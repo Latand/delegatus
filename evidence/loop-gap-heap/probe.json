@@ -1,0 +1,154 @@
+{
+  "runtime": "1.4.0",
+  "bunRevision": "34cbb9a40b4bd1bd767d134a7065e66c2432a676",
+  "utc": "2026-10-16T14:25:08.671Z",
+  "jscExports": [
+    "callerSourceOrigin",
+    "codeCoverageForFile",
+    "default",
+    "describe",
+    "describeArray",
+    "deserialize",
+    "drainMicrotasks",
+    "edenGC",
+    "estimateShallowMemoryUsageOf",
+    "fullGC",
+    "gcAndSweep",
+    "generateHeapSnapshotForDebugging",
+    "getProtectedObjects",
+    "getRandomSeed",
+    "heapSize",
+    "heapStats",
+    "isRope",
+    "jscDescribe",
+    "jscDescribeArray",
+    "memoryUsage",
+    "noFTL",
+    "noInline",
+    "noOSRExitFuzzing",
+    "numberOfDFGCompiles",
+    "optimizeNextInvocation",
+    "percentAvailableMemoryInUse",
+    "profile",
+    "releaseWeakRefs",
+    "reoptimizationRetryCount",
+    "samplingProfilerStackTraces",
+    "serialize",
+    "setRandomSeed",
+    "setTimeZone",
+    "setTimezone",
+    "startRemoteDebugger",
+    "startSamplingProfiler",
+    "totalCompileTime"
+  ],
+  "heapStatsKeys": [
+    "extraMemorySize",
+    "globalObjectCount",
+    "heapCapacity",
+    "heapSize",
+    "mimalloc",
+    "objectCount",
+    "objectTypeCounts",
+    "protectedGlobalObjectCount",
+    "protectedObjectCount",
+    "protectedObjectTypeCounts"
+  ],
+  "supportedEntryTypes": [
+    "dns",
+    "function",
+    "http",
+    "http2",
+    "mark",
+    "measure",
+    "net",
+    "quic",
+    "resource"
+  ],
+  "forcedCollections": 6,
+  "observedGc": [],
+  "readings": [
+    {
+      "phase": "before",
+      "heapUsed": 1159929,
+      "heapSize": 1159929,
+      "allocatedCounter": 1914137
+    },
+    {
+      "phase": "allocated",
+      "heapUsed": 25740548,
+      "heapSize": 25740548,
+      "allocatedCounter": 48144164
+    },
+    {
+      "phase": "held-gc",
+      "heapUsed": 48099469,
+      "heapSize": 48099469,
+      "allocatedCounter": 49682109
+    },
+    {
+      "phase": "released-gc",
+      "heapUsed": 1213098,
+      "heapSize": 1213098,
+      "allocatedCounter": 2017562
+    }
+  ],
+  "costs": [
+    {
+      "size": 10000,
+      "name": "process.memoryUsage",
+      "calls": 10000,
+      "wallMs": 27.348304999999982,
+      "cpuMs": 31.01
+    },
+    {
+      "size": 10000,
+      "name": "bun:jsc.heapSize",
+      "calls": 10000,
+      "wallMs": 16.316520000000025,
+      "cpuMs": 16.328
+    },
+    {
+      "size": 10000,
+      "name": "node:v8.getHeapStatistics",
+      "calls": 20,
+      "wallMs": 28.18249400000002,
+      "cpuMs": 28.223
+    },
+    {
+      "size": 10000,
+      "name": "bun:jsc.heapStats",
+      "calls": 20,
+      "wallMs": 49.517218000000014,
+      "cpuMs": 49.678
+    },
+    {
+      "size": 500000,
+      "name": "process.memoryUsage",
+      "calls": 10000,
+      "wallMs": 27.556551000000013,
+      "cpuMs": 28.841
+    },
+    {
+      "size": 500000,
+      "name": "bun:jsc.heapSize",
+      "calls": 10000,
+      "wallMs": 501.5888540000001,
+      "cpuMs": 511.627
+    },
+    {
+      "size": 500000,
+      "name": "node:v8.getHeapStatistics",
+      "calls": 20,
+      "wallMs": 734.833911,
+      "cpuMs": 732.209
+    },
+    {
+      "size": 500000,
+      "name": "bun:jsc.heapStats",
+      "calls": 20,
+      "wallMs": 629.6346789999998,
+      "cpuMs": 629.368
+    }
+  ],
+  "held": 500000
+}

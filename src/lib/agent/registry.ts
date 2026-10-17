@@ -99,6 +99,7 @@ import {
   registryRowsMatching, registryKeysMatching, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported,
+  type RegistryDeliveryCompactionChanges,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
 } from "./sqliteRegistryStore";
@@ -723,6 +724,8 @@ export type DeliveryAdmissionEvidence =
   | { outcome: "unknown"; reason: string };
 
 export interface DeliveryOperationOwner {
+  /** One Viewer-composed Claude input, committed before the engine write. */
+  batchId?: string;
   conversationId: ViewerConversationId;
   runtimeConversationId: ViewerConversationId;
   clientMessageId: string | null;
@@ -1608,7 +1611,29 @@ function rearmRolledBackMigrationDeliveries(
   }
 }
 
+/** Receipt selection shares the lazy view's transaction and collection order.
+ * Alias keys are selected too: adopted receipts can predate the canonical id. */
+export function registryReceiptsForConversation(file: RegistryFile, id: string): SpawnReceipt[] {
+  const canonical = resolveConversationAlias(file, id as ViewerConversationId);
+  return registryRowsMatching(file, "receipts", "conversationId", conversationIdsResolvingTo(file, canonical))
+    .filter(receipt => resolveConversationAlias(file, receipt.conversationId) === canonical);
+}
+
+function registryReceiptsReferencing(file: RegistryFile, id: string): SpawnReceipt[] {
+  const keys = new Set([
+    ...registryKeysMatching(file, "receipts", "conversationId", id),
+    ...registryKeysMatching(file, "receipts", "parentConversationId", id),
+    ...registryKeysMatching(file, "receipts", "launchProfile.parentConversationId", id),
+  ]);
+  return [...keys].map(key => file.receipts[key]!).filter(Boolean);
+}
+
 const CLAIMABLE_RECEIPT_STATES = new Set(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
+
+/** The same provisioning states in keyed reads and held startup views. */
+export function registryOpenSpawnReceipts(file: RegistryFile): SpawnReceipt[] {
+  return registryRowsMatching(file, "receipts", "state", [...CLAIMABLE_RECEIPT_STATES]);
+}
 
 export function deliveryHasDurableClaimOwner(
   snapshot: RegistryFile,
@@ -1623,7 +1648,7 @@ export function deliveryHasDurableClaimOwner(
     && entry.key.sessionId === current.id
     && entry.artifactPath === current.path
     && ((entry.structuredHost !== null && entry.structuredHost !== undefined) !== (entry.host !== null)))) return true;
-  return Object.values(snapshot.receipts).some((receipt) =>
+  return registryRowsMatching(snapshot, "receipts", "conversationId", conversation.id).some((receipt) =>
     receipt.engine === conversation.engine
     && receipt.conversationId === conversation.id
     && CLAIMABLE_RECEIPT_STATES.has(receipt.state));
@@ -1827,7 +1852,7 @@ function enrollSettledSpawnInDrain(file: RegistryFile, conversation: RegistryCon
     settling: staged, its first message not yet delivered (#2051). */
 function settlingLaunchAccounts(file: RegistryFile): Map<ViewerConversationId, string | null> {
   const accounts = new Map<ViewerConversationId, string | null>();
-  for (const receipt of Object.values(file.receipts)) {
+  for (const receipt of registryRowsMatching(file, "receipts", "state", ["starting", "path-pending"])) {
     if (receipt.purpose !== "launch" || (receipt.state !== "starting" && receipt.state !== "path-pending")) continue;
     accounts.set(resolveConversationAlias(file, receipt.conversationId), receipt.accountId);
   }
@@ -2986,6 +3011,7 @@ function normalizeDeliveryOperationOwners(
         deliveryId: owner.deliveryId,
         command: { ...canonicalHeldDeliveryCommand(owner.command, operationId), operationId },
         requestDigest: owner.requestDigest,
+        ...(typeof owner.batchId === "string" && /^inbox_[a-f0-9]{32}$/.test(owner.batchId) ? { batchId: owner.batchId } : {}),
         contentDigest: typeof owner.contentDigest === "string"
           ? owner.contentDigest
           : referencedDelivery?.contentDigest ?? settledDelivery?.contentDigest ?? null,
@@ -3101,9 +3127,21 @@ function dropCompactedHeldDelivery(file: RegistryFile, delivery: HeldDelivery): 
   delete file.heldDeliveries[delivery.id];
 }
 
-function compactDeliveryOperationOwners(file: RegistryFile, onlyConversationId?: ViewerConversationId): void {
+function compactDeliveryOperationOwners(
+  file: RegistryFile,
+  onlyConversationId?: ViewerConversationId,
+  touchedConversations?: Iterable<ViewerConversationId>,
+): void {
   const terminalGroups = new Map<ViewerConversationId, Array<[string, DeliveryOperationOwner]>>();
-  for (const [operationId, owner] of (onlyConversationId ? conversationRows(file, "deliveryOperationOwners", onlyConversationId).map(owner => [owner.command.operationId, owner] as const) : Object.entries(file.deliveryOperationOwners))) {
+  const selectedOwners = onlyConversationId
+    ? conversationRegistryEntries(file, "deliveryOperationOwners", onlyConversationId)
+    : touchedConversations
+      ? [...new Set(touchedConversations)].flatMap(id => conversationRegistryEntries(file, "deliveryOperationOwners", id))
+      : Object.entries(file.deliveryOperationOwners);
+  const seen = new Set<string>();
+  for (const [operationId, owner] of selectedOwners) {
+    if (seen.has(operationId)) continue;
+    seen.add(operationId);
     if (owner.terminalState === null) continue;
     const canonicalId = resolveConversationAlias(file, owner.conversationId);
     if (onlyConversationId && canonicalId !== resolveConversationAlias(file, onlyConversationId)) continue;
@@ -3137,8 +3175,43 @@ function terminalDeliveryExpired(delivery: HeldDelivery, nowMs: number | undefin
   return Number.isFinite(settledAt) && nowMs - settledAt > TERMINAL_DELIVERY_RETENTION_MS;
 }
 
-function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: ViewerConversationId, nowMs?: number): number {
-  for (const delivery of (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries))) {
+function terminalDeliveryExpiryAt(delivery: HeldDelivery): number | null {
+  const settledAt = Date.parse(delivery.deliveredAt ?? delivery.createdAt);
+  return Number.isFinite(settledAt) ? settledAt + TERMINAL_DELIVERY_RETENTION_MS + 1 : null;
+}
+
+interface DeliveryCompactionOutcome {
+  removed: number;
+  nextExpiryAt: number | null;
+}
+
+function compactDeliveryReservations(
+  file: RegistryFile,
+  onlyConversationId?: ViewerConversationId,
+  nowMs?: number,
+  changes?: RegistryDeliveryCompactionChanges,
+  forceDeliverySweep = false,
+  previousNextExpiryAt: number | null = null,
+): DeliveryCompactionOutcome {
+  const full = onlyConversationId === undefined && (!changes || changes.full);
+  const replaceNextExpiry = full || forceDeliverySweep;
+  let nextExpiryAt = nowMs === undefined ? null : replaceNextExpiry ? null : previousNextExpiryAt;
+  const syncDeliveries = onlyConversationId || full
+    ? undefined
+    : (changes?.deliveryIds ?? []).flatMap(id => file.heldDeliveries[id] ? [file.heldDeliveries[id]!] : []);
+  const deliveryConversationIds = new Set<ViewerConversationId>();
+  if (!onlyConversationId && !full && !forceDeliverySweep) {
+    for (const delivery of syncDeliveries ?? []) deliveryConversationIds.add(resolveConversationAlias(file, delivery.conversationId));
+  }
+  const candidateDeliveries = onlyConversationId
+    ? conversationRows(file, "heldDeliveries", onlyConversationId)
+    : full || forceDeliverySweep
+      ? Object.values(file.heldDeliveries)
+      : [...deliveryConversationIds].flatMap(id => conversationRows(file, "heldDeliveries", id))
+        .filter((delivery, index, all) => all.findIndex(candidate => candidate.id === delivery.id) === index);
+  const ownerConversations = new Set<ViewerConversationId>();
+  if (onlyConversationId) ownerConversations.add(resolveConversationAlias(file, onlyConversationId));
+  for (const delivery of (syncDeliveries ?? candidateDeliveries)) {
     /* Every accepted send gets its row, including the ordinary one whose
        operation id the reservation generated for itself (#1131). The exception
        used to be free — the reservation IS the record under that id — and it
@@ -3147,29 +3220,40 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
        common shape was the one nobody could ask about, and its duplicate-send
        evidence was the one that vanished. */
     if (!delivery.requestDigest) continue;
-    file.deliveryOperationOwners[delivery.command.operationId] ??= {
-      conversationId: delivery.conversationId,
-      runtimeConversationId: delivery.runtimeConversationId,
-      clientMessageId: delivery.clientMessageId,
-      deliveryId: delivery.id,
-      command: delivery.command,
-      requestDigest: delivery.requestDigest,
-      contentDigest: delivery.contentDigest,
-      targetGenerationId: delivery.generationId,
-      evidenceText: delivery.text,
-      evidenceImageCount: delivery.runtimeImages.length,
-      createdAt: delivery.createdAt,
-      retryOfOperationId: null,
-      terminalState: null,
-      terminalDisposition: null,
-      terminalReason: null,
-      settledAt: null,
-    };
+    const operationId = delivery.command.operationId;
+    if (!file.deliveryOperationOwners[operationId]) {
+      file.deliveryOperationOwners[operationId] = {
+        conversationId: delivery.conversationId,
+        runtimeConversationId: delivery.runtimeConversationId,
+        clientMessageId: delivery.clientMessageId,
+        deliveryId: delivery.id,
+        command: delivery.command,
+        requestDigest: delivery.requestDigest,
+        contentDigest: delivery.contentDigest,
+        targetGenerationId: delivery.generationId,
+        evidenceText: delivery.text,
+        evidenceImageCount: delivery.runtimeImages.length,
+        createdAt: delivery.createdAt,
+        retryOfOperationId: null,
+        terminalState: null,
+        terminalDisposition: null,
+        terminalReason: null,
+        settledAt: null,
+      };
+      if (!full) ownerConversations.add(resolveConversationAlias(file, delivery.conversationId));
+    }
     syncDeliveryOperationOwnerState(file, delivery);
+    if (!full) ownerConversations.add(resolveConversationAlias(file, delivery.conversationId));
+  }
+  if (!full) {
+    for (const operationId of changes?.ownerOperationIds ?? []) {
+      const owner = file.deliveryOperationOwners[operationId];
+      if (owner) ownerConversations.add(resolveConversationAlias(file, owner.conversationId));
+    }
   }
   const deliveredGroups = new Map<ViewerConversationId, HeldDelivery[]>();
   const failedGroups = new Map<ViewerConversationId, HeldDelivery[]>();
-  for (const delivery of (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries))) {
+  for (const delivery of candidateDeliveries) {
     const canonicalId = resolveConversationAlias(file, delivery.conversationId);
     if (onlyConversationId && canonicalId !== resolveConversationAlias(file, onlyConversationId)) continue;
     if (delivery.state === "delivered") {
@@ -3193,6 +3277,8 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
           dropCompactedHeldDelivery(file, delivery);
           removed += 1;
         } else {
+          const expiryAt = terminalDeliveryExpiryAt(delivery);
+          if (expiryAt !== null && (nextExpiryAt === null || expiryAt < nextExpiryAt)) nextExpiryAt = expiryAt;
           kept.push(delivery);
         }
       }
@@ -3207,7 +3293,7 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
     }
   }
   for (const [conversationId, deliveries] of failedGroups) {
-    const activeCount = (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries)).filter((delivery) =>
+    const activeCount = candidateDeliveries.filter((delivery) =>
       resolveConversationAlias(file, delivery.conversationId) === conversationId
       && ["held", "assigned", "delivery-uncertain"].includes(delivery.state)).length;
     const retainedFailed = Math.max(0, Math.min(50, 99 - activeCount));
@@ -3217,8 +3303,8 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
       removed += 1;
     }
   }
-  compactDeliveryOperationOwners(file, onlyConversationId);
-  return removed;
+  compactDeliveryOperationOwners(file, onlyConversationId, onlyConversationId || full ? undefined : ownerConversations);
+  return { removed, nextExpiryAt };
 }
 
 function conversationOwnsPath(conversation: RegistryConversation, artifactPath: string): boolean {
@@ -3278,10 +3364,8 @@ function scannerAllocatedProvisionalOwner(conversation: RegistryConversation, pa
 
 function conversationDurabilityScore(file: RegistryFile, conversation: RegistryConversation): number {
   let score = conversation.generations.length > 1 || conversation.migration !== null ? 100 : 0;
-  for (const receipt of Object.values(file.receipts)) {
-    if (receipt.conversationId === conversation.id) score += 20;
-    if (receipt.parentConversationId === conversation.id) score += 5;
-  }
+  score += registryKeysMatching(file, "receipts", "conversationId", conversation.id).length * 20;
+  score += registryKeysMatching(file, "receipts", "parentConversationId", conversation.id).length * 5;
   if (file.lineageEdges[conversation.id]) score += 10;
   for (const edge of Object.values(file.lineageEdges)) if (edge.parentConversationId === conversation.id) score += 5;
   if (file.memberships[conversation.id]?.length) score += 10;
@@ -3633,7 +3717,7 @@ function adoptProvisionalOwner(
   /* The adopted identity's keys are answered under the target from here on, so
      the target inherits the weaker of the two histories. */
   if (!owner.deliveryEvidenceTracked) target.deliveryEvidenceTracked = false;
-  for (const receipt of Object.values(file.receipts)) {
+  for (const receipt of registryReceiptsReferencing(file, owner.id)) {
     if (receipt.conversationId === owner.id) receipt.conversationId = target.id;
     if (receipt.parentConversationId === owner.id) receipt.parentConversationId = target.id;
     if (receipt.launchProfile.parentConversationId === owner.id) {
@@ -4546,6 +4630,8 @@ export class AgentRegistry {
   private readonly writerDeadlineMs: number | undefined;
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
+  private lastDeliveryCompactionChangeId: number | null = null;
+  private nextDeliveryCompactionAt: number | null = null;
   /** Synchronous writer admission lends its JSON claim to the mutation. */
   private admittedJsonWriter: RegistryLockClaim | null = null;
   private creditGuardRevision = 0;
@@ -5806,8 +5892,7 @@ export class AgentRegistry {
   }
 
   openSpawnReceipts(): SpawnReceipt[] {
-    return this.readKeyed(file => clone(registryRowsMatching(file,"receipts","state",
-      ["starting","pane-bound","host-verified","prompt-delivered","path-pending"])));
+    return this.readKeyed(file => clone(registryOpenSpawnReceipts(file)));
   }
 
   /** Structured ownership rows, including released rows needed by recovery. */
@@ -5995,7 +6080,7 @@ export class AgentRegistry {
       its identity even if an older host finishes cleanup afterwards. */
   discardSpawnCapabilityForOperation(operationId: string, digest?: string): void {
     this.mutate((file) => {
-      for (const receipt of Object.values(file.receipts)) {
+      for (const receipt of registryRowsMatching(file, "receipts", "pendingSpawnCapability.operationId", operationId)) {
         if (receipt.pendingSpawnCapability?.operationId === operationId
           && (digest === undefined || receipt.pendingSpawnCapability.digest === digest)) {
           receipt.pendingSpawnCapability = null;
@@ -6186,7 +6271,7 @@ export class AgentRegistry {
       which has no host binding. The state check and owner release are one CAS. */
   retireUnconsumedSpawn(clientAttemptId: string, reason: string): boolean {
     return this.mutate((file) => {
-      const receipt = Object.values(file.receipts).find((row) => row.clientAttemptId === clientAttemptId);
+      const receipt = registryRowsMatching(file, "receipts", "clientAttemptId", clientAttemptId)[0];
       if (!receipt || receipt.membershipAdmitted !== false || receipt.state !== "starting" || receipt.key || receipt.pane) return false;
       receipt.state = "failed";
       receipt.error = reason;
@@ -6312,7 +6397,7 @@ export class AgentRegistry {
                   entry.launchProfile.title = requestedTitle;
                 }
               }
-              for (const receipt of Object.values(file.receipts)) {
+              for (const receipt of registryReceiptsForConversation(file, existingConversationId)) {
                 if (resolveConversationAlias(file, receipt.conversationId) === existingConversationId
                   && !durableSemanticTitle(receipt.launchProfile.title)) {
                   receipt.launchProfile.title = requestedTitle;
@@ -6401,7 +6486,7 @@ export class AgentRegistry {
         }
       }
       if (conversationId && input.spawnCapabilityDigest) {
-        for (const existing of Object.values(file.receipts)) {
+        for (const existing of registryReceiptsForConversation(file, conversationId)) {
           if (resolveConversationAlias(file, existing.conversationId) === conversationId) {
             existing.spawnCapabilityDigest = null;
             existing.pendingSpawnCapability = null;
@@ -6706,7 +6791,7 @@ export class AgentRegistry {
       const stamped = stampOrchestratorLineage(file, seat, seat.activatedAt ?? seat.designatedAt);
       if (stamped.changed && stamped.engine) file.conversationRevision[stamped.engine] += 1;
       if (stamped.engine) return stamped.changed;
-      const receipt = Object.values(file.receipts).find((candidate) => candidate.conversationId === seat.conversationId);
+      const receipt = seat.conversationId ? registryRowsMatching(file, "receipts", "conversationId", seat.conversationId)[0] : undefined;
       if (!receipt) return false;
       const pending = normalizePendingOrchestratorSeatIdentity(seat);
       if (!pending || isDeepStrictEqual(receipt.pendingOrchestratorSeatIdentity, pending)) return false;
@@ -8183,7 +8268,7 @@ export class AgentRegistry {
       for (const entry of Object.values(file.entries)) {
         if (liveIds.has(sessionKeyId(entry.key))) entry.pendingAction = null;
       }
-      for (const receipt of Object.values(file.receipts)) {
+      for (const receipt of registryRowsMatching(file, "receipts", "state", "starting")) {
         if (receipt.state !== "starting" || !receipt.artifactPath) continue;
         const key = Object.values(file.entries).find((entry) => entry.artifactPath === receipt.artifactPath)?.key;
         if (key && liveIds.has(sessionKeyId(key))) receipt.state = "completed";
@@ -8202,7 +8287,7 @@ export class AgentRegistry {
         || entry.status === "dead"
         || entry.status === "unhosted") return false;
       const receiptCandidates = entry.structuredHostOperationId == null
-        ? Object.values(file.receipts)
+        ? registryRowsMatching(file, "receipts", "artifactPath", entry.artifactPath)
         : [file.receipts[entry.structuredHostOperationId]].filter((receipt): receipt is SpawnReceipt => Boolean(receipt));
       const matchingReceipts = receiptCandidates.filter((receipt) =>
         receipt.state === "completed"
@@ -8719,17 +8804,18 @@ export class AgentRegistry {
   }
 
   launchProfileForPath(artifactPath: string): LaunchProfile | null {
-    const snapshot = this.readOnlySnapshot();
-    for (const conversation of Object.values(snapshot.conversations)) {
-      const generation = conversation.generations.find((item) => item.path === artifactPath);
-      if (generation) return clone(generation.launchProfile);
-      if (conversation.continuityPaths.includes(artifactPath)) {
-        const current = conversation.generations.at(-1);
-        if (current) return clone(current.launchProfile);
+    return this.readKeyed(snapshot => {
+      for (const conversation of registryConversationsForPath(snapshot, artifactPath)) {
+        const generation = conversation.generations.find((item) => item.path === artifactPath);
+        if (generation) return clone(generation.launchProfile);
+        if (conversation.continuityPaths.includes(artifactPath)) {
+          const current = conversation.generations.at(-1);
+          if (current) return clone(current.launchProfile);
+        }
       }
-    }
-    const receipt = Object.values(snapshot.receipts).find((item) => item.artifactPath === artifactPath);
-    return receipt ? clone(receipt.launchProfile) : null;
+      const receipt = registryRowsMatching(snapshot, "receipts", "artifactPath", artifactPath)[0];
+      return receipt ? clone(receipt.launchProfile) : null;
+    });
   }
 
   /** Durable account ownership for a transcript path (issue #891, phase 0).
@@ -8737,18 +8823,20 @@ export class AgentRegistry {
       conversation; deriving the account from the path layout stays in the
       account manager only as recovery for artifacts the registry never saw. */
   transcriptAccountId(engine: AgentEngine, artifactPath: string): string | null {
-    const snapshot = this.readOnlySnapshot();
-    for (const conversation of Object.values(snapshot.conversations)) {
-      if (conversation.engine !== engine) continue;
-      const generation = conversation.generations.find((item) => item.path === artifactPath);
-      if (generation?.accountId) return generation.accountId;
-      if (conversation.continuityPaths.includes(artifactPath)) {
-        const current = conversation.generations.at(-1);
-        if (current?.accountId) return current.accountId;
+    return this.readKeyed(file => {
+      for (const conversation of registryConversationsForPath(file, artifactPath)) {
+        if (conversation.engine !== engine) continue;
+        const generation = conversation.generations.find((item) => item.path === artifactPath);
+        if (generation?.accountId) return generation.accountId;
+        if (conversation.continuityPaths.includes(artifactPath)) {
+          const current = conversation.generations.at(-1);
+          if (current?.accountId) return current.accountId;
+        }
       }
-    }
-    const receipt = Object.values(snapshot.receipts).find((item) => item.artifactPath === artifactPath && item.engine === engine);
-    return receipt?.accountId ?? null;
+      const receipt = registryRowsMatching(file, "receipts", "artifactPath", artifactPath)
+        .find((item) => item.engine === engine);
+      return receipt?.accountId ?? null;
+    });
   }
 
   updateConversationLaunchProfile(
@@ -9798,8 +9886,7 @@ export class AgentRegistry {
         (pathname) => !committedContinuityPaths.has(pathname),
       );
       conversation.migration = { ...migration, phase: "committed", updatedAt: now() };
-      const receipts = Object.values(file.receipts)
-        .filter((receipt) => resolveConversationAlias(file, receipt.conversationId) === conversation.id);
+      const receipts = registryReceiptsForConversation(file, conversation.id);
       const pending = receipts.find((receipt) => receipt.pendingSpawnCapability?.operationId === expectedOperationId);
       const digest = pending?.pendingSpawnCapability?.digest ?? null;
       // A rollback successor can publish without HTTP identity; its archived predecessor still loses access at commit.
@@ -10339,7 +10426,21 @@ export class AgentRegistry {
   }
 
   compactDeliveryReservations(): number {
-    return this.mutate((file) => compactDeliveryReservations(file, undefined, this.now()));
+    const sqlite = this.sqliteMode === "read" || this.sqliteMode === "sqlite" ? this.sqliteStore : null;
+    const nowMs = this.now();
+    const currentChangeId = sqlite?.deliveryCompactionChangeId() ?? null;
+    const expiryDue = this.nextDeliveryCompactionAt !== null && nowMs >= this.nextDeliveryCompactionAt;
+    if (sqlite && this.lastDeliveryCompactionChangeId === currentChangeId && !expiryDue) return 0;
+
+    let observedChangeId = currentChangeId;
+    const result = this.mutate((file) => {
+      const changes = sqlite?.deliveryCompactionChangesSince(this.lastDeliveryCompactionChangeId);
+      if (changes) observedChangeId = changes.changeId;
+      return compactDeliveryReservations(file, undefined, nowMs, changes, expiryDue, this.nextDeliveryCompactionAt);
+    });
+    if (sqlite) this.lastDeliveryCompactionChangeId = observedChangeId;
+    this.nextDeliveryCompactionAt = result.nextExpiryAt;
+    return result.removed;
   }
 
   queueSuccessorCleanup(conversationId: ViewerConversationId, receipt: ProviderReceipt): void {
@@ -10642,7 +10743,8 @@ export class AgentRegistry {
       immediately before it hands the operation to that host. */
   bindDeliveryOperationGeneration(operationId: string, generationId: string): boolean {
     if (!operationId || !generationId) return false;
-    if (!this.readOnlySnapshot().deliveryOperationOwners[operationId]?.retryOfOperationId) return true;
+    const owner = this.readOnlySnapshot().deliveryOperationOwners[operationId];
+    if (!owner?.retryOfOperationId && !owner?.batchId) return true;
     return this.writeDeliveryOperationGeneration(operationId, generationId);
   }
 
@@ -10650,16 +10752,35 @@ export class AgentRegistry {
       the event loop. Null when the lock stayed held and nothing was written. */
   async bindDeliveryOperationGenerationOffLoop(operationId: string, generationId: string): Promise<boolean | null> {
     if (!operationId || !generationId) return false;
-    if (!this.readOnlySnapshot().deliveryOperationOwners[operationId]?.retryOfOperationId) return true;
+    const owner = this.readOnlySnapshot().deliveryOperationOwners[operationId];
+    if (!owner?.retryOfOperationId && !owner?.batchId) return true;
     const write = await this.whenWriterHeld({ label: "delivery.bind-generation", operationId },
       () => this.writeDeliveryOperationGeneration(operationId, generationId));
+    return write.acquired ? write.value : null;
+  }
+
+  /** Atomically binds every member and its generation through the off-loop writer.
+      Missing, terminal or cross-conversation members refuse the entire write. */
+  async bindDeliveryBatchOffLoop(batchId: string, operationIds: readonly string[], generationId: string): Promise<boolean | null> {
+    if (!/^inbox_[a-f0-9]{32}$/.test(batchId) || operationIds.length < 2 || operationIds.length > 1000
+      || new Set(operationIds).size !== operationIds.length || !generationId) return false;
+    const write = await this.whenWriterHeld({ label: "delivery.inbox-batch", operationId: operationIds[0]! }, () => this.mutate(file => {
+      const owners = operationIds.map(id => file.deliveryOperationOwners[id]);
+      const conversation = owners[0] && file.conversations[owners[0].conversationId];
+      if (!conversation || conversation.engine !== "claude" || !conversation.generations.some(g => g.id === generationId)
+        || owners.some(owner => !owner || owner.conversationId !== conversation.id || owner.terminalState !== null
+          || owner.command.kind !== "send")) return false;
+      for (const owner of owners) { owner!.batchId = batchId; owner!.targetGenerationId = generationId; }
+      return true;
+    }));
     return write.acquired ? write.value : null;
   }
 
   private writeDeliveryOperationGeneration(operationId: string, generationId: string): boolean {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
-      if (!owner?.retryOfOperationId) return false;
+      if (!owner?.retryOfOperationId && !owner?.batchId) return false;
+      delete owner.batchId;
       owner.targetGenerationId = generationId;
       return true;
     });

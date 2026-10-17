@@ -161,6 +161,10 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
       setCopied(false);
       return;
     }
+    /* The check moves at once (audit B22) and the menu closes once the choice
+       is kept; a refusal moves it back and says why here. */
+    const before = info;
+    setInfo({ ...info, backend: id });
     setSaving(id);
     setError(null);
     try {
@@ -171,12 +175,14 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
       });
       const json = (await res.json()) as BackendInfo & { error?: string };
       if (!res.ok) {
+        setInfo(before);
         setError(json.error ?? t("mic.saveFailed"));
         return;
       }
       setInfo(json);
       close();
     } catch {
+      setInfo(before);
       setError(t("common.serverUnavailable"));
     } finally {
       setSaving(null);
@@ -258,16 +264,14 @@ function BackendMenu({ anchorRef, onClose }: { anchorRef: RefObject<HTMLElement 
                 type="button"
                 role="menuitemradio"
                 aria-checked={active}
-                disabled={Boolean(info?.lockedByEnv) || saving !== null}
+                disabled={Boolean(info?.lockedByEnv)}
                 onClick={() => void pick(option.id, option.available)}
                 className={`flex w-full items-start gap-2 rounded-[9px] px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${
                   active ? "bg-accent/10" : "hover:bg-canvas"
                 }`}
               >
                 <span className="mt-[3px] flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-                  {saving === option.id ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" aria-hidden />
-                  ) : active ? (
+                  {active ? (
                     <Check className="h-3.5 w-3.5 text-accent" aria-hidden />
                   ) : (
                     <span
@@ -408,6 +412,7 @@ export function MicButtonView({
         title={phase === "busy" ? t("mic.recognizing") : phase === "starting" ? t("mic.connecting") : t("mic.dictateHint")}
         disabled={phase !== "idle" || busy}
         onClick={handleMain}
+        data-mic-phase={phase}
         /* Hover/focus telegraphs an imminent press — mint the live token now
            so the press itself only waits for the microphone. */
         onPointerEnter={prewarmLiveToken}
@@ -418,7 +423,7 @@ export function MicButtonView({
         }}
         className={
           anchored
-            ? `relative inline-flex shrink-0 items-center justify-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${
+            ? `composer-ghost relative inline-flex shrink-0 items-center justify-center rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${
                 /* 32px visual, 44px hit via the pseudo-element (rule 8). */
                 isMobile ? "h-8 w-8 before:absolute before:-inset-1.5 before:content-['']" : "p-2"
               } ${phase === "starting" ? "bg-accent/10 text-accent" : "text-muted hover:bg-sunken hover:text-accent"}`

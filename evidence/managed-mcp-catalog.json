@@ -1,0 +1,1551 @@
+{
+  "recordedAt": "2026-10-16T09:00:05.627665+00:00",
+  "baseRevision": "917189ae562def76980341620987479ab2813cfc",
+  "testedCodeCommit": "e7036b1d9be16f2407d5d8a5fb93dff75ea6aebc",
+  "sourceSha256": {
+    "scripts/runtime-host-viewer-adapter.test.ts": "b5da2477233e03ad0c08f70410a92c06627330e352bcb8a2b8388d6f6da50ce8",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "ef9d5e8f69e360e5b6660b265c28d540d195e07b297360b3186e1722546e9d04",
+    "src/components/selfUpdate/SelfUpdateView.dom.test.tsx": "acb87ca6d19887f0d32a40603881f40323e4a5f8a4f159126b13a2e543c9c377",
+    "src/components/selfUpdate/SelfUpdateView.tsx": "7f4b95ea62d0c7eab2c8a505d7781376272487a3493425f4bb6673d353661184",
+    "src/components/selfUpdate/selfUpdateCopy.ts": "517dc087ec284bcfc77e0251d89f1606c3032ae56b81b0df91aea329f4e36a32",
+    "src/lib/i18n/en.ts": "11cbb9a2d9b1526811308a004ffd23ded114e333fea99adae0a92280d928fe2c",
+    "src/lib/i18n/uk.ts": "73ea7a103596ec7cbdf6ad32b4d8fd967b21927083e7fbc3b7f80ce505993094",
+    "src/lib/mcp/server.test.ts": "1eb670c416502734e8a86e6561ce22fbd80c5aef20361ac9efaa073804d80ffe",
+    "src/lib/mcp/server.ts": "61f38548ad7486bfd459f802586f26933e6f7b570832ce68d5295d843e9bf7f7",
+    "src/lib/mcp/toolCatalog.ts": "a9cb18bf45bbb345b62d71bb4a06bbf56131040695a61e813960ebd84ac43ae2",
+    "src/runtime-host/fixtures/legacyMcpRuntimeProbe.ts": "3a0f4eb1e84c951a181034f1eaba58110c8e022a047c940adde63efacdc3f426",
+    "src/runtime-host/mcpRuntimeCompatibility.test.ts": "464df47d3ee383b2be2dab253493e6eb048d8766f3e39be8d3cbde5aa7d04f9c",
+    "src/runtime-host/mcpRuntimeProbe.test.ts": "f5e5c1392dbd543b0d84472584b279b4270007b8133267d1a0772e719968d97d",
+    "src/runtime-host/mcpRuntimeProbe.ts": "42e831ca98f8456cf8a5a3026adca48a2de086c566702c9d0e4a7deef8b745d4"
+  },
+  "isolation": {
+    "owner": "private source exports in stage scratch",
+    "gate": "installed scripts/gate-slot.sh, sequential heavy checks",
+    "testPreload": "HOME, XDG_CONFIG_HOME and LLV_STATE_DIR nested inside the root claimed by test-preload.ts",
+    "shortSocketPaths": "held /proc directory descriptor into the same owned scratch",
+    "viewerVerifierAdaptation": "Private copy only: sandboxEnvironment uses TMPDIR: sandbox so its config and state remain under its own temp root. No owner token added. Committed verifier unchanged."
+  },
+  "regressionsRedOnMain": [
+    {
+      "parts": [
+        "A",
+        "B"
+      ],
+      "baseRevision": "917189ae562def76980341620987479ab2813cfc",
+      "command": [
+        "bun",
+        "test",
+        "--preload",
+        "$TMPDIR/managed-mcp/preload-base.ts",
+        "src/runtime-host/mcpRuntimeProbe.test.ts",
+        "src/runtime-host/mcpRuntimeCompatibility.test.ts",
+        "-t",
+        "candidate catalog:|deprecated update bridge:"
+      ],
+      "exitCode": 1,
+      "passed": 0,
+      "failed": 12,
+      "logSha256": "fcda5d4563b064b68ad0f9e92506c000e4e5e9152410239e843811acb67ff25e"
+    },
+    {
+      "parts": [
+        "C"
+      ],
+      "baseRevision": "917189ae562def76980341620987479ab2813cfc",
+      "command": [
+        "bun",
+        "test",
+        "--preload",
+        "$TMPDIR/managed-mcp/preload-base.ts",
+        "src/components/selfUpdate/SelfUpdateView.dom.test.tsx",
+        "-t",
+        "MCP update failure guidance"
+      ],
+      "exitCode": 1,
+      "passed": 0,
+      "failed": 10,
+      "logSha256": "550b6aaf956ed3895e79f930aec9a6b12830cd0e24b202e342ff118161e3f962"
+    }
+  ],
+  "finalChecks": [
+    {
+      "name": "probe-final-isolation",
+      "command": [
+        "bun",
+        "test",
+        "--preload",
+        "$TMPDIR/managed-mcp/preload-head.ts",
+        "src/runtime-host/mcpRuntimeProbe.test.ts"
+      ],
+      "exitCode": 0,
+      "logSha256": "d00e937cb711878251266fe8713285de67f8b7c9d244bb2d1cf0ee1c9fc6a60b",
+      "passed": 28,
+      "failed": 0
+    },
+    {
+      "name": "compat-final",
+      "command": [
+        "bun",
+        "test",
+        "--preload",
+        "$TMPDIR/managed-mcp/preload-head.ts",
+        "src/runtime-host/mcpRuntimeCompatibility.test.ts"
+      ],
+      "exitCode": 0,
+      "logSha256": "af8afc9e420d6065016cb80fc58a7f160b6a66ebf1de7383b8945c3f85a5a216",
+      "passed": 2,
+      "failed": 0
+    },
+    {
+      "name": "final-server",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/mcp/server.test.ts"
+      ],
+      "exitCode": 0,
+      "logSha256": "aaa8a3930f1d377de87c4fdb9b3d843abb4656ea2197af4f5dea45a2840e0075",
+      "passed": 99,
+      "failed": 0
+    },
+    {
+      "name": "dom-final",
+      "command": [
+        "bun",
+        "test",
+        "--preload",
+        "$TMPDIR/managed-mcp/preload-head.ts",
+        "src/components/selfUpdate/SelfUpdateView.dom.test.tsx"
+      ],
+      "exitCode": 0,
+      "logSha256": "dcebcf018c4a4326bc2a63781a265bbf7cc8757a4d632bd21ea52be06684b7ad",
+      "passed": 139,
+      "failed": 0
+    },
+    {
+      "name": "adapter-final",
+      "command": [
+        "bun",
+        "test",
+        "--preload",
+        "$TMPDIR/managed-mcp/preload-head.ts",
+        "scripts/runtime-host-viewer-adapter.test.ts",
+        "src/runtime-host/deploymentAdapter.test.ts"
+      ],
+      "exitCode": 0,
+      "logSha256": "779846bf902c8c32c141f7ae14d4719425acbbfd64137c38395bc7d80ea49182",
+      "passed": 71,
+      "skipped": 2,
+      "failed": 0
+    },
+    {
+      "name": "final-prompts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/orchestrator/prompt.test.ts",
+        "src/lib/orchestrator/operatorDecisionForms.test.ts",
+        "src/lib/mcp/issueReport.test.ts"
+      ],
+      "exitCode": 0,
+      "logSha256": "249d25ba2f2e8d9b40f0476173fe308425d58bda94b56902785cc3416fe7ed58",
+      "passed": 108,
+      "failed": 0
+    },
+    {
+      "name": "final-question-policy",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/agent/operatorQuestionPolicy.native.test.ts"
+      ],
+      "exitCode": 0,
+      "logSha256": "bb999b277202e8b8ec2bc67234f2998c151a92ece1dc0ff8ec776460a0aac1e2",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "name": "final-http",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/mcp/http.test.ts"
+      ],
+      "exitCode": 0,
+      "logSha256": "0e7a86ff5035f09ec211915dd85fd29433c8490a30649ab9bc18854c2256e146",
+      "passed": 11,
+      "failed": 0
+    },
+    {
+      "name": "runtime-verdict-tests",
+      "command": [
+        "bun",
+        "test",
+        "scripts/verify-viewer-runtime.test.ts",
+        "src/runtime-host/hostRehearsal.test.ts",
+        "src/runtime-host/hostRehearsalRun.test.ts"
+      ],
+      "exitCode": 0,
+      "logSha256": "94a6bee13fd7c0f7d455fa0b0d9935bc0bde81a6789a56927925c06303417f46",
+      "passed": 31,
+      "failed": 0
+    },
+    {
+      "name": "mcp-size-budgets",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/mcp/answerSizes.test.ts"
+      ],
+      "exitCode": 0,
+      "logSha256": "1e9543439f5358127cc2dcb5cecc7adad1bfd67a2880203847a1631f001484a2",
+      "passed": 8,
+      "failed": 0
+    },
+    {
+      "name": "viewer-build",
+      "command": [
+        "bun",
+        "run",
+        "build"
+      ],
+      "exitCode": 0,
+      "logSha256": "c0151dce324e1300c7acd8f013d0ca5fff246298475a361bc454948d8adb6053"
+    },
+    {
+      "name": "final-runtime-host",
+      "command": [
+        "bun",
+        "scripts/verify-runtime-host.ts"
+      ],
+      "exitCode": 0,
+      "logSha256": "5278d0456d4057dcfb7959a191be9df91e63f1ed949a27e84a206628a1255244"
+    },
+    {
+      "name": "viewer-runtime-scratch",
+      "command": [
+        "bun",
+        "scripts/verify-viewer-runtime-scratch.ts"
+      ],
+      "exitCode": 0,
+      "logSha256": "c086c78cd2d2a5ffbe070adaf0363283c42421912d175b97b4cb3544fc75a083"
+    },
+    {
+      "name": "viewer-codex-socket",
+      "command": [
+        "bun",
+        "scripts/verify-viewer-runtime.ts",
+        "--codex-socket"
+      ],
+      "exitCode": 0,
+      "logSha256": "ac7cd39a0544ddc5406e5758dca10d793391e6097d4b0740b0fabe69411a0e10"
+    },
+    {
+      "name": "runtime-negative-controls",
+      "command": [
+        "bun",
+        "scripts/verify-bun-runtime-controls.ts"
+      ],
+      "exitCode": 0,
+      "logSha256": "77f04abe9b57a420defc120d06fb593d16f8439b78266efe4778f3c4c9b0f094"
+    },
+    {
+      "name": "linux-backend",
+      "command": [
+        "bun",
+        "scripts/verify-platform-backend.ts",
+        "--expect",
+        "linux"
+      ],
+      "exitCode": 0,
+      "logSha256": "70d7c9c674dd8e677d53594f8874845788c7f0f91fea98e2c6893e9932f52c24"
+    },
+    {
+      "name": "browser-after-final",
+      "command": [
+        "bun",
+        "test",
+        "--preload",
+        "$TMPDIR/managed-mcp/preload-head.ts",
+        "src/components/kanban/kanbanBoard.browser.test.tsx",
+        "-t",
+        "managed MCP catalog failure"
+      ],
+      "exitCode": 0,
+      "logSha256": "9cfb8b05dd32b9f20ec46e7424651328e4490091343d7f2b5b4ad86280bfad2b",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "name": "browser-before-final",
+      "command": [
+        "bun",
+        "test",
+        "--preload",
+        "$TMPDIR/managed-mcp/preload-base.ts",
+        "src/components/kanban/kanbanBoard.browser.test.tsx",
+        "-t",
+        "managed MCP catalog failure"
+      ],
+      "exitCode": 0,
+      "logSha256": "0f93fdc64703122f45fdcc59096da74ab36a08a2d0d6dd81eeeeccd5b20d8434",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "name": "lint-all-final",
+      "command": [
+        "bun",
+        "scripts/eslint-changes.ts",
+        "--base",
+        "917189ae562def76980341620987479ab2813cfc",
+        "scripts/runtime-host-viewer-adapter.test.ts",
+        "src/components/kanban/kanbanBoard.browser.test.tsx",
+        "src/components/selfUpdate/SelfUpdateView.dom.test.tsx",
+        "src/components/selfUpdate/SelfUpdateView.tsx",
+        "src/components/selfUpdate/selfUpdateCopy.ts",
+        "src/lib/i18n/en.ts",
+        "src/lib/i18n/uk.ts",
+        "src/lib/mcp/server.test.ts",
+        "src/lib/mcp/server.ts",
+        "src/runtime-host/mcpRuntimeProbe.test.ts",
+        "src/runtime-host/mcpRuntimeProbe.ts",
+        "src/lib/mcp/toolCatalog.ts",
+        "src/runtime-host/fixtures/legacyMcpRuntimeProbe.ts",
+        "src/runtime-host/mcpRuntimeCompatibility.test.ts"
+      ],
+      "exitCode": 0,
+      "logSha256": "44f21c4c697afd8056bd7817588e674a953ae91af90e441e8c709e06dc0c5346"
+    },
+    {
+      "name": "TypeScript",
+      "command": [
+        "node",
+        "--max-old-space-size=6144",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "exitCode": 0,
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "runtimeHost": {
+    "runtime": "bun 1.4.0",
+    "ok": true,
+    "succession": {
+      "predecessorReadyMs": 514,
+      "successorTookOverMs": 504,
+      "completed": true
+    },
+    "listener": {
+      "windowMs": 15000,
+      "polls": 27,
+      "answered": 27,
+      "abandoned": 13
+    },
+    "socket": {
+      "polls": 27,
+      "answered": 27,
+      "abandoned": 13
+    }
+  },
+  "viewer": {
+    "runtime": "bun 1.4.0",
+    "ok": true,
+    "modules": {
+      "probed": 25,
+      "loaded": 25,
+      "failures": []
+    },
+    "served": {
+      "status": 200,
+      "bytes": 34642,
+      "readyMs": 3379
+    }
+  },
+  "legacyPairing": {
+    "frozenProbeRevision": "e37dc8d04e9b75d00643c8939ee3a08880217447",
+    "probeMatchesHistoricalSourceAfterImportAndCatalogNormalization": true,
+    "candidate": "current createViewerMcpServer in an owned stdio child",
+    "withBridge": "pass",
+    "withoutBridge": "MCP runtime is missing tools: suggest_replies",
+    "bridgeServiceCalls": 0
+  },
+  "renderedEvidence": {
+    "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+    "case": "managed MCP catalog failure",
+    "host": "Viewer.tsx SelfUpdateHost -> SelfUpdateDialog -> SelfUpdateView",
+    "headFrames": 60,
+    "baseFrames": 8,
+    "allFramesVisuallyInspected": true,
+    "frames": [
+      {
+        "file": ".artifacts/managed-mcp-catalog/before/en-dark-1440-legacy.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 1440,
+        "state": "legacy",
+        "sha256": "0275588226d97b730232831c01e6af71cfdc0a515390bf2a306ce336a2c408e9"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/before/en-dark-390-legacy.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 390,
+        "state": "legacy",
+        "sha256": "ea1cc99c9a89e3c063a890f44b4338932f4615a3965d107e1e48d68d19bc3b87"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/before/en-light-1440-legacy.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 1440,
+        "state": "legacy",
+        "sha256": "def615a0f1998b7b3c3a7b8356d9de9a423c33813bdcbb5b82f475cd7086a47e"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/before/en-light-390-legacy.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 390,
+        "state": "legacy",
+        "sha256": "cb838231f7d0c39457eff3345fc8319740a1697940e4cad96029804e8f349d20"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/before/uk-dark-1440-legacy.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 1440,
+        "state": "legacy",
+        "sha256": "21be48922596fd14b57aa53bf8ddb31030691bb5c83d2f752f32a9a001da26ad"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/before/uk-dark-390-legacy.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 390,
+        "state": "legacy",
+        "sha256": "b821ce08c952687048e5a973c0ee520d541fffc3eff71cfd627c912fa7d3e4c3"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/before/uk-light-1440-legacy.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 1440,
+        "state": "legacy",
+        "sha256": "4a219c778be5eabd56050c31300bbebf79b09ee29fd14c3cf51ac4465ab35d85"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/before/uk-light-390-legacy.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 390,
+        "state": "legacy",
+        "sha256": "6e4ea8eedc926af5ad17cde400ec5c7d89e99be3198f6c8aec1cdd39216cfa62"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-1440-contract.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 1440,
+        "state": "contract",
+        "sha256": "1e6b0cfdeb186b79d0107e3e811ddb6e4aeb56acba6921b5ac6e127d54caaad4"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-1440-declared.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 1440,
+        "state": "declared",
+        "sha256": "e58cb08c0686fb0986362947cedcdaf967a9fbdd7c05f41a5c1d312b7695a321"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-1440-invalid.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 1440,
+        "state": "invalid",
+        "sha256": "2c36896cc0c6861e49a468bcfd53980a7cd8cb6595fa6a5f57219b30f3c0b52a"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-1440-legacy.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 1440,
+        "state": "legacy",
+        "sha256": "3d1f7488ecd2de2b73d6bad22231d5ff548fbe65aec15fd06c668b39d036f3a5"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-1440-temporary.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 1440,
+        "state": "temporary",
+        "sha256": "8d5ab10a30c722bb23432b30b23f1ed3329bb06e9296d6569328cffa09dfec5f"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-390-contract.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 390,
+        "state": "contract",
+        "sha256": "3a6ee49ebd39c6c6c5130931a148ae517f7cadbd5e5dc94ad66e5846a453bec8"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-390-declared.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 390,
+        "state": "declared",
+        "sha256": "35b54eb175c223e010e39b6fcc9d18e8cc9b55ffc5019788e923a60f73f6b1d2"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-390-invalid.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 390,
+        "state": "invalid",
+        "sha256": "6836e02a369b316d79ccb875aa2ff1605d52a67419203e8a2cc9a3dd7475f606"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-390-legacy.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 390,
+        "state": "legacy",
+        "sha256": "4eb7ea5598ca8fa80564413814495b8126285a05a2708b540f722e676f0fc4c0"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-390-temporary.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 390,
+        "state": "temporary",
+        "sha256": "8a4719c6fcef5b4a3170a31cb5e8a6be2febe651b4720b0cd1eb4f9198c5f38b"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-800-contract.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 800,
+        "state": "contract",
+        "sha256": "2b5228f85ac9128b9cc8a0d052838dd3eb5c1acefb525267666127be60dcdd53"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-800-declared.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 800,
+        "state": "declared",
+        "sha256": "c1347bb1625418c4657b8729ed9f3285a6b647c186703690ff4294371ae4bbe7"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-800-invalid.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 800,
+        "state": "invalid",
+        "sha256": "f53adafb10eaf21dd4620e506c0aa609c20e3e0c74adfb35ee1a8357fbc1399d"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-800-legacy.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 800,
+        "state": "legacy",
+        "sha256": "94423cb1be716fe96c732241667428d6d6e5266407a0b05fe540d22bf6ce1eed"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-dark-800-temporary.png",
+        "locale": "en",
+        "theme": "dark",
+        "viewportWidth": 800,
+        "state": "temporary",
+        "sha256": "cb90ae9b15e862f059aa66c4faf3d8739728c4dd42cc2866cd8f176e3044dff8"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-1440-contract.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 1440,
+        "state": "contract",
+        "sha256": "844d4ac4d67f81771591a3bff3a94cd997c8e7aa9258d043df5d775b94094848"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-1440-declared.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 1440,
+        "state": "declared",
+        "sha256": "9402617b5bbeb9cd12a0552d3ac3a28fb40797e5fd3880974e76516fa5f80b52"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-1440-invalid.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 1440,
+        "state": "invalid",
+        "sha256": "b810ad2cee3b4e04e364f98091267e96cdc9d174669b5336dd1617095928de1e"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-1440-legacy.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 1440,
+        "state": "legacy",
+        "sha256": "f9df63b3a85327ea7cfd8896568ee71f74dacacbf7fbcbae21f07e51c4d54f38"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-1440-temporary.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 1440,
+        "state": "temporary",
+        "sha256": "9c21dc945ec727444fc8f21bd127893faf78daf77ca7c99160a9a2788d8ab016"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-390-contract.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 390,
+        "state": "contract",
+        "sha256": "721d397a13873843eacf9ae197ce198d505853c7b69aa56038819af0c97d9c15"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-390-declared.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 390,
+        "state": "declared",
+        "sha256": "28e156941c544d16264d7e583807b093bd847b23ea16c7a7218f4238a65a17b3"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-390-invalid.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 390,
+        "state": "invalid",
+        "sha256": "9264f7ee9fa24d4c3c8006963873690d60e78a6600adf39a552c7a14b748eeb7"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-390-legacy.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 390,
+        "state": "legacy",
+        "sha256": "c37a40fdd84b3c54d3025c008021f42b40b0decf35f2600e3703791f50c40b9d"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-390-temporary.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 390,
+        "state": "temporary",
+        "sha256": "b20e5396d19e723bace29524fd4007ea6874d6b172030a8c55c677fc2feb2e67"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-800-contract.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 800,
+        "state": "contract",
+        "sha256": "cd482153b6be8844fabca8c00772e2e013dfd9f0cdcee272ec6b071db97f6d96"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-800-declared.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 800,
+        "state": "declared",
+        "sha256": "881651b91157537accddd7f6d56bfa5bdcff49779fc2df559476ed6c604a72ff"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-800-invalid.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 800,
+        "state": "invalid",
+        "sha256": "670d51eebe281a72e29a4f9c14d917320ad040872a20e4feb15a53abbad74f2b"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-800-legacy.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 800,
+        "state": "legacy",
+        "sha256": "b816fa07e0c6768a89493d550069f8e19216df92bba6511fe649befdf3ee96f1"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/en-light-800-temporary.png",
+        "locale": "en",
+        "theme": "light",
+        "viewportWidth": 800,
+        "state": "temporary",
+        "sha256": "2bc7cec4277964baa373721d7039e97da167055a3899f5c2a4268365ef73eb3d"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-1440-contract.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 1440,
+        "state": "contract",
+        "sha256": "84a9bc092a54da39d64ee8fd51da01b0c63852d51ec02322faae1b638367286c"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-1440-declared.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 1440,
+        "state": "declared",
+        "sha256": "9c89147cc288c7d26fdc09c855ba7d38ff1a5e158fe1f064224525d5c46d17dd"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-1440-invalid.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 1440,
+        "state": "invalid",
+        "sha256": "458fd2c361582141f873d561a5119724243df1ed8f19d06a2c1bf7bc9763477b"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-1440-legacy.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 1440,
+        "state": "legacy",
+        "sha256": "b9b79da1e47bf65788361dcfbc00a5ce814dbed24c8c2638329225ac7d182b99"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-1440-temporary.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 1440,
+        "state": "temporary",
+        "sha256": "ac6ab3240416ab3c63bc29442fb686ebe81333a7af394583e3c01c9da7b63e26"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-390-contract.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 390,
+        "state": "contract",
+        "sha256": "8d692cec8b99b5f641af46e2e7db71d5cf2f66fd9ebb75fb28f1d81e0e572c25"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-390-declared.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 390,
+        "state": "declared",
+        "sha256": "eea45967626d7c90b6f6d357fb4f4708ffa109fb7972af630bb0a2969b07ed63"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-390-invalid.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 390,
+        "state": "invalid",
+        "sha256": "8d11c9a3d7f67d3b5a2f08ca776f7b79ebafe1847112d4b62cf54e19c5910b7d"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-390-legacy.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 390,
+        "state": "legacy",
+        "sha256": "8e3089510e645d0c97fd2894d7061d6899f629596f0ab8f1f7b2bbacae4103a0"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-390-temporary.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 390,
+        "state": "temporary",
+        "sha256": "c65b8e95ab8d227b362e3edba0dda80af4d11c7d3230743a56672f3e3c425338"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-800-contract.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 800,
+        "state": "contract",
+        "sha256": "546d774c2cbbcddf5381fa4a353ec96374f5cfaae121ed4890067d336fed4c91"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-800-declared.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 800,
+        "state": "declared",
+        "sha256": "0257821e61afeeaa74b2a0efe6ae487b94f3b129edcb22e0b1945fdd92557a9c"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-800-invalid.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 800,
+        "state": "invalid",
+        "sha256": "a1a91692c7090e6cb7681f0295b197efcf8bbee7784c343dcd033484ca5dbd25"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-800-legacy.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 800,
+        "state": "legacy",
+        "sha256": "efd84ed8575b0bc6d222542fbfad79da75c0e5228432326e099457d5c3024d29"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-dark-800-temporary.png",
+        "locale": "uk",
+        "theme": "dark",
+        "viewportWidth": 800,
+        "state": "temporary",
+        "sha256": "151b79acaf1bf53b1cefcff0fa4cc8790d45620ab200495bd5da4d734a46d951"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-1440-contract.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 1440,
+        "state": "contract",
+        "sha256": "68b344bfa1917e8d062dc7cc4e7e435c3e98738b84638a4d2d85d9bd6afdc0c3"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-1440-declared.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 1440,
+        "state": "declared",
+        "sha256": "fc9ab19223fb9c259ed121a6d4d06cb939c66f3fd616c1d286bb16e46ceb9a10"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-1440-invalid.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 1440,
+        "state": "invalid",
+        "sha256": "a625634c48cd90e8768dae725cec4121bd79970b3e76a6ec71082ff7ba43be62"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-1440-legacy.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 1440,
+        "state": "legacy",
+        "sha256": "101e8f6e2ad1404d1a7c1fc7ff911a15dc7088b6e0aa0882721c1b4529c99fa2"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-1440-temporary.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 1440,
+        "state": "temporary",
+        "sha256": "ede3a353c16703bbdcf9a485fd1fe4327c25d9e3691d05cf9a649f64121fc25c"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-390-contract.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 390,
+        "state": "contract",
+        "sha256": "2b90e25a2e3e80a55eab829e22bb1e251d148fe3d1a476bce69b1e1ab5e6d2db"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-390-declared.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 390,
+        "state": "declared",
+        "sha256": "615521b36abc3a977d72ab4e1e9d13459ee91e8a687e195fa5b3a56602cf0ed5"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-390-invalid.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 390,
+        "state": "invalid",
+        "sha256": "4be1f3873892a2e02c9481936de7941c0ed70bce8cdfd28cc1a69d05b3f14175"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-390-legacy.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 390,
+        "state": "legacy",
+        "sha256": "24afb0d0723e69c356173f185fe4dab89d2e6336e6c41efa8d867bba8a371682"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-390-temporary.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 390,
+        "state": "temporary",
+        "sha256": "497a420bdf8509a072e58583c2b40f249ddd49ff9166cfa3234f7bd37b551ce7"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-800-contract.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 800,
+        "state": "contract",
+        "sha256": "62c6feeb61625213492941adcef5d95242310cd9be1fc5b346e3c4e75d2c1d0d"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-800-declared.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 800,
+        "state": "declared",
+        "sha256": "8a5bc9650470550145a3f2b73a37a16b73a8f39d129605b9fdf11740aec4389e"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-800-invalid.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 800,
+        "state": "invalid",
+        "sha256": "4c75b7922c94a7198a9366c4755a984fe462f86fd0c8811f778544124226defa"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-800-legacy.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 800,
+        "state": "legacy",
+        "sha256": "a9b2988332ee1d130353d85fbbd694c999278b3722f3432053b1096d7d0019a8"
+      },
+      {
+        "file": ".artifacts/managed-mcp-catalog/after/uk-light-800-temporary.png",
+        "locale": "uk",
+        "theme": "light",
+        "viewportWidth": 800,
+        "state": "temporary",
+        "sha256": "76e2184df13c87d84a485f2d4482ddd7d1c6ff517ee551e6b2864bfc7e76f1a9"
+      }
+    ],
+    "readings": [
+      {
+        "generation": "before",
+        "lang": "en",
+        "theme": "light",
+        "width": 390,
+        "state": "legacy",
+        "cause": "MCP runtime is missing tools: suggest_replies",
+        "guidance": null
+      },
+      {
+        "generation": "before",
+        "lang": "en",
+        "theme": "light",
+        "width": 1440,
+        "state": "legacy",
+        "cause": "MCP runtime is missing tools: suggest_replies",
+        "guidance": null
+      },
+      {
+        "generation": "before",
+        "lang": "en",
+        "theme": "dark",
+        "width": 390,
+        "state": "legacy",
+        "cause": "MCP runtime is missing tools: suggest_replies",
+        "guidance": null
+      },
+      {
+        "generation": "before",
+        "lang": "en",
+        "theme": "dark",
+        "width": 1440,
+        "state": "legacy",
+        "cause": "MCP runtime is missing tools: suggest_replies",
+        "guidance": null
+      },
+      {
+        "generation": "before",
+        "lang": "uk",
+        "theme": "light",
+        "width": 390,
+        "state": "legacy",
+        "cause": "MCP runtime is missing tools: suggest_replies",
+        "guidance": null
+      },
+      {
+        "generation": "before",
+        "lang": "uk",
+        "theme": "light",
+        "width": 1440,
+        "state": "legacy",
+        "cause": "MCP runtime is missing tools: suggest_replies",
+        "guidance": null
+      },
+      {
+        "generation": "before",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 390,
+        "state": "legacy",
+        "cause": "MCP runtime is missing tools: suggest_replies",
+        "guidance": null
+      },
+      {
+        "generation": "before",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 1440,
+        "state": "legacy",
+        "cause": "MCP runtime is missing tools: suggest_replies",
+        "guidance": null
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 390,
+        "state": "legacy",
+        "cause": "The installed updater requires MCP tools this candidate does not provide: suggest_replies.",
+        "guidance": "Deploy again with the same image will not help. Choose a release with the compatibility tools to update the installed updater."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 390,
+        "state": "declared",
+        "cause": "The candidate declares MCP tools it did not register: new_read.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 390,
+        "state": "contract",
+        "cause": "The candidate is missing MCP tools required for deployment: board_snapshot.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 390,
+        "state": "invalid",
+        "cause": "The candidate provided an invalid MCP tool catalog.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 390,
+        "state": "temporary",
+        "cause": "MCP startup timed out",
+        "guidance": "Deploy again may help with a temporary failure. If it repeats, resolve the reported cause before retrying."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 800,
+        "state": "legacy",
+        "cause": "The installed updater requires MCP tools this candidate does not provide: suggest_replies.",
+        "guidance": "Deploy again with the same image will not help. Choose a release with the compatibility tools to update the installed updater."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 800,
+        "state": "declared",
+        "cause": "The candidate declares MCP tools it did not register: new_read.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 800,
+        "state": "contract",
+        "cause": "The candidate is missing MCP tools required for deployment: board_snapshot.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 800,
+        "state": "invalid",
+        "cause": "The candidate provided an invalid MCP tool catalog.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 800,
+        "state": "temporary",
+        "cause": "MCP startup timed out",
+        "guidance": "Deploy again may help with a temporary failure. If it repeats, resolve the reported cause before retrying."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 1440,
+        "state": "legacy",
+        "cause": "The installed updater requires MCP tools this candidate does not provide: suggest_replies.",
+        "guidance": "Deploy again with the same image will not help. Choose a release with the compatibility tools to update the installed updater."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 1440,
+        "state": "declared",
+        "cause": "The candidate declares MCP tools it did not register: new_read.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 1440,
+        "state": "contract",
+        "cause": "The candidate is missing MCP tools required for deployment: board_snapshot.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 1440,
+        "state": "invalid",
+        "cause": "The candidate provided an invalid MCP tool catalog.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "light",
+        "width": 1440,
+        "state": "temporary",
+        "cause": "MCP startup timed out",
+        "guidance": "Deploy again may help with a temporary failure. If it repeats, resolve the reported cause before retrying."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 390,
+        "state": "legacy",
+        "cause": "The installed updater requires MCP tools this candidate does not provide: suggest_replies.",
+        "guidance": "Deploy again with the same image will not help. Choose a release with the compatibility tools to update the installed updater."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 390,
+        "state": "declared",
+        "cause": "The candidate declares MCP tools it did not register: new_read.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 390,
+        "state": "contract",
+        "cause": "The candidate is missing MCP tools required for deployment: board_snapshot.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 390,
+        "state": "invalid",
+        "cause": "The candidate provided an invalid MCP tool catalog.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 390,
+        "state": "temporary",
+        "cause": "MCP startup timed out",
+        "guidance": "Deploy again may help with a temporary failure. If it repeats, resolve the reported cause before retrying."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 800,
+        "state": "legacy",
+        "cause": "The installed updater requires MCP tools this candidate does not provide: suggest_replies.",
+        "guidance": "Deploy again with the same image will not help. Choose a release with the compatibility tools to update the installed updater."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 800,
+        "state": "declared",
+        "cause": "The candidate declares MCP tools it did not register: new_read.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 800,
+        "state": "contract",
+        "cause": "The candidate is missing MCP tools required for deployment: board_snapshot.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 800,
+        "state": "invalid",
+        "cause": "The candidate provided an invalid MCP tool catalog.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 800,
+        "state": "temporary",
+        "cause": "MCP startup timed out",
+        "guidance": "Deploy again may help with a temporary failure. If it repeats, resolve the reported cause before retrying."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 1440,
+        "state": "legacy",
+        "cause": "The installed updater requires MCP tools this candidate does not provide: suggest_replies.",
+        "guidance": "Deploy again with the same image will not help. Choose a release with the compatibility tools to update the installed updater."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 1440,
+        "state": "declared",
+        "cause": "The candidate declares MCP tools it did not register: new_read.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 1440,
+        "state": "contract",
+        "cause": "The candidate is missing MCP tools required for deployment: board_snapshot.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 1440,
+        "state": "invalid",
+        "cause": "The candidate provided an invalid MCP tool catalog.",
+        "guidance": "Deploy again with the same image will not help. Choose a corrected release."
+      },
+      {
+        "generation": "after",
+        "lang": "en",
+        "theme": "dark",
+        "width": 1440,
+        "state": "temporary",
+        "cause": "MCP startup timed out",
+        "guidance": "Deploy again may help with a temporary failure. If it repeats, resolve the reported cause before retrying."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 390,
+        "state": "legacy",
+        "cause": "Встановлений оновлювач вимагає інструменти MCP, яких немає в кандидата: suggest_replies.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть реліз із сумісними інструментами, щоб оновити встановлений оновлювач."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 390,
+        "state": "declared",
+        "cause": "Кандидат заявляє інструменти MCP, які не зареєстрував: new_read.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 390,
+        "state": "contract",
+        "cause": "У кандидата відсутні інструменти MCP, потрібні для розгортання: board_snapshot.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 390,
+        "state": "invalid",
+        "cause": "Кандидат надав некоректний каталог інструментів MCP.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 390,
+        "state": "temporary",
+        "cause": "MCP startup timed out",
+        "guidance": "«Розгорнути ще раз» може допомогти за тимчасового збою. Якщо він повториться, усуньте вказану причину перед новою спробою."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 800,
+        "state": "legacy",
+        "cause": "Встановлений оновлювач вимагає інструменти MCP, яких немає в кандидата: suggest_replies.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть реліз із сумісними інструментами, щоб оновити встановлений оновлювач."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 800,
+        "state": "declared",
+        "cause": "Кандидат заявляє інструменти MCP, які не зареєстрував: new_read.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 800,
+        "state": "contract",
+        "cause": "У кандидата відсутні інструменти MCP, потрібні для розгортання: board_snapshot.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 800,
+        "state": "invalid",
+        "cause": "Кандидат надав некоректний каталог інструментів MCP.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 800,
+        "state": "temporary",
+        "cause": "MCP startup timed out",
+        "guidance": "«Розгорнути ще раз» може допомогти за тимчасового збою. Якщо він повториться, усуньте вказану причину перед новою спробою."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 1440,
+        "state": "legacy",
+        "cause": "Встановлений оновлювач вимагає інструменти MCP, яких немає в кандидата: suggest_replies.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть реліз із сумісними інструментами, щоб оновити встановлений оновлювач."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 1440,
+        "state": "declared",
+        "cause": "Кандидат заявляє інструменти MCP, які не зареєстрував: new_read.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 1440,
+        "state": "contract",
+        "cause": "У кандидата відсутні інструменти MCP, потрібні для розгортання: board_snapshot.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 1440,
+        "state": "invalid",
+        "cause": "Кандидат надав некоректний каталог інструментів MCP.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "light",
+        "width": 1440,
+        "state": "temporary",
+        "cause": "MCP startup timed out",
+        "guidance": "«Розгорнути ще раз» може допомогти за тимчасового збою. Якщо він повториться, усуньте вказану причину перед новою спробою."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 390,
+        "state": "legacy",
+        "cause": "Встановлений оновлювач вимагає інструменти MCP, яких немає в кандидата: suggest_replies.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть реліз із сумісними інструментами, щоб оновити встановлений оновлювач."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 390,
+        "state": "declared",
+        "cause": "Кандидат заявляє інструменти MCP, які не зареєстрував: new_read.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 390,
+        "state": "contract",
+        "cause": "У кандидата відсутні інструменти MCP, потрібні для розгортання: board_snapshot.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 390,
+        "state": "invalid",
+        "cause": "Кандидат надав некоректний каталог інструментів MCP.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 390,
+        "state": "temporary",
+        "cause": "MCP startup timed out",
+        "guidance": "«Розгорнути ще раз» може допомогти за тимчасового збою. Якщо він повториться, усуньте вказану причину перед новою спробою."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 800,
+        "state": "legacy",
+        "cause": "Встановлений оновлювач вимагає інструменти MCP, яких немає в кандидата: suggest_replies.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть реліз із сумісними інструментами, щоб оновити встановлений оновлювач."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 800,
+        "state": "declared",
+        "cause": "Кандидат заявляє інструменти MCP, які не зареєстрував: new_read.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 800,
+        "state": "contract",
+        "cause": "У кандидата відсутні інструменти MCP, потрібні для розгортання: board_snapshot.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 800,
+        "state": "invalid",
+        "cause": "Кандидат надав некоректний каталог інструментів MCP.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 800,
+        "state": "temporary",
+        "cause": "MCP startup timed out",
+        "guidance": "«Розгорнути ще раз» може допомогти за тимчасового збою. Якщо він повториться, усуньте вказану причину перед новою спробою."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 1440,
+        "state": "legacy",
+        "cause": "Встановлений оновлювач вимагає інструменти MCP, яких немає в кандидата: suggest_replies.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть реліз із сумісними інструментами, щоб оновити встановлений оновлювач."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 1440,
+        "state": "declared",
+        "cause": "Кандидат заявляє інструменти MCP, які не зареєстрував: new_read.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 1440,
+        "state": "contract",
+        "cause": "У кандидата відсутні інструменти MCP, потрібні для розгортання: board_snapshot.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 1440,
+        "state": "invalid",
+        "cause": "Кандидат надав некоректний каталог інструментів MCP.",
+        "guidance": "«Розгорнути ще раз» із тим самим образом не допоможе. Виберіть виправлений реліз."
+      },
+      {
+        "generation": "after",
+        "lang": "uk",
+        "theme": "dark",
+        "width": 1440,
+        "state": "temporary",
+        "cause": "MCP startup timed out",
+        "guidance": "«Розгорнути ще раз» може допомогти за тимчасового збою. Якщо він повториться, усуньте вказану причину перед новою спробою."
+      }
+    ]
+  },
+  "notes": [
+    "Initial sibling-config isolation caused six launcher/adapter timeouts on both main and head. Nesting sandbox paths fixed the probe file; the bootstrap adapter fixture now uses its entire sandbox as TMPDIR. Final runs pass.",
+    "The unadapted Viewer verifier refused one module under the stage scratch layout; its private TMPDIR-only adaptation loaded all 25 modules and served HTTP 200.",
+    "The full type check was rerun successfully after correcting two test result types. A long combined campaign was interrupted during a prior type-check attempt; the final compiler run used its own owned runner.",
+    "Two existing Docker busy-container/native-worker adapter cases remain opt-in and skipped.",
+    "Required hosted checks follow Delegatus publication. No deployment was part of this verification."
+  ]
+}

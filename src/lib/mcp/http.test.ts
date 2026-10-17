@@ -7,7 +7,11 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { NextRequest } from "next/server";
+import { ownFixtureChild, reapFixtureChildren } from "./ownedFixtureChildren";
+import { awaitFixtureFile } from "./fixtureBarrier";
 
 /**
  * The shared Streamable HTTP endpoint, driven at its public boundary.
@@ -30,15 +34,65 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-http-"));
 for (const key of Object.keys(process.env)) {
   if (key.startsWith("LLV_") || key.startsWith("NEXT_PUBLIC_")) delete process.env[key];
 }
-for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
+for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"]) {
   process.env[key] = path.join(sandbox, key);
   fs.mkdirSync(process.env[key]!, { recursive: true });
 }
+process.env.TMPDIR = sandbox;
+fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), JSON.stringify({
+  schemaVersion: 1, aliases: {}, displayNames: { viewer: "Fixture Viewer" },
+}));
 
 const { agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const route = await import("@/app/api/mcp/route");
-const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, SqliteMcpReceiptStore } = await import("./server");
+const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, SqliteMcpReceiptStore, withMcpDispatchTurns } = await import("./server");
 const { productionViewerControlDependencies, sendDownstreamKey, viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy } = await import("./bindings");
+
+test("a tool server still validates elicited content when its JSON Schema validator starts lazily", async () => {
+  const server = createViewerMcpServer({ async callTool() { throw new Error("no tool expected"); } });
+  const client = new Client({ name: "elicitation-fixture", version: "1" }, { capabilities: { elicitation: { form: {} } } });
+  let content: Record<string, string | number> = { value: "accepted" };
+  client.setRequestHandler(ElicitRequestSchema, async () => ({ action: "accept", content }));
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverSide), client.connect(clientSide)]);
+  const params = { message: "Fixture value", requestedSchema: {
+    type: "object" as const, properties: { value: { type: "string" as const } }, required: ["value"],
+  } };
+  try {
+    expect(await server.server.elicitInput(params)).toMatchObject({ action: "accept", content: { value: "accepted" } });
+    content = { value: 42 };
+    await expect(server.server.elicitInput(params)).rejects.toThrow("does not match requested schema");
+    content = { value: "accepted again" };
+    expect(await server.server.elicitInput(params)).toMatchObject({ action: "accept", content });
+  } finally { await Promise.all([client.close(), server.close()]); }
+});
+
+test("MCP dispatch yields to timers, preserves each caller and keeps awaited operations concurrent", async () => {
+  const { runAsMcpHttpCaller, currentMcpHttpCaller } = await import("./callerContext");
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let timerRan = false;
+  const timer = setTimeout(() => { timerRan = true; }, 0);
+  const observed: Array<string | undefined> = [];
+  const service = withMcpDispatchTurns({ async callTool(toolName, args) {
+    observed.push(currentMcpHttpCaller()?.capability);
+    if (args.clientRequestId === "held") await held;
+    return { ok: true, toolName: toolName as import("./server").McpToolName, clientRequestId: String(args.clientRequestId), replayed: false };
+  } });
+  const first = runAsMcpHttpCaller({ capability: "fixture-first" }, () => service.callTool("list_tasks", { clientRequestId: "held" }));
+  try {
+    const second = await runAsMcpHttpCaller({ capability: "fixture-second" }, () => service.callTool("list_tasks", { clientRequestId: "free" }));
+    expect(second.ok).toBe(true);
+    expect(timerRan).toBe(true);
+    expect(observed).toEqual(["fixture-first", "fixture-second"]);
+  } finally { clearTimeout(timer); release(); await first; }
+  const cancelled = new AbortController(); cancelled.abort();
+  const refused = await service.callTool("create_task", { clientRequestId: "original-key" }, { signal: cancelled.signal });
+  expect(refused).toMatchObject({ ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
+  expect(observed).toHaveLength(2);
+  expect((await service.callTool("create_task", { clientRequestId: "original-key" })).ok).toBe(true);
+  expect(observed).toHaveLength(3);
+});
 
 interface Delivery {
   capability: string | null;
@@ -119,7 +173,11 @@ function launchAgent(title: string): Agent {
   return { conversationId: receipt.conversationId, launchId: receipt.launchId, capability: registry.rotateSpawnCapabilityForReceipt(receipt.launchId) };
 }
 
-beforeAll(() => {
+beforeAll(async () => {
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const at = "2026-10-01T00:00:00.000Z";
+  beginOrchestratorSeatIntent({ project: "viewer", mandate: "Fixture board", clientRequestId: "http-fixture-seat", mode: "existing", now: at });
+  completeOrchestratorSeatIntent({ project: "viewer", clientRequestId: "http-fixture-seat", conversationId: "conversation_http_fixture_seat", path: null, preparedAuthCredentialBaseline: null, now: at });
   listener = serveViewer(0);
   port = listener.port!;
   origin = `http://127.0.0.1:${port}`;
@@ -129,8 +187,10 @@ beforeAll(() => {
   bob = launchAgent("HTTP MCP caller B");
 });
 
-afterAll(() => {
+afterAll(async () => {
   listener?.stop(true);
+  await (await import("./taskExecutor")).viewerTaskExecutor().close();
+  await reapFixtureChildren();
   setAgentRegistryForTests(null);
   for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key];
   Object.assign(process.env, originalEnv);
@@ -160,9 +220,126 @@ function payloadOf(result: Awaited<ReturnType<Client["callTool"]>>): Record<stri
   return (result.structuredContent ?? {}) as Record<string, unknown>;
 }
 
+async function holdReceiptLock(holdMs: number) {
+  const filename = path.join(process.env.LLV_STATE_DIR!, "mcp-receipts.sqlite");
+  new SqliteMcpReceiptStore(filename).close();
+  const ready = path.join(sandbox, `lock-${crypto.randomUUID()}`);
+  const release = `${ready}-release`;
+  const child = ownFixtureChild(Bun.spawn([process.execPath, path.join(import.meta.dir, "receiptStoreProbeChild.ts"),
+    "hold-sqlite", filename, ready, release, String(holdMs)], { env: process.env, stdout: "pipe", stderr: "pipe" }));
+  await awaitFixtureFile(ready);
+  return { child, async close() {
+    fs.writeFileSync(release, "released");
+    expect(await child.exited).toBe(0);
+    expect(await new Response(child.stderr).text()).toBe("");
+  } };
+}
+
+test("HTTP retries a failed first inline initialization and original keys without repeating a write", async () => {
+  const client = await agentClient(alice);
+  // The task executor warms the HTTP wrapper without opening its inline store.
+  await client.callTool({ name: "get_task", arguments: { taskId: "missing-task" } });
+  const lock = await holdReceiptLock(6200);
+  const args = { limit: 1, clientRequestId: "first-inline-read" };
+  try {
+    const [read, write] = await Promise.all([
+      client.callTool({ name: "list_flows", arguments: args }),
+      send(client, "first-inline-send"),
+    ]);
+    expect(read.isError).toBe(true);
+    expect(write.isError).toBe(true);
+    expect(JSON.stringify(read.content)).toMatch(/state admission timed out|database is locked/);
+    expect(deliveries).toHaveLength(0);
+    expect(await lock.child.exited).toBe(0);
+    expect(payloadOf(await client.callTool({ name: "list_flows", arguments: args }))).toMatchObject({ ok: true });
+    expect(payloadOf(await client.callTool({ name: "list_flows", arguments: { limit: 1, clientRequestId: "after-inline-failure" } })))
+      .toMatchObject({ ok: true });
+    expect(payloadOf(await send(client, "first-inline-send"))).toMatchObject({ ok: true });
+    expect(payloadOf(await send(client, "first-inline-send"))).toMatchObject({ ok: true, replayed: true });
+    expect(deliveries).toHaveLength(1);
+  } finally { await lock.close(); await client.close(); }
+}, 20_000);
+
+test("forwarded stdio receipt contention yields on the Viewer and preserves replay", async () => {
+  const client = new Client({ name: "receipt-contention", version: "1" });
+  const transport = new StdioClientTransport({ command: process.execPath,
+    args: [path.join(import.meta.dir, "entry.ts")],
+    env: Object.fromEntries(Object.entries({ ...process.env, LLV_SPAWN_CAPABILITY: alice.capability })
+      .filter((entry): entry is [string, string] => entry[1] !== undefined)), stderr: "pipe" });
+  await client.connect(transport);
+  await client.callTool({ name: "list_flows", arguments: { limit: 1 } });
+  const lock = await holdReceiptLock(1200);
+  const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
+  const start = performance.now();
+  let previous = start, maxGapMs = 0;
+  const timer = setInterval(() => {
+    const now = performance.now(); maxGapMs = Math.max(maxGapMs, now - previous); previous = now;
+  }, 5);
+  const args = { limit: 1, clientRequestId: "stdio-held-receipt" };
+  try {
+    expect(payloadOf(await client.callTool({ name: "list_flows", arguments: args }))).toMatchObject({ ok: true });
+    await new Promise<void>(resolve => setTimeout(resolve, 10));
+    const slices = performanceSpans.snapshot(start).records.filter(row => row.kind === "sync"
+      && performanceSites[row.site] === "state.write-wait");
+    const maxSliceMs = Math.max(0, ...slices.map(row => row.maxMs));
+    console.info(`[receipt contention] ${JSON.stringify({ maxGapMs, maxSliceMs })}`);
+    expect(maxGapMs).toBeLessThan(50);
+    expect(slices.length).toBeGreaterThan(0);
+    expect(maxSliceMs).toBeLessThan(50);
+    expect(payloadOf(await client.callTool({ name: "list_flows", arguments: args }))).toMatchObject({ ok: true, replayed: true });
+    expect(payloadOf(await send(client, "stdio-held-send"))).toMatchObject({ ok: true });
+    expect(payloadOf(await send(client, "stdio-held-send"))).toMatchObject({ ok: true, replayed: true });
+    expect(deliveries).toHaveLength(1);
+  } finally { clearInterval(timer); await lock.close(); await client.close(); }
+}, 20_000);
+
+test("task HTTP execution preserves protocol validation, exact text, caller receipts and replay", async () => {
+  const client = await agentClient(alice);
+  const details = "First line\nA tab\tand a backslash \\ with Unicode λ";
+  const args = { project: "Fixture Viewer", text: "Task HTTP executor fixture", details, board: "hidden", clientRequestId: "http-task-protocol" };
+  try {
+    const invalid = payloadOf(await client.callTool({ name: "create_task", arguments: { ...args, steps: "invalid" } }));
+    expect(invalid).toMatchObject({ ok: false, code: "TASK_INVALID_FIELD" });
+    const created = payloadOf(await client.callTool({ name: "create_task", arguments: { ...args, full: true } }));
+    expect(created).toMatchObject({ ok: true, task: { text: args.text, details } });
+    expect(payloadOf(await client.callTool({ name: "create_task", arguments: { ...args, full: true } })))
+      .toMatchObject({ ok: true, replayed: true, taskId: created.taskId, revision: created.revision });
+    const other = await agentClient(bob);
+    try {
+      expect(payloadOf(await other.callTool({ name: "create_task", arguments: { ...args, full: true } })))
+        .toMatchObject({ ok: true, replayed: true, taskId: created.taskId, revision: created.revision,
+          task: { statusBy: (created.task as { statusBy: unknown }).statusBy } });
+      expect(payloadOf(await other.callTool({ name: "update_task", arguments: {
+        taskId: created.taskId, note: "Second caller note", clientRequestId: "http-task-note", full: true,
+      } }))).toMatchObject({ ok: true, task: { note: { author: { conversationId: bob.conversationId } } } });
+    } finally { await other.close(); }
+    expect(payloadOf(await client.callTool({ name: "get_task", arguments: { taskId: created.taskId, full: true } })))
+      .toMatchObject({ ok: true, task: { text: args.text, details } });
+  } finally { await client.close(); }
+});
+
 function send(client: Client, clientRequestId: string, to: Agent = bob) {
   return client.callTool({ name: "send_message", arguments: { clientRequestId, conversationId: to.conversationId, text: "hello over http" } });
 }
+
+test("an authenticated compatibility adapter keeps unidentified authority and cannot borrow a launch identity", async () => {
+  const { internalServiceHeaders } = await import("@/lib/agent/callerClaims");
+  const headers = { ...internalServiceHeaders("mcp"), "x-delegatus-mcp-unattributed": "1" };
+  await expect(httpClient({ "x-delegatus-mcp-unattributed": "1" })).rejects.toThrow();
+  await expect(httpClient({ ...headers, "x-llv-spawn-capability": "unknown" })).rejects.toThrow();
+  const client = await httpClient(headers);
+  const previous = process.env.LLV_SPAWN_CAPABILITY;
+  process.env.LLV_SPAWN_CAPABILITY = alice.capability;
+  try {
+    expect(payloadOf(await client.callTool({ name: "list_tasks", arguments: { ids: ["absent"] } }))).toMatchObject({ ok: true });
+    expect(payloadOf(await send(client, "compatibility-unidentified"))).toMatchObject({ ok: false, code: "caller_unidentified" });
+    expect(deliveries).toHaveLength(0);
+  } finally {
+    await client.close();
+    if (previous === undefined) delete process.env.LLV_SPAWN_CAPABILITY;
+    else process.env.LLV_SPAWN_CAPABILITY = previous;
+  }
+});
 
 async function inMemoryAgentClient() {
   process.env.LLV_SPAWN_CAPABILITY = alice.capability;
@@ -306,6 +483,7 @@ test("the HTTP endpoint publishes exactly the stdio server's tools, schemas and 
     const [overHttp, overStdio] = await Promise.all([http.listTools(), stdio.listTools()]);
     expect(overHttp.tools.length).toBeGreaterThan(30);
     expect(overHttp.tools).toEqual(overStdio.tools);
+    expect(overHttp.tools.map(tool => tool.name)).not.toContain("suggest_replies");
     expect(http.getInstructions()).toBe(stdio.getInstructions());
     expect(http.getServerVersion()).toEqual(stdio.getServerVersion());
   } finally {

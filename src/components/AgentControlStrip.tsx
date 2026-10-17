@@ -702,7 +702,7 @@ export function AgentMoreMenu({ actions }: { actions: AgentControlActions }) {
           aria-expanded={position !== null}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={toggle}
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-muted hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="composer-ghost inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-muted hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         >
           {actions.compactBusy || actions.recheckBusy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <MoreHorizontal className="h-4 w-4" aria-hidden />}
         </button>

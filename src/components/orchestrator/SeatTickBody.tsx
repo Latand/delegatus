@@ -300,13 +300,16 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
     setRuntimeError(null);
     if (requestDirty) await read.save(change);
     if (roleDirty && runtimeDraft) {
+      /* The picker shows the new runtime as stored at once; a refusal puts the
+         operator's choice back as a draft beside the reason. A mapping that
+         moved under the panel shows the current value instead. */
+      const drafted = runtimeDraft;
+      setRuntimeDraft(null);
       setRoleSaving(true);
-      const result = await maintainer.save(runtimeDraft);
+      const result = await maintainer.save(drafted);
       setRoleSaving(false);
       if (!result.ok) setRuntimeError(result.error);
-      /* Saved, or the mapping moved under the panel: either way the stored
-         value is what the picker shows next. */
-      if (result.ok || result.stale) setRuntimeDraft(null);
+      if (!result.ok && !result.stale) setRuntimeDraft(drafted);
     }
   };
 

@@ -5,13 +5,13 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import { canonicalProject } from "@/lib/projects/aliases";
-import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
 
 import { appendRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
 import { roleMemoryEnabled } from "./settings";
 import { curationView } from "./curation/store";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
-import { renderLearnedRules } from "./roleRender";
+import { renderLearnedRulesSelection } from "./roleRender";
 import {
   MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
@@ -34,10 +34,12 @@ import {
    same aliases without writing. */
 
 const COLLECTION = "role_memory";
-const HISTORY_LIMIT = 500;
-/** Pass rollback records cannot age out while the window still offers Undo. */
+export const ROLE_MEMORY_HISTORY_LIMIT = 10_000;
+/** Keep 10,000 ordinary changes independently of every curator Undo record.
+ * At 141 daily writes this covers over 70 days; delivery rows keep their own
+ * ordered ids and content hashes, so reconstruction never depends on this window. */
 function keepHistory(entries: ScopeHistoryEntry[]): ScopeHistoryEntry[] {
-  const recent = new Set(entries.slice(-HISTORY_LIMIT));
+  const recent = new Set(entries.filter(entry => !entry.pass).slice(-ROLE_MEMORY_HISTORY_LIMIT));
   return entries.filter(entry => !!entry.pass || recent.has(entry));
 }
 
@@ -177,18 +179,27 @@ export function activeRules(scope: string): RoleMemoryRule[] {
 }
 
 /** The block a new stage of this role and project starts with. */
-export function learnedRulesBlock(project: string, roleId: string | null, maxBytes = Infinity): string {
+export function learnedRulesSnapshot(project: string, roleId: string | null, maxBytes = Infinity) {
   // A process start resolves aliases in its snapshot; it never joins or migrates state.
   const all = rows();
   const resolve = scopeResolver();
   const byId = new Map(all.flatMap(row => row.kind === "rule" ? [[row.id, row] as const] : []));
-  return renderLearnedRules(readableScopes(project, roleId).map(scope => {
+  const scopes = readableScopes(project, roleId).map(scope => {
     const active = all.flatMap(row => row.kind === "scope" && resolve(row.scope) === scope ? row.active : [])
       .flatMap(id => { const found = byId.get(id); return found?.state === "active" && !found.versionOf ? [found] : []; });
     // Two aliased rows can exceed one scope's bound before an owner joins them.
     // Apply the same retention decision to this snapshot without writing it.
-    return { scope, rules: retainRules(active, new Date().toISOString()).active.reverse() };
-  }), maxBytes);
+    const revisions = all.flatMap(row => row.kind === "scope" && resolve(row.scope) === scope
+      ? [{ scope: row.scope, revision: row.revision, revisionScope: row.revisionScope ?? row.scope }] : []);
+    return { scope, revisions, rules: retainRules(active, new Date().toISOString()).active.reverse() };
+  });
+  const rendered = renderLearnedRulesSelection(scopes, maxBytes);
+  return { block: rendered.block, scopes: scopes.map(({ scope, revisions }) => ({ scope, revisions })),
+    rules: rendered.rules.map(rule => ({ id: rule.id, hash: crypto.createHash("sha256").update(rule.rule).digest("hex") })) };
+}
+
+export function learnedRulesBlock(project: string, roleId: string | null, maxBytes = Infinity): string {
+  return learnedRulesSnapshot(project, roleId, maxBytes).block;
 }
 
 export function lessonRequest(pipelineId: string, stageId: string, attempt: number): LessonRequestRow | null {
@@ -567,10 +578,34 @@ export function storedLessonTexts(): string[] {
 const LESSON_MATCHER_SOURCE_LIMIT = 32_000;
 interface LessonMatcher { pattern: RegExp; prefilter: RegExp | null }
 interface LessonSource { source: string; words: string[]; anchor?: string }
-let matcherCache: { key: string; matchers: LessonMatcher[] } | null = null;
+let matcherCache: { key: string; matchers: LessonMatcher[]; skipped: number } | null = null;
+/** The readable store revision and file identity, without cloning its rows. */
+const privacyRevisionHost = globalThis as typeof globalThis & {
+  __llvLessonPrivacyRevision?: { file: string; signature: string; revision: string };
+};
+export function storedLessonRevision(): string {
+  try {
+    const file = statePath("state.sqlite");
+    const identity = () => {
+      const stat = fs.statSync(file, { bigint: true, throwIfNoEntry: false });
+      return stat ? `${stat.dev}:${stat.ino}:${stat.ctimeNs}` : "absent";
+    };
+    const signature = `${identity()}:${stateDatabaseSignature(file)}`;
+    const cached = privacyRevisionHost.__llvLessonPrivacyRevision;
+    if (cached?.file === file && cached.signature === signature) return cached.revision;
+    const held = roleMemoryCollection();
+    const stat = held ? fs.statSync(held.filename, { bigint: true }) : null;
+    const revision = held && stat ? `${stat.dev}:${stat.ino}:${held.signature()}` : "";
+    if (`${identity()}:${stateDatabaseSignature(file)}` === signature) privacyRevisionHost.__llvLessonPrivacyRevision = { file, signature, revision };
+    return revision;
+  } catch { throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE); }
+}
+
 /** Bounded alternatives in longest-first order, cached for this store signature. */
 function storedLessonMatchers(): LessonMatcher[] {
-  const { rows: all, signature } = readableRows();
+  const signature = storedLessonRevision();
+  if (matcherCache?.key === signature) return matcherCache.matchers;
+  const { rows: all } = readableRows();
   if (matcherCache?.key !== signature) {
     const matchers: LessonMatcher[] = [];
     let skipped = 0;
@@ -624,7 +659,8 @@ function storedLessonMatchers(): LessonMatcher[] {
       chunk.push(source);
     }
     compile(chunk);
-    matcherCache = { key: signature, matchers };
+    if (storedLessonRevision() !== signature) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE);
+    matcherCache = { key: signature, matchers, skipped };
     if (skipped) console.warn(`stored-lesson matcher skipped ${skipped} oversized or uncompilable lesson text(s)`);
   }
   return matcherCache.matchers;
@@ -668,8 +704,11 @@ export function withoutStoredLessons(text: string): string {
 
 /** withoutStoredLessons over every text a record holds, however deep; the
     record itself when none quotes a lesson. */
-export function withoutStoredLessonsIn<T>(value: T): T {
+export function withoutStoredLessonsIn<T>(value: T, options: { requireComplete?: boolean } = {}): T {
   const matchers = storedLessonMatchers();
+  if (options.requireComplete && matcherCache?.skipped) {
+    throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "a stored lesson could not be compiled by the privacy matcher; nothing was sent");
+  }
   if (!matchers.length) return value;
   const walk = (item: unknown): unknown => {
     if (typeof item === "string") return withholdLessons(item, matchers);

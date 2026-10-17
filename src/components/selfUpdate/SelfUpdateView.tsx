@@ -15,6 +15,7 @@ import {
   day,
   duration,
   headerStatus,
+  managedRetryText,
   checkErrorText,
   processErrorText,
   refusalText,
@@ -376,6 +377,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
   const remoteMoved = !managed && failed.failure?.kind === "remote-moved";
   const failedName = stepName(failed.name, t);
   const cause = stepFailureText(failed, t);
+  const retryGuidance = managed ? managedRetryText(failed, t) : undefined;
   const copy = managed
     ? t(update.rollback === "running" ? "selfUpdate.update.rollbackPending" : update.rolledBack ? "selfUpdate.update.rolledBack" : "selfUpdate.update.failedManaged", { step: failedName, duration: duration(elapsed, t) })
     : t(failed.name === "switch" ? update.rolledBack ? "selfUpdate.update.rolledBackApply" : "selfUpdate.update.failedApply"
@@ -393,6 +395,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
             tone={freshTarget ? "secondary" : "primary"}
             label={managed ? t("selfUpdate.update.deployAgain") : t("selfUpdate.update.retryFrom", { step: failedName })}
             onClick={actions.retry}
+            title={retryGuidance}
             disabled={s.busy !== null || state.pending.has("update")}
           /> : null}
         </div>
@@ -400,6 +403,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
       <div data-outcome="failed" className="flex flex-col gap-1 rounded-[8px] bg-danger-soft px-2.5 py-2 text-ui text-danger">
         <p className="m-0">{copy}</p>
         {cause ? <p data-cause="" className="m-0 font-mono text-label [overflow-wrap:anywhere]">{cause}</p> : null}
+        {retryGuidance ? <p data-retry-guidance="" className="m-0 text-label [overflow-wrap:anywhere]">{retryGuidance}</p> : null}
       </div>
       {steps(short, update.steps)}
     </section>

@@ -13,7 +13,7 @@ import { isEngineEffort } from "@/lib/agent/efforts";
 import { ENGINE_MODELS } from "@/lib/agent/models";
 import type { FlowEngine } from "@/lib/flows/types";
 import { useLocale } from "@/lib/i18n";
-import type { PatchPipelineRequest, PipelineRoleId } from "@/lib/pipelines/types";
+import type { PatchPipelineRequest, Pipeline, PipelineRoleId } from "@/lib/pipelines/types";
 import { renderStagePrompt } from "@/lib/pipelines/prompts";
 import { StageGlyph } from "@/components/kanban/StageGlyph";
 import { defaultRoleParameterValues } from "@/lib/roles/parameters";
@@ -63,6 +63,25 @@ function sanitizeParams(params: Record<string, string | number>): Record<string,
  * the stage materializes a node/deck, the layout dissolves this slot and the
  * live chat window takes over the footprint.
  */
+/** The record an unstarted stage's override leaves, as far as the client can
+    tell: the runtime fields and the role it names, and its first message. The
+    role's own defaults are the server's to resolve, so the echo completes them. */
+function predictedOverride(pipeline: Pipeline, stageId: string, body: Omit<PatchPipelineRequest, "action" | "stageId">): Pipeline {
+  return {
+    ...pipeline,
+    stages: pipeline.stages.map((stage) => {
+      if (stage.id !== stageId) return stage;
+      const next = { ...stage, effectiveRole: { ...stage.effectiveRole } };
+      if (body.engine !== undefined && body.engine !== null) { next.engine = body.engine; next.effectiveRole.engine = body.engine; }
+      if (body.model !== undefined) { next.model = body.model; next.effectiveRole.model = body.model ?? null; }
+      if (body.effort !== undefined) { next.effort = body.effort; next.effectiveRole.effort = body.effort ?? null; }
+      if (body.role !== undefined) { if (body.role) next.role = body.role; else delete next.role; }
+      if (typeof body.prompt === "string") next.prompt = body.prompt;
+      return next;
+    }),
+  };
+}
+
 export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; interactive: boolean }) {
   const { t } = useLocale();
   const { pipeline, stage } = slot;
@@ -122,14 +141,16 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
     setExtraPrompt((current) => (current === previous ? stagePromptExtra(stage.prompt) : current));
   }
 
-  const save = async (body: Omit<PatchPipelineRequest, "action" | "stageId">) => {
-    setBusy(true);
+  /* A configuration save is drawn at once on every surface through the
+     pipeline overlay, with no control lock; a refusal takes the overlay back,
+     which re-seeds the controls above from the stored stage (audit B11). */
+  const save = async (body: Omit<PatchPipelineRequest, "action" | "stageId">): Promise<string | null> => {
     setError(null);
     setSaved(false);
-    const fail = await patchPipeline(pipeline.id, "override-stage", { stageId: stage.id, ...body });
+    const fail = await patchPipeline(pipeline.id, "override-stage", { stageId: stage.id, ...body }, predictedOverride(pipeline, stage.id, body));
     if (fail) setError(fail);
     else setSaved(true);
-    setBusy(false);
+    return fail;
   };
   const changeEngine = (next: FlowEngine) => {
     if (next === engine) return;
@@ -158,7 +179,7 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
     }
     setApplyState("saving");
     setError(null);
-    const fail = await patchPipeline(pipeline.id, "override-stage", { stageId: stage.id, ...body });
+    const fail = await patchPipeline(pipeline.id, "override-stage", { stageId: stage.id, ...body }, predictedOverride(pipeline, stage.id, body));
     if (fail) {
       setError(fail);
       setApplyState("error");
@@ -185,7 +206,9 @@ export function StagePlaceholderPane({ slot, interactive }: { slot: StageSlot; i
   const promptDirty = extraPrompt.trim() !== stagePromptExtra(stage.prompt);
   const savePrompt = () => {
     if (!promptDirty) return;
-    void save({ prompt: buildStagePrompt(stage.prompt, extraPrompt, slot.index) });
+    const typed = extraPrompt;
+    /* A refused prompt keeps the words that were typed, beside the reason. */
+    void save({ prompt: buildStagePrompt(stage.prompt, typed, slot.index) }).then((fail) => { if (fail) setExtraPrompt(typed); });
   };
   /* Removing this stage must keep the chain startable: a removal that would
      orphan a review loop is disabled (same guard as the builder panel). */

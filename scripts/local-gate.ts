@@ -295,12 +295,16 @@ export interface PushDeadline { at: number; startedAt: number; cpuWaitMs?: numbe
     deadline; CPU queue waits extend it. Nothing starts once its execution
     budget is spent. Local reads (Git plumbing, planning) run outside it.
     Without it every step reaches its verdict. */
-export function pushDeadline(env: Partial<NodeJS.ProcessEnv>, startedAt: number): PushDeadline | null {
+export function pushDeadline(env: Partial<NodeJS.ProcessEnv>, startedAt: number, admitted = false): PushDeadline | null {
   const raw = env.LLV_GATE_PUSH_DEADLINE;
   if (raw === undefined || raw === "") return null;
   const at = Number(raw);
   if (!Number.isSafeInteger(at) || at <= 0) throw new Error("LLV_GATE_PUSH_DEADLINE must be a Unix time in milliseconds");
-  return { at, startedAt };
+  // The slot supervisor starts a fresh ledger after admission. Read the
+  // caller's completed admission interval before starting the check plan.
+  const waited = admitted && env.LLV_GATE_ADMISSION_WAIT_ROOTS
+    ? cpuInheritedWaitMs({ NODE_ENV: env.NODE_ENV ?? process.env.NODE_ENV, LLV_CPU_WAIT_ROOTS: env.LLV_GATE_ADMISSION_WAIT_ROOTS }) : 0;
+  return { at: at + waited, startedAt };
 }
 const seconds = (ms: number) => `${Math.max(0, Math.round(ms / 1000))} s`;
 export function budgetSeconds(deadline: PushDeadline): number {
@@ -625,6 +629,23 @@ class AdmittedGateFailed extends Error {
   constructor(readonly code: number) { super(`admitted checks exited ${code}`); }
 }
 
+/** One ledger spans the slot handoff. Nested supervisors may create their
+ * own ledgers; the admitted hook still credits this invocation's queue wait.
+ * Cancellation remains owned by execute throughout admission and execution. */
+export async function runAdmittedChecks(command: string[], root: string, env: NodeJS.ProcessEnv, deadline: PushDeadline | null, cancel?: AbortSignal): Promise<void> {
+  const budget = cpuWaitBudget(env);
+  try {
+    const outcome = await execute(command, root, {
+      ...budget.env, LLV_GATE_ADMISSION_WAIT_ROOTS: budget.env.LLV_CPU_WAIT_ROOTS,
+      ...(deadline ? { LLV_GATE_PUSH_DEADLINE: String(deadline.at + (deadline.cpuWaitMs ?? 0)) } : {}),
+      LLV_OWNED_RUN_TIMEOUT_MS: String(deadline ? Math.max(1, deadline.at + (deadline.cpuWaitMs ?? 0) - Date.now()) : 15 * 60 * 1000),
+    }, Infinity, undefined, cancel);
+    if (outcome.leaked) throw new ContainmentFailed("admitted checks", outcome.leaked, outcome.cancelled);
+    if (outcome.cancelled) return;
+    if (outcome.code !== 0) throw new AdmittedGateFailed(outcome.code ?? 1);
+  } finally { budget.close(); }
+}
+
 /** Both verdicts are mandatory. Refusal cancels the peer and waits for its
  * owned cleanup; a cleanup failure takes precedence over the initial refusal.
  * Preserve the original error so privacy keeps its refusal text and exit code.
@@ -655,7 +676,7 @@ export function endHook(mode: Mode, error: unknown): never {
 
 async function main(mode: Mode, admitted = false): Promise<void> {
   if (process.env.LLV_SKIP_HOOKS === "1") return;
-  const deadline = pushDeadline(process.env, Date.now());
+  const deadline = pushDeadline(process.env, Date.now(), admitted);
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
   let base = mode === "pre-commit" ? git(root, ["merge-base", "HEAD", "origin/main"]) : "HEAD";
   const until = deadline?.at ?? Infinity;
@@ -725,13 +746,8 @@ async function main(mode: Mode, admitted = false): Promise<void> {
     const options = { root, deadline, logDir: sandbox, prepare, ...(branch ? { ref: branch } : {}) };
     if (mode === "pre-push" && !admitted) {
       const privacy = (cancel?: AbortSignal) => runSteps(mode, steps.filter(step => step.name === "privacy"), { ...options, cancel });
-      const checks = async (cancel: AbortSignal) => {
-        const outcome = await execute(["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root,
-          { ...process.env, ...(deadline ? { LLV_GATE_PUSH_DEADLINE: String(deadline.at + (deadline.cpuWaitMs ?? 0)) } : {}), LLV_OWNED_RUN_TIMEOUT_MS: String(deadline ? Math.max(1, deadline.at + (deadline.cpuWaitMs ?? 0) - Date.now()) : 15 * 60 * 1000) }, Infinity, undefined, cancel);
-        if (outcome.leaked) throw new ContainmentFailed("admitted checks", outcome.leaked, outcome.cancelled);
-        if (outcome.cancelled) return;
-        if (outcome.code !== 0) throw new AdmittedGateFailed(outcome.code ?? 1);
-      };
+      const checks = (cancel: AbortSignal) => runAdmittedChecks(
+        ["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root, process.env, deadline, cancel);
       if (steps.some(step => step.name !== "privacy")) await runPushPair(privacy, checks);
       else await privacy();
     } else {

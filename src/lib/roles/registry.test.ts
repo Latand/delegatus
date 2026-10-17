@@ -207,6 +207,18 @@ test("builder, reviewer and architect scaffolds send the agent to earlier answer
   for (const tool of ["search_transcripts", "search_memory", "conversation_messages"]) expect(EARLIER_ANSWERS_MECHANICS).toContain(tool);
 });
 
+/* A stage report becomes the pull request body, and the publication privacy
+   gate refuses a home path in it, which parked a passed build. No role
+   scaffold may tell an agent to hand files over as absolute paths. */
+test("the builder scaffold names files repository-relative and no role scaffold asks for absolute paths", () => {
+  const builder = resolveRole("builder", { mode: "plain" });
+  if (!builder.ok) throw new Error(builder.error);
+  expect(builder.value.prompt).toContain("Name a file in the stage report and summary by its repository-relative path, with :line or #heading when you mean a place in it; the report is published as the pull request body, so it carries no absolute path.");
+  for (const role of listRoles()) {
+    expect(role.promptScaffold).not.toMatch(/as its absolute path|by (its )?absolute path|absolute paths? (of|for|to) /i);
+  }
+});
+
 /* #1770 — a stage cleaned up its probe servers by port and killed an unrelated
    local server. The standing rule reaches every seat and every pipeline stage
    only if every registry role renders it, so assert the whole registry. */

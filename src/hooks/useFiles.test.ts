@@ -889,3 +889,23 @@ test("an older health answer cannot replace a newer catalog health", async () =>
     expect(cache.read().systemHealth.storage?.writes?.state).toBe("ok");
   } finally { cache.dispose(); }
 });
+
+/* Audit B5–B7: an optimistic task write is drawn until it is confirmed or taken back. */
+test("an unconfirmed task overlay outlives every scan until it is confirmed or reverted", async () => {
+  let rows = [taskRow("task-a", "Stored")];
+  const cache = createFilesClientCache(async () => new Response(JSON.stringify({ files: [], pipelines: [], tasks: rows })));
+  await cache.revalidate();
+  cache.applyTask(taskRow("task-a", "Drawn ahead") as never, false);
+  cache.applyTask(taskRow("provisional:request-1", "New card") as never, false);
+  await cache.revalidate();
+  expect(cache.read().tasks.map((task) => [task.id, task.text])).toEqual([["task-a", "Drawn ahead"], ["provisional:request-1", "New card"]]);
+  /* A refusal takes the drawn row back: the stored one shows again. */
+  cache.revertTask("task-a");
+  cache.revertTask("provisional:request-1");
+  expect(cache.read().tasks.map((task) => [task.id, task.text])).toEqual([["task-a", "Stored"]]);
+  /* A confirmed echo yields to the next scan that carries the row. */
+  cache.applyTask(taskRow("task-a", "Echo") as never, true);
+  rows = [taskRow("task-a", "Echo")];
+  await cache.revalidate();
+  expect(cache.read().tasks.map((task) => task.text)).toEqual(["Echo"]);
+});

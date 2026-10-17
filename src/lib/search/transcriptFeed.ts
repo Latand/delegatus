@@ -2,6 +2,8 @@ import {
   indexTranscriptSources,
   type TranscriptIndexSource,
 } from "./transcriptSearch";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { performanceSpans } from "@/lib/performanceSpans";
 
 export interface TranscriptIndexFeed {
   sources: readonly TranscriptIndexSource[];
@@ -42,7 +44,8 @@ async function productionRun(
   complete: boolean,
   listedAt: number,
 ): Promise<void> {
-  const indexed = await indexTranscriptSources(sources, { complete });
+  const indexed = await withViewerOperation("transcript.index", () =>
+    performanceSpans.wait("transcript.index", () => indexTranscriptSources(sources, { complete })));
   try {
     const { refreshMemoryIndex } = await import("@/lib/memory/service");
     await refreshMemoryIndex();

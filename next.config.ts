@@ -24,12 +24,14 @@ const nextConfig: NextConfig = {
     "/*": [
       ".next/server/file-scanner-worker.js",
       ".next/server/files-response-worker.js",
+      ".next/server/task-page-worker.js",
       ".next/server/resource-collector-worker.js",
       ".next/server/account-migration-controller-worker.js",
       ".next/server/state-backup-worker.js",
       ".next/server/self-update-work-worker.js",
       ".next/server/transcript-search-index-worker.js",
       ".next/server/transcript-search-query-worker.js",
+      ".next/server/mcp-task-worker.js",
       ".next/server/chunks/**",
     ],
   },
@@ -48,12 +50,15 @@ const nextConfig: NextConfig = {
         ...(typeof originalEntry === "function" ? await originalEntry() : originalEntry),
         "file-scanner-worker": "./src/lib/fileScanner.worker.ts",
         "files-response-worker": "./src/lib/filesResponse.worker.ts",
+        "task-page-worker": "./src/lib/taskPage.worker.ts",
         "resource-collector-worker": "./src/lib/resourceCollector.worker.ts",
         "account-migration-controller-worker": "./src/lib/accountMigrationController.worker.ts",
         "state-backup-worker": "./src/lib/stateBackup.worker.ts",
         "self-update-work-worker": "./src/lib/selfUpdateWork.worker.ts",
         "transcript-search-index-worker": "./src/lib/transcriptSearchIndex.worker.ts",
         "transcript-search-query-worker": "./src/lib/transcriptSearchQuery.worker.ts",
+        // The shared MCP graph imports App Router APIs, including after().
+        "mcp-task-worker": { import: "./src/lib/mcpTask.worker.ts", layer: "rsc" },
       });
     }
     return config;

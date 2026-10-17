@@ -1,5 +1,13 @@
 # Stage Git custody
 
+This is the historical verification of #2955, deployed in `917189ae`. On
+2026-10-16, [stage push settlement](stage-push-settlement.md) supersedes its
+256-commit limit, commit-date predicate and lack of adoption for older
+attempts. The implementation and test observations below describe that
+earlier revision. Current settlement pages every commit, accepts native
+creation evidence or verified base history, and defines a worktree-reflog
+fallback for older attempts.
+
 A writable stage can leave its lane checkout behind after committing and pushing
 from a detached linked checkout. Settlement now adopts that push before review
 when the attempt's native Git hooks recorded every commit in the suffix.

@@ -197,8 +197,8 @@ const VOICE_PRODUCT = VOICE && new URLSearchParams(location.search).get("mount")
    `voiceCompanion.loaded` back rather than its own clock, which may have passed the next minute. */
 const VOICE_LOADED = Math.floor(Date.now() / 60_000) * 60;
 const voice = { loaded: VOICE_LOADED, delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
-  /* What the settings routes were asked to write. The key itself is never kept: its length is all the driver needs. */
-  settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], sessionStarts: [] as Array<Record<string, unknown>>, settingsOpened: 0 };
+  /* What the settings routes were asked to write. */
+  settingsWrites: [] as Array<Record<string, unknown>>, sessionStarts: [] as Array<Record<string, unknown>>, settingsOpened: 0 };
 const voicePlan = (): CompanionPlan => ({ type: "pro", limitReached: false, observedAt: VOICE_LOADED * 1000,
   primary: { usedPercent: 23, resetsAt: VOICE_LOADED + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: VOICE_LOADED + 4 * 86_400, windowMinutes: 10_080 } });
 const VOICE_CODEX = new URLSearchParams(location.search).get("backend") === "codex";
@@ -1588,6 +1588,48 @@ const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
         { stageId: "build", attempts: [attempt(1, "passed", null, done(30))] },
         { stageId: "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-bridge", attempts: [attempt(1, "running", null, { startedAt: iso(8 * MIN), ...passVia("build") })] },
       ], { stageId: "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-bridge", state: "running", input: null, activatedBy: null }),
+    /* The wide row hangs a fix under its gate: two gates, each with its own fix; Review fired once, Visual runs, Ui fix has no attempt. */
+    pipeline("p-chain-gates", L("Review and check the export screens", "Переглянути і перевірити екрани експорту"), "t-chain-gates", "running",
+      [stage("build", "builder", "review"), stage("review", "reviewer", "visual", { kind: "run", onFail: { to: "fix", maxRounds: 2 } }), stage("visual", "reviewer", null, { kind: "run", onFail: { to: "ui-fix", maxRounds: 2 } }), stage("fix", "builder", "review"), stage("ui-fix", "builder", "visual")],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "review", attempts: [attempt(1, "failed", null, { ...done(70), ...passVia("build") }), attempt(2, "passed", null, { ...done(50), ...passVia("fix") })] },
+        { stageId: "fix", attempts: [attempt(1, "passed", null, { ...done(60), ...failVia("review") })] },
+        { stageId: "visual", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...passVia("review") })] },
+      ], { stageId: "visual", state: "running", input: null, activatedBy: null }),
+    /* Two gates in a row, each with a fix wider than its gate and no attempt yet: the earlier fix takes the room up to the later fix, and wraps at spaces only. */
+    pipeline("p-chain-gates-long", L("Critique and review the sync screens", "Критика і рев’ю екранів синхронізації"), "t-chain-gates-long", "running",
+      [stage("build", "builder", "critique"), stage("critique", "architect", "review", { onFail: { to: "critique-fix", maxRounds: 2 } }), stage("review", "reviewer", null, { kind: "run", onFail: { to: "review-fix", maxRounds: 2 } }), stage("critique-fix", "builder", "critique"), stage("review-fix", "builder", "review")],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "critique", attempts: [attempt(1, "passed", null, { ...done(70), ...passVia("build") })] },
+        { stageId: "review", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...passVia("critique") })] },
+      ], { stageId: "review", state: "running", input: null, activatedBy: null }),
+    /* One fix shared by two gates is drawn once, under the first; it runs now because Visual failed. */
+    pipeline("p-chain-shared", L("Review and check the import screens", "Переглянути і перевірити екрани імпорту"), "t-chain-shared", "running",
+      [stage("build", "builder", "review"), stage("review", "reviewer", "visual", { kind: "run", onFail: { to: "fix", maxRounds: 2 } }), stage("visual", "reviewer", "merge", { kind: "run", onFail: { to: "fix", maxRounds: 2 } }), stage("fix", "builder", "review"), stage("merge", "cleaner", null)],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "review", attempts: [attempt(1, "passed", null, { ...done(70), ...passVia("build") })] },
+        { stageId: "visual", attempts: [attempt(1, "failed", null, { ...done(50), ...passVia("review") })] },
+        { stageId: "fix", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...failVia("visual") })] },
+      ], { stageId: "fix", state: "running", input: null, activatedBy: failVia("visual").activatedBy }),
+    /* A fix that failed with a stage after its gate: the lane waits on the operator. */
+    pipeline("p-chain-failed", L("Critique the sync, then review it", "Критика синхронізації, потім рев’ю"), "t-chain-failed", "needs_decision",
+      [stage("build", "builder", "critique"), stage("critique", "architect", "review", { onFail: { to: "critique-fix", maxRounds: 2 } }), stage("critique-fix", "builder", "critique"), stage("review", "reviewer", null, { kind: "run" })],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "critique", attempts: [attempt(1, "failed", null, { ...done(70), ...passVia("build") })] },
+        { stageId: "critique-fix", attempts: [attempt(1, "failed", null, { ...done(60), ...failVia("critique") })] },
+      ], { stageId: "critique-fix", state: "needs_decision", input: null, activatedBy: null }),
+    /* A fix with a name wider than its gate: the fix wraps inside its pill, the pass stages stay on one line, nothing overlaps. */
+    pipeline("p-chain-wide-long", L("Check every attachment on arrival", "Перевірити кожне вкладення при надходженні"), "t-chain-wide-long", "running",
+      [stage("build", "builder", "review"), stage("review", "reviewer", "merge", { kind: "run", onFail: { to: "review-fix-after-the-attachment-check", maxRounds: 2 } }), stage("review-fix-after-the-attachment-check", "builder", "review"), stage("merge", "cleaner", null)],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "review", attempts: [attempt(1, "failed", null, { ...done(70), ...passVia("build") })] },
+        { stageId: "review-fix-after-the-attachment-check", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...failVia("review") })] },
+      ], { stageId: "review-fix-after-the-attachment-check", state: "running", input: null, activatedBy: failVia("review").activatedBy }),
   ];
 })() : [];
 
@@ -1892,6 +1934,11 @@ const tasks: BoardTask[] = [
     task("t-chain-live", "blocked", L("Build, review and merge the export", "Зібрати, переглянути і злити експорт"), "", 10 * MIN),
     task("t-chain-long", "blocked", L("Confirm every attachment arrives whole", "Підтвердити, що кожне вкладення доходить цілим"), "", 8 * MIN),
     task("t-chain-wide", "assigned", L("Keep the review fix on the card, wide", "Залишити виправлення рев’ю на картці, широка"), "", 45 * MIN),
+    task("t-chain-gates", "assigned", L("Review and check the export screens", "Переглянути і перевірити екрани експорту"), "", 44 * MIN),
+    task("t-chain-gates-long", "assigned", L("Critique and review the sync screens", "Критика і рев’ю екранів синхронізації"), "", 45 * MIN),
+    task("t-chain-shared", "assigned", L("Review and check the import screens", "Переглянути і перевірити екрани імпорту"), "", 43 * MIN),
+    task("t-chain-failed", "assigned", L("Critique the sync, then review it", "Критика синхронізації, потім рев’ю"), "", 42 * MIN),
+    task("t-chain-wide-long", "assigned", L("Check every attachment on arrival", "Перевірити кожне вкладення при надходженні"), "", 41 * MIN),
   ] : []),
   ...(LABELS ? [task("t-labels", "assigned", "Build the board header lane", "Design, build and critique; the critique sent the first build back.", 2 * MIN)] : []),
   ...(REVIEW_SPENT ? [task("t-review-spent", "assigned", "Show the retry count in the banner", "The last review failed, and the fix after it was never reviewed.", 3 * MIN)] : []),
@@ -2335,6 +2382,17 @@ if (DRAG_BOARD) {
         { stageId: "review", state: "running", input: null, activatedBy: null }));
     }
   }
+  /* A live board: every working conversation has written a line since the last poll, as the
+     agents on a running board do. `window.dragBoardChurn()` is one such poll arriving. */
+  Object.assign(window, {
+    dragBoardChurn: () => {
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index]!;
+        if (file.activity === "live") files[index] = { ...file, size: file.size + 64, mtime: file.mtime + 1 };
+      }
+      fireTasksChanged();
+    },
+  });
 }
 if (OVERVIEW_SCOPE) {
   tasks.push(
@@ -3173,6 +3231,17 @@ if (OVERVIEW_PERFORMANCE) {
    agent's renders have — a desktop board, a phone screen, a wide strip, a
    small crop — so the grid meets the aspect ratios it will meet. */
 const ALBUM = params.get("album") === "1";
+/* `&olderfails=1`: the album's and the report log's older pages are refused,
+   so «Show older» meets the line that says so beside it. */
+const OLDER_FAILS = params.get("olderfails") === "1";
+/* `&dismissrefused=1`: dismissing a launch that did not start is refused, and
+   `&boardrefuses=1`: a board write that closes a conversation is refused for
+   good, so what the click took away comes back with the reason. */
+const DISMISS_REFUSED = params.get("dismissrefused") === "1";
+const BOARD_REFUSES = params.get("boardrefuses") === "1";
+/* `&settingsrefuse=1`: every write to the voice companion's settings is refused
+   with COMPANION_UNAVAILABLE, so a press flips and meets its reason. */
+const SETTINGS_REFUSE = params.get("settingsrefuse") === "1";
 function mockRender(width: number, height: number, hue: number, label: string, phone = false): string {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -3229,7 +3298,8 @@ function protoSummary(rounds: PrototypeRoundView[]): PrototypeReviewSummary {
   const waitingDismissal = summary.waitingReviewId ? protoHidden.get(summary.waitingReviewId) : undefined;
   /* As the Viewer's own read: a decision this installation delivers carries its delivery's phase on the card too. */
   const phase = rounds.at(-1)?.decision?.delivery.phase;
-  return { ...summary, ...(summary.decision && phase ? { decision: { ...summary.decision, phase } } : {}), ...(waitingDismissal ? { waitingDismissal } : {}) };
+  const undelivered = rounds.filter(round => round.decision?.delivery.phase === "attention").map(round => ({ reviewId: round.id, title: round.title, at: round.decision!.at }));
+  return { ...summary, ...(undelivered.length ? { undelivered } : {}), ...(summary.decision && phase ? { decision: { ...summary.decision, phase } } : {}), ...(waitingDismissal ? { waitingDismissal } : {}) };
 }
 function protoPublish(): void {
   for (const [taskId, rounds] of Object.entries(protoRounds)) {
@@ -3416,6 +3486,13 @@ if (DECISIONS) {
     Object.assign(seatRounds[0]!, form, { source: { conversationId: null }, nativeAssociationState: "pending" });
     seatRounds.splice(1); delete protoRounds["t-search"];
   }
+  if (DECISIONS === "undelivered") {
+    for (const [index, round] of [...seatRounds, ...Object.values(protoRounds).flat()].entries()) {
+      round.decision = { chosen: [], answers: (round.questions ?? []).map(question => ({ questionId: question.id, options: [0] })),
+        comment: L("Keep the recommended answer; it is already saved.", "Залиште рекомендовану відповідь; її вже збережено."), at: iso(MIN),
+        delivery: { state: (["pending", "uncertain", "failed"] as const)[index % 3]!, phase: "attention", retryable: true } };
+    }
+  }
   if (DECISIONS === "answered") {
     const held = seatRounds[0]!;
     held.decision = { chosen: [], answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [0] }], comment: "", at: iso(MIN), delivery: { state: "sent", retryable: false } };
@@ -3433,11 +3510,12 @@ function fixtureDecisions() {
   const fromTasks = Object.entries(protoRounds).flatMap(([taskId, rounds]) => {
     const waiting = rounds.at(-1);
     const held = tasks.find((entry) => entry.id === taskId);
-    return waiting && !waiting.decision && !protoHidden.has(waiting.id) && held ? [{ ...waiting, taskTitle: held.text.split("\n")[0] }] : [];
+    return held ? rounds.filter(round => (!round.decision && round === waiting && !protoHidden.has(round.id)) || round.decision?.delivery.phase === "attention")
+      .map(round => ({ ...round, taskTitle: held.text.split("\n")[0] })) : [];
   });
-  return [...fromTasks, ...seatRounds.filter((round) => !round.decision || (round.nativeAssociationState && round.decision.answers?.every(answer => answer.options[0] === 1)))].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return [...fromTasks, ...seatRounds.filter((round) => !round.decision || round.decision.delivery.phase === "attention" || (round.nativeAssociationState && round.decision.answers?.every(answer => answer.options[0] === 1)))].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
-const seatDecisionNotices = () => seatRounds.filter((round) => !round.decision).map((round) => ({ id: `prototype:${round.id}`, project: PROJECT, taskId: null, reviewId: round.id, title: round.title, asks: "questions" as const, createdAt: round.createdAt, target: { kind: "seat-decision" as const, project: PROJECT, reviewId: round.id } }));
+const seatDecisionNotices = () => seatRounds.filter((round) => !round.decision || round.decision.delivery.phase === "attention").map((round) => ({ ...(round.decision ? { undelivered: true as const } : {}), id: `prototype:${round.id}`, project: PROJECT, taskId: null, reviewId: round.id, title: round.title, asks: "questions" as const, createdAt: round.createdAt, target: { kind: "seat-decision" as const, project: PROJECT, reviewId: round.id } }));
 type FixtureAlbumItem = { id: string; src: string; name: string | null; ts: number; via: "read" | "named" | "pasted"; source: { key: string; conversationId: string | null; path: string; stage?: { pipelineId: string; stageId: string; attempt: number; round?: number } }; isNew: boolean };
 const albumOpened = new Map<string, number>([["t-export", Date.now()]]);
 const albumSource = (file: FileEntry, stage?: { pipelineId: string; stageId: string; attempt: number; round?: number }) => ({ key: file.conversationId ?? file.path, conversationId: file.conversationId ?? null, path: file.path, ...(stage ? { stage } : {}) });
@@ -3789,6 +3867,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
+  /* «Keys» (docs/design/keys-settings.md): the driver answers the section's routes, or hands them to the real ones. */
+  if ((HEADER_MENU || SCENARIO === "memory-settings" || SCENARIO === "keys") && url.pathname.startsWith("/api/keys")) return serverFetch(url.pathname + url.search, init);
+  if (SCENARIO === "keys" && url.pathname === "/api/transcribe/backend") return serverFetch(url.pathname + url.search, init);
   /* Role memory (docs/design/role-memory.md §3.1): `&rolememory=1` hands the rules window and the card's lesson line to the driver's real routes. */
   if (ROLE_MEMORY && url.pathname.startsWith("/api/role-memory")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
@@ -3817,11 +3898,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if ((DECISIONS || PROTO || REPORT_PREVIEW) && url.pathname === "/api/projects/decisions") {
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[]; reject?: true };
+      const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[]; reject?: true; retry?: true };
       decisionPosts.push(body);
       const held = [...seatRounds, ...Object.values(protoRounds).flat()].find((round) => round.id === body.reviewId);
       if (!held) return json({ error: "review not found" }, 404);
-      held.decision = { ...(body.reject ? { rejected: true as const } : {}), chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
+      if (body.retry && held.decision) held.decision = { ...held.decision, delivery: { state: "sent", phase: "delivered", retryable: false } };
+      else held.decision = { ...(body.reject ? { rejected: true as const } : {}), chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
       protoPublish();
       if (held.nativeAssociationState) held.nativeAssociationState = body.answers?.every((answer: { options: number[] }) => answer.options[0] === 1) ? "approved" : "refused";
       return json({ project: PROJECT, decisions: fixtureDecisions() });
@@ -3879,7 +3961,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       albumOpened.set(taskId, Date.now());
       return json({ ok: true, lastOpenedAt: Date.now() });
     }
-    return json(albumPage(taskId));
+    if (OLDER_FAILS && url.searchParams.has("cursor")) return json({ error: "album index is busy" }, 503);
+    const page = albumPage(taskId);
+    return json(OLDER_FAILS ? { ...page, nextCursor: "older" } : page);
   }
   if (NEW_AGENT && url.pathname === "/api/accounts" && method === "GET") {
     return json(NEW_AGENT_SEED === "signed-out" ? {
@@ -4052,6 +4136,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "PATCH") {
       const body = JSON.parse(String(init?.body)) as { mutations?: BoardMutationV1[] };
       evidence.boardMutations.push(...(body.mutations ?? []));
+      if (BOARD_REFUSES && body.mutations?.some((mutation) => mutation.kind === "close")) return json({ error: "INVALID_REQUEST" }, 400);
       const reduced = applyBoardMutations(board, body.mutations ?? []);
       board = { ...reduced, schemaVersion: 1, revision: board.revision + 1, pathAliases: reduced.pathAliases ?? {} };
       return json({ ok: true, applied: true, board });
@@ -4088,6 +4173,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/orchestrator/reports") {
+    if (OLDER_FAILS && url.searchParams.has("before")) return json({ error: "report log is busy" }, 503);
     const known = new Map<string, "task" | "pipeline">([
       ...tasks.map((task) => [task.id, "task"] as const),
       ...pipelines.map((pipeline) => [pipeline.id, "pipeline"] as const),
@@ -4216,6 +4302,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     /* «Launch did not start» dismissed: the row is kept as failed, and an
        unnamed launch placeholder with nothing else on it is done. */
+    if (method === "PATCH" && DISMISS_REFUSED) return json({ error: "the launch started after all" }, 409);
     if (method === "PATCH") {
       const assignments = current.assignments.map((assignment) => (assignment.launchId === body.launchId
         ? { ...assignment, state: "failed" as const, error: "launch did not start (dismissed)", at: new Date().toISOString() }
@@ -4442,6 +4529,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ calls: held.callMemoryRows });
   }
   if (VOICE && url.pathname === "/api/voice-companion/settings") {
+    if (method === "PUT" && SETTINGS_REFUSE) return json({ code: "COMPANION_UNAVAILABLE" }, 503);
     if (method === "PUT") { const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>; voice.settingsWrites.push(body); Object.assign(voiceSettings, body); }
     return json(voiceSettings);
   }
@@ -4451,14 +4539,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     voice.sessionStarts.push({ project: body.project, locale: body.locale, offer: typeof body.sdp === "string" && body.sdp.startsWith("v=0") });
     return json({ code: "CODEX_LIMIT_REACHED", resetsAt: VOICE_LOADED + 7_200 }, 409);
   }
-  if (VOICE && url.pathname === "/api/voice-companion/key" && method === "PUT") {
-    if (voiceSettings.keySource === "env") return json({ code: "KEY_FROM_ENV" }, 409);
-    const key = String((JSON.parse(String(init?.body ?? "{}")) as { key?: unknown }).key ?? "");
-    if (!key.trim() || /\s/u.test(key.trim())) return json({ code: "INVALID_KEY" }, 400);
-    voice.keyWrites.push(key.length);
-    voiceSettings.keySource = "file";
-    return json(voiceSettings);
-  }
+  /* «Keys», which the settings row opens on the OpenAI key (docs/design/keys-settings.md §4): the list as its route answers it, on placeholders. */
+  if (VOICE && url.pathname === "/api/keys") return json({ staging: false, owner: true, keys: [
+    { id: "openrouter", variable: "OPENROUTER_API_KEY", source: "missing", masked: null },
+    { id: "openai", variable: "OPENAI_API_KEY", source: voiceSettings.keySource, masked: voiceSettings.keySource === "missing" ? null : "sk-proj-••••••••2222" },
+    { id: "elevenlabs", variable: "ELEVENLABS_API_KEY", source: "missing", masked: null },
+    { id: "soniox", variable: "SONIOX_API_KEY", source: "missing", masked: null },
+    { id: "fishaudio", variable: "FISH_AUDIO_API_KEY", source: "missing", masked: null },
+    { id: "telegram", variable: "DELEGATUS_TELEGRAM_BOT_TOKEN", source: "missing", masked: null },
+  ] });
   if (VOICE && url.pathname === "/api/telemetry") return json({ enabled: false, locked: false, noticeDismissed: true });
   if (VOICE && url.pathname === "/api/memory/settings") return json({ enabled: false, capUsd: 5, spentUsd: 0 });
   if (url.pathname === "/api/log/provenance" && ROLE_AVATARS) {

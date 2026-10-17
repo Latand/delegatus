@@ -40,6 +40,16 @@ export function MembersTab({ view }: { view: TeamView }) {
   const [requests, setRequests] = useState<JoinRequest[]>([]);
   const [dialog, setDialog] = useState<"invite" | "approve" | { member: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /* A typed name or a picked colour, drawn on the row and in the dialog until
+     the team view is read again (audit B34). */
+  const [drawn, setDrawn] = useState<Record<string, Partial<Pick<TeamMember, "name" | "color">>>>({});
+  const draw = useCallback((id: string, field: "name" | "color", value: string | undefined) => setDrawn((held) => {
+    const { [field]: _dropped, ...rest } = held[id] ?? {};
+    const next = value === undefined ? rest : { ...rest, [field]: value };
+    const { [id]: _member, ...others } = held;
+    return Object.keys(next).length ? { ...others, [id]: next } : others;
+  }), []);
+  const shown = (member: TeamMember): TeamMember => (drawn[member.id] ? { ...member, ...drawn[member.id] } as TeamMember : member);
 
   const loadInvites = useCallback(async () => {
     if (!owner) return;
@@ -70,9 +80,9 @@ export function MembersTab({ view }: { view: TeamView }) {
     await loadInvites();
   };
 
-  const active = view.members.filter((member) => member.status === "active");
-  const revoked = view.members.filter((member) => member.status === "revoked");
   const selected = dialog && typeof dialog === "object" ? view.members.find((member) => member.id === dialog.member) ?? null : null;
+  const active = view.members.filter((member) => member.status === "active").map(shown);
+  const revoked = view.members.filter((member) => member.status === "revoked").map(shown);
 
   return (
     <div className="flex flex-col gap-4" data-team-members="">
@@ -134,7 +144,7 @@ export function MembersTab({ view }: { view: TeamView }) {
 
       {dialog === "invite" ? <InviteDialog onClose={() => { setDialog(null); void loadInvites(); }} /> : null}
       {dialog === "approve" ? <ApproveDeviceDialog onClose={() => setDialog(null)} /> : null}
-      {selected ? <MemberDialog member={selected} view={view} onClose={() => setDialog(null)} /> : null}
+      {selected ? <MemberDialog member={shown(selected)} stored={selected} view={view} onDraw={draw} onClose={() => setDialog(null)} /> : null}
     </div>
   );
 }
@@ -306,7 +316,7 @@ interface PasskeyRow { id: string; label: string; rpId: string; here: boolean; c
 
 /** A member's settings (§6.9): name and colour for oneself or, by the owner,
     anyone; one's own Telegram link and passkeys; the owner's revoke. */
-function MemberDialog({ member, view, onClose }: { member: TeamMember; view: TeamView; onClose: () => void }) {
+function MemberDialog({ member, stored, view, onDraw, onClose }: { member: TeamMember; stored: TeamMember; view: TeamView; onDraw: (id: string, field: "name" | "color", value: string | undefined) => void; onClose: () => void }) {
   const { t, locale } = useLocale();
   const self = member.id === view.me?.id;
   const owner = view.me?.role === "owner";
@@ -338,6 +348,21 @@ function MemberDialog({ member, view, onClose }: { member: TeamMember; view: Tea
     }
     await refreshTeamView();
     return true;
+  };
+  /* The name and the colour show at once and lock nothing; a refusal puts the
+     stored ones back, the field included, beside the reason (audit B34). */
+  const drawPatch = async (field: "name" | "color", value: string) => {
+    onDraw(member.id, field, field === "name" ? value.trim() : value);
+    setError(null);
+    const answer = await teamRequest(`/api/team/members/${member.id}`, { method: "PATCH", body: { [field]: value } });
+    if (!answer.ok) {
+      onDraw(member.id, field, undefined);
+      if (field === "name") setName(stored.name);
+      setError(errorText(t, answer));
+      return;
+    }
+    await refreshTeamView();
+    onDraw(member.id, field, undefined);
   };
 
   /* Linking Telegram: open the bot, press Start, and type back the code it
@@ -408,9 +433,17 @@ function MemberDialog({ member, view, onClose }: { member: TeamMember; view: Tea
     }
   };
 
+  /* Removing a passkey cannot be taken back, so it waits: the row reads
+     «Removing…» and sends once, and a refusal says why (audit F2). */
+  const [removing, setRemoving] = useState<string | null>(null);
   const removePasskey = async (id: string) => {
-    await teamRequest("/api/team/passkeys", { method: "DELETE", body: { id } });
+    if (removing) return;
+    setRemoving(id);
+    setError(null);
+    const answer = await teamRequest("/api/team/passkeys", { method: "DELETE", body: { id } });
+    if (!answer.ok) setError(errorText(t, answer));
     await Promise.all([loadPasskeys(), refreshTeamView()]);
+    setRemoving(null);
   };
 
   const section = "flex flex-col gap-2 border-t border-border pt-4";
@@ -419,7 +452,7 @@ function MemberDialog({ member, view, onClose }: { member: TeamMember; view: Tea
       <div className="flex flex-col gap-4">
         {member.status === "active" ? (
           <>
-            <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void patch({ name }); }}>
+            <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); if (name.trim() && name.trim() !== member.name) void drawPatch("name", name); }}>
               <div className="min-w-0 flex-1">
                 <Field label={t("team.member.name")}>
                   <input className={INPUT} value={name} maxLength={60} onChange={(event) => setName(event.target.value)} data-team-member-rename="" />
@@ -437,7 +470,7 @@ function MemberDialog({ member, view, onClose }: { member: TeamMember; view: Tea
                     role="radio"
                     aria-checked={member.color === color}
                     aria-label={t(`kanban.color.${color}`)}
-                    onClick={() => void patch({ color })}
+                    onClick={() => { if (member.color !== color) void drawPatch("color", color); }}
                     className={`flex h-8 w-8 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:w-11 ${member.color === color ? "ring-2 ring-primary ring-offset-2 ring-offset-card" : ""}`}
                   >
                     <span className="h-6 w-6 rounded-full" style={{ backgroundColor: MEMBER_COLOR_HEX[color] }} />
@@ -480,7 +513,7 @@ function MemberDialog({ member, view, onClose }: { member: TeamMember; view: Tea
                 <span className="min-w-0 flex-1 truncate text-ui text-primary">
                   {passkey.label}<span className="text-muted"> · {passkey.rpId}</span>
                 </span>
-                <button type="button" className={BUTTON.text} onClick={() => void removePasskey(passkey.id)}>{t("team.passkey.remove")}</button>
+                <button type="button" disabled={removing !== null} className={BUTTON.text} onClick={() => void removePasskey(passkey.id)} data-team-passkey-remove={passkey.id}>{t(removing === passkey.id ? "team.passkey.removing" : "team.passkey.remove")}</button>
               </div>
             ))}
             {passkeys.available && supportsPasskeys ? (

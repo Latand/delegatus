@@ -172,6 +172,8 @@ function pipelineRoute(stored: () => Pipeline) {
     refreshes: 0,
     omitDigests: false,
     beforeWrite: null as (() => void) | null,
+    /** The records writes predicted, which the browser port draws before the request. */
+    predicted: [] as Pipeline[],
   };
   const ports: PipelinePorts = {
     read: async (id) => {
@@ -179,8 +181,9 @@ function pipelineRoute(stored: () => Pipeline) {
       const pipeline = state.record ?? stored();
       return { pipeline, stageDigests: state.omitDigests ? {} : stageDigests(pipeline.stages), revision: REVISION };
     },
-    patch: async (id, body) => {
+    patch: async (id, body, predicted) => {
       patches.push({ id, body });
+      if (predicted) state.predicted.push(predicted);
       if (state.hold) await new Promise<void>((resolve) => { state.release = resolve; });
       const queued = state.answers.shift();
       if (queued) return queued;
@@ -303,7 +306,7 @@ test("the lane row's head opens Stages; the pipeline actions are a page of the c
   ]);
 });
 
-test("Pause goes to the pipeline route, the header says it is on its way, and the receipt says what the server did", async () => {
+test("Pause goes to the pipeline route drawn at once from the record it predicts, sends once, and the receipt says what the server did", async () => {
   const { host, route } = mount(searchPipeline());
   await tick();
   route.state.hold = true;
@@ -311,12 +314,14 @@ test("Pause goes to the pipeline route, the header says it is on its way, and th
   click(menuItem(host, "Pause"));
   await tick();
   expect(route.patches).toEqual([{ id: "p-search", body: { action: "pause" } }]);
-  expect(card(host).querySelector("[data-pipeline-acting]")?.textContent).toBe("Pausing…");
-  /* One action at a time: the menu names the one on its way. */
+  /* The port is handed the paused record to draw before the request (audit B8); no busy line holds the lane. */
+  expect(route.state.predicted.map((record) => [record.id, record.state, record.pausedState])).toEqual([["p-search", "paused", "running"]]);
+  expect(card(host).querySelector("[data-pipeline-acting]")).toBeNull();
+  /* A second press while the first is out sends nothing. */
   click(laneMenu(host));
-  expect(menuItem(host, "Pause")?.getAttribute("aria-disabled")).toBe("true");
-  expect(menuItem(host, "Pause")?.querySelector(".why")?.textContent).toBe("Waiting for the server: Pausing…");
-  key(host.querySelector(".menu"), "Escape");
+  click(menuItem(host, "Pause"));
+  await tick();
+  expect(route.patches).toHaveLength(1);
   route.state.release();
   await tick();
   expect(card(host).querySelector("[data-pipeline-acting]")).toBeNull();
@@ -587,6 +592,30 @@ test("a waiting node opens its first message on the card; Save re-reads the stag
   expect(panel.querySelector("textarea.draft-edit")).toBeNull();
   expect(panel.querySelector(".bstatus")?.textContent).toMatch(/^First message · not sent yet · edited \d/);
   same(document.activeElement, panel.querySelector("[data-draft-edit]"));
+});
+
+/* Audit B10: Save closes the editor at once and shows the new words; a refusal reopens it with the reason. */
+test("a save closes the editor at once and shows the new words while the write is held; a refusal reopens it with the words and the reason", async () => {
+  const { host, route } = mount(searchPipeline());
+  await tick();
+  click(card(host).querySelector('.pb-pills [data-stage="merge"]'));
+  await tick();
+  const panel = () => card(host).querySelector<HTMLElement>("[data-stage-detail]")!;
+  click(panel().querySelector("[data-draft-edit]"));
+  type(panel().querySelector<HTMLTextAreaElement>("textarea.draft-edit")!, "Merge after one warm query.");
+  route.state.hold = true;
+  route.state.answers.push({ ok: false, status: 500, error: "store busy" });
+  click(panel().querySelector("[data-draft-save]"));
+  await tick();
+  expect(route.patches).toHaveLength(1);
+  expect(panel().querySelector("textarea.draft-edit")).toBeNull();
+  expect(panel().querySelector("[data-draft-saving-text]")?.textContent).toBe("Merge after one warm query.");
+  expect(panel().querySelector("[data-draft-save]")).toBeNull();
+  route.state.release();
+  await tick();
+  expect(panel().querySelector<HTMLTextAreaElement>("textarea.draft-edit")?.value).toBe("Merge after one warm query.");
+  expect(panel().querySelector("[data-draft-failed] .msg-text")?.textContent).toContain("store busy");
+  expect(route.patches).toHaveLength(1);
 });
 
 test("words saved elsewhere since the edit began stop the save; Use theirs keeps them, Keep mine saves over them", async () => {

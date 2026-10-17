@@ -1,3 +1,4 @@
+import { assertCpuReadGuardSurvivesSpyRestoration, startAutoAndSettle } from "./engineEnvironment.fixture";
 import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, accountManager, realExec, engineModule, defaultPipelinePorts, pipelineClaudePermissionMode, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, tickFlow, saveFlows, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, successorOnPullRequestBranch, create, publishHarness, PUBLISH_STAGES } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, PipelinePorts } from "./engine.fixture";
 
@@ -43,6 +44,11 @@ test("default pipeline projections reuse one registry parse across the historica
     reads.mockRestore();
     setAgentRegistryForTests(null);
   }
+});
+
+test("the CPU sample guard survives projection reader restoration", () => {
+  // Check identity first so a broken fixture fails without touching procfs.
+  assertCpuReadGuardSurvivesSpyRestoration();
 });
 
 test("a pipeline stage keeps its reserved account through a routing change before settlement", async () => {
@@ -2235,7 +2241,7 @@ test("pipeline account admission retains reserved custody without parking or con
 test.each(["early", "drain-switch-off"] as const)("managed %s admission holds actual pipeline launches across recovery until terminal status", async (admission) => {
   const h = harness();
   savePipelines([]);
-  const dir = fs.mkdtempSync("/var/tmp/managed-pipeline-custody-");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "managed-pipeline-custody-"));
   const target = "a".repeat(40);
   const old = "b".repeat(40);
   let now = Date.parse("2026-01-01T00:00:00Z");
@@ -2248,8 +2254,9 @@ test.each(["early", "drain-switch-off"] as const)("managed %s admission holds ac
     check: { ...idleCheck(), state: "update-available", relation: "behind" } }, update: null }));
   const deps = { dir, now: () => now, env: {}, remote: "https://github.com/example/project", branch: "main", pollMinutes: 15,
     mode: async () => ({ mode: "managed", record: null, reason: null }), releaseTarget: () => ({ revision: old }),
+    check: async () => ({ ok: true, installed: rev(old), available: rev(target), relation: "behind", ahead: 0, behind: 1, delta: null }),
     prepareCheckRepo: async () => dir, targetOnBranch: async () => true, describe: async (_repo: string, sha: string) => rev(sha),
-    hostHealth: async () => ({ pid: 102, generation: { revision: old } }), web: { pid: 101, port: null, startedAt: "" },
+    hostHealth: async () => ({ pid: 102, generation: { revision: old } }), web: { pid: 101, port: null, startedAt: "", revision: old },
     green: { read: async () => ({ state: "green" }) }, quiet: { runtimeSnapshot: async () => ({ sessions: turns ? [{ turn: "running", host: "hosted" }] : [] }), pipelines: loadPipelines, presence: () => [], memoryAvailableMb: () => 8192 },
     requestDeployment: async (body: import("@/lib/runtime/contracts").ViewerDeploymentRequest) => {
       requests++;
@@ -2275,13 +2282,21 @@ test.each(["early", "drain-switch-off"] as const)("managed %s admission holds ac
     service.stop();
     now += DRAIN_LEASE_MS + 1;
     service = new SelfUpdateService(deps);
-    service.startAuto();
+    await startAutoAndSettle(service);
     for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(0);
     expect(requests).toBe(1);
     status = { ...status!, phase: "rolled-back", terminal: true, revisionNumber: 2 };
+    // A terminal receipt with mixed serving revisions still owns the drain.
+    deps.web.revision = target;
     await service.refreshManaged();
     await service.snapshot();
+    for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
+    expect(h.ports.drainHold()).not.toBeNull();
+    expect(h.spawnInputs).toHaveLength(0);
+    deps.web.revision = old;
+    await service.snapshot();
+    expect(h.ports.drainHold()).toBeNull();
     for (let i = 0; i < 2; i++) await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(1);
   } finally { service.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
@@ -2355,7 +2370,7 @@ test("attempt Git custody refuses an unproved detached push and fails the stage 
     expect(r.code).toBe(0);
     const refused = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.detached, f.env);
     expect(refused.code).not.toBe(0);
-    expect(refused.stderr).toContain("no proof from this attempt");
+    expect(refused.stderr).toContain("not created in the attempt worktree");
     expect(await f.git(f.origin, "for-each-ref", "--format=%(objectname)", `refs/heads/${f.lane.branch}`)).toBe("");
     const failed = await f.finish();
     expect(failed.state).toBe("needs_decision");
@@ -2365,15 +2380,11 @@ test("attempt Git custody refuses an unproved detached push and fails the stage 
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-for (const shape of ["foreign", "wrong-attempt", "missing-start", "missing-push", "malformed", "oversized", "mixed", "old", "future", "non-descendant", "remote-race", "remote-after-merge", "local-race", "pause", "claim-race", "dirty", "released"] as const) {
+for (const shape of ["foreign", "wrong-attempt", "missing-start", "malformed", "oversized", "mixed", "non-descendant", "remote-race", "remote-after-merge", "local-race", "pause", "claim-race", "dirty", "released"] as const) {
   test(`attempt Git custody preserves the fences for ${shape}`, async () => {
     const f = await detachedAttemptFixture(`attempt-git-${shape}`);
     try {
       if (shape === "non-descendant") await f.run("checkout", "--orphan", "unrelated");
-      if (shape === "old" || shape === "future") {
-        const stamp = Date.parse(f.attempt.startedAt!) + (shape === "old" ? -60000 : 3600000);
-        f.env.GIT_AUTHOR_DATE = f.env.GIT_COMMITTER_DATE = new Date(stamp).toISOString();
-      }
       if (shape === "mixed") await f.git(f.detached, "commit", "--allow-empty", "-m", "unproved ancestor");
       const fixed = await f.commit();
       // An adversarial writer may bypass its hooks. Settlement still needs all
@@ -2386,7 +2397,6 @@ for (const shape of ["foreign", "wrong-attempt", "missing-start", "missing-push"
         fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), launchId: "another-attempt" }));
       }
       if (shape === "missing-start") fs.rmSync(path.join(f.receipt, "start.json"));
-      if (shape === "missing-push") fs.rmSync(path.join(f.receipt, "pushes"), { recursive: true });
       if (shape === "malformed" || shape === "oversized") fs.writeFileSync(path.join(f.receipt, "start.json"), shape === "malformed" ? "{" : "x".repeat(8193));
       if (shape === "foreign") fs.rmSync(path.join(f.receipt, "commits", fixed), { force: true });
       if (shape === "dirty") fs.writeFileSync(path.join(f.worktree, "unsaved.txt"), "unsaved\n");
@@ -2451,23 +2461,16 @@ test("attempt Git custody replays its durable proof in a new controller process"
 });
 
 
-test.each([256, 257])("attempt Git custody bounds the proved suffix at 256 commits (%i)", async (count) => {
+test.each([256, 257])("attempt Git custody accepts every proved suffix commit (%i)", async (count) => {
   const f = await detachedAttemptFixture(`attempt-git-bound-${count}`);
   try {
     for (let n = 0; n < count; n++) await f.run("commit", "--allow-empty", "-m", `attempt change ${n}`);
     const fixed = await f.run("rev-parse", "HEAD");
     const pushed = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.detached, f.env);
-    expect(pushed.code === 0).toBe(count === 256);
+    expect(pushed.code, pushed.stderr).toBe(0);
     const settled = await f.finish();
-    if (count === 256) {
-      expect(settled.lastPassedCommit).toBe(fixed);
-      expect(settled.cursor?.stageId).toBe("review");
-    } else {
-      expect(pushed.stderr).toContain("stage push refused");
-      expect(settled.state).toBe("needs_decision");
-      expect(settled.lastPassedCommit).toBe(f.base);
-      expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.base);
-    }
+    expect(settled.lastPassedCommit).toBe(fixed);
+    expect(settled.cursor?.stageId).toBe("review");
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 }, 60000);
 

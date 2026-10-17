@@ -176,6 +176,8 @@ async function isolatedIdentityRepo() {
     return result.stdout.trim();
   };
   (await run("init", "--initial-branch=main"));
+  fs.mkdirSync(path.join(repo, ".git", "hooks"), { recursive: true });
+  fs.mkdirSync(path.join(repo, ".git", "info"), { recursive: true });
   fs.writeFileSync(path.join(repo, "source.ts"), "export const value = 1;\n");
   (await run("add", "source.ts"));
   (await run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "initial"));

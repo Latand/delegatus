@@ -38,6 +38,12 @@ fs.openSync = ((filename, flags, mode) => {
   return open(filename, flags, mode);
 }) as typeof fs.openSync;
 
+if (process.env.AUDIT_SEEDED === "1") {
+  await (await import("../src/lib/pipelines/fixtures/controllerLoad")).measureSeededController();
+  if (Object.keys(denied).length) throw new Error("seeded replay attempted a refused action");
+  process.exit(0);
+}
+
 const { registerPipelineTick } = await import("../src/lib/pipelines/controllerSignal");
 registerPipelineTick(async () => {});
 const { performanceSpans } = await import("../src/lib/performanceSpans");

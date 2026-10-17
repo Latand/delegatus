@@ -1,4 +1,4 @@
-export type MemoryTurnReason = "projectOff" | "noKey" | "notOwner" | "capped" | "unprovenOrigin" | "invalidTurn"
+export type MemoryTurnReason = "projectOff" | "memorySource" | "noKey" | "notOwner" | "capped" | "unprovenOrigin" | "invalidTurn"
   | "cancelled" | "timeout" | "candidateTimeout" | "ledgerPending" | "failed"
   | "noCandidates" | "noMatches" | "prepared" | "unconfirmed" | "delivered";
 /** Browser-safe, numeric status. Counts cover the whole installation. */

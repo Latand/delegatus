@@ -31,6 +31,7 @@ Object.assign(globalThis, {
 
 const { SelfUpdateView } = await import("./SelfUpdateView");
 const { publishBlockerNames } = await import("./blockerNames");
+const { resetDrainDecisionsForTests } = await import("./AutoDrainDecision");
 const { actionError, day } = await import("./selfUpdateCopy");
 type ActionError = import("./selfUpdateCopy").ActionError;
 const { setLocale } = await import("@/lib/i18n");
@@ -159,6 +160,43 @@ function render(s: Snapshot, state: Partial<{ armed: boolean; openLogs: Set<stri
 const text = (element: Element | null) => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
 const section = (el: HTMLElement, name: string) => el.querySelector<HTMLElement>(`[data-section="${name}"]`);
 const button = (el: HTMLElement, action: string) => el.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
+
+describe("MCP update failure guidance", () => {
+  for (const locale of ["en", "uk"] as const) {
+    test.each([
+      ["MCP runtime is missing tools: suggest_replies", "installed updater", "Встановлений оновлювач"],
+      ["MCP candidate did not register declared tools: new_read. Retrying the same image will not help; choose a corrected release.", "declares MCP tools", "заявляє інструменти MCP"],
+      ["MCP candidate is missing deployment contract tools: board_snapshot. Retrying the same image will not help; choose a corrected release.", "required for deployment", "потрібні для розгортання"],
+      ["MCP candidate tool catalog is invalid. Retrying the same image will not help; choose a corrected release.", "invalid MCP tool catalog", "некоректний каталог інструментів MCP"],
+    ])(`catalog failures explain cause and futile retry in ${locale}: %s`, (reason, en, uk) => {
+      setLocale(locale);
+      const s = snapshot({ mode: "managed", ...available(), update: {
+        ...idleUpdate(MANAGED_STEPS), state: "failed", target: NEW, targetShort: NEW.slice(0, 7),
+        startedAt: AT, finishedAt: new Date(NOW).toISOString(),
+        steps: pendingSteps(MANAGED_STEPS).map(step => step.name === "health"
+          ? { ...step, state: "failed", failure: null, tail: [reason] } : step),
+      } });
+      const el = render(s);
+      expect(text(el.querySelector("[data-cause]"))).toContain(locale === "en" ? en : uk);
+      const guidance = text(el.querySelector("[data-retry-guidance]"));
+      expect(guidance).toContain(locale === "en" ? "will not help" : "не допоможе");
+      expect(button(el, "retry")?.title).toBe(guidance);
+      button(el, "retry")!.click();
+      expect(calls).toEqual(["retry"]);
+    });
+
+    test(`a transient MCP failure explains that retry may help in ${locale}`, () => {
+      setLocale(locale);
+      const el = render(snapshot({ mode: "managed", ...available(), update: {
+        ...idleUpdate(MANAGED_STEPS), state: "failed", target: NEW, targetShort: NEW.slice(0, 7), startedAt: AT, finishedAt: new Date(NOW).toISOString(),
+        steps: pendingSteps(MANAGED_STEPS).map(step => step.name === "health"
+          ? { ...step, state: "failed", failure: null, tail: ["MCP startup timed out"] } : step),
+      } }));
+      expect(text(el.querySelector("[data-cause]"))).toBe("MCP startup timed out");
+      expect(text(el.querySelector("[data-retry-guidance]"))).toContain(locale === "en" ? "may help" : "може допомогти");
+    });
+  }
+});
 
 describe("automatic updates", () => {
   test.each(["en", "uk"] as const)("the expired hold explains admitted launches and retry time in %s", locale => {
@@ -338,6 +376,30 @@ describe("automatic updates", () => {
       expect(text(card?.querySelector('[role="alert"]') ?? null)).toBe("Could not record the decision. Try again.");
       expect(button(el, "deploy-now")?.disabled).toBe(false);
     } finally { globalThis.fetch = savedFetch; }
+  });
+
+  /* Audit B15: «Keep waiting» leaves at once; a lost answer brings the card back with the reason. */
+  test("Keep waiting takes the card away at once while the answer is held, sends once, and a lost answer brings it back with the reason", async () => {
+    const savedFetch = globalThis.fetch;
+    const posted: unknown[] = [];
+    let fail!: () => void;
+    globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+      posted.push(JSON.parse(String(init?.body)));
+      return new Promise<Response>((_resolve, reject) => { fail = () => reject(new TypeError("network")); });
+    }) as unknown as typeof fetch;
+    try {
+      const el = render(decided());
+      flushSync(() => button(el, "keep-waiting")!.click());
+      expect(el.querySelector("[data-auto-drain-decision]")).toBeNull();
+      expect(posted).toEqual([{ decisionId: "drain-current", choice: "keep-waiting" }]);
+      fail();
+      await Bun.sleep(0);
+      await Bun.sleep(0);
+      const card = el.querySelector("[data-auto-drain-decision]");
+      expect(card).not.toBeNull();
+      expect(text(card?.querySelector('[role="alert"]') ?? null)).toBe("Could not record the decision. Try again.");
+      expect(posted).toHaveLength(1);
+    } finally { globalThis.fetch = savedFetch; resetDrainDecisionsForTests(); }
   });
 
   test("the switch, blockers, serving revisions and history are visible", () => {

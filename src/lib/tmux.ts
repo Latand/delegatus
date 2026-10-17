@@ -18,6 +18,7 @@ import {
   type TmuxSpawnBinding,
 } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
+import type { DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import { logEvent } from "@/lib/events";
 import { inboxImageExt, MAX_INBOX_IMAGE_BYTES } from "@/lib/imagePolicy";
 import { INBOX_DIR } from "@/lib/inbox";
@@ -725,9 +726,11 @@ async function ensureDeliverable(
  * chip), Enter is pressed again. An extra Enter on an already-empty composer
  * is a no-op in both CLIs, so a false positive here costs nothing.
  */
-export async function sendText(target: TmuxTarget, text: string): Promise<void> {
+export async function sendText(target: TmuxTarget, text: string, authorityGuard?: DeliveryAdmissionGuard): Promise<void> {
+  authorityGuard?.();
   const endpoint = tmuxEndpointDescriptor();
   const initial = await inspectTmuxPane(target, endpoint, { runTmux, processIdentity: (pid) => procBackend.processIdentity(pid) });
+  authorityGuard?.();
   if (!initial) throw new Error("tmux pane is unavailable");
   const binding: TmuxSpawnBinding = {
     endpoint: endpoint.tmuxTmpdir,
@@ -738,13 +741,16 @@ export async function sendText(target: TmuxTarget, text: string): Promise<void> 
     display: initial.display,
   };
   const guard = async () => {
+    authorityGuard?.();
     if (!await verifyTmuxSpawnBinding(binding, endpoint)) {
       throw new Error("tmux server or pane identity changed during delivery");
     }
   };
   await withPaneLock(initial.paneId, async () => {
+    authorityGuard?.();
     try {
       await ensureDeliverable(initial.paneId, endpoint, guard);
+      authorityGuard?.();
       await sendTextUnlocked(initial.paneId, text, endpoint, guard);
       logEvent("send", { target: initial.paneId, result: "ok", meta: { bytes: text.length, display: initial.display } });
     } catch (error) {

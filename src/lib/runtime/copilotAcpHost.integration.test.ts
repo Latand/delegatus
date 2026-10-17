@@ -644,7 +644,7 @@ describe.skipIf(!BIN)("Copilot CLI reaches the Viewer MCP server through the pro
     const runtimeRoot = path.join(sandbox, "llv-mcp-runtime");
     fs.symlinkSync(path.resolve(import.meta.dir, "../../.."), runtimeRoot);
     process.env.LLV_MCP_RUNTIME_ROOT = runtimeRoot;
-    delete process.env.LLV_MCP_TRANSPORT;
+    process.env.LLV_MCP_TRANSPORT = "stdio";
     const { tools, config } = await firstTurnTools("stdio");
     expect(config).toMatchObject({ type: "local", args: [path.join(runtimeRoot, "bin", "mcp-server.mjs")] });
     expect(tools.some((name) => name.includes("stage_report"))).toBe(true);

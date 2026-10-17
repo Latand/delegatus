@@ -18,6 +18,7 @@ export interface TaskToast {
 }
 
 const TOAST_MS = 6000;
+const TOAST_CLEARANCE_PX = 8;
 
 let seq = 0;
 const listeners = new Set<(toast: TaskToast) => void>();
@@ -26,6 +27,24 @@ const listeners = new Set<(toast: TaskToast) => void>();
 export function pushTaskToast(kind: TaskToast["kind"], text: string): void {
   const toast = { id: ++seq, kind, text };
   for (const listener of listeners) listener(toast);
+}
+
+/** Scroll `element` up out from under the toasts that float over its scroller,
+    so a row an error toast is about stays readable while the toast is up. The
+    scroller is the nearest ancestor that scrolls; a row taller than the room
+    keeps its top in view. The phone's toasts dock in flow and cover nothing. */
+export function scrollClearOfToasts(element: Element | null): void {
+  const host = document.querySelector("[data-task-toasts]");
+  if (!element || !host?.firstElementChild) return;
+  const toastTop = Math.min(...Array.from(host.children, (child) => child.getBoundingClientRect().top));
+  const row = element.getBoundingClientRect();
+  let scroller: HTMLElement | null = element.parentElement;
+  while (scroller && !(scroller.scrollHeight > scroller.clientHeight && /auto|scroll/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement;
+  if (!scroller) return;
+  const over = row.bottom - (toastTop - TOAST_CLEARANCE_PX);
+  if (over <= 0) return;
+  const top = scroller.getBoundingClientRect().top;
+  scroller.scrollTop += Math.min(over, Math.max(0, row.top - top - TOAST_CLEARANCE_PX));
 }
 
 /** «Delivered 2 of 3; ✗ "title": error» — the partial-delivery breakdown. */
@@ -66,6 +85,7 @@ export function TaskToastHost() {
   if (!toasts.length) return null;
   return (
     <div
+      data-task-toasts=""
       className={
         isMobile
           ? `${Z.toast} flex shrink-0 flex-col gap-1.5 border-t border-border bg-canvas px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]`

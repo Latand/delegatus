@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 
 import { LIMITS_RATE_LIMITED_REASON, LIMITS_REAUTH_REQUIRED_REASON } from "@/lib/types";
 
@@ -26,6 +26,40 @@ const { claudeValidityFromLimitRead, NoHealthyClaudeAccountError, selectHealthyC
 const { withAccountMutationLockAsync } = await import("./accountMutation");
 const { seedAccountRegistry } = await import("./accountsStoreFixture");
 const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
+// Load the route graph before Bun starts an individual case's 5 s budget.
+// Its first import otherwise falls inside the first rejection scenario.
+const { NextRequest } = await import("next/server");
+const { POST } = await import("@/app/api/spawn/route");
+const credentials = await import("./claudeCredentials");
+const originalReadCredentials = credentials.readClaudeCredentials;
+const originalReplaceCredentials = credentials.replaceClaudeCredentials;
+const filePorts = { platform: "linux", security: () => { throw new Error("unexpected Keychain access"); } };
+const readFileCredentials = (home: string) => originalReadCredentials(home, filePorts);
+let restoreCredentials = () => {};
+const admissionCleanups: (() => Promise<void>)[] = [];
+
+// These cases create file credentials. Native Keychain recognition has its own
+// credential suite; repeatedly spawning security here makes admission depend
+// on the runner's Keychain latency, even when the requested item is absent.
+beforeEach(() => {
+  const reader = spyOn(credentials, "readClaudeCredentials").mockImplementation(readFileCredentials);
+  const writer = spyOn(credentials, "replaceClaudeCredentials").mockImplementation((home, expected, document) =>
+    originalReplaceCredentials(home, expected, document, filePorts));
+  restoreCredentials = () => { reader.mockRestore(); writer.mockRestore(); };
+});
+
+/** Join outstanding admission work before restoring shared hooks or state.
+ * afterEach also calls this if Bun interrupts a test before its finally runs.
+ * Memoization prevents a late finally from restoring the next case's hooks. */
+function admissionCleanup(settle: () => Promise<void>, restore: () => void) {
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= (async () => {
+    try { await settle(); } finally { restore(); }
+  })();
+  admissionCleanups.push(close);
+  return close;
+}
+
 /* The process-wide registry keeps its SQLite store open; close it before the
    store's directory goes, or macOS answers the next query with
    SQLITE_IOERR_VNODE. */
@@ -38,8 +72,14 @@ const current = () => ({ kind: "admissible", basis: "current", stale: false, ret
 const lastKnown = () => ({ kind: "admissible", basis: "last-known", stale: true, retryAt: null } as const);
 const unavailable = () => ({ kind: "unavailable", reason: "auth-failed", stale: false, retryAt: null } as const);
 
-afterEach(() => {
-  for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true });
+afterEach(async () => {
+  try {
+    for (const close of admissionCleanups.splice(0)) await close();
+  } finally {
+    providerReply = null;
+    restoreCredentials();
+    for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 afterAll(() => {
@@ -51,6 +91,60 @@ afterAll(() => {
   closeAgentRegistryForTests();
   fs.rmSync(STATE_SANDBOX, { recursive: true, force: true });
 });
+
+for (const failure of ["assertion", "request rejection", "holder rejection"] as const) {
+  test(`admission cleanup joins owned work after ${failure} before the next admission`, async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const marker = new Error("injected admission failure");
+    let finished = false;
+    const holder = withAccountMutationLockAsync(async () => {
+      entered();
+      await gate;
+      finished = true;
+      if (failure === "holder rejection") throw marker;
+    });
+    const request = holder.then(() => {
+      if (failure === "request rejection") throw marker;
+    });
+    // Observe failures immediately, as a pending request must not become an
+    // unhandled rejection while the assertion is unwinding.
+    const settled = Promise.allSettled([holder, request]);
+    let timerFired = false;
+    const timer = setTimeout(() => { timerFired = true; }, 60_000);
+    const previousReply = providerReply;
+    const reply = () => Response.json({ fixture: true });
+    providerReply = reply;
+    let restores = 0;
+    const cleanup = admissionCleanup(async () => {
+      clearTimeout(timer);
+      release();
+      await settled;
+    }, () => { providerReply = previousReply; restores += 1; });
+    await ready;
+    const exercise = async () => {
+      try { throw marker; } finally { await cleanup(); }
+    };
+    await expect(exercise()).rejects.toBe(marker);
+    expect(finished).toBe(true);
+    expect(timerFired).toBe(false);
+    expect(timer.hasRef()).toBe(false);
+    expect(providerReply === previousReply).toBe(true);
+    expect((await settled).map(result => result.status)).toEqual(failure === "holder rejection"
+      ? ["rejected", "rejected"] : failure === "request rejection" ? ["fulfilled", "rejected"] : ["fulfilled", "fulfilled"]);
+
+    // A late finally must not restore over the next admission's provider.
+    providerReply = reply;
+    await withAccountMutationLockAsync(async () => {
+      await cleanup();
+      expect(providerReply).toBe(reply);
+    });
+    expect(restores).toBe(1);
+    providerReply = previousReply;
+  });
+}
 
 function account(id: string, expiresAt: number, authPresent = true, refreshable = true): ClaudeAccount {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), `llv-spawn-health-${id}-`));
@@ -69,10 +163,7 @@ for (const kind of ["legacy", "managed"] as const) {
   for (const uncertainty of ["discovery", "metadata"] as const) {
     test("production spawn caller refuses " + kind + " requested account uncertainty at " + uncertainty, async () => {
       const store = await import("./claudeCredentials");
-      const originalRead = store.readClaudeCredentials;
-      const read = spyOn(store, "readClaudeCredentials").mockImplementation((home) => originalRead(home, {
-        platform: "linux", security: () => { throw new Error("unexpected Keychain access"); },
-      }));
+      const read = spyOn(store, "readClaudeCredentials").mockImplementation(readFileCredentials);
       const { createManagedClaudeAccount, listClaudeAccounts } = await import("./claude");
       const { resolveHealthySpawnAccount } = await import("./manager");
       removeStateDir();
@@ -486,16 +577,24 @@ test("Claude provider checks waiting behind deletion re-resolve retired accounts
   });
   await acquired;
 
-  const refreshResult = selectHealthyClaudeAccount([expired], expired.id).then(() => null, (error: unknown) => error);
-  const probeResult = selectHealthyClaudeAccount([currentAccount], currentAccount.id).then(() => null, (error: unknown) => error);
-  await Bun.sleep(10);
-  expect(providerReads).toBe(0);
-  release();
-  await holder;
+  let refreshResult: Promise<unknown> | undefined;
+  let probeResult: Promise<unknown> | undefined;
+  const cleanup = admissionCleanup(async () => {
+    release();
+    await Promise.allSettled([holder, refreshResult, probeResult]);
+  }, () => {});
+  try {
+    refreshResult = selectHealthyClaudeAccount([expired], expired.id).then(() => null, (error: unknown) => error);
+    probeResult = selectHealthyClaudeAccount([currentAccount], currentAccount.id).then(() => null, (error: unknown) => error);
+    await Bun.sleep(10);
+    expect(providerReads).toBe(0);
+    release();
+    await holder;
 
-  expect(await refreshResult).toBeInstanceOf(Error);
-  expect(await probeResult).toBeInstanceOf(Error);
-  expect(providerReads).toBe(0);
+    expect(await refreshResult).toBeInstanceOf(Error);
+    expect(await probeResult).toBeInstanceOf(Error);
+    expect(providerReads).toBe(0);
+  } finally { await cleanup(); }
 });
 
 test("a validity probe whose catalog revision moved returns replayable admission contention", async () => {
@@ -574,10 +673,16 @@ test("concurrent admissions coalesce refresh validation for one account", async 
   await Promise.resolve();
   await Promise.resolve();
 
-  expect(refreshCalls).toBe(1);
-  release();
-  expect((await first).account.id).toBe(expired.id);
-  expect((await second).account.id).toBe(expired.id);
+  const cleanup = admissionCleanup(async () => {
+    release();
+    await Promise.allSettled([first, second]);
+  }, () => {});
+  try {
+    expect(refreshCalls).toBe(1);
+    release();
+    expect((await first).account.id).toBe(expired.id);
+    expect((await second).account.id).toBe(expired.id);
+  } finally { await cleanup(); }
 });
 
 test("three expired accounts deterministically select the sole refreshable account", async () => {
@@ -731,13 +836,14 @@ for (const withFallback of [false, true]) test(`a pinned expired Claude account 
   } finally { providerReply = null; removeStateDir(); }
 });
 
-for (const outcome of ["invalid", "unknown", "queued removal", "queued catalog", "queued credentials", "current queued credentials", "successful refresh queued rotation", "successful refresh queued removal", "successful refresh queued unreadable"] as const) test(`a changed pin stays unreserved after ${outcome} admission`, async () => {
+const rejectionOutcomes = ["invalid", "unknown", "queued removal", "queued catalog", "queued credentials", "current queued credentials", "successful refresh queued rotation", "successful refresh queued removal", "successful refresh queued unreadable"] as const;
+for (const outcome of rejectionOutcomes) test(`a changed pin stays unreserved after ${outcome} admission`, () => rejectedAdmission(outcome));
+
+async function rejectedAdmission(outcome: typeof rejectionOutcomes[number], failAfterStart = false) {
   const { createManagedClaudeAccount } = await import("./claude");
   const { readAccountSource, writeAccountSource } = await import("./accountsStore");
   const { accountManager, resolveHealthySpawnAccount } = await import("./manager");
   const { AgentRegistry } = await import("@/lib/agent/registry");
-  const { NextRequest } = await import("next/server");
-  const { POST } = await import("@/app/api/spawn/route");
   const { clearAccountTestState } = await import("./accountsStoreFixture");
   clearAccountTestState(process.env.LLV_STATE_DIR!);
   const { resetLegacyDocumentStoresForTests } = await import("@/lib/state/legacyDocumentStore");
@@ -807,45 +913,56 @@ for (const outcome of ["invalid", "unknown", "queued removal", "queued catalog",
   const started = new Promise<void>(resolve => { resolverStarted = resolve; });
   const resolve: typeof resolveHealthySpawnAccount = (...args) => { resolverStarted(); return resolveHealthySpawnAccount(...args); };
   let timer: ReturnType<typeof setTimeout> | undefined;
-  if (outcome.includes("queued") && !outcome.startsWith("successful refresh")) {
-    let holderEntered!: () => void;
-    const entered = new Promise<void>(resolve => { holderEntered = resolve; });
-    const gate = new Promise<void>(resolve => { release = resolve; });
-    holder = withAccountMutationLockAsync(async () => {
-      holderEntered(); await gate;
-      const read = readAccountSource("claude-accounts.json");
-      if (read.kind !== "collection") throw new Error("Missing fixture catalog");
-      const catalog = read.body as { accounts: { id: string; label: string }[] };
-      if (outcome === "queued removal") {
-        catalog.accounts = catalog.accounts.filter(row => row.id !== pin.id);
-        writeAccountSource("claude-accounts.json", catalog);
-      } else if (outcome === "queued catalog") {
-        catalog.accounts.find(row => row.id === pin.id)!.label = "Changed queued pin";
-        writeAccountSource("claude-accounts.json", catalog);
-      } else {
-        fs.writeFileSync(path.join(pin.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
-          ["access" + "Token"]: crypto.randomUUID(), refreshToken: crypto.randomUUID(), expiresAt: Date.now() + 60_000,
-        } }), { mode: 0o600 });
-      }
-    });
-    await entered;
-  }
+  let pending: Promise<Response> | undefined;
+  const cleanup = admissionCleanup(async () => {
+    clearTimeout(timer); release();
+    await Promise.allSettled([holder, pending]);
+  }, () => {
+    providerReply = null;
+    registry.close();
+    if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+    clearAccountTestState(process.env.LLV_STATE_DIR!);
+  });
   try {
-    const pending = POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+    if (outcome.includes("queued") && !outcome.startsWith("successful refresh")) {
+      let holderEntered!: () => void;
+      const entered = new Promise<void>(resolve => { holderEntered = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      holder = withAccountMutationLockAsync(async () => {
+        holderEntered(); await gate;
+        const read = readAccountSource("claude-accounts.json");
+        if (read.kind !== "collection") throw new Error("Missing fixture catalog");
+        const catalog = read.body as { accounts: { id: string; label: string }[] };
+        if (outcome === "queued removal") {
+          catalog.accounts = catalog.accounts.filter(row => row.id !== pin.id);
+          writeAccountSource("claude-accounts.json", catalog);
+        } else if (outcome === "queued catalog") {
+          catalog.accounts.find(row => row.id === pin.id)!.label = "Changed queued pin";
+          writeAccountSource("claude-accounts.json", catalog);
+        } else {
+          fs.writeFileSync(path.join(pin.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+            ["access" + "Token"]: crypto.randomUUID(), refreshToken: crypto.randomUUID(), expiresAt: Date.now() + 60_000,
+          } }), { mode: 0o600 });
+        }
+      });
+      await entered;
+    }
+    pending = POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
       method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
       body: JSON.stringify({ engine: "claude", accountId: pin.id, cwd, title: "Rejected refresh fixture", prompt: "Review", clientAttemptId: `rejected-refresh-${outcome.replaceAll(" ", "-")}` }),
     }), { registry: () => registry, runtimeHostClient: () => ({} as never), storeImages: () => [], spawnStructuredConversation: async () => { throw new Error("deferred launch must not run"); }, engineReadiness: () => "connected", assertStructuredRuntime: () => {}, defer: () => {}, resolveHealthySpawnAccount: resolve, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id) });
+    if (failAfterStart) throw new Error("injected assertion after admission started");
     if (holder && !outcome.startsWith("successful refresh")) { await started; await Bun.sleep(8); release(); await holder; }
     const response = await pending;
     expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 503, body: { code: "account_admission_changed", retrySafe: true, retryable: true } });
     expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
-  } finally {
-    clearTimeout(timer); release(); await holder;
-    providerReply = null;
-    if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
-    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
-    clearAccountTestState(process.env.LLV_STATE_DIR!);
-  }
+  } finally { await cleanup(); }
+}
+
+test("a failed spawn assertion drains its request before the following admission", async () => {
+  await expect(rejectedAdmission("queued catalog", true)).rejects.toThrow("injected assertion after admission started");
+  await rejectedAdmission("unknown");
 });
 
 for (const change of ["rotation", "removal", "unreadable", "probe unreadable"] as const) test(change === "probe unreadable"
@@ -856,8 +973,6 @@ for (const change of ["rotation", "removal", "unreadable", "probe unreadable"] a
   const { accountProbeIdentity } = await import("./accountMutation");
   const { accountManager, resolveHealthySpawnAccount } = await import("./manager");
   const { AgentRegistry } = await import("@/lib/agent/registry");
-  const { NextRequest } = await import("next/server");
-  const { POST } = await import("@/app/api/spawn/route");
   const { clearAccountTestState } = await import("./accountsStoreFixture");
   clearAccountTestState(process.env.LLV_STATE_DIR!);
   const pin = createManagedClaudeAccount("Keychain probe fixture");
@@ -883,6 +998,17 @@ for (const change of ["rotation", "removal", "unreadable", "probe unreadable"] a
   let timer: ReturnType<typeof setTimeout> | undefined;
   let before: string | undefined;
   let after: string | undefined;
+  let pending: Promise<Response> | undefined;
+  const cleanup = admissionCleanup(async () => {
+    clearTimeout(timer); release();
+    await Promise.allSettled([holder, pending]);
+  }, () => {
+    reader.mockRestore(); providerReply = null;
+    registry.close();
+    if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+    clearAccountTestState(process.env.LLV_STATE_DIR!);
+  });
   providerReply = async () => {
     let entered!: () => void;
     const ready = new Promise<void>(resolve => { entered = resolve; });
@@ -900,19 +1026,14 @@ for (const change of ["rotation", "removal", "unreadable", "probe unreadable"] a
     return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
   };
   try {
-    const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
+    pending = POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
       method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
       body: JSON.stringify({ engine: "claude", accountId: pin.id, cwd, title: "Keychain recheck fixture", prompt: "Review", clientAttemptId: `keychain-recheck-${change.replaceAll(" ", "-")}` }),
     }), { registry: () => registry, runtimeHostClient: () => ({} as never), storeImages: () => [], spawnStructuredConversation: async () => { throw new Error("deferred launch must not run"); }, engineReadiness: () => "connected", assertStructuredRuntime: () => {}, defer: () => {}, resolveHealthySpawnAccount, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id) });
+    const response = await pending;
     if (change === "probe unreadable") expect(reachedProbe).toBeTrue();
     else expect(before).toBe(after);
     expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 503, body: { code: "account_admission_changed", retrySafe: true, retryable: true } });
     expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
-  } finally {
-    clearTimeout(timer); release(); await holder;
-    reader.mockRestore(); providerReply = null;
-    if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
-    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
-    clearAccountTestState(process.env.LLV_STATE_DIR!);
-  }
+  } finally { await cleanup(); }
 });

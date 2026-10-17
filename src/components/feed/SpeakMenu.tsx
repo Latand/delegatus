@@ -346,7 +346,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
     else setError(t("tts.voiceSaveFailed"));
   };
   const voiceRow = (voice: TtsVoice) => <button key={voice.id} type="button" role="menuitemradio" data-tts-voice
-    title={voice.id} aria-checked={voice.id === option.voice} disabled={saving !== null || option.voiceLockedByEnv}
+    title={voice.id} aria-checked={voice.id === option.voice} disabled={option.voiceLockedByEnv}
     onClick={() => void pickVoice(voice.id)}
     className={`flex w-full min-w-0 items-center gap-2 rounded-control px-2 text-left text-[12px] text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${isMobile ? "min-h-11 py-2" : "py-1.5"} ${voice.id === option.voice ? "bg-accent/10" : "hover:bg-canvas"}`}>
     {voice.id === option.voice ? <Check className="h-3.5 w-3.5 shrink-0" aria-hidden /> : null}
@@ -400,16 +400,14 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
                 role="menuitemradio"
                 data-tts-provider
                 aria-checked={active}
-                disabled={info.lockedByEnv || saving !== null}
+                disabled={info.lockedByEnv}
                 onClick={() => void pick(candidate.id)}
                 className={`flex w-full items-start gap-2 rounded-[9px] px-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${
                   isMobile ? "min-h-11 py-2" : "py-1.5"
                 } ${active && candidate.id !== "fishaudio" ? "bg-accent/10" : "hover:bg-canvas"}`}
               >
                 <span className="mt-[3px] flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-                  {saving === candidate.id ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" aria-hidden />
-                  ) : active ? (
+                  {active ? (
                     <Check className="h-3.5 w-3.5 text-accent" aria-hidden />
                   ) : (
                     <span
@@ -433,7 +431,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
                 <div role="group" aria-label={t("tts.fishModelGroup")} className="ml-5">
                   {FISH_AUDIO_MODELS.map((model) => (
                     <button key={model} type="button" role="menuitemradio" aria-checked={info.backend === "fishaudio" && candidate.model === model}
-                      disabled={saving !== null || candidate.modelLockedByEnv || (info.lockedByEnv && info.backend !== "fishaudio")}
+                      disabled={candidate.modelLockedByEnv || (info.lockedByEnv && info.backend !== "fishaudio")}
                       onClick={() => void pick("fishaudio", model)}
                       className={`block min-h-11 w-full rounded-[9px] px-2 py-2 text-left text-[11.5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${info.backend === "fishaudio" && candidate.model === model ? "bg-accent/10" : "hover:bg-canvas"} ${model === "s2.1-pro-free" && (candidate.freeEnded || fishAudioFreeEnded()) ? "text-danger" : "text-primary"}`}>
                       {t(model === "s2.1-pro" ? "tts.fishModelPaid" : (candidate.freeEnded || fishAudioFreeEnded()) ? "tts.fishModelFreeEnded" : "tts.fishModelFree", { date })}
@@ -445,7 +443,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
               {active ? <div role="group" data-tts-voice-group aria-label={t("tts.voiceGroup")} className="ml-5 min-w-0 space-y-1 border-l border-border py-1 pl-1">
                 <div className="px-2 text-[11px] font-semibold text-secondary">{t("tts.voiceGroup")}</div>
                 {option.voiceLockedByEnv ? null : <input aria-label={t("tts.voiceInput")} placeholder={t("tts.voiceInput")} autoComplete="off" spellCheck={false} value={query} maxLength={128}
-                  disabled={saving !== null || option.voiceLockedByEnv}
+                  disabled={option.voiceLockedByEnv}
                   onInput={(event) => setQuery(event.currentTarget.value)}
                   onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing && typed) { event.preventDefault(); void pickVoice(filtered.length === 1 ? filtered[0]!.id : typed); } }}
                   className={`w-full min-w-0 rounded-control border border-border bg-card px-2 text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 placeholder:text-muted disabled:opacity-60 ${isMobile ? "min-h-11 text-[16px]" : "h-8 text-[12px]"}`} />}
@@ -457,7 +455,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
                 {option.voiceLockedByEnv ? <div data-tts-voice-locked className="flex min-w-0 items-center gap-2 break-words px-2 text-[12px] text-primary"><Check className="h-3.5 w-3.5 shrink-0" aria-hidden /><span className="min-w-0 flex-1 break-words">{voiceName(option)}</span></div> : null}
                 {option.voiceLockedByEnv ? null : filtered.slice(0, 6).map(voiceRow)}
                 {!option.voiceLockedByEnv && (filtered.length > 6 || voices?.truncated) ? <div data-tts-voice-more className="px-2 text-[10.5px] text-muted">{t("tts.voiceMore", { count: Math.max(0, filtered.length - 6) })}</div> : null}
-                {useTyped ? <><button type="button" data-tts-typed disabled={saving !== null || option.voiceLockedByEnv} onClick={() => void pickVoice(typed)} className="min-h-11 w-full break-words rounded-control px-2 py-1.5 text-left text-[12px] text-primary hover:bg-canvas disabled:opacity-60">{t("tts.voiceUseTyped", { voice: typed })}</button>{voices ? <div className="px-2 text-[10.5px] text-muted">{t("tts.voiceNotListed")}</div> : null}</> : null}
+                {useTyped ? <><button type="button" data-tts-typed disabled={option.voiceLockedByEnv} onClick={() => void pickVoice(typed)} className="min-h-11 w-full break-words rounded-control px-2 py-1.5 text-left text-[12px] text-primary hover:bg-canvas disabled:opacity-60">{t("tts.voiceUseTyped", { voice: typed })}</button>{voices ? <div className="px-2 text-[10.5px] text-muted">{t("tts.voiceNotListed")}</div> : null}</> : null}
               </div> : null}
             </Fragment>
           );

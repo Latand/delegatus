@@ -1630,6 +1630,7 @@ test("a resume that cannot build a command names the failing condition (issue #9
     pathAllowed: () => true,
     registry: {
       conversationForPath: () => ({ id: "conversation_named", supersededBy: null }),
+      conversationDeliverySnapshot: () => ({ conversationAliases: {} }),
       launchProfileForPath: () => null,
       transcriptAccountId: () => "account-b",
     },
@@ -1659,6 +1660,7 @@ async function resumeSpecAccountFor(recorded: string | null, fixture: string): P
     pathAllowed: () => true,
     registry: {
       conversationForPath: () => ({ id: "conversation_recorded", supersededBy: null }),
+      conversationDeliverySnapshot: () => ({ conversationAliases: {} }),
       launchProfileForPath: () => null,
       transcriptAccountId: () => recorded,
     },

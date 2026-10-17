@@ -1,3 +1,9 @@
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
+import { registryRowProjection, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
+const receiptParents: RegistryRowProjector<"receipts", { conversationId: string; parentConversationId: string | null }> = {
+  id: "board-report-receipt-parent-v1", collection: "receipts",
+  project: receipt => ({ conversationId: receipt.conversationId, parentConversationId: receipt.parentConversationId }),
+};
 import crypto from "node:crypto";
 
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
@@ -41,7 +47,7 @@ export interface BoardReportSeat {
 
 /** A replay of the same epoch is the same message to the delivery layer. */
 export function boardReportMessageId(project: string, seatEpoch: number): string {
-  return `board_report_${crypto.createHash("sha256").update(`${project}:${seatEpoch}`).digest("hex").slice(0, 40)}`;
+  return `${seatMessageKeys.boardReport}${crypto.createHash("sha256").update(`${project}:${seatEpoch}`).digest("hex").slice(0, 40)}`;
 }
 
 export interface BoardReportDelivery {
@@ -349,7 +355,7 @@ async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number)
   const snapshot = read("registry", () => agentRegistry().readOnlySnapshot(), null);
   const parentOf = new Map<string, string>();
   for (const edge of Object.values(snapshot?.lineageEdges ?? {})) parentOf.set(edge.childConversationId, edge.parentConversationId);
-  for (const receipt of Object.values(snapshot?.receipts ?? {})) {
+  for (const [, receipt] of snapshot ? registryRowProjection(snapshot, receiptParents) : []) {
     if (receipt.parentConversationId && !parentOf.has(receipt.conversationId)) parentOf.set(receipt.conversationId, receipt.parentConversationId);
   }
   const agentStarted = new Set<string>(parentOf.keys());

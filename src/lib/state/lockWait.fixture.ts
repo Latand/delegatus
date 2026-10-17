@@ -13,14 +13,20 @@ export const lockRowOptions = {
 
 if (import.meta.main) {
   const [mode, filename, ready, go, argument, attempt] = process.argv.slice(2);
-  if (mode === "hold" || mode === "exclusive") {
+  if (mode === "hold" || mode === "exclusive" || mode === "hold-until-release") {
     const db = new Database(filename!);
     db.exec("PRAGMA busy_timeout = 0");
     if (mode === "exclusive") db.exec("PRAGMA locking_mode = EXCLUSIVE");
     db.exec("BEGIN EXCLUSIVE");
     fs.writeFileSync(ready!, "ready");
     try {
-      if (argument?.startsWith("manual")) {
+      if (mode === "hold-until-release") {
+        const deadline = performance.now() + Number(argument);
+        while (!fs.existsSync(go!)) {
+          if (performance.now() >= deadline) throw new Error("lock holder release watchdog expired");
+          await Bun.sleep(5);
+        }
+      } else if (argument?.startsWith("manual")) {
         while (!fs.existsSync(go!)) await Bun.sleep(1);
         const heldFor = Number(argument.split(":")[1] ?? 0);
         if (heldFor) await Bun.sleep(heldFor);

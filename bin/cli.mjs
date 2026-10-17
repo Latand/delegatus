@@ -2,7 +2,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import { constants, homedir } from "node:os";
@@ -29,7 +29,7 @@ let browserOpenCommand, cliRuntimeHostConfig, cliRuntimeHostEnvironment,
   newlyBoundNonLoopbackAddress, readNonLoopbackBindState, viewerChildProcessOptions,
   viewerServerBunRuntime, viewerExitStatus;
 let createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
-  probePageAndChunk, selfUpdatePaths, watchRestartRequests;
+  waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests;
 let probeHeadersFrom, viewerBootGateKey, findLegacySystemdUnits, legacySystemdNotice, linkSkills;
 let createRelaunch, relaunch;
 let assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost;
@@ -208,6 +208,9 @@ function withoutNextStartupLines(text) {
 
 function createStartupOutput() {
   const held = [];
+  const tails = { stdout: "", stderr: "" };
+  let failureFile = null;
+  let failureRevision = null;
   let heldBytes = 0;
   let released = false;
   let debug = false;
@@ -217,10 +220,20 @@ function createStartupOutput() {
     for (const [stream, text] of held.splice(0)) stream.write(text);
   };
   return {
+    setFailureFile(file, revision) { failureFile = file; failureRevision = revision; },
+    persistFailure() {
+      if (!failureFile) return;
+      mkdirSync(dirname(failureFile), { recursive: true });
+      const temporary = `${failureFile}.${process.pid}.tmp`;
+      writeFileSync(temporary, JSON.stringify({ pid: process.pid, capturedAt: new Date().toISOString(), revision: failureRevision, ...tails }) + "\n", { mode: 0o600 });
+      renameSync(temporary, failureFile);
+    },
     setDebug(value) {
       debug = value;
     },
     write(stream, chunk) {
+      const channel = stream === process.stderr ? "stderr" : "stdout";
+      tails[channel] = (tails[channel] + String(chunk)).slice(-32 * 1024);
       const text = debug ? String(chunk) : withoutNextStartupLines(String(chunk));
       if (!text) return;
       if (released) {
@@ -247,7 +260,13 @@ function fail(message) {
 }
 
 async function exitWithFailure(message) {
-  if (relaunch?.hasTrial()) await relaunch.failed(message);
+  if (relaunch?.hasTrial()) {
+    // Exec rollback replaces this process and never reaches its exit handler.
+    try { startupOutput.persistFailure(); }
+    catch { console.error("[self-update] could not persist candidate startup output; continuing rollback"); }
+    startupOutput.release();
+    await relaunch.failed(message);
+  }
   await stopStartedProcesses?.();
   startupOutput.release();
   console.error(message);
@@ -666,7 +685,7 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
     const packaged = release.dir === packageRoot;
     const child = spawn(bunRuntime, ["--bun", packaged ? config.entrypoint : hostEntrypoint(release.dir)], viewerChildProcessOptions({
       cwd: release.dir,
-      env: environment,
+      env: cliRuntimeHostEnvironment(environment, config, release.sha),
       stdio: ["ignore", "pipe", "pipe"],
     }));
     const state = {
@@ -774,7 +793,7 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
   };
 }
 
-function probe(url) {
+function probe(url, timeoutMs = READINESS_PROBE_TIMEOUT_MS) {
   return new Promise((resolve) => {
     const request = http.get(url, (response) => {
       response.resume();
@@ -785,31 +804,36 @@ function probe(url) {
       resolve(false);
     });
 
-    request.setTimeout(READINESS_PROBE_TIMEOUT_MS, () => {
+    const timer = setTimeout(() => {
       request.destroy();
       resolve(false);
-    });
+    }, timeoutMs);
+    request.once("close", () => clearTimeout(timer));
   });
 }
 
 /* `processHandle`, when given, is the child the readiness belongs to: its exit
    ends the wait at once, since a port answered by anyone else is no proof. */
-async function waitForReadiness(port, timeoutMs = READINESS_TIMEOUT_MS, processHandle = null) {
-  const deadline = Date.now() + timeoutMs;
+async function waitForReadiness(port, timeoutMs = READINESS_TIMEOUT_MS, processHandle = null, onPhase = () => {}) {
+  const deadline = performance.now() + timeoutMs;
   const url = `http://127.0.0.1:${port}/api/files`;
 
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     if (processHandle?.state.spawnError) {
+      onPhase({ phase: "files", status: "running" });
+      onPhase({ phase: "files", status: "failed", detail: "Viewer readiness probe failed" });
       throw new Error(`could not start (${processHandle.state.spawnError.message})`);
     }
     if (processHandle && (processHandle.child.exitCode !== null || processHandle.child.signalCode !== null)) {
+      onPhase({ phase: "files", status: "running" });
+      onPhase({ phase: "files", status: "failed", detail: "Viewer readiness probe failed" });
       throw new Error(`exited before it answered (${processHandle.child.signalCode ? `signal ${processHandle.child.signalCode}` : `exit code ${processHandle.child.exitCode}`})`);
     }
-    if (await probe(url)) {
-      return;
-    }
-
-    await wait(READINESS_INTERVAL_MS);
+    onPhase({ phase: "files", status: "running" });
+    const ready = await probe(url, Math.max(1, Math.min(READINESS_PROBE_TIMEOUT_MS, deadline - performance.now())));
+    onPhase({ phase: "files", status: ready ? "ready" : "failed" });
+    if (ready) return;
+    await wait(Math.max(0, Math.min(READINESS_INTERVAL_MS, deadline - performance.now())));
   }
 
   throw new Error(m.serverTimeout(timeoutMs / 1000));
@@ -1064,6 +1088,7 @@ async function main() {
   let runtimeHostSupervisor = null;
   const tailscaleProcessRef = { current: null };
   const serverRef = { current: null, release: releaseNow() };
+  startupOutput.setFailureFile(selfUpdate.startupOutput, serverRef.release.sha);
   let restartRequests = null;
   let webRestartTimer = null;
   let webRecovery = null;
@@ -1204,7 +1229,7 @@ async function main() {
       tailscaleProcessRef,
       runtimeHostSupervisor,
       release.dir,
-      runtimeHostEnvironment,
+      cliRuntimeHostEnvironment(runtimeHostEnvironment, runtimeHostConfig, release.sha),
       {
         restarting,
         stateDirectory: runtimeHostConfig.stateDirectory,
@@ -1235,13 +1260,16 @@ async function main() {
     tailscaleProcessRef.current = serveTailscale(runtime.tailscalePath, options.port);
   }
 
+  const readiness = createReadinessJournal(selfUpdate.readiness, { revision: serverRef.release.sha, pid: serverProcess.child.pid });
   try {
-    await waitForReadiness(options.port, relaunch.isReplacementStart() ? RESTART_READINESS_TIMEOUT_MS : READINESS_TIMEOUT_MS, serverProcess);
+    await waitForReadiness(options.port, relaunch.isReplacementStart() ? RESTART_READINESS_TIMEOUT_MS : READINESS_TIMEOUT_MS, serverProcess, readiness.observe);
     if (relaunch.isReplacementStart()) {
-      const page = await probePageAndChunk(options.port, undefined, probeHeaders());
+      const page = await waitForPageAndChunk(options.port, { headers: probeHeaders(), onPhase: readiness.observe });
       if (page) throw new Error(page);
     }
+    readiness.finish();
   } catch (error) {
+    readiness.finish(error instanceof Error ? error.message : m.serverNotReady());
     await stopAll(serverProcess, tailscaleProcessRef.current, runtimeHostSupervisor);
     fail(error instanceof Error ? error.message : m.serverNotReady());
   }
@@ -1304,21 +1332,25 @@ async function main() {
       await serverRef.current?.state.retired;
       if (!recoverWeb) return "shutdown";
       const handle = launchWeb(release, true);
+      const readiness = createReadinessJournal(selfUpdate.readiness, { revision: release.sha, pid: handle.child.pid });
       try {
-        await waitForReadiness(options.port, RESTART_READINESS_TIMEOUT_MS, handle);
+        await waitForReadiness(options.port, RESTART_READINESS_TIMEOUT_MS, handle, readiness.observe);
         if (verifyPage) {
-          const page = await probePageAndChunk(options.port, undefined, probeHeaders());
+          const page = await waitForPageAndChunk(options.port, { headers: probeHeaders(), onPhase: readiness.observe });
           if (page && keepWhenRefused && /^GET \/ answered 40[13]$/.test(page)) {
             handle.state.restarting = false;
             if (handle.child.exitCode !== null || handle.child.signalCode !== null) throw new Error("exited as it became ready");
+            readiness.finish(page);
             return { refused: page };
           }
           if (page) throw new Error(page);
         }
         handle.state.restarting = false;
         if (handle.child.exitCode !== null || handle.child.signalCode !== null) throw new Error("exited as it became ready");
+        readiness.finish();
         return null;
       } catch (error) {
+        readiness.finish(error instanceof Error ? error.message : "Viewer readiness failed");
         await stopChild(handle);
         return error instanceof Error ? error.message : String(error);
       }
@@ -1576,7 +1608,7 @@ async function checkoutLauncher() {
     viewerServerBunRuntime, viewerExitStatus } = runtime);
   runtime.discardUnsupportedApiCredentials();
   ({ createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
-    probePageAndChunk, selfUpdatePaths, watchRestartRequests } = await import("./self-update-supervisor.mjs"));
+    waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests } = await import("./self-update-supervisor.mjs"));
   ({ probeHeadersFrom } = await import("./internalService.mjs"));
   ({ viewerBootGateKey } = await import("./viewerGateKey.mjs").catch(() => ({ viewerBootGateKey: (environment) => environment.LLV_TOKEN || null })));
   ({ findLegacySystemdUnits, legacySystemdNotice } = await import("./legacySystemd.mjs"));

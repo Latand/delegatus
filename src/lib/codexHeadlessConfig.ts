@@ -1,3 +1,4 @@
+import { engineMemoryOff } from "@/lib/memory/source";
 import {
   CODEX_VIEWER_SPAWN_FEATURES,
   viewerMcpHttpCodexEntry,
@@ -154,7 +155,7 @@ export function headlessCodexThreadConfig(
       plugins: granted.length > 0,
       multi_agent: allowSubagents,
       realtime_conversation: true,
-      ...(cleanMemory ? { memories: false } : {}),
+      ...(engineMemoryOff({ cleanMemory }) ? { memories: false } : {}),
     },
     agents: { enabled: allowSubagents },
     ...(!allowSubagents ? { approvals_reviewer: "user" } : {}),

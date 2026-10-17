@@ -1,0 +1,598 @@
+{
+  "checkedAtUtc": "2026-10-17T06:08:56.517997+00:00",
+  "base": "9f4e5cfd8d6167e23b1233e827b8aeb2091459b0",
+  "sourceSha256": {
+    "src/components/LogFeed.tsx": "f039a98453c1bf3bcd2aa54657ea57cc6405146e5d2e30d24ef5c41f1d7fdff9",
+    "src/components/conversation/conversationWindow.browser.test.tsx": "5c25a96d2bafa89e8d99f4251599c948c46fb0fdeffd3ef11dee7befc086c27c",
+    "src/components/conversation/conversationWindowEvidence.fixture.tsx": "cb0633bbe84aac498fd15fb9d45cc97283709bd5e7ab6e6ca514a4779e1d3b72",
+    "src/components/feed/inboxBatch.test.ts": "a25bda269a52e9b242d018a59d80e487dcd4b23487b6941e4960251784920313",
+    "src/components/feed/messageProvenance.tsx": "1f10048689907bb5aa8fa8c5eba2b3654c1bc8965bcf8ffbc86c73f6c7c77974",
+    "src/components/feed/parse.ts": "feedb9850c6f67e33568e6e95822101ab56d5cdd63038f37822c83a4f3b5947a",
+    "src/lib/agent/registry.ts": "8b1423a799e92a76ecc5b7666743876c8af92cc950f546d06357e6552f4fc6fa",
+    "src/lib/mcp/bindings.ts": "99304bdea37d2cbf6f0436da8ec2be8491b544c0f3c829dcf8be144805f31f9d",
+    "src/lib/orchestrator/seatChannel.test.ts": "b4ce96635222531e33eb9320adf38f97d0f587171ef88812b7d41f50491e2834",
+    "src/lib/orchestrator/seats.ts": "13236e5e3b70be00573b4dc4e6c60bff89d3f46f4b5159d021945b3e42f96db6",
+    "src/lib/runtime/agentRecordAuthors.test.ts": "3201d517200c4ed7b1b13a881e34ccf1f119af0fd92bb36b52f7ce4d7295f98c",
+    "src/lib/runtime/agentRecordAuthors.ts": "3f5215d1610025d117cd98b3f5f86d7f889606526b7149c1acba9be99fa3e9c8",
+    "src/lib/runtime/claudeMessageProvenance.test.ts": "fdb1ca4f77b43357d8360e615da7ba251a27bede64399d6a063df7c55aca85ef",
+    "src/lib/runtime/claudeMessageProvenance.ts": "bf79913d94272fc35bf78fc8758acad128dde1a3571ef9ea641519b95bf330da",
+    "src/lib/runtime/claudeStreamBrokerHost.nativeQueue.test.ts": "06c4c55c989608e328ed2e629ad55f493fc13b94aec6294e7399f235019fd81c",
+    "src/lib/runtime/claudeStreamBrokerHost.test.ts": "85f23036181e59371eeebad89c087d010b3b6bfd9e36de682ebf53d1b8907616",
+    "src/lib/runtime/claudeStreamBrokerHost.ts": "b970812a66f26f63cd3f4dede53f552e1346ecebd20096f9cbaad2f94c9bd347",
+    "src/lib/runtime/confirmedSend.ts": "8e59c98a3a3a290429172dadb288f6c0d05a78ce9c3a22dda144d2263cb59a31",
+    "src/lib/runtime/engineHost.ts": "0d8cb0bce992d9d872ee979fdded29e11961dfc1d74d479edcf9f7ea455d5c93",
+    "src/lib/runtime/fixtures/inboxBatch.ts": "b08232318a6eaf929935e1620f31ad9b5299be4ce14f39ce6d63b4fa94785334",
+    "src/lib/runtime/inboxBatch.test.ts": "62553a3d416ec81559870762ed0a604673fa3215dfb497131b70b7f918a79636",
+    "src/lib/runtime/inboxBatch.ts": "876135a31af057ad12fddc25e84d94a77cf90349ba98ab9a994f96f493c37116",
+    "src/lib/runtime/messageOrigin.ts": "3158ab00f5c595b62926576a4222f003718a1020ac3355152f07477c708c40ae",
+    "src/lib/runtime/sendSettlement.test.ts": "c1eca0a3cd4edd613ce086aeb3c18b87fb856f3727936a726a649dc6f72ac91e",
+    "src/lib/runtime/sendSettlement.ts": "a73ecb7266a47bfa991573b7ce79db19ddff89d410a608a9b91dc07eaafc4001",
+    "src/lib/runtime/structuredDeliveryController.test.ts": "5739c92411cb6867d2b0e3fe9bc3c88711f2bf06eedad9a2b9679065f298099d",
+    "src/lib/runtime/structuredDeliveryController.ts": "24dfe1b832e3c4f6d47dddd5c6de496dca043b8449cf33769a8456f25bfe439f",
+    "src/lib/runtime/structuredDeliveryQueue.test.ts": "e28e9778f749d8d6bca310506cb16b931f128100371f3148c9961ebb9870f881",
+    "src/lib/runtime/structuredDeliveryQueue.ts": "4507435707137c238bc79725ff901de761080e4ae5a029d0f86b11160b0df449",
+    "src/lib/viewerLoopMonitor.ts": "d480fd03354c65695404d7c0e9c5a51d9d7702d27946a851049bfd8379928171"
+  },
+  "runtime": "Bun 1.4.0 (34cbb9a40)",
+  "isolation": {
+    "perFile": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "LLV_VIEWER_CONTROL_URL": "http://127.0.0.1:1",
+    "NODE_ENV": "test",
+    "runner": "scripts/gate-slot.sh",
+    "runnerSha256": "6ac5728ddc87d13ef5e3fb1ea7ad534b9c8b8da0d166def646a6d00ab1986f31",
+    "source": "scratch export of the base plus the listed changed files; base runs contain only the final test files and their independent fixture"
+  },
+  "redOnBase": [
+    {
+      "file": "src/components/conversation/conversationWindow.browser.test.tsx",
+      "command": "bash scripts/gate-slot.sh bun test src/components/conversation/conversationWindow.browser.test.tsx --test-name-pattern 'seat inbox|inbox composer|seat-inbox'",
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "cases": [
+        {
+          "name": "seat inbox attribution > four combined parts render their own bubbles in both languages and themes",
+          "assertion": "expect(subject?.composeBatch).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        }
+      ]
+    },
+    {
+      "file": "src/components/feed/inboxBatch.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/components/feed/inboxBatch.test.ts --test-name-pattern 'seat inbox|inbox composer|seat-inbox'",
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "cases": [
+        {
+          "name": "seat inbox parser splits a combined row only from its part evidence",
+          "assertion": "expect(subject.splitInboxBatchFeed).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/orchestrator/seatChannel.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/orchestrator/seatChannel.test.ts --test-name-pattern 'seat inbox|inbox composer|seat-inbox'",
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "cases": [
+        {
+          "name": "seat inbox revocation composes with channel, owner and epoch reconciliation",
+          "assertion": "expect(isCurrentOrchestratorSeat).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/runtime/agentRecordAuthors.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/agentRecordAuthors.test.ts --test-name-pattern 'seat inbox|inbox composer|seat-inbox'",
+      "counts": {
+        "pass": 0,
+        "fail": 2
+      },
+      "cases": [
+        {
+          "name": "seat inbox conversation records keep per-part authors and no whole-row operator attribution",
+          "assertion": "expect(subject.agentRecordPartAuthors).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        },
+        {
+          "name": "seat inbox conversation_messages keeps one row and returns bounded part author ranges",
+          "assertion": "expect(response.records[0]!.parts?.map(p => p.author.kind)).toEqual([\"operator\", \"agent\"]);",
+          "diagnostic": "error: expect(received).toEqual(expected)\n\n- [\n-   \"operator\",\n-   \"agent\",\n- ]\n+ undefined\n\n- Expected  - 4\n+ Received  + 1"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/runtime/claudeMessageProvenance.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/claudeMessageProvenance.test.ts --test-name-pattern 'seat inbox|inbox composer|seat-inbox'",
+      "counts": {
+        "pass": 0,
+        "fail": 2
+      },
+      "cases": [
+        {
+          "name": "seat inbox provenance gives each member its own author and submission",
+          "assertion": "expect(map[\"batch-user-uuid\"]?.parts?.map(p => ({ text: p.text, origin: p.provenance.origin })))",
+          "diagnostic": "error: expect(received).toEqual(expected)\n\n- [\n-   {\n-     \"origin\": \"operator\",\n-     \"text\": \"operator instruction\",\n-   },\n-   {\n-     \"origin\": \"agent\",\n-     \"text\": \"agent report\",\n-   },\n- ]\n+ undefined\n\n- Expected  - 10\n+ Received  + 1"
+        },
+        {
+          "name": "seat inbox preserves a seat mandate's own provenance inside a combined input",
+          "assertion": "expect(map[\"batch-mandate-uuid\"]?.parts?.[0]!.provenance.mandate).toEqual({ kind: \"version\", version: 44 });",
+          "diagnostic": "error: expect(received).toEqual(expected)\n\n- {\n-   \"kind\": \"version\",\n-   \"version\": 44,\n- }\n+ undefined\n\n- Expected  - 4\n+ Received  + 1"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/runtime/claudeStreamBrokerHost.nativeQueue.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/claudeStreamBrokerHost.nativeQueue.test.ts --test-name-pattern 'seat inbox|inbox composer|seat-inbox'",
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "cases": [
+        {
+          "name": "installed Claude queue protocol with loopback API: seat-inbox",
+          "assertion": "expect(rows[1]!.entry.parts?.map(p => p.operationId)).toEqual(answers.map(a => a.operationId));",
+          "diagnostic": "error: expect(received).toEqual(expected)\n\n- [\n-   \"answer-0\",\n-   \"answer-1\",\n-   \"answer-2\",\n-   \"answer-3\",\n-   \"answer-4\",\n-   \"answer-5\",\n- ]\n+ undefined\n\n- Expected  - 8\n+ Received  + 1"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/runtime/claudeStreamBrokerHost.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/claudeStreamBrokerHost.test.ts --test-name-pattern 'seat inbox|inbox composer|seat-inbox'",
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "cases": [
+        {
+          "name": "seat inbox broker persists layout before writing and refuses a changed layout under the same id",
+          "assertion": "expect(blocks).toHaveLength(4);",
+          "diagnostic": "error: expect(received).toHaveLength(expected)\n\nExpected length: 4\nReceived length: 1"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/runtime/inboxBatch.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/inboxBatch.test.ts --test-name-pattern 'seat inbox|inbox composer|seat-inbox'",
+      "counts": {
+        "pass": 0,
+        "fail": 4
+      },
+      "cases": [
+        {
+          "name": "inbox composer fits operator chat with the first two ordinary messages",
+          "assertion": "expect(subject?.composeBatch).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        },
+        {
+          "name": "inbox composer never skips a priority member to fit ordinary messages",
+          "assertion": "expect(subject?.composeBatch).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        },
+        {
+          "name": "inbox composer respects image count and raw image budget and leaves a near-limit member alone",
+          "assertion": "expect(subject?.composeBatch).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        },
+        {
+          "name": "inbox composer deduplicates only the same origin and restores every exact part",
+          "assertion": "expect(subject?.composeBatch).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/runtime/sendSettlement.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/sendSettlement.test.ts --test-name-pattern 'seat inbox|inbox composer|seat-inbox'",
+      "counts": {
+        "pass": 0,
+        "fail": 13
+      },
+      "cases": [
+        {
+          "name": "seat inbox restart: receipt confirms every original member with no resend",
+          "assertion": "expect(JSON.parse(freshReader.stdout)).toEqual([true, true, true]);",
+          "diagnostic": "error: expect(received).toEqual(expected)\n\n  [\n-   true,\n-   true,\n-   true,\n+   false,\n+   false,\n+   false,\n  ]\n\n- Expected  - 3\n+ Received  + 3"
+        },
+        {
+          "name": "seat inbox restart: projection confirms every original member with no resend",
+          "assertion": "expect(JSON.parse(freshReader.stdout)).toEqual([true, true, true]);",
+          "diagnostic": "error: expect(received).toEqual(expected)\n\n  [\n-   true,\n-   true,\n-   true,\n+   false,\n+   false,\n+   false,\n  ]\n\n- Expected  - 3\n+ Received  + 3"
+        },
+        {
+          "name": "seat inbox restart: startup confirms every original member with no resend",
+          "assertion": "expect(JSON.parse(freshReader.stdout)).toEqual([true, true, true]);",
+          "diagnostic": "error: expect(received).toEqual(expected)\n\n  [\n-   true,\n-   true,\n-   true,\n+   false,\n+   false,\n+   false,\n  ]\n\n- Expected  - 3\n+ Received  + 3"
+        },
+        {
+          "name": "seat inbox restart: original-key confirms every original member with no resend",
+          "assertion": "expect(JSON.parse(freshReader.stdout)).toEqual([true, true, true]);",
+          "diagnostic": "error: expect(received).toEqual(expected)\n\n  [\n-   true,\n-   true,\n-   true,\n+   false,\n+   false,\n+   false,\n  ]\n\n- Expected  - 3\n+ Received  + 3"
+        },
+        {
+          "name": "seat inbox restart: retry confirms every original member with no resend",
+          "assertion": "expect(JSON.parse(freshReader.stdout)).toEqual([true, true, true]);",
+          "diagnostic": "error: expect(received).toEqual(expected)\n\n  [\n-   true,\n-   true,\n-   true,\n+   false,\n+   false,\n+   false,\n  ]\n\n- Expected  - 3\n+ Received  + 3"
+        },
+        {
+          "name": "seat inbox evidence refuses missing-binding",
+          "assertion": "expect(registry.bindDeliveryBatchOffLoop).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        },
+        {
+          "name": "seat inbox evidence refuses missing-parts",
+          "assertion": "expect(registry.bindDeliveryBatchOffLoop).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        },
+        {
+          "name": "seat inbox evidence refuses omitted-member",
+          "assertion": "expect(registry.bindDeliveryBatchOffLoop).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        },
+        {
+          "name": "seat inbox evidence refuses part-digest",
+          "assertion": "expect(registry.bindDeliveryBatchOffLoop).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        },
+        {
+          "name": "seat inbox evidence refuses batch-id",
+          "assertion": "expect(registry.bindDeliveryBatchOffLoop).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        },
+        {
+          "name": "seat inbox evidence refuses no-echo",
+          "assertion": "expect(registry.bindDeliveryBatchOffLoop).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        },
+        {
+          "name": "seat inbox evidence refuses codex",
+          "assertion": "expect(registry.bindDeliveryBatchOffLoop).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        },
+        {
+          "name": "seat inbox registry binding is atomic and a subsequent single dispatch clears an unwritten batch",
+          "assertion": "expect(active.registry.bindDeliveryBatchOffLoop).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryController.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/structuredDeliveryController.test.ts --test-name-pattern 'seat inbox|inbox composer|seat-inbox'",
+      "counts": {
+        "pass": 0,
+        "fail": 1
+      },
+      "cases": [
+        {
+          "name": "seat inbox echo stamps every member once with its own ingress and excludes history",
+          "assertion": "expect(subject.observeDeliveryEcho).toBeFunction();",
+          "diagnostic": "error: expect(received).toBeFunction()\n\nReceived: undefined"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryQueue.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/structuredDeliveryQueue.test.ts --test-name-pattern 'seat inbox|inbox composer|seat-inbox'",
+      "counts": {
+        "pass": 0,
+        "fail": 13
+      },
+      "cases": [
+        {
+          "name": "seat inbox acceptance: six answers, chat and wake reach one turn without interrupt",
+          "assertion": "expect(h.sends[0]!.parts?.map(p => p.operationId)).toEqual(h.inputs.map(e => String(e.payload.operationId)));",
+          "diagnostic": "error: expect(received).toEqual(expected)\n\n- [\n-   \"inbox-0\",\n-   \"inbox-1\",\n-   \"inbox-2\",\n-   \"inbox-3\",\n-   \"inbox-4\",\n-   \"inbox-5\",\n-   \"inbox-6\",\n-   \"inbox-7\",\n- ]\n+ undefined\n\n- Expected  - 10\n+ Received  + 1"
+        },
+        {
+          "name": "seat inbox priority preserves ordinary admission order across a forty-message backlog",
+          "assertion": "expect(h.sends).toHaveLength(20);",
+          "diagnostic": "error: expect(received).toHaveLength(expected)\n\nExpected length: 20\nReceived length: 21"
+        },
+        {
+          "name": "seat inbox stale-turn returns every member to queued",
+          "assertion": "expect(h.sends[0]!.parts).toHaveLength(3);",
+          "diagnostic": "error: Received value does not have a length property: undefined"
+        },
+        {
+          "name": "seat inbox dead-host returns every member to queued",
+          "assertion": "expect(h.sends[0]!.parts).toHaveLength(3);",
+          "diagnostic": "error: Received value does not have a length property: undefined"
+        },
+        {
+          "name": "seat inbox unknown write terminalizes every member and never resends",
+          "assertion": "expect(h.sends).toHaveLength(1);",
+          "diagnostic": "error: expect(received).toHaveLength(expected)\n\nExpected length: 1\nReceived length: 3"
+        },
+        {
+          "name": "seat inbox binding refusal sends nothing and releases every delivering member",
+          "assertion": "expect(h.sends).toHaveLength(0);",
+          "diagnostic": "error: expect(received).toHaveLength(expected)\n\nExpected length: 0\nReceived length: 1"
+        },
+        {
+          "name": "seat inbox excludes a lost compare-and-set and recomputes membership",
+          "assertion": "expect(h.sends[0]!.parts?.map(p => p.operationId)).toEqual([\"inbox-0\", \"inbox-2\"]);",
+          "diagnostic": "error: expect(received).toEqual(expected)\n\n- [\n-   \"inbox-0\",\n-   \"inbox-2\",\n- ]\n+ undefined\n\n- Expected  - 4\n+ Received  + 1"
+        },
+        {
+          "name": "seat inbox per-member authorization refusal at preparation fails only that member before recomposition",
+          "assertion": "expect(h.sends).toHaveLength(0);",
+          "diagnostic": "error: expect(received).toHaveLength(expected)\n\nExpected length: 0\nReceived length: 1"
+        },
+        {
+          "name": "seat inbox per-member authorization refusal at after-binding fails only that member before recomposition",
+          "assertion": "expect(h.sends).toHaveLength(0);",
+          "diagnostic": "error: expect(received).toHaveLength(expected)\n\nExpected length: 0\nReceived length: 1"
+        },
+        {
+          "name": "seat inbox revoked at engine write applies to the entire batch",
+          "assertion": "expect(h.sends).toHaveLength(0);",
+          "diagnostic": "error: expect(received).toHaveLength(expected)\n\nExpected length: 0\nReceived length: 1"
+        },
+        {
+          "name": "seat inbox unknown at engine write applies to the entire batch",
+          "assertion": "expect(h.sends).toHaveLength(0);",
+          "diagnostic": "error: expect(received).toHaveLength(expected)\n\nExpected length: 0\nReceived length: 1"
+        },
+        {
+          "name": "seat inbox scope falls back to individual sends when eligibility is false",
+          "assertion": "expect(positive.sends[0]!.parts).toHaveLength(3);",
+          "diagnostic": "error: Received value does not have a length property: undefined"
+        },
+        {
+          "name": "seat inbox scope falls back to individual sends when eligibility is undefined",
+          "assertion": "expect(positive.sends[0]!.parts).toHaveLength(3);",
+          "diagnostic": "error: Received value does not have a length property: undefined"
+        }
+      ]
+    }
+  ],
+  "finalTests": [
+    {
+      "file": "src/components/conversation/conversationWindow.browser.test.tsx",
+      "command": "bash scripts/gate-slot.sh bun test src/components/conversation/conversationWindow.browser.test.tsx --test-name-pattern 'seat inbox|inbox composer|seat-inbox'",
+      "counts": {
+        "pass": 1,
+        "fail": 0
+      },
+      "newCasesPassed": [
+        "seat inbox attribution > four combined parts render their own bubbles in both languages and themes"
+      ],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/components/feed/inboxBatch.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/components/feed/inboxBatch.test.ts",
+      "counts": {
+        "pass": 1,
+        "fail": 0
+      },
+      "newCasesPassed": [
+        "seat inbox parser splits a combined row only from its part evidence"
+      ],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/orchestrator/seatChannel.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/orchestrator/seatChannel.test.ts",
+      "counts": {
+        "pass": 21,
+        "fail": 0
+      },
+      "newCasesPassed": [
+        "seat inbox revocation composes with channel, owner and epoch reconciliation"
+      ],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/agentRecordAuthors.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/agentRecordAuthors.test.ts",
+      "counts": {
+        "pass": 2,
+        "fail": 0
+      },
+      "newCasesPassed": [
+        "seat inbox conversation records keep per-part authors and no whole-row operator attribution",
+        "seat inbox conversation_messages keeps one row and returns bounded part author ranges"
+      ],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/claudeMessageProvenance.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/claudeMessageProvenance.test.ts",
+      "counts": {
+        "pass": 14,
+        "fail": 2
+      },
+      "newCasesPassed": [
+        "seat inbox provenance gives each member its own author and submission",
+        "seat inbox preserves a seat mandate's own provenance inside a combined input"
+      ],
+      "preExistingFailures": [
+        "rotation UUID retains custom mandate from active seat with stamped operator origin",
+        "rotation UUID retains custom mandate from history with stamped operator origin"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/claudeStreamBrokerHost.nativeQueue.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/claudeStreamBrokerHost.nativeQueue.test.ts",
+      "counts": {
+        "pass": 4,
+        "fail": 0
+      },
+      "newCasesPassed": [
+        "installed Claude queue protocol with loopback API: seat-inbox"
+      ],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/claudeStreamBrokerHost.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/claudeStreamBrokerHost.test.ts",
+      "counts": {
+        "pass": 125,
+        "fail": 0
+      },
+      "newCasesPassed": [
+        "seat inbox broker persists layout before writing and refuses a changed layout under the same id"
+      ],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/inboxBatch.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/inboxBatch.test.ts",
+      "counts": {
+        "pass": 4,
+        "fail": 0
+      },
+      "newCasesPassed": [
+        "inbox composer fits operator chat with the first two ordinary messages",
+        "inbox composer never skips a priority member to fit ordinary messages",
+        "inbox composer respects image count and raw image budget and leaves a near-limit member alone",
+        "inbox composer deduplicates only the same origin and restores every exact part"
+      ],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/sendSettlement.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/sendSettlement.test.ts",
+      "counts": {
+        "pass": 82,
+        "fail": 0
+      },
+      "newCasesPassed": [
+        "seat inbox restart: receipt confirms every original member with no resend",
+        "seat inbox restart: projection confirms every original member with no resend",
+        "seat inbox restart: startup confirms every original member with no resend",
+        "seat inbox restart: original-key confirms every original member with no resend",
+        "seat inbox restart: retry confirms every original member with no resend",
+        "seat inbox evidence refuses missing-binding",
+        "seat inbox evidence refuses missing-parts",
+        "seat inbox evidence refuses omitted-member",
+        "seat inbox evidence refuses part-digest",
+        "seat inbox evidence refuses batch-id",
+        "seat inbox evidence refuses no-echo",
+        "seat inbox evidence refuses codex",
+        "seat inbox registry binding is atomic and a subsequent single dispatch clears an unwritten batch"
+      ],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryController.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/structuredDeliveryController.test.ts",
+      "counts": {
+        "pass": 5,
+        "fail": 0
+      },
+      "newCasesPassed": [
+        "seat inbox echo stamps every member once with its own ingress and excludes history"
+      ],
+      "preExistingFailures": []
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryQueue.test.ts",
+      "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/structuredDeliveryQueue.test.ts",
+      "counts": {
+        "pass": 153,
+        "fail": 0
+      },
+      "newCasesPassed": [
+        "seat inbox acceptance: six answers, chat and wake reach one turn without interrupt",
+        "seat inbox priority preserves ordinary admission order across a forty-message backlog",
+        "seat inbox stale-turn returns every member to queued",
+        "seat inbox dead-host returns every member to queued",
+        "seat inbox unknown write terminalizes every member and never resends",
+        "seat inbox binding refusal sends nothing and releases every delivering member",
+        "seat inbox excludes a lost compare-and-set and recomputes membership",
+        "seat inbox per-member authorization refusal at preparation fails only that member before recomposition",
+        "seat inbox per-member authorization refusal at after-binding fails only that member before recomposition",
+        "seat inbox revoked at engine write applies to the entire batch",
+        "seat inbox unknown at engine write applies to the entire batch",
+        "seat inbox scope falls back to individual sends when eligibility is false",
+        "seat inbox scope falls back to individual sends when eligibility is undefined"
+      ],
+      "preExistingFailures": []
+    }
+  ],
+  "existingFailureBaseline": {
+    "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/claudeMessageProvenance.test.ts",
+    "failures": [
+      "rotation UUID retains custom mandate from active seat with stamped operator origin",
+      "rotation UUID retains custom mandate from history with stamped operator origin"
+    ]
+  },
+  "focusedProvenance": {
+    "command": "bash scripts/gate-slot.sh bun test src/lib/runtime/claudeMessageProvenance.test.ts --test-name-pattern 'seat inbox|inbox composer|seat-inbox'",
+    "counts": {
+      "pass": 2,
+      "fail": 0
+    }
+  },
+  "typecheck": {
+    "command": "bash scripts/gate-slot.sh bun node_modules/typescript/bin/tsc --noEmit --incremental false",
+    "exitCode": 0
+  },
+  "lint": {
+    "command": "bash scripts/gate-slot.sh bun scripts/eslint-changes.ts --base 9f4e5cfd8d6167e23b1233e827b8aeb2091459b0 src/components/LogFeed.tsx src/components/conversation/conversationWindow.browser.test.tsx src/components/conversation/conversationWindowEvidence.fixture.tsx src/components/feed/inboxBatch.test.ts src/components/feed/messageProvenance.tsx src/components/feed/parse.ts src/lib/agent/registry.ts src/lib/mcp/bindings.ts src/lib/orchestrator/seatChannel.test.ts src/lib/orchestrator/seats.ts src/lib/runtime/agentRecordAuthors.test.ts src/lib/runtime/agentRecordAuthors.ts src/lib/runtime/claudeMessageProvenance.test.ts src/lib/runtime/claudeMessageProvenance.ts src/lib/runtime/claudeStreamBrokerHost.nativeQueue.test.ts src/lib/runtime/claudeStreamBrokerHost.test.ts src/lib/runtime/claudeStreamBrokerHost.ts src/lib/runtime/confirmedSend.ts src/lib/runtime/engineHost.ts src/lib/runtime/fixtures/inboxBatch.ts src/lib/runtime/inboxBatch.test.ts src/lib/runtime/inboxBatch.ts src/lib/runtime/messageOrigin.ts src/lib/runtime/sendSettlement.test.ts src/lib/runtime/sendSettlement.ts src/lib/runtime/structuredDeliveryController.test.ts src/lib/runtime/structuredDeliveryController.ts src/lib/runtime/structuredDeliveryQueue.test.ts src/lib/runtime/structuredDeliveryQueue.ts src/lib/viewerLoopMonitor.ts",
+    "exitCode": 0,
+    "introducedErrors": 0,
+    "baseErrors": 4
+  },
+  "filesChanged": [
+    "docs/verification/seat-inbox-coalescing.md",
+    "evidence/seat-inbox-render.json",
+    "evidence/seat-inbox-verification.json",
+    "src/components/LogFeed.tsx",
+    "src/components/conversation/conversationWindow.browser.test.tsx",
+    "src/components/conversation/conversationWindowEvidence.fixture.tsx",
+    "src/components/feed/inboxBatch.test.ts",
+    "src/components/feed/messageProvenance.tsx",
+    "src/components/feed/parse.ts",
+    "src/lib/agent/registry.ts",
+    "src/lib/mcp/bindings.ts",
+    "src/lib/orchestrator/seatChannel.test.ts",
+    "src/lib/orchestrator/seats.ts",
+    "src/lib/runtime/agentRecordAuthors.test.ts",
+    "src/lib/runtime/agentRecordAuthors.ts",
+    "src/lib/runtime/claudeMessageProvenance.test.ts",
+    "src/lib/runtime/claudeMessageProvenance.ts",
+    "src/lib/runtime/claudeStreamBrokerHost.nativeQueue.test.ts",
+    "src/lib/runtime/claudeStreamBrokerHost.test.ts",
+    "src/lib/runtime/claudeStreamBrokerHost.ts",
+    "src/lib/runtime/confirmedSend.ts",
+    "src/lib/runtime/engineHost.ts",
+    "src/lib/runtime/fixtures/inboxBatch.ts",
+    "src/lib/runtime/inboxBatch.test.ts",
+    "src/lib/runtime/inboxBatch.ts",
+    "src/lib/runtime/messageOrigin.ts",
+    "src/lib/runtime/sendSettlement.test.ts",
+    "src/lib/runtime/sendSettlement.ts",
+    "src/lib/runtime/structuredDeliveryController.test.ts",
+    "src/lib/runtime/structuredDeliveryController.ts",
+    "src/lib/runtime/structuredDeliveryQueue.test.ts",
+    "src/lib/runtime/structuredDeliveryQueue.ts",
+    "src/lib/viewerLoopMonitor.ts"
+  ],
+  "pendingAfterPublication": [
+    "required hosted checks",
+    "independent pipeline review rounds",
+    "deployment and the seven-day latency observation"
+  ],
+  "speedClaim": "none",
+  "privacy": {
+    "command": "bash scripts/gate-slot.sh bun scripts/privacy-publication-gate.ts --base 9f4e5cfd8d6167e23b1233e827b8aeb2091459b0 --require-known-values",
+    "exitCode": 0,
+    "result": "PRIVACY GATE: PASS"
+  }
+}

@@ -160,9 +160,13 @@ export interface FilesClientCache {
       is authoritative again. */
   revertPipeline(id: string): void;
   /** Layer one task row over the server snapshot without a refetch (#1836).
-      Held only until a scan requested after the apply carries the row, exactly
-      as a confirmed pipeline echo is. */
-  applyTask(task: BoardTask): void;
+      Confirmed (a server echo), it is held only until a scan requested after
+      the apply carries the row, exactly as a confirmed pipeline echo is;
+      unconfirmed (an optimistic local write), until it is confirmed or
+      reverted. */
+  applyTask(task: BoardTask, confirmed?: boolean): void;
+  /** Drop a task overlay (a failed optimistic write). */
+  revertTask(id: string): void;
   /** Layer a freshly admitted launch conversation (the client-built
       `spawn:<launchId>` card, issue #919) over the server snapshot without a
       refetch, so the board renders the live window the moment the spawn receipt
@@ -990,9 +994,16 @@ export function createFilesClientCache(
     publish(undefined, "urgent");
   };
 
-  const applyTask = (task: BoardTask) => {
+  const applyTask = (task: BoardTask, confirmed = true) => {
     if (disposed) return;
-    taskOverlays.set(task.id, { task, minGeneration: requestedGeneration + 1 });
+    taskOverlays.set(task.id, { task, minGeneration: confirmed ? requestedGeneration + 1 : Number.POSITIVE_INFINITY });
+    composeTasks();
+    publish(undefined, "urgent");
+  };
+
+  const revertTask = (id: string) => {
+    if (disposed) return;
+    if (!taskOverlays.delete(id)) return;
     composeTasks();
     publish(undefined, "urgent");
   };
@@ -1094,7 +1105,7 @@ export function createFilesClientCache(
     listeners.clear();
   };
 
-  return { read: () => withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), readScope: exactScopeSnapshot, revalidate, revalidateWriteHealth, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
+  return { read: () => withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), readScope: exactScopeSnapshot, revalidate, revalidateWriteHealth, subscribe, applyPipeline, revertPipeline, applyTask, revertTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
 }
 
 const defaultFilesFetcher: FilesFetcher = (input, init) => fetch(input, init);
@@ -1199,9 +1210,18 @@ export function applyPipelineSnapshot(pipeline: Pipeline, confirmed: boolean): v
  * server pushed with an attention request (#1836) — so the board draws its
  * card in the same frame. The next complete scan is authoritative and retires
  * the overlay; a row the server no longer carries goes away with it.
+ * `confirmed: false` draws an optimistic local write (a dismissed launch, a
+ * link, a card being created) that outlives every scan until it is confirmed
+ * with the server's row or rolled back with {@link revertTaskSnapshot}.
  */
-export function applyTaskSnapshot(task: BoardTask): void {
-  flushSync(() => filesClientCache.applyTask(task));
+export function applyTaskSnapshot(task: BoardTask, confirmed = true): void {
+  flushSync(() => filesClientCache.applyTask(task, confirmed));
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(PIPELINES_PATCHED_EVENT));
+}
+
+/** Roll back a failed optimistic task write to the server snapshot. */
+export function revertTaskSnapshot(id: string): void {
+  flushSync(() => filesClientCache.revertTask(id));
   if (typeof window !== "undefined") window.dispatchEvent(new Event(PIPELINES_PATCHED_EVENT));
 }
 

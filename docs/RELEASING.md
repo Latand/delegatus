@@ -196,7 +196,13 @@ chooses «Випустити й більше не питати» or turns the ch
    annotated `vX.Y.Z` tag on the reviewed release head, message `Delegatus X.Y.Z`.
    The release PR merges into main after the pipeline finishes; the tag carries
    the soaked product source plus release metadata.
-6. The tag starts `publish.yml` (OIDC npm publication) and `docker-image.yml`.
+6. Every `v*` tag starts `publish.yml` and `docker-image.yml`. After immutable
+   tag verification, `publish.yml` publishes to npm through OIDC and creates
+   a GitHub Release in parallel jobs. The GitHub Release is titled
+   `Delegatus X.Y.Z` and uses that version's `CHANGELOG.md` section, including
+   its reference links, as its notes. Only that job receives `contents: write`,
+   using the repository's `GITHUB_TOKEN`; no additional secret is needed.
+   Each publication job reports its own result and runs even if the other fails.
    `macos-newcomer.yml` follows successful npm publication through
    [GitHub's workflow_run trigger](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run).
    It installs the exact version from the publisher's immutable receipt,
@@ -208,9 +214,12 @@ chooses «Випустити й більше не питати» or turns the ch
 
 Never retag, delete the tag or publish a version again. A failed publish can be
 recovered by dispatching `publish.yml` with the existing immutable tag; it skips
-an npm version that already exists. Otherwise release a patch. Automatic
-releases stay off until enabled, and missing capture tools hold the lane before
-it starts. The screenshot driver remains the existing one.
+an npm version that already exists and also runs the GitHub Release job.
+An existing GitHub Release is skipped, so rerunning the tag creates no duplicate.
+A missing or empty changelog section fails only the GitHub Release job. Dispatch
+from a revision containing this workflow to recover an older tag. Otherwise
+release a patch. Automatic releases stay off until enabled, and missing capture
+tools hold the lane before it starts. The screenshot driver remains the existing one.
 
 High-severity dependency exceptions require a reason and expiry in
 [`security/audit-allowlist.json`](../security/audit-allowlist.json); expired

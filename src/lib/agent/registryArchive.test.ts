@@ -236,6 +236,35 @@ test("fleet liveness census skips archived dead entries and completed dead-host 
   expect(metrics.reads).toBeLessThanOrEqual(8);
 });
 
+for (const transition of ["settled", "deleted", "rebound"] as const) {
+  test(`a held liveness snapshot keeps its receipt after a peer ${transition} it`, () => {
+    const { open, conversationId } = fixture();
+    const reader = open();
+    reader.mutate(file => {
+      const receipt = file.receipts["archive-launch-0"]!;
+      receipt.state = "starting";
+      receipt.createdAt = "2026-10-17T00:00:00.000Z";
+      receipt.verifiedHost = null;
+    });
+    const held = reader.readOnlySnapshot().file;
+    expect(registryLivenessRows(held).receipts.map(row => row.launchId)).toContain("archive-launch-0");
+
+    const writer = open();
+    writer.mutate(file => {
+      if (transition === "settled") file.receipts["archive-launch-0"]!.state = "completed";
+      else if (transition === "deleted") delete file.receipts["archive-launch-0"];
+      else file.receipts["archive-launch-0"]!.conversationId = conversationId(1);
+    });
+
+    const heldReceipt = registryLivenessRows(held).receipts.find(row => row.launchId === "archive-launch-0");
+    expect(heldReceipt?.conversationId).toBe(conversationId(0));
+    const fresh = reader.readOnlySnapshot().file;
+    const current = registryLivenessRows(fresh).receipts.find(row => row.launchId === "archive-launch-0");
+    if (transition === "settled" || transition === "deleted") expect(current).toBeUndefined();
+    else expect(current?.conversationId).toBe(conversationId(1));
+  });
+}
+
 for (const archived of [false,true]) {
   for (const external of [false,true]) {
     test(`detached reads preserve shared deltas after ${external ? "external" : "local"} ${archived ? "cold promotion" : "hot update"}`, () => {

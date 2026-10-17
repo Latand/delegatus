@@ -11,7 +11,13 @@ type PipelineTick = () => Promise<void>;
 async function post(request: NextRequest, tick: PipelineTick): Promise<NextResponse> {
   const rejection = rejectCrossOrigin(request);
   if (rejection) return rejection;
-  await tick();
+  try {
+    await tick();
+  } catch {
+    // The controller owns the diagnostic; each HTTP waiter gets a bounded
+    // response without asking Next to print the same rejection again.
+    return NextResponse.json({ ok: false }, { status: 503 });
+  }
   return NextResponse.json({ ok: true }, { status: 200 });
 }
 

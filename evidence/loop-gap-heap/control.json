@@ -1,0 +1,123 @@
+{
+  "utc": "2026-10-16T13:39:09.993Z",
+  "runtime": "1.4.0",
+  "bunRevision": "34cbb9a40b4bd1bd767d134a7065e66c2432a676",
+  "sourceHashes": {
+    "baseline": "983da223dbca6a1c57045f172a898f6674871b96d7d701e6e62b7cb2fce878a9",
+    "candidate": "e3e5b1daa40f5e5e0b3eb0f521e8520b8d439606166acecc28bee0b44794752a",
+    "sampler": "06338363957f45b7b1e3c8a8f54afc101a4112a51ad206c47ec4919c90e199ff",
+    "benchmark": "6936c666d2a29b6e4dce7eab8873262579f07519c5f775bdd0e4e7e01a27756c",
+    "spans": "92e13562c191ed125a772c8b6c9d3e8dab5ca76d31b914e80cd76ed0d1283639",
+    "watchdog": "ffa24e57ede0a959e75a29780cbaf92e25a7ced3b8b5547f43685cf03516a6fb"
+  },
+  "conditions": {
+    "control": "baseline-vs-baseline",
+    "preload": "both-variants",
+    "intervalMs": 10,
+    "loadPeriodMs": 20,
+    "rows": 10000,
+    "serializationsPerBatch": 3,
+    "stallCount": 2,
+    "stallMs": 550,
+    "warmupBatchesPerVariant": 100,
+    "warmupManualTicksPerVariant": 10000,
+    "warmupWaitMs": 1000,
+    "logSink": "bounded scalar counts",
+    "cpuMetric": "process.cpuUsage user+system, including watchdog and GC helper threads; 100% is one core"
+  },
+  "passed": true,
+  "activeSourceHashes": {
+    "baseline": "983da223dbca6a1c57045f172a898f6674871b96d7d701e6e62b7cb2fce878a9",
+    "candidate": "983da223dbca6a1c57045f172a898f6674871b96d7d701e6e62b7cb2fce878a9"
+  },
+  "resourceLimits": [
+    {
+      "level": 0,
+      "cpuMax": "60000 20000",
+      "memoryMax": "8589934592"
+    },
+    {
+      "level": 1,
+      "cpuMax": "360000 20000",
+      "memoryMax": "max"
+    },
+    {
+      "level": 2,
+      "cpuMax": "max 100000",
+      "memoryMax": "114462744576"
+    },
+    {
+      "level": 3,
+      "cpuMax": "max 100000",
+      "memoryMax": "max"
+    },
+    {
+      "level": 4,
+      "cpuMax": "max 100000",
+      "memoryMax": "max"
+    },
+    {
+      "level": 5,
+      "cpuMax": "max 100000",
+      "memoryMax": "max"
+    },
+    {
+      "level": 6,
+      "cpuMax": "max 100000",
+      "memoryMax": "max"
+    },
+    {
+      "level": 7,
+      "cpuMax": null,
+      "memoryMax": null
+    }
+  ],
+  "resourceLimitsStable": true,
+  "measurementsColumns": [
+    "run",
+    "variant",
+    "mode",
+    "batches",
+    "checksum",
+    "elapsedMs",
+    "cpuMs",
+    "selected",
+    "affinity",
+    "cpuPercent",
+    "userMs",
+    "systemMs",
+    "gaps",
+    "logBytes",
+    "throttleDeltaUsByAncestor"
+  ],
+  "pairsColumns": [
+    "mode",
+    "run",
+    "addedCpuPercentPoints",
+    "relativeCpuPercent",
+    "sameWork"
+  ],
+  "baselineRevision": "02f9301fc32370210a4af533c1204741c6436f52",
+  "measurements": [
+    [1,"baseline","idle",1000,0,20030.648226999998,352.602,0,"8",1.7603124771804222,179.15,173.452,0,0,[0,0,0,0,0,0,0,0]],
+    [1,"candidate","idle",1000,0,20029.618235,351.649,0,"8",1.7556450446245861,174.532,177.117,0,0,[0,0,0,0,0,0,0,0]],
+    [2,"candidate","idle",1000,0,20029.62008,471.548,0,"8",2.3542533413843962,178.342,293.206,0,0,[0,0,0,0,0,0,0,0]],
+    [2,"baseline","idle",1000,0,20030.153686,425.104,0,"8",2.1223202111380943,155.499,269.605,0,0,[0,0,0,0,0,0,0,0]],
+    [3,"baseline","idle",1000,0,20031.178473,258.446,0,"8",1.2902186476365285,136.37,122.076,0,0,[0,0,0,0,0,0,0,0]],
+    [3,"candidate","idle",1000,0,20029.223011,256.962,0,"8",1.2829354381788904,139.869,117.093,0,0,[0,0,0,0,0,0,0,0]],
+    [1,"baseline","load",1000,59997000,20029.472556,9135.98,0,"8",45.61268388100034,8914.186,221.794,2,2118,[0,0,0,0,0,0,0,0]],
+    [1,"candidate","load",1000,59997000,20029.955241,8776.345,0,"8",43.81609890987374,8598.118,178.227,2,2115,[0,0,0,0,0,0,0,0]],
+    [2,"candidate","load",1000,59997000,20029.552959,9296.735,0,"8",46.41508983765233,9039.328,257.407,2,2115,[0,0,0,0,0,0,0,0]],
+    [2,"baseline","load",1000,59997000,20029.965156,9337.002,0,"8",46.615168460256115,9026.98,310.022,2,2110,[0,0,0,0,0,0,0,0]],
+    [3,"baseline","load",1000,59997000,20029.997457,8934.657,0,"8",44.60638110005127,8704.712,229.945,2,2113,[0,0,0,0,0,0,0,0]],
+    [3,"candidate","load",1000,59997000,20030.14305,8065.407,0,"8",40.26634747373909,7873.754,191.653,2,2143,[0,0,0,0,0,0,0,0]]
+  ],
+  "pairs": [
+    ["idle",1,-0.004667432555836015,-0.2702764022892601,true],
+    ["idle",2,0.2319331302463019,10.925326508336797,true],
+    ["idle",3,-0.007283209457638051,-0.5742011870951913,true],
+    ["load",1,-1.796584971126606,-3.936468775106783,true],
+    ["load",2,-0.20007862260378317,-0.4312626258407115,true],
+    ["load",3,-4.340033626312184,-9.728968890467748,true]
+  ]
+}

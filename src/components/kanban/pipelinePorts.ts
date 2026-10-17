@@ -2,13 +2,17 @@
 
 import type { PatchPipelineRequest, Pipeline } from "@/lib/pipelines/types";
 import { PIPELINES_CHANGED_EVENT } from "@/components/pipelines/pipelineEvents";
-import { applyPipelineSnapshot } from "@/hooks/useFiles";
+import { applyPipelineSnapshot, revertPipelineSnapshot } from "@/hooks/useFiles";
 
 /**
  * The pipeline writes the kanban board makes (#1695 K5b), over the existing
  * `GET`/`PATCH /api/pipelines/:id` routes. Unlike the scheme's `patchPipeline`
  * helper they answer with the status, so a refusal the operator can act on
  * (a stage that already started) is told apart from any other failure.
+ *
+ * A write may carry the record it predicts (pause, resume, the "finishes the
+ * task" flag): it is drawn on every surface before the request, the echo
+ * confirms it, and a refusal or a write with no answer takes it back.
  */
 
 /**
@@ -33,7 +37,7 @@ export interface PipelineRead {
 export interface PipelinePorts {
   /** The stored record, or null when it cannot be read. */
   read(id: string): Promise<PipelineRead | null>;
-  patch(id: string, body: PatchPipelineRequest): Promise<PipelineWriteResult>;
+  patch(id: string, body: PatchPipelineRequest, predicted?: Pipeline): Promise<PipelineWriteResult>;
   /** Ask every surface to read the catalog again: a check found it behind. */
   refresh(): void;
 }
@@ -54,29 +58,43 @@ export const browserPipelinePorts: PipelinePorts = {
       return null;
     }
   },
-  async patch(id, body) {
-    try {
-      const response = await fetch(`/api/pipelines/${encodeURIComponent(id)}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const json = (await response.json().catch(() => null)) as { pipeline?: Pipeline; error?: string; code?: string; field?: string } | null;
-      if (response.ok && json?.pipeline) {
-        applyPipelineSnapshot(json.pipeline, true);
-        if (REFRESH_ACTIONS.has(body.action)) window.dispatchEvent(new Event(PIPELINES_CHANGED_EVENT));
-        return { ok: true, pipeline: json.pipeline };
-      }
-      if (response.ok || typeof json?.error !== "string") return { ok: false, status: response.status, error: `HTTP ${response.status}`, unknown: true };
-      return { ok: false, status: response.status, error: json.error, ...(json.code ? { code: json.code } : {}), ...(json.field ? { field: json.field } : {}) };
-    } catch (error) {
-      return { ok: false, status: 0, error: error instanceof Error ? error.message : String(error), unknown: true };
-    }
+  async patch(id, body, predicted) {
+    if (predicted) applyPipelineSnapshot(predicted, false);
+    const result = await patchPipelineRecord(id, body);
+    if (predicted && !result.ok) revertPipelineSnapshot(id);
+    return result;
   },
   refresh() {
     window.dispatchEvent(new Event(PIPELINES_CHANGED_EVENT));
   },
 };
+
+async function patchPipelineRecord(id: string, body: PatchPipelineRequest): Promise<PipelineWriteResult> {
+  try {
+    const response = await fetch(`/api/pipelines/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const json = (await response.json().catch(() => null)) as { pipeline?: Pipeline; error?: string; code?: string; field?: string } | null;
+    if (response.ok && json?.pipeline) {
+      applyPipelineSnapshot(json.pipeline, true);
+      if (REFRESH_ACTIONS.has(body.action)) window.dispatchEvent(new Event(PIPELINES_CHANGED_EVENT));
+      return { ok: true, pipeline: json.pipeline };
+    }
+    if (response.ok || typeof json?.error !== "string") return { ok: false, status: response.status, error: `HTTP ${response.status}`, unknown: true };
+    return { ok: false, status: response.status, error: json.error, ...(json.code ? { code: json.code } : {}), ...(json.field ? { field: json.field } : {}) };
+  } catch (error) {
+    return { ok: false, status: 0, error: error instanceof Error ? error.message : String(error), unknown: true };
+  }
+}
+
+/** The record a pause or a resume leaves, as the engine writes it; null for any other action. */
+export function predictedPauseResume(pipeline: Pipeline, action: string, now = new Date().toISOString()): Pipeline | null {
+  if (action === "pause" && pipeline.state !== "paused" && pipeline.state !== "draft") return { ...pipeline, pausedState: pipeline.state, state: "paused", pausedAt: now };
+  if (action === "resume" && pipeline.state === "paused") return { ...pipeline, state: pipeline.pausedState ?? "running", pausedState: null, resumedAt: now };
+  return null;
+}
 
 /** The engine's refusal of a guarded write: the stage it named is not the one the pipeline holds now. */
 export function isStageChanged(result: PipelineWriteResult): boolean {

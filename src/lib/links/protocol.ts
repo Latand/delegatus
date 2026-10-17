@@ -1,3 +1,4 @@
+import { validTelegramPublicationPart } from "./telegramPublication";
 import { sharedLinkState } from "./runtimeState";
 import { randomBytes, randomUUID } from "node:crypto";
 
@@ -177,10 +178,11 @@ export function removePeer(id: string): Link | undefined {
 export const sharedDigest = (projects: SharedProject[]) => sha(JSON.stringify(projects)).slice(0, 8);
 const partialShared = sharedLinkState("protocol.partialShared", () => new Map<string, { hash: string; total: number; rows: SharedProject[]; at: number }>());
 
-export function incomingSync(grant: Grant, input: unknown): { status: number; body: object; agreed?: boolean } {
+export async function incomingSync(grant: Grant, input: unknown): Promise<{ status: number; body: object; agreed?: boolean }> {
   if (partialShared.size) for (const [id, pending] of partialShared) if (Date.now() - pending.at > 600_000) partialShared.delete(id);
   if (!input || typeof input !== "object" || (input as Record<string, unknown>).v !== 1) return { status: 400, body: { error: "malformed" } };
   const wire = input as Record<string, unknown>;
+  if (wire.tp !== undefined && !validTelegramPublicationPart(wire.tp)) return { status: 400, body: { error: "malformed" } };
   if (wire.sm !== undefined && !validSeatMessagePart(wire.sm)) return { status: 400, body: { error: "malformed" } };
   if (typeof wire.store !== "string" || !/^[0-9a-f-]{36}$/.test(wire.store) || typeof wire.now !== "number" || !Number.isSafeInteger(wire.now)) return { status: 400, body: { error: "malformed" } };
   // A recreated store on A is rebuilt by A's own resync (M.8); B only records it.
@@ -215,11 +217,13 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
   if (!Number.isInteger(agentPage) || (agentPage as number) < 0 || (agentPage as number) > 400) return { status: 400, body: { error: "malformed" } };
   const push = wire.push && typeof wire.push === "object" && !Array.isArray(wire.push) ? wire.push as Record<string, unknown> : null;
   const pushAgents = push?.agents;
-  const served = serveTasks(grant, { ...wire, ...(push && push.rows === undefined ? { push: undefined } : {}) }, agreed);
+  const served = await serveTasks(grant, { ...wire, ...(push && push.rows === undefined ? { push: undefined } : {}) }, agreed);
   if ("error" in served) {
     usedGrant(grant, false);
     return { status: served.error === "quota" ? 429 : served.error === "clock" ? 409 : 400, body: { error: served.error } };
   }
+  if (!readGrants().grants.some(row => row.id === grant.id && row.hash === grant.hash && row.install === grant.install && row.scopes.includes("board:sync")) || sharedDigest(sharedProjects()) !== localHash
+    || sharedDigest(remoteProjects(grant.id)) !== remoteHash) return { status: 400, body: { error: "malformed" } };
   const projects = linkedPeer("grant", grant.id)?.projects ?? new Set<string>();
   const messageLink = linkedPeer("grant", grant.id);
   recordSeatMessages(`grant:${grant.id}`, wire.sm !== undefined);

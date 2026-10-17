@@ -35,7 +35,7 @@ afterAll(async () => {
 
 const { flushSync } = await import("react-dom");
 const { createRoot } = await import("react-dom/client");
-const { PipelineBlock, PipelineStateLine } = await import("./PipelineBlock");
+const { PipelineBlock, PipelineStateLine, stageAt } = await import("./PipelineBlock");
 const { summarizePipeline } = await import("@/components/kanban/kanbanModel");
 const { WorkLinksProvider } = await import("@/components/workLinks/workLinksContext");
 const { setLocale, translate } = await import("@/lib/i18n");
@@ -166,6 +166,43 @@ test("stage names stay the pipeline's in Ukrainian, and the state words are the 
   expect(host.querySelector(".pstate-word")?.textContent).toBe(translate("uk", "pipelineState.needs_decision"));
 });
 
+test("a card line given an opener makes each stage with an agent a button that opens it, and leaves the rest text (2026-10-16)", () => {
+  const summary = summarizePipeline(searchPipeline());
+  const opened: Array<[string, string]> = [];
+  const host = mount(<PipelineBlock summary={summary} density="card" nowMs={NOW_MS} onOpenStage={(pipeline, stage) => opened.push([pipeline.id, stage.id])} />);
+  /* Implement, Review and Verify have run; Merge waits with no agent and no form on a closed card. */
+  expect([...host.querySelectorAll("button.pb-pill[data-stage]")].map((pill) => pill.getAttribute("data-stage"))).toEqual(["implement", "review", "verify"]);
+  expect(host.querySelector('span.pb-pill[data-stage="merge"]')).not.toBeNull();
+  expect(host.querySelector('[data-stage="merge"]')?.getAttribute("role")).toBeNull();
+  expect(host.querySelector('button.pb-pill[data-stage="verify"]')?.getAttribute("aria-label")).toContain("Verify");
+  click(host.querySelector('button.pb-pill[data-stage="verify"]'));
+  click(host.querySelector('button.pb-pill[data-stage="implement"]'));
+  expect(opened).toEqual([["p-search", "verify"], ["p-search", "implement"]]);
+});
+
+test("a card line inside one button marks the pills that hold an agent and resolves a tap against them; a lane managed elsewhere opens nothing", () => {
+  const summary = summarizePipeline(searchPipeline());
+  const opened: string[] = [];
+  const host = mount(<PipelineBlock summary={summary} density="card" nowMs={NOW_MS} stagesInFace onOpenStage={(_pipeline, stage) => opened.push(stage.id)} />);
+  expect(host.querySelectorAll("button")).toHaveLength(0);
+  expect([...host.querySelectorAll("[data-stage-open]")].map((pill) => pill.getAttribute("data-stage-open"))).toEqual(["implement", "review", "verify"]);
+  /* Pills 22 px tall in a row: a tap 10 px above one reaches it, 12 px does not, and a tap between two takes the nearer. */
+  const rects: Record<string, [number, number]> = { implement: [0, 60], review: [64, 120], verify: [124, 190] };
+  for (const pill of host.querySelectorAll<HTMLElement>("[data-stage-open]")) {
+    const [left, right] = rects[pill.dataset.stageOpen!]!;
+    pill.getBoundingClientRect = () => ({ left, right, top: 100, bottom: 122, width: right - left, height: 22, x: left, y: 100 } as DOMRect);
+  }
+  expect(stageAt(host, 30, 111)).toEqual({ pipelineId: "p-search", stageId: "implement" });
+  expect(stageAt(host, 100, 90)).toEqual({ pipelineId: "p-search", stageId: "review" });
+  expect(stageAt(host, 100, 133)).toEqual({ pipelineId: "p-search", stageId: "review" });
+  expect(stageAt(host, 100, 88)).toBeNull();
+  expect(stageAt(host, 100, 134)).toBeNull();
+  expect(stageAt(host, 62, 111)).not.toBeNull();
+  expect(stageAt(host, 220, 111)).toBeNull();
+  const managed = mount(<PipelineBlock summary={summary} density="card" nowMs={NOW_MS} onOpenStage={() => {}} managedOn={{ host: "laptop", note: null, reason: null }} />);
+  expect(managed.querySelectorAll("button.pb-pill, [data-stage-open]")).toHaveLength(0);
+});
+
 test("the card line is passive: no control in it, the PR as text, the reason in warning words, and a finished lane one muted line", () => {
   const links = { "p-search": { links: [link(2070), link(2061, { kind: "issue", state: null })], noPr: false } } as Record<string, ResolvedWorkLinks>;
   const decision = mount(<PipelineBlock summary={summarizePipeline(parked())} density="card" nowMs={NOW_MS} />, links);
@@ -271,14 +308,23 @@ test("the task chain tags each step for the narrow lane's vertical layout, and k
     runs: stages.map((entry) => ({ stageId: entry.id, attempts: [attempt(1, "passed", 600)] })),
   } as unknown as Partial<Pipeline>);
   const host = mount(<PipelineBlock summary={summarizePipeline(through)} density="task" nowMs={NOW_MS} onOpenStage={() => {}} />);
-  const steps = [...host.querySelectorAll<HTMLElement>(".pb-pills > .pb-step")];
+  /* Each main step is a unit with the branches that return to it; the last gate with a branch takes the stages after it, then its branches. */
+  const units = [...host.querySelectorAll<HTMLElement>(".pb-pills > .pb-unit")];
+  expect(units.map((unit) => [...unit.querySelectorAll(":scope > .pb-step .pb-pill")].map((pill) => (pill as HTMLElement).dataset.stage))).toEqual([["build"], ["critique", "review", "critique-fix"]]);
+  expect(host.querySelector(".pb-pills")?.getAttribute("data-branches")).toBe("1");
+  const steps = [...host.querySelectorAll<HTMLElement>(".pb-pills .pb-step")];
   expect(steps.map((step) => step.querySelector<HTMLElement>(".pb-pill")!.dataset.stage)).toEqual(["build", "critique", "review", "critique-fix"]);
   expect(steps.map((step) => step.dataset.step)).toEqual(["first", "next", "next", "branch"]);
   expect(steps.map((step) => step.dataset.through ?? null)).toEqual([null, null, null, "1"]);
   expect(steps.map((step) => step.style.getPropertyValue("--pb-order"))).toEqual(["0", "2", "4", "3"]);
-  /* The wide row is the DOM as it was: an arrow before each later main step and none before the first or the branch. */
+  /* An arrow before each later main step and none before the first or the branch. */
   expect(host.querySelectorAll(".pb-arrow").length).toBe(2);
   expect(steps.map((step) => Boolean(step.querySelector(":scope > .pb-arrow")))).toEqual([false, true, true, false]);
+  /* The branch says "branch" in its own span, which the wide row hides and the narrow form shows. */
+  const branch = host.querySelector<HTMLElement>('[data-stage="critique-fix"] .pb-name')!;
+  expect(branch.textContent).toBe("branch: Critique fix");
+  expect(branch.querySelector(".pb-branch-word")?.textContent).toBe("branch:");
+  expect(host.querySelector('[data-stage="critique"] .pb-branch-word')).toBeNull();
 
   /* The operator's lane: the reviewer is the last stage, so nothing passes its branch. */
   const fixStages = [stage("build", "builder", "review"), stage("review", "reviewer", null, { onFail: { to: "review-fix", maxRounds: 3 } }), stage("review-fix", "builder", "review")];
@@ -287,7 +333,7 @@ test("the task chain tags each step for the narrow lane's vertical layout, and k
     runs: fixStages.map((entry) => ({ stageId: entry.id, attempts: [attempt(1, "passed", 600)] })),
   } as unknown as Partial<Pipeline>);
   const lane = mount(<PipelineBlock summary={summarizePipeline(fix)} density="task" nowMs={NOW_MS} onOpenStage={() => {}} />);
-  const laneSteps = [...lane.querySelectorAll<HTMLElement>(".pb-pills > .pb-step")];
+  const laneSteps = [...lane.querySelectorAll<HTMLElement>(".pb-pills .pb-step")];
   expect(laneSteps.map((step) => step.dataset.step)).toEqual(["first", "next", "branch"]);
   expect(laneSteps.some((step) => step.dataset.through)).toBe(false);
   expect(laneSteps.map((step) => step.style.getPropertyValue("--pb-order"))).toEqual(["0", "2", "3"]);

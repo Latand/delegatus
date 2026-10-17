@@ -133,7 +133,10 @@ plugins = false
         effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
         status: async id => journal.operationResult(id)?.receipt ?? null,
         hostClaim: async () => "fixture-owner",
-        transition: async (id, status, details) => { states.push({id, status, reason: details?.reason}); journal.transitionOperation(id, status, details); },
+        transition: async (id, status, details) => {
+          journal.transitionOperation(id, status, details);
+          states.push({id, status, reason: details?.reason});
+        },
       }, () => host!);
       const admit = async (id: string) => {
         await publish();

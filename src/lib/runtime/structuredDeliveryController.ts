@@ -1,3 +1,6 @@
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
+import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { detachCodexHostForViewerRestart } from "./registry";
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { creditGuardBlock } from "@/lib/accounts/creditGuard";
@@ -16,7 +19,7 @@ import { conversationActorRunning, recordObservedWait, recordWait, restoreMissin
 /** How many times a failed switch's hold is asked for before it is given up
     and logged; each attempt waits up to the registry's lock deadline. */
 const SWITCH_HOLD_WRITE_ATTEMPTS = 6;
-import { NativeQueueExecutor } from "./nativeQueueExecutor";
+import { NativeQueueExecutor, withdrawNativeSeatMessage } from "./nativeQueueExecutor";
 import { RetryBackoff } from "./retryBackoff";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -35,15 +38,18 @@ import { forEachStartupBatch } from "./startupWork";
 import { hostlessConversations, hostlessConversationEvidence } from "./hostlessRegistryEvidence";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
 import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
-import { canonicalOrchestratorProject, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, isCurrentOrchestratorSeat, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
 import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
 import { confirmedSend } from "./confirmedSend";
 import { readEvidence } from "./evidence";
-import { StructuredSendRefusedError, type EngineHost, type HostState } from "./engineHost";
+import { StructuredDispatchDeferredError, StructuredSendRefusedError, type EngineHost, type HostState } from "./engineHost";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
 import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgressStore } from "./deliveryProgress";
+import { DeliveryWake } from "./deliveryWake";
+import { DeliveryEffectPages } from "./deliveryEffectPages";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
 import { coalesceReadyEngineDeltas, projectEngineHostEvent } from "./engineHostEvents";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
@@ -140,6 +146,7 @@ interface ControllerState {
   /* Optional: a controller published by a bundle realm built before #2515
      shares this object and has no such hook. */
   settleHostlessSessions?: (() => Promise<number>) | null;
+  updateStartupDeferral?: ((conversationId: string, deferred: boolean) => void) | null;
   completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void, deferredConversationIds?: ReadonlySet<string>) => Promise<void>) | null;
   stopActive: () => void;
   lastDrainError?: string | null;
@@ -216,6 +223,7 @@ function retireStructuredDeliveryPublication(): void {
   state.terminateActiveHost = null;
   state.settleHostlessSessions = null;
   state.completeActive = null;
+  state.updateStartupDeferral = null;
   setStructuredDeliveryKick(null);
   markStructuredDeliveryControllerUnavailable();
 }
@@ -765,11 +773,17 @@ export async function bindStructuredDeliveryQueue(
   // the remaining hosts. Their original queued operations must wait for those
   // seats instead of attempting competing recovery and terminalizing them.
   let startupPending = dependencies.deferStartupWork === true;
-  let deferredStartupConversations: ReadonlySet<string> = new Set();
+  let deferredStartupConversations = new Set<string>();
   let scheduleAutomaticRetry = () => {};
   let requestDrain = () => {};
   const nativeReconciliations = new Map<string, Promise<void>>();
   const nativeRetries = new Map<string, RetryBackoff>();
+  const seatRecipient = (conversationId: string) => {
+    const snapshot = registry.conversationDeliverySnapshot({ conversationId });
+    const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
+    return seatRecipientVerdict(conversationIdsResolvingTo(snapshot, lookup.canonicalConversationId(conversationId as ViewerConversationId)),
+      id => lookup.canonicalConversationId(id as ViewerConversationId));
+  };
   const authorizeAccountDispatch = (conversationId: string) => {
     assertPipelineTurnAllowed(conversationId, registry);
     const conversation = registry.conversation(conversationId as ViewerConversationId);
@@ -778,9 +792,15 @@ export async function bindStructuredDeliveryQueue(
     const observation = registry.quotaObservations("codex").find(item => item.accountId === accountId);
     if (creditGuardBlock("codex", observation?.limits)) throw new StructuredSendRefusedError("Codex paid-credit guard reached; continue on an allowed account with capacity");
   };
+  setSeatChannelNativeWithdrawal((conversationId, operationId) => withdrawNativeSeatMessage(conversationId, operationId, client, nativeQueueExecutor));
   const nativeQueueExecutor = new NativeQueueExecutor({
     client,
-    authorizeDispatch: authorizeAccountDispatch,
+    authorizeDispatch: conversationId => {
+      const verdict = seatRecipient(conversationId);
+      if (verdict.kind === "revoked") throw new StructuredSendRefusedError(verdict.reason);
+      if (verdict.kind === "unknown") throw new StructuredDispatchDeferredError(verdict.reason);
+      authorizeAccountDispatch(conversationId);
+    },
     resolveHost: hostResolver(registry, hosts),
     /* Off the loop, a hand-off's own row included (C3, A8). */
     settled: async (entry) => { await settleNativeQueueEntry(registry, entry, progressStore); },
@@ -847,6 +867,7 @@ export async function bindStructuredDeliveryQueue(
     get: (operationId) => progressStore.get(operationId),
     open: () => progressStore.open(),
   };
+  const effectPages = new DeliveryEffectPages(client, () => scheduleAutomaticRetry());
   const queue = new StructuredDeliveryQueue(
     {
       progress,
@@ -885,6 +906,13 @@ export async function bindStructuredDeliveryQueue(
         }
         if (lost) requestAccountMigrationTick();
       },
+      coalescesConversation: (conversationId) => isCurrentOrchestratorSeat(
+        conversationIdsResolvingTo(registry.readOnlySnapshot(), conversationId as ViewerConversationId)),
+      bindDeliveryBatch: async (batchId, members, generationId) => {
+        const bound = await registry.bindDeliveryBatchOffLoop(batchId, members, generationId);
+        if (bound === null) throw new Error(REGISTRY_WRITER_BUSY);
+        return bound;
+      },
       /* Original-key reconciliation reads the host's own evidence: the Claude
          delivery ledger and transcript, the Codex thread. It never writes input. */
       confirmedDelivery: (operationId) => confirmedSend(registry.readOnlySnapshot(), operationId, true),
@@ -920,7 +948,8 @@ export async function bindStructuredDeliveryQueue(
         controllerDiagnosticError("[structured delivery] a failed switch's hold could not be written; it stays owed", { operationId: effect.operationId });
         return false;
       },
-      effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
+      effects: (kinds, afterEventSeq) => effectPages.read(kinds, afterEventSeq),
+      takeEffectsReadFailure: () => effectPages.takeReadFailure(),
       idleContinuationCurrent: async (conversationId, fence) => {
         const session = await readRuntimeSession(client, { conversationId });
         // This operation itself blocks retirement. Admission and the claim
@@ -977,6 +1006,13 @@ export async function bindStructuredDeliveryQueue(
         if (!ownerRelaySpawnAuthorized(receipt?.clientAttemptId))
           throw new StructuredSendRefusedError("owner relay first prompt authorization revoked");
       },
+      seatRecipientAsync: async conversationId => {
+        const snapshot = registry.conversationDeliverySnapshot({ conversationId });
+        const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
+        return seatRecipientVerdictAsync(conversationIdsResolvingTo(snapshot, lookup.canonicalConversationId(conversationId as ViewerConversationId)),
+          id => lookup.canonicalConversationId(id as ViewerConversationId));
+      },
+      seatRecipient,
       conversationRetired: conversationId => runtimeSwitchRetirementReason(conversationId, registry),
       /* Who may write to this conversation's engine right now (#1131): the
          evidence a `delivering` row is compared against before it is called
@@ -1161,7 +1197,7 @@ export async function bindStructuredDeliveryQueue(
       if (!await durableAuthority() || !idleAuthority()) return false;
       const settleKilledLaunches = async () => {
         const reason = "structured launch host was intentionally terminated";
-        for (const receipt of Object.values(registry.readOnlySnapshot().receipts)) {
+        for (const receipt of registryRowsMatching(registry.readOnlySnapshot(), "receipts", "conversationId", conversationId)) {
           if (receipt.transport !== "structured" || receipt.conversationId !== conversationId
             || !receipt.key || sessionKeyId(receipt.key) !== sessionKeyId(expectedKey)
             || receipt.state === "completed" || receipt.state === "conflicted"
@@ -1285,7 +1321,7 @@ export async function bindStructuredDeliveryQueue(
       : null,
     dependencies.queueTiming,
   );
-  let drainTimer: ReturnType<typeof setTimeout> | null = null;
+  const drainWake = new DeliveryWake(() => { if (!stopped) void withViewerOperation("runtime.delivery-wake", () => drainWithRetry()); });
   let settleTimer: ReturnType<typeof setInterval> | null = null;
   let watchdogTimer: ReturnType<typeof setInterval> | null = null;
   let settlementSweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -1307,21 +1343,12 @@ export async function bindStructuredDeliveryQueue(
         registry: () => registry, client: () => client, recover: dependencies.recover, kick: requestDrain,
         authorizeDispatch: authorizeRecovery, interruptionContinuation: true });
     }, { onlyIfChanged }).finally(() => { guarding = null; });
-  const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => {
-    if (stopped || drainTimer) return false;
-    drainTimer = setTimeout(() => {
-      drainTimer = null;
-      if (stopped) return;
-      void drainWithRetry();
-    }, delayMs);
-    drainTimer.unref?.();
-    return true;
-  };
-  const drainWithRetry = async (afterAdmission = false): Promise<void> => {
+  const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => !stopped && drainWake.schedule(delayMs);
+  const drainWithRetry = async (afterAdmission = false, freshAdmission = false): Promise<void> => {
     if (stopped) return;
     try {
       if (!startupPending) await enforceGuard();
-      if (afterAdmission) await queue.drainAfterAdmission();
+      if (afterAdmission) await queue.drainAfterAdmission(freshAdmission);
       else await queue.drain();
       drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
     } catch (error) {
@@ -1743,11 +1770,7 @@ export async function bindStructuredDeliveryQueue(
         if (next.done) return;
         if (next.value.kind === "item" && next.value.deliveryEcho) {
           const echo = next.value.deliveryEcho;
-          try {
-            if (progressStore.get(echo.operationId)?.conversationId === conversationId) {
-              progressStore.timing(echo.operationId, { engineEchoAt: echo.at });
-            }
-          } catch { /* An observation never delays the journal or delivery. */ }
+          observeDeliveryEcho(progressStore, conversationId, echo, !echo.memberOperationIds || next.value.seq > initialState.eventCursor);
         }
         /* Before the journal append, which retries for as long as the runtime
            host is away: a request nobody can answer is answered now. */
@@ -1910,17 +1933,15 @@ export async function bindStructuredDeliveryQueue(
   };
   state.activeQueue = queue;
   state.activeRegistry = registry;
-  setStructuredDeliveryKick(() => {
+  setStructuredDeliveryKick((freshAdmission = false) => {
     if (stopped) return;
-    if (drainTimer) clearTimeout(drainTimer);
-    drainTimer = null;
-    return drainWithRetry(true);
+    if (freshAdmission) drainWake.cancel();
+    return drainWithRetry(true, freshAdmission);
   });
   state.stopActive = () => {
     stopped = true;
     queue.retire();
-    if (drainTimer) clearTimeout(drainTimer);
-    drainTimer = null;
+    drainWake.cancel();
     if (settleTimer) clearInterval(settleTimer);
     settleTimer = null;
     if (watchdogTimer) clearInterval(watchdogTimer);
@@ -1947,6 +1968,7 @@ export async function bindStructuredDeliveryQueue(
       state.detachRetiredActiveHost = null;
       state.settleHostlessSessions = null;
       state.completeActive = null;
+      state.updateStartupDeferral = null;
       setStructuredDeliveryKick(null);
     }
   };
@@ -1977,7 +1999,7 @@ export async function bindStructuredDeliveryQueue(
          down controller never gets to mutate the registry. Do this before
          registering hosts so even a registration-triggered drain sees the
          repaired durable state. */
-      deferredStartupConversations = deferredConversationIds;
+      deferredStartupConversations = new Set(deferredConversationIds);
       registry.repairCompletedStructuredSpawnMarkers();
       await phase("registering structured delivery hosts");
       for (const item of items) await register(item);
@@ -2035,6 +2057,11 @@ export async function bindStructuredDeliveryQueue(
     return completion;
   };
   state.completeActive = complete;
+  state.updateStartupDeferral = (conversationId, deferred) => {
+    if (stopped || state.activeQueue !== queue) throw new StructuredDeliveryControllerUnavailableError();
+    if (deferred) deferredStartupConversations.add(conversationId);
+    else deferredStartupConversations.delete(conversationId);
+  };
   state.settleHostlessSessions = settleHostlessSessions;
   const settleIntervalMs = dependencies.hostlessSettleIntervalMs ?? HOSTLESS_SETTLE_INTERVAL_MS;
   if (settleIntervalMs > 0) {
@@ -2180,6 +2207,13 @@ export async function publishStructuredDeliveryHost(
   ownsOperation?: () => Promise<boolean>,
 ): Promise<() => Promise<void>> {
   return requireStructuredDeliveryControllerPublication()(item, ownsOperation);
+}
+
+/** Adjust one startup row without replaying historical publication or disturbing
+ * another row's hand-over fence. */
+export function updateStructuredStartupDeferral(registry: AgentRegistry, conversationId: string, deferred: boolean): void {
+  if (state.activeRegistry !== registry || !state.updateStartupDeferral) throw new StructuredDeliveryControllerUnavailableError();
+  state.updateStartupDeferral(conversationId, deferred);
 }
 
 export async function completeStructuredDeliveryQueueStartup(
@@ -2551,4 +2585,20 @@ export async function terminateStructuredDeliveryHost(
   expected?: Readonly<ProcessIdentity>,
 ): Promise<boolean> {
   return await state.terminateActiveHost?.(key, expected) ?? false;
+}
+
+
+/** Live observations only; history with no observation time never invents one. */
+export function observeDeliveryEcho(
+  progress: { get(id: string): { conversationId: string } | null | undefined; timing(id: string, fields: { engineEchoAt: string }): unknown },
+  conversationId: string,
+  echo: { operationId: string; at: string | null; memberOperationIds?: string[] },
+  observedLive = true,
+): void {
+  if (!observedLive || !echo.at) return;
+  for (const id of echo.memberOperationIds ?? [echo.operationId]) {
+    try {
+      if (progress.get(id)?.conversationId === conversationId) progress.timing(id, { engineEchoAt: echo.at });
+    } catch { /* Observations never delay journal delivery. */ }
+  }
 }

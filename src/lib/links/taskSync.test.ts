@@ -1,14 +1,17 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, spyOn, setSystemTime, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { taskRevision } from "@/lib/tasks/revision";
 import type { TaskWithRevision } from "@/lib/tasks/revision";
 import { randomUUID } from "node:crypto";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
+import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { deleteTask, patchTask, createTask } from "@/lib/tasks/commands";
-import { loadTasks, loadTasksFile, mutateTasksFile, mutateTasks, mutateLinkedTasks, taskFeedSource } from "@/lib/tasks/store";
+import { loadTasks, loadTasksFile, mutateTasksFile, mutateTasks, mutateLinkedTasks, taskFeedSource, mutateTaskPrototypeRound } from "@/lib/tasks/store";
 import { BOARD_TASKS_PER_PROJECT_LIMIT } from "@/lib/tasks/commands";
 import { countBoardTasks, DONE_TASK_BOARD_RETENTION_MS } from "@/lib/tasks/boardVisibility";
 import { type BoardTask } from "@/lib/tasks/types";
@@ -39,6 +42,7 @@ afterEach(() => {
   if (original.config === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = original.config;
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   resetRowBudgetsForTests();
+  setSystemTime();
 });
 
 /** An install that shares `key` with one linked peer, without any network. */
@@ -210,6 +214,50 @@ test("the stamp step stamps linked tasks only, per changed group, and leaves eve
     return { tasks, result: tasks[index]! };
   }, file);
   expect(assigned.sync!.s).toEqual(moved.sync!.s);
+});
+
+test("a linked prototype semantic write stamps one row with the indexed project watermark", () => {
+  setSystemTime(new Date("2026-10-17T00:00:00.000Z"));
+  const { file, db } = linkedInstall();
+  const review = "pr_00000000000000000000000000000001";
+  const peerStamp = `9999999999000.000.${installPrefix(PEER)}`;
+  const sync = { o: installPrefix(PEER), s: { text: peerStamp, status: peerStamp, look: peerStamp,
+    place: peerStamp, links: peerStamp, machine: peerStamp, handover: peerStamp } };
+  mutateTasks(() => ({ tasks: Array.from({ length: 1025 }, (_, index) => {
+    const id = `linked-${String(index).padStart(4, "0")}`;
+    return { id, project: key, machine: PEER, sync, status: "inbox" as const, text: `peer task ${index}`,
+      placement: "unplaced" as const, assignments: [], createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z",
+      ...(index === 0 ? { prototypeReviews: [{ id: review, taskId: id, project: key, title: "Before", createdAt: "2026-10-01T00:00:00.000Z",
+        publicationKey: "prototype-watermark", inputDigest: "fixture", source: { conversationId: null }, variants: [] }] } : {}) };
+  }), result: null }), file);
+  expect(find(file, "linked-0000")!.prototypeReviews?.map(round => round.id)).toEqual([review]);
+  expect(taskFeedSource(file)!.get("linked-0000")?.prototypeReviews?.map(round => round.id)).toEqual([review]);
+  const stringify = JSON.stringify;
+  let taskFingerprints = 0;
+  const spy = spyOn(JSON, "stringify").mockImplementation((...args) => {
+    if (new Error().stack?.includes("taskFingerprint")) taskFingerprints++;
+    return Reflect.apply(stringify, JSON, args) as string;
+  });
+  try {
+    mutateTaskPrototypeRound("linked-0000", review, round => { round!.title = "After"; }, file);
+  } finally { spy.mockRestore(); }
+  expect(taskFingerprints).toBeLessThanOrEqual(4);
+  expect(find(file, "linked-0000")!.sync!.s.text).toBe("9999999999000.001." + installPrefix(SELF));
+  const database = new Database(db);
+  const stampedPlan = database.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN SELECT json_extract(value_json,'$.sync.s.text')
+    FROM state_rows INDEXED BY state_rows_task_stamp_text WHERE collection='tasks' AND json_valid(value_json)
+      AND json_extract(value_json,'$.project')=? AND json_type(value_json,'$.sync.s.text')='text'
+    ORDER BY json_extract(value_json,'$.sync.s.text') DESC LIMIT 1`).all(key).map(row => row.detail).join(" ");
+  const legacyPlan = database.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN SELECT round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000)
+    FROM state_rows INDEXED BY state_rows_task_legacy_stamp WHERE collection='tasks' AND json_valid(value_json)
+      AND json_extract(value_json,'$.project')=? AND json_type(value_json,'$.sync.s.text') IS NULL
+    ORDER BY round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000) DESC LIMIT 1`).all(key)
+    .map(row => row.detail).join(" ");
+  database.close();
+  expect(stampedPlan).toContain("state_rows_task_stamp_text");
+  expect(stampedPlan).not.toContain("TEMP B-TREE");
+  expect(legacyPlan).toContain("state_rows_task_legacy_stamp");
+  expect(legacyPlan).not.toContain("TEMP B-TREE");
 });
 
 test("deleting a linked task writes its tombstone and the project floor in the same commit; a refused write writes neither", () => {
@@ -576,4 +624,61 @@ test("peer arrivals preserve membership, bound bands, and repair legacy done arr
   expect(readStateCollectionRevision(db, "tasks")).toBe(afterChoice);
   expect(find(file, legacy.id)!.board).toBeUndefined();
   expect(loadTasksFile(file).recentCreates).toEqual(receipts);
+});
+
+
+test("a bounded prototype write retains linked watermarks, no-op revisions and peer rows", () => {
+  setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+  const { file } = linkedInstall();
+  const task = create(file, "Prototype task");
+  const round: PrototypeReviewRound = { id: `pr_${"c".repeat(32)}`, taskId: task.id, project: key, title: "Layout",
+    createdAt: "2026-10-01T00:00:00.000Z", source: { conversationId: null }, publicationKey: "fixture", inputDigest: "fixture", variants: [] };
+  mutateTasks(tasks => { tasks.find(t => t.id === task.id)!.prototypeReviews = [round]; return { tasks, result: undefined }; }, file);
+  const future = peerRow({ id: THIRD, text: "Future peer" }, Date.parse("2026-10-01T00:00:01.000Z"));
+  expect(applyTaskRows([decodeWireRow(future)], peerLink, { filePath: file }).changed).toBe(1);
+  const peer = find(file, future.id)!;
+  const initial = find(file, task.id)!;
+  mutateTaskPrototypeRound(task.id, round.id, held => { held!.title = "Updated layout"; }, file);
+  const changed = find(file, task.id)!;
+  expect(changed.prototypeReviews![0]!.title).toBe("Updated layout");
+  expect(changed.sync!.s.text! > peer.sync!.s.text!).toBe(true);
+  expect(taskRevision(changed)).not.toBe(taskRevision(initial));
+  expect(find(file, peer.id)).toEqual(peer);
+  mutateTaskPrototypeRound(task.id, round.id, () => {}, file);
+  expect(find(file, task.id)).toEqual(changed);
+  expect(() => mutateTaskPrototypeRound(task.id, round.id, held => { held!.title = "Discarded"; throw new Error("refused"); }, file)).toThrow("refused");
+  expect(find(file, task.id)).toEqual(changed);
+  mutateTaskPrototypeRound(task.id, round.id, held => {
+    held!.telegramPost = { key: "fixture-post", state: "sent", at: "2026-10-01T00:00:00.000Z" };
+  }, file);
+  const bookkeeping = find(file, task.id)!;
+  expect(bookkeeping.sync!.s).toEqual(changed.sync!.s);
+  expect(find(file, peer.id)).toEqual(peer);
+});
+
+test("linked prototype stamps include aliased peer rows and preserve exact legacy milliseconds", () => {
+  setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+  const { file, db } = linkedInstall();
+  const task = create(file, "Prototype task");
+  const peer = create(file, "Legacy peer");
+  const round: PrototypeReviewRound = { id: `pr_${"d".repeat(32)}`, taskId: task.id, project: key, title: "Before",
+    createdAt: "2026-10-01T00:00:00.000Z", source: { conversationId: null }, publicationKey: "alias-watermark", inputDigest: "fixture", variants: [] };
+  mutateTasks(tasks => { tasks.find(t => t.id === task.id)!.prototypeReviews = [round]; return { tasks, result: undefined }; }, file);
+  const database = new Database(db);
+  const legacy = { id: peer.id, project: "old-project", machine: PEER, text: "Legacy peer", status: "inbox", placement: "unplaced",
+    assignments: [], createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.004Z" };
+  database.query("UPDATE state_rows SET value_json=? WHERE collection='tasks' AND row_key=?").run(JSON.stringify(legacy), `t:${peer.id}`);
+  database.close();
+  try {
+    expect(persistProjectAliases([
+      { source: "old-project", target: "middle-project", displayName: "Widget" },
+      { source: "middle-project", target: key, displayName: "Widget" },
+    ])).toBe(true);
+    mutateTaskPrototypeRound(task.id, round.id, held => { held!.title = "After"; }, file);
+    expect(find(file, task.id)!.sync!.s.text).toBe("1790812800004.001." + installPrefix(SELF));
+    const peerDatabase = new Database(db);
+    const unchanged = peerDatabase.query<{ value_json: string }, [string]>("SELECT value_json FROM state_rows WHERE collection='tasks' AND row_key=?").get(`t:${peer.id}`)!;
+    peerDatabase.close();
+    expect(JSON.parse(unchanged.value_json)).toEqual(legacy);
+  } finally { resetProjectAliasesForTests(); }
 });

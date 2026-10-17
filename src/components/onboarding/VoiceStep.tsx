@@ -1,17 +1,20 @@
 "use client";
 
-import { Check, KeyRound, Lock } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { KeyRound, Lock } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+
+import { KEYS_CHANGED_EVENT, openKeys } from "@/components/keys/openKeys";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { TranscribeBackend, TranscribeBackendInfo, TranscribeBackendOption } from "@/lib/transcribeBackend";
 
 /**
  * Step 4, Voice (#2004, design §2.6): where dictation is transcribed. Choosing
- * a row saves it at once through the mic menu's own route; a live row takes
- * its key here, written by `PUT /api/transcribe/key` and never shown again;
- * one Check asks the real path and answers in a sentence. The same component
- * is the "Dictation" menu row, opened alone.
+ * a row saves it at once through the mic menu's own route; a live row says
+ * whether its key is set and opens «Keys» on it, the one place keys are
+ * entered (docs/design/keys-settings.md §4); one Check asks the real path and
+ * answers in a sentence. The same component is the "Dictation" menu row,
+ * opened alone.
  */
 
 const ORDER: readonly TranscribeBackend[] = ["local", "chatgpt", "elevenlabs", "soniox"];
@@ -37,7 +40,6 @@ const PROVIDER_NAME: Record<LiveProvider, string> = { elevenlabs: "ElevenLabs", 
 export const TRANSCRIPTION_GUIDE_URL = "https://github.com/Latand/delegatus/blob/main/docs/transcription.md#local-default--faster-whisper";
 
 type CheckResult = { tone: "success" | "danger"; text: string };
-type KeyNote = { provider: LiveProvider; kind: "saved" } | { provider: LiveProvider; kind: "failed"; reason: string };
 
 function isInfo(value: unknown): value is TranscribeBackendInfo {
   return Boolean(value) && typeof value === "object" && typeof (value as TranscribeBackendInfo).backend === "string" && Array.isArray((value as TranscribeBackendInfo).options);
@@ -89,107 +91,19 @@ export async function checkDictation(backend: TranscribeBackend, t: TFunction): 
   return available ? { tone: "success", text: t("onboarding.voice.result.chatgptOk") } : { tone: "danger", text: t("onboarding.voice.result.chatgptMissing") };
 }
 
-function KeyArea({ provider, option, note, onSaved, onNote }: {
-  provider: LiveProvider;
-  option: TranscribeBackendOption | undefined;
-  note: KeyNote | null;
-  onSaved: (info: TranscribeBackendInfo) => void;
-  onNote: (note: KeyNote | null) => void;
-}) {
+/** Where a live provider's key comes from, and the way to «Keys» on it: the field that was here moved there. */
+function KeyArea({ provider, option }: { provider: LiveProvider; option: TranscribeBackendOption | undefined }) {
   const { t } = useLocale();
-  /* Uncontrolled on purpose: the key lives in the field until it is sent,
-     never in component state, and the field is emptied once the server has it. */
-  const fieldRef = useRef<HTMLInputElement>(null);
-  const [filled, setFilled] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [replacing, setReplacing] = useState(false);
   const source = option?.keySource ?? null;
-
-  if (source === "env") {
-    return <p data-voice-key-env={provider} className="text-ui text-secondary">{t("onboarding.voice.keyFromEnv", { var: LIVE_ENV[provider] })}</p>;
-  }
-
-  const save = async () => {
-    const key = fieldRef.current?.value.trim() ?? "";
-    if (!key || saving) return;
-    setSaving(true);
-    onNote(null);
-    try {
-      const response = await fetch("/api/transcribe/key", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ provider, key }),
-      });
-      if (!response.ok) {
-        onNote({ provider, kind: "failed", reason: await errorOf(response) });
-        return;
-      }
-      const body: unknown = await response.json();
-      if (fieldRef.current) fieldRef.current.value = "";
-      setFilled(false);
-      setReplacing(false);
-      onNote({ provider, kind: "saved" });
-      if (isInfo(body)) onSaved(body);
-    } catch (error) {
-      onNote({ provider, kind: "failed", reason: error instanceof Error ? error.message : String(error) });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const noteLine = note?.provider === provider ? (
-    note.kind === "saved"
-      ? <p data-voice-key-note="saved" className="flex items-center gap-1.5 text-ui text-success"><Check className="h-3.5 w-3.5 shrink-0" aria-hidden />{t("onboarding.voice.keySaved")}</p>
-      : <p data-voice-key-note="failed" role="alert" className="text-ui text-danger">{t("onboarding.voice.keySaveFailed", { reason: note.reason })}</p>
-  ) : null;
-
-  if (source === "file" && !replacing) {
-    return (
-      <div className="flex flex-col gap-1.5">
-        <p className="flex flex-wrap items-center gap-x-1.5 text-ui text-secondary">
-          <KeyRound className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
-          <span>{t("onboarding.voice.keyOnFile")}</span>
-          <span aria-hidden>·</span>
-          <button type="button" data-voice-key-replace="" onClick={() => { setReplacing(true); onNote(null); }} className="rounded-[6px] font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">
-            {t("onboarding.voice.keyReplace")}
-          </button>
-        </p>
-        {noteLine}
-      </div>
-    );
-  }
-
   return (
-    <div className="flex flex-col gap-1.5">
-      <form
-        data-voice-key-field={provider}
-        className="flex items-center gap-2 max-sm:flex-col max-sm:items-stretch"
-        onSubmit={(event) => { event.preventDefault(); void save(); }}
-      >
-        <label className="flex min-w-0 flex-1 items-center gap-2 max-sm:flex-col max-sm:items-stretch max-sm:gap-1">
-          <span className="shrink-0 text-ui font-semibold text-secondary">{t("onboarding.voice.keyLabel")}</span>
-          <input
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            ref={fieldRef}
-            placeholder={t("onboarding.voice.keyPlaceholder")}
-            onChange={(event) => setFilled(event.currentTarget.value.trim().length > 0)}
-            className="h-8 min-w-0 flex-1 rounded-[8px] border border-border bg-canvas px-2.5 text-ui text-primary placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11 max-sm:text-[16px]"
-          />
-        </label>
-        <button
-          type="button"
-          data-voice-key-save=""
-          onClick={() => void save()}
-          disabled={!filled || saving}
-          className="inline-flex h-8 shrink-0 items-center justify-center rounded-[8px] border border-border bg-card px-3 text-ui font-semibold text-primary hover:bg-sunken disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11"
-        >
-          {t("onboarding.voice.keySave")}
-        </button>
-      </form>
-      {noteLine}
-    </div>
+    <p data-voice-key={provider} data-key-source={source ?? "missing"} className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-ui text-secondary">
+      <KeyRound className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+      <span>{source === "env" ? t("onboarding.voice.keyFromEnv", { var: LIVE_ENV[provider] }) : source === "file" ? t("onboarding.voice.keyOnFile") : t("onboarding.voice.keyMissing")}</span>
+      <span aria-hidden>·</span>
+      <button type="button" data-voice-open-keys={provider} onClick={() => openKeys(provider)} className="rounded-[6px] font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11">
+        {t("keys.open")}
+      </button>
+    </p>
   );
 }
 
@@ -205,7 +119,6 @@ export function VoiceStep({ onSkip, onGoEngines }: {
   const [info, setInfo] = useState<TranscribeBackendInfo | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectError, setSelectError] = useState<string | null>(null);
-  const [keyNote, setKeyNote] = useState<KeyNote | null>(null);
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<CheckResult | null>(null);
 
@@ -214,6 +127,11 @@ export function VoiceStep({ onSkip, onGoEngines }: {
     readInfo().then(setInfo, (error: unknown) => setLoadError(error instanceof Error ? error.message : String(error)));
   }, []);
   useEffect(load, [load]);
+  /* A key saved in «Keys» makes its backend available here without a reload. */
+  useEffect(() => {
+    window.addEventListener(KEYS_CHANGED_EVENT, load);
+    return () => window.removeEventListener(KEYS_CHANGED_EVENT, load);
+  }, [load]);
 
   const choose = async (backend: TranscribeBackend) => {
     if (!info || info.lockedByEnv || info.backend === backend) return;
@@ -312,7 +230,7 @@ export function VoiceStep({ onSkip, onGoEngines }: {
               {detail ? <div className="flex flex-col pl-[26px] max-sm:pl-0">{detail}</div> : null}
               {selected && isLive(id) ? (
                 <div className="pl-[26px] max-sm:pl-0">
-                  <KeyArea provider={id} option={option} note={keyNote} onSaved={setInfo} onNote={setKeyNote} />
+                  <KeyArea provider={id} option={option} />
                 </div>
               ) : null}
             </div>

@@ -1,15 +1,24 @@
+import { readAttribution, startReadAttributionSampler } from "./readAttribution";
 import { performanceSpans, performanceSites, performanceProcess } from "./performanceSpans";
 import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createLoopHeapSignals } from "./loopHeapSignals";
 
-export type ViewerOperation = "pipelines.repository-initialization" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
-  | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "state.rollback-checkpoint"
+export type ViewerOperation = "pipelines.repository-initialization" | "tasks.note" | "mcp.receipts" | "mcp.tasks.executor" | "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
+  | "transcript.index" | "memory.discovery" | "memory.refresh"
+  | "memory.source-read" | "memory.source-write"
+  | "delivery.inbox-batch"
+  | "http.render" | "links.task-export"
+  | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "pipelines.evidence" | "pipelines.get" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
-  | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.telegram"
+  | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
+  | "external-relay.owner-history"
+  | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
+  | "codex.protocol-admission"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"
-  | "telegram.outbound-state" | "telegram.outbound-publication" | "orchestrator.recipient-authority";
+  | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel";
 type Operation = { name: ViewerOperation; start: number; end?: number };
 const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 
@@ -35,7 +44,8 @@ export function createLoopLogSink(write = (line: string, done: () => void) => { 
 
 /** Completed operations survive until the next timer: their synchronous work
     can have returned before that timer is allowed to run. */
-export function createViewerLoopMonitor(log?: (line: string) => void, now = () => performance.now(), spans = performanceSpans) {
+export function createViewerLoopMonitor(log?: (line: string) => void, now = () => performance.now(), spans = performanceSpans, heapSignals = createLoopHeapSignals(undefined, undefined, now),
+  watchdogFactory: () => ReturnType<typeof startLoopWatchdog> = () => startLoopWatchdog()) {
   const sink = createLoopLogSink();
   let writeLog = log ?? sink.enqueue;
   const context = new AsyncLocalStorage<ViewerOperation>();
@@ -48,7 +58,13 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   let timer: ReturnType<typeof setTimeout> | undefined;
   const tick = () => {
     const at = now();
+    // The launcher pins each child to its own release, including checkout
+    // installs with no container identity or hot-state activation record.
+    const revision = performanceProcess.revision ?? [process.env.LLV_DIAGNOSTIC_REVISION, process.env.LLV_HOT_STATE_RELEASE_REVISION]
+      .find(value => value && /^[a-f0-9]{7,40}$/.test(value)) ?? null;
+    watchdog?.heartbeat();
     const gapMs = Math.max(0, at - last - 10);
+    const memory = heapSignals.sample(last, at, gapMs);
     if (gapMs > 500) {
       const named = new Map<ViewerOperation, { name: ViewerOperation; durationMs: number; completed: boolean; count: number }>();
       for (const op of [...completed, ...active]) {
@@ -61,7 +77,10 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
           entry.count++;
         } else named.set(op.name, { name: op.name, durationMs, completed: op.end !== undefined, count: 1 });
       }
-      const operations = [...named.values()].sort((a, b) => b.durationMs - a.durationMs).slice(0, 16);
+      const reads = readAttribution.snapshot(at - last);
+      const operations = [...named.values()].sort((a, b) => b.durationMs - a.durationMs).slice(0, 16).map(op => ({ ...op,
+        readBytes: reads.operations.find(row => row.name === op.name)?.readBytes ?? 0,
+        decodedJsonBytes: reads.operations.find(row => row.name === op.name)?.decodedJsonBytes ?? 0 }));
       const attribution = spans.snapshot(last);
       // Keep measured synchronous blockers when long awaited spans fill the
       // report. Remaining slots retain awaits/events in duration order.
@@ -70,18 +89,30 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       const scheduler = watchdog?.snapshot();
       const window = scheduler?.samples.filter(row => row.utcMs >= Date.now() - (at - last) - 200) ?? [];
       const first = window[0], final = window.at(-1);
-      const revision = process.env.LLV_HOT_STATE_RELEASE_REVISION;
-      writeLog(`[viewer loop-gap] ${JSON.stringify({ gapMs: Math.round(gapMs), operations,
+      const rss = window.filter(row => row.rssBytes >= 0 && row.rssUtcMs >= 0);
+      const rssFirst = rss[0], rssFinal = rss.at(-1);
+      writeLog(`[viewer loop-gap] ${JSON.stringify({ gapMs: Math.round(gapMs), operations, ...memory,
         role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
-        ...performanceProcess, revision: performanceProcess.revision ?? (revision && /^[a-f0-9]{7,40}$/.test(revision) ? revision : null), sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
+        ...performanceProcess, revision, sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
         pendingOperations: active.size, activeDropped, completedDropped, logDropped: sink.dropped(),
         requests: spans.requests(),
+        reads,
         attribution: { pending: attribution.pending, dropped: attribution.dropped, droppedMs: attribution.droppedMs,
           omitted: Math.max(0, attribution.records.length - longest.length),
           slices: longest.map(row => ({ ...row, site: performanceSites[row.site],
             overlapMs: Math.max(0, Math.min(row.end, at) - Math.max(row.start, last)) })),
           coverage: "partial", unresolved: "unknown-runtime-or-native" },
         scheduler: { available: scheduler?.available ?? false, samples: window.length,
+          rss: { source: rssFirst ? "proc-status-worker" : "unavailable",
+            beforeBytes: rssFirst?.rssBytes ?? null, afterBytes: rssFinal?.rssBytes ?? null,
+            deltaBytes: rssFirst && rssFinal ? rssFinal.rssBytes - rssFirst.rssBytes : null,
+            peakBytes: rss.length ? Math.max(...rss.map(row => row.rssBytes)) : null,
+            sampleFromUtcMs: rssFirst?.rssUtcMs ?? null, sampleToUtcMs: rssFinal?.rssUtcMs ?? null },
+          // The worker records this while the main loop is still stale. Its
+          // timestamp is not the recovery callback's timestamp. Sequence can
+          // repeat across reports until a later stall replaces this record.
+          stall: scheduler?.stall ? { ...scheduler.stall,
+            site: performanceSites[scheduler.stall.site] ?? "unknown-runtime-or-native" } : null,
           runMs: first && final && first.runNs >= 0 && final.runNs >= 0 ? (final.runNs - first.runNs) / 1e6 : null,
           queueMs: first && final && first.queueNs >= 0 && final.queueNs >= 0 ? (final.queueNs - first.queueNs) / 1e6 : null,
           throttleMs: first && final && first.throttleUs >= 0 && final.throttleUs >= 0 ? (final.throttleUs - first.throttleUs) / 1000 : null,
@@ -100,10 +131,11 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     }
     completed = [];
     if (at - lastSummary >= 60_000) {
-      writeLog(`[performance summary] ${JSON.stringify({ ...performanceProcess, role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
+      writeLog(`[performance summary] ${JSON.stringify({ ...performanceProcess, revision, role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
         monotonic: at, utc: new Date().toISOString(), requests: spans.requests(), logDropped: sink.dropped() })}`);
       lastSummary = at;
     }
+    readAttribution.clear();
     spans.clear();
     activeDropped = completedDropped = 0;
     last = at;
@@ -130,7 +162,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         completed.splice(shortest, 1);
         completedDropped++;
       };
-      return context.run(name, () => {
+      return readAttribution.run(name, () => context.run(name, () => {
         try {
           const result = work();
           if (result && typeof (result as unknown as Promise<unknown>).then === "function") {
@@ -139,18 +171,21 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
           finish();
           return result;
         } catch (error) { finish(); throw error; }
-      });
+      }));
     },
     tick,
     start() {
-      if (timer) return;
+      if (timer) return watchdog?.ready;
       last = now();
-      watchdog = startLoopWatchdog();
+      startReadAttributionSampler();
+      heapSignals.start();
+      watchdog = watchdogFactory();
       spans.observeSite(watchdog.site);
       const poll = () => { tick(); timer = setTimeout(poll, 10); timer.unref(); };
       timer = setTimeout(poll, 10); timer.unref();
+      return watchdog.ready;
     },
-    stop() { if (timer) clearTimeout(timer); timer = undefined; completed = []; spans.observeSite(); void watchdog?.stop().catch(() => {}); watchdog = undefined; },
+    stop() { if (timer) clearTimeout(timer); timer = undefined; heapSignals.stop(); completed = []; spans.observeSite(); void watchdog?.stop().catch(() => {}); watchdog = undefined; },
   };
 }
 export const viewerLoopMonitor = shared.__delegatusLoopMonitor ??= createViewerLoopMonitor();

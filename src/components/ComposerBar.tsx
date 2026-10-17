@@ -471,6 +471,8 @@ export function ComposerBar({
         <button
           type={slotActs || (dictationRecording && !sendBlocked) ? "button" : "submit"}
           data-mobile2-send={isMobile ? slotKind : undefined}
+          data-composer-send={dictationRecording ? "recording" : slotKind}
+          data-composer-send-tone={mode === "context" ? "info" : undefined}
           onClick={
             slotActs
               ? () => sendSlot?.onAct?.()
@@ -507,6 +509,7 @@ export function ComposerBar({
         >
           {isMobile ? (
             <span
+              data-composer-send-visual={dictationRecording ? "recording" : slotKind === "stop" || slotKind === "respawn" ? slotKind : slotSubmits && !effectiveCanSend && !hasSendMenu ? "idle" : "ready"}
               style={slotSubmits && !dictationRecording && effectiveCanSend ? sendIdleStyle : undefined}
               className={`inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-control border text-ui font-semibold transition-[scale] duration-[120ms] ease-out motion-safe:group-enabled/send:group-active/send:scale-[0.96] ${slotWide ? "px-2.5" : ""} ${
                 dictationRecording ? "border-danger bg-danger text-white" : slotFill
@@ -529,7 +532,7 @@ export function ComposerBar({
           aria-expanded={sendMenuOpen}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={toggleSendMenu}
-          className={`inline-flex shrink-0 items-center justify-center rounded-control text-secondary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${isMobile ? "h-11 w-11" : "ml-1 p-2"}`}
+          className={`composer-ghost inline-flex shrink-0 items-center justify-center rounded-control text-secondary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${isMobile ? "h-11 w-11" : "ml-1 p-2"}`}
         >
           <ChevronDown className="h-4 w-4" aria-hidden />
         </button>
@@ -554,7 +557,7 @@ export function ComposerBar({
       <ImagePickerButton
         acceptFiles={attachments.acceptsFiles}
         ariaLabel={imageAriaLabel}
-        className={`inline-flex shrink-0 items-center justify-center rounded-control text-muted hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${iconBtn}`}
+        className={`composer-ghost inline-flex shrink-0 items-center justify-center rounded-control text-muted hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${iconBtn}`}
         onFiles={onAttachFiles ?? attachments.addFiles}
         /* An unavailable image capability no longer closes the picker
            outright where files are deliverable (#1224) — a document

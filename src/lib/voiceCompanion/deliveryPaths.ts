@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
 import type { TeamActor } from "@/lib/team/contract";
-import { orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { currentSeat, seatRecipientVerdict, SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { readBridgeReportLog } from "@/lib/bridge/store";
 import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
@@ -11,7 +11,7 @@ import type { CompanionDeliveryPaths } from "./admission";
 
 export const companionDeliveryPaths: CompanionDeliveryPaths = {
   recipient(project) {
-    const seat = orchestratorSeatFor(project).active;
+    const seat = currentSeat(project);
     if (!seat?.conversationId) return null;
     const identity = readOnlyConversationLookupFromSnapshot(agentRegistry().readOnlySnapshot()).conversation(seat.conversationId as ViewerConversationId);
     const engine = identity?.engine ?? seat.engine;
@@ -21,10 +21,11 @@ export const companionDeliveryPaths: CompanionDeliveryPaths = {
   send: binding => sendCompanionMessage(binding),
   reports: project => readBridgeReportLog().reports.filter(report => report.project
     && canonicalProject(report.project) === canonicalProject(project)),
+  revokedAt(conversationId) { const verdict = seatRecipientVerdict([conversationId]); return verdict.kind === "revoked" ? verdict.revokedAt ?? null : null; },
   async receipt(delivery) {
     const receipt = delivery.operationId ? await resolveSendReceipt(delivery.operationId) : null;
     if (!receipt || receipt.conversationId !== delivery.recipient.conversationId || receipt.clientMessageId !== delivery.clientMessageId) return "pending";
-    return receipt.state === "in-flight" ? "pending" : receipt.state;
+    return receipt.reason === SEND_SEAT_REVOKED_REASON ? "seat-revoked" : receipt.state === "in-flight" ? "pending" : receipt.state;
   },
 };
 

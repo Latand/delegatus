@@ -801,7 +801,35 @@ function ClaudeProviderEditor({ state, account, phone = false }: { state: Engine
   }));
   const provider = { baseUrl, model: model || "model-for-list", smallFastModel, ...(token ? { token } : {}),
     ...(!account || headerLines.trim() || clearHeaders ? { headers } : {}) };
+  /* An existing account's save closes the editor and draws the new label,
+     URL and model on its row at once, the token field emptied; a refusal
+     takes the row back and reopens the editor with what was typed, token
+     included (audit B32). A new account and the model list still wait. */
+  const saveExisting = async (existing: AccountOption) => {
+    if (busy) return;
+    const typed = { token, headerLines, clearHeaders };
+    const undo = state.drawAccount?.(existing.id, { label: label.trim(), provider: { ...existing.provider, baseUrl, model, smallFastModel: smallFastModel || null } }) ?? (() => {});
+    setBusy(true); setError(""); setToken(""); setOpen(false);
+    const refused = (message: string) => {
+      undo();
+      setToken(typed.token); setHeaderLines(typed.headerLines); setClearHeaders(typed.clearHeaders);
+      setError(message); setOpen(true);
+    };
+    try {
+      const response = await fetch("/api/accounts/claude", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: existing.id, label, provider: { ...provider, model } }),
+      });
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) { refused(body.error ?? t("accounts.provider.error")); return; }
+      setHeaderLines(""); setClearHeaders(false);
+      await state.refresh();
+    } catch { refused(t("accounts.provider.error")); }
+    finally { setBusy(false); }
+  };
   const request = async (action: "provider-models" | "save") => {
+    if (action === "save" && account) return saveExisting(account);
     setBusy(true); setError("");
     try {
       const response = await fetch("/api/accounts/claude", {
