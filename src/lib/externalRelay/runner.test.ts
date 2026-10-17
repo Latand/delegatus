@@ -3212,8 +3212,20 @@ test("v2 invalid_format downgrades once while legacy completion retries stay unc
     expect(bodies[1]).toMatchObject({ answer: { format: "plain", text: "# Short" } });
   } finally { await server.close(); }
 });
+test("invalid_format cannot downgrade an over-cap rich answer to plain",async()=>{
+  const bodies:{answer?:Record<string,unknown>;outcome?:string}[]=[];
+  const server=await startTestRelay((_req,body)=>{bodies.push(body as typeof bodies[number]);return bodies.length===1?{status:422,body:{error:{code:"invalid_format"}}}:{body:{}};});
+  try {
+    const result=await completeRelayRequest(relay(`${server.origin}/v1`),"rq_oversized_plain_fallback",{
+      lease_id:sampleRequest.lease_id,outcome:"answered",duration_ms:1,
+      answer:{action:"reply",text:"# Report\n\n"+"x".repeat(5000),reply_to:null,format:"rich_markdown",buttons:[]},
+    },()=>Date.now()+5000);
+    expect(result.body).toMatchObject({outcome:"failed",reason:"invalid_answer"});
+    expect(bodies[1]).toMatchObject({outcome:"failed",reason:"invalid_answer"});
+  }finally{await server.close();}
+});
 
-test("attachment readiness fallback preserves rich text and URL buttons", async () => {
+test("attachment readiness fallback preserves long rich text and URL buttons", async () => {
   const bodies: { answer?: Record<string, unknown> }[] = [];
   const server = await startTestRelay((_req, body) => {
     bodies.push(body as typeof bodies[number]);
@@ -3223,13 +3235,39 @@ test("attachment readiness fallback preserves rich text and URL buttons", async 
   try {
     const result = await completeRelayRequest(relay(`${server.origin}/v1`), "rq_attachment_downgrade", {
       lease_id: sampleRequest.lease_id, outcome: "answered", duration_ms: 1,
-      answer: { action: "reply", text: "# Short", reply_to: null, format: "rich_markdown", buttons, attachments: [{ attachment_id: "a0-fixture", kind: "document" }] },
+      answer: { action: "reply", text: "# Report\n\n" + "x".repeat(5000), reply_to: null, format: "rich_markdown", buttons, attachments: [{ attachment_id: "a0-fixture", kind: "document" }] },
     }, () => Date.now() + 5000);
     expect(result.delivery).toBe("accepted");
     expect(bodies).toHaveLength(2);
-    expect(bodies[1]?.answer).toMatchObject({ format: "rich_markdown", buttons });
+    expect(bodies[1]?.answer).toMatchObject({ format: "rich_markdown", buttons, text: bodies[0]?.answer?.text });
     expect(bodies[1]?.answer?.attachments ?? []).toEqual([]);
   } finally { await server.close(); }
+});
+
+test("already_completed conflict refuses a changed completion body", async () => {
+  const bodies: unknown[] = [];
+  const server = await startTestRelay((_req, body) => {
+    bodies.push(body);
+    return { status: 409, body: { error: { code: "already_completed" } } };
+  });
+  try {
+    const result = await completeRelayRequest(relay(`${server.origin}/v1`), "rq_changed_completion", {
+      lease_id: sampleRequest.lease_id, outcome: "answered", duration_ms: 1,
+      answer: { action: "reply", text: "changed body", reply_to: null, format: "rich_markdown", buttons: [] },
+    }, () => Date.now() + 5000);
+    expect(result).toMatchObject({ delivery: "refused", body: { outcome: "failed", reason: "invalid_answer" } });
+    expect(bodies).toHaveLength(1);
+  } finally { await server.close(); }
+});
+test("the identical rich completion is accepted after a lost acknowledgement",async()=>{
+  const bodies:unknown[]=[];
+  const server=await startTestRelay((_req,body)=>{bodies.push(body);return bodies.length===1?{drop:true}:{body:{}};});
+  const completion={lease_id:sampleRequest.lease_id,outcome:"answered" as const,duration_ms:1,
+    answer:{action:"reply" as const,text:"# Same",reply_to:null,format:"rich_markdown" as const,buttons:[]}};
+  try {
+    const result=await completeRelayRequest(relay(`${server.origin}/v1`),"rq_identical_rich",completion,()=>Date.now()+5000);
+    expect(result.delivery).toBe("accepted");expect(bodies).toHaveLength(2);expect(bodies[1]).toEqual(bodies[0]);
+  } finally {await server.close();}
 });
 
 
@@ -3246,7 +3284,7 @@ test.each(["ok","lease_lost","refused","media_only_refused","outside","ignore"])
       expect(req.headers["delegatus-relay-lease"]).toBe(request.lease_id);
       if(mode==="lease_lost") return {status:409,body:{error:{code:"lease_lost"}}};
       if(mode.includes("refused")) return {status:415,body:{error:{code:"unsupported_media_type"}}};
-      return {status:201,body:{attachment_id:req.url!.split("/").at(-1),mime_type:"image/png",filename:"exec-1.png",sha256:req.headers["delegatus-relay-sha256"],byte_size:bytes.length,expires_at:"2027-01-01T00:00:00Z"}};
+      return {status:201,body:{attachment_id:req.url!.split("/").at(-1),mime_type:"image/png",filename:"exec-1.png",sha256:req.headers["delegatus-relay-sha256"],byte_size:bytes.length,expires_at:new Date(Date.now()+60_000).toISOString()}};
     }
     if(req.url?.endsWith("/complete")) sent.push(body);
     return {body:{status:"ok"}};
@@ -3292,7 +3330,7 @@ test.each(["claude","codex"])("owner %s returns rich text, buttons and a documen
   request.input.requester={key:"u1",is_owner:true,is_admin:true,is_anonymous_admin:false,can_delete_messages:true,can_restrict_members:true};
   const events:string[]=[];
   const server=await startTestRelay((req)=>{
-    if(req.method==="PUT") {events.push("upload");return {status:201,body:{attachment_id:req.url!.split("/").at(-1),mime_type:"text/markdown",filename:"report.md",byte_size:8,sha256:req.headers["delegatus-relay-sha256"],expires_at:"2027-01-01T00:00:00Z"}};}
+    if(req.method==="PUT") {events.push("upload");return {status:201,body:{attachment_id:req.url!.split("/").at(-1),mime_type:"text/markdown",filename:"report.md",byte_size:8,sha256:req.headers["delegatus-relay-sha256"],expires_at:new Date(Date.now()+60_000).toISOString()}};}
     if(req.url?.endsWith("/complete"))events.push("complete");
     return {body:{status:"ok"}};
   });

@@ -35,11 +35,15 @@ test("relay_answer binds a live owner conversation, replaces parts and closes af
       env:{...process.env,HOME:root,XDG_CONFIG_HOME:path.join(root,"config"),TMPDIR:childTemp,LLV_STATE_DIR:path.join(root,"state"),LLV_VIEWER_CONTROL_URL:"http://127.0.0.1:1"},stdout:"pipe",stderr:"pipe"});
     const fresh=await new Response(restarted.stdout).text();
     expect(await restarted.exited).toBe(0);expect(fresh.trim()).toBe("null");
-    const before=new Set(fs.readdirSync(path.join(root,"attachments")));
+    const stagedFiles=()=>fs.readdirSync(root).filter(name=>name.startsWith("relay-job-")).flatMap(job=>{
+      const directory=path.join(root,job,"attachments");
+      return fs.existsSync(directory)?fs.readdirSync(directory).map(file=>`${job}/${file}`):[];
+    });
+    const before=new Set(stagedFiles());
     const late=relayAnswerOp("conversation_owner_parts",{attachments:[{path:file,kind:"document"}]});
     entry.close();
     expect(await late).toBeNull();
-    expect(new Set(fs.readdirSync(path.join(root,"attachments")))).toEqual(before);
+    expect(new Set(stagedFiles())).toEqual(before);
     expect(await relayAnswerOp("conversation_owner_parts",{format:"rich_markdown"})).toBeNull();
-  } finally {const files=entry.parts().attachments;entry.dispose();for(const file of files)expect(fs.existsSync(file.file)).toBe(false);if(savedHome===undefined)delete process.env.HOME;else process.env.HOME=savedHome;}
+  } finally {const files=entry.parts().attachments;await entry.dispose();for(const file of files)expect(fs.existsSync(file.file)).toBe(false);if(savedHome===undefined)delete process.env.HOME;else process.env.HOME=savedHome;}
 });

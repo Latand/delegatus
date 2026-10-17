@@ -170,17 +170,15 @@ export async function completeRelayRequest(
       if (isUnknownFeatureRefusal(error)) await onUnknownFeature?.();
       if (error instanceof ExternalRelayError) {
         const v2 = body.outcome === "answered" && body.answer.format !== undefined;
-        if (v2 && error.status === 409 && error.code === "already_completed") return { body, delivery: "accepted" };
+        if (v2 && error.status === 409 && error.code === "already_completed") return { body: failed(body.lease_id, "invalid_answer"), delivery: "refused" };
         if (v2 && !downgraded && (error.status === 422 && ["invalid_format", "attachment_not_ready"].includes(error.code) || error.status === 415 || error.status === 400 && error.code === "malformed")) {
           downgraded = true;
-          if (body.outcome === "answered" && body.answer.text.trim() && [...body.answer.text].length <= plainMax) {
-            if (error.status === 422 && error.code === "attachment_not_ready") {
-              const answer = { ...body.answer }; delete answer.attachments;
-              body = { ...body, answer };
-            } else {
-              const { action, text, reply_to } = body.answer;
-              body = { ...body, answer: { action, text, reply_to, format: "plain", buttons: [] } };
-            }
+          if (body.outcome === "answered" && body.answer.text.trim() && error.status === 422 && error.code === "attachment_not_ready") {
+            const answer = { ...body.answer }; delete answer.attachments;
+            body = { ...body, answer };
+          } else if (body.outcome === "answered" && body.answer.text.trim() && [...body.answer.text].length <= plainMax) {
+            const { action, text, reply_to } = body.answer;
+            body = { ...body, answer: { action, text, reply_to, format: "plain", buttons: [] } };
           } else body = failed(body.lease_id, "invalid_answer");
           continue;
         }
@@ -557,7 +555,7 @@ export async function runClaimedRequest(
       selection.kind === "exhausted" && selection.resetsAt ? Math.max(0, selection.resetsAt - Math.floor(Date.now() / 1000)) : null) : null;
     const earlyCapacityDecline = capacityDecline();
     if (earlyCapacityDecline) return await finish(earlyCapacityDecline);
-    runDir = fs.mkdtempSync(
+    runDir = await fs.promises.mkdtemp(
       path.join(externalRelayTempRoot(), "llv-external-relay-"),
     );
     const ownerIdentity = procBackend.processIdentity(process.pid);
@@ -679,7 +677,7 @@ export async function runClaimedRequest(
       // Service tools never read the Delegatus board; their names stay local.
       steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
     } : undefined);
-    if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, [relay.credential], () => !leaseUnavailable && !callAbort.signal.aborted && allowOwnerReply!());
+    if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, [relay.credential], () => !leaseUnavailable && !callAbort.signal.aborted && allowOwnerReply!(),callAbort.signal);
     let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
     let completion: ExternalRelayDecision | null = null;
     for (rounds = 1; rounds <= (loop ? 8 : 1); rounds++) {
@@ -688,7 +686,7 @@ export async function runClaimedRequest(
       runFinished = false;
       let previousImages = new Set<string>();
       if (caps?.generate && conversation?.sessionId) {
-        try { previousImages = new Set(withViewerOperation("relay.attachments", () => fs.readdirSync(path.join(conversationCodexHome(conversation!), "generated_images", conversation!.sessionId!)))); } catch { /* New image directory. */ }
+        try { previousImages = new Set(await withViewerOperation("relay.attachments", () => fs.promises.readdir(path.join(conversationCodexHome(conversation!), "generated_images", conversation!.sessionId!)))); } catch { /* New image directory. */ }
       }
       try {
         if (rounds === 1 && activeDrain()) {
@@ -786,13 +784,13 @@ export async function runClaimedRequest(
       if (caps?.generate && !owner && result?.imageHome && result.threadId) {
         const directory = path.join(result.imageHome, "generated_images", result.threadId);
         let names = new Set<string>();
-        try { names = new Set(withViewerOperation("relay.attachments", () => fs.readdirSync(directory)).filter(name => !previousImages.has(name))); } catch { /* No generated files. */ }
+        try { names = new Set((await withViewerOperation("relay.attachments", () => fs.promises.readdir(directory))).filter(name => !previousImages.has(name))); } catch { /* No generated files. */ }
         const owned = generatedSources.get(directory) ?? new Set<string>();
         for (const name of names) { generatedFiles.push(path.join(directory, name)); owned.add(name); }
         generatedSources.set(directory, owned);
-        if (decision && !("kind" in decision) && decision.action === "reply") stagedAttachments = await stageGeneratedAttachments(answerFiles(decision), directory, names, runDir, caps, answerDrops, generatedSources);
+        if (decision && !("kind" in decision) && decision.action === "reply") stagedAttachments = await stageGeneratedAttachments(answerFiles(decision), directory, names, runDir, caps, answerDrops, generatedSources,callAbort.signal);
       } else if (caps?.generate && !owner && decision && !("kind" in decision) && answerFiles(decision).length) {
-        stagedAttachments = await stageGeneratedAttachments(answerFiles(decision), null, new Set(), runDir, caps, answerDrops, generatedSources);
+        stagedAttachments = await stageGeneratedAttachments(answerFiles(decision), null, new Set(), runDir, caps, answerDrops, generatedSources,callAbort.signal);
       }
       if (leaseUnavailable) return null;
       if (steps && decision && !("kind" in decision)) {
@@ -849,8 +847,8 @@ export async function runClaimedRequest(
     if (cadenceTimer) clearTimeout(cadenceTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     callAbort.abort();
-    ownerParts?.dispose();
-    for (const file of generatedFiles) { try { fs.rmSync(file, {force:true}); } catch { console.error("Relay generated image cleanup failed"); } }
+    await ownerParts?.dispose();
+    for (const file of generatedFiles) { try { await fs.promises.rm(file, {force:true}); } catch { console.error("Relay generated image cleanup failed"); } }
     if (conversation) {
       const compacted = conversationEvidence.compacted;
       await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
@@ -871,7 +869,7 @@ export async function runClaimedRequest(
     }
     try {
       const held = readRunLedger().runs.find(r => r.requestId === requestId);
-      if (runDir && !(held?.ownerTurn?.cancel && !held.ownerTurn.confirmed)) fs.rmSync(runDir, { recursive: true, force: true });
+      if (runDir && !(held?.ownerTurn?.cancel && !held.ownerTurn.confirmed)) await fs.promises.rm(runDir, { recursive: true, force: true });
     } catch (error) {
       console.error("External relay run directory cleanup failed", error instanceof Error ? error.name : "unknown");
     }

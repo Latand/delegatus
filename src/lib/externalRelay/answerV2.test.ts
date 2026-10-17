@@ -31,14 +31,21 @@ test("rich validation checks syntax, code exceptions, blocks, depth and columns"
     expect(richTextRefusal(text, caps)).not.toBeNull();
   for (const text of ["\\<b>literal", "`<b>x</b>`", "```html\n<b>x</b>\n```", "[a](https://example.com)"])
     expect(richTextRefusal(text, caps)).toBeNull();
+  for (const text of ["[a [b]](tg://user?id=1)", "[a [b]](https://127.0.0.1)"])
+    expect(richTextRefusal(text, caps)).toBe("link");
+  expect(richTextRefusal("[a [b]](https://example.com)", caps)).toBeNull();
+  expect(richTextRefusal("[a \\[b\\]](https://example.com)", caps)).toBeNull();
   expect(richTextRefusal(Array(500).fill("# x").join("\n"), caps)).toBeNull();
   expect(richTextRefusal(Array(501).fill("# x").join("\n"), caps)).toBe("blocks");
+  expect(richTextRefusal(Array(500).fill("# a|b").join("\n"), caps)).toBeNull();
+  expect(richTextRefusal(Array(501).fill("# a|b").join("\n"), caps)).toBe("blocks");
+  expect(richTextRefusal("| a | b |\n| --- | --- |\n| x | y |", caps)).toBeNull();
   expect(richTextRefusal(">".repeat(16) + " x", caps)).toBeNull();
   expect(richTextRefusal(">".repeat(17) + " x", caps)).toBe("depth");
   expect(richTextRefusal(">".repeat(17) + " ```", caps)).toBe("depth");
   expect(richTextRefusal("\\`<b>raw</b>`", caps)).toBe("raw_html");
-  expect(richTextRefusal("|" + Array(20).fill("x").join("|") + "|", caps)).toBeNull();
-  expect(richTextRefusal("|" + Array(21).fill("x").join("|") + "|", caps)).toBe("table_columns");
+  expect(richTextRefusal("|" + Array(20).fill("x").join("|") + "|\n|" + Array(20).fill("---").join("|") + "|", caps)).toBeNull();
+  expect(richTextRefusal("|" + Array(21).fill("x").join("|") + "|\n|" + Array(21).fill("---").join("|") + "|", caps)).toBe("table_columns");
 });
 test("buttons and captions enforce every wire bound", () => {
   const good = { text: "x".repeat(64), url: "https://example.com/" };

@@ -100,20 +100,27 @@ function invalidLinks(text:string) {
   let offset=0;
   while(offset<text.length) {
     const start=text.indexOf("[",offset);if(start<0)return false;
-    const end=text.indexOf("]",start+1);if(end<0)return false;
-    offset=end+1;
-    if(text[offset]!=="(")continue;
-    const targetStart=++offset;
-    let depth=1;
-    while(offset<text.length && depth>0) {
-      if(text[offset]==="(")depth++;
-      if(text[offset]===")")depth--;
-      if(depth>0)offset++;
+    let end=start+1, depth=1;
+    for(;end<text.length && depth;end++) {
+      if(text[end]==="\\") { end++; continue; }
+      if(text[end]==="[")depth++;
+      else if(text[end]==="]")depth--;
+    }
+    if(depth) return false;
+    offset=start+1;
+    if(text[end]!=="(")continue;
+    let cursor=end+1;
+    const targetStart=cursor;
+    depth=1;
+    while(cursor<text.length && depth>0) {
+      if(text[cursor]==="\\") { cursor+=2; continue; }
+      if(text[cursor]==="(")depth++;
+      if(text[cursor]===")")depth--;
+      if(depth>0)cursor++;
     }
     if(depth!==0)return true;
-    const target=text.slice(targetStart,offset).split(/\s/)[0];
+    const target=text.slice(targetStart,cursor).split(/\s/)[0];
     if(!safeRelayUrl(target))return true;
-    offset++;
   }
   return false;
 }
@@ -122,7 +129,11 @@ function invalidLinks(text:string) {
 export function richTextRefusal(text: string, caps: AnswerCapabilities): string | null {
   if ([...text].length > caps.richMax || Buffer.byteLength(text) > 128000) return "length";
   let blocks = 0, paragraph = false, table = false, fence: string | null = null;
-  for (const line of text.replace(/\r\n?/g, "\n").split("\n")) {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const tableHeader = (line: string, next: string | undefined) => !!next
+    && line.includes("|") && /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(next);
+  for (let index=0;index<lines.length;index++) {
+    const line=lines[index]!;
     const quotes = (/^(?:\s*>)+/.exec(line)?.[0].match(/>/g) ?? []).length;
     if (quotes > caps.depth) return "depth";
     const content = line.replace(/^(?:\s*>)+\s?/, "");
@@ -139,7 +150,8 @@ export function richTextRefusal(text: string, caps: AnswerCapabilities): string 
     const list = /^\s*(?:[-+*]|\d+[.)])\s/.test(content);
     if (quotes + (list ? Math.floor(indent / 2) + 1 : 0) > caps.depth) return "depth";
     const pipes = visible.split("|");
-    const isTable = pipes.length > 1;
+    const isTable = visible.includes("|") && (table || tableHeader(content, lines[index+1])
+      || index>0 && tableHeader(lines[index-1]!,content));
     if (isTable) {
       const columns = pipes.length - (visible.trimStart().startsWith("|") ? 1 : 0) - (visible.trimEnd().endsWith("|") ? 1 : 0);
       if (columns > caps.columns) return "table_columns";

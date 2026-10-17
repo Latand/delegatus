@@ -7,7 +7,7 @@ import { stageOwnerAttachments, removeStaged, type StagedAttachment } from "./at
 import type { ExternalRelayRequest, RelayUrlButton } from "./protocol";
 import { scrubOwnerOutput } from "./ownerOutput";
 export type OwnerAnswerParts = { format:"plain"|"rich_markdown"; buttons:RelayUrlButton[][]; attachments:StagedAttachment[] };
-type Entry = {relayId:string;request:ExternalRelayRequest;runDir:string;credentials:readonly string[];authorize:()=>boolean;open:boolean;sequence:number;parts:OwnerAnswerParts;drops:AnswerDrop[]};
+type Entry = {relayId:string;request:ExternalRelayRequest;runDir:string;credentials:readonly string[];authorize:()=>boolean;signal?:AbortSignal;open:boolean;sequence:number;parts:OwnerAnswerParts;drops:AnswerDrop[]};
 const shared=globalThis as typeof globalThis & {__llvRelayOwnerAnswers?:Map<string,Entry>};
 const entries=shared.__llvRelayOwnerAnswers??=new Map<string,Entry>();
 export function ownerAnswerDrops(requestId:string) { return entries.get(requestId)?.drops ?? []; }
@@ -16,13 +16,13 @@ export function sealOwnerAnswer(requestId:string) {
   if (entry) entry.open=false;
   return entry?.parts;
 }
-export function openOwnerAnswer(relayId:string,request:ExternalRelayRequest,runDir:string,credentials:readonly string[],authorize:()=>boolean) {
+export function openOwnerAnswer(relayId:string,request:ExternalRelayRequest,runDir:string,credentials:readonly string[],authorize:()=>boolean,signal?:AbortSignal) {
   if (!answerCapabilities(request, "").rich || entries.has(request.request_id)) throw new ExternalRelayError("relay_answer_unavailable");
-  const entry:Entry={relayId,request,runDir,credentials,authorize,open:true,sequence:0,parts:{format:"plain",buttons:[],attachments:[]},drops:[]};
+  const entry:Entry={relayId,request,runDir,credentials,authorize,...(signal?{signal}:{}),open:true,sequence:0,parts:{format:"plain",buttons:[],attachments:[]},drops:[]};
   entries.set(request.request_id,entry);
   return {parts:()=>entry.parts, drops:entry.drops,
     close:()=>{entry.open=false;},
-    dispose:()=>{entry.open=false; if(entries.get(request.request_id)===entry) entries.delete(request.request_id); removeStaged(entry.parts.attachments);},
+    dispose:async()=>{entry.open=false; if(entries.get(request.request_id)===entry) entries.delete(request.request_id); await removeStaged(entry.parts.attachments);},
   };
 }
 export async function relayAnswerOp(conversationId:string,args:unknown) {
@@ -46,10 +46,10 @@ export async function relayAnswerOp(conversationId:string,args:unknown) {
     button.text=scrub(button.text);
   }
   const refs=(value.attachments??[]).map(ref=>({...ref,caption:scrub(ref.caption??"")}));
-  const files=await stageOwnerAttachments(refs,entry.runDir,caps,drops);
-  if(!available() || sequence!==entry.sequence) {removeStaged(files);return null;}
+  const files=await stageOwnerAttachments(refs,entry.runDir,caps,drops,undefined,undefined,entry.signal);
+  if(!available() || sequence!==entry.sequence) {await removeStaged(files);return null;}
   const old=entry.parts.attachments;
   entry.parts={format:value.format??"plain",buttons,attachments:files}; entry.drops.push(...drops);
-  removeStaged(old);
+  await removeStaged(old);
   return {format:entry.parts.format,buttons,attachments:files.map((file,index)=>({index,kind:file.kind,filename:file.filename,bytes:file.size})),limits:{plain:caps.plainMax,rich_markdown:caps.richMax,max_items:caps.maxItems}};
 }
