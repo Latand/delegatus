@@ -114,6 +114,45 @@ test("memory source table reaches fresh and adopted Claude, including settings-f
   }
 });
 
+test("Claude clean inline settings preserve legacy bytes outside the clean-memory override", async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-clean-inline-"));
+  const state = path.join(root, "state");
+  process.env.LLV_STATE_DIR = state;
+  const env = { ...process.env, HOME: root };
+  const legacyBody = JSON.stringify({ env: agentPublicationIdentityEnv(env) });
+  const cleanBody = JSON.stringify({
+    autoMemoryEnabled: false,
+    env: { ...agentPublicationIdentityEnv(env), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
+  });
+  try {
+    for (const source of ["unchosen", "importing"] as const) {
+      chooseSource(source);
+      for (const cleanMemory of [false, true]) for (const resumed of [false, true]) {
+        const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+        const options = {
+          cwd: root, sessionId: "00000000-0000-0000-0000-000000000000", env,
+          cleanMemory, appendSystemPrompt: "Synthetic Delegatus rules.",
+          eventStore: new MemoryEventStore(), readTranscript: () => [],
+          readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+          spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+        };
+        const host = resumed
+          ? await ClaudeStreamBrokerHost.adopt(options.sessionId, options)
+          : await ClaudeStreamBrokerHost.start(options);
+        try {
+          const settingsIndex = captured.args!.indexOf("--settings");
+          expect(settingsIndex).toBeGreaterThanOrEqual(0);
+          expect(captured.args![settingsIndex + 1]).toBe(cleanMemory ? cleanBody : legacyBody);
+        } finally { await host.release(); }
+      }
+    }
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function agentSandboxEnv(home?: string): Record<string, string> {
   const key = home ? path.basename(home) : "default";
   const config = path.join(os.tmpdir(), "llv-spawn-sandbox", key, "config");
