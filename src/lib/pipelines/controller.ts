@@ -88,6 +88,7 @@ type PhaseOutcome<T> =
 const DEFAULT_PHASE_DEADLINE_MS = 15_000;
 const DEFAULT_MAX_PASSES = 8;
 const ARCHIVE_SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
+const OVERFLOW_WAKE_DELAY_MS = 25;
 export const FLOW_PIPELINE_WATCHDOG_MS = 30_000;
 const HEARTBEAT_FILE = "flow-pipeline-controller-heartbeat.json";
 
@@ -139,6 +140,7 @@ export class FlowPipelineController {
   private running: Promise<void> | null = null;
   private trailingCycleRequested = false;
   private trailingTrigger = "signal";
+  private scheduledFollowup: { timer: TimeoutHandle; trigger: string } | null = null;
   private cycle = 0;
   private lastArchiveSweepAt = 0;
   private readonly activePhases = new Map<Exclude<FlowPipelineControllerPhase, "idle">, ActivePhase>();
@@ -178,12 +180,18 @@ export class FlowPipelineController {
       this.trailingTrigger = trigger;
       return this.running;
     }
+    if (this.scheduledFollowup) {
+      this.ports.clearTimeout(this.scheduledFollowup.timer);
+      this.scheduledFollowup = null;
+    }
     this.requestDeadline = this.ports.monotonicNow() + this.requestDeadlineMs;
     this.running = this.runRequestedCycles(trigger).finally(() => {
       // A failed generation settles immediately. Later work gets a fresh
       // request and cannot hold this generation's observers or error alive.
+      const followupTrigger = this.trailingCycleRequested ? this.trailingTrigger : null;
       this.running = null;
       this.trailingCycleRequested = false;
+      if (followupTrigger !== null) this.scheduleFollowup(followupTrigger);
     });
     return this.running;
   }
@@ -199,7 +207,7 @@ export class FlowPipelineController {
   private async runRequestedCycles(initialTrigger: string): Promise<void> {
     let trigger = initialTrigger;
     // One initial cycle and one coalesced trailing cycle share one deadline.
-    // The watchdog covers further wakes.
+    // Further wakes are retained by a paced dispatch with a fresh deadline.
     for (let cycles = 0; cycles < 2 && this.ports.monotonicNow() < this.requestDeadline; cycles++) {
       this.trailingCycleRequested = false;
       await this.runCycle(trigger);
@@ -207,6 +215,22 @@ export class FlowPipelineController {
       if (!this.trailingCycleRequested) break;
       trigger = this.trailingTrigger;
     }
+  }
+
+  private scheduleFollowup(trigger: string): void {
+    if (this.scheduledFollowup) {
+      this.scheduledFollowup.trigger = trigger;
+      return;
+    }
+    const followup = { timer: undefined as unknown as TimeoutHandle, trigger };
+    followup.timer = this.ports.scheduleTimeout(() => {
+      if (this.scheduledFollowup !== followup) return;
+      this.scheduledFollowup = null;
+      void this.tick(followup.trigger).catch((error) => {
+        this.ports.log("[flow pipeline controller] retained follow-up tick failed", error);
+      });
+    }, OVERFLOW_WAKE_DELAY_MS);
+    this.scheduledFollowup = followup;
   }
 
   private async runCycle(trigger: string): Promise<void> {

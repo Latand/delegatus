@@ -400,6 +400,73 @@ test("continuous wakes cannot extend a controller request beyond its cycle budge
   expect(calls).toBeLessThanOrEqual(2);
 });
 
+test("a tick after the second cycle snapshot gets a paced retained dispatch", async () => {
+  type ManualTimer = { active: boolean; callback: () => void; delayMs: number };
+  const timers: ManualTimer[] = [];
+  const pipelineRevisions: number[] = [];
+  let revision = 0;
+  let now = 10;
+  let releaseFirstFlow!: () => void;
+  let releaseSecondFlow!: () => void;
+  let firstFlowStarted!: () => void;
+  let secondFlowStarted!: () => void;
+  let revisionOneSeen!: () => void;
+  const firstFlow = new Promise<void>((resolve) => { releaseFirstFlow = resolve; });
+  const secondFlow = new Promise<void>((resolve) => { releaseSecondFlow = resolve; });
+  const firstStarted = new Promise<void>((resolve) => { firstFlowStarted = resolve; });
+  const flowStarted = new Promise<void>((resolve) => { secondFlowStarted = resolve; });
+  const processedRevisionOne = new Promise<void>((resolve) => { revisionOneSeen = resolve; });
+  let flowCalls = 0;
+  const controller = new FlowPipelineController({
+    monotonicNow: () => now,
+    tickPipelines: async () => {
+      pipelineRevisions.push(revision);
+      if (revision === 1) revisionOneSeen();
+      return { changed: pipelineRevisions.length === 1 };
+    },
+    tickFlows: async () => {
+      flowCalls += 1;
+      if (flowCalls === 1) {
+        firstFlowStarted();
+        await firstFlow;
+      }
+      if (flowCalls === 2) {
+        secondFlowStarted();
+        await secondFlow;
+      }
+      return { changed: false };
+    },
+    scheduleTimeout: (callback, delayMs) => {
+      const timer = { active: true, callback, delayMs };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimeout: (timer) => { (timer as ManualTimer).active = false; },
+  }, { maxPasses: 1, requestDeadlineMs: 100 });
+
+  const firstRequest = controller.tick("initial");
+  await firstStarted;
+  const cycleTwoRequest = controller.tick("cycle-two");
+  releaseFirstFlow();
+  await flowStarted;
+  revision = 1;
+  const lateRequest = controller.tick("late-revision");
+  releaseSecondFlow();
+  await Promise.all([firstRequest, cycleTwoRequest, lateRequest]);
+
+  expect(pipelineRevisions).toEqual([0, 0]);
+  const retainedWake = timers.find((timer) => timer.active && timer.delayMs === 25);
+  expect(retainedWake).toBeDefined();
+  now = 500;
+  retainedWake!.active = false;
+  retainedWake!.callback();
+  await processedRevisionOne;
+  await controller.poll();
+
+  expect(pipelineRevisions).toEqual([0, 0, 1]);
+  expect(timers.filter((timer) => timer.active && timer.delayMs === 25)).toHaveLength(0);
+});
+
 test("watchdog keeps only one observer while its poll remains in flight", async () => {
   let reject!: (error: Error) => void;
   const pending = new Promise<void>((_, fail) => { reject = fail; });
