@@ -7,11 +7,11 @@ import { ownerRelayAuthorized } from "./ownerAuthority";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
 import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
-import { runOwnerAgent, OwnerContinuationRefused, ownerContinuationPrompt, ownerRunPrompt, type OwnerRunPorts } from "./ownerRun";
+import { runOwnerAgent, OwnerContinuationRefused, ownerContinuationPrompt, ownerInitialCursor, ownerRunPrompt, type OwnerRunPorts } from "./ownerRun";
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
 import { runCompactRequest } from "./compact";
-import { conversationAuthority, resolveChainConversation, resolveChainConversationAsync, reserveChainConversationAsync, releaseConversationAsync, prepareConversationAccount, conversationCodexHome, sweepConversationsAsync, readConversations, type RelayConversation } from "./conversations";
+import { conversationAuthority, lookupChainConversationAsync, resolveChainConversationAsync, reserveChainConversationAsync, releaseConversationAsync, prepareConversationAccount, conversationCodexHome, sweepConversationsAsync, type RelayConversation } from "./conversations";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import fs from "node:fs";
 import os from "node:os";
@@ -501,8 +501,17 @@ export async function runClaimedRequest(
     if (owner) allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
     const authority = conversationAuthority(request.input.requester, !!owner);
     const usesConversation = !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
+    let preResolvedConversation: RelayConversation | null = null;
+    let preResolutionPending = false;
+    if (usesConversation) {
+      try { preResolvedConversation = await resolveChainConversationAsync(relay, target, request, authority!, admissionCutoff()); preResolutionPending = true; }
+      catch (error) {
+        if (!(error instanceof RelayStoreBusy)) throw error;
+        preResolvedConversation = await lookupChainConversationAsync(relay, target, request, authority!);
+      }
+    }
     const selectAccount = () => prototype ? null : accountManager.resolveHeadlessSpawn(target.engine!,
-      conversation?.accountId ?? (usesConversation ? resolveChainConversation(readConversations(), relay, target, request, authority!)?.accountId : null) ?? null,
+      conversation?.accountId ?? preResolvedConversation?.accountId ?? null,
       [], target.project, target.model);
     let selection = selectAccount();
     const selectedAccount = () => {
@@ -550,7 +559,13 @@ export async function runClaimedRequest(
         let resolved: RelayConversation | null = null;
         let cause: RelayHoldCause | null = activeDrain() ? "drain" : null;
         if (usesConversation) {
-          try { resolved = await resolveChainConversationAsync(relay, target, request, authority!, Math.min(admissionCutoff(), deadline.declineAt)); }
+          try {
+            if (preResolutionPending) {
+              resolved = preResolvedConversation;
+              preResolvedConversation = null;
+              preResolutionPending = false;
+            } else resolved = await resolveChainConversationAsync(relay, target, request, authority!, Math.min(admissionCutoff(), deadline.declineAt));
+          }
           catch (error) {
             if (!(error instanceof RelayStoreBusy)) throw error;
             cause ??= "capacity"; admissionHeld = true;
@@ -674,11 +689,16 @@ export async function runClaimedRequest(
           credentials: [relay.credential],
           request, owner, target, deadline, accountId: selectedAccount().accountId,
           hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
-          onConversation: async (conversationId) => {
+          onConversation: async (conversationId, initialPrompt) => {
             await changeRunAsync(requestId, current => ({ ...current, conversationId }), Date.now() + 5000);
             if (conversation) {
               conversation.conversationId = conversationId;
-              await releaseConversationAsync(conversation.id, { conversationId, state: "running", runningRequestId: requestId }, Date.now() + 5000);
+              const cursor = initialPrompt ? ownerInitialCursor(request, owner!, target.hardCapMinutes) : null;
+              if (cursor) turn = { prompt: "", ...cursor };
+              const patch = { conversationId, state: "running" as const, runningRequestId: requestId,
+                ...(initialPrompt && cursor ? { pendingCursor: { operationId: initialPrompt.operationId, seen: cursor.seen, staticDigest: cursor.digest } } : {}) };
+              await releaseConversationAsync(conversation.id, patch, Date.now() + 5000);
+              if (cursor) Object.assign(conversation, patch);
             }
             recorder?.bindConversation(conversationId);
           },

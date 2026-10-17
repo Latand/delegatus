@@ -127,3 +127,33 @@ test("owner continuation carries an unseen explicit reply alongside local outbou
   expect(prompt).toContain("<local_outbound_context>"); expect(prompt).toContain("<owner_reply_context>");
   expect(ownerContinuationPrompt(request, owner, 1, { seen: ["unseen-parent"], staticDigest: first.digest }).prompt).not.toContain("<owner_reply_context>");
 });
+
+test("owner continuation never repeats seen reply context and prefers complete recovered rows", async () => {
+  const { ownerContinuationPrompt } = await import("./ownerRun");
+  const request = requestSchema.parse(contextRequest);
+  const root = { ...request.input.conversation[0]!, id: "seen-root", reply_to: null, text: "already delivered root" };
+  const parent = { ...root, id: "new-parent", reply_to: root.id, text: "new parent" };
+  const current = { ...root, id: "current-owner", reply_to: parent.id, text: "current request" };
+  request.input.conversation = [root, { ...parent, text: "truncated recovered text" }, current];
+  request.input.respond_to = current.id;
+  const owner = { messageId: current.id, text: current.text, requestText: null,
+    localContext: { resolution: "history" as const, questionIds: [], origins: {},
+      conversation: [{ ...parent, text: "full confirmed recovered text" }] } };
+  const turn = ownerContinuationPrompt(request, owner, 1, { seen: [root.id], staticDigest: null });
+  expect(turn.prompt).not.toContain("already delivered root");
+  expect(turn.prompt).not.toContain("truncated recovered text");
+  expect(turn.prompt.match(/full confirmed recovered text/g)).toHaveLength(1);
+  expect(turn.prompt).toContain('"id":"new-parent"');
+  expect(turn.prompt).toContain("full confirmed recovered text");
+  expect(turn.prompt).toContain("current request");
+  expect(turn.prompt).not.toContain("<owner_reply_context>");
+});
+
+test("owner initial cursor records the exact conversation sent with the first prompt", async () => {
+  const { ownerInitialCursor } = await import("./ownerRun");
+  const request = requestSchema.parse(contextRequest);
+  const owner = { messageId: request.input.respond_to!, text: "current owner request", requestText: null };
+  const cursor = ownerInitialCursor(request, owner, 1);
+  expect(cursor.seen).toEqual([...new Set([...request.input.conversation.map(message => message.id), owner.messageId])]);
+  expect(cursor.digest).toMatch(/^[0-9a-f]{64}$/);
+});

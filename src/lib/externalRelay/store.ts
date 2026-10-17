@@ -255,7 +255,7 @@ export function withFileLock<T>(file: string, action: () => T): T {
 export class RelayStoreBusy extends Error {
   constructor() { super("relay store is busy"); this.name = "RelayStoreBusy"; }
 }
-export async function withFileLockAsync<T>(file: string, action: () => T, until: number): Promise<T> {
+export async function withFileLockAsync<T>(file: string, action: () => T | Promise<T>, until: number): Promise<T> {
   const lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   let fd: number | null = null;
@@ -297,7 +297,7 @@ export async function withFileLockAsync<T>(file: string, action: () => T, until:
         identity: procBackend.processIdentity(process.pid),
       }),
     );
-    return action();
+    return await action();
   } finally {
     fs.closeSync(fd);
     fs.rmSync(lock, { force: true });

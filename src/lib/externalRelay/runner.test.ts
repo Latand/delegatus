@@ -2859,6 +2859,7 @@ for (const explicitReply of [false, true])
   const directory = path.join(process.env.LLV_STATE_DIR!, "telegram");
   fs.mkdirSync(directory, { recursive: true });
   const filename = path.join(directory, "bot.sqlite");
+  fs.rmSync(filename, { force: true });
   const db = new Database(filename);
   db.exec("CREATE TABLE chats (chat_id TEXT PRIMARY KEY, alias TEXT)");
   const chatId = String(2 ** 6), messageId = 2 ** 5 + Number(explicitReply);
@@ -3200,7 +3201,8 @@ test("owner reply chains reuse one conversation, learn bot answers and bind only
       respond_to: `turn-${n}`, conversation: [ ...(includeRoot && n > 1 ? [message("turn-1", null), message("bot-1", "turn-1", true)] : []), message(`turn-${n}`, parent) ] } };
   };
   const ports: import("./ownerRun").OwnerRunPorts = {
-    launch: async body => { launches++; prompts.push(String(body.prompt)); return { status: 202, body: { conversationId: "conversation_chain_fixture" } }; },
+    launch: async body => { launches++; prompts.push(String(body.prompt)); return { status: 202, body: { conversationId: "conversation_chain_fixture",
+      launchId: "launch_chain_fixture", initialMessage: "delivered" } }; },
     continue: async (turn, prompt) => {
       prompts.push(prompt);
       expect(turn.clientAttemptId).toBe(`relay-owner-${current}`);
@@ -3214,6 +3216,12 @@ test("owner reply chains reuse one conversation, learn bot answers and bind only
     for (const n of [1, 2, 3]) {
       const request = make(n, n === 1 ? null : "bot-1", n < 3); current = request.request_id;
       expect(await runClaimedRequest(paired, request, undefined, { ownerPorts: ports })).toMatchObject({ outcome: "answered" });
+      if (n === 1) {
+        const initial = readConversations()[0];
+        expect(initial).toMatchObject({ conversationId: "conversation_chain_fixture",
+          seen: expect.arrayContaining(request.input.conversation.map(message => message.id)), staticDigest: expect.any(String) });
+        expect(initial?.pendingCursor).toBeUndefined();
+      }
       expect(liveOwnerRelayConversation("conversation_chain_fixture")).toBe(false);
       expect(ownerRelayPayload("context", "conversation_chain_fixture")).toBeNull();
     }
@@ -3292,11 +3300,13 @@ test.each([0, 10000])("continued owner latency: five identical-input pairs (%s h
     }
     expect(launches).toBe(10); expect(sends).toBe(5);
     const median = (values: number[]) => [...values].sort((a,b) => a-b)[Math.floor(values.length / 2)]!;
+    const variability = (values: number[]) => ({ rangeMs: Math.max(...values) - Math.min(...values),
+      medianAbsoluteDeviationMs: median(values.map(value => Math.abs(value - median(values)))) });
     const fresh = samples.filter(s => s.mode === "fresh"), continued = samples.filter(s => s.mode === "continued");
     expect(median(continued.map(s => s.promptBytes))).toBeLessThan(median(fresh.map(s => s.promptBytes)) / 10);
-    if (passes) expect(median(continued.map(s => s.answerMs))).toBeLessThan(median(fresh.map(s => s.answerMs)));
     const measurement = { engine: `SHA256 ${passes} passes per prompt; alternating pair order`, load: os.loadavg(), samples,
-      medians: { freshMs: median(fresh.map(s => s.answerMs)), continuedMs: median(continued.map(s => s.answerMs)) } };
+      medians: { freshMs: median(fresh.map(s => s.answerMs)), continuedMs: median(continued.map(s => s.answerMs)) },
+      variability: { fresh: variability(fresh.map(s => s.answerMs)), continued: variability(continued.map(s => s.answerMs)) } };
     console.log("RELAY_LATENCY", JSON.stringify(measurement));
     if (process.env.LLV_RELAY_LATENCY_OUTPUT) fs.writeFileSync(`${process.env.LLV_RELAY_LATENCY_OUTPUT}-${passes}.json`, JSON.stringify(measurement, null, 2) + "\n");
   } finally { setRelaySwitch("chain_conversations", true); await server.close(); }

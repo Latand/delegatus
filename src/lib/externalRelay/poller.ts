@@ -1,6 +1,6 @@
 import { confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
 import { changeRun } from "./store";
-import { sweepConversations } from "./conversations";
+import { sweepConversationsAsync } from "./conversations";
 import { readRelaySwitches } from "./switches";
 import fs from "node:fs";
 import path from "node:path";
@@ -152,7 +152,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
       run.ownerTurn ? readRunLedger().runs.find(r => r.requestId === run.requestId)?.conversationId : undefined);
     dropRun(run.requestId);
   }
-  sweepConversations(readRelayStore().relays, readRunLedger().runs);
+  await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000);
 }
 /* A paired relay's targets come from endpoint 6 whenever the settings page
    reads them (at most every 30 s), every 5 min from the claim loop, and once
@@ -428,7 +428,7 @@ async function sweepAndRefresh(): Promise<void> {
   ) {
     controller.prunedAt = Date.now();
     pruneAnswerRecords(Date.now(), () => readRunLedger().runs);
-    sweepConversations(readRelayStore().relays, readRunLedger().runs);
+    await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000);
   }
 }
 export function refreshExternalRelayPollers(changedId?: string): void {

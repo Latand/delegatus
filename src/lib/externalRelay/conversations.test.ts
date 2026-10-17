@@ -2,7 +2,7 @@ import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { conversationAuthority, reserveChainConversation, releaseConversation, readConversations, prepareConversationAccount, sweepConversations, sweepConversationsAsync } from "./conversations";
+import { conversationAuthority, reserveChainConversation, reserveChainConversationAsync, releaseConversation, readConversations, prepareConversationAccount, sweepConversations, sweepConversationsAsync } from "./conversations";
 import { sampleRequest, contextRequest } from "./request.fixture";
 import { newTargetSettings, reserveRun, dropRun, withFileLock, writeRelayFile, type PairedRelay } from "./store";
 import { requestSchema, type ExternalRelayRequest } from "./protocol";
@@ -92,12 +92,62 @@ test("unchanged held chain resolution does not rewrite retained conversation his
   expect(after.size).toBe(before.size);
 });
 
+test("large chain admission yields to the Viewer loop and avoids unchanged cursor rewrites", async () => {
+  const seed = reserveChainConversation(relay, target, request(), "owner-tier")!;
+  releaseConversation(seed.id);
+  const rows = Array.from({ length: 299 }, (_, i) => ({ ...seed,
+    id: `00000000-0000-0000-0000-${String(i + 1).padStart(12, "0")}`, anchors: [`large-${i}`],
+    seen: Array.from({ length: 200 }, (_, j) => `seen-${i}-${j}-${"x".repeat(42)}`), state: "idle" as const, runningRequestId: null }));
+  const filename = path.join(root, "external-relay/conversations.json");
+  writeRelayFile(filename, { v: 2, conversations: [seed, ...rows] });
+  const inputBytes = fs.statSync(filename).size;
+  const admissionMs: number[] = [];
+  for (let sample = 0; sample < 5; sample++) {
+    let timerRan = false;
+    const timer = new Promise<boolean>(resolve => setImmediate(() => { timerRan = true; resolve(true); }));
+    const started = performance.now();
+    const admission = reserveChainConversationAsync(relay, target, request(`async-new-${sample}`), "owner-tier", Date.now() + 5000);
+    const first = await Promise.race([timer, admission.then(() => false)]);
+    expect(first).toBe(true);
+    expect(timerRan).toBe(true);
+    expect(await admission).not.toBeNull();
+    admissionMs.push(performance.now() - started);
+  }
+  console.log("RELAY_MAP_ADMISSION", JSON.stringify({ records: 300, bytes: inputBytes, eventLoopResponsiveSamples: 5,
+    admissionMs, load: os.loadavg() }));
+  const before = fs.statSync(filename);
+  await (await import("./conversations")).releaseConversationAsync(rows[0]!.id, { state: "idle", runningRequestId: null }, Date.now() + 5000);
+  const after = fs.statSync(filename);
+  expect(after.mtimeMs).toBe(before.mtimeMs);
+  expect(after.ino).toBe(before.ino);
+});
+
+test("async sweeps and already-running admissions skip unchanged conversation writes", async () => {
+  const api = await import("./conversations");
+  const requestForRun = request("async-running");
+  const record = await reserveChainConversationAsync(relay, target, requestForRun, "owner-tier", Date.now() + 5000);
+  expect(record?.runningRequestId).toBe("async-running");
+  reserveRun({ requestId: "async-running", leaseId: "fixture-lease", relayId: relay.id, targetId: target.id,
+    childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: "fixture", runDir: root,
+    startedAt: new Date().toISOString() });
+  const filename = path.join(root, "external-relay/conversations.json");
+  const before = fs.statSync(filename);
+  try {
+    await api.sweepConversationsAsync([relay], Date.now(), Date.now() + 5000);
+    expect(await reserveChainConversationAsync(relay, target, requestForRun, "owner-tier", Date.now() + 5000)).toBeNull();
+    const after = fs.statSync(filename);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(after.size).toBe(before.size);
+    expect(after.ino).toBe(before.ino);
+  } finally { dropRun("async-running"); }
+});
+
 test("restart reconciles a delivered pending cursor, while proven refusal keeps the prior cursor", async () => {
   const api = await import("./conversations");
   const settlement = await import("@/lib/runtime/sendSettlement");
   const record = reserveChainConversation(relay, target, request(), "owner-tier")!;
   releaseConversation(record.id, { conversationId: "conversation_pinned", seen: ["before"], staticDigest: "old",
-    pendingCursor: { operationId: "relay-owner-delivered", seen: ["before", "consumed"], staticDigest: "new" } });
+    pendingCursor: { operationId: "spawn_message_initial-owner-prompt", seen: ["before", "consumed"], staticDigest: "new" } });
   const lookup = spyOn(settlement, "resolveSendReceipt").mockResolvedValue({
     state: "delivered", conversationId: "conversation_pinned", acceptedAt: new Date().toISOString(),
     settledAt: new Date().toISOString(),
@@ -108,12 +158,12 @@ test("restart reconciles a delivered pending cursor, while proven refusal keeps 
     expect(recovered).toMatchObject({ seen: ["before", "consumed"], staticDigest: "new" });
     expect(recovered?.pendingCursor).toBeUndefined();
     lookup.mockResolvedValueOnce({ state: "failed" } as never);
-    releaseConversation(record.id, { pendingCursor: { operationId: "relay-owner-refused", seen: ["lost"], staticDigest: "refused" } });
+    releaseConversation(record.id, { pendingCursor: { operationId: "spawn_message_refused-owner-prompt", seen: ["lost"], staticDigest: "refused" } });
     const refused = await api.resolveChainConversationAsync(relay, target, reply, "owner-tier", Date.now() + 5000);
     expect(refused).toMatchObject({ seen: ["before", "consumed"], staticDigest: "new" });
     expect(refused?.pendingCursor).toBeUndefined();
     lookup.mockResolvedValueOnce(null as never);
-    releaseConversation(record.id, { pendingCursor: { operationId: "relay-owner-unbound", seen: ["never-sent"], staticDigest: "unbound" } });
+    releaseConversation(record.id, { pendingCursor: { operationId: "spawn_message_unbound-owner-prompt", seen: ["never-sent"], staticDigest: "unbound" } });
     const unbound = await api.resolveChainConversationAsync(relay, target, reply, "owner-tier", Date.now() + 5000);
     expect(unbound).toMatchObject({ seen: ["before", "consumed"], staticDigest: "new" });
     expect(unbound?.pendingCursor).toBeUndefined();

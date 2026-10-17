@@ -1101,8 +1101,9 @@ function heldDrainProgress(
 
 function ownerFirstPromptAllowed(registry: AgentRegistry, operationId: string): boolean {
   if (operationId.startsWith("relay-owner-")) {
-    const snapshot = registry.readOnlySnapshot();
-    const conversationId = Object.values(snapshot.heldDeliveries).find(row => row.command.operationId === operationId)?.conversationId;
+    const snapshot = registry.deliverySnapshotForOperation(operationId);
+    const owner = snapshot.deliveryOperationOwners[operationId];
+    const conversationId = owner ? snapshot.heldDeliveries[owner.deliveryId]?.conversationId : undefined;
     return !!conversationId && ownerRelayOperationAuthorized(operationId, conversationId);
   }
   if (!operationId.startsWith("spawn_message_")) return true;

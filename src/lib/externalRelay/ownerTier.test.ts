@@ -87,7 +87,7 @@ test("owner continuation sends each unseen service and recovered message once", 
   const turn = ownerContinuationPrompt(r, owner, 1, { seen: ["seen-message"], staticDigest: null });
   const sections = [...turn.prompt.matchAll(/<conversation>\n([^]*?)\n<\/conversation>/g)].map(match => JSON.parse(match[1]!));
   expect(sections.flat().map((message: { id: string }) => message.id)).toEqual(["new-message", "recovered-message"]);
-  expect(turn.seen).toEqual(["seen-message", "new-message", "recovered-message"]);
+  expect(turn.seen).toEqual(["seen-message", "new-message", "recovered-message", "m1"]);
 });
 
 test("final answer redacts before truncation, keeps sentinels and counts Unicode code points", () => {
@@ -194,6 +194,7 @@ test("production owner observation scrubs raw transcript answers before ordinary
   const sources = { registry: () => ({
     spawnReceiptForClientAttempt: () => ({ state: "completed", conversationId: id, launchId: "launch_reader_fixture", artifactPath: transcript }),
     readOnlySnapshot: () => ({ heldDeliveries: {} }),
+    deliverySnapshotForOperation: () => ({ heldDeliveries: {}, deliveryOperationOwners: {} }),
   }), now: Date.now, liveness: async () => [{ reason: "host_alive_turn_idle", lastRecordAt: new Date().toISOString() }] } as unknown as Pick<SeatTickSources, "registry" | "liveness" | "now">;
   try {
     for (const engine of ["codex", "claude"] as const) {
@@ -247,6 +248,35 @@ test("normal spawn fields and final turn are used without a child or progress st
   expect(bodies).toHaveLength(1);
   expect(bodies[0]).toMatchObject({ engine: "codex", model: "gpt-6-sol", effort: "low", accountId: "answer", mcpServers: ["viewer"], plugins: [], notifyLauncher: false, clientAttemptId: "relay-owner-rq_1" });
   expect(bound).toEqual(["conversation_owner"]);
+});
+
+test("initial owner prompt exposes its durable delivery cursor after binding", async () => {
+  let binding: unknown;
+  const run = runOwnerAgent({ request: request(), owner: instruction(), target, accountId: "answer", hardCapMs: 1000,
+    onConversation: (_id, initialPrompt) => { binding = initialPrompt; }, ports: {
+      launch: async () => ({ status: 202, body: { conversationId: "conversation_owner", launchId: "launch_owner", initialMessage: "delivered" } }),
+      observe: async () => ({ state: "ended", finalText: "Done" }), stop: async () => {}, pollMs: 1,
+    } });
+  await run.done;
+  expect(binding).toEqual({ operationId: "spawn_message_launch_owner", initialMessage: "delivered" });
+});
+
+test("a lost launch acknowledgement recovers the initial prompt operation before releasing custody", async () => {
+  const requestId = request().request_id;
+  reserveRun({ requestId, relayId: "relay_fixture", targetId: target.id, leaseId: "lease_fixture",
+    ownerTurn: { clientAttemptId: `relay-owner-${requestId}` }, ownerPid: process.pid, ownerIdentity: "fixture",
+    childPid: null, childIdentity: null, runDir: "", startedAt: new Date().toISOString() }, 1);
+  let binding: unknown;
+  const run = runOwnerAgent({ request: request(), owner: instruction(), target, accountId: "answer", hardCapMs: 1000,
+    onConversation: (_id, initialPrompt) => { binding = initialPrompt; }, ports: {
+      launch: async () => { throw Error("launch acknowledgement lost"); },
+      observe: async () => ({ state: "failed", conversationId: "conversation_owner", initialMessageOperationId: "spawn_message_launch_owner" }),
+      stop: async () => {}, pollMs: 1,
+    } });
+  try {
+    await run.done;
+    expect(binding).toEqual({ operationId: "spawn_message_launch_owner", initialMessage: "delivered" });
+  } finally { dropRun(requestId); }
 });
 
 test("cancel before admission retains custody and kills the late conversation", async () => {
@@ -521,8 +551,10 @@ test("continuation observation waits for an assistant after the delivered user",
       { timestamp: at, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "new request" }] } } ];
     fs.writeFileSync(transcript, records.map(r => JSON.stringify(r)).join("\n") + "\n");
     expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "running" });
-    fs.appendFileSync(transcript, JSON.stringify({ timestamp: "2026-10-17T12:00:00.500Z", payload: { type: "tool_output", message: "x".repeat(200_000) } }) + "\n");
+    fs.appendFileSync(transcript, Array.from({ length: 144 }, (_, index) => JSON.stringify({ timestamp: `2026-10-17T12:00:00.${String(index).padStart(3, "0")}Z`,
+      payload: { type: "tool_output", message: "x".repeat(64 * 1024) } })).join("\n") + "\n");
     fs.appendFileSync(transcript, JSON.stringify({ timestamp: "2026-10-17T12:00:01Z", payload: { type: "agent_message", message: "New answer" } }) + "\n");
+    expect(fs.statSync(transcript).size).toBeGreaterThan(8 * 1024 * 1024);
     expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "ended", finalText: "New answer" });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -540,12 +572,17 @@ test("Claude continuation observation retains a delivered turn across large tool
   const receipt = async () => ({ state: "delivered", acceptedAt: at, settledAt: at, conversationId: id });
   try {
     const rows = [
+      { type: "assistant", timestamp: "2026-10-17T11:59:59Z", message: { content: [{ type: "text", text: "Old Claude answer" }] } },
       { type: "user", timestamp: at, message: { content: [{ type: "text", text: "new request" }] } },
       { type: "assistant", timestamp: at, message: { content: [{ type: "tool_use", name: "read_file" }] } },
-      { type: "user", timestamp: at, message: { content: [{ type: "tool_result", content: "x".repeat(200_000) }] } },
-      { type: "assistant", timestamp: "2026-10-17T12:00:01Z", message: { content: [{ type: "text", text: "New Claude answer" }] } },
     ];
     fs.writeFileSync(transcript, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+    fs.appendFileSync(transcript, Array.from({ length: 144 }, (_, index) => JSON.stringify({ type: "user", timestamp: `2026-10-17T12:00:00.${String(index).padStart(3, "0")}Z`,
+      message: { content: [{ type: "tool_result", content: "x".repeat(64 * 1024) }] } })).join("\n") + "\n");
+    expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "running" });
+    fs.appendFileSync(transcript, JSON.stringify({ type: "assistant", timestamp: "2026-10-17T12:00:01Z",
+      message: { content: [{ type: "text", text: "New Claude answer" }] } }) + "\n");
+    expect(fs.statSync(transcript).size).toBeGreaterThan(8 * 1024 * 1024);
     expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "ended", finalText: "New Claude answer" });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -582,7 +619,8 @@ test("restart custody for an unadmitted continuation forces interrupt and retire
   const { settleOwnerContinuation } = await import("./ownerRun");
   const rows = { own: { id: "own", conversationId: "conversation_pinned", command: { operationId: "own-operation" }, state: "queued", text: "own" },
     peer: { id: "peer", conversationId: "conversation_pinned", command: { operationId: "peer-operation" }, state: "queued", text: "peer" } };
-  const registry = { conversationDeliverySnapshot: () => ({ heldDeliveries: rows }), deliveryWrite: async (_meta: unknown, action: () => void) => { action(); return { acquired: true }; },
+  const registry = { deliverySnapshotForOperation: (operationId: string) => ({ deliveryOperationOwners: { [operationId]: { deliveryId: "own" } },
+      heldDeliveries: { own: rows.own } }), deliveryWrite: async (_meta: unknown, action: () => void) => { action(); return { acquired: true }; },
     terminalizeHeldDelivery: (id: "own" | "peer") => { rows[id].state = "failed"; rows[id].text = ""; } } as unknown as AgentRegistry;
   const requestId = "continuation-restart-custody";
   const run = { requestId, relayId: "relay_fixture", targetId: target.id, leaseId: "lease_fixture", conversationId: "conversation_pinned",
