@@ -16,7 +16,8 @@ in `seat_tick_settings`. All triggers respect that interval after the later
 persisted claim/end time, including pressure, ten new lessons, failed passes
 and successful no-op passes. This supersedes the original early-trigger and
 30-minute claim wording below. The existing tick panel shows the controls,
-latest result counts, conversation and next eligibility.
+latest completed result and conversation, any live pass separately, and next
+eligibility.
 
 ## Originating requirement
 

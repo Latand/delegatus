@@ -863,8 +863,29 @@ function SeatTickCuration({ value, state, control, row, phone, now, locale, onOp
 }) {
   const { t } = useLocale();
   const { curation: draft, setCuration: setDraft } = state;
-  const run = value.live ?? value.lastRun;
-  const next = value.waitingOn ? t(`seatTick.curation.${value.waitingOn}`) : seatTickLocalTime(value.nextRunAt, now, locale) ?? t("seatTick.unknown");
+  const run = value.lastRun;
+  const running = value.live;
+  const endedAt = run ? seatTickLocalTime(run.endedAt ?? run.claimedAt, now, locale) ?? t("seatTick.unknown") : null;
+  const startedAt = running ? seatTickLocalTime(running.claimedAt, now, locale) : null;
+  const nextAt = seatTickLocalTime(value.nextRunAt, now, locale);
+  const counts = run ? ([
+    ["calls", "seatTick.curation.count.calls"],
+    ["changed", "seatTick.curation.count.changed"],
+    ["rewritten", "seatTick.curation.count.rewritten"],
+    ["merged", "seatTick.curation.count.merged"],
+    ["moved", "seatTick.curation.count.moved"],
+    ["split", "seatTick.curation.count.split"],
+    ["archived", "seatTick.curation.count.archived"],
+    ["restored", "seatTick.curation.count.restored"],
+  ] as const).flatMap(([key, label]) => {
+    const count = run.counts[key];
+    return count > 0 ? [t(label, { count })] : [];
+  }).join(" · ") : "";
+  const next = value.waitingOn
+    ? t(`seatTick.curation.${value.waitingOn}`)
+    : (nextAt
+      ? t(run ? "seatTick.maintenance.next.at" : "seatTick.maintenance.next.firstRun", { time: nextAt })
+      : t("seatTick.unknown"));
   return <div data-seat-tick-curation={value.live ? "running" : value.enabled ? "on" : "off"} className="flex min-w-0 flex-col gap-2 border-t border-border pt-2.5">
     <div className={`flex min-w-0 items-center gap-2 ${row}`}>
       <p className="min-w-0 flex-1 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.curation.head")}</p>
@@ -877,16 +898,34 @@ function SeatTickCuration({ value, state, control, row, phone, now, locale, onOp
         value={draft.hours} disabled={state.saving} onChange={event => setDraft(previous => ({ ...previous, hours: event.target.value }))}
         className={`${control} ${phone ? "w-24" : "w-20"} shrink-0 text-right tabular-nums disabled:opacity-50`} />
     </label> : null}
-    <div data-seat-tick-curation-row="last" className="flex min-w-0 flex-col gap-1 text-ui text-primary">
-      <span className="text-caption text-muted">{t("seatTick.maintenance.row.last")}</span>
-      <span className="break-words">{run ? `${seatTickLocalTime(run.endedAt ?? run.claimedAt, now, locale)} · ${t(`seatTick.curation.${run.state}`)}` : t("seatTick.curation.never")}</span>
-      {run ? <span data-seat-tick-curation-counts className="break-words text-caption text-secondary">{t("seatTick.curation.counts", run.counts)}</span> : null}
-      {run?.failure ? <span role="status" className="break-words text-caption text-warning">{run.failure}</span> : null}
-      {run?.conversationId ? <a data-seat-tick-curation-conversation href={"#c=" + encodeURIComponent(run.conversationId)} onClick={onOpened}
-        className={`${LINK} self-start text-ui ${phone ? "min-h-11" : "h-7"}`}>{t("seatTick.curation.conversation")}<ArrowUpRight className="h-3.5 w-3.5" aria-hidden /></a> : null}
-    </div>
-    <div data-seat-tick-curation-row="next" className="flex min-w-0 items-baseline gap-2 text-ui text-primary">
-      <span className="shrink-0 text-caption text-muted">{t("seatTick.maintenance.row.next")}</span><span className="min-w-0 flex-1 break-words text-right">{next}</span>
+    <div data-seat-tick-curation-rows className="flex min-w-0 flex-col gap-1">
+      {running ? <div data-seat-tick-curation-row="running" className="flex min-w-0 flex-col gap-0.5">
+        <div className={`flex min-w-0 items-baseline gap-2 ${phone ? "min-h-6" : ""}`}>
+          <span className="shrink-0 text-caption text-muted">{t(running.state === "running" ? "seatTick.curation.runningLabel" : "seatTick.curation.startingLabel")}</span>
+          <span className="min-w-0 flex-1 break-words text-right text-ui text-primary">{t(running.state === "running" ? "seatTick.curation.runningSince" : "seatTick.curation.startingSince", { time: startedAt ?? t("seatTick.unknown") })}</span>
+        </div>
+        {running.conversationId ? <div className="flex min-w-0 flex-wrap justify-end gap-x-3">
+          <a data-seat-tick-curation-live-conversation href={"#c=" + encodeURIComponent(running.conversationId)} onClick={onOpened}
+            className={`${LINK} text-ui ${phone ? "min-h-11" : "h-7"}`}>{t("seatTick.curation.conversation")}<ArrowUpRight className="h-3.5 w-3.5 shrink-0" aria-hidden /></a>
+        </div> : null}
+      </div> : null}
+      <div data-seat-tick-curation-row="last" className="flex min-w-0 flex-col gap-0.5">
+        <div className={`flex min-w-0 items-baseline gap-2 ${phone ? "min-h-6" : ""}`}>
+          <span className="shrink-0 text-caption text-muted">{t("seatTick.maintenance.row.last")}</span>
+          <span className="min-w-0 flex-1 break-words text-right text-ui text-primary">{run
+            ? t(run.state === "succeeded" ? "seatTick.maintenance.status.done" : "seatTick.maintenance.status.failed", { time: endedAt ?? t("seatTick.unknown") })
+            : t("seatTick.curation.never")}</span>
+        </div>
+        {counts ? <span data-seat-tick-curation-counts className="break-words text-right text-caption text-secondary">{counts}</span> : null}
+        {run?.failure ? <span role="status" className="break-words text-right text-caption text-warning">{run.failure}</span> : null}
+        {run?.conversationId ? <div className="flex min-w-0 flex-wrap justify-end gap-x-3">
+          <a data-seat-tick-curation-conversation href={"#c=" + encodeURIComponent(run.conversationId)} onClick={onOpened}
+            className={`${LINK} text-ui ${phone ? "min-h-11" : "h-7"}`}>{t("seatTick.curation.conversation")}<ArrowUpRight className="h-3.5 w-3.5 shrink-0" aria-hidden /></a>
+        </div> : null}
+      </div>
+      <div data-seat-tick-curation-row="next" className={`flex min-w-0 items-baseline gap-2 ${phone ? "min-h-6" : ""}`}>
+        <span className="shrink-0 text-caption text-muted">{t("seatTick.maintenance.row.next")}</span><span className="min-w-0 flex-1 break-words text-right text-ui text-primary">{next}</span>
+      </div>
     </div>
     {value.runsError ? <p role="status" className="break-words text-caption text-warning">{value.runsError}</p> : null}
   </div>;

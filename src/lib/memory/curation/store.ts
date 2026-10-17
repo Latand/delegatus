@@ -237,8 +237,19 @@ export function curationView(project: string, now = Date.now()) {
 /** Panel polling reads two pass records, independent of retained history size. */
 export function curationPanelRuns(project: string) {
   const rows = projectRows(project);
-  const latest = rows.flatMap(row => row.passes.length ? [passMetadata(row.passes.at(-1)!)] : [])
-    .filter((pass): pass is CuratorPass => !!pass).sort((a, b) => a.claimedAt.localeCompare(b.claimedAt)).at(-1) ?? null;
+  let latestCompleted: CuratorPass | null = null;
+  for (const row of rows) {
+    // Pass ids are appended in claim order. The newest entry can be the live
+    // pass, so walk back only to this row's newest completed pass; never
+    // materialize the retained history for a panel read.
+    for (let index = row.passes.length - 1; index >= 0; index--) {
+      const pass = passMetadata(row.passes[index]!);
+      if (!pass) continue;
+      if (passIsLive(pass)) continue;
+      if (!latestCompleted || pass.claimedAt > latestCompleted.claimedAt) latestCompleted = pass;
+      break;
+    }
+  }
   const current = rows.map(row => row.current ? passMetadata(row.current) : null).find(passIsLive) ?? null;
-  return { live: current ? readPass(current.id) : null, last: latest ? readPass(latest.id) : null };
+  return { live: current ? readPass(current.id) : null, last: latestCompleted ? readPass(latestCompleted.id) : null };
 }

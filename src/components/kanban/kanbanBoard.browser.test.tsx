@@ -33449,7 +33449,7 @@ describe("saved decision delivery", () => {
 
 
 describe("role memory curator in the seat tick panel", () => {
-  browserTest("curation status and controls fit desktop and 390px in both themes and languages", async () => {
+  browserTest("curation status and controls fit desktop and 390px in every state, theme and language", async () => {
     const out = path.resolve(".artifacts/role-memory-curator/panel");
     fs.mkdirSync(out, { recursive: true });
     const tick = {
@@ -33461,47 +33461,87 @@ describe("role memory curator in the seat tick panel", () => {
       maintenance: { enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
         live: null, lastRun: null, nextEligibleAt: null, nextRunAt: null, waitingOn: "disabled", pauseReason: null, runsError: null },
     };
-    Object.assign(tick, { curation: {
-      enabled: true, intervalHours: 12, intervalMs: 43200000, defaultIntervalHours: 6, minIntervalHours: 1, maxIntervalHours: 168, updatedAt: null,
-      live: null, lastRun: { id: "curate_fixture", state: "succeeded", claimedAt: "2026-10-17T10:00:00Z", endedAt: "2026-10-17T10:15:00Z",
-        conversationId: "conversation_curator_fixture", failure: null, counts: { calls: 3, changed: 8, rewritten: 2, merged: 1, moved: 0, split: 0, archived: 5, restored: 0 } },
-      nextRunAt: "2026-10-17T22:15:00Z", waitingOn: null, runsError: null,
-    } });
-    const server = await serveEvidenceFixture(out, undefined, {
-      "/api/monitor/seat-tick/settings": tick,
-      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
-      "/api/board/maintenance/worktrees": () => { throw new Error("Maintenance UI called the recovery diagnostic"); },
-    });
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const counts = { calls: 3, changed: 8, rewritten: 2, merged: 1, moved: 0, split: 0, archived: 5, restored: 0 };
+    const zeroCounts = { calls: 0, changed: 0, rewritten: 0, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 };
+    const completed = { id: "curate_fixture", state: "succeeded", claimedAt: "2026-10-17T10:00:00Z", endedAt: "2026-10-17T10:15:00Z",
+      conversationId: "conversation_curator_fixture", failure: null, counts };
+    const states = ["on", "off", "starting", "running", "failed", "never"] as const;
+    const curationFor = (state: typeof states[number]) => {
+      const base = { enabled: state !== "off", intervalHours: 12, intervalMs: 43200000, defaultIntervalHours: 6, minIntervalHours: 1, maxIntervalHours: 168, updatedAt: null,
+        live: null, lastRun: null, nextRunAt: "2026-10-17T22:15:00Z", waitingOn: null as string | null, runsError: null };
+      if (state === "off") return { ...base, waitingOn: "off" };
+      if (state === "starting") return { ...base, live: { ...completed, id: "curate_starting", state: "launching", endedAt: null, conversationId: "conversation_curator_starting", counts: zeroCounts }, waitingOn: "live-run" };
+      if (state === "running") return { ...base, live: { ...completed, id: "curate_live", state: "running", endedAt: null, conversationId: "conversation_curator_live", counts: zeroCounts }, lastRun: completed, waitingOn: "live-run" };
+      if (state === "failed") return { ...base, lastRun: { ...completed, id: "curate_failed", state: "failed", endedAt: "2026-10-17T10:15:00Z", conversationId: "conversation_curator_failed", failure: "fixture failure", counts: zeroCounts } };
+      if (state === "never") return { ...base, nextRunAt: null, waitingOn: "no-rules" };
+      return { ...base, lastRun: completed };
+    };
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
     const readings: unknown[] = [];
     try {
-      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
-        const phone = width === 390;
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width, height: 900 }, theme, lang, "reduce", phone);
+      for (const state of states) {
+        const server = await serveEvidenceFixture(out, undefined, {
+          "/api/monitor/seat-tick/settings": { ...tick, curation: curationFor(state) },
+          "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
+          "/api/board/maintenance/worktrees": () => { throw new Error("Maintenance UI called the recovery diagnostic"); },
+        });
         try {
-          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
-          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
-          else {
-            await page.locator("[data-kanban-seat]").waitFor();
-            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+          for (const width of [1440, 1000, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+            const phone = width === 390;
+            const height = phone ? 844 : width === 1000 ? 700 : 900;
+            const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width, height }, theme, lang, "reduce", phone);
+            try {
+              await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+              if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+              else {
+                await page.locator("[data-kanban-seat]").waitFor();
+                if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+              }
+              const seat = page.locator(phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat]");
+              await seat.locator("[data-seat-tick-thumb]").click();
+              const panel = page.locator("[data-seat-tick-curation]:visible").first();
+              await panel.waitFor();
+              await panel.scrollIntoViewIfNeeded();
+              expect(await panel.locator("[data-seat-tick-curation-interval]").count()).toBe(state === "off" ? 0 : 1);
+              const last = panel.locator('[data-seat-tick-curation-row="last"]');
+              const next = panel.locator('[data-seat-tick-curation-row="next"]');
+              if (state === "on") {
+                expect(await panel.locator("[data-seat-tick-curation-conversation]").getAttribute("href")).toBe("#c=conversation_curator_fixture");
+                expect(await panel.locator("[data-seat-tick-curation-counts]").innerText()).toBe(lang === "en" ? "3 calls · 8 changed · 2 rewritten · 1 merged · 5 archived" : "3 виклики · 8 змінено · 2 переписано · 1 об’єднано · 5 заархівовано");
+                expect(await last.innerText()).toContain(lang === "en" ? "done" : "готово");
+                expect(await next.innerText()).toContain(lang === "en" ? "about" : "близько");
+              } else if (state === "off") {
+                expect(await next.innerText()).toContain(lang === "en" ? "none while curator is off" : "немає, поки куратор вимкнений");
+                expect(await last.innerText()).toContain(lang === "en" ? "never" : "ще не було");
+              } else if (state === "running") {
+                expect(await panel.locator('[data-seat-tick-curation-row="running"]').innerText()).toContain(lang === "en" ? "Running since" : "Працює з");
+                expect(await panel.locator("[data-seat-tick-curation-live-conversation]").getAttribute("href")).toBe("#c=conversation_curator_live");
+                expect(await last.innerText()).toContain(lang === "en" ? "done" : "готово");
+                expect(await panel.locator("[data-seat-tick-curation-conversation]").getAttribute("href")).toBe("#c=conversation_curator_fixture");
+                expect(await next.innerText()).toContain(lang === "en" ? "after the current run" : "після поточного запуску");
+              } else if (state === "starting") {
+                expect(await panel.locator('[data-seat-tick-curation-row="running"]').innerText()).toContain(lang === "en" ? "Starting since" : "Запускається з");
+                expect(await panel.locator("[data-seat-tick-curation-live-conversation]").getAttribute("href")).toBe("#c=conversation_curator_starting");
+                expect(await last.innerText()).toContain(lang === "en" ? "never" : "ще не було");
+                expect(await next.innerText()).toContain(lang === "en" ? "after the current run" : "після поточного запуску");
+              } else if (state === "failed") {
+                expect(await last.innerText()).toContain(lang === "en" ? "failed" : "не вдалося");
+                expect(await last.locator("[data-seat-tick-curation-counts]").count()).toBe(0);
+              } else {
+                expect(await last.innerText()).toContain(lang === "en" ? "never" : "ще не було");
+                expect(await next.innerText()).toContain(lang === "en" ? "waiting for role memory rules" : "очікує на правила пам’яті ролей");
+              }
+              const fits = await panel.evaluate(element => element.scrollWidth <= element.clientWidth);
+              expect(fits).toBe(true);
+              expect(pageErrors).toEqual([]);
+              await panel.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${state}-curation.png`) });
+              readings.push({ width, lang, theme, state, reachable: true, intervalHours: 12, fits, pageErrors });
+            } finally { await context.close(); }
           }
-          const seat = page.locator(phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat]");
-          await seat.locator("[data-seat-tick-thumb]").click();
-          const panel = page.locator("[data-seat-tick-curation]:visible").first();
-          await panel.waitFor();
-          await panel.scrollIntoViewIfNeeded();
-          expect(await panel.locator("[data-seat-tick-curation-interval]").inputValue()).toBe("12");
-          expect(await panel.locator("[data-seat-tick-curation-conversation]").getAttribute("href")).toBe("#c=conversation_curator_fixture");
-          expect(await panel.locator("[data-seat-tick-curation-counts]").innerText()).toContain(lang === "en" ? "3 calls" : "3 викликів");
-          const fits = await panel.evaluate(element => element.scrollWidth <= element.clientWidth);
-          expect(fits).toBe(true);
-          expect(pageErrors).toEqual([]);
-          await panel.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-curation.png`) });
-          readings.push({ width, lang, theme, reachable: true, intervalHours: 12, fits, pageErrors });
-        } finally { await context.close(); }
+        } finally { server.stop(); }
       }
       fs.mkdirSync("evidence/role-memory-curator", { recursive: true });
       fs.writeFileSync("evidence/role-memory-curator/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
-    } finally { await browser.close(); server.stop(); }
+    } finally { await browser.close(); }
   }, 120_000);
 });

@@ -12,7 +12,7 @@ import { ROLE_MEMORY_BOUND, CURATION_INTERVAL_MS, type RoleMemoryRule, type Rule
 import { scopeChars } from "../roleConsolidate";
 import { canonicalScope, leaveLessons, newRuleId, projectView, recordLessonRequest, learnedRulesBlock, roleMemoryCollection, roleScope, projectScope, restoreRule, deleteRule, storedLessonTexts } from "../roleStore";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
-import { claimPass, currentPass, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
+import { claimPass, currentPass, curationPanelRuns, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
 import { curatorCallerOf } from "./guard";
 import { readCuration } from "./read";
 import { productionCurationController } from "./run";
@@ -94,6 +94,32 @@ test("current curation selection and history ordering never copy the role archiv
     patchPass(live.id, { state: "succeeded", endedAt: at(9 * CURATION_INTERVAL_MS) });
     expect(currentPass(PROJECT)).toBeNull();
   } finally { copied.mockRestore(); }
+});
+
+test("the panel keeps the most recent completed pass beside a newer live pass", () => {
+  fixture();
+  const completed = pass();
+  patchPass(completed.id, { state: "succeeded", endedAt: at(1000), conversationId: "conversation_previous" });
+  const live = pass(NOW + CURATION_INTERVAL_MS + 2000);
+  patchPass(live.id, { state: "running", conversationId: "conversation_live" });
+
+  expect(curationPanelRuns(PROJECT)).toMatchObject({
+    live: { id: live.id, state: "running", conversationId: "conversation_live" },
+    last: { id: completed.id, state: "succeeded", conversationId: "conversation_previous" },
+  });
+});
+
+test("a successful no-op pass leaves pressure as the trigger but cannot claim again before the interval", () => {
+  const scope = roleScope(PROJECT, "builder");
+  Array.from({ length: 30 }, (_, i) => fixture(scope, {
+    rule: `Preserve the complete operational guidance for category ${i} before changing shared state. ${"additional guidance ".repeat(25)}`.slice(0, 300),
+  }));
+  const initial = pass();
+  ended(initial);
+
+  expect(curationStatus(PROJECT, NOW + 31 * 60_000)).toMatchObject({ due: false, trigger: "pressure", pressure: true, newLessons: 0 });
+  expect(pass(NOW + 31 * 60_000)).toBeNull();
+  expect(curationStatus(PROJECT, NOW + CURATION_INTERVAL_MS + 1001)).toMatchObject({ due: true, trigger: "pressure", pressure: true, newLessons: 0 });
 });
 function hostingFixture() {
   const registry = new AgentRegistry(path.join(dir, "registry.json"));

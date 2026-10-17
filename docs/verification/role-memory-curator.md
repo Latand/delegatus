@@ -18,7 +18,7 @@ The stored block follows the settings normalizer, effective defaults, expiry res
 
 Compact MCP reads omit untouched curator defaults to preserve the existing answer budget; `verbose: true` includes them. Configured timers, run results and errors are included in compact reads.
 
-The panel reads the latest and current pass records without materializing every retained pass. Its operation is registered as `memory.curation-panel`. English and Ukrainian share the existing timer controls and layout.
+The panel reads the latest completed pass separately from a live pass without materializing every retained pass. A live pass has its own start-time row and conversation link; the previous completed result remains under “Last run.” Its operation is registered as `memory.curation-panel`. English and Ukrainian share the existing timer controls and layout.
 
 ## Verification
 
@@ -42,6 +42,6 @@ bash "$GATE_SLOT" bun scripts/local-gate-tests.ts --base 32e5a6e91824659604d54ac
   src/lib/viewerLoopMonitor.test.ts
 ```
 
-The existing kanban driver case `role memory curator in the seat tick panel` passes 40 assertions across eight frames: 1440px and 390px, English and Ukrainian, light and dark. Every frame was visually inspected; each reading fits and records no page errors. Its record is `evidence/role-memory-curator/rendered.json`; frames stay in `.artifacts/role-memory-curator/panel/` for local review. Set `LLV_KANBAN_BROWSER_TEST=1` and `CHROME_BIN`, then run that driver by path with `--test-name-pattern "role memory curator in the seat tick panel"` through the same wrapper. Chromium needs a short temporary path; this run used a descriptor alias into the same owned scratch directory.
+The existing kanban driver case `role memory curator in the seat tick panel` passes 444 expect calls across 72 frames: 1440×900, 1000×700 and 390×844, all six states, English and Ukrainian, light and dark. Every frame was visually inspected; each reading fits and records no page errors. Its record is `evidence/role-memory-curator/rendered.json`; frames stay in `.artifacts/role-memory-curator/panel/` for local review. Set `LLV_KANBAN_BROWSER_TEST=1` and `CHROME_BIN`, then run that driver by path with `--test-name-pattern "curation status and controls fit"` through the same wrapper. Chromium needs a short temporary path; this run used an owned cache temp directory.
 
 The implementation commit passed the enabled pre-commit whitespace, privacy and lint hooks. Publication belongs to the pipeline.

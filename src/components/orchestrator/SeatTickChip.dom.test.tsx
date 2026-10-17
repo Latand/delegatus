@@ -1167,16 +1167,50 @@ test("curation: its own switch and interval follow maintenance and save independ
   expect(mSwitch().getAttribute("aria-checked")).toBe("false");
 });
 
-test("curation: last result counts link to its conversation; refused changes retain the draft", async () => {
+test("curation: last result follows maintenance rows, omits zero counts, and links to its conversation", async () => {
   const run = { id: "curate_fixture", state: "succeeded" as const, claimedAt: "2026-10-17T10:00:00Z", endedAt: "2026-10-17T10:15:00Z", conversationId: "conversation_curator_fixture", failure: null,
     counts: { calls: 3, changed: 8, rewritten: 2, merged: 1, moved: 0, split: 0, archived: 5, restored: 0 } };
-  getAnswer = curatorRecord({ lastRun: run });
+  getAnswer = curatorRecord({ lastRun: run, waitingOn: null, nextRunAt: new Date(Date.now() + 60 * 60_000).toISOString() });
   const { root } = await mount(); await open(root);
-  expect(cGroup().textContent).toContain("succeeded");
-  expect(cGroup().querySelector("[data-seat-tick-curation-counts]")!.textContent).toContain("3 calls · 8 changed");
+  const last = cGroup().querySelector('[data-seat-tick-curation-row="last"]')!;
+  expect(last.textContent).toContain("Last run");
+  expect(last.textContent).toContain("done");
+  expect(last.querySelector("[data-seat-tick-curation-counts]")!.textContent).toBe("3 calls · 8 changed · 2 rewritten · 1 merged · 5 archived");
+  expect(last.textContent).not.toContain("moved");
+  expect(last.textContent).not.toContain("restored");
+  expect(cGroup().querySelector('[data-seat-tick-curation-row="next"]')!.textContent).toContain("about");
   expect(cGroup().querySelector("a")!.getAttribute("href")).toBe("#c=conversation_curator_fixture");
   type(cInterval(), "12"); putAnswers = [{ status: 400, body: { error: "fixture curator refusal" } }];
   press(save()); await settle(root);
   expect(cInterval().value).toBe("12");
   expect(body().textContent).toContain("fixture curator refusal");
+});
+
+test("curation: a live run has its own row and keeps the previous completed result visible", async () => {
+  const completed = { id: "curate_previous", state: "succeeded" as const, claimedAt: ago(100), endedAt: ago(90), conversationId: "conversation_previous", failure: null,
+    counts: { calls: 3, changed: 8, rewritten: 2, merged: 1, moved: 0, split: 0, archived: 5, restored: 0 } };
+  const live = { id: "curate_live", state: "running" as const, claimedAt: ago(5), endedAt: null, conversationId: "conversation_live", failure: null,
+    counts: { calls: 0, changed: 0, rewritten: 0, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 } };
+  getAnswer = curatorRecord({ live, lastRun: completed, waitingOn: "live-run" });
+  const { root } = await mount(); await open(root);
+  const running = cGroup().querySelector('[data-seat-tick-curation-row="running"]')!;
+  expect(running.textContent).toMatch(/Running.*Running since/);
+  expect(running.querySelector("a")!.getAttribute("href")).toBe("#c=conversation_live");
+  const last = cGroup().querySelector('[data-seat-tick-curation-row="last"]')!;
+  expect(last.textContent).toContain("done");
+  expect(last.textContent).not.toContain("running");
+  expect(last.querySelector("[data-seat-tick-curation-counts]")!.textContent).toContain("3 calls · 8 changed");
+  expect(last.querySelector("a")!.getAttribute("href")).toBe("#c=conversation_previous");
+  expect(cGroup().querySelector('[data-seat-tick-curation-row="next"]')!.textContent).toContain("after the current run");
+});
+
+test("curation: a failed run with zero counts shows its result without a counts row", async () => {
+  const failed = { id: "curate_failed", state: "failed" as const, claimedAt: ago(20), endedAt: ago(15), conversationId: "conversation_failed", failure: "fixture failure",
+    counts: { calls: 0, changed: 0, rewritten: 0, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 } };
+  getAnswer = curatorRecord({ lastRun: failed });
+  const { root } = await mount(); await open(root);
+  const last = cGroup().querySelector('[data-seat-tick-curation-row="last"]')!;
+  expect(last.textContent).toContain("failed");
+  expect(last.textContent).toContain("fixture failure");
+  expect(last.querySelector("[data-seat-tick-curation-counts]")).toBeNull();
 });
