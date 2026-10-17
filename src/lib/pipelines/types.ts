@@ -15,6 +15,7 @@ export type PipelineRepoPreflightErrorCode =
   | "not_directory"
   | "repo_unreadable"
   | "repo_untraversable"
+  | "initialization_refused"
   | "not_git"
   /** A Git probe could not reach a verdict — a spawn/exec failure, a timeout, or
       a transient non-zero exit that is not the definitive "not a git repository"
@@ -23,8 +24,17 @@ export type PipelineRepoPreflightErrorCode =
   | "git_metadata_unwritable"
   | "worktree_parent_unwritable";
 
+export interface RepositoryInitialization {
+  message: string;
+  project: string;
+  commit: string;
+  committedFiles: string[];
+  ignoredPaths: string[];
+  defaultIgnorePatterns: string[];
+}
+
 export type PipelineRepoPreflight =
-  | { ok: true; repoDir: string; gitCommonDir: string; worktreeParent: string }
+  | { ok: true; repoDir: string; gitCommonDir: string; worktreeParent: string; repositoryInitialization?: RepositoryInitialization }
   /** `detail` carries the underlying stderr/reason for a probe_failed transient so
       the failure preserves fidelity instead of collapsing to a generic code. */
   | { ok: false; code: PipelineRepoPreflightErrorCode; path: string; detail?: string };

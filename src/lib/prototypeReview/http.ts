@@ -8,11 +8,11 @@ import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { refuseAnonymous, teamActor } from "@/lib/team";
 import { parsePrototypeInput, PrototypeError } from "./input";
 import { prototypeCriticGate, criticRefusal } from "./criticGate";
-import { publishPrototype, withPrototypeState, resolvePrototypeReviewId } from "./store";
+import { findPrototypeRound, publishPrototype, withPrototypeState, resolvePrototypeReviewId } from "./store";
 import { operatorDecisionRound, operatorDecisions, readPrototypeReviews, readSeatRounds } from "./read";
 import { findSeatRound, loadSeatRounds } from "./seatRounds";
 import { loadTasksForList } from "@/lib/tasks/store";
-import { decidePrototype, refreshPrototypeDelivery, prototypeDelivery, type PrototypeDelivery } from "./decision";
+import { decidePrototype, refreshPrototypeDelivery, prototypeDelivery, type PrototypeDelivery, type PrototypeDeliveryPorts } from "./decision";
 import { prototypeWorld, taskForPrototype, type PrototypeCaller, type PrototypeWorld } from "./world";
 import { deliverPrototypeDecision } from "./deliveryWorker";
 import { runsElsewhere } from "@/lib/links/linked";
@@ -21,8 +21,9 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { postPrototypeReviewToTelegram } from "./telegramPost";
 
-export function prototypeFailure(error: unknown): NextResponse {
+export function prototypeFailure(error: unknown, route = "prototype review"): NextResponse {
   const ambiguous = error instanceof PrototypeError && (error as { code?: string }).code === "short_id_ambiguous";
+  if (!(error instanceof PrototypeError)) console.error(`[prototype review] ${route}`, error);
   return NextResponse.json({
     error: error instanceof PrototypeError ? error.message : "prototype review is unavailable",
     ...(ambiguous ? { code: "short_id_ambiguous", field: "reviewId", retryable: false, candidates: (error as { candidates?: string[] }).candidates } : {}),
@@ -49,10 +50,11 @@ export async function resendTelegramPOST(request: NextRequest, world: PrototypeW
     const body = await request.json();
     const { round } = resendTarget(request, body?.reviewId, world);
     if (typeof body.clientRequestId !== "string" || !body.clientRequestId.trim() || body.clientRequestId.length > 200) throw new PrototypeError("clientRequestId is required");
+    if (round.decision) throw new PrototypeError("Рішення вже збережено. Щоб доставити відповідь поточному координатору, натисніть «Надіслати ще раз» біля стану доставки рішення.", 409);
     const key = `${round.id}:resend:${body.clientRequestId.trim()}`;
     const telegramPost = await postPrototypeReviewToTelegram(round, key);
     return NextResponse.json({ reviewId: round.id, telegramPost }, { headers: { "cache-control": "private, no-store" } });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "POST /api/prototype-reviews/telegram"); }
 }
 /** The project whose designated orchestrator is calling, or null. Only that
     seat may ask without a task (docs/design/operator-decision-forms.md §2.1). */
@@ -104,7 +106,7 @@ export async function reviewScopePOST(request: NextRequest,world: PrototypeWorld
     const target = await withPrototypeState(() => body.mode === "publish" ? publicationTarget(request,body.taskId,world) : readTarget(request,body.taskId,world));
     if (!target.caller.conversationId) throw new PrototypeError("caller could not be identified",403);
     return NextResponse.json({ conversationId: target.caller.conversationId, taskId: target.taskId },{ headers: { "cache-control": "private, no-store" } });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "POST /api/prototype-reviews/scope"); }
 }
 /** A seat's answered rounds whose message is not yet known delivered take the
     receipt's word before they are read, as a task's rounds do in reviewGET.
@@ -122,7 +124,7 @@ export async function reviewReadPOST(request: NextRequest,world: PrototypeWorld 
       return NextResponse.json(readSeatRounds(target.seat!),{ headers: { "cache-control": "private, no-store" } });
     }
     return reviewGET(request,target.taskId,world);
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "POST /api/prototype-reviews/read"); }
 }
 export async function publishPOST(request: NextRequest,world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
@@ -154,7 +156,7 @@ export async function publishPOST(request: NextRequest,world: PrototypeWorld = p
       ...(round.critic ? { critic: { stageId: round.critic.stageId, attempt: round.critic.attempt, outcome: round.critic.outcome } } : {}),
       ...(round.questions ? { questions: round.questions.length } : {}),
       frames: round.variants.reduce((n,v) => n + v.frames.length,0), videos: round.variants.reduce((n,v) => n + v.videos.length,0) });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "POST /api/prototype-reviews"); }
 }
 /** A read reports the decision's delivery as the background delivery last left it, and never waits on it. */
 export async function reviewGET(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
@@ -162,7 +164,7 @@ export async function reviewGET(request: NextRequest,taskId: string,world: Proto
   const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
     return NextResponse.json(readPrototypeReviews(taskForPrototype(taskId,world.caller(request))),{ headers: { "cache-control": "private, no-store" } });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "GET /api/tasks/[id]/prototypes"); }
 }
 export async function reviewPOST(request: NextRequest,taskId: string,world: PrototypeWorld = prototypeWorld,delivery: PrototypeDelivery = prototypeDelivery,now: () => number = Date.now): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
@@ -175,11 +177,12 @@ export async function reviewPOST(request: NextRequest,taskId: string,world: Prot
     taskForPrototype(taskId,caller,true);
     const body = await request.json() as DecidePrototypeInput | { reviewId: string; retry: true };
     if (!body || typeof body !== "object" || typeof body.reviewId !== "string" || ("retry" in body && body.retry !== true)) throw new PrototypeError("invalid decision");
-    /* The decision is durable before the answer, and the answer never waits
-       for the seat: its message goes from the background delivery. */
-    if (decidePrototype(request,taskId,body,world)) deliverPrototypeDecision(taskId,body.reviewId,{ delivery, world, now });
+    /* A new decision is durable before the initial save answers; explicit
+       retries wait for the delivery worker's verdict. */
+    if ("retry" in body) await retryPrototypeDecision(request,taskId,body.reviewId,{ delivery, world, now });
+    else if (decidePrototype(request,taskId,body,world)) deliverPrototypeDecision(taskId,body.reviewId,{ delivery, world, now });
     return NextResponse.json(readPrototypeReviews(taskForPrototype(taskId,caller)),{ headers: { "cache-control": "private, no-store" } });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "POST /api/tasks/[id]/prototypes"); }
 }
 
 /** The operator's own read of a project's open decisions: the «Рішення»
@@ -204,7 +207,7 @@ export async function decisionsGET(request: NextRequest,project: string,world: P
       }
     }
     return NextResponse.json({ ...operatorDecisions(project), ...(review ? { round: operatorDecisionRound(project,review) } : {}) },{ headers: { "cache-control": "private, no-store" } });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "GET /api/projects/decisions"); }
 }
 /** One answer from the column: a seat's question or a task's waiting round,
     found by its id within the project, decided through the same decision path
@@ -230,7 +233,24 @@ export async function decisionsPOST(request: NextRequest,world: PrototypeWorld =
       if (!task) throw new PrototypeError("review not found",404);
       taskId = taskForPrototype(task.id,caller,true).id;
     }
-    if (decidePrototype(request,taskId,body,world)) deliverPrototypeDecision(taskId,body.reviewId,{ delivery, world, now: Date.now });
+    if ("retry" in body) await retryPrototypeDecision(request,taskId,body.reviewId,{ delivery, world, now: Date.now });
+    else if (decidePrototype(request,taskId,body,world)) deliverPrototypeDecision(taskId,body.reviewId,{ delivery, world, now: Date.now });
     return NextResponse.json(operatorDecisions(key),{ headers: { "cache-control": "private, no-store" } });
-  } catch (error) { return prototypeFailure(error); }
+  } catch (error) { return prototypeFailure(error, "POST /api/projects/decisions"); }
+}
+
+/** An explicit resend waits for its delivery verdict instead of acknowledging a
+ * counter reset. Unknown execution never grants permission to send again. */
+async function retryPrototypeDecision(request: NextRequest, taskId: string | null, reviewId: string,
+  ports: PrototypeDeliveryPorts): Promise<void> {
+  if (decidePrototype(request, taskId, { reviewId, retry: true }, ports.world)) {
+    await deliverPrototypeDecision(taskId, reviewId, ports);
+    const decision = await withPrototypeState(() => findPrototypeRound(taskId, reviewId)?.decision);
+    if (decision?.delivery.state === "uncertain") throw new PrototypeError(
+      "Доставку попередньої спроби не підтверджено. Перевіряємо повідомлення та підтверджені пробудження поточного координатора. Повторне надсилання призупинено через ризик дублювання; збережена відповідь залишається у формі.", 409);
+    if (decision?.delivery.state === "failed") throw new PrototypeError(
+      "Збережену відповідь поки не вдалося доставити. Delegatus повторить спробу в межах бюджету доставки.", 503);
+    if (decision?.delivery.state === "no-orchestrator" || !decision?.delivery.conversationId) throw new PrototypeError(
+      "Відповідь збережено. Для доставки потрібен чинний координатор проєкту.", 409);
+  }
 }

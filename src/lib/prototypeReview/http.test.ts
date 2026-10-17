@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -26,6 +26,9 @@ import { taskAcknowledgement } from "@/lib/mcp/listAnswers";
 import type { PrototypeWorld } from "./world";
 import type { PublishPrototypeInput, PrototypeReviewRead } from "./types";
 import { MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, createMcpToolService, MemoryMcpReceiptStore } from "@/lib/mcp/server";
+
+import * as prototypeHttp from "./http";
+import { PrototypeError } from "./input";
 
 import { questions } from "./questionnaire.fixture";
 
@@ -562,11 +565,63 @@ test("a dispatched choice amended to rejection gets a new message identity and e
   expect(repeated.status).toBe(200); expect(loadTasks()[0]!.prototypeReviews![0]!.decision!.revision).toBe(2);
 });
 
-test("unexpected prototype failures stay unavailable, including null and primitive errors", async () => {
-  const { prototypeFailure } = await import("./http");
-  for (const error of [null, undefined, "failure", new Error("internal detail")]) {
-    const response = prototypeFailure(error);
-    expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({ error: "prototype review is unavailable" });
-  }
+test("unexpected prototype failures log the cause and keep internal details out of the response", async () => {
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    for (const error of [null, undefined, "failure", "internal failure", new Error("internal detail"), new Error("no such index: state_rows_task_stamp_text")]) {
+      const response = prototypeHttp.prototypeFailure(error, "POST /api/prototype-reviews");
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: "prototype review is unavailable" });
+      expect(log).toHaveBeenLastCalledWith("[prototype review] POST /api/prototype-reviews", error);
+    }
+    log.mockClear();
+    const refused = prototypeHttp.prototypeFailure(new PrototypeError("review not found", 404), "GET /api/tasks/[id]/prototypes");
+    expect(refused.status).toBe(404);
+    expect(await refused.json()).toEqual({ error: "review not found" });
+    expect(log).not.toHaveBeenCalled();
+  } finally { log.mockRestore(); }
+});
+
+test("ambiguous short review IDs return retryable guidance and bounded candidates", async () => {
+  const ambiguous = Object.assign(new PrototypeError("reviewId is ambiguous; pass more characters", 409), {
+    code: "short_id_ambiguous",
+    candidates: ["pr_00000001", "pr_00000002"],
+  });
+  const response = prototypeHttp.prototypeFailure(ambiguous, "POST /api/prototype-reviews/telegram");
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({
+    error: "reviewId is ambiguous; pass more characters",
+    code: "short_id_ambiguous",
+    field: "reviewId",
+    retryable: false,
+    candidates: ["pr_00000001", "pr_00000002"],
+  });
+});
+
+test("every prototype HTTP fallback identifies its route in the journal", async () => {
+  const error = new Error("no such index: state_rows_task_stamp_text");
+  const world: PrototypeWorld = { ...reviewedWorld, caller: () => { throw error; } };
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  const cases: [string, () => Promise<Response>][] = [
+    ["POST /api/prototype-reviews", () => publishPOST(request("/api/prototype-reviews", {
+      clientRequestId: "failure-route", taskId: "task-prototype", title: "Choose", questions,
+    }), world)],
+    ["POST /api/prototype-reviews/scope", () => prototypeHttp.reviewScopePOST(request("/scope", { mode: "read", taskId: "task-prototype" }), world)],
+    ["POST /api/prototype-reviews/telegram", () => prototypeHttp.resendTelegramPOST(request("/telegram", { reviewId: "pr_00000000000000000000000000000001" }), world)],
+    ["POST /api/prototype-reviews/read", () => reviewReadPOST(request("/read", { taskId: "task-prototype" }), world)],
+    ["GET /api/tasks/[id]/prototypes", () => reviewGET(request("/review"), "task-prototype", world)],
+    ["POST /api/tasks/[id]/prototypes", () => reviewPOST(request("/review", {}), "task-prototype", world)],
+    ["GET /api/projects/decisions", () => prototypeHttp.decisionsGET(request("/decisions"), "project-a", world)],
+    ["POST /api/projects/decisions", () => prototypeHttp.decisionsPOST(request("/decisions", {}), world)],
+  ];
+  try {
+    for (const [route, call] of cases) {
+      log.mockClear();
+      const response = await call();
+      expect(response.status, route).toBe(503);
+      expect(await response.json()).toEqual({ error: "prototype review is unavailable" });
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith(`[prototype review] ${route}`, error);
+    }
+  } finally { log.mockRestore(); }
 });

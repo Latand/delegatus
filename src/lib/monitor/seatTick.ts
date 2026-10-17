@@ -2230,13 +2230,14 @@ function childrenShown(before: readonly string[], shown: readonly string[]): str
   return merged.slice(-SEAT_TICK_CHILDREN_SHOWN_LIMIT);
 }
 
-/** Stable per-item versions keep unrelated board movement out of dedupe.
- * Existing child/outcome/event ledgers retain their own delivery semantics.
+/** Stable per-item versions bind signals to the recipient that saw them and
+ * keep unrelated board movement out of dedupe. Existing child/outcome/event
+ * ledgers retain their own delivery semantics.
  * Permission requests keep their reminder behavior: equal labels do not prove
  * equal requests, and this projection has no durable request identity. */
-export function seatTickSignalVersion(signal: SeatTickSignalInput): string {
+export function seatTickSignalVersion(signal: SeatTickSignalInput, recipient: Pick<SeatTickSeatInput, "conversationId" | "seatEpoch"> | null): string {
   const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
-  return `${hash(["signal", signal.id])}@${hash([signal.episode ?? signal.label, null])}`;
+  return `${hash(["signal", signal.id])}@${hash([signal.episode ?? signal.label, recipient?.conversationId ?? null, recipient?.seatEpoch ?? null])}`;
 }
 
 function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | undefined {
@@ -2256,7 +2257,7 @@ function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | 
   const pipeline = kind === "pipeline" ? input.pipelines.find(row => row.id === item.id) : undefined;
   const ownLane = kind === "pipeline" ? input.ownLanes.find(row => row.id === item.id) : undefined;
   const signal = kind === "signal" ? input.signals.find(row => row.id === item.id) : undefined;
-  if (signal) return seatTickSignalVersion(signal);
+  if (signal) return seatTickSignalVersion(signal, input.seat);
   const source = (kind === "task" ? input.tasks.find(row => row.id === item.id)
     : kind === "pull-request" ? input.pullRequests.find(row => `#${row.number}` === item.id)
     : pipeline ? { title: pipeline.title, state: pipeline.state, stageId: pipeline.stageId, updatedAt: pipeline.updatedAt, pausedBy: pipeline.pausedBy, stall: pipeline.pausedBy !== "seat" && (verifiedIdle(pipeline.stageActivity) || input.state.stalledSeen.includes(pipeline.id)) && stalledLanes(input).some(entry => entry.pipeline.id === pipeline.id) ? laneStallToken(pipeline) : null, activity: pipeline.stageActivity?.lifecycle, reason: pipeline.stageActivity?.reason }
@@ -2289,7 +2290,22 @@ function visibleAgendaVersions(state: SeatTickProjectState, commit: SeatTickWake
   const text = state.outstandingWake?.text;
   if (text === undefined || commit.itemLines === undefined) return commit.itemsShown ?? [];
   const framed = `\n${text}\n`;
-  return commit.itemLines.filter(item => framed.includes(`\n${item.line}\n`)).map(item => item.version);
+  const visible = commit.itemLines.filter(item => framed.includes(`\n${item.line}\n`));
+  const wake = state.outstandingWake;
+  if (!wake) return visible.map(item => item.version);
+  /* Before recipient-bound signal versions shipped, saved prototype answers
+     used the null-recipient hash. Rebind only a complete frozen answer bullet
+     to the recipient the durable wake names while committing its landing. */
+  const rebound = new Map<string, string>();
+  for (const item of visible) {
+    const match = item.line.match(/^- \[signal\] (prototype-answer:\S+) — ([\s\S]*)$/);
+    if (!match) continue;
+    const signal = { id: match[1]!, label: match[2]! };
+    if (item.version === seatTickSignalVersion(signal, null)) {
+      rebound.set(item.version, seatTickSignalVersion(signal, { conversationId: wake.conversationId, seatEpoch: wake.seatEpoch }));
+    }
+  }
+  return [...new Set(visible.map(item => rebound.get(item.version) ?? item.version))];
 }
 
 /** Upgrade retained plans without rewriting their delivery identity or text.
