@@ -237,6 +237,109 @@ test("C: retrying a legacy terminal-output forge refusal never publishes its loc
   } finally { f.close(); }
 });
 
+test("a legacy privacy rewrite checkpoint removes the old terminal marker before report delivery and survives restart", async () => {
+  const f = await fixture();
+  try {
+    fs.mkdirSync(path.join(f.worktree, "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(f.worktree, "scripts/privacy-publication-gate.ts"), "// Controlled privacy gate fixture.\n");
+    const initialExec = f.h.ports.exec;
+    f.h.ports.exec = async (command, args, cwd, env, options) => command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")
+      ? { code: 0, stdout: "PRIVACY GATE: PASS\n", stderr: "" }
+      : initialExec(command, args, cwd, env, options);
+    await f.git(f.worktree, "add", "scripts/privacy-publication-gate.ts");
+    await f.commit(); f.setExisting();
+    await f.finish();
+    const current = loadPipelines().find(p => p.id === f.id)!;
+    delete current.delivery!.target.pr;
+    delete current.publication;
+    current.stages[1]!.outputs = ["review.md"];
+    current.runs[0]!.attempts[0]!.paneId = null;
+    savePipelines([current]);
+    f.setMissing();
+    await tickPipelines([], f.h.ports);
+    fs.writeFileSync(path.join(f.worktree, "review.md"), "Review passed.\n");
+    const publishedHead = await f.git(f.origin, "rev-parse", `refs/heads/${current.branch}`);
+    f.setRefused();
+    f.setExpectedBody("Review passed.");
+    f.h.setConversationActive(false);
+    await engineModule.reportStageCompletion({ verdict: "pass", summary: "Review passed." },
+      { kind: "agent", role: "reviewer", conversationId: "conversation_stage_2" }, f.h.ports);
+    await tickPipelines([finishReported(f.h, "/codex/stage-2.jsonl", "pass", "Review passed.")], f.h.ports);
+    const legacyRefusal = loadPipelines().find(p => p.id === f.id)!;
+    const owner = legacyRefusal.runs[1]!.attempts[0]!;
+    expect(owner.terminalOutputPublication).toMatchObject({ pullRequestHead: publishedHead });
+    expect(owner.terminalOutputPublication!.localSha).not.toBe(publishedHead);
+    const localReportSha = owner.terminalOutputPublication!.localSha;
+
+    const originalExec = f.h.ports.exec;
+    let gateCalls = 0;
+    f.h.ports.exec = async (command, args, cwd, env, options) => {
+      if (command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")) gateCalls++;
+      if (command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts") && args.at(-1)?.endsWith("body.md"))
+        return { code: 1, stdout: "PRIVACY GATE: FAIL\nknown_value: 1\n", stderr: "" };
+      if (command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts"))
+        return { code: 0, stdout: "PRIVACY GATE: PASS\n", stderr: "" };
+      return originalExec(command, args, cwd, env, options);
+    };
+    f.setRefused(false); f.setMissing(); f.setExpectedBody(publicSummary);
+    expect(fs.existsSync(path.join(f.worktree, "scripts/privacy-publication-gate.ts"))).toBe(true);
+    f.h.ports.resumeSeveredTurn = async () => {
+      const report = await engineModule.reportStageCompletion({ verdict: "pass", summary: publicSummary },
+        { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, f.h.ports);
+      expect(report.error).toBeUndefined();
+      f.h.setConversationActive(false);
+      const checkpoint = loadPipelines().find(p => p.id === f.id)!;
+      const saved = checkpoint.runs[1]!.attempts[0]!;
+      expect(saved.publicationTextRepair).toMatchObject({ state: "answered", sha: localReportSha });
+      expect(saved.terminalOutputPublication).toBeUndefined();
+      expect(checkpoint.lastPassedCommit).toBe(localReportSha);
+      return true;
+    };
+    expect((await engineModule.patchPipeline(f.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+    await tickPipelines([], f.h.ports);
+
+    const checkpoint = loadPipelines().find(p => p.id === f.id)!;
+    const checkpointAttempt = checkpoint.runs[1]!.attempts[0]!;
+    expect(gateCalls).toBeGreaterThan(0);
+    expect(checkpointAttempt.publicationTextRepair).toMatchObject({ state: "answered", pullRequestHead: publishedHead });
+    expect(checkpointAttempt.terminalOutputPublication).toBeUndefined();
+
+    const reload = await realExec(process.execPath, ["-e", `
+      const { loadPipelines } = await import("@/lib/pipelines/store");
+      const { defaultPipelinePorts, settlePendingStageGit } = await import("@/lib/pipelines/engine");
+      const { realExec } = await import("@/lib/workflows/provision");
+      const lane = loadPipelines().find(item => item.id === ${JSON.stringify(f.id)});
+      const attempt = lane.runs[1].attempts[0];
+      const head = attempt.publicationTextRepair.pullRequestHead;
+      const branch = lane.delivery.target.branch.replace(/^refs\\/heads\\//, "");
+      const at = Date.parse(attempt.publicationTextRepair.answeredAt) + 1_000;
+      await settlePendingStageGit({ ...defaultPipelinePorts(), now: () => new Date(at).toISOString(),
+        conversationAgentActive: async () => false, conversationDeliveryOutstanding: () => false,
+        durableTurnEvidence: async () => ({ turn: "terminal", message: { ts: at, text: "Rewrite completed." } }),
+        exec: async (command, args, cwd, env, options) => command === "gh"
+          ? { code: 0, stdout: JSON.stringify([{ number: 17, headRefName: branch, baseRefName: lane.baseBranch,
+            state: "OPEN", isCrossRepository: false, headRefOid: head }]), stderr: "" }
+          : realExec(command, args, cwd, env, options) });
+      const settled = loadPipelines().find(item => item.id === ${JSON.stringify(f.id)});
+      const saved = settled.runs[1].attempts[0];
+      console.log(JSON.stringify({ state: settled.state, lastPassedCommit: settled.lastPassedCommit,
+        repair: saved.publicationTextRepair, terminalOutputPublication: saved.terminalOutputPublication,
+        pullRequest: settled.delivery.target.pr }));
+    `], process.cwd(), process.env, { timeoutMs: 15_000 });
+    expect(reload.code, reload.stderr).toBe(0);
+    const persisted = JSON.parse(reload.stdout.trim());
+    expect(persisted.state).toBe("completed");
+    expect(persisted.pullRequest).toBe(17);
+    expect(persisted.terminalOutputPublication).toBeUndefined();
+    expect(persisted.lastPassedCommit).toBe(localReportSha);
+
+    const done = loadPipelines().find(p => p.id === f.id)!;
+    expect(done.state).toBe("completed");
+    expect(done.runs[1]!.attempts[0]!.terminalOutputPublication).toBeUndefined();
+    expect(await f.git(f.origin, "rev-parse", `refs/heads/${current.branch}`)).toBe(publishedHead);
+  } finally { f.close(); }
+});
+
 test("C: summary fingerprint inspection lets an independent scheduler advance", async () => {
   const { pipelinePublicationTextSafe } = await import("./git");
   let progressed = 0;

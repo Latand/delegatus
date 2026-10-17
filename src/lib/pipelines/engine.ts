@@ -10470,6 +10470,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         }
         if (candidateAttempt.publicationTextRepair) {
           recorded.publicationTextRepair = structuredClone(candidateAttempt.publicationTextRepair);
+          if (!candidateAttempt.terminalOutputPublication) delete recorded.terminalOutputPublication;
           recorded.state = candidateAttempt.state;
           recorded.completedAt = candidateAttempt.completedAt;
           recorded.error = candidateAttempt.error;
