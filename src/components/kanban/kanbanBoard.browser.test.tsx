@@ -33403,3 +33403,62 @@ describe("saved decision delivery", () => {
     } finally { await browser.close(); served.stop(); }
   }, 180_000);
 });
+
+
+describe("role memory curator in the seat tick panel", () => {
+  browserTest("curation status and controls fit desktop and 390px in both themes and languages", async () => {
+    const out = path.resolve(".artifacts/role-memory-curator/panel");
+    fs.mkdirSync(out, { recursive: true });
+    const tick = {
+      project: "atlas", changed: false, at: "2026-10-01T12:00:00Z",
+      settings: { project: "atlas", enabled: true, wakeIntervalMinutes: null, reason: null, monitorPrompt: null, until: null, updatedAt: null, setBy: null },
+      effective: { enabled: true, wakeIntervalMinutes: 60, reason: null, monitorPrompt: null, until: null, isDefault: true, configured: false, lapsed: false, updatedAt: null },
+      defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
+      state: null, stateError: null, lastRun: null, lastDelivery: null, journalError: null,
+      maintenance: { enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
+        live: null, lastRun: null, nextEligibleAt: null, nextRunAt: null, waitingOn: "disabled", pauseReason: null, runsError: null },
+    };
+    Object.assign(tick, { curation: {
+      enabled: true, intervalHours: 12, intervalMs: 43200000, defaultIntervalHours: 6, minIntervalHours: 1, maxIntervalHours: 168, updatedAt: null,
+      live: null, lastRun: { id: "curate_fixture", state: "succeeded", claimedAt: "2026-10-17T10:00:00Z", endedAt: "2026-10-17T10:15:00Z",
+        conversationId: "conversation_curator_fixture", failure: null, counts: { calls: 3, changed: 8, rewritten: 2, merged: 1, moved: 0, split: 0, archived: 5, restored: 0 } },
+      nextRunAt: "2026-10-17T22:15:00Z", waitingOn: null, runsError: null,
+    } });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": tick,
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
+      "/api/board/maintenance/worktrees": () => { throw new Error("Maintenance UI called the recovery diagnostic"); },
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width, height: 900 }, theme, lang, "reduce", phone);
+        try {
+          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          else {
+            await page.locator("[data-kanban-seat]").waitFor();
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+          }
+          const seat = page.locator(phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat]");
+          await seat.locator("[data-seat-tick-thumb]").click();
+          const panel = page.locator("[data-seat-tick-curation]:visible").first();
+          await panel.waitFor();
+          await panel.scrollIntoViewIfNeeded();
+          expect(await panel.locator("[data-seat-tick-curation-interval]").inputValue()).toBe("12");
+          expect(await panel.locator("[data-seat-tick-curation-conversation]").getAttribute("href")).toBe("#c=conversation_curator_fixture");
+          expect(await panel.locator("[data-seat-tick-curation-counts]").innerText()).toContain(lang === "en" ? "3 calls" : "3 викликів");
+          const fits = await panel.evaluate(element => element.scrollWidth <= element.clientWidth);
+          expect(fits).toBe(true);
+          expect(pageErrors).toEqual([]);
+          await panel.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-curation.png`) });
+          readings.push({ width, lang, theme, reachable: true, intervalHours: 12, fits, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/role-memory-curator", { recursive: true });
+      fs.writeFileSync("evidence/role-memory-curator/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});

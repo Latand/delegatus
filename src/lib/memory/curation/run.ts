@@ -2,6 +2,7 @@ import { launchAutonomousConversation, observeSpawnedTurn, type SpawnedTurnObser
 import { repoDirForProject, type SeatTickSources } from "@/lib/monitor/seatTickSources";
 import type { SeatTickCheckInput } from "@/lib/monitor/types";
 import type { ReportSpawnResult } from "@/lib/telegram/reportSpawn";
+import { effectiveCurationSetting } from "@/lib/monitor/seatTickSettings";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { roleMemoryEnabled } from "../settings";
 import { curatorBrief } from "./brief";
@@ -78,7 +79,7 @@ export async function launchCurationIfDue(input: SeatTickCheckInput, ports: Cura
   for (const project of [...new Set([...ports.sources.activeSeats(), input.project].map(canonicalProject))].sort()) {
     const host = await hostAdmission(project, ports);
     if (host.held !== null) { if (project === canonicalProject(input.project)) reason = host.held; continue; }
-    const status = curationStatus(project, ports.sources.now());
+    const status = curationStatus(project, ports.sources.now(), effectiveCurationSetting(ports.sources.settings(project)));
     if (!status.active) continue;
     if (!status.due) { quietEligible = true; continue; }
     eligible.push({ project, wakeAt: host.wakeAt });
@@ -90,7 +91,7 @@ export async function launchCurationIfDue(input: SeatTickCheckInput, ports: Cura
   const seat = ports.sources.seatFor(project).active;
   const conversation = seat?.conversationId ? ports.sources.registry().conversation(seat.conversationId as `conversation_${string}`) : null;
   const repoDir = repoDirForProject(project, ports.sources) ?? conversation?.generations.at(-1)?.launchProfile.cwd ?? null;
-  const pass = claimPass({ project, repoDir, now: ports.sources.now() });
+  const pass = claimPass({ project, repoDir, now: ports.sources.now(), setting: effectiveCurationSetting(ports.sources.settings(project)) });
   return pass ? launch(pass, ports) : null;
 }
 export function productionCurationController(sources: SeatTickSources, overrides: Omit<CurationPorts, "sources"> = {}): CurationController {

@@ -2,7 +2,7 @@ import { defaultSeatTickAdmissionSources, type SeatTickAdmissionSources } from "
 import { archiveConversationPaths } from "@/lib/board/archivePlacement";
 import { applyBoardCommand } from "@/lib/board/command";
 import { boardFor } from "@/lib/board/store";
-import { effectiveSeatTickSettings } from "@/lib/monitor/seatTickSettings";
+import { effectiveCurationSetting, effectiveSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import { activeDrain } from "@/lib/selfUpdate/drain";
@@ -20,6 +20,7 @@ export interface CurationAdmissionPorts {
 export function admissionHeld(project: string, ports: CurationAdmissionPorts): string | null {
   if (!roleMemoryEnabled()) return "curation: paused, memory off";
   if (!effectiveSeatTickSettings(ports.sources.settings(project), ports.sources.now(), SEAT_TICK_WAKE_INTERVAL_MS).enabled) return "curation: paused, wakes off";
+  if (!effectiveCurationSetting(ports.sources.settings(project)).enabled) return "curation: paused, curator off";
   if (activeDrain()) return "curation: held for the automatic update";
   const deployment = ports.sources.latestDeployment();
   if (deployment.state === "ok" && deployment.value && !deployment.value.terminal) return "curation: waits, a deployment is running";
@@ -28,6 +29,7 @@ export function admissionHeld(project: string, ports: CurationAdmissionPorts): s
 function hostEvidence(project: string, ports: CurationAdmissionPorts) {
   const now = ports.sources.now();
   const settings = effectiveSeatTickSettings(ports.sources.settings(project), now, SEAT_TICK_WAKE_INTERVAL_MS);
+  if (!effectiveCurationSetting(ports.sources.settings(project)).enabled) return { held: "curator off" } as const;
   if (!settings.enabled) return { held: "seat wakes off" } as const;
   const seat = ports.sources.seatFor(project).active;
   if (!seat?.conversationId) return { held: "no designated seat" } as const;

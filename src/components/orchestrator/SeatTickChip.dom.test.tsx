@@ -1137,3 +1137,46 @@ for (const [locale, copy] of [
     } finally { setLocale("en"); }
   });
 }
+
+
+function curatorRecord(overrides: Partial<NonNullable<SeatTickSettingsAnswer["curation"]>> = {}) {
+  return record({ curation: { enabled: true, intervalHours: 6, intervalMs: 21600000, defaultIntervalHours: 6, minIntervalHours: 1, maxIntervalHours: 168,
+    updatedAt: null, live: null, lastRun: null, nextRunAt: null, waitingOn: "no-rules", runsError: null, ...overrides } });
+}
+const cGroup = () => body().querySelector("[data-seat-tick-curation]") as HTMLElement;
+const cSwitch = () => body().querySelector("[data-seat-tick-curation-enabled]") as HTMLButtonElement;
+const cInterval = () => body().querySelector("[data-seat-tick-curation-interval]") as HTMLInputElement;
+
+test("curation: its own switch and interval follow maintenance and save independently", async () => {
+  getAnswer = curatorRecord();
+  const { root } = await mount(); await open(root);
+  expect(cGroup().textContent).toContain("Role memory curator");
+  expect(mGroup()!.compareDocumentPosition(cGroup()) & 4).toBe(4);
+  expect(cInterval().value).toBe("6");
+  type(cInterval(), "12");
+  putAnswers = [{ status: 200, body: curatorRecord({ intervalHours: 12, updatedAt: "2026-10-17T12:00:00Z" }) }];
+  press(save()); await settle(root);
+  expect(puts()[0]!.body).toEqual({ project: PROJECT, curation: { intervalHours: 12 } });
+  expect(cInterval().value).toBe("12");
+  press(cSwitch());
+  expect(cInterval()).toBeNull();
+  putAnswers = [{ status: 200, body: curatorRecord({ enabled: false, intervalHours: 12, waitingOn: "off", updatedAt: "2026-10-17T12:01:00Z" }) }];
+  press(save()); await settle(root);
+  expect(puts()[1]!.body).toEqual({ project: PROJECT, curation: { enabled: false } });
+  expect(cGroup().textContent).toContain("none while curator is off");
+  expect(mSwitch().getAttribute("aria-checked")).toBe("false");
+});
+
+test("curation: last result counts link to its conversation; refused changes retain the draft", async () => {
+  const run = { id: "curate_fixture", state: "succeeded" as const, claimedAt: "2026-10-17T10:00:00Z", endedAt: "2026-10-17T10:15:00Z", conversationId: "conversation_curator_fixture", failure: null,
+    counts: { calls: 3, changed: 8, rewritten: 2, merged: 1, moved: 0, split: 0, archived: 5, restored: 0 } };
+  getAnswer = curatorRecord({ lastRun: run });
+  const { root } = await mount(); await open(root);
+  expect(cGroup().textContent).toContain("succeeded");
+  expect(cGroup().querySelector("[data-seat-tick-curation-counts]")!.textContent).toContain("3 calls · 8 changed");
+  expect(cGroup().querySelector("a")!.getAttribute("href")).toBe("#c=conversation_curator_fixture");
+  type(cInterval(), "12"); putAnswers = [{ status: 400, body: { error: "fixture curator refusal" } }];
+  press(save()); await settle(root);
+  expect(cInterval().value).toBe("12");
+  expect(body().textContent).toContain("fixture curator refusal");
+});
