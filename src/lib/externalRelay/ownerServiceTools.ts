@@ -50,6 +50,8 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
   const adapter = {
     requestId: request.request_id, relayId: relay.id, targetId: target.id,
     get records() { return loop.records; },
+    get actionSent() { return loop.actionSent; },
+    get sawUnknown() { return loop.sawUnknown; },
     get available() { return open && !signal.aborted; },
     bindConversation(conversationId: string) {
       const prior = conversations().get(conversationId);

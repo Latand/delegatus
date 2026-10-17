@@ -88,6 +88,53 @@ test.each(["inline", "on_demand"])("owner describes and calls reactions and poll
   } finally { selected.mockRestore(); await server.close(); }
 });
 
+test("owner action state rejects a final handoff after a successful service action", async () => {
+  const posts: unknown[] = [], completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/tool-calls")) {
+      const call = body as { call_id: string; tool: string };
+      if ("describe" in (body as object)) {
+        const lookupResults = JSON.parse(fs.readFileSync(path.join(x1Dir, "lookup_results.json"), "utf8"));
+        return { body: { ...lookupResults.truncated, call_id: call.call_id } };
+      }
+      posts.push(body);
+      return { body: { ...x1Results.action_ok, call_id: call.call_id, tool: call.tool } };
+    }
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const target = { ...destinationTarget("target_1", true), model: "gpt-6-sol", project: null };
+  const relay = { ...destinationRelay([target]), api_base: `${server.origin}/v1` };
+  const request = requestSchema.parse(contextRequest);
+  request.request_id = "owner_action_then_handoff"; request.answer.max_chars = 4000;
+  request.input.requester!.is_owner = true;
+  request.input.tools = ownerRequest().input.tools;
+  updateRelayStore(s => ({ ...s, relays: [relay] }));
+  const selected = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "answer", kind: "managed", home, transcriptRoot: home, env: { ...process.env },
+  } });
+  const own = binding("conversation_owner_action_then_handoff");
+  let observedError: unknown;
+  try {
+    const result = await runClaimedRequest(relay, request, undefined, { command: "/missing-owner-cli", timeoutMs: 10000,
+      ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_owner_action_then_handoff" } }),
+        observe: async () => {
+          try {
+            await own.relay_service_tools({ op: "describe", names: ["create_poll"] });
+            const called = await own.relay_service_tools({ op: "call", calls: [{ tool: "create_poll", arguments: {} }] }) as { results: { status: string }[] };
+            expect(called.results[0]).toMatchObject({ status: "ok" });
+            return { state: "ended", finalText: "[handoff]" };
+          } catch (error) { observedError = error; return { state: "ended", finalText: "Tool failed" }; }
+        }, stop: async () => {}, pollMs: 1 },
+    });
+    if (observedError) throw observedError;
+    expect(posts).toHaveLength(1);
+    expect(result).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+    expect(completions).toHaveLength(1);
+    expect(completions).not.toContainEqual(expect.objectContaining({ outcome: "declined", reason: "handoff" }));
+  } finally { selected.mockRestore(); await server.close(); }
+});
+
 
 async function withAdapter(id: string, handler: Parameters<typeof startTestRelay>[0],
   work: (ctx: { own: ReturnType<typeof binding>; request: ReturnType<typeof ownerRequest>; relay: ReturnType<typeof destinationRelay>;
