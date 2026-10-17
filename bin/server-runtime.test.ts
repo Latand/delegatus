@@ -469,13 +469,27 @@ test("each launched release pins diagnostic identity and clears an inherited pre
   }
 });
 
-test("a packaged revision reaches both launched children when the package has no checkout", () => {
+test("a packaged revision reaches both launched children inside a consumer checkout", () => {
   const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-package-revision-"));
+  const consumerRoot = path.join(packageRoot, "consumer");
+  const installedPackage = path.join(consumerRoot, "node_modules", "delegatus-cli");
   const revision = "e".repeat(40);
   try {
-    fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "1.0.0", gitHead: revision }));
-    const release = installedRelease(path.join(packageRoot, "missing-pointer.json"), packageRoot);
-    expect(release).toEqual({ dir: packageRoot, sha: revision, published: false });
+    fs.mkdirSync(installedPackage, { recursive: true });
+    const git = (args: string[]) => {
+      const result = Bun.spawnSync(["git", ...args], { cwd: consumerRoot, stdout: "pipe", stderr: "pipe" });
+      if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+      return result.stdout.toString().trim();
+    };
+    git(["init", "--initial-branch=main"]);
+    fs.writeFileSync(path.join(consumerRoot, "tracked.txt"), "consumer checkout\n");
+    git(["add", "tracked.txt"]);
+    git(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "consumer"]);
+    const consumerRevision = git(["rev-parse", "HEAD"]);
+    fs.writeFileSync(path.join(installedPackage, "package.json"), JSON.stringify({ version: "1.0.0", gitHead: revision }));
+    const release = installedRelease(path.join(packageRoot, "missing-pointer.json"), installedPackage);
+    expect(release).toEqual({ dir: installedPackage, sha: revision, published: false });
+    expect(consumerRevision).not.toBe(revision);
 
     const config = { socketPath: "fixture.sock", fencePath: "fixture.lock", journalPath: "fixture.sqlite" };
     const runtimeHostEnvironment = cliRuntimeHostEnvironment({ LLV_DIAGNOSTIC_REVISION: "old" }, config, release.sha);

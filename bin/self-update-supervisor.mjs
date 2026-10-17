@@ -116,7 +116,7 @@ function packageRevision(packageRoot) {
  * @returns {{ dir: string, sha: string | null, published: boolean }}
  */
 export function installedRelease(pointerFile, packageRoot) {
-  const rootHead = headRevision(packageRoot);
+  const rootHead = isGitCheckout(packageRoot) ? headRevision(packageRoot) : null;
   try {
     const parsed = JSON.parse(readFileSync(pointerFile, "utf8"));
     if (parsed.kind === "package" && typeof parsed.dir === "string" && /^[0-9a-f]{40}$/.test(parsed.sha)) {
