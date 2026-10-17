@@ -315,3 +315,18 @@ test("a warmed count follows project succession even when its caller holds the e
     resetProjectAliasesForTests();f.db.close();
   }
 });
+
+
+test("fleet wait precedence follows row order, row key and then run order",async () => {
+  const f=fixture();
+  const wait=(accountId:string)=>({accountId,resetsAt:null,resumeAt:new Date(NOW+1000).toISOString(),condition:{kind:"usage_limit"},actionAt:null});
+  const first=pipeline("pipeline_alpha"),last=pipeline("pipeline_zulu");
+  first.runs[1].attempts.push({...first.runs[0].attempts[0],providerWait:wait("account-alpha")} as never);
+  Object.assign(last.runs[0].attempts[0],{providerWait:wait("account-zulu")});
+  try {
+    f.put(last);f.put(first);
+    const expected=fleetLimitWaits([first,last] as unknown as Pipeline[]);
+    expect(await f.read(db=>historyFleetLimitWaits(db,["conversation_fixture"]))).toEqual(expected);
+    expect(expected.get("conversation_fixture")?.account).toBe("account-zulu");
+  } finally {f.db.close();}
+});

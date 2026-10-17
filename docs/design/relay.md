@@ -3399,3 +3399,11 @@ order and advertised free slots exclude them. On expiry it sends `declined`
 with reason `busy`, retaining detail `chat busy` for a chat hold. Demotion
 wakes holds and attempts that completion once before its bounded exit.
 Heartbeats follow a fixed grid through admission and completion delivery.
+
+
+The install announces the service's existing `relay_tools_on_demand` feature
+when its descriptor offers it, and fills those claims once with bounded
+`describe` lookups for both relay paths. Owner agents receive a compact index
+and use request-bound `relay_service_tools` to describe and call tools through
+the same tool loop as restricted agents. The relay wire protocol is unchanged.
+See [owner service tools](relay-owner-service-tools.md).

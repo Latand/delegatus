@@ -1,3 +1,4 @@
+import { relayServiceToolsOp } from "@/lib/externalRelay/ownerServiceTools";
 import { readHistoryProjection, historyFleetLimitWaits } from "@/lib/state/historyProjection";
 import { registryReceiptsForConversation } from "@/lib/agent/registry";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
@@ -816,7 +817,7 @@ export interface ViewerMcpDomainDependencies {
   registrySnapshot(): RegistrySnapshot;
   /** Fresh seat and delivered-wake admission for curator reads and writes. */
   curatorSnapshot?(conversationId: string): RegistrySnapshot;
-  curatorAdmission?(conversationId: string | null): Promise<void>;
+  curatorAdmission?(conversationId: string | null): Promise<void | (() => void)>;
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
   getFlowsWithPresets(): ReturnType<typeof getFlowsWithPresets>;
@@ -1350,7 +1351,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   curatorSnapshot: conversationId => agentRegistry().curatorConversationSnapshot(conversationId),
   curatorAdmission: async conversationId => {
     const { curatorRecoveryGuard } = await import("@/lib/memory/curation/admission");
-    await curatorRecoveryGuard(conversationId ?? "");
+    return curatorRecoveryGuard(conversationId ?? "");
   },
   readSpawnAdmissionFence,
   validateSpawnAdmission: (body, context) => productionViewerControlDependencies().post(
@@ -7871,10 +7872,12 @@ export function viewerMcpBindings(
     curate_rules: Object.assign(async (args: McpToolArgs) => {
       try {
         const conversationId = attributionOf(domainDependencies).conversationId;
-        await domainDependencies.curatorAdmission?.(conversationId);
+        const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
+        if (typeof assertAdmission === "function") assertAdmission();
         const pass = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
         if (args.action !== "read") return applyCuration(pass, args as unknown as CurationApply);
         const result = await readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined);
+        if (typeof assertAdmission === "function") assertAdmission();
         curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
         return result;
       } catch (error) {
@@ -7885,7 +7888,8 @@ export function viewerMcpBindings(
     }, { authorizeReceipt: async () => {
       try {
         const conversationId = attributionOf(domainDependencies).conversationId;
-        await domainDependencies.curatorAdmission?.(conversationId);
+        const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
+        if (typeof assertAdmission === "function") assertAdmission();
         curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
@@ -7959,6 +7963,13 @@ export function viewerMcpBindings(
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
+    relay_service_tools: async (args) => {
+      const caller = attributionOf(domainDependencies);
+      const result = caller.kind === "agent" && !caller.via && caller.conversationId
+        ? await relayServiceToolsOp(caller.conversationId, args) : null;
+      if (result === null) throw new McpToolRefusal("Service tools exist only while you answer a relay message as its owner.", { code: "relay_tools_unavailable", retryable: false });
+      return result;
+    },
     relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
     issue_report: (args, context) => issueReportTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),

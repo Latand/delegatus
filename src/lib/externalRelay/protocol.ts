@@ -119,6 +119,7 @@ const toolSchema = z.object({
   summary: boundedString(240),
   mode: z.enum(["direct", "handoff"]),
   effect: z.enum(["read", "action"]).optional(),
+  spec: z.string().regex(/^[0-9a-f]{16}$/).optional(),
   parameters: z.record(z.string(), z.unknown()).refine((value) => Buffer.byteLength(JSON.stringify(value)) <= 8192).optional(),
   audience: z.enum(["admin", "owner"]).optional(),
 });
@@ -172,6 +173,7 @@ export const requestSchema = z.object({
 });
 export type ExternalRelayRequest = z.infer<typeof requestSchema>;
 export type ExternalRelayTool = z.infer<typeof toolSchema>;
+export const RELAY_TOOLS_ON_DEMAND = "relay_tools_on_demand";
 export const RELAY_OWNER_TOOLS = "relay_owner_tools";
 /** I9 uses the offered audience; operation names and schemas stay service-owned. */
 export const isOwnerTool = (tool: ExternalRelayTool) => tool.audience === "owner";
@@ -198,6 +200,10 @@ export const toolCallResultSchema = z.object({
   confirmation_id: id.optional(),
   summary: boundedString(240).optional(),
   expires_at: time.optional(),
+});
+export const lookupResultSchema = toolCallResultSchema.extend({
+  tools: z.array(toolSchema).max(128).optional(),
+  guidance: z.array(z.object({ tools: z.array(z.string().max(64)).max(128), text: boundedString(24000) })).max(128).optional(),
 });
 export type ToolCallResult = z.infer<typeof toolCallResultSchema>;
 export type RoundCall = { tool: string; arguments: string; cursor: string | null };

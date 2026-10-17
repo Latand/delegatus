@@ -105,6 +105,7 @@ function boundedArgs(
     });
   }
   if (toolName === "search_transcripts") args.query = "fixture";
+  if (toolName === "relay_service_tools") args.op = "list";
   if (toolName === "relay_owner_history") args.action = "groups";
   if (toolName === "telegram_bot_messages") args.chat = "team-reports";
   return args;

@@ -41,6 +41,13 @@ test("real MCP binding checks the live pass before dispatch and receipt replay",
   const blocked = await service.callTool("curate_rules", { clientRequestId: "stale-seat-read", action: "read", scope });
   expect(blocked.ok).toBe(false); expect(blocked).toHaveProperty("details.code", "CURATE_CALLER");
   expect(readPass(pass.id)!.counts.calls).toBe(1);
+  dependencies.curatorAdmission = async () => {
+    let checks = 0;
+    return () => { if (++checks > 1) throw new DeliveryAdmissionRefusedError("fixture host expired during read"); };
+  };
+  const unhosted = await service.callTool("curate_rules", { clientRequestId: "host-expired-during-read", action: "read", scope });
+  expect(unhosted.ok).toBe(false); expect(unhosted).toHaveProperty("details.code", "CURATE_CALLER");
+  expect(unhosted).not.toHaveProperty("rules");
   dependencies.curatorAdmission = async () => {};
   let reads = 0;
   dependencies.curatorSnapshot = () => {

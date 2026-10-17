@@ -251,7 +251,7 @@ export function historyFleetLimitWaits(db: Database, ids: string[]): ReturnType<
     AND p.state NOT IN ('completed','closed') AND COALESCE(json_extract(p.input,'$.closedAt'),'')=''
     AND COALESCE(a.historical,0)=0 AND a.providerWait IS NOT NULL
     AND a.attempt=(SELECT MAX(b.attempt) FROM history_attempts b WHERE b.collection=a.collection AND b.row_key=a.row_key AND b.run=a.run AND COALESCE(b.historical,0)=0)
-    ORDER BY p.row_order,a.run`).all(...ids);
+    ORDER BY p.row_order,p.row_key,a.run`).all(...ids);
   for (const row of rows) {
     const wait = JSON.parse(row.providerWait);
     if (wait.actionAt || wait.condition.kind !== "usage_limit") continue;
