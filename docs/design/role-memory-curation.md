@@ -9,6 +9,16 @@ outside the repository under
 `$HOME/.local/share/delegatus-evidence/role-memory-quality/`. No rule text
 from the live store appears here; the examples are invented.
 
+**Timer amendment, 2026-10-17.** The current timer contract is documented in
+[Role memory curator timer](../verification/role-memory-curator.md). Each project
+has an independent `curation` switch and an interval of 1–168 hours (default 6)
+in `seat_tick_settings`. All triggers respect that interval after the later
+persisted claim/end time, including pressure, ten new lessons, failed passes
+and successful no-op passes. This supersedes the original early-trigger and
+30-minute claim wording below. The existing tick panel shows the controls,
+latest completed result and conversation, any live pass separately, and next
+eligibility.
+
 ## Originating requirement
 
 Operator, 2026-10-11 01:59 Kyiv (2026-10-10 22:59 UTC), orchestrator seat

@@ -19,7 +19,9 @@ export interface CurationAdmissionPorts {
 }
 export function admissionHeld(project: string, ports: CurationAdmissionPorts): string | null {
   if (!roleMemoryEnabled()) return "curation: paused, memory off";
-  if (!effectiveSeatTickSettings(ports.sources.settings(project), ports.sources.now(), SEAT_TICK_WAKE_INTERVAL_MS).enabled) return "curation: paused, wakes off";
+  const settings = effectiveSeatTickSettings(ports.sources.settings(project), ports.sources.now(), SEAT_TICK_WAKE_INTERVAL_MS);
+  if (!settings.enabled) return "curation: paused, wakes off";
+  if (settings.curation?.enabled === false) return "curation: paused, curator off";
   if (activeDrain()) return "curation: held for the automatic update";
   const deployment = ports.sources.latestDeployment();
   if (deployment.state === "ok" && deployment.value && !deployment.value.terminal) return "curation: waits, a deployment is running";
@@ -28,6 +30,7 @@ export function admissionHeld(project: string, ports: CurationAdmissionPorts): s
 function hostEvidence(project: string, ports: CurationAdmissionPorts) {
   const now = ports.sources.now();
   const settings = effectiveSeatTickSettings(ports.sources.settings(project), now, SEAT_TICK_WAKE_INTERVAL_MS);
+  if (settings.curation?.enabled === false) return { held: "curator off" } as const;
   if (!settings.enabled) return { held: "seat wakes off" } as const;
   const seat = ports.sources.seatFor(project).active;
   if (!seat?.conversationId) return { held: "no designated seat" } as const;
