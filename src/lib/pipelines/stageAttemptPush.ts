@@ -51,9 +51,11 @@ export async function stageAttemptPushRefusal(launchId: string | null): Promise<
   catch { return "the stage Git refusal receipt cannot be read"; }
 }
 
-/** Runs only during the producing attempt's settlement, before a review can
- * name its head. Publication recovery never calls this adoption path. */
-export async function settleStageAttemptPush(pipeline: Pipeline, attempt: PipelineStageAttempt, execute: ExecPort, now: string): Promise<PipelineGitResult | null> {
+/** Prove the producing attempt's commits before review. Ordinary settlement
+ * may adopt its proved push. Repair mode only verifies a local descendant of
+ * the accepted head; it never adopts a remote tip or writes Git history. */
+export async function settleStageAttemptPush(pipeline: Pipeline, attempt: PipelineStageAttempt, execute: ExecPort, now: string,
+  repair?: { acceptedHead: string }): Promise<PipelineGitResult | null> {
   const directory = attempt.launchId ? stageGitReceiptDirectory(attempt.launchId) : null;
   const refuse = (detail: string): PipelineGitResult => ({ ok: false, error: `settling the stage push: ${detail}; both tips are preserved` });
   const exec: ExecPort = (command, args, cwd, env, options) => execute(command, args, cwd, pipelineLiteralGitEnv(env), options);
@@ -78,6 +80,36 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const delivery = pipeline.delivery;
     if (!delivery || !delivery.active || delivery.disposition !== "owner" || delivery.ownerId !== pipeline.id
       || delivery.publish !== "enabled") return null;
+    // Only durable same-stage replacement/decision edges carry creation proof.
+    // A later start is a boundary to verify, never evidence of who made its prefix.
+    const directories = directory ? [directory] : [];
+    let anchor = start.head;
+    const run = pipeline.runs?.find(run => run.attempts.some(item => item.launchId === attempt.launchId));
+    const attempts = new Map(run?.attempts.map(item => [item.n, item]));
+    let child = attempt;
+    for (;;) {
+      const decision = child.decisionAnswerId ? pipeline.decisionAnswers?.find(answer => answer.clientRequestId === child.decisionAnswerId
+        && answer.stageId === run?.stageId && answer.nextAttempt === child.n
+        && attempts.get(answer.attempt)?.verdict?.status === "pass") : undefined;
+      const parentN = child.restartContext?.previousAttempt ?? decision?.attempt;
+      if (parentN === undefined) break;
+      const parent = attempts.get(parentN);
+      if (!parent || parent.n >= child.n || !parent.launchId || !parent.completedAt
+        || (!decision && parent.restartRecovery?.replacementAttempt !== child.n)) return refuse("the replacement's creation lineage is invalid");
+      const parentDirectory = stageGitReceiptDirectory(parent.launchId);
+      const parentRaw = await smallFile(path.join(parentDirectory, "start.json"));
+      const parentStart = parentRaw ? JSON.parse(parentRaw) : null;
+      if (!parentStart || parentStart.launchId !== parent.launchId || parentStart.worktree !== pipeline.worktreeDir
+        || !/^[0-9a-f]{40}$/.test(parentStart.head ?? "") || !parent.startedAt
+        || !Number.isFinite(Date.parse(parentStart.startedAt)) || !Number.isFinite(Date.parse(parent.startedAt))
+        || Date.parse(parentStart.startedAt) < Date.parse(parent.startedAt) || Date.parse(parentStart.startedAt) > Date.parse(now)
+        || await stageAttemptPushRefusal(parent.launchId) !== null) return refuse("the replaced attempt's creation receipts are unavailable or invalid");
+      if ((await exec("git", ["merge-base", "--is-ancestor", parentStart.head, anchor], pipeline.worktreeDir)).code !== 0)
+        return refuse("the replacement dropped its starting history");
+      directories.push(parentDirectory);
+      anchor = parentStart.head;
+      child = parent;
+    }
     const remote = delivery.target.remote;
     const ref = delivery.target.branch;
     const remoteHead = async (): Promise<string | null> => {
@@ -95,11 +127,11 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const candidates = directory ? await recordedPushesForRef(directory, ref) : [];
     // No agent commit or push exists to adopt. Let the ordinary stage
     // committer preserve dirty output even while publication is offline.
-    if (head === start.head && candidates.length === 0 && !await hasCreatedCommits(directory)) return null;
-    const tip = await remoteHead();
+    if (!repair && directories.length <= 1 && head === start.head && candidates.length === 0 && !await hasCreatedCommits(directory)) return null;
+    const tip = repair ? null : await remoteHead();
     const url = await exec("git", ["remote", "get-url", "--push", remote], pipeline.worktreeDir);
     const expectedUrl = url.code === 0 ? url.stdout.trim() : remote;
-    for (const candidate of candidates) {
+    for (const candidate of repair ? [] : candidates) {
       const receipt = await smallFile(path.join(directory!, "pushes", candidate));
       if (receipt !== `${ref}\n${expectedUrl}\n`) return refuse("the push receipt names another delivery target");
       if (!tip || (await exec("git", ["merge-base", "--is-ancestor", candidate, tip], pipeline.worktreeDir)).code !== 0) {
@@ -159,25 +191,31 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       return baseTip = sha;
     };
     const verifiedSuffix = async (target: string): Promise<string | null> => {
-      if (target === start.head) return null;
-      let anchor = start.head;
-      if ((await exec("git", ["merge-base", "--is-ancestor", anchor, target], pipeline.worktreeDir)).code !== 0) {
+      const from = repair?.acceptedHead ?? anchor;
+      if (target === from) return null;
+      let suffixAnchor = from;
+      if ((await exec("git", ["merge-base", "--is-ancestor", suffixAnchor, target], pipeline.worktreeDir)).code !== 0) {
+        if (repair || directories.length > 1) return `commit ${target} dropped accepted replacement history`;
         // Local history rewrites still pass through the existing accepted-
         // content reconciliation in the stage committer. Prove their native
         // creation here; pushed adoption below retains its stricter ancestry.
-        anchor = pipeline.baseRef;
-        if ((await exec("git", ["merge-base", "--is-ancestor", anchor, target], pipeline.worktreeDir)).code !== 0)
+        suffixAnchor = pipeline.baseRef;
+        if ((await exec("git", ["merge-base", "--is-ancestor", suffixAnchor, target], pipeline.worktreeDir)).code !== 0)
           return `commit ${target} does not descend from the pipeline base`;
       }
       // Bound each read, not the number of commits a real stage may create.
       for (let offset = 0; ; offset += 128) {
-        const log = await exec("git", ["rev-list", "--topo-order", "--max-count=128", `--skip=${offset}`, `${anchor}..${target}`], pipeline.worktreeDir);
+        const log = await exec("git", ["rev-list", "--topo-order", "--max-count=128", `--skip=${offset}`, `${suffixAnchor}..${target}`], pipeline.worktreeDir);
         if (log.code !== 0) return `commit ${target} has unreadable ancestry`;
         const commits = log.stdout.trim().split("\n").filter(Boolean);
         if (offset === 0 && !commits.length) return `commit ${target} has no readable suffix evidence`;
         for (const sha of commits) {
           if (!/^[0-9a-f]{40}$/.test(sha)) return `commit ${target} has malformed ancestry evidence`;
-          if (directory && await smallFile(path.join(directory, "commits", sha)) === "") continue;
+          let created = false;
+          for (const receipts of directories) {
+            if (await smallFile(path.join(receipts, "commits", sha)) === "") { created = true; break; }
+          }
+          if (created) continue;
           if (await nativeCreation(sha)) continue;
           // A stage merges current main to keep up. Its already published
           // ancestors belong to the base, so they need no stage receipt.
@@ -189,6 +227,24 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       }
       return null;
     };
+    if (repair || directories.length > 1) {
+      // Replacements retain the head they were launched on, even when a
+      // rewritten commit has a new receipt under the replacement's identity.
+      if ((await exec("git", ["merge-base", "--is-ancestor", start.head, head], pipeline.worktreeDir)).code !== 0)
+        return refuse(`commit ${head} dropped the attempt's starting history`);
+    }
+    if (repair) {
+      if (!directory || await smallFile(path.join(directory, "commits", head)) !== "") return refuse(`commit ${head} has no producer creation receipt`);
+      const error = await verifiedSuffix(head);
+      if (error) return refuse(error);
+      const status = await exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
+      const branch = await exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
+      const current = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+      if (status.code !== 0 || status.stdout.trim() || branch.code !== 0
+        || ![pipeline.branch, ref.replace(/^refs\/heads\//, "")].includes(branch.stdout.trim())
+        || current.code !== 0 || current.stdout.trim() !== head) return refuse("the producer repair requires a stable clean owned branch");
+      return { ok: true, sha: head };
+    }
     if (!tip) {
       const error = await verifiedSuffix(head);
       return error ? refuse(error) : null;

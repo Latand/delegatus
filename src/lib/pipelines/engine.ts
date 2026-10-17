@@ -1,5 +1,5 @@
 import { ensureStagePullRequest } from "./stagePullRequest";
-import { stageAttemptPushRefusal } from "./stageAttemptPush";
+import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, withControllerPipelineScope } from "./controllerScope";
 import { startPipelineControllerJob, pipelineControllerJobLanes } from "./controllerJobs";
@@ -4191,6 +4191,16 @@ async function retryTerminalStagePublication(
   if (ports.deferStageGit) return;
   if (attempt.publicationRepair && !await settlePublicationRepair(pipeline, stage, attempt, ports, persist)) return;
   const current = (await currentPipelineBranchHead(pipeline, ports.exec));
+  if (current.ok && current.sha !== pipeline.lastPassedCommit && stage.kind === "run" && attempt.effectiveRole.access === "read-write") {
+    const repaired = await performanceSpans.wait("pipeline.attempt-push-proof", () => settleStageAttemptPush(pipeline, attempt, ports.exec, ports.now(), { acceptedHead: pipeline.lastPassedCommit }));
+    if (repaired?.ok) {
+      pipeline.lastPassedCommit = repaired.sha;
+      pipeline.publishedCommit = null;
+      delete pipeline.delivery!.operation;
+      delete attempt.publicationRetry;
+      await persist();
+    }
+  }
   if (!current.ok || current.sha !== pipeline.lastPassedCommit) {
     const detail = afterCommitRepair(attempt, current.ok
       ? `the worktree moved to ${current.sha} after accepting ${pipeline.lastPassedCommit}; commit and publish the current head before completing this stage`
@@ -12382,10 +12392,11 @@ export function decisionAnswerActorRefusal(
   return null;
 }
 
-/** No host or Git operations here: accepting an answer only reserves work. */
-function resolveDecision(
+/** Accepting an answer reserves work; publication continuations first verify
+    that the old producer has finished its repair turn. */
+async function resolveDecision(
   pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
-): PipelinePatchResult {
+): Promise<PipelinePatchResult> {
   const refusal = decisionAnswerActorRefusal(pipeline, actor, req.clientRequestId);
   if (refusal) return refusal;
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
@@ -12416,8 +12427,9 @@ function resolveDecision(
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
   const budgetRefusal = terminalBudgetDecisionRefusal(attempt);
   if (budgetRefusal) return budgetRefusal;
-  if (stage?.kind !== "run" || !attempt || attempt.state !== "needs_decision"
-    || attempt.verdict?.status !== "needs_decision" || !attempt.completedAt) {
+  const publicationDecision = pipeline.state === "needs_decision" && passedStagePublicationPark(pipeline, attempt);
+  if (stage?.kind !== "run" || !attempt || !attempt.completedAt || (!publicationDecision
+    && (attempt.state !== "needs_decision" || attempt.verdict?.status !== "needs_decision"))) {
     return { error: "resolve-decision requires a run attempt settled with a needs_decision verdict", status: 409 };
   }
   if (recoverableRuntimeSwitch(attempt)) {
@@ -12430,10 +12442,30 @@ function resolveDecision(
   if (survivor) return survivor;
   const termination = unresolvedTerminationRefusal(attempt);
   if (termination) return { error: termination, status: 409 };
+  if (publicationDecision && (pipeline.delivery?.operation?.state === "running"
+    || pipeline.delivery?.operation?.state === "pending"
+    || attempt.publicationRepair && !attempt.publicationRepair.settledAt
+    || attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId))) {
+    return { error: "the publication or its producer repair is still settling", status: 409 };
+  }
+  if (publicationDecision) {
+    const producerFence = pipelineRevision(pipeline);
+    const worker = publicationRepairWorker(pipeline, attempt) ?? { stage, attempt };
+    if (worker.attempt.conversationId) {
+      const active = await ports.conversationAgentActive(worker.attempt.conversationId);
+      const durable = await stageRepairEvidence(worker.attempt, ports);
+      if (active === true || durable?.turn === "busy"
+        || ports.conversationDeliveryOutstanding?.(worker.attempt.conversationId)
+        || liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length > 0) {
+        return { error: "the producer repair turn may still be running or queued", status: 409 };
+      }
+    }
+    if (pipelineRevision(pipeline) !== producerFence) return { error: "the pipeline changed while checking its producer", status: 409, code: "STAGE_CHANGED" };
+  }
   const decision: PipelineDecisionAnswer = {
     clientRequestId: req.clientRequestId, expectedRevision: req.expectedRevision,
     stageId: stage.id, attempt: attempt.n, nextAttempt: runFor(pipeline, stage.id)!.attempts.length + 1,
-    question: attempt.output ?? attempt.report?.summary ?? "", answer: req.answer,
+    question: publicationDecision ? pipeline.stateDetail! : attempt.output ?? attempt.report?.summary ?? "", answer: req.answer,
     actor: structuredClone(actor!), at: ports.now(),
   };
   // Keep the settled attempt, its report and worktree untouched. A fresh identity owns the continuation.
@@ -12442,6 +12474,7 @@ function resolveDecision(
   recordHandLaunch(pipeline, actor, decision.at);
   const next = newAttempt(pipeline, stage)!;
   next.decisionAnswerId = decision.clientRequestId;
+  if (publicationDecision && pipeline.delivery?.operation?.state === "settled") delete pipeline.delivery.operation;
   pipeline.decisionAnswers = [...(pipeline.decisionAnswers ?? []), decision];
   pipeline.state = "running";
   pipeline.pausedState = null;
@@ -12921,7 +12954,7 @@ export async function patchPipeline(
       return { pipeline };
     }
     if (req.action === "resolve-decision") {
-      const result = resolveDecision(pipeline, req, actor, ports);
+      const result = await resolveDecision(pipeline, req, actor, ports);
       if (result.pipeline && !result.replayed) await persist();
       return result;
     }
