@@ -216,6 +216,46 @@ test("the stamp step stamps linked tasks only, per changed group, and leaves eve
   expect(assigned.sync!.s).toEqual(moved.sync!.s);
 });
 
+test("a pre-task-index database upgrades on reopen before a linked task write", () => {
+  setSystemTime(new Date("2026-10-17T00:00:00.000Z"));
+  const { file, db: filename } = linkedInstall();
+  const db = new Database(filename);
+  try {
+    const taskIndexes = () => db.query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name GLOB 'state_rows_task_*' ORDER BY name",
+    ).all().map(row => row.name);
+    const expected = taskIndexes();
+    expect(expected).toHaveLength(9);
+    for (const name of expected) db.exec(`DROP INDEX "${name}"`);
+    // A read-only connection leaves schema repair to the writable open path.
+    expect(readStateCollectionRevision(filename, "tasks")).not.toBeNull();
+    expect(taskIndexes()).toEqual([]);
+    const source = `import { mutateTasks, loadTasks } from "./src/lib/tasks/store";
+      import { patchTask } from "./src/lib/tasks/commands";
+      Date.now = () => 1792195200000;
+      const file = process.argv[1], project = process.argv[2];
+      const at = "2026-10-17T00:00:00.000Z";
+      mutateTasks(tasks => ({ tasks: [...tasks, { id: "upgrade-task", project,
+        text: "Created after upgrade", status: "inbox", placement: "unplaced",
+        assignments: [], createdAt: at, updatedAt: at }], result: null }), file);
+      mutateTasks(tasks => {
+        const outcome = patchTask(tasks, "upgrade-task", { details: "Saved after upgrade" }, at, { explicit: true });
+        if (!outcome.ok) throw new Error(outcome.error);
+        return { tasks: outcome.tasks, result: null };
+      }, file);
+      console.log(JSON.stringify(loadTasks(file).find(task => task.id === "upgrade-task")));`;
+    // A real restart drops the task collection cache held by the old writer.
+    const child = spawnSync(process.execPath, ["-e", source, file, key], {
+      cwd: path.resolve(import.meta.dir, "../../.."), env: { ...process.env,
+        LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, encoding: "utf8", timeout: 30_000,
+    });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toMatchObject({ id: "upgrade-task", details: "Saved after upgrade",
+      sync: { s: { text: expect.stringMatching(STAMP_PATTERN) } } });
+    expect(taskIndexes()).toEqual(expected);
+  } finally { db.close(); }
+});
+
 test("a linked prototype semantic write stamps one row with the indexed project watermark", () => {
   setSystemTime(new Date("2026-10-17T00:00:00.000Z"));
   const { file, db } = linkedInstall();
