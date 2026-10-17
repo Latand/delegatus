@@ -971,3 +971,10 @@ test("a claim already waiting when drain begins is held until its busy bound wit
     expect(slots[1]).toEqual([{ target_id: "target_1", free: 0 }]);
   } finally { accountManager.resolveHeadlessSpawn = resolve; release(); stopExternalRelayPollers(); releaseDrain(drainFile(), "claim-wait"); updateRelayStore(store => ({ ...store, relays: originalRelays })); await server.close(); }
 });
+
+
+test("claim advertises on-demand tools only when the stored descriptor offers them", () => {
+  expect(relayClaimCapabilities({ features: ["relay_tool_calls", "relay_tools_on_demand"] }).features).toContain("relay_tools_on_demand");
+  expect(relayClaimCapabilities({ features: ["relay_tool_calls"] }).features).not.toContain("relay_tools_on_demand");
+  expect(relayClaimCapabilities().features).not.toContain("relay_tools_on_demand");
+});

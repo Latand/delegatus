@@ -3177,3 +3177,53 @@ for (const retry of [false, true]) test(`owner completion rechecks cutoff after 
     expect(completions).toHaveLength(retry ? 2 : 1);
   } finally { release(); lookup.mockRestore(); await server.close(); }
 });
+
+
+test("a member on-demand claim is filled before the first round and still calls its read", async () => {
+  const full = x1Request("member");
+  const request = structuredClone(full);
+  request.request_id = "member_on_demand";
+  request.input.tools = request.input.tools!.map(tool => tool.mode === "direct" ? { ...tool, parameters: undefined, spec: "0123456789abcdef" } : tool);
+  request.input.tool_guidance = null;
+  const run = await runLoopCase({ request, features: ["relay_tool_calls", "relay_tools_on_demand"], response: body => {
+    if ("describe" in body) return { body: { ...x1Results.ok, call_id: body.call_id, tool: "", tools: full.input.tools!.filter(tool => tool.mode === "direct"),
+      guidance: [{ tools: ["search_docs"], text: "Search the advertised documents." }] } };
+    return { body: { ...x1Results.ok, call_id: body.call_id } };
+  } });
+  expect(run.completion).toMatchObject({ outcome: "answered" });
+  expect(run.calls).toHaveLength(2);
+  expect(run.calls[0]).toHaveProperty("describe");
+  expect(run.calls[1]).toHaveProperty("tool", "search_docs");
+  expect(run.rounds[0].prompt).toContain("parameters");
+  expect(run.rounds[0].prompt).toContain("Search the advertised documents.");
+});
+
+
+test("owner tool lease loss interrupts the owner and completes nothing", async () => {
+  const { productionDomainDependencies, viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const request = requestSchema.parse(contextRequest);
+  request.request_id = "owner_tool_lease_loss"; request.input.requester!.is_owner = true;
+  request.input.tools = ownerRequest().input.tools;
+  const stops: string[] = []; let posts = 0, observed = false;
+  const server = await startTestRelay((req) => {
+    if (req.url?.endsWith("/tool-calls")) { posts++; return { status: 409, body: { error: { code: "lease_lost" } } }; }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const bindings = viewerMcpBindings(undefined, { get: async () => ({}), post: async () => ({}) }, {
+    ...productionDomainDependencies, callerAttribution: () => ({ kind: "agent", conversationId: "conversation_owner_lease_loss", role: null }),
+  });
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: "/missing-owner-cli", timeoutMs: 5000, ownerPorts: {
+      launch: async () => ({ status: 202, body: { conversationId: "conversation_owner_lease_loss" } }),
+      observe: async () => {
+        if (!observed) { observed = true; await bindings.relay_service_tools({ op: "call", calls: [{ tool: "get_media", arguments: {} }] }); }
+        return { state: stops.length ? "ended" : "running" };
+      }, stop: async (_id, action) => { stops.push(action); }, pollMs: 1,
+    } });
+    expect(result).toBeNull(); expect(stops).toEqual(["interrupt"]); expect(posts).toBe(1);
+    await expect(bindings.relay_service_tools({ op: "list" })).rejects.toMatchObject({ details: { code: "relay_tools_unavailable" } });
+    expect(posts).toBe(1);
+  } finally { await server.close(); }
+});

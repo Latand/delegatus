@@ -38,7 +38,7 @@ test("a problem reaches the designated seat's agenda, retries until landing and 
   const source = report();
   const sources = defaultSeatTickSources();
   const base = input();
-  const signals = sources.memoryProblems!(PROJECT, []);
+  const signals = sources.memoryProblems!(PROJECT, [], base.seat);
   expect(signals).toHaveLength(1);
   expect(signals[0].label).toContain(problem.statement);
   expect(signals[0].label).toContain(problem.evidence);
@@ -49,15 +49,15 @@ test("a problem reaches the designated seat's agenda, retries until landing and 
   expect(payload.text).toContain(problem.statement);
   expect(payload.text).toContain(problem.evidence);
   // A refusal or uncertain send makes no delivery credit and keeps the row owed.
-  expect(sources.memoryProblems!(PROJECT, [])).toEqual(signals);
+  expect(sources.memoryProblems!(PROJECT, [], base.seat)).toEqual(signals);
   const plan = seatTickWakeCommitPlan({ ...decision.verdict, items: [...payload.items] }, { fingerprint: base.changeFingerprint, eventsThrough: 0, frozenText: payload.text })!;
   const landed = seatTickWakeCommit(decision.state, plan, NOW);
-  expect(sources.memoryProblems!(PROJECT, landed.itemsShown ?? [])).toEqual([]);
+  expect(sources.memoryProblems!(PROJECT, landed.itemsShown ?? [], base.seat)).toEqual([]);
   const rotated = seatTickStateForEpoch(landed, 2);
-  expect(sources.memoryProblems!(PROJECT, rotated.itemsShown ?? [])).toEqual([]);
+  expect(sources.memoryProblems!(PROJECT, rotated.itemsShown ?? [], base.seat)).toEqual([]);
   expect(lessonRequest(source.pipelineId, source.stageId, source.attempt)?.problemDeliveredAt).toBeTruthy();
   // Even after the generic agenda ledger trims this signal, its own row remembers delivery.
-  expect(sources.memoryProblems!(PROJECT, [])).toEqual([]);
+  expect(sources.memoryProblems!(PROJECT, [], base.seat)).toEqual([]);
   expect(problems.memoryProblemSignals("another-project", [])).toEqual([]);
 });
 
@@ -65,12 +65,15 @@ test("the production controller credits a landed problem before losing the seat 
   const source = report();
   const sources = defaultSeatTickSources();
   const base = input();
-  const signals = sources.memoryProblems!(PROJECT, []);
+  const signals = sources.memoryProblems!(PROJECT, [], base.seat);
   const decision = seatTickDecision({ ...base, signals });
   if (decision.verdict.kind !== "wake") throw Error("wake expected");
   const plan = seatTickWakeCommitPlan(decision.verdict, { fingerprint: base.changeFingerprint, eventsThrough: 0 })!;
   const landed = seatTickWakeCommit(decision.state, plan, NOW);
   expect(lessonRequest(source.pipelineId, source.stageId, source.attempt)?.problemDeliveredAt).toBeUndefined();
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  beginOrchestratorSeatIntent({ project: PROJECT, mandate: "coordinate", mode: "existing", clientRequestId: "problem-seat" });
+  completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "problem-seat", conversationId: base.seat!.conversationId, path: "fixture-transcript" });
   await runSeatTickCheck(PROJECT, {
     sources: { ...sources, now: () => NOW + 60_000 },
     readState: () => landed, writeState: () => {}, appendRecord: () => {},
@@ -78,7 +81,7 @@ test("the production controller credits a landed problem before losing the seat 
     curation: null, maintenance: null,
   });
   expect(lessonRequest(source.pipelineId, source.stageId, source.attempt)?.problemDeliveredAt).toBeTruthy();
-  expect(sources.memoryProblems!(PROJECT, [])).toEqual([]);
+  expect(sources.memoryProblems!(PROJECT, [], base.seat)).toEqual([]);
 });
 
 test("concrete file paths are steered to problem on Unix and Windows", () => {
@@ -140,7 +143,7 @@ test("a new curator transfer after Undo is offered again even when the calls sha
   const first = claimPass({ project: PROJECT, repoDir: root, now: NOW })!;
   transfer(first);
   const old = problems.memoryProblemSignals(PROJECT, []);
-  const shown = old.map(seatTickSignalVersion);
+  const shown = old.map(signal => seatTickSignalVersion(signal, null));
   expect(problems.memoryProblemSignals(PROJECT, shown)).toEqual([]);
   patchPass(first.id, { state: "succeeded", endedAt: new Date(NOW + 2).toISOString() });
   revertCuratorPass(first.id, new Date(NOW + 3).toISOString());
@@ -159,7 +162,7 @@ test("a summarized problem points to a complete local report even after delivery
   const item = { kind: "signal" as const, id: signal.id, label: "Long problem evidence ".repeat(250) };
   const payload = seatTickWakePayload({ project: PROJECT, items: [item], reasons: [{ kind: "interval", detail: "a problem is owed" }], signals: [], deferred: 0 });
   expect(payload.text).toContain(`seat_tick_settings verbose:true problemId=${signal.id}`);
-  problems.memoryProblemSignals(PROJECT, [seatTickSignalVersion(signal)]);
+  problems.memoryProblemSignals(PROJECT, [seatTickSignalVersion(signal, null)]);
   expect(lessonRequest(source.pipelineId, source.stageId, source.attempt)?.problemDeliveredAt).toBeTruthy();
   expect(problems.readMemoryProblem(PROJECT, signal.id)).toEqual(problem);
 });
