@@ -5107,6 +5107,7 @@ describe("CodexAppServerHost", () => {
   });
 
   test("boot re-host resumes Codex and reconstructs its Viewer MCP connector (#1346)", async () => {
+    const stdioEnv = { ...process.env, LLV_SPAWN_CAPABILITY: undefined };
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-adoption-"));
     const registryPath = path.join(directory, "agent-registry.json");
     const registry = new AgentRegistry(registryPath);
@@ -5144,7 +5145,7 @@ describe("CodexAppServerHost", () => {
     const eventStore = new MemoryEventStore();
     const adopted = await adoptCodexRegistryHosts(
       registry,
-      () => ({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) }),
+      () => ({ cwd: "/repo", env: stdioEnv, eventStore, spawnProcess: fakeSpawn(server) }),
       { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
     );
     expect(adopted).toHaveLength(1);
@@ -5188,7 +5189,7 @@ describe("CodexAppServerHost", () => {
     const replacement = new FakeAppServer("adopted-thread");
     const releasedRows = await adoptCodexRegistryHosts(
       restartedRegistry,
-      () => ({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(replacement) }),
+      () => ({ cwd: "/repo", env: stdioEnv, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(replacement) }),
       { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
     );
     expect(releasedRows).toHaveLength(1);
@@ -5232,12 +5233,19 @@ describe("CodexAppServerHost", () => {
     const control = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      fetch(request) {
+      async fetch(request) {
         controlRequests += 1;
         const url = new URL(request.url);
-        expect(url.pathname).toBe("/api/runtime/deployments");
-        expect(url.searchParams.get("limit")).toBe("25");
-        return Response.json({ count: 1, deployments: [deployment] });
+        expect(url.pathname).toBe("/api/mcp");
+        const call = await request.json() as { id: string; method: string; params: { name: string; arguments: { clientRequestId: string } } };
+        expect(call.method).toBe("tools/call");
+        expect(call.params.name).toBe("deployment_status");
+        expect(call.params.arguments.clientRequestId).toBe("seat-successor-deployment-status");
+        const result = { ok: true, toolName: "deployment_status", clientRequestId: call.params.arguments.clientRequestId,
+          replayed: false, count: 1, deployments: [deployment] };
+        return Response.json({ jsonrpc: "2.0", id: call.id, result: {
+          content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result,
+        } });
       },
     });
     if (control.port === 8898) {

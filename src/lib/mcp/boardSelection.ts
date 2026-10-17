@@ -97,8 +97,14 @@ export class BoardSelection {
     } finally { if (!snapshot) source.close(); }
   }
   links(task: string): string[] {
+    return this.withLinks(lookup => lookup(task));
+  }
+  /** A synchronous page observes one pipeline generation. Refresh once before
+   * projecting its rows; the next request refreshes again. */
+  withLinks<T>(read: (lookup: (task: string) => string[]) => T): T {
     this.sync();
-    return this.db.query<{ pipeline: string }, [string]>("SELECT pipeline FROM links WHERE task=? ORDER BY pipeline").all(task).map(row => row.pipeline);
+    const links = this.db.query<{ pipeline: string }, [string]>("SELECT pipeline FROM links WHERE task=? ORDER BY pipeline");
+    return read(task => links.all(task).map(row => row.pipeline));
   }
   projectKeys<T>(source: Source<T>): string[] {
     const Database = sqliteDatabase();

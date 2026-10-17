@@ -1374,6 +1374,8 @@ export class CodexAppServerHost implements EngineHost {
       value unknown, keeps admission fail-closed, and schedules discovery on
       the next image send. */
   private imageInputSupport: "supported" | "unsupported" | "unknown" = "unknown";
+  /** Effective connector after Codex merges the account's registered server. */
+  viewerMcpTransport: "stdio" | "http" | null = null;
   private requestedModel: string | undefined;
   private readonly reroutedModels = new Map<string, string>();
   private realtimeDeliveryEpoch = 0;
@@ -1592,6 +1594,10 @@ export class CodexAppServerHost implements EngineHost {
         features,
         options.cleanMemory === true,
       );
+      const viewer = record(record(config.mcp_servers)?.viewer);
+      provisional.viewerMcpTransport = viewer?.enabled === true
+        ? typeof viewer.command === "string" ? "stdio" : typeof viewer.url === "string" ? "http" : null
+        : null;
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
       const cleanup = questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome);
       if (questionPolicy) config.tools = questionPolicy.tools;

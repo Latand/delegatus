@@ -4,9 +4,10 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { NextRequest } from "next/server";
-import { createMcpToolService, createProductionViewerMcpService, SqliteMcpReceiptStore, MemoryMcpReceiptStore, type McpToolBindings, type McpToolCallContext } from "./server";
+import { MCP_TOOL_NAMES, createMcpToolService, createProductionViewerMcpService, SqliteMcpReceiptStore, MemoryMcpReceiptStore, type McpToolBindings, type McpToolCallContext } from "./server";
 import { handleMcpHttpRequest, setMcpHttpDependenciesForTests } from "./http";
 import { currentMcpHttpCaller } from "./callerContext";
+import { ownFixtureChild, reapFixtureChildren } from "./ownedFixtureChildren";
 
 const original = { ...process.env };
 const listeners: Array<ReturnType<typeof Bun.serve>> = [];
@@ -120,7 +121,28 @@ function fixture(handler: (request: Request) => Promise<Response>) {
   process.env.LLV_VIEWER_CONTROL_TOKEN = "fixture-control-key";
 }
 
-test("stdio large reads run in the Viewer and preserve its receipt and native work envelope", async () => {
+test("the stdio bridge bounds concurrent transport calls and frees admission after replies", async () => {
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let reached = 0;
+  fixture(async request => {
+    const body = await request.json() as { id: string; params: { name: string } };
+    reached++;
+    await held;
+    return Response.json({ jsonrpc: "2.0", id: body.id, result: { content: [], structuredContent: { ok: true, toolName: body.params.name } } });
+  });
+  const service = await createProductionViewerMcpService(false, true);
+  const pending = Array.from({ length: 32 }, (_, n) => service.callTool("create_task", { clientRequestId: `bounded-${n}` }));
+  try {
+    expect(await service.callTool("create_task", { clientRequestId: "bounded-next" })).toMatchObject({ ok: false, retryable: true });
+  } finally { release(); }
+  expect((await Promise.all(pending)).every(result => result.ok)).toBe(true);
+  expect(reached).toBe(32);
+  expect(await service.callTool("create_task", { clientRequestId: "bounded-next" })).toMatchObject({ ok: true });
+  expect(reached).toBe(33);
+});
+
+test("every stdio tool runs in the Viewer and preserves its receipt and native work envelope", async () => {
   const calls: Array<Record<string, unknown>> = [];
   fixture(async request => {
     expect(new URL(request.url).pathname).toBe("/api/mcp");
@@ -135,11 +157,11 @@ test("stdio large reads run in the Viewer and preserve its receipt and native wo
   });
   const service = await createProductionViewerMcpService(false, true);
   const nativeWork = { threadId: "fixture-thread", turnId: "fixture-turn", turnTrigger: "realtime", callId: "fixture-call", itemId: "fixture-item" };
-  for (const name of ["conversation_messages", "resources", "operator_snapshot", "board_snapshot", "agent_fleet", "list_pipelines", "get_pipeline", "read_prototype_review", "agent_activity", "search_transcripts", "lifecycle_events"] as const) {
+  for (const name of MCP_TOOL_NAMES) {
     expect(await service.callTool(name, { clientRequestId: "read-key", full: true }, { nativeWork }))
       .toEqual({ ok: true, toolName: name, clientRequestId: "read-key", replayed: true, marker: "Viewer answer" });
   }
-  expect(calls).toHaveLength(11);
+  expect(calls).toHaveLength(MCP_TOOL_NAMES.length);
   for (const call of calls) expect(call).toMatchObject({ arguments: { clientRequestId: "read-key", full: true }, _meta: {
     threadId: "fixture-thread", callId: "fixture-call", itemId: "fixture-item",
     "x-codex-turn-metadata": { thread_id: "fixture-thread", turn_id: "fixture-turn", turn_trigger: "realtime" },
@@ -182,3 +204,61 @@ test("cancelling a delegated read releases the request and the next read works",
     expect(await service.callTool("resources", {})).toMatchObject({ ok: true });
   } finally { release(); await call; }
 });
+
+
+test("a task mutation whose reply is lost replays once through the Viewer and rechecks policy before replay", async () => {
+  let effects = 0, permitted = true, lose = true;
+  const upstream = createMcpToolService({ create_task: async () => ({ taskId: `task-${++effects}`, revision: "one" }) } as unknown as McpToolBindings,
+    new MemoryMcpReceiptStore(), { permit: () => permitted ? { allowed: true } : { allowed: false, code: "tool_not_permitted", error: "caller no longer admitted" } });
+  setMcpHttpDependenciesForTests({ service: async () => upstream, conversationForCapability: () => "conversation_fixture" });
+  fixture(async request => {
+    const answer = await handleMcpHttpRequest(new NextRequest(request));
+    if (lose) { lose = false; return new Response("cut", { status: 502 }); }
+    return answer;
+  });
+  const service = await createProductionViewerMcpService(false, true);
+  const args = { clientRequestId: "write-replay", project: "fixture", text: "A task", placement: "unplaced" };
+  expect(await service.callTool("create_task", args)).toMatchObject({ ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
+  expect(await service.callTool("create_task", args)).toMatchObject({ ok: true, taskId: "task-1", replayed: true });
+  expect(effects).toBe(1);
+  expect(await service.callTool("create_task", { ...args, text: "Changed payload" })).toMatchObject({ ok: false });
+  permitted = false;
+  const denied = await service.callTool("create_task", args);
+  expect(denied).toMatchObject({ ok: false });
+  expect(JSON.stringify(denied)).not.toContain("task-1");
+  expect(effects).toBe(1);
+});
+
+test.skipIf(process.platform !== "linux")("native forwarding proves the kernel peer and the exact request body", async () => {
+  const { nativePeerProof, verifyNativePeer } = await import("./nativePeer");
+  const body = JSON.stringify({ method: "tools/call", params: { name: "create_task" } });
+  const proof = await nativePeerProof(body);
+  try {
+    expect((await verifyNativePeer(proof.header, body)).pid).toBe(process.pid);
+    await expect(verifyNativePeer(proof.header, body + " ")).rejects.toThrow("refused");
+    const forged = JSON.parse(Buffer.from(proof.header, "base64url").toString());
+    forged.nonce = "a".repeat(43);
+    await expect(verifyNativePeer(Buffer.from(JSON.stringify(forged)).toString("base64url"), body)).rejects.toThrow("refused");
+  } finally { proof.close(); }
+  await expect(verifyNativePeer(proof.header, body)).rejects.toThrow();
+});
+
+test.skipIf(process.platform !== "linux")("native peer proof crosses the Viewer's separate temporary filesystem", async () => {
+  const { nativePeerProof } = await import("./nativePeer");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-peer-mount-"));
+  const hidden = path.join(directory, "parent-only");
+  fs.writeFileSync(hidden, "fixture");
+  const body = JSON.stringify({ method: "tools/call", params: { name: "list_tasks" } });
+  const proof = await nativePeerProof(body);
+  try {
+    const child = ownFixtureChild(Bun.spawn({ cmd: ["unshare", "--user", "--map-root-user", "--mount",
+      "sh", "-c", 'mount -t tmpfs tmpfs "$1" && exec "$2" "$3"', "fixture", directory, process.execPath, path.join(import.meta.dir, "writerConcurrencyChild.ts")],
+      env: { ...process.env, LLV_NATIVE_PEER_VERIFY: proof.header, LLV_NATIVE_PEER_BODY: body, LLV_NATIVE_PEER_HIDDEN: hidden }, stdout: "pipe", stderr: "pipe" }));
+    const errors = new Response(child.stderr).text();
+    const answer = new Response(child.stdout).text();
+    const code = await child.exited;
+    if (code !== 0) throw new Error(await errors);
+    expect(JSON.parse(await answer).pid).toBe(process.pid);
+    expect(fs.existsSync(hidden)).toBe(true);
+  } finally { proof.close(); await reapFixtureChildren(); fs.rmSync(directory, { recursive: true, force: true }); }
+}, 15_000);

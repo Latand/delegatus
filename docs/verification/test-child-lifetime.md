@@ -595,9 +595,13 @@ Additional launch wiring checked by text and imports:
 
 | File | Result |
 | --- | --- |
+| `src/lib/mcp/largeReads.test.ts` | The native-peer mount-namespace fixture uses the recorded child handle and awaited shared teardown; the owned runner contains it on deadline. |
 | `src/lib/mcp/ownedFixtureChildren.ts` | Receives existing handles; immediate registration and handle cleanup retained. The preload owns them before any caller can await. |
 | `src/lib/testing/testChildren.ts` | Wraps the real Node primitive and both Bun overloads before spawn returns; supplies the parent identity even without options. |
 | `scripts/local-gate-tests.ts` | Per-file comparison launches the kernel-owned runner and removes the old post-exit group-number kill. |
+| `src/lib/mcp/taskExecutor.ts` | One Viewer-owned task executor uses the helper lease, bounds pending calls and input bytes, and retires after idle. `taskExecutor.test.ts` kills its real Viewer owner and requires the executor and guardian to exit within three seconds. |
+| `src/lib/mcp/taskExecutor.test.ts` | Retains and closes every executor and owns its fixture parent; records descendant identities before the hard-death case and cleans only those identities. |
+| `scripts/mcp-state-writer-benchmark.ts` | The existing MCP cost benchmark's state-writer mode retains the Viewer handle and every SDK client, closes them in finally, and samples only their recorded descendants. Run through gate-slot in a private PID namespace; namespace teardown contains grandchildren after controller death. |
 | `scripts/verify-native-codex-runtime.ts` | Preserves the existing manager connection for nested containment, with one named file per process and a five-minute bound. |
 | `src/lib/runtime/codexAppServerHost.injectCli.test.ts` | The direct CLI helper records its root identity at spawn and awaits bounded identity-checked tree termination in every finally block, including native app-server helpers. |
 | `src/lib/runtime/claudeStreamBrokerHost.integration.test.ts` | Generated launchers and product launch ports remain inside their test service. |

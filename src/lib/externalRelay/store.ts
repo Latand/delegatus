@@ -151,6 +151,14 @@ export function readRelayStore(): RelayStore {
     ? updateRelayStore((current) => current)
     : store;
 }
+/** Authority reads never create settings or prune pending pairings. */
+export function pairedTelegramOwner(userId: string): boolean {
+  try {
+    const store = JSON.parse(fs.readFileSync(externalRelayFile("relays"), "utf8")) as RelayStore;
+    return store.v === 1 && Array.isArray(store.relays) && store.relays.some(relay =>
+      relay?.paused === false && relay.owner?.namespace === "telegram" && relay.owner.id === userId);
+  } catch { return false; }
+}
 function readStoredRelays(): RelayStore {
   const file = externalRelayFile("relays");
   const existed = fs.existsSync(file);
