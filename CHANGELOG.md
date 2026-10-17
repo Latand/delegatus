@@ -464,6 +464,11 @@ guarantees for the 1.x series.
 - **A delivery wake is not lost.** A wake that arrives while an older
   delivery pass runs, or after a listing went into backoff, now moves the
   admitted send on ([#2989]).
+- **The landing demo's sounds load.** The demo asks for its audio cues
+  when a visitor first interacts, and the landing build did not include
+  them, so each request answered 404 and filled the browser console with
+  errors. The build now copies the cue files, and it fails when a file the
+  product names is missing ([#2950]).
 
 ### Security
 - An external native Claude session needs your approval before Delegatus
@@ -4325,6 +4330,7 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2945]: https://github.com/Latand/delegatus/pull/2945
 [#2946]: https://github.com/Latand/delegatus/pull/2946
 [#2947]: https://github.com/Latand/delegatus/pull/2947
+[#2950]: https://github.com/Latand/delegatus/pull/2950
 [#2951]: https://github.com/Latand/delegatus/pull/2951
 [#2952]: https://github.com/Latand/delegatus/pull/2952
 [#2953]: https://github.com/Latand/delegatus/pull/2953
