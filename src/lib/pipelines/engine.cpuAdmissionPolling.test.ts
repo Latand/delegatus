@@ -34,7 +34,8 @@ beforeEach(() => {
   saveWorkflows([]);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
   closeAgentRegistryForTests();
   globals[queueSymbol]?.queue.close();
   delete globals[queueSymbol];
