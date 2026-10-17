@@ -102,7 +102,7 @@ test("a refusal under the button is brought into the visible area of its scrolle
   const before = proto.scrollIntoView;
   proto.scrollIntoView = function (this: Element, options: unknown) { shown.push([this.hasAttribute("data-decision-error"), options]); };
   try {
-    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "try again" }), { status: 409 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "try again" }), { status: 409 })) as unknown as typeof fetch;
     const host = await render(<DecisionList project="project-a" initial={[taskDecision()]} />);
     await click(host.querySelector("[data-decision-reject]"));
     const field = host.querySelector<HTMLTextAreaElement>("[data-decision-comment]")!;
