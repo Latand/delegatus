@@ -671,7 +671,7 @@ test("a click scrolls the page to its top and puts the cursor in the composer wi
   await settle();
   const page = section(host).parentElement as unknown as HTMLElement & { scrollTo: (options: ScrollToOptions) => void };
   const scrolls: ScrollToOptions[] = [];
-  page.scrollTo = (options) => { scrolls.push(options); };
+  page.scrollTo = ((options: ScrollToOptions) => { scrolls.push(options); }) as typeof page.scrollTo;
   const composer = host.querySelector("[data-orchestrator-conversation] textarea") as HTMLTextAreaElement;
   const focused: Array<FocusOptions | undefined> = [];
   const realFocus = composer.focus.bind(composer);
@@ -681,7 +681,7 @@ test("a click scrolls the page to its top and puts the cursor in the composer wi
 
   expect(scrolls).toEqual([{ top: 0, behavior: "smooth" }]);
   expect(focused).toEqual([{ preventScroll: true }]);
-  expect(dom.document.activeElement).toBe(composer as unknown as Element);
+  expect(dom.document.activeElement as unknown as HTMLElement).toBe(composer);
   /* Returning never changes the folded state. */
   expect(section(host).getAttribute("data-collapsed")).toBe("0");
 });
