@@ -14,6 +14,7 @@ import {
   type AgentRegistry,
   type RegistryConversation,
 } from "@/lib/agent/registry";
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { structuredHostsEnabled } from "./flags";
 import { readRetiredAccountIds } from "@/lib/accounts/accountsStore";
 import type { AgentEngine } from "@/lib/agent/cli";
@@ -64,6 +65,17 @@ import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
 import { isInterruptedCodexContinuationId, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+
+function receiptAttemptForOperation(registry: AgentRegistry, operationId?: string | null, launchId?: string | null): string | null | undefined {
+  const fromOperation = operationId?.startsWith("spawn_message_") ? operationId.slice("spawn_message_".length) : null;
+  if (launchId && fromOperation && launchId !== fromOperation) {
+    // Preserve collection order when the diagnostic identities disagree.
+    return registryRowsMatching(registry.readOnlySnapshot(), "receipts", "launchId",
+      [launchId, fromOperation])[0]?.clientAttemptId;
+  }
+  const id = launchId || fromOperation;
+  return id ? registry.spawnReceipt(id)?.clientAttemptId : undefined;
+}
 
 export interface StructuredMessageRequest {
   /** Live authorization at fresh reservation, after runtime and lock waits. */
@@ -1174,8 +1186,7 @@ async function deliverHeldAttempt(
   } catch (error) {
     const invalidAuthority = await authorityFence();
     if (invalidAuthority !== undefined) return invalidAuthority;
-    spawnDiagnosticErrorFor(Object.values(registry.readOnlySnapshot().receipts).find(receipt =>
-      `spawn_message_${receipt.launchId}` === request.command?.operationId)?.clientAttemptId,
+    spawnDiagnosticErrorFor(receiptAttemptForOperation(registry, request.command?.operationId),
       "[structured delivery] runtime session read failed", error);
     progress.unreadable(error instanceof Error ? error.message : String(error));
     return heldOutcomeDuringRuntimeSynchronization(request, registry, error instanceof Error ? error.message : String(error));
@@ -1453,8 +1464,7 @@ export async function enqueueStructuredMessage(
   try {
     session = await readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined });
   } catch (error) {
-    spawnDiagnosticErrorFor(Object.values(registry.readOnlySnapshot().receipts).find(receipt =>
-      receipt.launchId === request.launchId || `spawn_message_${receipt.launchId}` === request.operationId)?.clientAttemptId,
+    spawnDiagnosticErrorFor(receiptAttemptForOperation(registry, request.operationId, request.launchId),
       "[structured delivery] runtime session read failed", error);
     if (dependencies.idleContinuationAllowed) return continuationRefused(`runtime session read failed: ${error instanceof Error ? error.message : String(error)}`);
     return holdDuringRuntimeSynchronization(

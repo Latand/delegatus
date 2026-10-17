@@ -2,11 +2,11 @@ import type { NextRequest } from "next/server";
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { loadPipelines } from "@/lib/pipelines/store";
+import { pipelineSelectionSource, loadPipelinesForList } from "@/lib/pipelines/store";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { currentSeat } from "@/lib/orchestrator/seatChannel";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadPrototypeTask } from "@/lib/tasks/store";
 import { runsElsewhere } from "@/lib/links/linked";
 import type { PrototypeReviewRound } from "./types";
 import { PrototypeError } from "./input";
@@ -19,7 +19,7 @@ export interface PrototypeWorld {
   orchestrator(project: string): string | null;
 }
 export const prototypeWorld: PrototypeWorld = {
-  pipeline: id => loadPipelines().find(p => p.id === id) ?? null,
+  pipeline: id => pipelineSelectionSource().read(id),
   caller(request) {
     const id = callerConversationId(request);
     if (!id) {
@@ -32,7 +32,7 @@ export const prototypeWorld: PrototypeWorld = {
     return { conversationId: id, project: project ? canonicalProject(project) : null };
   },
   stage(conversationId) {
-    const found = loadPipelines().flatMap(pipeline => pipeline.runs.flatMap(run => run.attempts
+    const found = loadPipelinesForList().flatMap(pipeline => pipeline.runs.flatMap(run => run.attempts
       .filter(attempt => attempt.conversationId === conversationId && !attempt.historical)
       .map(attempt => ({ taskIds: pipeline.taskIds, project: pipeline.project,
         source: { conversationId, pipelineId: pipeline.id, stageId: run.stageId, attempt: attempt.n } }))));
@@ -44,7 +44,7 @@ export const prototypeWorld: PrototypeWorld = {
   },
 };
 export function taskForPrototype(taskId: string, caller: PrototypeCaller, write = false) {
-  const task = loadTasks().find(t => t.id === taskId);
+  const task = loadPrototypeTask(taskId);
   if (!task) throw new PrototypeError("task not found",404);
   if (caller.conversationId && (!caller.project || canonicalProject(task.project) !== canonicalProject(caller.project))) throw new PrototypeError("prototype access is limited to the caller's project",403);
   if (write && runsElsewhere(task)) throw new PrototypeError("this task's prototypes are owned by another installation",409);

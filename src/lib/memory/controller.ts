@@ -1,3 +1,4 @@
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { structuredContent } from "@/lib/runtime/structuredContent";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
@@ -45,7 +46,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     const snapshot = agentRegistry().readOnlySnapshot();
     const conversation = snapshot.conversations[conversationId];
     const generation = conversation?.generations.at(-1);
-    const receipt = Object.values(snapshot.receipts).findLast(r => r.conversationId === conversationId);
+    const receipt = registryRowsMatching(snapshot, "receipts", "conversationId", conversationId).at(-1);
     const engine = conversation?.engine ?? receipt?.engine;
     if (engine !== "claude" && engine !== "codex") return "";
     // A clean stage (a reviewer, a review gate) takes no automatic memory on any turn.

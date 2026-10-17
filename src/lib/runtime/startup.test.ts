@@ -1147,7 +1147,8 @@ test.each(["terminal", "demoted-superseded", "new-generation", "superseded-durin
     },
     effectBatch: async (...args: Parameters<RuntimeHostClient["effectBatch"]>) => {
       // Signals read no session for a demoted row, but always page the effects.
-      if (failStartupSignalsAfterDiscard) {
+      // Startup includes spawns; a concurrent delivery drain must not consume its fault.
+      if (failStartupSignalsAfterDiscard && args[0]?.includes("runtime.spawn")) {
         failStartupSignalsAfterDiscard = false;
         throw new RuntimeHostUnavailableError("runtime socket failed after retained host discard");
       }

@@ -1,3 +1,4 @@
+import { yieldToRuntime } from "@/lib/cooperative";
 import type { FileEntry } from "../types";
 import { agentRegistry, RegistryReadError } from "../agent/registry";
 import { headRecordsResult, tailRecordsResult } from "./activity";
@@ -133,6 +134,23 @@ export function entryServiceTier(entry: FileEntry, durableTiers?: ReadonlyMap<st
   const tier = pick(tail.records);
   if (tail.complete) serviceTierCache.set(entry.path, [entry.size, mtimeMs, tier]);
   return tier ?? durableServiceTier(entry, durableTiers);
+}
+
+/** Resolve only the scanner's current paths, with bounded synchronous slices.
+ * No archived receipt census is needed to answer a missing tier. */
+export async function durableServiceTierIndexForPaths(paths: readonly string[], registry = agentRegistry()): Promise<ReadonlyMap<string, string | null>> {
+  const tiers = new Map<string, string | null>();
+  for (let offset = 0; offset < paths.length; offset += 16) {
+    for (const pathname of paths.slice(offset, offset + 16)) {
+      try {
+        const profile = registry.launchProfileForPath(pathname);
+        tiers.set(pathname, profile ? normalizeServiceTier(profile.serviceTier)
+          ?? (profile.fast === true ? "priority" : profile.fast === false ? "default" : null) : null);
+      } catch (error) { if (!(error instanceof RegistryReadError)) throw error; }
+    }
+    if (offset + 16 < paths.length) await yieldToRuntime();
+  }
+  return tiers;
 }
 
 /** One registry walk per scan, including misses. Conversation generations win

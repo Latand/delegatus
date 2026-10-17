@@ -1,3 +1,4 @@
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { realExec } from "@/lib/workflows/provision";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -354,7 +355,7 @@ function profileForPath(snapshot: ReturnType<AgentRegistry["snapshot"]>, pathnam
 }
 
 function hasViewerWorkerLaunchPrompt(snapshot: ReturnType<AgentRegistry["snapshot"]>, pathname: string): boolean {
-  return Object.values(snapshot.receipts).some((receipt) =>
+  return registryRowsMatching(snapshot, "receipts", "artifactPath", pathname).some((receipt) =>
     receipt.purpose === "launch"
     && receipt.artifactPath === pathname
     && receipt.launchProfile.role === "worker"
@@ -834,7 +835,7 @@ function migrationSourceHasLiveOwner(
     entry.key.engine === conversation.engine
     && entry.artifactPath === source.path
     && entryIsLive(entry, probe))) return true;
-  return Object.values(snapshot.receipts).some((receipt) =>
+  return registryRowsMatching(snapshot, "receipts", "conversationId", conversation.id).some((receipt) =>
     receipt.engine === conversation.engine
     && receipt.conversationId === conversation.id
     && receiptIsLive(snapshot, receipt, probe));

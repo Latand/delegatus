@@ -13,7 +13,9 @@ let nextFixture = 0;
 async function fixture(legacy = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "stage-proof-"));
   const lane = path.join(root, "lane"), remote = path.join(root, "remote.git"), foreign = path.join(root, "foreign");
-  const baseEnv = { ...process.env, GIT_AUTHOR_DATE: "2026-10-16T09:00:00Z", GIT_COMMITTER_DATE: "2026-10-16T09:00:00Z" };
+  const baseEnv = { ...process.env, ...Object.fromEntries(Object.keys(process.env).filter(key => key.startsWith("GIT_")).map(key => [key, undefined])),
+    HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(root, "absent-git-config"), GIT_CONFIG_COUNT: "0",
+    GIT_AUTHOR_DATE: "2026-10-16T09:00:00Z", GIT_COMMITTER_DATE: "2026-10-16T09:00:00Z" };
   const env = { ...baseEnv };
   const git = async (cwd: string, ...args: string[]) => {
     const r = await realExec("git", args, cwd, cwd === lane ? env : baseEnv);
@@ -50,6 +52,25 @@ async function fixture(legacy = false) {
   return { root, lane, remote, foreign, env, git, own, commit, push, settle, pipeline, attempt, receipt: stageGitReceiptDirectory(launchId),
     close: async () => { await fs.rm(root, { recursive: true, force: true }); await fs.rm(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); } };
 }
+
+test("B: a controller-created replacement link proves a completed parent without restartRecovery", async () => {
+  const f = await fixture();
+  let childLaunch: string | null = null;
+  try {
+    const inherited = await f.commit("completed parent output");
+    const parent = { ...f.attempt, n: 1, state: "failed", completedAt: NOW, agentPath: "/stage/parent.jsonl" } as PipelineStageAttempt;
+    childLaunch = `stage-proof-generic-replacement-${nextFixture}`;
+    await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, START));
+    const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: START, completedAt: NOW, state: "passed",
+      agentPath: "/stage/child.jsonl", restartContext: { previousAttempt: 1, transcriptPath: parent.agentPath } } as PipelineStageAttempt;
+    const head = await f.commit("replacement output");
+    f.pipeline.runs = [{ stageId: "build", attempts: [parent, child] }] as never;
+    await f.push();
+    expect(await settleStageAttemptPush(f.pipeline, child, realExec, NOW)).toEqual({ ok: true, sha: head });
+    expect(inherited).not.toBe(head);
+  } finally { if (childLaunch) await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true }); await f.close(); }
+});
 
 test.each([1, 3])("A: main fast-forward plus %i own commits settles after an in-worktree push", async count => {
   const f = await fixture();

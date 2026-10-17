@@ -1,3 +1,5 @@
+import { registryReceiptsForConversation } from "@/lib/agent/registry";
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
@@ -2274,7 +2276,7 @@ function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): stri
   const capability = callerCapability();
   const snapshot = dependencies.registrySnapshot();
   const digest = capability ? crypto.createHash("sha256").update(capability).digest("hex") : null;
-  const receipts = digest ? Object.values(snapshot.receipts).filter(row => row.spawnCapabilityDigest === digest) : [];
+  const receipts = digest ? registryRowsMatching(snapshot, "receipts", "spawnCapabilityDigest", digest) : [];
   const receipt = receipts.length === 1 ? receipts[0] : null;
   const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
   const conversation = authority.kind !== "unidentified" && authority.conversationId
@@ -5987,8 +5989,7 @@ async function deploymentStatus(
         throw new McpToolRefusal("retirement observation is limited to the caller's own project", { code: "retirement_project_refused" });
       }
       const explicit = text(args.callerLaunchId);
-      const receipt = explicit ? snapshot.receipts[explicit] : Object.values(snapshot.receipts)
-        .filter(candidate => candidate.conversationId === caller.conversationId)
+      const receipt = explicit ? snapshot.receipts[explicit] : registryRowsMatching(snapshot, "receipts", "conversationId", caller.conversationId)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.launchId.localeCompare(a.launchId))[0];
       if (!receipt || receipt.conversationId !== caller.conversationId) {
         throw new McpToolRefusal("retirement observation requires the authenticated caller's spawn receipt", { code: "retirement_receipt_refused" });
@@ -6171,7 +6172,7 @@ function latestReceiptForConversation(
   conversationId: string,
 ): RegistrySnapshot["receipts"][string] | null {
   const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
-  return Object.values(snapshot.receipts ?? {})
+  return registryReceiptsForConversation(snapshot, conversationId)
     .filter((receipt) => lookup.canonicalConversationId(receipt.conversationId) === conversationId)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
 }
@@ -6181,7 +6182,7 @@ function latestPendingLaunchReceiptForConversation(
   conversationId: string,
 ): RegistrySnapshot["receipts"][string] | null {
   const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
-  return Object.values(snapshot.receipts ?? {})
+  return registryReceiptsForConversation(snapshot, conversationId)
     .filter((receipt) => (
       lookup.canonicalConversationId(receipt.conversationId) === conversationId
       && receipt.transport === "structured"
@@ -7615,7 +7616,7 @@ async function recoverSpawn(
   } catch (error) {
     return { outcome: "unknown", evidence: "spawn-receipt", reason: `the launch record could not be read: ${error instanceof Error ? error.message : String(error)}`, ids: {} };
   }
-  let receipts = Object.values(snapshot.receipts).filter((receipt) => receipt.clientAttemptId === key);
+  let receipts = registryRowsMatching(snapshot, "receipts", "clientAttemptId", key);
   if (receipts.length === 0) {
     if (legacy || !args || typeof args.role !== "string" || !args.role.trim() || !dependencies.validateSpawnAdmission) return unknown();
     let body: Record<string, unknown>;
@@ -7653,7 +7654,7 @@ async function recoverSpawn(
     } catch (error) {
       return { outcome: "unknown", evidence: "spawn-receipt", reason: `the launch record could not be read after admission fencing: ${error instanceof Error ? error.message : String(error)}`, ids: {} };
     }
-    receipts = Object.values(snapshot.receipts).filter((receipt) => receipt.clientAttemptId === key);
+    receipts = registryRowsMatching(snapshot, "receipts", "clientAttemptId", key);
     let fence: SpawnAdmissionFence | null;
     try {
       fence = dependencies.readSpawnAdmissionFence(key);

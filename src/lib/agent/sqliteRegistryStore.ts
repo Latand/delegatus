@@ -69,8 +69,8 @@ const ROW_COLLECTION_KEYS: ReadonlySet<string> = new Set(ROW_COLLECTIONS);
 /** The rows whose MCP grant lists a complete load decides from other rows. */
 const READER_GRANT_COLLECTIONS: ReadonlySet<RowCollection> = new Set(["entries", "receipts", "conversations"]);
 type LookupValue = string | readonly string[];
-type LookupField = "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind";
-const LOOKUP_PATHS: Record<LookupField, string> = { conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
+type LookupField = "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind";
+const LOOKUP_PATHS: Record<LookupField, string> = { launchId: "$.launchId", parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
 type KeyedReader = (collection: RowCollection, field: LookupField, value: LookupValue) => string[];
 type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>;
 interface RegistryFileReaders {
@@ -1032,7 +1032,7 @@ export class SqliteAgentRegistryStore {
     for (const [field, jsonPath] of Object.entries(LOOKUP_PATHS)) {
       // Recovery indexes are prepared separately with a yield between
       // each build; accumulating their scans here breaks the cold-loop bound.
-      if (field === "requestDigest" || field === "supersedes.conversationId" || field === "structuredHost.kind") continue;
+      if (["launchId", "requestDigest", "supersedes.conversationId", "structuredHost.kind", "parentConversationId", "launchProfile.parentConversationId", "pendingSpawnCapability.operationId"].includes(field)) continue;
       if (options.allowArchiveMigration === false
         && !["conversationId", "artifactPath", "command.operationId", "alias"].includes(field)) continue;
       this.db.exec(`CREATE INDEX IF NOT EXISTS registry_lookup_${field.replaceAll(".", "_")} ON registry_rows(collection, json_extract(value_json, '${jsonPath}'), row_order)${field === 'alias' ? " WHERE collection = 'conversationAliases'" : ''}`);
@@ -1473,6 +1473,14 @@ export class SqliteAgentRegistryStore {
   async prepareRecoveryIndexes(signal?: AbortSignal): Promise<void> {
     if (this.options.readOnly || this.options.allowArchiveMigration === false) return;
     for (const [name, table, field, collection] of [
+      ["registry_lookup_launchId", "registry_rows", "launchId", "receipts"],
+      ["registry_archive_launchId", "registry_archive", "launchId", "receipts"],
+      ["registry_lookup_parentConversationId", "registry_rows", "parentConversationId", "receipts"],
+      ["registry_lookup_launchProfile_parentConversationId", "registry_rows", "launchProfile.parentConversationId", "receipts"],
+      ["registry_lookup_pendingSpawnCapability_operationId", "registry_rows", "pendingSpawnCapability.operationId", "receipts"],
+      ["registry_archive_launchProfile_parentConversationId", "registry_archive", "launchProfile.parentConversationId", "receipts"],
+      ["registry_archive_pendingSpawnCapability_operationId", "registry_archive", "pendingSpawnCapability.operationId", "receipts"],
+      ["registry_archive_pendingSpawnCapability_digest", "registry_archive", "pendingSpawnCapability.digest", "receipts"],
       ["registry_lookup_requestDigest", "registry_rows", "requestDigest", "receipts"],
       ["registry_lookup_supersedes_conversationId", "registry_rows", "supersedes.conversationId", "receipts"],
       ["registry_archive_request_digest", "registry_archive", "requestDigest", "receipts"],
@@ -2390,7 +2398,7 @@ export class SqliteAgentRegistryStore {
       ?? this.constantReader(deliveryDescriptor.value as RegistryFile["heldDeliveries"]);
     this.coldViewCache = nextCache;
     this.coldGrantCursor = { changeId: coldGrantChangeId,stamp: snapshot.stamp };
-    const pinnedReceipts = this.changesReady ? this.pinnedRowKeys(file, "receipts", coldGrantChangeId, identity) : null;
+    const pinnedReceipts = this.changesReady ? this.pinnedRowKeys(file, "receipts", coldGrantChangeId, identity, this.collectionOrders.get("receipts")?.orders) : null;
     const pinnedDeliveries = this.changesReady ? this.pinnedRowKeys(file, "heldDeliveries", coldGrantChangeId, identity) : null;
     const pinnedEntries = this.changesReady ? this.pinnedRowKeys(file, "entries", coldGrantChangeId, identity) : null;
     keyedReaders.set(file,(collection,field,value) => {
@@ -2401,8 +2409,8 @@ export class SqliteAgentRegistryStore {
         const holds = (entry: AgentRegistryEntry) => values.includes(entry.structuredHost?.kind ?? "");
         return pinnedEntries ? pinnedEntries(indexed, holds) : Object.keys(file.entries).filter(key => holds(file.entries[key]!));
       }
-      if (collection === "receipts" && field === "artifactPath") {
-        const holds = (receipt: RegistryFile["receipts"][string]) => values.includes(receipt.artifactPath ?? "");
+      if (collection === "receipts") {
+        const holds = (receipt: RegistryFile["receipts"][string]) => values.includes(lookupValue(receipt, field) as string);
         return pinnedReceipts ? pinnedReceipts(indexed, holds) : Object.keys(file.receipts).filter(key => holds(file.receipts[key]!));
       }
       if (collection === "heldDeliveries" && field === "conversationId") {
@@ -2413,22 +2421,39 @@ export class SqliteAgentRegistryStore {
     });
     livenessReaders.set(file,() => {
       const projection = this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_liveness_entries'").get();
-      const entryRows = projection
+      const indexedEntryKeys = () => (projection
         ? this.db.query<{ row_key: string }, []>("SELECT row_key FROM registry_liveness_entries ORDER BY row_order").all()
         : this.db.query<{ row_key: string }, []>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='entries' AND (
           json_extract(value_json,'$.status')!='dead' OR json_extract(value_json,'$.host') IS NOT NULL
           OR json_extract(value_json,'$.structuredHost.process') IS NOT NULL OR json_extract(value_json,'$.claimOwner') IS NOT NULL
           OR json_extract(value_json,'$.pendingAction') IS NOT NULL
           OR COALESCE(json_array_length(value_json,'$.structuredTerminationSurvivors'),0)>0
-        ) ORDER BY row_order`).all();
-      const entries = entryRows.map(row => file.entries[row.row_key]).filter((row): row is AgentRegistryEntry => !!row);
+        ) ORDER BY row_order`).all()).map(row => row.row_key);
+      const pinnedEntryKeys = pinnedEntries
+        ? pinnedEntries(indexedEntryKeys, entry => entry.status !== "dead" || entry.host !== null
+          || entry.structuredHost?.process != null || entry.claimOwner !== null || entry.pendingAction !== null
+          || (entry.structuredTerminationSurvivors?.length ?? 0) > 0)
+        : indexedEntryKeys();
+      const entries = pinnedEntryKeys.map(key => file.entries[key]).filter((row): row is AgentRegistryEntry => !!row);
       const entryKeys = entries.map(row => `${row.key.engine}:${row.key.sessionId}`);
-      const receiptKeys = new Set((projection
+      const entryKeySet = new Set(entryKeys);
+      const operationIds = new Set(entries.flatMap(entry => entry.structuredHostOperationId ? [entry.structuredHostOperationId] : []));
+      const indexedReceiptKeys = () => (projection
         ? this.db.query<{ row_key: string }, []>("SELECT row_key FROM registry_liveness_receipts ORDER BY row_order").all()
         : this.db.query<{ row_key: string }, []>(`SELECT row_key FROM ${this.recordsSource} WHERE collection='receipts' AND (
           json_extract(value_json,'$.state') NOT IN ('completed','failed','conflicted')
           OR json_extract(value_json,'$.admissionOwner') IS NOT NULL OR json_extract(value_json,'$.queuedPinnedSpawn') IS NOT NULL
-        ) ORDER BY row_order`).all()).map(row => row.row_key));
+        ) ORDER BY row_order`).all()).map(row => row.row_key);
+      const receiptHasHost = (receipt: RegistryFile["receipts"][string]) =>
+        receipt.verifiedHost?.agent != null || receipt.pane?.panePid != null;
+      const holdsLiveness = (receipt: RegistryFile["receipts"][string]) =>
+        !["completed", "failed", "conflicted"].includes(receipt.state)
+        || receipt.admissionOwner != null || receipt.queuedPinnedSpawn != null
+        || (receiptHasHost(receipt) && (entryKeySet.has(`${receipt.key?.engine}:${receipt.key?.sessionId}`)
+          || operationIds.has(receipt.launchId)));
+      const receiptKeys = new Set(pinnedReceipts
+        ? pinnedReceipts(indexedReceiptKeys, holdsLiveness)
+        : indexedReceiptKeys());
       if (entryKeys.length) {
         const placeholders = entryKeys.map(() => "?").join(",");
         for (const row of this.db.query<{ row_key: string }, string[]>(`SELECT r.row_key FROM registry_rows r INDEXED BY registry_liveness_receipt_session
@@ -2480,11 +2505,11 @@ export class SqliteAgentRegistryStore {
       from the view's own rows and the rest from the index. A journal that no
       longer reaches back to the view, or a replaced database, enumerates the
       view. */
-  private pinnedRowKeys<C extends RowCollection>(file: RegistryFile, collection: C, changeId: number, identity: string | null) {
+  private pinnedRowKeys<C extends RowCollection>(file: RegistryFile, collection: C, changeId: number, identity: string | null, originalOrder?: ReadonlyMap<string, number>) {
     type Row = RegistryFile[C][string];
     let seen = changeId;
     let changed: Set<string> | null = new Set();
-    let order: Map<string, number> | undefined;
+    let order: ReadonlyMap<string, number> | undefined = originalOrder;
     return (indexed: () => string[], holds: (row: Row) => boolean): string[] => {
       /* The index is read before the journal: whatever commits between the
          two reads is in the journal, and is then answered from the view. */
@@ -2559,8 +2584,7 @@ export class SqliteAgentRegistryStore {
   private matchingRowKeys(collection: RowCollection, field: LookupField, values: readonly string[]): string[] {
     const placeholders = values.map(() => "?").join(",");
     const jsonPath = LOOKUP_PATHS[field];
-    if (this.changesReady && (collection === "receipts" && (field === "requestDigest" || field === "supersedes.conversationId")
-        || collection === "entries" && field === "structuredHost.kind")
+    if (this.changesReady && (collection === "receipts" || collection === "entries" && field === "structuredHost.kind")
       && this.db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='registry_records'")
         .get()?.sql.includes("a.collection=c.collection AND a.row_key=c.row_key")) {
       // The compound view cannot prove the partial index's collection
