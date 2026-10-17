@@ -1,7 +1,7 @@
 "use client";
 
 import { MessageCircleQuestionMark } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ArrowRight } from "@/components/icons";
 import { usePrototypeNoticesFor } from "@/components/prototypeReview/prototypeReviewStore";
@@ -12,7 +12,7 @@ import type { OperatorDecisionView, OperatorDecisionsRead } from "@/lib/prototyp
 
 import { DecisionRecord } from "./DecisionCard";
 import { openOperatorDecisions } from "./decisionSurface";
-import { decisionsUrl } from "./useOperatorDecisions";
+import { decisionsUrl, recordAfter } from "./useOperatorDecisions";
 
 /*
  * Where the seat asked (docs/design/operator-decision-forms.md, variant 3):
@@ -54,21 +54,31 @@ export function DecisionPointer({ target }: { target: DecisionPointerTarget }) {
   const [record, setRecord] = useState<OperatorDecisionView | null>(null);
   /* Each retry reads the record again and polls it while the message travels. */
   const [reads, setReads] = useState(0);
-  const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const retrying = useRef(false);
+  /* Retry draws the message as on its way at once (audit B14); a refusal puts
+     the record back as it was, with the reason under it. */
   const retry = async () => {
-    setRetrying(true);
+    if (retrying.current || !record?.decision) return;
+    retrying.current = true;
+    const before = record;
+    setRecord(recordAfter(record, { retry: true }));
     setRetryError(null);
+    let failed: string | null = null;
     try {
       const response = await fetch("/api/projects/decisions", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ project: target.project, reviewId: target.reviewId, retry: true }),
       });
-      if (!response.ok) setRetryError(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? String(response.status));
+      if (!response.ok) failed = ((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? String(response.status);
     } catch (failure) {
-      setRetryError(failure instanceof Error ? failure.message : String(failure));
+      failed = failure instanceof Error ? failure.message : String(failure);
     } finally {
-      setRetrying(false);
+      retrying.current = false;
+      if (failed !== null) {
+        setRecord(before);
+        setRetryError(failed);
+      }
       setReads((held) => held + 1);
     }
   };
@@ -89,7 +99,8 @@ export function DecisionPointer({ target }: { target: DecisionPointerTarget }) {
         if (!response.ok) { if (transientRead(response.status)) again(); return; }
         const body = await response.json() as OperatorDecisionsRead;
         if (!alive) return;
-        setRecord(body.round ?? null);
+        /* A read that lands while a retry is out keeps the retry drawn. */
+        if (!retrying.current) setRecord(body.round ?? null);
         if (UNSETTLED.has(body.round?.decision?.delivery.state ?? "")) again();
       } catch { again(); }
     };
@@ -99,7 +110,7 @@ export function DecisionPointer({ target }: { target: DecisionPointerTarget }) {
   if (!waiting && record?.decision) {
     return (
       <div data-decision-pointer={target.reviewId} className="my-1 ml-9 max-w-[640px] max-[480px]:ml-0">
-        <DecisionRecord decision={record} onRetry={() => void retry()} retrying={retrying} retryError={retryError} />
+        <DecisionRecord decision={record} onRetry={() => void retry()} retryError={retryError} />
       </div>
     );
   }

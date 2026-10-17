@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { TelegramReportPromptPayload, TelegramReportSettings, TelegramReportsPayload } from "@/lib/telegram/reportContracts";
 
@@ -50,13 +50,17 @@ function codeOf(json: Record<string, unknown>): string {
 }
 
 export function useTelegramReports(active: boolean): TelegramReportsState {
-  const [reports, setReports] = useState<TelegramReportsPayload | null>(null);
+  /* The last payload the server gave, and the settings presses still on their
+     way: the drawn reports are the payload with the newest press laid over it. */
+  const [stored, setReports] = useState<TelegramReportsPayload | null>(null);
+  const [presses, setPresses] = useState<ReadonlyArray<{ id: number; settings: TelegramReportSettings }>>([]);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<TelegramReportsFailure | null>(null);
   const [openReport, setOpenReport] = useState<{ id: string; text: string } | null>(null);
   const [groups, setGroups] = useState<{ id: string; title: string }[] | null>(null);
   const [prompt, setPrompt] = useState<TelegramReportPromptPayload | null>(null);
   const sequence = useRef(0);
+  const reports = useMemo(() => (stored && presses.length > 0 ? { ...stored, settings: presses[presses.length - 1]!.settings } : stored), [stored, presses]);
 
   const load = useCallback(async () => {
     const current = ++sequence.current;
@@ -89,9 +93,9 @@ export function useTelegramReports(active: boolean): TelegramReportsState {
   /* Returns the OUTCOME, not just the body: an action that only knows the
      payload cannot tell a rejected save from an accepted one, and would report
      success the server never gave. */
-  const act = useCallback(async (body: Record<string, unknown>): Promise<{ ok: boolean; json: Record<string, unknown> }> => {
+  const act = useCallback(async (body: Record<string, unknown>, quiet = false): Promise<{ ok: boolean; json: Record<string, unknown> }> => {
     sequence.current += 1;
-    setBusy(true);
+    if (!quiet) setBusy(true);
     setFailure(null);
     try {
       const { ok, json } = await readJson(await fetch("/api/telegram/reports", {
@@ -108,9 +112,23 @@ export function useTelegramReports(active: boolean): TelegramReportsState {
       setFailure({ code: "transport" });
       return { ok: false, json: {} };
     } finally {
-      setBusy(false);
+      if (!quiet) setBusy(false);
     }
   }, []);
+  /* The report settings and the prompt are local writes: each shows at once
+     and locks nothing, and a refusal puts the last settings the server gave
+     back, with the presses still out drawn over them (audit B40, B41). An
+     older answer does not undo a newer one. */
+  const settingsWrite = useRef(0);
+  const drawnSettings = useCallback(async (settings: TelegramReportSettings, body: Record<string, unknown>) => {
+    const mine = ++settingsWrite.current;
+    setPresses((held) => [...held, { id: mine, settings }]);
+    try {
+      return await act(body, true);
+    } finally {
+      setPresses((held) => held.filter((press) => press.id !== mine));
+    }
+  }, [act]);
 
   return {
     reports,
@@ -120,7 +138,7 @@ export function useTelegramReports(active: boolean): TelegramReportsState {
     groups,
     prompt,
     refresh: load,
-    saveSettings: async (settings) => { await act({ action: "settings", settings }); },
+    saveSettings: async (settings) => { await drawnSettings(settings, { action: "settings", settings }); },
     loadPrompt: async () => {
       setBusy(true);
       setFailure(null);
@@ -145,8 +163,12 @@ export function useTelegramReports(active: boolean): TelegramReportsState {
     savePrompt: async (next) => {
       const current = reports?.settings;
       if (!current) return;
-      const { ok } = await act({ action: "settings", settings: current, prompt: next });
-      if (ok) setPrompt(null);
+      /* Closed on the press, reading "edited by you"; a refusal reopens the
+         editor with the typed text and the failure above it (audit B41). */
+      const opened = prompt;
+      setPrompt(null);
+      const { ok } = await drawnSettings({ ...current, promptIsDefault: opened ? next === opened.defaultPrompt : false }, { action: "settings", settings: current, prompt: next });
+      if (!ok && opened) setPrompt({ prompt: next, defaultPrompt: opened.defaultPrompt });
     },
     closePrompt: () => setPrompt(null),
     runNow: async () => { await act({ action: "run-now" }); },

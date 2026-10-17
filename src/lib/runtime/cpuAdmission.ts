@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -116,7 +117,7 @@ export class CpuAdmissionQueue {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite?.Database) throw new Error("CPU admission requires the supported Bun runtime");
-    this.db = new sqlite.Database(file, { create: true });
+    this.db = observeSqlite(new sqlite.Database(file, { create: true }), "cpu-admission");
     fs.chmodSync(file, 0o600);
     this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
     this.db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT); CREATE TABLE IF NOT EXISTS suspended (key TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER); INSERT OR IGNORE INTO admission VALUES (1, NULL);");
@@ -189,7 +190,7 @@ export class CpuAdmissionQueue {
       // A release that predates polls released these from a hold since the last check.
       this.db.query("UPDATE tickets SET polled = ? WHERE owner IS NULL AND polled IS NULL").run(now);
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NOT NULL").all()) {
-        const identity = JSON.parse(row.owner!) as ProcessIdentity;
+        const identity = parseSqliteJson(row.owner!, this.db) as ProcessIdentity;
         if (processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)) this.cancel(row.key);
       }
       // The insert is the poll: tickets_poll stamps an existing row with `now`.

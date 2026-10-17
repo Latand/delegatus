@@ -114,7 +114,8 @@ test("every library worker is bundled and traced into standalone output", async 
   expect(tracingIncludes).toContain(".next/server/chunks/**");
   for (const workerFile of workerFiles) {
     const source = `./src/lib/${workerFile}`;
-    const workerEntry = Object.entries(entries).find(([, entry]) => entry === source);
+    const workerEntry = Object.entries(entries).find(([, entry]) => entry === source
+      || (typeof entry === "object" && entry !== null && "import" in entry && entry.import === source));
     if (!workerEntry) throw new Error(`${workerFile} has no webpack entry`);
     expect(
       tracingIncludes,

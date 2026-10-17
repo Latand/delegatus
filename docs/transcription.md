@@ -75,11 +75,11 @@ guide's **Voice** step (reachable again from the **Dictation** menu row) and
 the microphone button's right-click menu. Both write the override file above
 (mode 600).
 
-The Voice step also takes the ElevenLabs or Soniox key: it is written to
-`elevenlabs-api-key` or `soniox-api-key` in the same directory, mode 600,
-through `PUT /api/transcribe/key`, and is never shown or returned again. A key
-set in `ELEVENLABS_API_KEY` or `SONIOX_API_KEY` wins over the file and cannot
-be replaced from the page. **Check dictation** asks the real path: for a live
+The Voice step says whether the ElevenLabs or Soniox key is set and opens
+**Settings → Keys** on it, the one place keys are entered: it writes
+`elevenlabs-api-key` or `soniox-api-key` in the same directory, mode 600. A key
+set in `ELEVENLABS_API_KEY` or `SONIOX_API_KEY` wins over the file; «Keys»
+labels it as set by its variable and does not replace it. **Check dictation** asks the real path: for a live
 backend it requests a token from `POST /api/transcribe/token` (and discards
 it), and for local or ChatGPT it reads the backend's availability, then says
 in one sentence whether dictation works.
@@ -172,7 +172,7 @@ batch.
 
 1. Environment variable `ELEVENLABS_API_KEY`, or
 2. File `~/.config/delegatus/elevenlabs-api-key` (the key as the file's
-   only contents).
+   only contents), which **Settings → Keys** writes.
 
 **Setup:**
 
@@ -210,7 +210,7 @@ marks the utterance finished.
 
 1. Environment variable `SONIOX_API_KEY`, or
 2. File `~/.config/delegatus/soniox-api-key` (the key as the file's only
-   contents).
+   contents), which **Settings → Keys** writes.
 
 **Setup:**
 
@@ -290,7 +290,7 @@ names the file to drop the key into — the same degradation as the other
 providers.
 
 Fish Audio reads `FISH_AUDIO_API_KEY` or `fishaudio-api-key` in the same config
-folder. Select it in the read-aloud right-click menu, which also offers
+folder; **Settings → Keys** writes the file. Select it in the read-aloud right-click menu, which also offers
 **S2.1 Pro Free** (the default, free through 30 November 2026) and **S2.1 Pro**
 (paid). The model is saved in `tts-model-fishaudio`; `LLV_TTS_FISHAUDIO_MODEL`
 overrides and locks it. `LLV_TTS_FISHAUDIO_VOICE` or `tts-voice-fishaudio` can
@@ -358,8 +358,8 @@ the whole board.
 | `open() got an unexpected keyword argument 'metadata_errors'` | faster-whisper 1.2.1 passes an argument removed in PyAV 19. | Re-run `scripts/setup-whisper.sh` to install the committed pins, including PyAV 18.1.0, and pass the transcription smoke step. |
 | "no Codex ChatGPT token (~/.codex/auth.json)…"           | ChatGPT backend selected but no Codex login found.              | Log in with Codex, then retry.                                      |
 | "ChatGPT token expired…"                                 | The stored Codex token is stale.                                | Open Codex so it refreshes the token, then retry.                   |
-| "no ElevenLabs key…"                                     | ElevenLabs backend selected but no key found.                   | Set `ELEVENLABS_API_KEY` or write the key file (see above).         |
-| "missing Soniox key…"                                    | Soniox backend selected but no key found.                       | Set `SONIOX_API_KEY` or write the key file (see above).             |
+| "no ElevenLabs key…"                                     | ElevenLabs backend selected but no key found.                   | Add it in Settings → Keys, or set `ELEVENLABS_API_KEY`.             |
+| "missing Soniox key…"                                    | Soniox backend selected but no key found.                       | Add it in Settings → Keys, or set `SONIOX_API_KEY`.                 |
 | "Soniox token: HTTP 401"                                 | The key was rejected when minting the temporary key.            | Check the key; live mode stays off and dictation falls back to batch. |
 | "live transcription is only available with the elevenlabs or soniox backend" | Live token requested while another backend is active. | Expected — the client falls back to batch automatically.            |
 

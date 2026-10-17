@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronRight } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { roleNameById } from "@/components/builderCopy";
@@ -121,13 +121,41 @@ function projectRulesOf(value: unknown): RoleMemoryProjectView {
   return view;
 }
 
+/** The reading as `action` leaves it, as far as the client can tell. */
+export function predictedRules(view: RoleMemoryProjectView, action: "delete" | "restore" | "revert" | "revert-pass", id: string, at = new Date().toISOString()): RoleMemoryProjectView {
+  if (action === "revert-pass") return view;
+  return { ...view, scopes: view.scopes.map((scope) => {
+    if (action === "delete") {
+      const rule = scope.active.find((candidate) => candidate.id === id);
+      return rule ? { ...scope, active: scope.active.filter((candidate) => candidate !== rule), left: [{ ...rule, state: "archived" as const, reason: "deleted" as const, changedAt: at }, ...scope.left] } : scope;
+    }
+    if (action === "restore") {
+      const rule = scope.left.find((candidate) => candidate.id === id);
+      if (!rule) return scope;
+      const { reason: _reason, ...kept } = rule;
+      return { ...scope, left: scope.left.filter((candidate) => candidate !== rule), active: [...scope.active, { ...kept, state: "active" as const, changedAt: at }] };
+    }
+    const revise = (rule: RuleView): RuleView => {
+      const version = rule.versions?.find((candidate) => candidate.id === id);
+      return version ? { ...rule, rule: version.rule, why: version.why, hints: version.hints } : rule;
+    };
+    return { ...scope, active: scope.active.map(revise), left: scope.left.map(revise) };
+  }) };
+}
+
 function useProjectRules(project: string | null) {
-  const [view, setView] = useState<RoleMemoryProjectView | null>(null);
+  /* The last reading the server gave, and the presses still on their way,
+     drawn over it in the order they were made (audit B26). A refusal drops
+     only its own press, so the screen falls back to the server's reading with
+     every other press still drawn. */
+  const [stored, setStored] = useState<RoleMemoryProjectView | null>(null);
+  const [presses, setPresses] = useState<ReadonlyArray<{ seq: number; action: "delete" | "restore" | "revert" | "revert-pass"; ruleId: string }>>([]);
   const [failed, setFailed] = useState<"read" | "save" | null>(null);
-  const revision = useRef(0);
+  const reads = useRef(0);
+  const pressSeq = useRef(0);
   useEffect(() => {
     if (!project) return;
-    const sequence = revision;
+    const sequence = reads;
     const abort = new AbortController();
     const read = async () => {
       const current = ++sequence.current;
@@ -135,24 +163,32 @@ function useProjectRules(project: string | null) {
         const response = await fetch(`/api/role-memory?project=${encodeURIComponent(project)}`, { signal: abort.signal, cache: "no-store" });
         if (!response.ok) throw Error();
         const value = projectRulesOf(await response.json());
-        if (current === sequence.current && !abort.signal.aborted) { setView(value); setFailed(null); }
+        if (current === sequence.current && !abort.signal.aborted) { setStored(value); setFailed(null); }
       } catch { if (current === sequence.current && !abort.signal.aborted) setFailed("read"); }
     };
     void read();
     const timer = setInterval(() => void read(), 15_000);
     return () => { sequence.current++; abort.abort(); clearInterval(timer); };
   }, [project]);
-  /** Removes a rule from the injected list or puts one back; the answer is the project's new reading. */
+  const view = useMemo(() => (stored ? presses.reduce((held, press) => predictedRules(held, press.action, press.ruleId), stored) : stored), [stored, presses]);
+  /** Removes a rule from the injected list or puts one back; the answer is the project's new reading.
+      Delete, restore and a text's revert are drawn at once and a refusal takes
+      back that press alone; undoing a curator's pass waits, since the server
+      holds what the pass changed. */
   const act = useCallback(async (action: "delete" | "restore" | "revert" | "revert-pass", ruleId: string) => {
     if (!project) return false;
-    const current = ++revision.current;
+    const seq = ++pressSeq.current;
+    setPresses((held) => [...held, { seq, action, ruleId }]);
+    const settle = () => setPresses((held) => held.filter((press) => press.seq !== seq));
     try {
       const response = await fetch("/api/role-memory", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, action, ruleId }) });
       if (!response.ok) throw Error();
       const value = projectRulesOf(await response.json());
-      if (current === revision.current) { setView(value); setFailed(null); }
+      /* The answer is newer than any read already out. */
+      reads.current++;
+      setStored(value); setFailed(null); settle();
       return true;
-    } catch { if (current === revision.current) setFailed("save"); return false; }
+    } catch { settle(); setFailed("save"); return false; }
   }, [project]);
   return { view, failed, act };
 }
@@ -340,10 +376,16 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
   const roleName = roleNameById(t, role);
   const remove = async (rule: RuleView) => {
     const from = scopes.find((scope) => scope.active.some((candidate) => candidate.id === rule.id));
-    if (!from || !await act("delete", rule.id)) return;
-    setUndo({ rule, scope: from.scope, at: from.active.length - 1 - from.active.findIndex((candidate) => candidate.id === rule.id) });
+    if (!from) return;
+    const removed = { rule, scope: from.scope, at: from.active.length - 1 - from.active.findIndex((candidate) => candidate.id === rule.id) };
+    setUndo(removed);
+    if (!await act("delete", rule.id)) setUndo((held) => (held === removed ? null : held));
   };
-  const restore = async (rule: RuleView) => { if (await act("restore", rule.id)) setUndo(null); };
+  const restore = async (rule: RuleView) => {
+    const held = undo;
+    setUndo(null);
+    if (!await act("restore", rule.id)) setUndo(held);
+  };
   if (typeof document === "undefined") return null;
   const picker = roles.length > 1 ? (
     <div role="tablist" aria-label={t("roleMemory.roleSection")} className="flex gap-1 overflow-x-auto pt-0.5">

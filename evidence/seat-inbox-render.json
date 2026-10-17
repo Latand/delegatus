@@ -1,0 +1,42 @@
+{
+  "390-light-en": {
+    "rows": 4,
+    "overflowX": 0,
+    "text": "Keep the release on hold.First saved answer: use the short form.Second saved answer: keep the original words.internalReviewer09:00Review complete: the checks passed."
+  },
+  "390-light-uk": {
+    "rows": 4,
+    "overflowX": 0,
+    "text": "Keep the release on hold.First saved answer: use the short form.Second saved answer: keep the original words.внутрішнєРев'юер09:00Review complete: the checks passed."
+  },
+  "390-dark-en": {
+    "rows": 4,
+    "overflowX": 0,
+    "text": "Keep the release on hold.First saved answer: use the short form.Second saved answer: keep the original words.internalReviewer09:00Review complete: the checks passed."
+  },
+  "390-dark-uk": {
+    "rows": 4,
+    "overflowX": 0,
+    "text": "Keep the release on hold.First saved answer: use the short form.Second saved answer: keep the original words.внутрішнєРев'юер09:00Review complete: the checks passed."
+  },
+  "1280-light-en": {
+    "rows": 4,
+    "overflowX": 0,
+    "text": "Keep the release on hold.First saved answer: use the short form.Second saved answer: keep the original words.internalReviewer09:00:00Review complete: the checks passed."
+  },
+  "1280-light-uk": {
+    "rows": 4,
+    "overflowX": 0,
+    "text": "Keep the release on hold.First saved answer: use the short form.Second saved answer: keep the original words.внутрішнєРев'юер09:00:00Review complete: the checks passed."
+  },
+  "1280-dark-en": {
+    "rows": 4,
+    "overflowX": 0,
+    "text": "Keep the release on hold.First saved answer: use the short form.Second saved answer: keep the original words.internalReviewer09:00:00Review complete: the checks passed."
+  },
+  "1280-dark-uk": {
+    "rows": 4,
+    "overflowX": 0,
+    "text": "Keep the release on hold.First saved answer: use the short form.Second saved answer: keep the original words.внутрішнєРев'юер09:00:00Review complete: the checks passed."
+  }
+}

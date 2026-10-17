@@ -126,10 +126,15 @@ function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen
   ].filter(Boolean).join(". ");
   const hover = [[name, state, rework, who].filter(Boolean).join(" · "), suffix?.title].filter(Boolean).join(" · ");
   const className = `pb-pill tone-${STAGE_TONE[chip.state]} st-${chip.state}${attempt ? "" : " waiting"}${chip.branch ? " side" : ""}${chip.rework ? " rework" : ""}${selected ? " selected" : ""}`;
+  /* The wide row hangs a branch under its gate and drops the word "branch" (the elbow says it), so the word is its own span. */
+  const label = chip.branch ? t("kanban.branch", { stage: name }) : name;
+  const branchWord = chip.branch ? t("kanban.branch", { stage: "" }).trim() : "";
   const body = (
     <>
       <StageGlyph state={chip.state} model={chip.stage.effectiveRole ? stageIdentity(pipeline, chip.stage) : null} live={chip.rework} fallback="mark" />
-      <span className="pb-name">{chip.branch ? t("kanban.branch", { stage: name }) : name}</span>
+      <span className="pb-name">
+        {branchWord && label.startsWith(branchWord) ? <><span className="pb-branch-word">{branchWord}</span>{label.slice(branchWord.length)}</> : label}
+      </span>
       {chip.rounds ? <CountCircle n={chip.rounds} tone="neutral" label={t("kanban.stageAriaRounds", { stage: name, state, count: chip.rounds })} /> : null}
       {drawn(suffix) ? <ReturnSuffix arc={suffix.arc} title={suffix.title} /> : null}
     </>
@@ -138,7 +143,7 @@ function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen
     return <span className={className} data-stage={chip.stage.id} data-stage-open={chip.stage.id} title={hover}>{body}</span>;
   }
   return openable ? (
-    <button type="button" className={className} data-stage={chip.stage.id} aria-label={aria} title={hover} onClick={() => onOpen!(pipeline, chip.stage)}>
+    <button type="button" className={className} data-stage={chip.stage.id} data-attempt-path={attempt?.agentPath} aria-label={aria} title={hover} onClick={() => onOpen!(pipeline, chip.stage)}>
       {body}
     </button>
   ) : (
@@ -148,7 +153,7 @@ function StagePill({ pipeline, chip, name, suffix, interactive, selected, onOpen
   );
 }
 
-/** The chain as a row that wraps: the pass path joined by arrows, then the fail branches. */
+/** The chain as a row that wraps: the pass path joined by arrows, each stage in a unit with the fail branches that return to it. A narrow lane draws the units' steps flat and reads their order (pipelineBlock.css). */
 function ChainPills({ summary, nameOf, suffixes, selected, onOpenStage }: {
   summary: KanbanPipeline;
   nameOf: (stage: PipelineStage) => string;
@@ -167,20 +172,45 @@ function ChainPills({ summary, nameOf, suffixes, selected, onOpenStage }: {
       onOpen={onOpenStage}
     />
   );
+  const steps = chainSteps(summary.chips, summary.pipeline);
+  const mains = steps.filter((entry) => entry.step !== "branch");
+  const hasBranch = steps.length > mains.length;
+  /* The last gate with a branch and the stages after it form one unit: its branch may use the room to the lane's right edge, under them. */
+  const tail = hasBranch ? Math.max(...steps.filter((entry) => entry.step === "branch").map((entry) => entry.anchor)) : mains.length;
+  const units = mains.filter((entry) => entry.anchor <= tail);
   return (
-    <div className="pb-pills" data-chain={summary.pipeline.id}>
-      {chainSteps(summary.chips).map(({ chip, step, through, order }) => (
-        <span
-          key={chip.stage.id}
-          className="pb-step"
-          data-step={step}
-          data-through={through ? "1" : undefined}
-          style={{ "--pb-order": order } as CSSProperties}
-        >
-          {step === "next" ? <span className="pb-arrow" aria-hidden="true">→</span> : null}
-          {pill(chip)}
-        </span>
-      ))}
+    <div className="pb-pills" data-chain={summary.pipeline.id} data-branches={hasBranch ? "1" : undefined}>
+      {units.map((gate) => {
+        const isTail = hasBranch && gate.anchor === tail;
+        const members = [
+          gate,
+          ...(isTail ? mains.filter((entry) => entry.anchor > tail) : []),
+          ...steps.filter((entry) => entry.step === "branch" && entry.anchor === gate.anchor),
+        ];
+        const columns = members.filter((entry) => entry.step !== "branch").length;
+        return (
+          <span
+            key={gate.chip.stage.id}
+            className="pb-unit"
+            data-tail={isTail ? "1" : undefined}
+            style={isTail ? { "--pb-columns": `${"auto auto ".repeat(columns - 1)}auto 1fr` } as CSSProperties : undefined}
+          >
+            {members.map(({ chip, step, through, order }, index) => (
+              <span
+                key={chip.stage.id}
+                className="pb-step"
+                data-step={step}
+                data-through={through ? "1" : undefined}
+                data-late={step !== "branch" && index > 0 ? "1" : undefined}
+                style={{ "--pb-order": order, ...(step !== "branch" && index > 0 ? { "--pb-gc": 2 * index + 1 } : {}) } as CSSProperties}
+              >
+                {step === "next" ? <span className="pb-arrow" aria-hidden="true">→</span> : null}
+                {pill(chip)}
+              </span>
+            ))}
+          </span>
+        );
+      })}
     </div>
   );
 }

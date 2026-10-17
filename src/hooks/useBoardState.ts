@@ -98,6 +98,29 @@ export interface BoardSnapshot {
   /** The selection session's «armed» latch: the lasso toolbar button entered a
       session that has no members yet. Session ⇔ armed or a non-empty set. */
   selectionArmed: boolean;
+  /** Mutations the server refused for good and the outbox shed (audit B44):
+      the board already drew them back, and these say so. At most
+      {@link MAX_BOARD_REJECTIONS}, newest last, until the reader clears them. */
+  rejections?: readonly BoardRejection[];
+}
+
+/** One shed mutation: what it was, what it named, and the server's code. */
+export interface BoardRejection {
+  id: number;
+  kind: BoardMutationV1["kind"];
+  /** The path or conversation id the mutation named, when it named one. */
+  target: string | null;
+  code: string;
+  at: number;
+}
+
+export const MAX_BOARD_REJECTIONS = 5;
+
+function rejectionTarget(mutation: BoardMutationV1): string | null {
+  if (mutation.kind === "close" || mutation.kind === "restore") return mutation.path;
+  if (mutation.kind === "set-favorite" || mutation.kind === "mark-seen" || mutation.kind === "set-engine-child-fold") return mutation.id;
+  if (mutation.kind === "set-engine-tray-expanded") return mutation.parentId;
+  return null;
 }
 
 export function isEmptyPrefs(prefs: BoardPrefs): boolean {
@@ -318,7 +341,7 @@ type WriteAttempt =
      later mutation queued behind it (the /api/board 413 storm). Access
      failures (401/403) and other transient 4xx keep the queued intent and
      take the backoff path. */
-  | { status: "rejected" }
+  | { status: "rejected"; code: string }
   /* The request envelope is refused (client/server schema skew): every
      bisected prefix would draw the same verdict, so shedding is wrong — the
      outbox survives and the board reports unavailable until versions align. */
@@ -461,6 +484,8 @@ export interface BoardStore {
   /** Prune against the paths that still EXIST (the scan) — never against one
       view's layout. See `pruneSelection`. */
   pruneSelectionTo(existing: ReadonlySet<string>): void;
+  /** The reader said these rejections; they leave the snapshot. */
+  clearRejections(ids: readonly number[]): void;
   dispose(): void;
 }
 
@@ -602,6 +627,9 @@ export function createBoardStore(options: BoardStoreOptions): BoardStore {
      not install its (now superseded) board over the write's response, which is
      the authoritative post-write state. */
   let writeEpoch = 0;
+  /* What the outbox shed, published until the reader clears it. */
+  let rejections: BoardRejection[] = [];
+  let rejectionSeq = 0;
   const listeners = new Set<() => void>();
 
   const emit = () => {
@@ -619,7 +647,7 @@ export function createBoardStore(options: BoardStoreOptions): BoardStore {
     /* Every queued intent is acknowledged: this view is no longer behind. */
     if (outbox.length === 0) rebased = false;
     const board = optimisticBoard(confirmed, mutationsOf(outbox));
-    snapshot = { prefs: board.prefs, explicitManual: board.explicitManual ?? [], revision: confirmed.revision, sync: syncFor(), loaded, cached: !loaded && fromPersisted, selection: selection().paths, selectionArmed: selection().armed };
+    snapshot = { prefs: board.prefs, explicitManual: board.explicitManual ?? [], revision: confirmed.revision, sync: syncFor(), loaded, cached: !loaded && fromPersisted, selection: selection().paths, selectionArmed: selection().armed, ...(rejections.length ? { rejections } : {}) };
     /* Cache only a genuinely loaded, available board — never the pre-load empty
        board or an unavailable one — so a later mount primes from the settled
        arrangement and not from a placeholder that would paint an unpruned set. */
@@ -701,7 +729,7 @@ export function createBoardStore(options: BoardStoreOptions): BoardStore {
       if (res.status === 409) return { status: "conflict", board: ((await res.json()) as { board: BoardProjectStateV1 }).board };
       if (res.status >= 400 && res.status < 500) {
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
-        if (body?.error !== undefined && PERMANENT_REJECTION_CODES.has(body.error)) return { status: "rejected" };
+        if (body?.error !== undefined && PERMANENT_REJECTION_CODES.has(body.error)) return { status: "rejected", code: body.error };
         if (body?.error !== undefined && ENVELOPE_REJECTION_CODES.has(body.error)) return { status: "envelope" };
         /* Expired auth (403 from the proxy), rate limiting, unknown codes:
            the queued intent survives and drains once access heals. */
@@ -859,6 +887,9 @@ export function createBoardStore(options: BoardStoreOptions): BoardStore {
       conflictStreak = 0;
       if (prefix.length === 1) {
         rejectCap = null;
+        const shed = prefix[0]!;
+        rejectionSeq += 1;
+        rejections = [...rejections, { id: rejectionSeq, kind: shed.kind, target: rejectionTarget(shed), code: result.code, at: Date.now() }].slice(-MAX_BOARD_REJECTIONS);
         outbox = outbox.slice(1);
       } else {
         rejectCap = Math.max(1, Math.floor(prefix.length / 2));
@@ -1025,6 +1056,12 @@ export function createBoardStore(options: BoardStoreOptions): BoardStore {
     pruneSelectionTo(existing) {
       writeSelection({ paths: pruneSelection(selection().paths, existing), armed: selection().armed });
     },
+    clearRejections(ids) {
+      const before = rejections.length;
+      rejections = rejections.filter((rejection) => !ids.includes(rejection.id));
+      if (rejections.length === before) return;
+      refresh();
+    },
     dispose() {
       disposed = true;
       releaseSelection();
@@ -1127,6 +1164,8 @@ export interface BoardState extends BoardSnapshot {
       durable conversation identity; the stamp is taken from this device's clock
       in epoch seconds and merged forward. */
   markSeen(id: string): void;
+  /** Clear rejections the board has told the operator about. */
+  clearRejections(ids: readonly number[]): void;
 }
 
 /**
@@ -1220,6 +1259,9 @@ export function useBoardState(project: string | null): BoardState {
     },
     pruneSelectionTo(existing) {
       storeRef.current?.pruneSelectionTo(existing);
+    },
+    clearRejections(ids) {
+      storeRef.current?.clearRejections(ids);
     },
   };
 }

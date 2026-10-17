@@ -1,10 +1,11 @@
+import { startAutoAndSettle } from "./engineEnvironment.fixture";
 import { expect, spyOn, test, crypto, spawn, spawnSync, fs, os, path, monitorEventLoopDelay, Database, laneMovedAt, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, idleUpdate, stoppedProcess, endRestartGate, restartGateFile, realExec, engineModule, adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, pipelineAttemptTargetForSource, setPipelineDismissal, tickPipelines, AgentRegistry, setAgentRegistryForTests, rawCreatePipelineFromRequest, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, saveTasks, asStoredLegacyReviewLane, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, realWorktreeLane, create, boardTask, FETCHED_SHA, slowRemote, provisionRetryClock, DNS_FAILURE, realProvisioningRepo } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, LauncherRecord, PipelinePorts } from "./engine.fixture";
 
 
 test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage completes and its successor waits for both update roles: %s", async (admission) => {
   const h = harness();
-  const dir = fs.mkdtempSync("/var/tmp/drain-pipeline-");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "drain-pipeline-"));
   const target = "a".repeat(40);
   const old = "b".repeat(40);
   let now = Date.parse("2026-01-01T00:00:00Z");
@@ -20,7 +21,7 @@ test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage comp
     serving: { web: rev(record.web.revision === target.slice(0, 7) ? target : old), runtimeHost: rev(record.runtimeHost.revision === target.slice(0, 7) ? target : old) },
     processes: { web: { ...stoppedProcess(), state: "healthy", lastHealthOk: true, tail: [] }, runtimeHost: { ...stoppedProcess(), state: "healthy", lastHealthOk: true, tail: [] } },
     meta: { branch: "main", remote: "https://github.com/example/project", checkout: null, pollMinutes: 15, serverTime: new Date(now).toISOString() } });
-  const deps = { dir, now: () => now, env: {}, remote: "https://github.com/example/project", branch: "main", mode: async () => ({ mode: "checkout", record }),
+  const deps = { dir, now: () => now, env: {}, remote: "https://github.com/example/project", branch: "main", pollMinutes: 15, mode: async () => ({ mode: "checkout", record }),
     green: { read: async () => ({ state: "green" }) }, quiet: { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: loadPipelines, presence: () => [] },
     prune: async () => {}, findDeploymentByIdempotencyKey: async () => null,
     web: { pid: 101, port: 0, startedAt: "" }, processAlive: () => true, hostHealth: async () => ({ pid: 102 }),
@@ -71,9 +72,7 @@ test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage comp
       service.stop();
       now += DRAIN_LEASE_MS + 1;
       service = makeService();
-      service.startAuto();
-      expect(h.ports.drainHold()).not.toBeNull();
-      await Bun.sleep(0);
+      await startAutoAndSettle(service, () => expect(h.ports.drainHold!()).not.toBeNull());
     }
     await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(1);
@@ -98,6 +97,17 @@ test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage comp
       expect(h.spawnInputs).toHaveLength(1);
       record.web.revision = old.slice(0, 7);
     } else record.runtimeHost.revision = target.slice(0, 7);
+    if (admission === "early-switch-off") {
+      // Recovery continues the accepted update and files the second role's
+      // request. Model its acknowledgement before expecting custody to end.
+      const hostRequest = JSON.parse(fs.readFileSync(record.requestFile, "utf8"));
+      expect(hostRequest.role).toBe("runtime-host");
+      endRestartGate(restartGateFile(record.requestFile), hostRequest.autoGateId);
+      record.runtimeHost.requestId = hostRequest.requestId;
+      fs.rmSync(record.requestFile);
+      await service.autoTick();
+      expect(JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8")).autoPending).toBeNull();
+    }
     await service.autoTick();
     await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(2);

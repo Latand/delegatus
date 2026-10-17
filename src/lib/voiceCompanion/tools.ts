@@ -2,7 +2,7 @@ import { ownerHistoryRead } from "./ownerHistoryRead";
 import type { OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
 import { READ_TOOL_NAMES, type CompanionBoardReads } from "./boardReads";
 import type { CallRequest, CompanionAdmission, OperatorAttempt } from "./admission";
-import { DELEGATION_REASONS, deliveryFailureReason } from "./delegationOutcome";
+import { DELEGATION_REASONS, deliveryFailureReason, nothingSent } from "./delegationOutcome";
 import { askGist, liveEndRefusal, requestText, VOICE_ASK_MAX_CHARS, VOICE_ASK_ENVELOPE_CHARS } from "./liveGate";
 import { READ_SCHEMAS, validToolValue, type ToolProperty } from "./readSchemas";
 
@@ -31,6 +31,8 @@ interface ToolEntry {
   description: string;
   capability: string;
   privateResult?: true;
+  /** Model-written text can leave this call. Every delegation tool declares this. */
+  egress?: boolean;
   class: "owner-read" | "board-read" | "call-read" | "delegation" | "session-control";
   parameters: { type: "object"; properties: Record<string, ToolProperty>; required: string[]; additionalProperties: false };
   handler(context: CompanionToolContext, args: Record<string, unknown>): unknown | Promise<unknown>;
@@ -55,7 +57,7 @@ function spoken(outcome: Awaited<ReturnType<CompanionAdmission["delegate"]>>) {
   if (outcome.state === "answered") return { status: "answered", request: outcome.request.handle, ...(outcome.report ? { report: outcome.report } : {}),
     speech: outcome.report ? "Nothing was sent: the orchestrator already answered this. Answer from its report, keeping each fact with its own subject, in its words."
       : "Nothing was sent: the orchestrator already answered this. Read orchestrator_reports for its answer." };
-  if (outcome.state === "awaiting") return { status: "awaiting_confirmation", reason: outcome.proposal.confirmation?.reason ?? "",
+  if (outcome.state === "awaiting") return { status: "awaiting_confirmation", instruction: outcome.proposal.instruction, reason: outcome.proposal.confirmation?.reason ?? "",
     speech: "Nothing has been sent. Tell the operator in one sentence what would be sent and why you ask, and ask whether to send it. Their spoken yes or no comes back through resolve_orchestrator_confirmation; the card's buttons answer it too." };
   const reason = DELEGATION_REASONS[outcome.code];
   if (outcome.code === "request_other_project") return { status: "refused", code: outcome.code, reason,
@@ -124,7 +126,7 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       return result.status === "not_found" ? { status: "not_found", speech: "No such report in this call. Read orchestrator_reports for the handles, or say that no report has arrived yet." }
         : { status: "reading", report: result.report, speech: "The report is read to the operator from its own text right after your answer. Say one short sentence that introduces it; never restate, shorten or summarize it." };
     } },
-  { name: "request_orchestrator_delegation", capability: "Send to the orchestrator: writes the operator's request as one complete task and sends it to the project's orchestrator at once; its answer comes back to you as a report.", class: "delegation",
+  { name: "request_orchestrator_delegation", egress: true, capability: "Send to the orchestrator: writes the operator's request as one complete task and sends it to the project's orchestrator at once; its answer comes back to you as a report.", class: "delegation",
     description: `Send one task to the project's orchestrator when the operator explicitly asks to send work or a question to it, the work is that project's, and the board, its messages and its reports cannot answer it. General knowledge, chit-chat and content the voice can give itself are never sent. Write the instruction yourself, in your own words, as one complete task: what to do and why, the outcome the operator expects, and the context the orchestrator needs from this call's reads and conversation, such as the card, pull request, issue, project or earlier point meant. Never pass the transcript or the operator's raw phrasing as the task; the operator's key phrase may follow word for word on a last line that names it as theirs. Write it in the operator's interface language unless they asked for another, add nothing they did not ask for, and keep it as short as the work allows, at most ${VOICE_ASK_MAX_CHARS} characters. It is delivered at once, with no confirmation. Asking first is the exception and your own judgment: set confirmation_reason to one short sentence only when the action is critical or hard to undo, or when you are unsure you understood the request; then nothing is sent until the operator answers. In every other case pass null. When the ask repeats or rephrases a request whose report has not arrived, pass its handle in pending_request: nothing is sent and the operator hears that the answer is on its way. When one turn repeats a waiting request and also asks something new, pass the repeat with its handle and send the new part as its own ask. Words that match a request already raised in an earlier turn are a repeat and send nothing, unless the operator explicitly asked to send it once more and you set asked_again: then it is sent again, also while its report is pending. Input transcripts are optional context.`,
     // An overlong task within the envelope reaches the handler for recomposition.
     parameters: schema({ project: { ...READ_SCHEMAS.list_tasks.project, description: "null sends to the project currently in view. A name only when the operator named another project; never guess one." },
@@ -158,7 +160,7 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
           speech: "Nothing was sent: the orchestrator already answered this, and its report is read to the operator from its own text right after your answer. Say one short sentence that introduces it; never restate, shorten or summarize it." };
       return spoken(outcome);
     } },
-  { name: "resolve_orchestrator_confirmation", capability: "Confirmation answer: passes on the operator's yes or no to a request you asked about.", class: "delegation",
+  { name: "resolve_orchestrator_confirmation", egress: false, capability: "Confirmation answer: passes on the operator's yes or no to a request you asked about.", class: "delegation",
     description: "Pass on the operator's spoken answer to the confirmation that is waiting: send when they clearly agree, cancel when they decline or change their mind. When the answer is unclear, ask again and call nothing. A cancelled confirmation sends nothing; say so.",
     parameters: schema({ decision: { type: "string", enum: ["send", "cancel"] } }),
     handler: async (context, args) => {
@@ -188,6 +190,8 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
 ];
 
 export const PRIVATE_RESULT_TOOLS = new Set(COMPANION_TOOL_REGISTRY.filter(entry => entry.privateResult).map(entry => entry.name));
+export const EGRESS_TOOLS = new Set(COMPANION_TOOL_REGISTRY.filter(entry => entry.egress).map(entry => entry.name));
+export const DELEGATION_TOOLS = new Set(COMPANION_TOOL_REGISTRY.filter(entry => entry.class === "delegation").map(entry => entry.name));
 
 export const COMPANION_TOOLS = COMPANION_TOOL_REGISTRY.map(({ name, description, parameters }) =>
   ({ type: "function" as const, name, description, strict: true, parameters }));
@@ -202,5 +206,6 @@ export async function runCompanionTool(context: CompanionToolContext, name: stri
   const properties = entry.parameters.properties;
   if (Object.keys(values).some(key => !Object.hasOwn(properties, key))
     || entry.parameters.required.some(key => !validToolValue(properties[key],values[key]))) throw new Error("INVALID_TOOL_ARGUMENTS");
-  return entry.handler(context, values);
+  const result = await entry.handler(context, values);
+  return entry.class === "delegation" ? nothingSent(result as { status?: unknown; speech?: unknown }) : result;
 }

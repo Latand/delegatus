@@ -2586,3 +2586,125 @@ test("late recipient evidence preserves an explicit discard", async () => {
       .toMatchObject({ state: "failed", reason: "delivery-discarded" });
   } finally { active.close(); }
 });
+
+
+for (const reader of ["receipt", "projection", "startup", "original-key", "retry"] as const) test(`seat inbox restart: ${reader} confirms every original member with no resend`, async () => {
+  const active = fixture(`inbox-reader-${reader}`, { engine: "claude" });
+  try {
+    const { fixtureInboxBatch } = await import("./fixtures/inboxBatch");
+    const members = ["a", "b", "c"].map(id => ({ id: `inbox-${id}`, text: id === "c" ? "distinct" : "identical" }));
+    for (const m of members) { acceptSend(active, { operationId: m.id, clientMessageId: m.id, text: m.text }); active.journal.transitionOperation(m.id, "delivering"); }
+    const batch = fixtureInboxBatch(members);
+    // A separate process owns the batch write and exits before member settlement.
+    const child = spawnSync(process.execPath, ["--eval", `
+      const { AgentRegistry } = await import(${JSON.stringify(new URL("../agent/registry.ts", import.meta.url).href)});
+      const { FileClaudeDeliveryLedger } = await import(${JSON.stringify(new URL("./claudeStreamBrokerHost.ts", import.meta.url).href)});
+      const registry = new AgentRegistry(${JSON.stringify(active.registryPath)});
+      const batch = ${JSON.stringify(batch)};
+      if (registry.bindDeliveryBatchOffLoop) await registry.bindDeliveryBatchOffLoop(batch.id, batch.parts.map(p => p.operationId), ${JSON.stringify(active.generationId)});
+      const ledger = new FileClaudeDeliveryLedger();
+      ledger.recordQueued(${JSON.stringify(active.generationId)}, batch, "turn-started");
+      ledger.confirmDelivered(${JSON.stringify(active.generationId)}, batch.id, "inbox-canonical-echo");
+      process.kill(process.pid, "SIGKILL");
+    `], { cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 10000 });
+    expect(child.signal, child.stderr).toBe("SIGKILL");
+    const freshReader = spawnSync(process.execPath, ["--eval", `
+      const { AgentRegistry } = await import(${JSON.stringify(new URL("../agent/registry.ts", import.meta.url).href)});
+      const { confirmedSend } = await import(${JSON.stringify(new URL("./confirmedSend.ts", import.meta.url).href)});
+      const registry = new AgentRegistry(${JSON.stringify(active.registryPath)});
+      const answers = [];
+      for (const id of ${JSON.stringify(members.map(m => m.id))}) answers.push(await confirmedSend(registry.readOnlySnapshot(), id, false));
+      process.stdout.write(JSON.stringify(answers));
+    `], { cwd: process.cwd(), env: process.env, encoding: "utf8", timeout: 10000 });
+    expect(freshReader.status, freshReader.stderr).toBe(0);
+    expect(JSON.parse(freshReader.stdout)).toEqual([true, true, true]);
+    const reopened = new AgentRegistry(active.registryPath);
+    const ledger = new FileClaudeDeliveryLedger();
+    const before = JSON.stringify(ledger.load(active.generationId));
+    const { confirmedSend } = await import("./confirmedSend");
+    for (const m of members) expect(await confirmedSend(reopened.readOnlySnapshot(), m.id)).toBe(true);
+    if (reader === "startup") {
+      const { bindStructuredDeliveryQueue } = await import("./structuredDeliveryController");
+      await bindStructuredDeliveryQueue([], { registry: reopened, client: active.client });
+    }
+    for (const m of members) {
+      if (reader === "projection" || reader === "original-key") {
+        const { resolveOriginalSend } = await import("./sendSettlement");
+        expect(await resolveOriginalSend({ conversationId: active.conversationId, clientMessageId: m.id }, { registry: reopened, client: active.client }))
+          .toMatchObject({ kind: "found", current: { readable: true, value: { state: "delivered", resend: "not-needed", turnId: batch.id } } });
+      } else if (reader === "retry") {
+        setAgentRegistryForTests(reopened);
+        const response = await handleRuntimeRetry(new NextRequest(`http://127.0.0.1/api/runtime/operations/${m.id}`, {
+          method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+        }), m.id, { enabled: () => true, client: () => active.client,
+          recover: async () => { throw new Error("a delivered batch member must not recover a host"); },
+          kick: () => { throw new Error("a delivered batch member must not resend"); } });
+        expect(await response.json()).toMatchObject({ send: { state: "delivered", resend: "not-needed", turnId: batch.id } });
+      } else if (reader === "receipt") {
+        setAgentRegistryForTests(reopened);
+        const { viewerMcpBindings } = await import("../mcp/bindings");
+        expect(await viewerMcpBindings().message_receipt({ operationId: m.id }))
+          .toMatchObject({ state: "delivered", resend: "not-needed", turnId: batch.id });
+      } else expect(await resolveSendReceipt(m.id, { registry: reopened, client: active.client })).toMatchObject({ state: "delivered", resend: "not-needed", turnId: batch.id });
+    }
+    expect(JSON.stringify(ledger.load(active.generationId))).toBe(before);
+    expect(ledger.load(active.generationId)).toHaveLength(1);
+  } finally { active.close(); }
+});
+
+for (const corruption of ["missing-binding", "missing-parts", "omitted-member", "part-digest", "batch-id", "no-echo", "codex"] as const) test(`seat inbox evidence refuses ${corruption}`, async () => {
+  const active = fixture(`inbox-negative-${corruption}`, { engine: corruption === "codex" ? "codex" : "claude" });
+  try {
+    const { fixtureInboxBatch } = await import("./fixtures/inboxBatch");
+    const registry = active.registry as AgentRegistry & { bindDeliveryBatchOffLoop?: (id: string, members: string[], generation: string) => Promise<boolean | null> };
+    expect(registry.bindDeliveryBatchOffLoop).toBeFunction();
+    const guard = ["guard-a", "guard-b"].map(id => ({ id, text: "positive control" }));
+    for (const m of guard) acceptSend(active, { operationId: m.id, clientMessageId: m.id, text: m.text });
+    const positive = fixtureInboxBatch(guard);
+    await registry.bindDeliveryBatchOffLoop!(positive.id, guard.map(m => m.id), active.generationId);
+    const positiveLedger = new FileClaudeDeliveryLedger();
+    positiveLedger.recordQueued(active.generationId, positive, "turn-started");
+    positiveLedger.confirmDelivered(active.generationId, positive.id, "positive-inbox-echo");
+    const { confirmedSend } = await import("./confirmedSend");
+    if (corruption !== "codex") expect(await confirmedSend(registry.readOnlySnapshot(), guard[0]!.id)).toBe(true);
+    const members = ["a", "b"].map(id => ({ id: `negative-${id}`, text: "identical" }));
+    for (const m of members) acceptSend(active, { operationId: m.id, clientMessageId: m.id, text: m.text });
+    const batch = fixtureInboxBatch(members);
+    if (corruption !== "missing-binding") await registry.bindDeliveryBatchOffLoop?.(batch.id, members.map(m => m.id), active.generationId);
+    const ledger = new FileClaudeDeliveryLedger();
+    if (corruption === "missing-parts") delete batch.parts;
+    if (corruption === "omitted-member") batch.parts!.shift();
+    if (corruption === "part-digest") batch.parts![0]!.contentDigest = "f".repeat(64);
+    if (corruption === "batch-id") batch.id = "inbox_invalid";
+    ledger.recordQueued(active.generationId, batch, "turn-started");
+    if (corruption !== "no-echo") ledger.confirmDelivered(active.generationId, batch.id, "negative-echo");
+    const evidence = structuredClone(active.registry.readOnlySnapshot());
+    // Exercise the reader as well as the writer's Claude-only admission gate.
+    if (corruption === "codex") evidence.deliveryOperationOwners[members[0]!.id]!.batchId = batch.id;
+    expect(await confirmedSend(evidence, members[0]!.id)).toBe(false);
+    if (corruption === "no-echo") for (const m of members) {
+      active.journal.transitionOperation(m.id, "delivering");
+      active.journal.transitionOperation(m.id, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+      expect(await resolveSendReceipt(m.id, { registry: active.registry, client: active.client })).toMatchObject({ state: "failed", resend: "verify-first" });
+    }
+  } finally { active.close(); }
+});
+
+
+test("seat inbox registry binding is atomic and a subsequent single dispatch clears an unwritten batch", async () => {
+  const active = fixture("inbox-registry-atomic", { engine: "claude" });
+  try {
+    const { fixtureInboxBatch } = await import("./fixtures/inboxBatch");
+    const members = ["bind-one", "bind-two"].map(id => ({ id, text: id }));
+    for (const m of members) acceptSend(active, { operationId: m.id, clientMessageId: m.id, text: m.text });
+    const batch = fixtureInboxBatch(members);
+    expect(active.registry.bindDeliveryBatchOffLoop).toBeFunction();
+    expect(await active.registry.bindDeliveryBatchOffLoop(batch.id, [members[0]!.id, "missing-owner"], active.generationId)).toBe(false);
+    expect(active.registry.readOnlySnapshot().deliveryOperationOwners[members[0]!.id]!.batchId).toBeUndefined();
+    expect(await active.registry.bindDeliveryBatchOffLoop(batch.id, members.map(m => m.id), active.generationId)).toBe(true);
+    const reopened = new AgentRegistry(active.registryPath);
+    expect(members.map(m => reopened.readOnlySnapshot().deliveryOperationOwners[m.id]!.batchId)).toEqual([batch.id, batch.id]);
+    expect(await reopened.bindDeliveryOperationGenerationOffLoop(members[0]!.id, active.generationId)).toBe(true);
+    expect(new AgentRegistry(active.registryPath).readOnlySnapshot().deliveryOperationOwners[members[0]!.id]!.batchId).toBeUndefined();
+  } finally { active.close(); }
+});

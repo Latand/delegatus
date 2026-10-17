@@ -11,7 +11,7 @@ import { prototypeCriticGate, criticRefusal } from "./criticGate";
 import { publishPrototype, withPrototypeState, resolvePrototypeReviewId } from "./store";
 import { operatorDecisionRound, operatorDecisions, readPrototypeReviews, readSeatRounds } from "./read";
 import { findSeatRound, loadSeatRounds } from "./seatRounds";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasksForList } from "@/lib/tasks/store";
 import { decidePrototype, refreshPrototypeDelivery, prototypeDelivery, type PrototypeDelivery } from "./decision";
 import { prototypeWorld, taskForPrototype, type PrototypeCaller, type PrototypeWorld } from "./world";
 import { deliverPrototypeDecision } from "./deliveryWorker";
@@ -32,10 +32,10 @@ export function prototypeFailure(error: unknown): NextResponse {
 function resendTarget(request: NextRequest, reviewId: unknown, world: PrototypeWorld) {
   if (typeof reviewId !== "string" || !/^pr_[a-f0-9]{7,32}$/i.test(reviewId)) throw new PrototypeError("invalid reviewId");
   const caller = world.caller(request);
-  const tasks = loadTasks();
-  const rounds = [...tasks.flatMap(task => task.prototypeReviews ?? []), ...loadSeatRounds()];
-  reviewId = resolvePrototypeReviewId(rounds.filter(round => !caller.conversationId || (caller.project && canonicalProject(round.project) === canonicalProject(caller.project))), reviewId);
-  const task = tasks.find(t => t.prototypeReviews?.some(r => r.id === reviewId));
+  const rounds = [...loadTasksForList().flatMap(task => task.prototypeReviews ?? []), ...loadSeatRounds()]
+    .filter(round => !caller.conversationId || (caller.project && canonicalProject(round.project) === canonicalProject(caller.project)));
+  reviewId = resolvePrototypeReviewId(rounds, reviewId);
+  const task = loadTasksForList().find(t => t.prototypeReviews?.some(r => r.id === reviewId));
   const round = task?.prototypeReviews?.find(r => r.id === reviewId) ?? findSeatRound(String(reviewId));
   if (!round) throw new PrototypeError("review not found", 404);
   if (caller.conversationId && (!caller.project || canonicalProject(round.project) !== canonicalProject(caller.project))) throw new PrototypeError("prototype access is limited to the caller's project", 403);
@@ -199,7 +199,7 @@ export async function decisionsGET(request: NextRequest,project: string,world: P
       const seat = findSeatRound(review);
       if (seat) { if (canonicalProject(seat.project) === key) await refreshPrototypeDelivery(null,review,delivery); }
       else {
-        const task = loadTasks().find(t => canonicalProject(t.project) === key && t.prototypeReviews?.some(r => r.id === review));
+        const task = loadTasksForList().find(t => canonicalProject(t.project) === key && t.prototypeReviews?.some(r => r.id === review));
         if (task && !runsElsewhere(task)) await refreshPrototypeDelivery(task.id,review,delivery);
       }
     }
@@ -226,7 +226,7 @@ export async function decisionsPOST(request: NextRequest,world: PrototypeWorld =
     if (seat) {
       if (canonicalProject(seat.project) !== key) throw new PrototypeError("review not found",404);
     } else {
-      const task = loadTasks().find(t => canonicalProject(t.project) === key && t.prototypeReviews?.some(r => r.id === body.reviewId));
+      const task = loadTasksForList().find(t => canonicalProject(t.project) === key && t.prototypeReviews?.some(r => r.id === body.reviewId));
       if (!task) throw new PrototypeError("review not found",404);
       taskId = taskForPrototype(task.id,caller,true).id;
     }

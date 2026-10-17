@@ -1,0 +1,157 @@
+{
+  "failures": [],
+  "readings": {
+    "dismiss-refused-1440-en-light": {
+      "leftAtOnce": true,
+      "text": "Couldn't dismiss the launch: the launch started after all",
+      "sent": 1,
+      "back": 1,
+      "contrast": 5.62
+    },
+    "board-close-refused-1440-en-light": {
+      "leftAtOnce": true,
+      "text": "Couldn't remove «Stopped closed launch» from the board: INVALID_REQUEST",
+      "mutations": 1,
+      "toasts": 1,
+      "cover": {
+        "block": true,
+        "toast": true,
+        "hits": 0,
+        "inside": true
+      }
+    },
+    "dismiss-refused-768-en-light": {
+      "leftAtOnce": true,
+      "text": "Couldn't dismiss the launch: the launch started after all",
+      "sent": 1,
+      "back": 1,
+      "contrast": 5.62
+    },
+    "board-close-refused-768-en-light": {
+      "leftAtOnce": true,
+      "text": "Couldn't remove «Stopped closed launch» from the board: INVALID_REQUEST",
+      "mutations": 1,
+      "toasts": 1,
+      "cover": {
+        "block": true,
+        "toast": true,
+        "hits": 0,
+        "inside": true
+      }
+    },
+    "dismiss-refused-1440-en-dark": {
+      "leftAtOnce": true,
+      "text": "Couldn't dismiss the launch: the launch started after all",
+      "sent": 1,
+      "back": 1,
+      "contrast": 5.39
+    },
+    "board-close-refused-1440-en-dark": {
+      "leftAtOnce": true,
+      "text": "Couldn't remove «Stopped closed launch» from the board: INVALID_REQUEST",
+      "mutations": 1,
+      "toasts": 1,
+      "cover": {
+        "block": true,
+        "toast": true,
+        "hits": 0,
+        "inside": true
+      }
+    },
+    "dismiss-refused-768-en-dark": {
+      "leftAtOnce": true,
+      "text": "Couldn't dismiss the launch: the launch started after all",
+      "sent": 1,
+      "back": 1,
+      "contrast": 5.39
+    },
+    "board-close-refused-768-en-dark": {
+      "leftAtOnce": true,
+      "text": "Couldn't remove «Stopped closed launch» from the board: INVALID_REQUEST",
+      "mutations": 1,
+      "toasts": 1,
+      "cover": {
+        "block": true,
+        "toast": true,
+        "hits": 0,
+        "inside": true
+      }
+    },
+    "dismiss-refused-1440-uk-light": {
+      "leftAtOnce": true,
+      "text": "Не вдалося прибрати запуск: the launch started after all",
+      "sent": 1,
+      "back": 1,
+      "contrast": 5.62
+    },
+    "board-close-refused-1440-uk-light": {
+      "leftAtOnce": true,
+      "text": "Не вдалося прибрати «Stopped closed launch» з дошки: INVALID_REQUEST",
+      "mutations": 1,
+      "toasts": 1,
+      "cover": {
+        "block": true,
+        "toast": true,
+        "hits": 0,
+        "inside": true
+      }
+    },
+    "dismiss-refused-768-uk-light": {
+      "leftAtOnce": true,
+      "text": "Не вдалося прибрати запуск: the launch started after all",
+      "sent": 1,
+      "back": 1,
+      "contrast": 5.62
+    },
+    "board-close-refused-768-uk-light": {
+      "leftAtOnce": true,
+      "text": "Не вдалося прибрати «Stopped closed launch» з дошки: INVALID_REQUEST",
+      "mutations": 1,
+      "toasts": 1,
+      "cover": {
+        "block": true,
+        "toast": true,
+        "hits": 0,
+        "inside": true
+      }
+    },
+    "dismiss-refused-1440-uk-dark": {
+      "leftAtOnce": true,
+      "text": "Не вдалося прибрати запуск: the launch started after all",
+      "sent": 1,
+      "back": 1,
+      "contrast": 5.39
+    },
+    "board-close-refused-1440-uk-dark": {
+      "leftAtOnce": true,
+      "text": "Не вдалося прибрати «Stopped closed launch» з дошки: INVALID_REQUEST",
+      "mutations": 1,
+      "toasts": 1,
+      "cover": {
+        "block": true,
+        "toast": true,
+        "hits": 0,
+        "inside": true
+      }
+    },
+    "dismiss-refused-768-uk-dark": {
+      "leftAtOnce": true,
+      "text": "Не вдалося прибрати запуск: the launch started after all",
+      "sent": 1,
+      "back": 1,
+      "contrast": 5.39
+    },
+    "board-close-refused-768-uk-dark": {
+      "leftAtOnce": true,
+      "text": "Не вдалося прибрати «Stopped closed launch» з дошки: INVALID_REQUEST",
+      "mutations": 1,
+      "toasts": 1,
+      "cover": {
+        "block": true,
+        "toast": true,
+        "hits": 0,
+        "inside": true
+      }
+    }
+  }
+}

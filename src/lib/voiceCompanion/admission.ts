@@ -1,3 +1,5 @@
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
+import { seatRedirectNote } from "@/lib/orchestrator/seatChannel";
 import { createHash, randomUUID } from "node:crypto";
 import type { BridgeReportV1 } from "@/lib/bridge/types";
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -18,7 +20,8 @@ export interface CompanionDeliveryPaths {
   /** Existing orchestrator send path. It owns durable receipt idempotency. */
   send(binding: { sessionId: string; proposalId: string; delivery: Delivery; text: string; startedBy?: SessionStarter }): Promise<{ status: "delivered" | "queued" | "unknown" | "failed"; operationId: string | null; code?: string }>;
   reports(project: string): BridgeReportV1[];
-  receipt?(delivery: Delivery): Promise<"delivered" | "failed" | "pending">;
+  revokedAt?(conversationId: string): string | null;
+  receipt?(delivery: Delivery): Promise<"delivered" | "failed" | "pending" | "seat-revoked">;
 }
 /** One logical request: the same words from the same completed operator turn,
  * whatever Live delegation named it. Without a turn the delegation is all
@@ -414,7 +417,7 @@ export class CompanionAdmission {
         row.via = "auto";
         row.status = "unknown";
         row.delivery = { proposalId: proposal.proposalId, callId: proposal.callId,
-          clientMessageId: `voice-${randomUUID()}`, operationId: null, recipient: proposal.recipient };
+          clientMessageId: `${seatMessageKeys.voice}${randomUUID()}`, operationId: null, recipient: proposal.recipient };
         row.text = directiveText(proposal.instruction, row.delivery.clientMessageId);
       }
       session.proposals[proposal.proposalId] = row;
@@ -464,7 +467,7 @@ export class CompanionAdmission {
       // key in one commit, so a restart in between recovers this very send.
       row.status = "unknown";
       row.delivery = { proposalId: row.proposal.proposalId, callId: row.proposal.callId,
-        clientMessageId: `voice-${randomUUID()}`, operationId: null, recipient: row.proposal.recipient };
+        clientMessageId: `${seatMessageKeys.voice}${randomUUID()}`, operationId: null, recipient: row.proposal.recipient };
       row.text = directiveText(row.proposal.instruction, row.delivery.clientMessageId);
       return row;
     });
@@ -485,6 +488,14 @@ export class CompanionAdmission {
   }
   private async deliver(id: string, row: StoredProposal): Promise<void> {
     if (row.status === "failed") return;
+    if (row.admittedAt === undefined) {
+      const admittedAt = this.storage.change(document => {
+        const held = document.sessions[id].proposals[row.proposal.proposalId];
+        held.admittedAt ??= this.now();
+        return held.admittedAt;
+      });
+      row = { ...row, admittedAt };
+    }
     const proposalId = row.proposal.proposalId;
     // A request nobody was asked about announces its own send; a confirmed one names how it was answered.
     this.emit(id, row.proposal.confirmation ? { type: "delegation.confirmed", proposalId, via: row.via === "speech" ? "speech" : "tap" }
@@ -505,7 +516,7 @@ export class CompanionAdmission {
         if (sameRecipient(recipient, held.proposal.recipient)) return null;
         held.retargetCount = (held.retargetCount ?? 0) + 1;
         held.proposal.recipient = recipient;
-        held.delivery = { ...held.delivery!, recipient, clientMessageId: `voice-${randomUUID()}`, operationId: null };
+        held.delivery = { ...held.delivery!, recipient, clientMessageId: `${seatMessageKeys.voice}${randomUUID()}`, operationId: null };
         held.text = directiveText(held.proposal.instruction, held.delivery.clientMessageId);
         delete held.failureCode;
         this.append(session, { type: "delegation.retargeted", proposalId, recipient }, this.now(), this.cleaner());
@@ -536,6 +547,24 @@ export class CompanionAdmission {
       if (!row.delivery?.operationId || row.status === "delivered" || row.status === "failed") continue;
       const status = await this.paths.receipt(row.delivery);
       if (status === "pending") continue;
+      if (status === "seat-revoked") {
+        const retry = this.storage.change(document => {
+          const session = document.sessions[id];
+          const held = session.proposals[row.proposal.proposalId];
+          if (held.delivery?.operationId !== row.delivery!.operationId || held.status === "delivered" || held.status === "failed") return null;
+          const recipient = this.paths.recipient(held.proposal.recipient.project);
+          if (!recipient || sameRecipient(recipient, held.proposal.recipient)) return null;
+          held.proposal.recipient = recipient;
+          held.delivery = { ...held.delivery!, recipient, clientMessageId: `${seatMessageKeys.voice}${randomUUID()}`, operationId: null };
+          held.text = `${seatRedirectNote(new Date(held.admittedAt ?? session.createdAt).toISOString(), this.paths.revokedAt?.(row.delivery!.recipient.conversationId) ?? new Date(this.now()).toISOString())}\n${directiveText(held.proposal.instruction, held.delivery.clientMessageId)}`;
+          held.status = "unknown";
+          delete held.failureCode;
+          this.append(session, { type: "delegation.retargeted", proposalId: held.proposal.proposalId, recipient }, this.now(), this.cleaner());
+          return held;
+        });
+        if (retry) await this.deliver(id, retry);
+        continue;
+      }
       const clean = this.cleaner();
       this.storage.change(document => {
         const session = document.sessions[id];

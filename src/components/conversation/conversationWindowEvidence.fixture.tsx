@@ -30,16 +30,20 @@ import { OrchestratorConversation } from "@/components/orchestrator/Orchestrator
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
 
+import { MessageProvenanceProvider, provenanceLookupFor } from "@/components/feed/messageProvenance";
 import { FeedItem } from "@/components/feed/FeedItem";
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
 import { ImagePane } from "@/components/preview/ImagePane";
-import { buildFeed, type Item } from "@/components/feed/parse";
+import { createFeedSession, splitInboxBatchFeed, buildFeed, type Item } from "@/components/feed/parse";
 import { codexHistoryCorpus, codexHistorySeams, historyCall } from "@/components/feed/__fixtures__/codexHistory";
 import { LogFeed } from "@/components/LogFeed";
 import { RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
 import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxComposerRuntime";
-import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
+import { setRuntimeBusForTests, setRuntimeUiEnabledForTests, type RuntimeBusState } from "@/hooks/runtimeBus";
+import { ConversationAttention } from "@/components/runtime/ConversationAttention";
+import { emptyStore, type RuntimeAttention } from "@/components/runtime/runtimeModel";
+import type { RuntimeSession } from "@/lib/runtime/contracts";
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { composerSubmissionPayloads } from "@/lib/composerSubmissionPayloads";
 import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceBus";
@@ -92,7 +96,9 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "seat-inbox"
   | "parallel-failure"
+  | "attention-answer"
   | "delivery-settlement"
   | "delivery-stalled"
   | "delivery-check-card"
@@ -1791,13 +1797,63 @@ function ParallelFailureFixture() {
   return <main data-parallel-failure className="mx-auto max-w-3xl p-3"><DeputyBlock deputy={deputy} /></main>;
 }
 
+/* Audit B3: the structured attention card of a conversation, mounted through the
+   production `ConversationAttention` over a runtime bus that holds one open
+   request (`?kind=permission|question`). The driver answers `/api/runtime/answer`
+   itself, so the frame shows the answered line while the answer is out and the
+   buttons with the reason once it is refused. */
+function mountAttentionAnswer(root: HTMLElement): void {
+  const uk = params.get("lang") === "uk";
+  const kind = params.get("kind") === "question" ? "question" : "permission";
+  const conversationId = "conversation_attention";
+  const permission: RuntimeAttention = {
+    id: "attention_permission", conversationId, kind: "permission", state: "open", unowned: false, createdAt: "2026-10-16T10:00:00.000Z",
+    request: { title: uk ? "Запустити команду в корені репозиторію" : "Run a command in the repository root", tool: "Bash", command: "bun test src/components/runtime/ConversationAttention.dom.test.tsx", protocol: { engine: "claude", method: "can_use_tool" } },
+  };
+  const question: RuntimeAttention = {
+    id: "attention_question", conversationId, kind: "question", state: "open", unowned: false, createdAt: "2026-10-16T10:00:00.000Z",
+    request: {
+      question: {
+        header: uk ? "Гілка" : "Branch",
+        "prompt": uk ? "Яку назву гілки лишити для цього лейна?" : "Which branch name should this lane keep?",
+        options: [
+          { label: uk ? "Лишити поточну назву й перебазувати на main перед злиттям" : "Keep the current branch name and rebase onto main before the merge", description: uk ? "Історія лишається, конфлікти розв'язуються до злиття." : "History stays, conflicts are resolved before the merge." },
+          { label: uk ? "Перейменувати за номером задачі" : "Rename it after the task number", recommended: true },
+        ],
+      },
+      protocol: { engine: "claude", method: "AskUserQuestion", input: {} },
+    },
+  };
+  const attention = kind === "question" ? question : permission;
+  const store = emptyStore();
+  store.attentions[attention.id] = attention;
+  store.sessions[conversationId] = {
+    conversationId, sessionKey: { engine: "claude", sessionId: conversationId }, hostKind: "claude-broker", host: "hosted", turn: "running",
+    provenance: "structured", revision: 1, attentionIds: [attention.id], recentReceipts: [], accountId: null, parentConversationId: null,
+    flowId: null, workflowId: null, cwd: "/workspace/demo", artifactPath: null,
+    capabilities: { steer: false, structuredAttention: true, imageInput: { supported: true } }, activeTurnId: "turn_attention",
+  } as unknown as RuntimeSession;
+  const state: RuntimeBusState = { store, connection: "live", resyncedAt: null, lastEventAt: null, enabled: true, structuredHostsEnabled: true };
+  setRuntimeBusForTests({
+    getState: () => state, subscribe: () => () => undefined, subscribeFilesRevision: () => () => undefined,
+    start: () => undefined, stop: () => undefined, refresh: async () => true,
+  });
+  createRoot(root).render(
+    <main data-evidence-case="attention-answer" className="mx-auto min-h-dvh max-w-3xl bg-canvas px-4 py-6 text-primary">
+      <ConversationAttention file={{ path: "/attention.jsonl", conversationId } as unknown as FileEntry} />
+    </main>,
+  );
+}
+
 setLocale((params.get("lang") as Locale | null) ?? "en");
 const root = document.getElementById("root");
 const requested = (params.get("case") as ConversationWindowCase | null) ?? "receipt-delivered";
 /* The lifecycle case mounts the production window itself — the feed, the
    composer and a fake host behind them — so it takes over the root rather than
    rendering one arranged frame. */
-if (root && requested === "parallel-failure") createRoot(root).render(<ParallelFailureFixture />);
+if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
+else if (root && requested === "attention-answer") mountAttentionAnswer(root);
+else if (root && requested === "parallel-failure") createRoot(root).render(<ParallelFailureFixture />);
 else if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "payload-notice") mountPayloadNotice(root);
 else if (root && (requested === "long-history" || requested === "codex-history")) mountLongHistory(root);
@@ -1809,4 +1865,17 @@ else if (root && requested === "delivery-stalled") {
 } else if (root) {
   if (requested === "image-viewers") installCaptureBytes();
   createRoot(root).render(<Fixture id={requested} />);
+}
+
+
+function InboxFixture() {
+  const data = JSON.parse(params.get("batch")!) as { text: string; messages: Record<string, import("@/lib/runtime/messageOrigin").DeliveredMessageProvenance> };
+  const parsed = createFeedSession({ engine: "claude", fmt: "claude", showSvc: true, lineFilter: "" }).feed([
+    JSON.stringify({ type: "user", uuid: "inbox-render-uuid", promptSource: "sdk", timestamp: "2026-10-17T06:00:00Z", message: { role: "user", content: data.text } }),
+  ], 0, false);
+  const feed = splitInboxBatchFeed(parsed, id => data.messages[id]?.parts);
+  const lookup = provenanceLookupFor({ messages: data.messages }, feed.items.map(e => e.item));
+  return <main data-evidence-case="seat-inbox" className="mx-auto max-w-3xl space-y-4 bg-canvas px-3 py-5 text-primary">
+    <MessageProvenanceProvider value={lookup}>{feed.items.map(e => <div key={e.key} data-inbox-member><FeedItem item={e.item} /></div>)}</MessageProvenanceProvider>
+  </main>;
 }

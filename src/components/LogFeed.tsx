@@ -1,4 +1,5 @@
 "use client";
+import { splitInboxBatchFeed } from "./feed/parse";
 
 import { ArrowDownToLine, CornerDownRight, type LucideIcon, Wrench } from "lucide-react";
 import { useCallback, Component, type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -874,14 +875,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [session, file?.activity, tail.lines, tail.linesStart],
   );
-  const feed = useReasoningFeed(canonicalFeed, runtimeLiveTurn, `${memoryKey}\0${tailPath}`);
+  const unsplitFeed = useReasoningFeed(canonicalFeed, runtimeLiveTurn, `${memoryKey}\0${tailPath}`);
   /* Tool activity earns its cue from the parse itself: every newly appended
      call ticks once, keyed on the engine's call id — even one that settled
      inside a single tail tick — while re-parses, remounts and paged-in history
      stay silent. The window end anchors "newly appended" to the tail stream;
      loading gates the baseline so an unloaded feed is not mistaken for an
      empty conversation. */
-  useToolActivityCues(feed.items, memoryKey, tailPath, tail.linesStart + tail.lines.length, Boolean(file) && !tail.loading);
+  useToolActivityCues(unsplitFeed.items, memoryKey, tailPath, tail.linesStart + tail.lines.length, Boolean(file) && !tail.loading);
   /* Delivered-message authorship (#1117): joins the Claude delivery ledger by
      engine message id server-side, and on both engines joins each settled
      delivery occurrence (registry receipt or flow round: content digest,
@@ -901,9 +902,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   );
   const provenanceLookup = useDeliveredMessageProvenance(
     file?.engine === "claude" || file?.engine === "codex" ? tailPath : null,
-    feed.items,
+    unsplitFeed.items,
     awaitingSubmissions,
   );
+  const feed = useMemo(() => splitInboxBatchFeed(unsplitFeed, id => provenanceLookup.inboxPartsFor?.(id)), [unsplitFeed, provenanceLookup]);
   const hiddenLocal = Math.max(0, feed.items.length - visibleCount);
   const visibleItems = hiddenLocal ? feed.items.slice(-visibleCount) : feed.items;
   const visibleStartIndex = feed.items.length - visibleItems.length;

@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { expect, test } from "bun:test";
+import { expect, test, spyOn } from "bun:test";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { buildPipeline, loadPipelines, savePipelines, withPipelineControllerMutation, withPipelineMutation } from "./store";
@@ -172,4 +172,34 @@ test("a competing SQLite writer after controller lease acquisition yields before
     prototype.acquireLease = original;
     clearInterval(probe); clearTimeout(release); holder?.close();
   }
+});
+
+
+test("preparation tolerates an unrelated row write while each selected row retains its fence", async () => {
+  savePipelines([fixtureLane("selected"),fixtureLane("peer")]);
+  const { withControllerPipelineScope } = await import("./controllerScope");
+  const prototype = SqliteStateCollection.prototype as unknown as { prepareControllerSnapshot: (...args: unknown[]) => Promise<unknown> };
+  const original = prototype.prepareControllerSnapshot;
+  let changed = false;
+  const prepare = spyOn(prototype,"prepareControllerSnapshot").mockImplementation(async function(this: unknown, ...args) {
+    const result = await original.apply(this,args);
+    if (!changed) {
+      changed = true;
+      const db = new Database(`${process.env.LLV_STATE_DIR}/state.sqlite`);
+      try {
+        db.query("UPDATE state_rows SET value_json=json_set(value_json,'$.stateDetail','fresh peer'),row_revision=row_revision+1 WHERE collection='pipelines' AND row_key='peer'").run();
+        db.query("UPDATE state_collections SET revision=revision+1 WHERE collection='pipelines'").run();
+      } finally { db.close(); }
+    }
+    return result;
+  });
+  try {
+    await withControllerPipelineScope(["selected"], () => withPipelineControllerMutation(async (rows,persist,assertCurrent) => {
+      expect(rows.map(row => row.id)).toEqual(["selected"]);
+      assertCurrent(rows[0]!);
+      rows[0]!.stateDetail = "selected result";
+      await persist(rows);
+    }));
+  } finally { prepare.mockRestore(); }
+  expect(loadPipelines().map(row => row.stateDetail)).toEqual(["selected result","fresh peer"]);
 });

@@ -1,3 +1,4 @@
+import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
@@ -75,6 +76,80 @@ test("fresh and resumed Claude carry learned rules once in the append channel", 
       );
       expect(captured.args).not.toContain("--system-prompt");
     } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
+test("memory source table reaches fresh and adopted Claude, including settings-free homes", async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-source-"));
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  try {
+    for (const configured of [false, true]) for (const cleanMemory of [false, true]) for (const resumed of [false, true]) {
+      let original: string | undefined;
+      for (const state of SOURCE_STATES) {
+        chooseSource(state);
+        const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+        const options = { cwd: root, sessionId: "00000000-0000-0000-0000-000000000000", memoryQueuePath: path.join(root, "fixed-queue.jsonl"), claudeConfigDir: configured ? root : undefined,
+          env: { ...process.env, LLV_SPAWN_CAPABILITY: undefined },
+          cleanMemory, appendSystemPrompt: "Synthetic Delegatus rules.", eventStore: new MemoryEventStore(), readTranscript: () => [],
+          readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+          spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured) };
+        const host = resumed ? await ClaudeStreamBrokerHost.adopt("00000000-0000-0000-0000-000000000000", options) : await ClaudeStreamBrokerHost.start(options);
+        try {
+          const arg = captured.args![captured.args!.indexOf("--settings") + 1];
+          const body = arg.startsWith("{") ? arg : fs.readFileSync(arg, "utf8");
+          const settings = JSON.parse(body);
+          const off = cleanMemory || sourceTurnsEnginesOff(state);
+          expect(settings.autoMemoryEnabled).toBe(off ? false : undefined);
+          expect(settings.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe(off ? "1" : undefined);
+          if (!cleanMemory) expect(captured.args![captured.args!.indexOf("--append-system-prompt") + 1]).toContain("Synthetic Delegatus rules.");
+          if (state === "unchosen") original = body;
+          if (state === "importing" || state === "engines") expect(body).toBe(original!);
+        } finally { await host.release(); }
+      }
+    }
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Claude clean inline settings preserve legacy bytes outside the clean-memory override", async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-clean-inline-"));
+  const state = path.join(root, "state");
+  process.env.LLV_STATE_DIR = state;
+  const env = { ...process.env, HOME: root };
+  const legacyBody = JSON.stringify({ env: agentPublicationIdentityEnv(env) });
+  const cleanBody = JSON.stringify({
+    autoMemoryEnabled: false,
+    env: { ...agentPublicationIdentityEnv(env), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
+  });
+  try {
+    for (const source of ["unchosen", "importing"] as const) {
+      chooseSource(source);
+      for (const cleanMemory of [false, true]) for (const resumed of [false, true]) {
+        const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+        const options = {
+          cwd: root, sessionId: "00000000-0000-0000-0000-000000000000", env,
+          cleanMemory, appendSystemPrompt: "Synthetic Delegatus rules.",
+          eventStore: new MemoryEventStore(), readTranscript: () => [],
+          readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+          spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+        };
+        const host = resumed
+          ? await ClaudeStreamBrokerHost.adopt(options.sessionId, options)
+          : await ClaudeStreamBrokerHost.start(options);
+        try {
+          const settingsIndex = captured.args!.indexOf("--settings");
+          expect(settingsIndex).toBeGreaterThanOrEqual(0);
+          expect(captured.args![settingsIndex + 1]).toBe(cleanMemory ? cleanBody : legacyBody);
+        } finally { await host.release(); }
+      }
+    }
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -264,7 +339,7 @@ test.each([
   try {
     const reloaded = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
     const entry = reloaded.readOnlySnapshot().entries[`claude:${sessionId}`]!;
-    const options = claudeStartupHostOptions(entry, null, null, { NODE_ENV: "test", HOME: directory, LLV_STATE_DIR: process.env.LLV_STATE_DIR });
+    const options = await claudeStartupHostOptions(entry, null, null, { NODE_ENV: "test", HOME: directory, LLV_STATE_DIR: process.env.LLV_STATE_DIR });
     const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
     const host = await ClaudeStreamBrokerHost.adopt(sessionId, { ...options,
       eventStore: new MemoryEventStore(), readTranscript: () => [],
@@ -440,7 +515,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-structured-http-"));
     fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ mcpServers: { viewer: { type: "stdio", command: "viewer-mcp" } } }));
     const previous = { transport: process.env.LLV_MCP_TRANSPORT, token: process.env.LLV_TOKEN };
-    process.env.LLV_MCP_TRANSPORT = "http";
+    delete process.env.LLV_MCP_TRANSPORT;
     delete process.env.LLV_TOKEN;
     const viewerEntry = async (env: Record<string, string>, resume: boolean) => {
       const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
@@ -976,6 +1051,7 @@ describe("ClaudeStreamBrokerHost", () => {
   });
 
   test("managed fresh and adopted hosts share one settings profile while legacy settings stay local", async () => {
+    const stdioEnv = { ...process.env, LLV_SPAWN_CAPABILITY: undefined };
     const managedHome = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-managed-policy-"));
     const sharedHome = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-shared-policy-"));
     const sharedSettingsPath = path.join(sharedHome, "settings.json");
@@ -996,6 +1072,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const freshCapture: { args?: string[] } = {};
     const fresh = await ClaudeStreamBrokerHost.start({
       sessionId: "managed-policy-session",
+      env: stdioEnv,
       cwd: managedHome,
       claudeConfigDir: managedHome,
       spawnPolicyBaseSettingsPath: sharedSettingsPath,
@@ -1017,6 +1094,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const adoptedChild = new FakeClaude(new RecordingDeliveryLedger());
     const adoptedCapture: { args?: string[] } = {};
     const adopted = await ClaudeStreamBrokerHost.adopt("managed-policy-session", {
+      env: stdioEnv,
       cwd: managedHome,
       claudeConfigDir: managedHome,
       spawnPolicyBaseSettingsPath: sharedSettingsPath,
@@ -1059,6 +1137,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const legacyCapture: { args?: string[] } = {};
     const legacy = await ClaudeStreamBrokerHost.start({
       sessionId: "legacy-policy-session",
+      env: stdioEnv,
       cwd: legacyHome,
       claudeConfigDir: legacyHome,
       spawnPolicyBaseSettingsPath: null,
@@ -2508,11 +2587,11 @@ describe("ClaudeStreamBrokerHost", () => {
     const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
     const adopted = await adoptClaudeRegistryHosts(
       registry,
-      (entry) => ({
+      async (entry) => ({
         /* The production boot builder, not a hand-written option object. The
            #1346 fix was asserted against its own options, so nothing ever ran
            this and the managed-only config dir it answered stayed invisible. */
-        ...claudeStartupHostOptions(entry, owner, null, { NODE_ENV: "test" }),
+        ...await claudeStartupHostOptions(entry, owner, null, { NODE_ENV: "test" }),
         deliveryLedger: ledger,
         eventStore: new MemoryEventStore(),
         readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max", version: "2.1.197" }),
@@ -3864,4 +3943,31 @@ test("seat launches deny native questions while workers keep them on fresh and a
       if (!seat) expect(captured.args).not.toContain("--disallowedTools");
     } finally { await host.release(); }
   }
+});
+
+
+test("seat inbox broker persists layout before writing and refuses a changed layout under the same id", async () => {
+  const { fixtureInboxBatch } = await import("./fixtures/inboxBatch");
+  const entry = fixtureInboxBatch([{ id: "wire-one", text: "first exact body", operator: true }, { id: "wire-two", text: "second exact body" }]);
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const events = new MemoryEventStore();
+  const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", deliveryLedger: ledger, eventStore: events,
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), readTranscript: () => [], spawnProcess: fakeSpawn(child, {}) });
+  try {
+    const sending = host.send(entry);
+    void sending.catch(() => undefined);
+    const frame = child.inputs.find(input => input.type === "user")!;
+    const blocks = (frame.message as { content: Array<{ type: string; text?: string }> }).content;
+    expect(blocks.filter(b => b.type === "text").map(b => b.text).join("")).toBe(entry.content!.text);
+    expect(blocks).toHaveLength(4);
+    expect(ledger.load(host.identity.sessionId)[0]!.entry.parts).toEqual(entry.parts);
+    const changed = structuredClone(entry); changed.parts![0]!.origin = { kind: "agent" };
+    await expect(host.send(changed)).rejects.toThrow("different payload");
+    child.emitJson({ type: "user", isReplay: true, uuid: "wire-inbox-echo", message: { role: "user", content: blocks } });
+    expect(await sending).toMatchObject({ turnId: entry.id });
+    const echoed = events.load(host.identity.sessionId).find(e => e.kind === "item" && e.deliveryEcho);
+    expect(echoed?.kind === "item" ? echoed.deliveryEcho : undefined)
+      .toMatchObject({ operationId: entry.id, memberOperationIds: ["wire-one", "wire-two"] });
+  } finally { await host.release(); }
 });

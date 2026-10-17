@@ -780,13 +780,14 @@ export class RuntimeJournal {
   nativeQueueTransition(operationId: string, transition: NativeQueueTransition): RuntimeOperationResult {
     const original = this.operationResult(operationId);
     const status = transition.phase === "prepared" || transition.phase === "withdrawn" ? "delivering"
+      : transition.phase === "seat-withdrawal" ? "failed"
       : (transition.phase === "acknowledged" || transition.phase === "observed-queued") ? original?.receipt.kind === "send" ? "queued" : "applied"
       : transition.phase === "proven" ? "delivered"
       : transition.phase === "refused" || transition.phase === "removed" ? "failed" : "uncertain";
     return this.transitionOperation(operationId, status,
       transition.phase === "removed" ? { reason: RUNTIME_DELIVERY_DISCARDED_REASON }
         : "reason" in transition ? { reason: transition.reason } : {},
-      transition.phase === "prepared" ? { fromStatuses: ["pending", "queued"] } : {}, transition);
+      transition.phase === "prepared" || transition.phase === "seat-withdrawal" ? { fromStatuses: ["pending", "queued"] } : {}, transition);
   }
 
   /** Evidence-only settlement of an entry whose add operation compaction
@@ -1948,6 +1949,15 @@ export class RuntimeJournal {
       }
     }
     return { scanned: rows.length, settled };
+  }
+
+  private readonly effectReaderGeneration = randomUUID();
+
+  /** Process generation plus both SQLite write witnesses: a peer commit and
+      a replacement journal invalidate a conditional page too. */
+  effectPageVersion(): string {
+    const peer = this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
+    return `${this.effectReaderGeneration}:${this.totalChanges()}:${peer}`;
   }
 
   effectBatch(limit = 100, kinds?: readonly string[], afterEventSeq = 0): Array<RuntimeEffect & { eventSeq: number }> {

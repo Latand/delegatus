@@ -163,3 +163,34 @@ test("the anchored mic names its phase, so the dark rest colour leaves the conne
   expect(starting.getAttribute("data-mic-phase")).toBe("starting");
   expect(starting.className).toContain("text-accent");
 });
+
+/* Audit B22: the check moves at once; a refusal moves it back and the menu says why. */
+test("picking a backend moves the check at once while the save is held, sends once, and a refusal moves it back with the reason", async () => {
+  const saved = globalThis.fetch;
+  const posts: unknown[] = [];
+  let refuse: () => void = () => {};
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      posts.push(JSON.parse(String(init.body)));
+      await new Promise<void>((resolve) => { refuse = resolve; });
+      return new Response(JSON.stringify({ error: "backend store busy" }), { status: 503, headers: { "content-type": "application/json" } });
+    }
+    return saved(input, init);
+  }) as typeof fetch;
+  try {
+    const button = await render();
+    const menu = await openFromKeyboard(button);
+    const option = (label: string) => Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')).find((item) => item.textContent?.includes(label))!;
+    await act(async () => { option("Soniox").click(); });
+    expect(option("Soniox").getAttribute("aria-checked")).toBe("true");
+    expect(option("ChatGPT").getAttribute("aria-checked")).toBe("false");
+    await act(async () => { option("Soniox").click(); });
+    expect(posts).toEqual([{ backend: "soniox" }]);
+    await act(async () => { refuse(); await new Promise((resolve) => setTimeout(resolve, 10)); });
+    expect(option("ChatGPT").getAttribute("aria-checked")).toBe("true");
+    expect(option("Soniox").getAttribute("aria-checked")).toBe("false");
+    expect(menu.textContent).toContain("backend store busy");
+  } finally {
+    globalThis.fetch = saved;
+  }
+});

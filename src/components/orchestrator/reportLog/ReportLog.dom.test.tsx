@@ -48,6 +48,8 @@ let pages: ReportLogPage[] = [];
 let requests: string[] = [];
 let settingWrites: unknown[] = [];
 let dismissals: Array<{ target: unknown; undo: boolean; surface: string }> = [];
+/* When set, the dismissal route refuses with this error, as a held 400 would. */
+let dismissalRefusal: string | null = null;
 type DoneItemV1 = import("@/lib/done/types").DoneItemV1;
 let doneServer: DoneItemV1[] = [];
 let doneWrites: Array<{ keys: string[]; undo: boolean; surface: string }> = [];
@@ -67,6 +69,7 @@ beforeEach(() => {
   requests = [];
   settingWrites = [];
   dismissals = [];
+  dismissalRefusal = null;
   resetDismissalOverlayForTests();
   pages = [];
   dom.localStorage.clear();
@@ -92,6 +95,7 @@ beforeEach(() => {
     if (url.startsWith("/api/attention/dismissals")) {
       const body = JSON.parse(String(init!.body)) as { target: { subjects: Array<{ kind: "report"; seq: number }> }; undo: boolean; surface: string };
       dismissals.push(body);
+      if (dismissalRefusal) return new Response(JSON.stringify({ error: dismissalRefusal }), { status: 400 });
       return new Response(JSON.stringify({ ok: true, dismissed: body.target.subjects, alreadyClear: [], changed: [], at: "2026-09-24T12:00:00.000Z", by: { kind: "operator", surface: body.surface }, undo: body.undo }));
     }
     if (url.startsWith("/api/attention/done")) {
@@ -551,4 +555,53 @@ test("«Готово» is pinned above the log for this project, newest first, a
   expect(doneWrites).toEqual([{ keys: ["deploy:d1", "report:r-incident", "task:t-mine"], undo: false, surface: "desktop" }]);
   expect(section.querySelector("[data-done-all-accepted]")).not.toBeNull();
   expect(section.querySelector("[data-done-count]")!.textContent).toBe("0");
+});
+
+/* Audit B43: a refused Resolve or Undo is taken back and says why beside the question. */
+test("a refused Resolve and a refused Undo each come back with the server's words beside the question, cleared by the next press", async () => {
+  pages = [questionPage()];
+  const host = mount();
+  await settle();
+  dismissalRefusal = "INVALID_REQUEST";
+  flushSync(() => host.querySelector<HTMLInputElement>('[data-report-resolve="4"]')!.click());
+  await settle();
+  expect(dismissals).toHaveLength(1);
+  expect(host.querySelector<HTMLInputElement>('[data-report-resolve="4"]')!.checked).toBe(false);
+  expect(host.querySelector('[data-report-resolve-error="4"]')?.textContent).toBe("Could not mark it resolved: INVALID_REQUEST");
+  /* The next press clears it, and this one lands. */
+  dismissalRefusal = null;
+  flushSync(() => host.querySelector<HTMLInputElement>('[data-report-resolve="4"]')!.click());
+  expect(host.querySelector('[data-report-resolve-error="4"]')).toBeNull();
+  await settle();
+  expect(host.querySelector<HTMLInputElement>('[data-report-resolve="4"]')!.checked).toBe(true);
+  dismissalRefusal = "INVALID_REQUEST";
+  flushSync(() => host.querySelector<HTMLInputElement>('[data-report-resolve="4"]')!.click());
+  await settle();
+  /* The layer is taken back (the box reads what the server last said); the refusal says why. */
+  expect(host.querySelector('[data-report-resolve-error="4"]')?.textContent).toBe("Could not mark it open again: INVALID_REQUEST");
+  expect(dismissals).toHaveLength(3);
+});
+
+/* Audit F1: an «Older» page that does not come says so beside the button, which retries. */
+test("a failed «Show older» says so under the button, and the next press clears it and loads the page", async () => {
+  pages = [page([entry(40), entry(39)], { nextBefore: 39 })];
+  const served = globalThis.fetch;
+  let refuseOlder = true;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (refuseOlder && String(input).includes("before=39")) return new Response("{}", { status: 503 });
+    return served(input, init);
+  }) as typeof fetch;
+  const host = mount();
+  await settle();
+  (host.querySelector("[data-report-log-older]") as HTMLElement).click();
+  await settle();
+  expect(host.querySelector("[data-report-log-older-failed]")?.textContent).toBe("Could not load older reports. Press Show older to try again.");
+  expect(host.querySelector("[data-report-log-older]")).not.toBeNull();
+
+  refuseOlder = false;
+  pages = [page([entry(38), entry(37)], { nextBefore: null })];
+  (host.querySelector("[data-report-log-older]") as HTMLElement).click();
+  await settle();
+  expect(host.querySelector("[data-report-log-older-failed]")).toBeNull();
+  expect([...host.querySelectorAll("[data-report-entry]")].map((row) => row.getAttribute("data-report-entry"))).toEqual(["40", "39", "38", "37"]);
 });

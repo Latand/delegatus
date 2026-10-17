@@ -28,7 +28,7 @@ import { ctxFor } from "./context";
 import { lastAgentWorkAtFor, lastAssistantMessageAtFor, lastTurnFor } from "./turnDuration";
 import { discoverFiles, discoverFilesWithProjectCatalog } from "./discover";
 import { describeFile } from "./describe";
-import { durableServiceTierIndex, entryEffort, entryEffortResult, entryServiceTier } from "./effort";
+import { durableServiceTierIndexForPaths, entryEffort, entryEffortResult, entryServiceTier } from "./effort";
 import { linkEntries } from "./links";
 import { entryModelsResult } from "./model";
 import { agentProcesses, outputHolders } from "./process";
@@ -372,7 +372,7 @@ async function listFilesInternal(
   // activity() only consults holders on the same claude-tasks/.output path.
   const needsHolders = entries.some((entry) => entry.root === "claude-tasks" && entry.path.endsWith(".output"));
   const holders = needsHolders ? outputHolders() : NO_HOLDERS;
-  const durableTiers = durableServiceTierIndex();
+  const durableTiers = await durableServiceTierIndexForPaths(entries.map(entry => entry.path));
   const invalidTails = new Set<string>();
   const hydrateEntry = (entry: FileEntry) => {
     const verdict = activityVerdict(entry.root, entry.path, entry.mtime, entry.size);

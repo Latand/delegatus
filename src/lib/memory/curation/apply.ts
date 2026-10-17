@@ -161,7 +161,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
         ordered.add(id);
       }
       const active = ids.map(id => work.get(id)!);
-      if (scopeChars(active) > Math.max(ROLE_MEMORY_BOUND, scopeChars(scopes.get(item.scope)!.active.map(id => before.get(id)!)))) refuse("CURATE_BOUND", "the resulting scope exceeds its character bound");
+      if (scopeChars(active) > ROLE_MEMORY_BOUND) refuse("CURATE_BOUND", "the resulting scope exceeds its character bound");
       orders.set(item.scope, ids.slice().reverse());
     }
     for (const [id, rule] of work) {

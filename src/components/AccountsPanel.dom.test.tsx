@@ -897,3 +897,62 @@ test("a watched retry clears an old login error and shows live limits without a 
     expect(store.limitsVersion).toBe(1);
   } finally { unsubscribe(); }
 });
+
+/* Audit B32: an existing provider account's save closes the editor and draws
+   the new label on its row at once, the token field emptied; a refusal takes
+   the row back and reopens the editor with what was typed, token included. */
+test("a held provider save closes the editor and shows the new name at once, and a refusal reopens it with the typed token and the reason", async () => {
+  const provider = { baseUrl: "https://example.invalid/anthropic", model: "large", smallFastModel: "small" };
+  const account = { id: "provider", label: "Provider", kind: "managed" as const, authPresent: true, authHealth: "authenticated" as const, loginPending: false, loginState: "authenticated" as const, deviceAuth: null, provider };
+  const draws: unknown[] = [];
+  let undone = 0;
+  let view: Awaited<ReturnType<typeof mount>> | null = null;
+  const base = state(login(), { accounts: [account], active: "provider" });
+  const withDraw = (accounts: typeof base.accounts): EngineAccountsState => ({
+    ...base,
+    accounts,
+    drawAccount: (id, patch) => {
+      draws.push({ id, ...patch });
+      queueMicrotask(() => void view!.rerender(withDraw([{ ...account, ...patch }])));
+      return () => { undone += 1; queueMicrotask(() => void view!.rerender(withDraw([account]))); };
+    },
+  });
+  view = await mount(withDraw([account]));
+  mounted.push(view);
+  const patches: unknown[] = [];
+  let refuse: () => void = () => {};
+  const saved = globalThis.fetch;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    patches.push({ method: init?.method, body: JSON.parse(String(init?.body)) });
+    await new Promise<void>((resolve) => { refuse = resolve; });
+    return new Response(JSON.stringify({ error: "The provider URL must use https" }), { status: 400, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const editor = () => view!.host.querySelector('[data-claude-provider-editor="provider"]') as HTMLElement;
+  const field = (label: string) => editor().querySelector(`input[aria-label="${label}"]`) as HTMLInputElement | null;
+  const type = (input: HTMLInputElement, value: string) => {
+    const key = Object.keys(input).find((name) => name.startsWith("__reactProps$"))!;
+    flushSync(() => (input as unknown as Record<string, { onChange(event: unknown): void }>)[key]!.onChange({ target: { value } }));
+  };
+  const button = (text: string) => [...editor().querySelectorAll("button")].find((candidate) => candidate.textContent === text)!;
+  try {
+    flushSync(() => dispatch(button("Edit provider"), new dom.MouseEvent("click", { bubbles: true })));
+    type(field("Display name")!, "Gateway");
+    type(field("Provider token")!, "typed-fixture-value");
+    flushSync(() => dispatch(button("Save provider"), new dom.MouseEvent("click", { bubbles: true })));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(field("Display name")).toBeNull();
+    expect(draws).toEqual([{ id: "provider", label: "Gateway", provider: { ...provider } }]);
+    expect(view.host.querySelector('[data-account-row="provider"]')!.textContent).toContain("Gateway");
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toMatchObject({ method: "PATCH", body: { id: "provider", label: "Gateway", provider: { token: "typed-fixture-value" } } });
+    refuse();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(undone).toBe(1);
+    expect(view.host.querySelector('[data-account-row="provider"]')!.textContent).not.toContain("Gateway");
+    expect(field("Display name")!.value).toBe("Gateway");
+    expect(field("Provider token")!.value).toBe("typed-fixture-value");
+    expect(editor().querySelector('[role="alert"]')!.textContent).toBe("The provider URL must use https");
+  } finally {
+    globalThis.fetch = saved;
+  }
+});

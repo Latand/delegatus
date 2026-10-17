@@ -4,7 +4,10 @@ import type { LaunchProfile } from "@/lib/accounts/migration/contracts";
 import { statePath } from "@/lib/configDir";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { roleIsClean } from "./eligibility";
-import { learnedRulesBlock } from "./roleStore";
+import { learnedRulesSnapshot } from "./roleStore";
+import type { AgentRegistry } from "@/lib/agent/registry";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { recordMemoryDelivery, type MemoryEngineStart } from "./deliveryLedger";
 import { roleMemoryEnabled } from "./settings";
 
 /** Leave headroom below Linux's single-argument ceiling, including the notice. */
@@ -29,16 +32,30 @@ export function roleMemoryProfileForIdentity(
   };
 }
 
-/** The selector survives in receipts; only the engine options carry its text. */
-export function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, "cleanMemory" | "learnedRules"> | null | undefined): string | undefined {
+/** Identity comes from durable membership, including resumed and migrated generations. */
+export function memoryStartIdentity(registry: AgentRegistry, conversationId: string | undefined, transcriptPath?: string) {
+  const id = conversationId ?? (transcriptPath ? registry.conversationForPath(transcriptPath)?.id : undefined);
+  if (!id) throw Error("memory delivery requires a durable conversation identity");
+  const members = registry.conversationMemberships(id as ViewerConversationId).filter(row => row.kind === "pipeline" && row.stageId && Number.isSafeInteger(row.round) && row.round! > 0);
+  const member = members.length === 1 ? members[0] : undefined;
+  return { conversationId: id, ...(member ? { attempt: { pipelineId: member.containerId, stageId: member.stageId!, attempt: member.round! } } : {}) };
+}
+
+/** The selector survives in receipts; only engine options carry its text.
+ * A ledger refusal stops a start: a successfully started attempt must have evidence. */
+export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, "cleanMemory" | "learnedRules"> | null | undefined, start?: MemoryEngineStart): Promise<string | undefined> {
   const marker = profile?.learnedRules;
-  if (!marker || profile?.cleanMemory || roleIsClean(marker.roleId) || !roleMemoryEnabled()) return undefined;
-  try { return learnedRulesBlock(marker.project, marker.roleId, LEARNED_RULES_MAX_BYTES); }
-  catch {
-    // Store diagnostics can contain private text; log only the cause class.
-    console.warn("[role-memory] learned rules unavailable at engine start; starting without rules");
-    return undefined;
-  }
+  const clean = profile?.cleanMemory === true;
+  const select = () => {
+    if (!marker || clean || roleIsClean(marker.roleId) || !roleMemoryEnabled()) return undefined;
+    try { return learnedRulesSnapshot(marker.project, marker.roleId, LEARNED_RULES_MAX_BYTES); }
+    catch {
+      // Store diagnostics can contain private text; log only the cause class.
+      console.warn("[role-memory] learned rules unavailable at engine start; starting without rules");
+      return undefined;
+    }
+  };
+  return start ? recordMemoryDelivery(start, clean, select) : select()?.block;
 }
 
 /** Retire old pointer files only at activation by the state owner. */

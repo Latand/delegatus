@@ -1,7 +1,6 @@
 import type { NextRequest } from "next/server";
-import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
+import { keysOwnerGate } from "@/lib/keys/access";
 import { openRouterKeySource, writeOpenRouterApiKey } from "@/lib/asks/settings";
-import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { isStagingMode } from "@/lib/staging";
 
 export const runtime = "nodejs";
@@ -13,10 +12,8 @@ function answer(status = 200, error?: string) {
 }
 export async function GET() { return answer(); }
 export async function PUT(request: NextRequest) {
-  const rejection = rejectCrossOrigin(request);
-  if (rejection) return rejection;
-  const authority = requireOperatorAuthority(request);
-  if (!authority.ok) return answer(authority.status, "operator_only");
+  const refusal = keysOwnerGate(request);
+  if (refusal) return refusal;
   if (isStagingMode()) return answer(409, "staging");
   if (openRouterKeySource() === "env") return answer(409, "environment_authoritative");
   // Bound the secret in memory; no error includes the submitted body.

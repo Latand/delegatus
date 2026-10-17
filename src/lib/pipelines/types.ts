@@ -869,6 +869,8 @@ export type PipelinePublicationFailure = {
   hookBudgetMs?: number;
   /** The check the hook named as stopped without a verdict. */
   hookStoppedCheck?: string;
+  /** Full output proved a deadline with no decisive check or cleanup refusal. */
+  retryableDeadline?: boolean;
 };
 
 export type PipelinePublicationResult = (

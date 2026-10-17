@@ -92,13 +92,88 @@ test("a state colour is left alone: muted call, connecting mic, context Send", (
   expect(RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m).length).toBe(2);
 });
 
-test("a Send that cannot send keeps its dim on hover and press, in both scopes", () => {
+test("a Send or Stop that cannot act keeps its dim on hover and press, in both scopes", () => {
   const scopes = RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m);
   expect(scopes.length).toBe(2);
   for (const scope of scopes) {
     const states = scope.split("\n").filter((line) => /composer-send/.test(line) && /:(?:hover|active):not\(:disabled\)/.test(line));
-    expect(states.length).toBe(6);
+    /* Six for Send and its phone visual, one for the phone Stop's press. */
+    expect(states.length).toBe(7);
     for (const line of states) expect(line).toContain(':not([aria-disabled="true"])');
+  }
+});
+
+/* The rest of the dark controls (the audit of 2026-10-16). */
+const sunken = dark("surface-sunken");
+const well = dark("surface-well");
+const success = dark("color-success");
+const warning = dark("color-warning");
+const danger = dark("color-danger");
+const brand = dark("color-brand");
+const white = "#ffffff";
+/** The two scopes' audit blocks, each with its scope prefix and indent stripped. */
+function auditBlocks(): string[] {
+  return RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m).map((scope) => {
+    const block = scope.slice(scope.indexOf("Every other control"));
+    return block.replace(/:root(?::not\(\[data-theme="light"\]\)|\[data-theme="dark"\])/g, ":root").replace(/^ +/gm, "").replace(/\n}\s*$/, "").trim();
+  });
+}
+
+test("a filled primary action takes the accent with a canvas label instead of the cream brand slab", () => {
+  expect(contrast(brand, card)).toBeGreaterThan(14);
+  for (const fill of [accent, hover, pressed]) expect(contrast(canvas, fill)).toBeGreaterThanOrEqual(5.1);
+  for (const block of auditBlocks()) {
+    expect(block).toContain(":root .bg-brand { background-color: var(--color-accent); }");
+    expect(block).toContain(":root .text-on-brand { color: var(--color-canvas); }");
+  }
+});
+
+test("white on the dark accent, success, warning and info fills is replaced by the canvas; red danger keeps its white", () => {
+  for (const fill of [accent, success, warning, info]) {
+    expect(contrast(white, fill)).toBeLessThan(3);
+    expect(contrast(canvas, fill)).toBeGreaterThanOrEqual(6.3);
+  }
+  for (const block of auditBlocks()) {
+    expect(block).toContain(":root :is(.bg-accent, .bg-success, .bg-warning, .bg-info).text-white,");
+    /* The red fill is not matched; the danger focus ring below is a ring colour, not a fill. */
+    expect(block).not.toMatch(/bg-danger/);
+  }
+  expect(danger).toBe("#f07171");
+});
+
+test("the phone Stop, the switch knob and the focus ring hold their floors", () => {
+  expect(contrast(primary, raised)).toBeGreaterThanOrEqual(12.8);
+  expect(contrast(primary, strong)).toBeGreaterThanOrEqual(8.4);
+  /* Non-text: the 3:1 floor. */
+  expect(contrast(card, accent)).toBeGreaterThanOrEqual(5.8);
+  expect(contrast(muted, sunken)).toBeGreaterThanOrEqual(5.4);
+  for (const ground of [canvas, card, raised, sunken, well]) expect(contrast(accent, ground)).toBeGreaterThanOrEqual(5.3);
+  /* The browser's own ring takes the accent without outranking any authored outline. */
+  for (const block of auditBlocks()) expect(block).toContain(":where(:root) :where(:focus-visible) { outline-color: var(--color-accent); }");
+});
+
+test("a hover wash lifts to the raised surface and keeps every label over 4.5:1", () => {
+  for (const label of [muted, secondary, primary]) expect(contrast(label, raised)).toBeGreaterThanOrEqual(4.6);
+  /* The well it replaces sat below the card it was drawn on. */
+  expect(luminance(well)).toBeLessThan(luminance(card));
+  expect(luminance(raised)).toBeGreaterThan(luminance(card));
+  /* A lighter step (the strong line as a fill) would take muted labels under the floor, which is why a press draws a line. */
+  expect(contrast(muted, strong)).toBeLessThan(4.5);
+  for (const block of auditBlocks()) expect(block).toContain(":root { --dc-hover: var(--color-raised); }");
+});
+
+test("the audit rules are the same in both dark scopes and never reach the light theme", () => {
+  const [system, pinned] = auditBlocks();
+  expect(system).toBe(pinned);
+  expect(system.length).toBeGreaterThan(2000);
+  /* `--dc-hover` is declared only inside the two dark scopes (the lift, the raised-surface reset, the card lift in each); the light theme reads each rule's fallback. */
+  expect(RULES.match(/--dc-hover:/g)?.length).toBe(6);
+  expect(system.match(/--dc-hover:/g)?.length).toBe(3);
+  expect(TOKENS).not.toContain("--dc-hover");
+  for (const sheet of ["../components/kanban/kanbanBoard.css", "../components/pipelines/pipelineBlock.css"]) {
+    const uses = fs.readFileSync(path.join(import.meta.dir, sheet), "utf8").match(/var\(--dc-hover[^;]*;/g) ?? [];
+    expect(uses.length).toBeGreaterThan(0);
+    for (const use of uses) expect(use).toMatch(/^var\(--dc-hover, var\(--surface-(well|sunken)/);
   }
 });
 
@@ -107,4 +182,157 @@ test("the rules read the tokens the numbers above come from", () => {
   expect(RULES).toContain("color-mix(in srgb, var(--color-accent) 88%, var(--color-canvas))");
   expect(RULES).toContain("color-mix(in srgb, var(--color-accent) 25%, var(--color-card))");
   expect(RULES).not.toMatch(/data-proto/);
+});
+
+/* Review of PR #2965: the danger, warning and info rings at 30–50 % were left translucent. */
+/** `fg` at `alpha` over `ground`, the way a box-shadow ring composites. */
+const over = (fg: string, alpha: number, ground: string): string => mix(fg, alpha, ground);
+
+test("a translucent danger, warning or info focus ring was under the floor, and its solid colour clears it on every surface", () => {
+  /* Measured against the surfaces the controls sit on, as the accent ring is. */
+  expect(contrast(over(danger, 0.3, card), card)).toBeLessThan(1.7);
+  expect(contrast(over(danger, 0.4, card), card)).toBeLessThan(2);
+  expect(contrast(over(danger, 0.5, card), card)).toBeLessThan(2.5);
+  expect(contrast(over(warning, 0.4, card), card)).toBeLessThan(2.5);
+  expect(contrast(over(warning, 0.5, raised), raised)).toBeLessThan(3);
+  expect(contrast(over(info, 0.4, card), card)).toBeLessThan(2.6);
+  for (const ground of [card, raised, canvas]) {
+    expect(contrast(danger, ground)).toBeGreaterThanOrEqual(5.4);
+    expect(contrast(warning, ground)).toBeGreaterThanOrEqual(7.7);
+    expect(contrast(info, ground)).toBeGreaterThanOrEqual(8.4);
+  }
+});
+
+/** Every ring-colour utility (with its focus variant) the sources spell, at an alpha under 100 %. */
+function translucentFocusRings(): Set<string> {
+  const found = new Set<string>();
+  const walk = (directory: string): void => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.(tsx|ts)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+        for (const match of fs.readFileSync(full, "utf8").matchAll(/(?:group-)?focus(?:-visible|-within)?:ring-(?:accent|danger|warning|info|success)\/\d+/g)) found.add(match[0]);
+      }
+    }
+  };
+  walk(path.join(import.meta.dir, ".."));
+  return found;
+}
+/** The class as a selector: `focus-visible:ring-danger/40` becomes `.focus-visible\:ring-danger\/40`. */
+const asSelector = (utility: string): string => `.${utility.replace(/[:/]/g, (character) => `\\${character}`)}`;
+
+test("no focus-visible or focus-within ring below 100 % alpha is left unmapped in either dark scope", () => {
+  const rings = translucentFocusRings();
+  expect(rings.size).toBeGreaterThan(10);
+  for (const utility of ["focus-visible:ring-danger/30", "focus-visible:ring-danger/50", "focus-visible:ring-warning/40", "focus-visible:ring-warning/50", "focus-within:ring-info/40"]) expect(rings.has(utility)).toBe(true);
+  for (const scope of RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m)) {
+    for (const utility of rings) expect(scope).toContain(asSelector(utility));
+  }
+});
+
+test("the danger, warning and info rings are drawn in their own colour, in both scopes", () => {
+  const scopes = RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m);
+  expect(scopes.length).toBe(2);
+  for (const scope of scopes) {
+    const lines = scope.replace(/^ +/gm, "");
+    expect(lines).toMatch(/:is\(\.focus-visible\\:ring-danger\\\/30, \.focus-visible\\:ring-danger\\\/40, \.focus-visible\\:ring-danger\\\/50\):focus-visible \{ --tw-ring-color: var\(--color-danger\); \}/);
+    expect(lines).toMatch(/:is\(\.focus-visible\\:ring-warning\\\/40, \.focus-visible\\:ring-warning\\\/50\):focus-visible \{ --tw-ring-color: var\(--color-warning\); \}/);
+    expect(lines).toMatch(/\.focus-within\\:ring-info\\\/40:focus-within \{ --tw-ring-color: var\(--color-info\); \}/);
+  }
+});
+
+test("a hover row in a menu on the card lifts to raised; only menus that are raised keep the well", () => {
+  const scopes = RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m);
+  for (const scope of scopes) {
+    /* The exception names surfaces that are raised, never a bare menu or listbox role. */
+    expect(scope).not.toMatch(/\[role="(?:menu|listbox)"\]/);
+    expect(scope).toContain(":not(:where(.bg-raised, .kb .menu, .kb .popover) *)");
+  }
+  /* The two menus the review named are drawn on the card, so they lift. */
+  const bar = fs.readFileSync(path.join(import.meta.dir, "../components/ProjectBar.tsx"), "utf8");
+  const strip = fs.readFileSync(path.join(import.meta.dir, "../components/pipelines/PipelineStrip.tsx"), "utf8");
+  expect(bar).toMatch(/data-bar-filter-menu=""\s+className=\{`[^`]*\bbg-card\b/);
+  expect(strip).toMatch(/role="menu" aria-label=\{t\("pipelineStrip\.moreActions"\)\} className="[^"]*\bbg-card\b/);
+  expect(bar).toContain("hover:bg-well");
+  expect(strip).toContain("hover:bg-sunken");
+  expect(luminance(well)).toBeLessThan(luminance(card));
+  expect(luminance(sunken)).toBeLessThan(luminance(card));
+  expect(luminance(raised)).toBeGreaterThan(luminance(card));
+  for (const label of [muted, secondary, primary]) expect(contrast(label, raised)).toBeGreaterThanOrEqual(4.6);
+});
+
+/* Review of PR #2965, second round. */
+
+/** Selectors of the component rules that draw a `:focus-visible` outline or shadow at a share of a colour (`color-mix`, an alpha). */
+function translucentFocusRules(): Set<string> {
+  const found = new Set<string>();
+  const walk = (directory: string): void => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.css$/.test(entry.name) && !full.endsWith("darkControls.css")) {
+        for (const match of fs.readFileSync(full, "utf8").matchAll(/^([^{}\n]*:focus-visible)\s*\{([^}]*)\}/gm)) {
+          if (/(?:outline|box-shadow)[^;]*(?:color-mix\([^;]*\d+%|rgba\(|rgb\([^)]*\/)/.test(match[2])) found.add(match[1].trim());
+        }
+      }
+    }
+  };
+  walk(path.join(import.meta.dir, ".."));
+  return found;
+}
+
+test("the stage-lesson outline was 2:1 and a translucent authored focus rule is left in neither dark scope", () => {
+  /* 40 % accent over the dark surfaces, as the rule is drawn. */
+  for (const ground of [card, canvas, raised]) {
+    expect(contrast(over(accent, 0.4, ground), ground)).toBeLessThan(2.1);
+    expect(contrast(accent, ground)).toBeGreaterThanOrEqual(5.3);
+  }
+  const rules = translucentFocusRules();
+  for (const selector of [".pblock .stage-lesson:focus-visible", ".kb .pane:focus-visible", ".kb .reader.conv:focus-visible"]) expect(rules.has(selector)).toBe(true);
+  for (const scope of RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m)) {
+    const lines = scope.replace(/^ +/gm, "");
+    for (const selector of rules) {
+      const prefix = scope.includes(":root:not([data-theme=\"light\"])") ? ':root:not([data-theme="light"])' : ':root[data-theme="dark"]';
+      expect(lines).toMatch(new RegExp(`^${prefix.replace(/[[\]().]/g, "\\$&")} ${selector.replace(/[[\]().]/g, "\\$&")} \\{ (?:outline-color|box-shadow): (?:var\\(--color-accent\\)|(?:inset )?0 0 0 2px var\\(--color-accent\\)); \\}`, "m"));
+    }
+  }
+});
+
+test("the board's raised surfaces keep the well for hover fills and the cards inside them lift again, in both scopes", () => {
+  /* Raised on raised draws no step; the well is the step below it. */
+  expect(raised).not.toBe(card);
+  expect(luminance(well)).toBeLessThan(luminance(raised));
+  const board = fs.readFileSync(path.join(import.meta.dir, "../components/kanban/kanbanBoard.css"), "utf8");
+  /* Some declaration block of the selector paints the surface. */
+  const paints = (selector: string, background: string): boolean =>
+    [...board.matchAll(new RegExp(`^${selector.replace(/\./g, "\\.")} \\{[^}]*\\}`, "gm"))].some((rule) => rule[0].includes(`background: var(--${background})`));
+  for (const surface of [".kb .gsheet", ".kb .popover", ".kb .menu"]) expect(paints(surface, "surface-raised")).toBe(true);
+  for (const surface of [".kb .pane", ".kb .card"]) expect(paints(surface, "surface-card")).toBe(true);
+  for (const scope of RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m)) {
+    const lines = scope.replace(/^ +/gm, "");
+    expect(lines).toContain(".kb :is(.gsheet, .popover, .menu) { --dc-hover: var(--surface-well); }");
+    expect(lines).toContain(".kb :is(.pane, .card) { --dc-hover: var(--color-raised); }");
+    /* The reset follows the declaration it overrides. */
+    expect(lines.indexOf("{ --dc-hover: var(--color-raised); }")).toBeLessThan(lines.indexOf(".kb :is(.gsheet, .popover, .menu)"));
+  }
+});
+
+test("a pressed icon button on a raised surface keeps the well, and a focused accent fill is ringed with a canvas gap, in both scopes", () => {
+  /* The press is no lighter than the hover it follows: the well, never the sheet's own raised colour. */
+  expect(luminance(well)).toBeLessThan(luminance(raised));
+  const scopes = RULES.split(/(?=^\/\* `data-theme="dark"` pins)/m);
+  expect(scopes.length).toBe(2);
+  for (const scope of scopes) {
+    const lines = scope.replace(/^ +/gm, "");
+    expect(lines).toMatch(/\.kb :is\(\.gsheet, \.popover, \.menu\) \.icon-btn:active:not\(:disabled\) \{ background: var\(--surface-well\); box-shadow: inset 0 0 0 1px var\(--color-strong\); \}/);
+    /* The raised-surface press follows the general one it overrides. */
+    expect(lines.indexOf(".kb .icon-btn:active:not(:disabled) {")).toBeLessThan(lines.indexOf(".kb :is(.gsheet, .popover, .menu) .icon-btn:active"));
+    const ring = lines.match(/:is\(\.bg-brand, \.bg-accent\.text-white\):is\(([^)]*)\):focus-visible \{([^}]*)\}/);
+    expect(ring).not.toBeNull();
+    for (const share of ["35", "40", "45", "50", "55", "60"]) expect(ring![1]).toContain(`.focus-visible\\:ring-accent\\/${share}`);
+    expect(ring![2]).toContain("--tw-ring-offset-width: 2px;");
+    expect(ring![2]).toContain("--tw-ring-offset-shadow: 0 0 0 2px var(--color-canvas);");
+  }
+  /* The ring is solid accent over the canvas gap: 3:1 or more against the canvas. */
+  expect(contrast(accent, canvas)).toBeGreaterThanOrEqual(3);
 });

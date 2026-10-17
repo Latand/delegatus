@@ -229,3 +229,22 @@ test("a scan indexes durable tiers once for registered and missing paths, then r
     reads.mockRestore(); lookup.mockRestore();
   }
 });
+
+
+test("the scanner resolves current paths in bounded slices and observes a later profile", async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { durableServiceTierIndexForPaths } = await import("./effort");
+  const registry = new AgentRegistry(path.join(SANDBOX, "keyed-tiers.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const pathname = writeJsonl(".codex/current-tier.jsonl", []);
+  try {
+    const conversation = registry.ensureConversation("codex", pathname, null);
+    registry.updateConversationLaunchProfile(conversation.id, { model: null, effort: null, fast: false, serviceTier: "priority" });
+    const paths = Array.from({ length: 33 }, (_, n) => n ? `/fixture/missing-${n}.jsonl` : pathname);
+    const tiers = await durableServiceTierIndexForPaths(paths, registry);
+    expect(tiers.size).toBe(33);
+    expect(tiers.get(pathname)).toBe("priority");
+    expect(tiers.get(paths[32]!)).toBeNull();
+    registry.updateConversationLaunchProfile(conversation.id, { model: null, effort: null, fast: false, serviceTier: "default" });
+    expect((await durableServiceTierIndexForPaths([pathname], registry)).get(pathname)).toBe("default");
+  } finally { registry.close(); }
+});

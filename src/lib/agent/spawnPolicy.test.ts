@@ -469,8 +469,8 @@ test("over HTTP, the Claude spawn config points the Viewer server at the shared 
   }
 });
 
-test("the Viewer MCP transport flag defaults to stdio and the endpoint URL to the stable loopback listener", () => {
-  expect(viewerMcpTransport({})).toBe("stdio");
+test("the Viewer MCP transport flag prefers HTTP and the endpoint URL to the stable loopback listener", () => {
+  expect(viewerMcpTransport({})).toBe("http");
   expect(viewerMcpTransport({ LLV_MCP_TRANSPORT: "HTTP" })).toBe("http");
   expect(viewerMcpTransport({ LLV_MCP_TRANSPORT: "sse" })).toBe("stdio");
   expect(viewerMcpHttpUrl({})).toBe("http://127.0.0.1:8898/api/mcp");
@@ -482,14 +482,15 @@ test("the Viewer MCP transport flag defaults to stdio and the endpoint URL to th
   expect(viewerMcpHttpUrl({ LLV_MCP_HTTP_URL: "https://127.0.0.1:443/api/mcp" })).toBe("http://127.0.0.1:8898/api/mcp");
 });
 
-test("a launch goes over HTTP only with the flag, a capability of its own, and a way through the access gate", () => {
+test("a launch prefers HTTP with a capability of its own and a way through the access gate", () => {
   const capability = { LLV_SPAWN_CAPABILITY: "c".repeat(43) };
   const flag = { LLV_MCP_TRANSPORT: "http" };
   expect(viewerMcpTransportForLaunch(capability, flag)).toBe("http");
   /* No capability: the endpoint could name nobody, so the stdio launcher stays. */
   expect(viewerMcpTransportForLaunch({}, flag)).toBe("stdio");
   expect(viewerMcpTransportForLaunch({ LLV_SPAWN_CAPABILITY: "short" }, flag)).toBe("stdio");
-  expect(viewerMcpTransportForLaunch(capability, {})).toBe("stdio");
+  expect(viewerMcpTransportForLaunch(capability, {})).toBe("http");
+  expect(viewerMcpTransportForLaunch(capability, { LLV_MCP_TRANSPORT: "stdio" })).toBe("stdio");
   /* Omitted, applyClaudeSpawnPolicy writes stdio: a caller must assert HTTP. */
   const accountHome = home();
   const written = applyClaudeSpawnPolicy(accountHome, { profileId: "default-transport", cwd: "/repo" });

@@ -8,7 +8,7 @@ import { prototypeRoot, storedMediaPath } from "./store";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { runsElsewhere } from "@/lib/links/linked";
 import { firstLineTitle } from "@/lib/tasks/helpers";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasksForList } from "@/lib/tasks/store";
 import { loadSeatRounds } from "./seatRounds";
 import type { OperatorDecisionView, OperatorDecisionsRead, PrototypeReviewNotice, PrototypeReviewRead, PrototypeMediaView, PrototypeReviewRound, PrototypeReviewSummary, PrototypeRoundRead, PrototypeRoundView } from "./types";
 import { currentPrototypeSummary, prototypeDeliveryPhase, prototypeReviewSummary, prototypeRoundMetadata, prototypeRoundsSuperseded, seatRoundNotice } from "./model";
@@ -111,7 +111,7 @@ export function readSeatRounds(project: string): PrototypeReviewRead {
 /** Every actionable decision of a project, oldest first: waiting forms and
     saved answers whose delivery needs attention. Rounds another installation owns are
     answered there, and a round the operator hid waits on nobody. */
-export function operatorDecisions(project: string, tasks: readonly BoardTask[] = loadTasks()): OperatorDecisionsRead {
+export function operatorDecisions(project: string, tasks: readonly BoardTask[] = loadTasksForList()): OperatorDecisionsRead {
   const key = canonicalProject(project);
   const now = Date.now();
   const fromTasks = tasks.filter(task => canonicalProject(task.project) === key && !runsElsewhere(task)).flatMap(task => {
@@ -129,7 +129,7 @@ export function operatorDecisions(project: string, tasks: readonly BoardTask[] =
 }
 
 /** One round of a project by its id, open or answered: a seat's own or a task's. */
-export function operatorDecisionRound(project: string, reviewId: string, tasks: readonly BoardTask[] = loadTasks()): OperatorDecisionView | null {
+export function operatorDecisionRound(project: string, reviewId: string, tasks: readonly BoardTask[] = loadTasksForList()): OperatorDecisionView | null {
   const key = canonicalProject(project);
   const seat = loadSeatRounds(key).find(round => round.id === reviewId);
   if (seat) return localRoundViews([seat], null)[0]!;

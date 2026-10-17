@@ -1,3 +1,5 @@
+import { reportHeaderName } from "@/lib/projects/settings";
+import { notifySeatChannel } from "./seatChannelSignal";
 import crypto from "node:crypto";
 import { captureSeatAuthCredentialBaseline, normalizeSeatAuthCredentialBaseline, seatAuthCredentialStamp, type SeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
 import fs from "node:fs";
@@ -207,7 +209,7 @@ interface OrchestratorSeatFile {
 
 const seatsFile = () => statePath("orchestrator-seats.json");
 
-type RecipientRefusal = { status: 409 | 503; error: string; successorConversationId?: string } | null;
+type RecipientRefusal = { status: 409 | 503; error: string; successorConversationId?: string; project?: string; revokedAt?: string; revokedSeatEpoch?: number } | null;
 
 const RECIPIENT_AUTHORITY_CACHE_LIMIT = 8;
 const recipientAuthorityCacheProperty = "__delegatusOrchestratorRecipientAuthorityV2__" as const;
@@ -218,8 +220,12 @@ interface RecipientAuthorityRecord {
   revokedSeatEpoch: number;
   revocationOrder: number;
   successorConversationId?: string;
+  project?: string;
+  revokedAt?: string;
 }
 interface RecipientAuthorityIndex {
+  activeConversations: Set<string>;
+  currentSeats: Map<string, string | null>;
   records: Map<string, RecipientAuthorityRecord>;
   revocationCount: number;
 }
@@ -619,6 +625,8 @@ function writeSeatFile(file: OrchestratorSeatFile): void {
     ? cache.indexes.get(recipientAuthorityIndexKey(filePath, previousRevision))
     : undefined;
   atomicWriteJson(filePath, file);
+  const newRows = file.revocations.slice(previous?.file?.revocations.length ?? 0);
+  notifySeatChannel(newRows);
   const revision = seatFileRevisionSync(filePath);
   if (revision === null) return;
   rememberBounded(cache.files, filePath, { revision, file });
@@ -1429,7 +1437,7 @@ function revokedOrchestratorSeatConversationsIn(
 }
 
 /** Recipient admission follows designation authority while historical
-    conversations and their already admitted operations keep their identity. */
+    conversations remain readable; delivery is fenced again at dispatch. */
 export function orchestratorRecipientRefusal(
   conversationIds: readonly string[],
   resolveAlias: (conversationId: string) => string = identityConversationAlias,
@@ -1441,8 +1449,19 @@ export function orchestratorRecipientRefusal(
     const key = recipientAuthorityIndexKey(filePath, revision);
     const index = recipientAuthorityCache().indexes.get(key);
     if (!index) return { status: 503, error: "orchestrator seat authority is not ready" };
-    return recipientAuthorityRefusal(index.records, conversationIds, resolveAlias);
+    return recipientAuthorityRefusal(index, conversationIds, resolveAlias);
   });
+}
+
+/** Affirmative current-seat membership from the already hydrated shared index.
+ * Missing or changed authority keeps the original individual-delivery path. */
+export function isCurrentOrchestratorSeat(conversationIds: readonly string[]): boolean {
+  const filename = seatsFile();
+  const revision = seatFileRevisionSync(filename);
+  if (revision === null) return false;
+  const index = recipientAuthorityCache().indexes.get(recipientAuthorityIndexKey(filename, revision));
+  return !!index && conversationIds.some(id => index.activeConversations?.has(id))
+    && recipientAuthorityRefusal(index, conversationIds, identityConversationAlias) === null;
 }
 
 /** Hydrate and index seat authority before a caller reaches synchronous
@@ -1460,20 +1479,20 @@ export async function orchestratorRecipientRefusalAsync(
     if (seatFileRevisionSync(filePath) !== revision) {
       return { status: 503, error: "orchestrator seat authority changed during lookup" };
     }
-    return recipientAuthorityRefusal(index.records, conversationIds, resolveAlias);
+    return recipientAuthorityRefusal(index, conversationIds, resolveAlias);
   });
 }
 
 function recipientAuthorityRefusal(
-  index: ReadonlyMap<string, RecipientAuthorityRecord>,
+  index: RecipientAuthorityIndex,
   conversationIds: readonly string[],
   resolveAlias: (conversationId: string) => string,
 ): RecipientRefusal {
   if (conversationIds.length === 0) return { status: 503, error: "orchestrator seat authority is unavailable" };
   let activeSeatEpoch = 0;
-  let latestRevocation: { seatEpoch: number; order: number; successorConversationId?: string } | undefined;
+  let latestRevocation: { seatEpoch: number; order: number; successorConversationId?: string; project?: string; revokedAt?: string } | undefined;
   for (const id of conversationIds) {
-    const record = index.get(id);
+    const record = index.records.get(id);
     if (!record) continue;
     activeSeatEpoch = Math.max(activeSeatEpoch, record.activeSeatEpoch);
     if (record.revokedSeatEpoch > (latestRevocation?.seatEpoch ?? 0)
@@ -1482,20 +1501,22 @@ function recipientAuthorityRefusal(
       latestRevocation = {
         seatEpoch: record.revokedSeatEpoch,
         order: record.revocationOrder,
+        project: record.project, revokedAt: record.revokedAt,
         ...(record.successorConversationId ? { successorConversationId: record.successorConversationId } : {}),
       };
     }
   }
   if (!latestRevocation || latestRevocation.seatEpoch < activeSeatEpoch) return null;
-  const successorConversationId = latestRevocation.successorConversationId
-    ? resolveAlias(latestRevocation.successorConversationId)
-    : undefined;
+  const successor = latestRevocation.project && index.currentSeats.has(latestRevocation.project)
+    ? index.currentSeats.get(latestRevocation.project) : latestRevocation.successorConversationId;
+  const successorConversationId = successor ? resolveAlias(successor) : undefined;
   return {
     status: 409,
     error: successorConversationId
-      ? `orchestrator seat was rotated; send to ${successorConversationId}`
-      : "orchestrator seat was revoked; designate a successor before sending",
+      ? `This orchestrator was replaced. The current orchestrator of «${latestRevocation.project ? reportHeaderName(latestRevocation.project) : "the project"}» is ${successorConversationId}; send there.`
+      : "This orchestrator was replaced; designate a current orchestrator before sending.",
     ...(successorConversationId ? { successorConversationId } : {}),
+    project: latestRevocation.project, revokedAt: latestRevocation.revokedAt, revokedSeatEpoch: latestRevocation.seatEpoch,
   };
 }
 
@@ -1598,10 +1619,12 @@ function recipientAuthorityIndexIn(
     const successor = file.seats[revocation.project]?.conversationId ?? revocation.successorConversationId;
     record.revokedSeatEpoch = revocation.seatEpoch;
     record.revocationOrder = order;
+    record.project = revocation.project;
+    record.revokedAt = revocation.revokedAt;
     delete record.successorConversationId;
     if (successor) record.successorConversationId = successor;
   }
-  return { records: authority, revocationCount: file.revocations.length };
+  return { activeConversations: new Set(Object.values(file.seats).filter(seat => seat.state === "active" && seat.conversationId).map(seat => seat.conversationId!)), records: authority, currentSeats: new Map(Object.entries(file.seats).map(([project, seat]) => [project, seat.conversationId])), revocationCount: file.revocations.length };
 }
 
 function updateRecipientAuthorityIndexAfterWrite(
@@ -1642,9 +1665,13 @@ function updateRecipientAuthorityIndexAfterWrite(
     const successor = file.seats[revocation.project]?.conversationId ?? revocation.successorConversationId;
     record.revokedSeatEpoch = revocation.seatEpoch;
     record.revocationOrder = order;
+    record.project = revocation.project;
+    record.revokedAt = revocation.revokedAt;
     delete record.successorConversationId;
     if (successor) record.successorConversationId = successor;
   }
+  index.activeConversations = new Set(Object.values(file.seats).filter(seat => seat.state === "active" && seat.conversationId).map(seat => seat.conversationId!));
+  index.currentSeats = new Map(Object.entries(file.seats).map(([project, seat]) => [project, seat.conversationId]));
   index.revocationCount = file.revocations.length;
   return index;
 }

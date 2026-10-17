@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test";
+import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +30,71 @@ import type { groundedRequest } from "./selection";
 const previous = { ...process.env };
 const originalFetch = globalThis.fetch;
 const roots: string[] = [];
+const sourceHookCases = [
+  ...SOURCE_STATES.map(state => ({ state, change: null })),
+  { state: "unchosen" as const, change: "candidates" }, { state: "unchosen" as const, change: "decision" },
+];
+for (const engine of ["claude", "codex"] as const) for (const { state, change } of sourceHookCases) test(`${engine} later human stage turn respects memory source ${state} (${change ?? "before candidates or spend"})`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-source-hook-")); roots.push(root);
+  process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT; process.env.OPENROUTER_API_KEY = "fixture";
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }); setAgentRegistryForTests(registry);
+  const launch = registry.beginSpawnRequest({ engine, cwd: root, role: "builder", transport: "structured", origin: { kind: "operator" },
+    launchDisplay: { prompt: "Initial stage brief", echo: "Initial stage brief", images: 0 },
+    launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic memory source stage" }) });
+  if (launch.kind === "conflict") throw Error("stage fixture conflict");
+  const receipt = launch.receipt;
+  registry.rememberMembership(receipt.conversationId, { kind: "pipeline", containerId: "fixture-pipeline", stageId: "build", stageOrder: 0, round: 1, slot: "build:1", role: "builder", parentConversationId: null });
+  const session = "00000000-0000-0000-0000-000000000000";
+  registry.settleSpawn(receipt.launchId, { key: { engine, sessionId: session }, artifactPath: path.join(root, session + ".jsonl"), cwd: root,
+    accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  const capability = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+  const project = projectInfoFromCwd(root)!.project; setSharedMemoryEnabled(project, true);
+  // Both remain engine-store history: a note excluded by curation, and one
+  // not yet considered. Neither has a curated rule delivery to this stage.
+  const sources = ["dropped", "unseen"].map(name => {
+    const file = path.join(root, `${name}.md`);
+    fs.writeFileSync(file, `---\nname: Widget parser ${name}\ndescription: Widget parser escaped delimiters ${name}.\ntype: project\n---\nUse escaped widget parser delimiters (${name}).\n`);
+    return { path: file, engine: "claude" as const, sourceKind: "claude_memory" as const, project };
+  });
+  await memoryIndex().refresh(sources);
+  chooseSource(state); writeAsksYouSettings({ capUsd: 1 });
+  const index = memoryIndex();
+  const query = index.injectionCandidates.bind(index);
+  const candidates = spyOn(index, "injectionCandidates").mockImplementation(async (...args) => {
+    const found = await query(...args);
+    if (change === "candidates") chooseSource("active");
+    return found;
+  });
+  let decisions = 0;
+  globalThis.fetch = (async (_url, init) => {
+    decisions++;
+    const body = JSON.parse(String(init?.body));
+    if (change === "decision") chooseSource("active");
+    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { noul: .8 }])), usage: { cost: .0001 } });
+  }) as typeof fetch;
+  const prompt = "Update widget parser escaped delimiters";
+  const delivery = registry.holdDelivery(receipt.conversationId, prompt, "fixture-human-followup", "text", [], structuredContent(prompt, []).contentDigest, { origin: { kind: "operator" } });
+  const turn = "fixture-human-turn";
+  if (engine === "claude") new FileClaudeDeliveryLedger().recordQueued(session, { id: turn, text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+  const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root,
+    ["prompt"]: engine === "codex" ? encodeCodexStructuredUserText(prompt, undefined, null, { kind: "operator" }, deliveryDedupToken(delivery.command.operationId)) : prompt,
+    ...(engine === "claude" ? { delegatus_delivery_id: turn } : {}) };
+  const request = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": capability,
+    "x-llv-memory-hook": "00000000-0000-0000-0000-000000000000", "x-llv-memory-deadline": String(Date.now() + 1500) } });
+  const before = readOperatorAsks().spend;
+  try {
+    const block = await prepareForHook(request, input);
+    const off = sourceTurnsEnginesOff(state) || change !== null;
+    expect(block.includes("Delegatus shared memory")).toBe(!off);
+    expect(candidates.mock.calls.length).toBe(sourceTurnsEnginesOff(state) ? 0 : 1);
+    expect(decisions).toBe(sourceTurnsEnginesOff(state) || change === "candidates" ? 0 : 1);
+    expect(index.lastTurn(project)).toBe(off ? "memorySource" : "prepared");
+    if (off && change !== "decision") expect(readOperatorAsks().spend).toEqual(before);
+    else if (change === "decision") expect(readOperatorAsks().spend.calls).toBe(1);
+    else { expect(block).toContain("dropped"); expect(block).toContain("unseen"); }
+  } finally { candidates.mockRestore(); registry.close(); }
+});
+
 async function offerForHook(request: Request, input: Record<string, unknown>) {
   const headers = new Headers(request.headers);
   headers.set("x-llv-memory-deadline", String(Date.now() + 1500));

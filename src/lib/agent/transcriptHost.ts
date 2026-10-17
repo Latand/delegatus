@@ -1,4 +1,5 @@
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import { isDeepStrictEqual } from "node:util";
 
 import type { ResumeSpec } from "@/lib/agent/cli";
@@ -86,11 +87,12 @@ export function canonicalTranscriptTarget(snapshot: TranscriptHostSnapshot, path
 export type HostDeliveryOutcome =
   | { ok: true; outcome: "delivered-to-live"; target: string }
   | { ok: true; outcome: "resumed"; target: string }
-  | { ok: false; outcome: "failed"; error: string; status: number; actuation?: "started" };
+  | { ok: false; outcome: "failed"; error: string; status: number; actuation?: "started"; admission?: "refused";
+      successorConversationId?: string; project?: string; revokedAt?: string; revokedSeatEpoch?: number };
 
 export interface TranscriptHostResolver {
   readTranscriptHosts(fresh?: boolean, entries?: FileEntry[], ppids?: Map<number, number>): Promise<TranscriptHostSnapshot>;
-  deliverToTranscriptHost(input: { entry: FileEntry; spec: ResumeSpec; payload: string }): Promise<HostDeliveryOutcome>;
+  deliverToTranscriptHost(input: { entry: FileEntry; spec: ResumeSpec; payload: string; authorityGuard?: DeliveryAdmissionGuard }): Promise<HostDeliveryOutcome>;
 }
 
 const globalStore = globalThis as unknown as {
@@ -120,7 +122,7 @@ interface HostDependencies extends TranscriptHostObservationDependencies {
   spawn: (spec: ResumeSpec, text: string, receipt?: SpawnReceipt) => Promise<SpawnedPane>;
   beginResume?: (entry: FileEntry, spec: ResumeSpec) => { receipt: SpawnReceipt; spec: ResumeSpec } | null;
   remember: (pathname: string, spec: ResumeSpec, pane: SpawnedPane) => Promise<void>;
-  deliver: (paneId: string, text: string) => Promise<void>;
+  deliver: (paneId: string, text: string, authorityGuard?: DeliveryAdmissionGuard) => Promise<void>;
   confirmAlive?: (host: TranscriptHost) => void | Promise<void>;
   serializeDelivery?: (entry: FileEntry, task: () => Promise<HostDeliveryOutcome>) => Promise<HostDeliveryOutcome>;
 }
@@ -348,11 +350,16 @@ function isDescendantOf(pid: number, ancestor: number, parentPid: (pid: number) 
 
 function failure(error: unknown, status = 500, actuation?: "started"): HostDeliveryOutcome {
   const resolvedStatus = error instanceof TranscriptHostConflictError ? 409 : status;
+  const guardedStatus = error instanceof DeliveryAdmissionRefusedError ? 409 : resolvedStatus;
+  const refusal = error instanceof DeliveryAdmissionRefusedError ? error.details : undefined;
   return {
     ok: false,
     outcome: "failed",
     error: operatorSafeTmuxDeliveryError(error, actuation === "started"),
-    status: resolvedStatus,
+    status: guardedStatus,
+    ...(refusal ? { admission: "refused" as const, ...(refusal.successorConversationId ? { successorConversationId: refusal.successorConversationId } : {}),
+      ...(refusal.project ? { project: refusal.project } : {}), ...(refusal.revokedAt ? { revokedAt: refusal.revokedAt } : {}),
+      ...(refusal.revokedSeatEpoch !== undefined ? { revokedSeatEpoch: refusal.revokedSeatEpoch } : {}) } : {}),
     ...(actuation ? { actuation } : {}),
   };
 }
@@ -455,20 +462,28 @@ export function createTranscriptHostResolver(
     return ownsTranscript && host.claimedPaths.includes(entry.path);
   }
 
-  async function decide(input: { entry: FileEntry; spec: ResumeSpec }): Promise<Decision> {
+  async function decide(input: { entry: FileEntry; spec: ResumeSpec; authorityGuard?: DeliveryAdmissionGuard }): Promise<Decision> {
+    const assertAuthority = () => input.authorityGuard?.();
+    assertAuthority();
     const conversationIdForPath = dependencies.conversationIdForPath ?? (() => null);
     let snapshot = await observe(true);
+    assertAuthority();
     if (snapshot.observation === "failure") throw new Error(`tmux pane observation failed: ${snapshot.observationError}`);
     const initialConflict = conflictForPath(snapshot, input.entry.path, conversationIdForPath);
     if (initialConflict) throw new TranscriptHostConflictError(initialConflict);
     let host = snapshot.canonicalFor(input.entry.path);
-    if (host && (await revalidate(host, input.entry))) return { host, resumed: false };
+    if (host) {
+      const valid = await revalidate(host, input.entry);
+      assertAuthority();
+      if (valid) return { host, resumed: false };
+    }
 
     const rejectedHost = host;
 
     /* The snapshot can tear while tmux or a process exits. One fresh pass
        closes that race before a controlled resume is allowed. */
     snapshot = await observe(true);
+    assertAuthority();
     if (snapshot.observation === "failure") throw new Error(`tmux pane observation failed: ${snapshot.observationError}`);
     const refreshedConflict = conflictForPath(snapshot, input.entry.path, conversationIdForPath);
     if (refreshedConflict) throw new TranscriptHostConflictError(refreshedConflict);
@@ -485,14 +500,20 @@ export function createTranscriptHostResolver(
       host.agentIdentity !== null &&
       rejectedHost.agentIdentity !== null &&
       host.agentIdentity !== rejectedHost.agentIdentity;
-    if (host && !identityReplaced && (await revalidate(host, input.entry))) return { host, resumed: false };
+    if (host && !identityReplaced) {
+      const valid = await revalidate(host, input.entry);
+      assertAuthority();
+      if (valid) return { host, resumed: false };
+    }
 
     const prepared = await withAccountMutationLockAsync(
       () => dependencies.beginResume?.(input.entry, input.spec) ?? null,
       { holder: "resume admission", caller: "resume admission" },
     );
+    assertAuthority();
     const resumeSpec = prepared?.spec ?? input.spec;
     let spawnFailure: unknown = null;
+    assertAuthority();
     try {
       const spawned = await dependencies.spawn(resumeSpec, "", prepared?.receipt);
       await dependencies.remember(input.entry.path, resumeSpec, spawned);
@@ -504,6 +525,7 @@ export function createTranscriptHostResolver(
       spawnFailure = error;
     }
     snapshot = await observe(true);
+    assertAuthority();
     if (snapshot.observation === "failure") {
       if (spawnFailure) throw spawnFailure;
       throw new Error(`tmux pane observation failed: ${snapshot.observationError}`);
@@ -511,14 +533,16 @@ export function createTranscriptHostResolver(
     const resumedConflict = conflictForPath(snapshot, input.entry.path, conversationIdForPath);
     if (resumedConflict) throw new TranscriptHostConflictError(resumedConflict);
     host = snapshot.canonicalFor(input.entry.path);
-    if (!host || !(await revalidate(host, input.entry))) {
+    const valid = host ? await revalidate(host, input.entry) : false;
+    assertAuthority();
+    if (!host || !valid) {
       if (spawnFailure) throw spawnFailure;
       throw new Error("resumed agent host could not be identified safely");
     }
     return { host, resumed: true };
   }
 
-  function joinDecision(input: { entry: FileEntry; spec: ResumeSpec }): { owner: boolean; task: Promise<Decision> } {
+  function joinDecision(input: { entry: FileEntry; spec: ResumeSpec; authorityGuard?: DeliveryAdmissionGuard }): { owner: boolean; task: Promise<Decision> } {
     const existing = decisions.get(input.entry.path);
     if (existing) return { owner: false, task: existing };
     const task = decide(input).finally(() => decisions.delete(input.entry.path));
@@ -526,14 +550,16 @@ export function createTranscriptHostResolver(
     return { owner: true, task };
   }
 
-  async function deliverToTranscriptHost(input: { entry: FileEntry; spec: ResumeSpec; payload: string }): Promise<HostDeliveryOutcome> {
+  async function deliverToTranscriptHost(input: { entry: FileEntry; spec: ResumeSpec; payload: string; authorityGuard?: DeliveryAdmissionGuard }): Promise<HostDeliveryOutcome> {
       let owner = false;
       let resumed = false;
       let decision: Decision;
       try {
+        input.authorityGuard?.();
         const joined = joinDecision(input);
         owner = joined.owner;
         decision = await joined.task;
+        input.authorityGuard?.();
         resumed = decision.resumed;
       } catch (error) {
         return failure(error);
@@ -542,7 +568,10 @@ export function createTranscriptHostResolver(
       /* A host can disappear after the shared decision completes. Re-entering
          the same keyed decision gives all callers one fresh recovery attempt. */
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        if (!(await revalidate(decision.host, input.entry))) {
+        const valid = await revalidate(decision.host, input.entry);
+        try { input.authorityGuard?.(); }
+        catch (error) { return failure(error); }
+        if (!valid) {
           try {
             const retry = joinDecision(input);
             decision = await retry.task;
@@ -558,7 +587,8 @@ export function createTranscriptHostResolver(
              the host, an empty tmux paste can add only a transport failure (and
              was the source of the raw `no buffer` response over a live host). */
           if (input.payload !== "") {
-            await dependencies.deliver(decision.host.paneId, input.payload);
+            input.authorityGuard?.();
+            await dependencies.deliver(decision.host.paneId, input.payload, input.authorityGuard);
           }
           try {
             await dependencies.confirmAlive?.(decision.host);

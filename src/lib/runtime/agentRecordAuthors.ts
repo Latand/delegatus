@@ -22,6 +22,7 @@ export interface AuthorEvidenceRecord {
   text: string;
   sourceText?: string;
   sourceId?: string;
+  truncated?: boolean;
 }
 
 function authorFromOrigin(origin: MessageOrigin): AgentRecordAuthor {
@@ -69,9 +70,10 @@ export function agentRecordAuthors(
   engine: "claude" | "codex" | "copilot",
   records: ReadonlyArray<AuthorEvidenceRecord>,
   context: ReadonlyArray<AuthorEvidenceRecord> | null = null,
+  claudeOrigins?: ReturnType<typeof claudeMessageProvenance>,
 ): Map<number, AgentRecordAuthor> {
   const authors = new Map<number, AgentRecordAuthor>();
-  const ledger = engine === "claude" ? claudeMessageProvenance(transcriptPath) : {};
+  const ledger = engine === "claude" ? claudeOrigins ?? claudeMessageProvenance(transcriptPath) : {};
   const fallback = new Map<number, DeliveredMessageProvenance>();
   if (context?.length) {
     const occurrences = deliveredMessageOccurrences(transcriptPath);
@@ -93,7 +95,7 @@ export function agentRecordAuthors(
     if (record.role !== "user") return;
     const { origin } = recordEvidence(record, engine, NO_OCCURRENCE_DIGESTS);
     const provenance = record.sourceId ? ledger[record.sourceId] ?? null : null;
-    if (provenance?.origin === "operator") return;
+    if (provenance?.parts || provenance?.origin === "operator") return;
     if (provenance?.origin === "agent") {
       authors.set(index, authorFromProvenance(provenance));
       return;
@@ -107,4 +109,40 @@ export function agentRecordAuthors(
     if (origin?.kind === "agent") authors.set(index, authorFromOrigin(origin));
   });
   return authors;
+}
+
+
+/** conversation_messages keeps the transcript row and exposes its separate
+ * authors without attributing the entire batch to any one of them. */
+export function agentRecordPartAuthors(
+  transcriptPath: string,
+  records: readonly AuthorEvidenceRecord[],
+  ledger = claudeMessageProvenance(transcriptPath),
+  projectText: (text: string) => string = text => text,
+) {
+  return new Map(records.flatMap((record, index) => {
+    const parts = record.role === "user" && record.sourceId ? ledger[record.sourceId]?.parts : undefined;
+    if (!parts) return [];
+    const sourceText = record.sourceText ?? record.text;
+    let searchFrom = 0;
+    const projectedParts = parts.flatMap(p => {
+      const authoredText = p.text;
+      // Locate the start with a bounded prefix. Transcript normalization trims
+      // the final block and conversation_messages may cut the visible body.
+      const anchorLength = Math.min(32, authoredText.trimEnd().length);
+      const anchor = authoredText.slice(0, anchorLength);
+      const sourceStart = anchor ? sourceText.indexOf(anchor, Math.max(searchFrom, p.textStart)) : -1;
+      if (sourceStart < 0) return [];
+      const sourceEnd = sourceStart + (sourceText.startsWith(authoredText, sourceStart) ? authoredText.length : authoredText.trimEnd().length);
+      searchFrom = sourceEnd;
+      const textStart = projectText(sourceText.slice(0, sourceStart)).length;
+      if (textStart >= record.text.length) return [];
+      const projectedEnd = projectText(sourceText.slice(0, sourceEnd)).length;
+      const textEnd = Math.min(record.text.length, projectedEnd);
+      if (textEnd <= textStart) return [];
+      return [{ operationId: p.operationId, textStart, textEnd,
+        author: p.provenance.origin === "agent" ? authorFromProvenance(p.provenance) : { kind: "operator" as const } }];
+    });
+    return projectedParts.length ? [[index, projectedParts] as const] : [];
+  }));
 }

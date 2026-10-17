@@ -2,7 +2,7 @@ import { shortenHashesInText } from "@/lib/shortIds";
 import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import sharp from "sharp";
-import { loadTasks } from "@/lib/tasks/store";
+import { taskFeedSource } from "@/lib/tasks/store";
 import { telegramBotService, TelegramBotError, type TelegramRichMessage } from "@/lib/telegram/bot/service";
 import { prototypeRoot, storedMediaPath, findPrototypeRound, mutatePrototypeRound, withPrototypeState } from "./store";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -144,7 +144,7 @@ async function postRound(round: PrototypeReviewRound, key: string): Promise<Prot
     };
     await record("pending");
     try {
-      const task = await withPrototypeState(() => loadTasks().find(t => t.id === round.taskId));
+      const task = await withPrototypeState(() => round.taskId === null ? undefined : taskFeedSource()?.get(round.taskId));
       const slides = await prototypeSlides(current);
       const fallback = withReviewLink(renderPrototypeTelegram(current, [], task?.text), current, 0);
       const result = await telegramBotService().sendOwnerReview({ clientRequestId: key,

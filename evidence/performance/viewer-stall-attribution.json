@@ -1,0 +1,1181 @@
+{
+  "version": 1,
+  "generatedAtUtc": "2026-10-17T03:10:21.395906+00:00",
+  "baseline": "225c3c166f710a6723ffa3309f0437d2f732df3c",
+  "candidate": "Source manifest below; the containing commit records this revision.",
+  "runtime": {
+    "bun": "1.4.0",
+    "build": "34cbb9a40"
+  },
+  "watchdog": {
+    "sampleSlots": 600,
+    "sampleIntervalMs": 100,
+    "sharedBytes": 52904,
+    "triggerAgeAboveMs": 1000,
+    "cooldownMs": 60000,
+    "retainedTriggers": 1,
+    "producerWrapTest": "real worker exceeded 600 samples with a healthy heartbeat",
+    "rss": {
+      "source": "asynchronous worker /proc status",
+      "healthyReadIntervalMs": 1000,
+      "staleReadIntervalMs": 100,
+      "maxInFlight": 1,
+      "retainedSampleSlots": 600,
+      "measurements": "timestamped process-wide RSS; no main-VM heap inference"
+    }
+  },
+  "profilerControl": {
+    "runtime": "1.4.0",
+    "local": {
+      "js": true,
+      "native": true,
+      "samples": 53,
+      "stoppedAndCleared": true
+    },
+    "independent": {
+      "requestedBeforeRecovery": true,
+      "completedBeforeRecovery": true,
+      "sampledMainControl": false
+    },
+    "gc": {
+      "automaticCoverage": "unknown",
+      "forcedControlSamples": 3,
+      "gcFrames": 0
+    },
+    "producerCap": {
+      "requested": 1,
+      "observed": 53
+    }
+  },
+  "scannerReplay": {
+    "command": "NODE_ENV=test bun scripts/measure-scanner-ipc.ts",
+    "conditions": {
+      "rows": 30000,
+      "producerChunkCharacters": 4096,
+      "samplingIntervalUs": 10000,
+      "order": "three baseline runs, then three candidate runs; serial gate admission",
+      "includes": "leased helper startup, scanner framing, decode and publication"
+    },
+    "baseline": [
+      {
+        "run": 0,
+        "runtime": "1.4.0",
+        "rows": 30000,
+        "bytes": 20197884,
+        "sha256": "33daf4eb29d28fdfd2651f001adb04e8d3ea91a6bd49843f4c9c6e953020a06c",
+        "elapsedMs": 252.690702,
+        "maxGapMs": 190.00856299999998,
+        "top": [
+          {
+            "name": "indexOf",
+            "hits": 16
+          },
+          {
+            "name": "parse",
+            "hits": 2
+          },
+          {
+            "name": "collectFileScanInWorker",
+            "hits": 1
+          },
+          {
+            "name": "setFlowing",
+            "hits": 1
+          },
+          {
+            "name": "",
+            "hits": 1
+          }
+        ]
+      },
+      {
+        "run": 1,
+        "runtime": "1.4.0",
+        "rows": 30000,
+        "bytes": 20197884,
+        "sha256": "33daf4eb29d28fdfd2651f001adb04e8d3ea91a6bd49843f4c9c6e953020a06c",
+        "elapsedMs": 323.70078700000005,
+        "maxGapMs": 252.67659700000002,
+        "top": [
+          {
+            "name": "consume",
+            "hits": 23
+          },
+          {
+            "name": "setFlowing",
+            "hits": 1
+          },
+          {
+            "name": "handleResult",
+            "hits": 1
+          },
+          {
+            "name": "slice",
+            "hits": 1
+          },
+          {
+            "name": "parse",
+            "hits": 1
+          }
+        ]
+      },
+      {
+        "run": 2,
+        "runtime": "1.4.0",
+        "rows": 30000,
+        "bytes": 20197884,
+        "sha256": "33daf4eb29d28fdfd2651f001adb04e8d3ea91a6bd49843f4c9c6e953020a06c",
+        "elapsedMs": 334.89248099999986,
+        "maxGapMs": 267.43928500000004,
+        "top": [
+          {
+            "name": "consume",
+            "hits": 25
+          },
+          {
+            "name": "parse",
+            "hits": 2
+          },
+          {
+            "name": "flatIntoArray",
+            "hits": 1
+          },
+          {
+            "name": "(root)",
+            "hits": 0
+          },
+          {
+            "name": "processTicksAndRejections",
+            "hits": 0
+          }
+        ]
+      }
+    ],
+    "candidate": [
+      {
+        "run": 0,
+        "runtime": "1.4.0",
+        "rows": 30000,
+        "bytes": 20197884,
+        "sha256": "33daf4eb29d28fdfd2651f001adb04e8d3ea91a6bd49843f4c9c6e953020a06c",
+        "elapsedMs": 342.323391,
+        "maxGapMs": 278.819636,
+        "top": [
+          {
+            "name": "indexOf",
+            "hits": 23
+          },
+          {
+            "name": "parse",
+            "hits": 3
+          },
+          {
+            "name": "(module)",
+            "hits": 1
+          },
+          {
+            "name": "write",
+            "hits": 1
+          },
+          {
+            "name": "indexOf",
+            "hits": 1
+          }
+        ]
+      },
+      {
+        "run": 1,
+        "runtime": "1.4.0",
+        "rows": 30000,
+        "bytes": 20197884,
+        "sha256": "33daf4eb29d28fdfd2651f001adb04e8d3ea91a6bd49843f4c9c6e953020a06c",
+        "elapsedMs": 346.04252700000006,
+        "maxGapMs": 276.47417700000005,
+        "top": [
+          {
+            "name": "",
+            "hits": 18
+          },
+          {
+            "name": "indexOf",
+            "hits": 9
+          },
+          {
+            "name": "parse",
+            "hits": 2
+          },
+          {
+            "name": "write",
+            "hits": 1
+          },
+          {
+            "name": "",
+            "hits": 1
+          }
+        ]
+      },
+      {
+        "run": 2,
+        "runtime": "1.4.0",
+        "rows": 30000,
+        "bytes": 20197884,
+        "sha256": "33daf4eb29d28fdfd2651f001adb04e8d3ea91a6bd49843f4c9c6e953020a06c",
+        "elapsedMs": 339.1886099999999,
+        "maxGapMs": 275.6577810000001,
+        "top": [
+          {
+            "name": "",
+            "hits": 23
+          },
+          {
+            "name": "parse",
+            "hits": 2
+          },
+          {
+            "name": "byteLength",
+            "hits": 1
+          },
+          {
+            "name": "write",
+            "hits": 1
+          },
+          {
+            "name": "pull",
+            "hits": 1
+          }
+        ]
+      }
+    ],
+    "interpretation": "No fourteen-second stall reproduced; no speed improvement claimed."
+  },
+  "verification": {
+    "commandsUse": "scripts/gate-slot.sh; scratch exports; private HOME, config, state and temp roots",
+    "finalIsolation": "scripts/local-gate.ts createGateSandbox and isolatedEnvironment",
+    "exitCodes": {
+      "types": 0,
+      "profiler": 0,
+      "capability": 0,
+      "replay-base": 0,
+      "replay-candidate": 0,
+      "build": 0,
+      "viewer-runtime": 1,
+      "build-base": 0,
+      "viewer-runtime-base": 1,
+      "host-runtime": 0,
+      "runtime-controls": 0,
+      "lint": 0,
+      "privacy": 0,
+      "viewer-runtime-base-isolated": 0,
+      "viewer-runtime-isolated": 0,
+      "tests-watchdog": 0,
+      "tests-scanner-memory": 1,
+      "scanner-base-isolated": 1,
+      "tests-spans-feed": 0,
+      "types-final": 0,
+      "native-fixtures": 0,
+      "native-shared": 0,
+      "native-0.154.0": 0,
+      "native-0.159.0": 0
+    },
+    "focused": {
+      "tests-watchdog": {
+        "reportedPasses": 5,
+        "reportedFailures": 0,
+        "files": [
+          "scripts/probe-loop-profiler.test.ts",
+          "src/lib/loopWatchdog.test.ts",
+          "src/lib/viewerLoopMonitor.test.ts"
+        ]
+      },
+      "tests-scanner-memory": {
+        "reportedPasses": 75,
+        "reportedFailures": 1,
+        "files": [
+          "src/lib/scanner/fileScanWorker.test.ts",
+          "src/lib/memory/service.test.ts",
+          "src/lib/memory/index.test.ts"
+        ]
+      },
+      "tests-spans-feed": {
+        "reportedPasses": 25,
+        "reportedFailures": 0,
+        "files": [
+          "src/lib/loopHeapSignals.test.ts",
+          "src/lib/performanceSpans.test.ts",
+          "src/lib/search/transcriptFeed.test.ts"
+        ]
+      }
+    },
+    "native": {
+      "native-shared": {
+        "reportedPasses": 1341,
+        "reportedFailures": 0,
+        "files": [
+          "src/lib/runtime/nativeQueueRuntime.test.ts",
+          "src/lib/runtime/nativeQueueContent.test.ts",
+          "src/runtime-host/nativeQueueJournal.test.ts",
+          "src/runtime-host/nativeQueueCompaction.test.ts",
+          "src/lib/runtime/codexTurnProfile.test.ts",
+          "src/lib/runtime/codexAppServerHost.test.ts",
+          "src/lib/runtime/claudeStreamBrokerHost.test.ts",
+          "src/lib/runtime/structuredDeliveryQueue.test.ts",
+          "src/lib/runtime/structuredDeliveryController.test.ts",
+          "src/lib/runtime/engineHostEvents.test.ts",
+          "src/lib/runtime/codex.test.ts",
+          "src/lib/runtime/eventStore.test.ts",
+          "src/lib/runtime/commands.test.ts",
+          "src/lib/runtime/realtimeControl.selectedContext.test.ts",
+          "src/lib/runtime/voiceViewBinding.test.ts",
+          "src/lib/runtime/voicePersonaRole.test.ts",
+          "src/lib/runtime/voiceDelivery.test.ts",
+          "src/lib/runtime/voiceStreamChunks.test.ts",
+          "src/lib/runtime/codexRealtimeTranscript.test.ts",
+          "src/lib/mcp/nativeWorkMetadata.test.ts",
+          "src/lib/mcp/voiceUtteranceWiring.test.ts",
+          "src/components/nativeQueueView.test.ts",
+          "src/lib/runtime/structuredDelivery.integration.test.ts",
+          "src/components/NativeQueuePanel.dom.test.tsx",
+          "src/components/TmuxComposer.nativeQueue.dom.test.tsx",
+          "src/components/VoiceConversation.dom.test.tsx",
+          "src/lib/realtime/voiceCardChain.dom.test.ts",
+          "src/lib/realtime/voiceCanonicalTranscript.dom.test.ts",
+          "src/lib/realtime/codexRealtimeClient.selectedContext.dom.test.ts",
+          "src/lib/realtime/codexRealtimeClient.transport.dom.test.ts",
+          "src/lib/realtime/codexRealtimeClient.transport.dom.test.tsx",
+          "src/lib/runtime/voicePersonaMandate.test.ts",
+          "src/lib/mcp/voiceUtteranceContext.test.ts",
+          "src/lib/runtime/codexAppServerHost.inject.test.ts",
+          "src/lib/runtime/structuredDeliveryQueue.inject.test.ts",
+          "src/runtime-host/journal.inject.test.ts",
+          "src/lib/runtime/http.inject.test.ts",
+          "src/lib/runtime/commands.inject.test.ts",
+          "src/components/ComposerBar.dom.test.tsx",
+          "src/components/TmuxComposer.inject.dom.test.tsx",
+          "src/components/TmuxComposer.injectReceipts.dom.test.tsx",
+          "src/components/retainedQueueAdmissions.dom.test.ts",
+          "src/lib/runtime/nativeQueueHttp.files.test.ts",
+          "src/lib/runtime/inboxWriters.integration.test.ts",
+          "src/lib/runtime/composerPayloadRetry.integration.test.ts",
+          "src/lib/inboxFiles.test.ts",
+          "src/components/TmuxComposer.test.ts",
+          "src/components/TmuxComposer.reconciliation.dom.test.tsx",
+          "src/components/TmuxComposer.reconciliationExpiry.dom.test.tsx",
+          "src/components/TmuxComposer.pendingImages.dom.test.tsx"
+        ]
+      },
+      "native-0.154.0": {
+        "reportedPasses": 102,
+        "reportedFailures": 0,
+        "files": [
+          "src/lib/runtime/codexSocketTransport.native.test.ts",
+          "src/lib/agent/processCleanupPolicy.native.test.ts",
+          "src/lib/agent/operatorQuestionPolicy.native.test.ts",
+          "src/lib/runtime/nativeCodexQueue.test.ts",
+          "src/lib/runtime/codexHistoryReader.test.ts",
+          "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
+          "src/lib/runtime/nativeQueueHost.integration.test.ts",
+          "src/lib/runtime/codexSteerDelivery.integration.test.ts",
+          "src/lib/runtime/codexAppServerHost.injectResponses.test.ts",
+          "src/lib/runtime/codexAppServerHost.injectCli.test.ts"
+        ]
+      },
+      "native-0.159.0": {
+        "reportedPasses": 102,
+        "reportedFailures": 0,
+        "files": [
+          "src/lib/runtime/codexSocketTransport.native.test.ts",
+          "src/lib/agent/processCleanupPolicy.native.test.ts",
+          "src/lib/agent/operatorQuestionPolicy.native.test.ts",
+          "src/lib/runtime/nativeCodexQueue.test.ts",
+          "src/lib/runtime/codexHistoryReader.test.ts",
+          "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
+          "src/lib/runtime/nativeQueueHost.integration.test.ts",
+          "src/lib/runtime/codexSteerDelivery.integration.test.ts",
+          "src/lib/runtime/codexAppServerHost.injectResponses.test.ts",
+          "src/lib/runtime/codexAppServerHost.injectCli.test.ts"
+        ]
+      }
+    },
+    "baselineFailure": {
+      "file": "src/lib/scanner/fileScanWorker.test.ts",
+      "case": "worker scans publish a Claude transcript that appears in a previously sessionless project directory",
+      "diagnostic": "read ECONNRESET",
+      "baseline": {
+        "reportedPasses": 10,
+        "reportedFailures": 1,
+        "files": [
+          "src/lib/scanner/fileScanWorker.test.ts"
+        ]
+      },
+      "candidateScanner": {
+        "reportedPasses": 12,
+        "reportedFailures": 1
+      }
+    },
+    "initialHarnessCondition": "Viewer module load rejected a nested private inbox on both revisions; both pass with the existing gate isolator.",
+    "viewerRuntime": {
+      "baselineLoaded": 25,
+      "candidateLoaded": 25,
+      "httpStatus": 200
+    },
+    "runtimeHost": {
+      "ok": true,
+      "stableListenerAnswered": "27/27",
+      "runtimeSocketAnswered": "27/27",
+      "windowSeconds": 15
+    },
+    "hostedPublicationAndTrackerAudit": "pending pipeline publication"
+  },
+  "remaining": {
+    "productionCaller": "unobserved",
+    "automaticGcCoverage": "unknown",
+    "servingProfiler": "not installed: independent main-thread stop and a producer cap are unavailable in the tested inspector route",
+    "nativePermissionControl": {
+      "command": "perf stat -e task-clock -- true",
+      "exitCode": 255,
+      "perfEventParanoid": 4
+    },
+    "decision": "bounded native sampling with separately authorized access, or a Bun primitive supplying the missing guarantees",
+    "productionAcceptance": "not run; requires a separately approved deploy and exactly thirty loaded minutes"
+  },
+  "initialAttemptSourceSha256": {
+    "docs/perf/viewer-stall-attribution.md": "76453e46a1f479f17ffb63121c1012c754ff14d1cada1e67704c83e082ea9c8f",
+    "scripts/measure-scanner-ipc.ts": "5f6f7ee81d2ffdb82cb9704baeb19b530a0dc48649cfcb4d82d03b0ff45cdd96",
+    "scripts/probe-loop-profiler.test.ts": "53cbfb703e3a6420c034eb97a8d63e1088fd90fe9a73fba7630fe869eb5d384b",
+    "scripts/probe-loop-profiler.ts": "363ec3655bbece7d150449b64312f9869f8fbdc6926439dc4eef43ce07e991d1",
+    "src/lib/loopWatchdog.test.ts": "03ed84ea1c313f683797af36e0916fe9c5d70318bb17365ec82abd11b0cfd09e",
+    "src/lib/loopWatchdog.ts": "928c2a4f17787ca4b81d7c25ba246f10a65bfb76a54fbf91416f61a2dfd2f78c",
+    "src/lib/memory/index.ts": "ce3c5abb16444de3f04ca77b17021e486d8c60a74d8ee7eb793e66c63bcbc85d",
+    "src/lib/memory/service.test.ts": "618f46bdb8aa67739d3d83b4be305d569f338593437cb2bee2a0a11e8bc941ba",
+    "src/lib/memory/service.ts": "a6c921601b0eaeb3319f00c35cb60fbf8001f7f4a7b04693345bc1c75b21362f",
+    "src/lib/performanceSpans.ts": "b4b9406a52a7bc9438d956bdeea6398d413235a7e9802cb71892cbfff868e8c9",
+    "src/lib/scanner/fileScanWorker.test.ts": "e28de69e19b88927124140ee8b2c8df0b76c108bbe1f53e553a41ed888ba61c1",
+    "src/lib/scanner/fileScanWorker.ts": "b8b943c9411613cb5482e583daf77b3a8f972c9b17c08a70c30d3e0579a668bf",
+    "src/lib/scanner/scanCache.ts": "2479e6660cebf439634bfe2a7711937fc1abe267eda1e27ec34299531770fc16",
+    "src/lib/search/transcriptFeed.ts": "315ad6f9fa96d170b4a96cbc513464b1c26e267d2fb2669742c6939bb3213f2e",
+    "src/lib/viewerLoopMonitor.ts": "11ac54f0b240311aec77514d507bba27b5dd1e5fa1ff68855deb60cd9b998e23"
+  },
+  "continuation": {
+    "settledScope": "Heartbeat, independent bounded RSS observations and scanner/index/memory/JSON/render labels; no serving profiler, new system access, Bun change, deploy or push.",
+    "measuredAtUtc": "2026-10-17T02:58:33.839950+00:00",
+    "overhead": {
+      "runtime": "1.4.0",
+      "base": "225c3c166f710a6723ffa3309f0437d2f732df3c",
+      "conditions": {
+        "batches": 200,
+        "periodMs": 20,
+        "rows": 10000,
+        "serializationsPerBatch": 3,
+        "repetitions": 5,
+        "warmupMs": 1000,
+        "order": "alternating by pair",
+        "metric": "process user+system, includes worker"
+      },
+      "measurements": [
+        {
+          "run": 0,
+          "arm": "base",
+          "mode": "idle",
+          "elapsedMs": 3999.6652209999997,
+          "cpuMs": 76.635,
+          "cpuPercent": 1.9160353621006223,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 0,
+          "arm": "candidate",
+          "mode": "idle",
+          "elapsedMs": 3999.760983,
+          "cpuMs": 79.711,
+          "cpuPercent": 1.9928940838913123,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 1,
+          "arm": "candidate",
+          "mode": "idle",
+          "elapsedMs": 3999.244285,
+          "cpuMs": 78.756,
+          "cpuPercent": 1.9692720521072145,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 1,
+          "arm": "base",
+          "mode": "idle",
+          "elapsedMs": 3999.8717050000005,
+          "cpuMs": 128.442,
+          "cpuPercent": 3.2111529937183323,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 2,
+          "arm": "base",
+          "mode": "idle",
+          "elapsedMs": 3999.0888560000003,
+          "cpuMs": 148.417,
+          "cpuPercent": 3.711270375433738,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 2,
+          "arm": "candidate",
+          "mode": "idle",
+          "elapsedMs": 4000.116836,
+          "cpuMs": 154.702,
+          "cpuPercent": 3.8674370360316144,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 3,
+          "arm": "candidate",
+          "mode": "idle",
+          "elapsedMs": 4000.065359,
+          "cpuMs": 90.815,
+          "cpuPercent": 2.2703379032462454,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 3,
+          "arm": "base",
+          "mode": "idle",
+          "elapsedMs": 3999.8704179999995,
+          "cpuMs": 69.861,
+          "cpuPercent": 1.7465815813836199,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 4,
+          "arm": "base",
+          "mode": "idle",
+          "elapsedMs": 4000.028681,
+          "cpuMs": 71.82,
+          "cpuPercent": 1.7954871259084355,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 4,
+          "arm": "candidate",
+          "mode": "idle",
+          "elapsedMs": 3999.9381599999997,
+          "cpuMs": 64.838,
+          "cpuPercent": 1.6209750602744317,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 0,
+          "arm": "base",
+          "mode": "load",
+          "elapsedMs": 3999.3764469999996,
+          "cpuMs": 908.059,
+          "cpuPercent": 22.705014444968054,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 0,
+          "arm": "candidate",
+          "mode": "load",
+          "elapsedMs": 3999.9571560000004,
+          "cpuMs": 872.956,
+          "cpuPercent": 21.824133758296682,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 1,
+          "arm": "candidate",
+          "mode": "load",
+          "elapsedMs": 4000.057899,
+          "cpuMs": 901.842,
+          "cpuPercent": 22.545723656286505,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 1,
+          "arm": "base",
+          "mode": "load",
+          "elapsedMs": 3999.808069,
+          "cpuMs": 1062.815,
+          "cpuPercent": 26.571649980838117,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 2,
+          "arm": "base",
+          "mode": "load",
+          "elapsedMs": 3999.1540429999995,
+          "cpuMs": 966.408,
+          "cpuPercent": 24.165310703436692,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 2,
+          "arm": "candidate",
+          "mode": "load",
+          "elapsedMs": 3999.5595999999996,
+          "cpuMs": 909.206,
+          "cpuPercent": 22.73265286508045,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 3,
+          "arm": "candidate",
+          "mode": "load",
+          "elapsedMs": 4000.158392,
+          "cpuMs": 900.627,
+          "cpuPercent": 22.51478345960457,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 3,
+          "arm": "base",
+          "mode": "load",
+          "elapsedMs": 3999.267173,
+          "cpuMs": 1085.569,
+          "cpuPercent": 27.14419800029699,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 4,
+          "arm": "base",
+          "mode": "load",
+          "elapsedMs": 3999.193916,
+          "cpuMs": 1078.533,
+          "cpuPercent": 26.968759771437895,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 4,
+          "arm": "candidate",
+          "mode": "load",
+          "elapsedMs": 3999.2106570000005,
+          "cpuMs": 1030.363,
+          "cpuPercent": 25.76415918967681,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        }
+      ],
+      "summary": {
+        "idle": {
+          "medianCpuMs": {
+            "base": 76.635,
+            "candidate": 79.711
+          },
+          "meanAddedCpuPercentPoints": -0.13192226059878598,
+          "paired95PercentPoints": [
+            -0.9624802352630571,
+            0.6986357140654852
+          ]
+        },
+        "load": {
+          "medianCpuMs": {
+            "base": 1062.815,
+            "candidate": 901.842
+          },
+          "meanAddedCpuPercentPoints": -2.434695994406546,
+          "paired95PercentPoints": [
+            -4.609950239366217,
+            -0.2594417494468746
+          ]
+        }
+      },
+      "protocolSource": "import fs from \"node:fs\";\nimport path from \"node:path\";\nimport { createHash } from \"node:crypto\";\nimport { isolatedEnvironment } from \"./candidate/scripts/local-gate\";\nconst root=import.meta.dir;\nif (process.argv[2] === \"--child\") {\n const [arm,mode] = process.argv.slice(3);\n const { createViewerLoopMonitor } = await import(path.join(root,arm,\"src/lib/viewerLoopMonitor.ts\"));\n const { createPerformanceSpans } = await import(path.join(root,arm,\"src/lib/performanceSpans.ts\"));\n const spans=createPerformanceSpans(); let logs=0, checksum=0;\n const monitor=createViewerLoopMonitor(()=>logs++,()=>performance.now(),spans);\n const rows=Array.from({length:10000},(_,id)=>({id,state:\"ready\",value:`item-${id}`}));\n const body=JSON.stringify(rows); const dataSha256=createHash(\"sha256\").update(body).digest(\"hex\");\n monitor.start(); await Bun.sleep(1000);\n const cpu=process.cpuUsage(),start=performance.now();\n for(let i=0;i<200;i++) {\n  if(mode === \"load\") spans.sync(\"files.encode\",()=>{for(let j=0;j<3;j++) checksum+=JSON.parse(JSON.stringify(rows)).length;});\n  await Bun.sleep(Math.max(0,start+(i+1)*20-performance.now()));\n }\n const used=process.cpuUsage(cpu),elapsedMs=performance.now()-start;\n monitor.stop(); await Bun.sleep(100);\n console.log(JSON.stringify({arm,mode,elapsedMs,cpuMs:(used.user+used.system)/1000,cpuPercent:(used.user+used.system)/1000/elapsedMs*100,checksum,dataSha256,logs}));\n} else {\n const out=[];\n for(const mode of [\"idle\",\"load\"]) for(let run=0;run<5;run++) for(const arm of run%2?[\"candidate\",\"base\"]:[\"base\",\"candidate\"]) {\n  const envRoot=fs.mkdtempSync(path.join(root,\"measure-env-\"));\n  const child=Bun.spawn([process.execPath,import.meta.path,\"--child\",arm,mode],{env:isolatedEnvironment(envRoot,process.env),cwd:path.join(root,arm),stdout:\"pipe\",stderr:\"inherit\"});\n  const [body,code]=await Promise.all([new Response(child.stdout).text(),child.exited]); if(code)throw Error(`measurement child exit ${code}`);\n  const row={run,...JSON.parse(body)};out.push(row);process.stderr.write(JSON.stringify(row)+\"\\n\");\n }\n console.log(JSON.stringify({runtime:process.versions.bun,base:\"225c3c166f710a6723ffa3309f0437d2f732df3c\",conditions:{batches:200,periodMs:20,rows:10000,serializationsPerBatch:3,repetitions:5,warmupMs:1000,order:\"alternating by pair\",metric:\"process user+system, includes worker\"},measurements:out}));\n}\n",
+      "protocolSha256": "608ee4be22824c01141f9c4290387e28997c4fcd4e72d1aea2f436dcaa87d3f8",
+      "interpretation": "No detected idle CPU increase in five pairs; the wide interval allows a small cost. No performance gain or production stall fix is claimed.",
+      "sourceSha256": {
+        "src/lib/loopWatchdog.ts": "ee4e1dac7e6ed4dc5d827ec041aefcd7b09113f53c8d5b1cb52cb11171220b10",
+        "src/lib/viewerLoopMonitor.ts": "a01775973fc0cfa0365f3402d0be3363fa3b4d47925e941acf1b43a7b4152b9f",
+        "src/lib/performanceSpans.ts": "7f1ed084029f003c165e9544b15d1a1c9de6f786b82571f3ba93594e21e592dc",
+        "src/lib/loopHeapSignals.ts": "f962170ef6448427196d0cc50d984d8135168f9ce707fbf91f835e769e45d594"
+      },
+      "provenance": "Historical measurement retained from 2026-10-17T02:58:33.839950Z; its source fingerprints predate the final diagnostic sources and it is not evidence for the final-source idle-cost condition."
+    },
+    "heap": "Main-VM heap growth remains unavailable on pinned Bun; no synchronous heap walk or main-thread RSS read.",
+    "verification": {
+      "commandsUse": "The pinned project gate wrapper; scratch exports; isolatedEnvironment. Runtime rehearsals use createGateSandbox as in the initial attempt.",
+      "exitCodes": {
+        "types-final": 0,
+        "tests-final": 0,
+        "tests-render-final": 0,
+        "lint-final": 0,
+        "build-final": 0,
+        "viewer-runtime-isolated-final": 0,
+        "host-runtime-isolated-final": 0,
+        "runtime-controls-isolated-final": 0,
+        "privacy-final": 0
+      },
+      "pathTests": {
+        "cases": 76,
+        "failures": 0,
+        "files": [
+          "src/lib/loopWatchdog.test.ts",
+          "src/lib/nextRenderMonitor.test.ts",
+          "src/lib/viewerLoopMonitor.test.ts",
+          "src/lib/performanceSpans.test.ts",
+          "src/lib/loopHeapSignals.test.ts",
+          "src/instrumentation.test.ts"
+        ],
+        "recheckedAfterLastImportChange": {
+          "cases": 46,
+          "failures": 0,
+          "files": [
+            "src/lib/nextRenderMonitor.test.ts",
+            "src/instrumentation.test.ts"
+          ]
+        }
+      },
+      "viewer": {
+        "runtime": "bun 1.4.0",
+        "modules": {
+          "loaded": 25,
+          "probed": 25
+        },
+        "served": {
+          "status": 200,
+          "bytes": 82414
+        }
+      },
+      "runtimeHost": {
+        "windowMs": 15000,
+        "listener": {
+          "answered": 27,
+          "polls": 27
+        },
+        "socket": {
+          "answered": 27,
+          "polls": 27
+        },
+        "ok": true
+      },
+      "negativeControls": [
+        "missing build",
+        "unloadable Viewer module",
+        "absent runtime host"
+      ],
+      "journalParserControls": [
+        "binary prefix",
+        "serving process identity",
+        "role",
+        "gapMs strictly above 5000",
+        "retained trigger outside its gap"
+      ],
+      "knownHarnessRefusal": "Both scratch-root rehearsals reproduced the previous attempt’s nested-inbox ownership refusal; canonical gate-sandbox rehearsals passed. No production path or ownership rule changed.",
+      "packaging": "Inspected the production chunk after the final build: the ignored node:module import supplies native createRequire; no undefined webpack context remains.",
+      "hostedChecks": "Pending pipeline publication and PR creation; this continuation writes neither remote branch nor PR."
+    },
+    "finalSourceOverhead": {
+      "measuredAtUtc": "2026-10-17T04:05:27.070Z",
+      "revision": "59339d0af",
+      "revisionFull": "59339d0af",
+      "base": "225c3c166f710a6723ffa3309f0437d2f732df3c",
+      "conditions": {
+        "batches": 200,
+        "periodMs": 20,
+        "rows": 10000,
+        "serializationsPerBatch": 3,
+        "repetitions": 5,
+        "warmupMs": 1000,
+        "order": "alternating by pair",
+        "metric": "process user+system, includes worker"
+      },
+      "summary": {
+        "idle": {
+          "medianCpuMs": {
+            "base": 96.559,
+            "candidate": 93.042
+          },
+          "meanAddedCpuPercentPoints": 0.11936636402769074,
+          "paired95PercentPoints": [
+            -0.5763584675154233,
+            0.8150911955708048
+          ],
+          "pairedDifferencesCpuPercentPoints": [
+            -0.10494180555886068,
+            -0.0011709077479382657,
+            0.8871498158093662,
+            -0.5980894216301367,
+            0.4138841392660231
+          ]
+        },
+        "load": {
+          "medianCpuMs": {
+            "base": 2111.233,
+            "candidate": 1733.812
+          },
+          "meanAddedCpuPercentPoints": -5.320274654039317,
+          "paired95PercentPoints": [
+            -22.735552802756402,
+            12.09500349467777
+          ],
+          "pairedDifferencesCpuPercentPoints": [
+            -2.7919253393801853,
+            -7.880938578068029,
+            16.10184015665397,
+            -9.447482400024441,
+            -22.5828671093779
+          ]
+        }
+      },
+      "measurements": [
+        {
+          "run": 0,
+          "arm": "base",
+          "mode": "idle",
+          "elapsedMs": 3999.7003139999997,
+          "cpuMs": 97.241,
+          "cpuPercent": 2.4312071496864656,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 0,
+          "arm": "candidate",
+          "mode": "idle",
+          "elapsedMs": 3999.6297170000003,
+          "cpuMs": 93.042,
+          "cpuPercent": 2.326265344127605,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 1,
+          "arm": "candidate",
+          "mode": "idle",
+          "elapsedMs": 3999.4594480000005,
+          "cpuMs": 82.323,
+          "cpuPercent": 2.058353161729569,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 1,
+          "arm": "base",
+          "mode": "idle",
+          "elapsedMs": 3999.6133680000003,
+          "cpuMs": 82.373,
+          "cpuPercent": 2.0595240694775074,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 2,
+          "arm": "base",
+          "mode": "idle",
+          "elapsedMs": 3999.6978300000005,
+          "cpuMs": 77.75,
+          "cpuPercent": 1.9438968468275513,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 2,
+          "arm": "candidate",
+          "mode": "idle",
+          "elapsedMs": 3999.474876,
+          "cpuMs": 113.227,
+          "cpuPercent": 2.8310466626369175,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 3,
+          "arm": "candidate",
+          "mode": "idle",
+          "elapsedMs": 3999.1933969999995,
+          "cpuMs": 72.637,
+          "cpuPercent": 1.8162912564940907,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 3,
+          "arm": "base",
+          "mode": "idle",
+          "elapsedMs": 3999.327897,
+          "cpuMs": 96.559,
+          "cpuPercent": 2.4143806781242274,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 4,
+          "arm": "base",
+          "mode": "idle",
+          "elapsedMs": 3999.7810789999994,
+          "cpuMs": 119.826,
+          "cpuPercent": 2.995813961647075,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 4,
+          "arm": "candidate",
+          "mode": "idle",
+          "elapsedMs": 3999.5036499999997,
+          "cpuMs": 136.371,
+          "cpuPercent": 3.409698100913098,
+          "checksum": 0,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 0,
+          "arm": "base",
+          "mode": "load",
+          "elapsedMs": 3999.546148,
+          "cpuMs": 2209.31,
+          "cpuPercent": 55.2390175846522,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 0,
+          "arm": "candidate",
+          "mode": "load",
+          "elapsedMs": 4000.027285,
+          "cpuMs": 2097.898,
+          "cpuPercent": 52.44709224527202,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 1,
+          "arm": "candidate",
+          "mode": "load",
+          "elapsedMs": 3999.7267190000002,
+          "cpuMs": 1197.583,
+          "cpuPercent": 29.9416206190061,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 1,
+          "arm": "base",
+          "mode": "load",
+          "elapsedMs": 3999.694976,
+          "cpuMs": 1512.787,
+          "cpuPercent": 37.82255919707413,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 2,
+          "arm": "base",
+          "mode": "load",
+          "elapsedMs": 3999.5517809999997,
+          "cpuMs": 1227.886,
+          "cpuPercent": 30.700590146953772,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 2,
+          "arm": "candidate",
+          "mode": "load",
+          "elapsedMs": 3999.9204910000003,
+          "cpuMs": 1872.06,
+          "cpuPercent": 46.80243030360774,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 3,
+          "arm": "candidate",
+          "mode": "load",
+          "elapsedMs": 4000.0844270000002,
+          "cpuMs": 1733.812,
+          "cpuPercent": 43.34438514089892,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 3,
+          "arm": "base",
+          "mode": "load",
+          "elapsedMs": 3999.1633150000002,
+          "cpuMs": 2111.233,
+          "cpuPercent": 52.79186754092336,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 4,
+          "arm": "base",
+          "mode": "load",
+          "elapsedMs": 3999.863283,
+          "cpuMs": 2206.663,
+          "cpuPercent": 55.168460616607526,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        },
+        {
+          "run": 4,
+          "arm": "candidate",
+          "mode": "load",
+          "elapsedMs": 3999.518989,
+          "cpuMs": 1303.267,
+          "cpuPercent": 32.585593507229625,
+          "checksum": 6000000,
+          "dataSha256": "0d7b7c3aa91f91b6d1bb3cad9d72a87db923580e3f206216875eccea55ceb8cf",
+          "logs": 0
+        }
+      ],
+      "protocolSource": "import fs from \"node:fs\";\nimport path from \"node:path\";\nimport { createHash } from \"node:crypto\";\nimport { isolatedEnvironment } from \"./candidate/scripts/local-gate\";\nconst root=import.meta.dir;\nif (process.argv[2] === \"--child\") {\n const [arm,mode] = process.argv.slice(3);\n const { createViewerLoopMonitor } = await import(path.join(root,arm,\"src/lib/viewerLoopMonitor.ts\"));\n const { createPerformanceSpans } = await import(path.join(root,arm,\"src/lib/performanceSpans.ts\"));\n const spans=createPerformanceSpans(); let logs=0, checksum=0;\n const monitor=createViewerLoopMonitor(()=>logs++,()=>performance.now(),spans);\n const rows=Array.from({length:10000},(_,id)=>({id,state:\"ready\",value:`item-${id}`}));\n const body=JSON.stringify(rows); const dataSha256=createHash(\"sha256\").update(body).digest(\"hex\");\n monitor.start(); await Bun.sleep(1000);\n const cpu=process.cpuUsage(),start=performance.now();\n for(let i=0;i<200;i++) {\n  if(mode === \"load\") spans.sync(\"files.encode\",()=>{for(let j=0;j<3;j++) checksum+=JSON.parse(JSON.stringify(rows)).length;});\n  await Bun.sleep(Math.max(0,start+(i+1)*20-performance.now()));\n }\n const used=process.cpuUsage(cpu),elapsedMs=performance.now()-start;\n monitor.stop(); await Bun.sleep(100);\n console.log(JSON.stringify({arm,mode,elapsedMs,cpuMs:(used.user+used.system)/1000,cpuPercent:(used.user+used.system)/1000/elapsedMs*100,checksum,dataSha256,logs}));\n} else {\n const out=[];\n for(const mode of [\"idle\",\"load\"]) for(let run=0;run<5;run++) for(const arm of run%2?[\"candidate\",\"base\"]:[\"base\",\"candidate\"]) {\n  const envRoot=fs.mkdtempSync(path.join(root,\"measure-env-\"));\n  const child=Bun.spawn([process.execPath,import.meta.path,\"--child\",arm,mode],{env:isolatedEnvironment(envRoot,process.env),cwd:path.join(root,arm),stdout:\"pipe\",stderr:\"inherit\"});\n  const [body,code]=await Promise.all([new Response(child.stdout).text(),child.exited]); if(code)throw Error(`measurement child exit ${code}`);\n  const row={run,...JSON.parse(body)};out.push(row);process.stderr.write(JSON.stringify(row)+\"\\n\");\n }\n console.log(JSON.stringify({runtime:process.versions.bun,base:\"225c3c166f710a6723ffa3309f0437d2f732df3c\",conditions:{batches:200,periodMs:20,rows:10000,serializationsPerBatch:3,repetitions:5,warmupMs:1000,order:\"alternating by pair\",metric:\"process user+system, includes worker\"},measurements:out}));\n}\n",
+      "protocolSha256": "608ee4be22824c01141f9c4290387e28997c4fcd4e72d1aea2f436dcaa87d3f8",
+      "sourceSha256": {
+        "scripts/measure-scanner-ipc.ts": "5f6f7ee81d2ffdb82cb9704baeb19b530a0dc48649cfcb4d82d03b0ff45cdd96",
+        "scripts/probe-loop-profiler.test.ts": "53cbfb703e3a6420c034eb97a8d63e1088fd90fe9a73fba7630fe869eb5d384b",
+        "scripts/probe-loop-profiler.ts": "363ec3655bbece7d150449b64312f9869f8fbdc6926439dc4eef43ce07e991d1",
+        "src/lib/loopWatchdog.test.ts": "8569b5e8363651a23b67fb73c63daf55fa6f28cfb0d28d195a3912ee62e5e14e",
+        "src/lib/loopWatchdog.ts": "ef0c7b616dc4c4d79b72340a50c54da84c3e27344eaf300147fe44e7486d4ede",
+        "src/lib/memory/index.ts": "acd387279e016acd7ec50096811ab3e90439ff2a043b2761bfe5fd6eddfaecca",
+        "src/lib/memory/service.test.ts": "b1b67efb750a545b61c180b6bd45551f53eb60c0571b70765d6a6d8e67cf6f51",
+        "src/lib/memory/service.ts": "a6c921601b0eaeb3319f00c35cb60fbf8001f7f4a7b04693345bc1c75b21362f",
+        "src/lib/nextRenderMonitor.test.ts": "bba325fc9072aeb7ed2e20b83442aeecdbf49b9abf3394cb61e8c56015afff98",
+        "src/lib/nextRenderMonitor.ts": "b02d6b9c3d8ea3ca67c2ff5c2811f467e75219efede83f2da2585736f0abe0b1",
+        "src/lib/performanceSpans.ts": "7f1ed084029f003c165e9544b15d1a1c9de6f786b82571f3ba93594e21e592dc",
+        "src/lib/scanner/fileScanWorker.test.ts": "e28de69e19b88927124140ee8b2c8df0b76c108bbe1f53e553a41ed888ba61c1",
+        "src/lib/scanner/fileScanWorker.ts": "b8b943c9411613cb5482e583daf77b3a8f972c9b17c08a70c30d3e0579a668bf",
+        "src/lib/scanner/scanCache.ts": "2479e6660cebf439634bfe2a7711937fc1abe267eda1e27ec34299531770fc16",
+        "src/lib/search/transcriptFeed.test.ts": "c8e00b30c225b76de1fb0b792438064607a8617783ae0a1f7021385548a3b46b",
+        "src/lib/search/transcriptFeed.ts": "315ad6f9fa96d170b4a96cbc513464b1c26e267d2fb2669742c6939bb3213f2e",
+        "src/lib/search/transcriptSearch.ts": "37dd490db93a1deb60968456bf8174383c2d7c22a7fb26f548eac99558f9e880",
+        "src/lib/viewerInstrumentation.ts": "1ca4cb878f87bb440bb99ebfdb551621466ce9d25333739b747587c5442801f1",
+        "src/lib/viewerLoopMonitor.ts": "590e35bca08a34c909049a96780bab8b10851308a411f7e97960a7adb6391d55"
+      },
+      "manifestScope": "Every TypeScript source and test file changed in the diagnostic lane through revision 59339d0af; this fingerprints the exact candidate used in the paired run.",
+      "interpretation": "Five paired idle runs show a mean CPU difference near zero with a wide 95% interval; these measurements detect no idle increase and cannot exclude a small cost. Loaded results are highly variable. Neither mode represents production load, establishes a performance gain, or identifies the production stall caller."
+    },
+    "finalSourceVerification": {
+      "revision": "59339d0afcab15bad861dcdce3c3d448934a5602",
+      "tests": [
+        {
+          "command": "bun test ./src/lib/memory/service.test.ts",
+          "passed": 2,
+          "failed": 0,
+          "assertions": 21
+        },
+        {
+          "command": "bun test ./src/lib/memory/index.test.ts",
+          "passed": 62,
+          "failed": 0,
+          "assertions": 2781
+        }
+      ],
+      "typecheck": {
+        "command": "bunx tsc --noEmit",
+        "exitCode": 0
+      },
+      "privacyPublication": {
+        "command": "bun scripts/privacy-publication-gate.ts --base origin/main --require-known-values --paths docs/perf/viewer-stall-attribution.md evidence/performance/viewer-stall-attribution.json src/lib/memory/index.ts src/lib/memory/service.test.ts",
+        "exitCode": 0
+      },
+      "build": {
+        "command": "bun run build",
+        "exitCode": 0,
+        "notes": [
+          "Scratch export; isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR.",
+          "Existing CSS warning for ::highlight(tts-karaoke)."
+        ]
+      },
+      "viewerRuntime": {
+        "runtime": "bun 1.4.0",
+        "modules": "25/25",
+        "httpStatus": 200,
+        "notes": [
+          "Scratch copy of verifier sets child TMPDIR to its sandbox so the sandbox covers config and state."
+        ]
+      },
+      "runtimeHost": {
+        "runtime": "bun 1.4.0",
+        "successionMs": 504,
+        "listener": "27/27",
+        "socket": "27/27",
+        "windowSeconds": 15
+      },
+      "hostedChecks": {
+        "privacyTrackerAudit": "Pending pipeline publication and PR.",
+        "runtimeGate": "Pending pipeline publication; local Viewer and runtime-host rehearsals passed."
+      },
+      "productionAcceptance": "Pending deployment: serving caller and thirty-minute loaded journal window not observed."
+    }
+  },
+  "initialAttemptGeneratedAtUtc": "2026-10-17T02:44:18.300212+00:00",
+  "sourceSha256": {
+    "docs/perf/viewer-stall-attribution.md": "6b175fdacb8860f288cf42b5ee31ba7b45036f42ac59704c8c5ca3b68f95d6f8",
+    "scripts/measure-scanner-ipc.ts": "5f6f7ee81d2ffdb82cb9704baeb19b530a0dc48649cfcb4d82d03b0ff45cdd96",
+    "scripts/probe-loop-profiler.test.ts": "53cbfb703e3a6420c034eb97a8d63e1088fd90fe9a73fba7630fe869eb5d384b",
+    "scripts/probe-loop-profiler.ts": "363ec3655bbece7d150449b64312f9869f8fbdc6926439dc4eef43ce07e991d1",
+    "src/lib/loopWatchdog.test.ts": "005894f3e2a871454f5b10d49295091857289f92e3419562f36970caa435d6b9",
+    "src/lib/loopWatchdog.ts": "ee4e1dac7e6ed4dc5d827ec041aefcd7b09113f53c8d5b1cb52cb11171220b10",
+    "src/lib/memory/index.ts": "ce3c5abb16444de3f04ca77b17021e486d8c60a74d8ee7eb793e66c63bcbc85d",
+    "src/lib/memory/service.test.ts": "618f46bdb8aa67739d3d83b4be305d569f338593437cb2bee2a0a11e8bc941ba",
+    "src/lib/memory/service.ts": "a6c921601b0eaeb3319f00c35cb60fbf8001f7f4a7b04693345bc1c75b21362f",
+    "src/lib/nextRenderMonitor.test.ts": "bba325fc9072aeb7ed2e20b83442aeecdbf49b9abf3394cb61e8c56015afff98",
+    "src/lib/nextRenderMonitor.ts": "b02d6b9c3d8ea3ca67c2ff5c2811f467e75219efede83f2da2585736f0abe0b1",
+    "src/lib/performanceSpans.ts": "7f1ed084029f003c165e9544b15d1a1c9de6f786b82571f3ba93594e21e592dc",
+    "src/lib/scanner/fileScanWorker.test.ts": "e28de69e19b88927124140ee8b2c8df0b76c108bbe1f53e553a41ed888ba61c1",
+    "src/lib/scanner/fileScanWorker.ts": "b8b943c9411613cb5482e583daf77b3a8f972c9b17c08a70c30d3e0579a668bf",
+    "src/lib/scanner/scanCache.ts": "2479e6660cebf439634bfe2a7711937fc1abe267eda1e27ec34299531770fc16",
+    "src/lib/search/transcriptFeed.ts": "315ad6f9fa96d170b4a96cbc513464b1c26e267d2fb2669742c6939bb3213f2e",
+    "src/lib/viewerInstrumentation.ts": "1ca4cb878f87bb440bb99ebfdb551621466ce9d25333739b747587c5442801f1",
+    "src/lib/viewerLoopMonitor.ts": "a01775973fc0cfa0365f3402d0be3363fa3b4d47925e941acf1b43a7b4152b9f"
+  },
+  "sourceManifestProvenance": "The top-level sourceSha256 map and continuation.overhead.sourceSha256 belong to historical runs. Use continuation.finalSourceOverhead.sourceSha256 for the final-source paired run."
+}

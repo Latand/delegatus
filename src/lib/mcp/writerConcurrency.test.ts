@@ -14,6 +14,78 @@ afterEach(async () => {
 });
 afterAll(reapFixtureChildren);
 
+test.skipIf(!process.env.MCP_SQL_OBSERVER)("native SQL observer reconciles handles, explicit/autocommit/empty commits, rollback and successful/failed waits", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-sql-observer-control-"));
+  sandboxes.push(root);
+  const database = path.join(root, "control.sqlite");
+  let overheadSample = 0;
+  const run = (mode: string, observed = true, holdMs = 600) => {
+    const suffix = mode === "overhead" ? `-${++overheadSample}` : "";
+    const events = path.join(root, `${mode}${suffix}.ndjson`);
+    const ready = path.join(root, `${mode}.ready`);
+    const child = ownFixtureChild(Bun.spawn({
+      cmd: [process.execPath, ...(observed ? ["--preload", path.resolve("scripts/sqlite-observer.ts")] : []), path.join(import.meta.dir, "writerConcurrencyChild.ts")],
+      env: { ...process.env, LLV_STATE_DIR: root, MCP_BENCH_SCRATCH_ROOT: path.dirname(root), MCP_SQL_OBSERVER: observed ? process.env.MCP_SQL_OBSERVER : undefined, MCP_SQL_EVENTS: observed ? events : undefined, LLV_WRITER_OBSERVER_CONTROL: mode,
+        LLV_WRITER_DATABASE: mode === "overhead" ? path.join(root, `overhead-${overheadSample}.sqlite`) : database,
+        LLV_WRITER_READY: ready, LLV_WRITER_HOLD_MS: String(holdMs) },
+      stdout: "pipe", stderr: "pipe",
+    }));
+    const stderr = new Response(child.stderr).text();
+    const stdout = new Response(child.stdout).text();
+    return { child, ready, events, stdout, done: async () => {
+      const code = await child.exited;
+      if (code !== 0) throw new Error(await stderr);
+      return fs.existsSync(events) ? fs.readFileSync(events, "utf8").trim().split("\n").map(line => JSON.parse(line) as { event: string; value: number }) : [];
+    } };
+  };
+  const initial = await run("transactions").done();
+  const count = (events: typeof initial, event: string) => events.filter(row => row.event === event).length;
+  expect(count(initial, "open")).toBe(3);
+  expect(count(initial, "close")).toBe(3);
+  expect(initial.filter(row => row.event === "open").map(row => row.value)).toEqual([0, 1, 1]);
+  expect(count(initial, "commit")).toBe(4);
+  expect(count(initial, "rollback")).toBe(1);
+  expect(count(initial, "begin")).toBe(3);
+  const locker = run("lock", false);
+  await waitFor(locker.ready);
+  const waited = await run("wait").done();
+  await locker.done();
+  expect(count(waited, "commit")).toBe(1);
+  expect(count(waited, "sqlite-sleep-ns")).toBeGreaterThan(0);
+  fs.unlinkSync(locker.ready);
+  const nextLocker = run("lock", false);
+  await waitFor(nextLocker.ready);
+  const refused = await run("refuse").done();
+  await nextLocker.done();
+  expect(count(refused, "commit")).toBe(0);
+  expect(count(refused, "sqlite-sleep-ns")).toBeGreaterThan(0);
+  expect(fs.readFileSync(path.join(root, "refuse.ndjson.js"), "utf8")).toContain('"event":"busy-result"');
+  const lease = run("lease-hold", true, 800);
+  await waitFor(lease.ready);
+  const leaseWaiter = run("lease-wait");
+  const leaseEvents = await leaseWaiter.done();
+  const heldEvents = await lease.done() as Array<{ event: string; value: number; sql?: string; atNs?: number }>;
+  const acquire = heldEvents.findIndex(row => row.event === "lease-statement" && /^\s*INSERT INTO state_leases/.test(row.sql ?? ""));
+  const release = heldEvents.findIndex((row, index) => index > acquire && row.event === "lease-statement" && /^\s*DELETE FROM state_leases/.test(row.sql ?? ""));
+  const acquiredAt = heldEvents.slice(acquire + 1).find(row => row.event === "commit")!.atNs!;
+  const releasedAt = heldEvents.slice(release + 1).find(row => row.event === "commit")!.atNs!;
+  expect(acquire).toBeGreaterThan(-1);
+  expect(release).toBeGreaterThan(acquire);
+  expect((releasedAt - acquiredAt) / 1e6).toBeGreaterThanOrEqual(750);
+  expect(count(leaseEvents, "sqlite-sleep-ns")).toBe(0);
+  const leaseJs = fs.readFileSync(`${leaseWaiter.events}.js`, "utf8");
+  expect(leaseJs).toContain('"event":"lease-held-refusal"');
+  expect(leaseJs).toContain('"event":"lease-acquired"');
+  const overhead: Array<{ observed: boolean; iterations: number; elapsedMs: number }> = [];
+  for (let repeat = 0; repeat < 3; repeat++) for (const observed of repeat % 2 ? [true, false] : [false, true]) {
+    const sample = run("overhead", observed);
+    const events = await sample.done();
+    if (observed) expect(count(events, "domain-statement")).toBe(1000);
+    overhead.push({ observed, ...JSON.parse((await sample.stdout).trim()) });
+  }
+  console.log(`SQL observer controls ${JSON.stringify({ overhead })}`);
+}, 30_000);
+
 async function waitFor(pathname: string, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!fs.existsSync(pathname)) {
@@ -23,6 +95,26 @@ async function waitFor(pathname: string, timeoutMs = 5_000): Promise<void> {
 }
 
 type WriterOperation = "create" | "update" | "transition";
+
+async function prepareWriters(sandbox: string): Promise<void> {
+  // These fixtures have no catalog scanner or seat controller. Declare the
+  // project membership that production admission reads, then finish startup
+  // before either writer is deliberately held inside its transaction.
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = sandbox;
+  try {
+    beginOrchestratorSeatIntent({ project: "viewer", mandate: "Fixture board", clientRequestId: "writer-seat", mode: "existing" });
+    completeOrchestratorSeatIntent({ project: "viewer", clientRequestId: "writer-seat", conversationId: "conversation_writer_seat", path: null, preparedAuthCredentialBaseline: null });
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+  }
+  const child = ownFixtureChild(Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "writerConcurrencyChild.ts")],
+    env: { ...process.env, LLV_STATE_DIR: sandbox, LLV_WRITER_PREPARE: "1" }, stdout: "ignore", stderr: "pipe" }));
+  const error = new Response(child.stderr).text();
+  if (await child.exited !== 0) throw new Error(await error);
+}
 
 /** The task store lives in `state.sqlite` beside its legacy path (#1870). */
 function persistedTasks(stateFile: string): { tasks: Record<string, unknown>[]; recentCreates: Record<string, unknown>[] } {
@@ -62,9 +154,12 @@ async function runConcurrentWriters(
   // Start admission is exercised with injected launch ports, never a real CLI.
   fs.writeFileSync(path.join(claudeHome, ".credentials.json"), "{}", { mode: 0o600 });
   const fixture = path.join(import.meta.dir, "writerConcurrencyChild.ts");
+  await prepareWriters(sandbox);
+  const begin = path.join(sandbox, "writers.begin");
   const writers = ["http", "mcp"].map((writer) => {
     const ready = path.join(sandbox, `${writer}.ready`);
     const release = path.join(sandbox, `${writer}.release`);
+    const initialized = path.join(sandbox, `${writer}.initialized`);
     const child = ownFixtureChild(Bun.spawn({
       cmd: [process.execPath, fixture],
       cwd: process.cwd(),
@@ -77,6 +172,8 @@ async function runConcurrentWriters(
         LLV_WRITER_OPERATION: operation,
         LLV_WRITER_READY: ready,
         LLV_WRITER_RELEASE: release,
+        LLV_WRITER_INITIALIZED: initialized,
+        LLV_WRITER_BEGIN: begin,
         ...(codexHome ? { LLV_CODEX_HOME: codexHome } : {}),
         ...(creatorPath ? { LLV_WRITER_SRC: creatorPath } : {}),
         LLV_AGENT_REGISTRY_SQLITE: "sqlite",
@@ -85,8 +182,13 @@ async function runConcurrentWriters(
       stderr: "pipe",
     }));
     const errors = new Response(child.stderr).text();
-    return { child, ready, release, errors };
+    return { child, ready, release, initialized, errors };
   });
+
+  await Promise.all(writers.map(async writer => Promise.race([
+    waitFor(writer.initialized), writer.child.exited.then(async () => { throw new Error(await writer.errors || "writer failed during initialization"); }),
+  ])));
+  fs.writeFileSync(begin, "begin");
 
   await Promise.race([
     Promise.any(writers.map(({ ready }) => waitFor(ready))),
@@ -100,7 +202,7 @@ async function runConcurrentWriters(
   await Bun.sleep(750);
   const enteredBeforeRelease = fs.existsSync(second.ready);
   fs.writeFileSync(first.release, "release\n", "utf8");
-  await waitFor(second.ready);
+  await Promise.race([waitFor(second.ready), second.child.exited.then(async () => { throw new Error(await second.errors || "second writer exited before its barrier"); })]);
   fs.writeFileSync(second.release, "release\n", "utf8");
 
   const exitCodes = await Promise.all(writers.map(({ child }) => child.exited));
@@ -214,6 +316,7 @@ test("an aged live writer without process identity retains the transaction until
   fs.writeFileSync(path.join(claudeHome, ".credentials.json"), "{}", { mode: 0o600 });
   const fixture = path.join(import.meta.dir, "writerConcurrencyChild.ts");
   fs.writeFileSync(stateFile, "{\"tasks\":[]}\n", "utf8");
+  await prepareWriters(sandbox);
 
   const spawnWriter = (writer: "http" | "mcp") => {
     const ready = path.join(sandbox, `${writer}.ready`);
@@ -239,19 +342,24 @@ test("an aged live writer without process identity retains the transaction until
 
   const first = spawnWriter("http");
   await waitFor(first.ready);
-  /* The first writer holds the tasks collection lease (#1870). Age it well
-     past the old file lock's 30 s staleness window: a live owner keeps it. */
+  /* The fixture ages its lease before opening the SQL transaction, leaving
+     SQLite free so the peer must check the live owner rather than a SQL lock. */
   const { Database } = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
   const db = new Database(path.join(sandbox, "state.sqlite"));
   try {
-    const held = db.query("UPDATE state_leases SET acquired_at = ? WHERE collection = 'tasks'").run(Date.now() - 60_000);
-    expect(held.changes).toBe(1);
+    const held = db.query<{ acquired_at: number; owner_start_identity: string | null }, []>(
+      "SELECT acquired_at, owner_start_identity FROM state_leases WHERE collection = 'tasks'",
+    ).get();
+    expect(held?.acquired_at).toBeLessThanOrEqual(Date.now() - 59_000);
+    expect(held?.owner_start_identity).toBeNull();
+    db.exec("BEGIN IMMEDIATE");
+    db.exec("ROLLBACK");
   } finally {
     db.close();
   }
 
   const second = spawnWriter("mcp");
-  await Bun.sleep(300);
+  await waitFor(`${second.ready}.waiting`);
   const enteredBeforeRelease = fs.existsSync(second.ready);
   fs.writeFileSync(first.release, "release\n", "utf8");
   if (!enteredBeforeRelease) await waitFor(second.ready);

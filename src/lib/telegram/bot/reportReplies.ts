@@ -1,3 +1,4 @@
+import { currentSeat } from "@/lib/orchestrator/seatChannel";
 import crypto from "node:crypto";
 import { agentRegistry } from "@/lib/agent/registry";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
@@ -49,8 +50,9 @@ export const productionReportReplyPorts: ReportReplyPorts = {
   reports: () => readBridgeReportLog().reports,
   destination: effectiveReportTelegram,
   seat: project => {
-    const seat = orchestratorSeatForCurrentProject(project);
-    return seat.pending ? null : seat.active?.conversationId ? { conversationId: seat.active.conversationId, path: seat.active.path } : null;
+    const designation = orchestratorSeatForCurrentProject(project);
+    const seat = currentSeat(project, designation);
+    return designation.pending ? null : seat ? { conversationId: seat.conversationId!, path: seat.path } : null;
   },
   ready: async seat => {
     const client = runtimeHostClient();
