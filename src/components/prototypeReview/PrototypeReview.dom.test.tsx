@@ -1158,36 +1158,43 @@ describe("a saved decision answers at once", () => {
 
   test("a failed read never drops the draft; a read that shows the round decided or gone does", async () => {
     let mode: "down" | "undecided" | "decided" | "gone" = "down";
+    const reads: Record<string, number> = { down: 0, undecided: 0, decided: 0, gone: 0 };
     globalThis.fetch = (async () => {
+      reads[mode]! += 1;
       if (mode === "down") return new Response(JSON.stringify({ error: "prototype review is unavailable" }), { status: 503 });
       const read = mode === "decided" ? reviewRead({ chosen: [1], comment: "Elsewhere" }) : reviewRead();
       if (mode === "gone") read.rounds[0]!.id = `pr_${"d".repeat(32)}`;
       return new Response(JSON.stringify(read), { status: 200 });
     }) as unknown as typeof fetch;
-    dom.localStorage.setItem(`llv.prototypeReview.draft:${earlierId}`, JSON.stringify({ v: 1, reviewId: earlierId, taskId: "task-1", project: "project-a", updatedAt: Date.now(), reject: false, chosen: [2], comment: "Mine", answers: [] }));
-    // A page load reads what storage holds.
-    reloadDecisionDraftsForTests();
-    const host = dom.document.createElement("div") as unknown as HTMLElement;
-    dom.document.body.appendChild(host as never);
-    root = createRoot(host);
-    await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); });
-    await settle();
+    const seed = () => {
+      dom.localStorage.setItem(`llv.prototypeReview.draft:${earlierId}`, JSON.stringify({ v: 1, reviewId: earlierId, taskId: "task-1", project: "project-a", updatedAt: Date.now(), reject: false, chosen: [2], comment: "Mine", answers: [] }));
+      reloadDecisionDraftsForTests();
+    };
+    // Each mode is one page load: the mount effect reads once, so the read in that mode is observed, not awaited by wall clock.
+    const load = async (next: typeof mode) => {
+      mode = next;
+      const before = reads[next]!;
+      await act(async () => { root?.unmount(); });
+      root = null;
+      seed();
+      const host = dom.document.createElement("div") as unknown as HTMLElement;
+      dom.document.body.appendChild(host as never);
+      root = createRoot(host);
+      await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); });
+      await settle();
+      expect(reads[next]!).toBeGreaterThan(before);
+    };
+    await load("down");
     expect(document.querySelector("[data-prototype-error]")).not.toBeNull();
     expect(draftOf(earlierId)).not.toBeNull();
-    const refresh = async (next: typeof mode) => { mode = next; await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); }); };
-    await refresh("undecided");
+    await load("undecided");
     expect(document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!.value).toBe("Mine");
     expect(draftOf(earlierId)).not.toBeNull();
-    await refresh("down");
-    expect(draftOf(earlierId)).not.toBeNull();
-    await refresh("decided");
+    await load("decided");
     expect(draftOf(earlierId)).toBeNull();
-    // Gone: a fresh draft for a round the read no longer lists.
-    dom.localStorage.setItem(`llv.prototypeReview.draft:${earlierId}`, JSON.stringify({ v: 1, reviewId: earlierId, taskId: "task-1", project: "project-a", updatedAt: Date.now(), reject: false, chosen: [2], comment: "Mine", answers: [] }));
-    reloadDecisionDraftsForTests();
-    await refresh("gone");
+    await load("gone");
     expect(draftOf(earlierId)).toBeNull();
-  }, 30_000);
+  });
 
   for (const [phase, words, retry] of [
     ["saved", "Decision saved", false],

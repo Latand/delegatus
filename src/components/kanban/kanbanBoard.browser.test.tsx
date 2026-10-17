@@ -737,10 +737,22 @@ describe("decision form keeps the operator's typed answer", () => {
       const text = box(error), area = box(field), action = box(send);
       const range = document.createRange(); range.selectNodeContents(text.el);
       const lines = [...range.getClientRects()];
-      const inside = (r: { left: number; right: number; top: number; bottom: number }) => r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight;
+      /* Inside the window and inside every scrolling ancestor's visible area: a scroller clips what lies past its edge. */
+      const clips = (el: HTMLElement) => {
+        const boxes: { left: number; right: number; top: number; bottom: number }[] = [];
+        for (let node = el.parentElement; node; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          if (style.overflowX !== "visible" || style.overflowY !== "visible") { const r = node.getBoundingClientRect(); boxes.push(r); }
+        }
+        return boxes;
+      };
+      const insideOf = (el: HTMLElement) => {
+        const bounds = [{ left: 0, right: innerWidth, top: 0, bottom: innerHeight }, ...clips(el)];
+        return (r: { left: number; right: number; top: number; bottom: number }) => bounds.every((b) => r.left >= b.left - 0.5 && r.right <= b.right + 0.5 && r.top >= b.top - 0.5 && r.bottom <= b.bottom + 0.5);
+      };
       return {
         value: (area.el as HTMLTextAreaElement).value, errorText: text.el.textContent ?? "",
-        errorInside: lines.every(inside), fieldInside: inside(area),
+        errorInside: lines.length > 0 && lines.every(insideOf(text.el)), fieldInside: insideOf(area.el)(area),
         errorOverlapsSend: text.left < action.right && text.right > action.left && text.top < action.bottom && text.bottom > action.top,
       };
     }, { field, error, send });
@@ -819,7 +831,8 @@ describe("decision form keeps the operator's typed answer", () => {
           await comment.fill(typed);
           await press(form.locator("[data-decision-send]"));
           await form.locator("[data-decision-error]").waitFor();
-          await form.locator("[data-decision-comment]").scrollIntoViewIfNeeded();
+          /* No scrolling by the driver: the card brings its own refusal into view. */
+          await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
           const refusedSeat = await reading(page, "[data-decision-comment]", "[data-decision-error]", "[data-decision-send]");
           expect(refusedSeat.value).toBe(typed); expect(refusedSeat.errorText).toContain("unavailable");
           expect(refusedSeat.errorInside && refusedSeat.fieldInside && !refusedSeat.errorOverlapsSend).toBe(true);

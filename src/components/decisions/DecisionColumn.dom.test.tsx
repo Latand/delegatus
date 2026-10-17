@@ -96,6 +96,25 @@ test("rejecting variants in a decision form requires corrections and keeps the r
   expect(posts[1]).toMatchObject({ reject: true, chosen: [], comment: "Simplify every frame." });
 });
 
+test("a refusal under the button is brought into the visible area of its scroller", async () => {
+  const shown: unknown[] = [];
+  const proto = (globalThis as unknown as { Element: { prototype: { scrollIntoView?: unknown } } }).Element.prototype;
+  const before = proto.scrollIntoView;
+  proto.scrollIntoView = function (this: Element, options: unknown) { shown.push([this.hasAttribute("data-decision-error"), options]); };
+  try {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "try again" }), { status: 409 })) as typeof fetch;
+    const host = await render(<DecisionList project="project-a" initial={[taskDecision()]} />);
+    await click(host.querySelector("[data-decision-reject]"));
+    const field = host.querySelector<HTMLTextAreaElement>("[data-decision-comment]")!;
+    const props = (field as unknown as Record<string, { onChange: (event: { target: { value: string } }) => void }>)[Object.keys(field).find(key => key.startsWith("__reactProps$"))!]!;
+    await act(async () => { props.onChange({ target: { value: "Simplify every frame." } }); });
+    shown.length = 0;
+    await click(host.querySelector("[data-decision-send]"));
+    expect(host.querySelector("[data-decision-error]")).not.toBeNull();
+    expect(shown).toContainEqual([true, { block: "nearest" }]);
+  } finally { proto.scrollIntoView = before; }
+});
+
 test("one decision stands open as its form with the recommended answers chosen; one click and «Відповісти» answer it, and it leaves the column", async () => {
   const posts: unknown[] = [];
   globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {

@@ -147,6 +147,12 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
   const [sending, setSending] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
+  const errorLine = useRef<HTMLParagraphElement>(null);
+  /* A refusal lands under the button, which can sit below the scroll edge of
+     the dialog or the column: bring it into view with the field it belongs to. */
+  useEffect(() => {
+    if (error) errorLine.current?.scrollIntoView?.({ block: "nearest" });
+  }, [error]);
   const insertSpoken = useCallback((spoken: string) => {
     edit((held) => ({ ...held, comment: held.comment ? `${held.comment.trimEnd()} ${spoken}` : spoken }));
     setVoiceError(null);
@@ -225,7 +231,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
           </div>
           {reject && !comment.trim() ? <p role="status" data-decision-reject-needs="" className="m-0 text-label text-warning">{t("proto.reject.needs")}</p> : null}
           {!valid ? <p role="status" className="m-0 text-label text-muted">{t(answers.some((answer) => answer.other) && !comment.trim() ? "proto.q.otherNeedsComment" : "proto.q.answerAll")}</p> : null}
-          {error ? <p role="alert" data-decision-error="" className="m-0 text-label font-semibold text-danger">{t("decisions.refused", { error })}</p> : null}
+          {error ? <p ref={errorLine} role="alert" data-decision-error="" className="m-0 text-label font-semibold text-danger">{t("decisions.refused", { error })}</p> : null}
           {voiceError ? <p role="alert" className="m-0 text-label font-semibold text-danger">{voiceError}</p> : null}
         </footer>
       ) : <div className="h-3" />}
