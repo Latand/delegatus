@@ -28,7 +28,7 @@ export interface SchedulePorts {
   /** Live links this install calls (A side), with the projects each links. */
   links(): { id: string; projects: ReadonlySet<string> }[];
   ownRevision(): number;
-  hasPush(id: string, projects: ReadonlySet<string>): boolean;
+  hasPush(id: string, projects: ReadonlySet<string>): boolean | Promise<boolean>;
   messagesPending?(id: string): boolean;
   boardOpen(projects: ReadonlySet<string>): boolean;
   sync(id: string): Promise<{ moved: number }>;
@@ -59,7 +59,7 @@ export class LinkedBoardSchedule {
       let plan = this.plans.get(link.id);
       if (!plan) { plan = { lastCallAt: now, nextAt: now, idle: IDLE_FIRST_MS, burstUntil: 0, failures: 0, running: false }; this.plans.set(link.id, plan); }
       if (plan.running) continue;
-      if (revisionMoved && plan.failures === 0 && this.ports.hasPush(link.id, link.projects)) plan.nextAt = Math.min(plan.nextAt, now);
+      if (revisionMoved && plan.failures === 0 && (await this.ports.hasPush(link.id, link.projects))) plan.nextAt = Math.min(plan.nextAt, now);
       if (plan.failures === 0 && this.ports.messagesPending?.(link.id)) plan.nextAt = Math.min(plan.nextAt, now);
       // Opening a previously idle board must shorten the already-armed wait.
       if (plan.failures === 0 && this.ports.boardOpen(link.projects)) plan.nextAt = Math.min(plan.nextAt, plan.lastCallAt + OPEN_INTERVAL_MS);

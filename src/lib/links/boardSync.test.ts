@@ -951,16 +951,15 @@ test("2 000 expired Done omissions per install keep unchanged idle syncs within 
     expect(cpuAfter[side]! - cpuBefore[side]!).toBeLessThanOrEqual(200);
     expect(await tasksOf(installs[side]!)).toHaveLength(2_000);
   }
-  // A changed scanner snapshot starts bounded work even when no task row
-  // changed. Four calls cover all 2 000 omissions, then idle reads stop again.
+  // A scanner refresh with identical decision observations leaves the export
+  // unchanged. It reuses the worker page and reads no task rows on the Viewer.
   for (const side of installs) await request(side, "/test/scan");
   for (let i = 0; i < 4; i++) {
     await Promise.all(installs.map((side) => figures(side, true)));
     await sync(installs[0]!, peerId);
     for (const side of installs) {
       const work = await figures(side);
-      expect(work.rowReads).toBeGreaterThan(0);
-      expect(work.rowReads).toBeLessThanOrEqual(513);
+      expect(work.rowReads).toBe(0);
       expect(work.writes).toBe(0);
     }
   }

@@ -8,7 +8,7 @@ export type ViewerOperation = "tasks.note" | "mcp.receipts" | "mcp.tasks.executo
   | "transcript.index" | "memory.discovery" | "memory.refresh"
   | "memory.source-read" | "memory.source-write"
   | "delivery.inbox-batch"
-  | "http.render"
+  | "http.render" | "links.task-export"
   | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
