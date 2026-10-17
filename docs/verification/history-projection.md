@@ -64,14 +64,14 @@ Final repeated measurements and source digests are recorded in
 
 | Operation | Phase | Before main-thread ms | After main-thread ms | Before bytes read | After bytes read |
 | --- | --- | ---: | ---: | ---: | ---: |
-| History reads | cold | 889.441 | 1220.820 | 160,411,230 | 338,558,218 |
-| History reads | warm | 813.456 | 0.256 | 159,863,030 | 191 |
-| Registry admission | cold | 509.528 | 3.916 | 783,881,674 | 176,385 |
-| Registry admission | warm | 0.000 | 1.043 | 150 | 4,279 |
+| History reads | cold | 1605.028 | 2243.476 | 160,411,190 | 338,558,442 |
+| History reads | warm | 1318.085 | 0.370 | 159,863,157 | 165 |
+| Registry admission | cold | 954.819 | 9.001 | 783,881,678 | 176,386 |
+| Registry admission | warm | 0.000 | 2.000 | 154 | 4,280 |
 
 Values are medians. The history corpus has 1,153 records and 153,203,262 JSON bytes; the registry has 52,207 rows and 187,103,963 JSON bytes. Result counts agree in every repetition (4,113 history attempts; one selected registry conversation).
 
-Cold projection preparation has a median elapsed time of 1667.2 ms and a maximum observed timer gap of 152.2 ms. Warm history calls have a median elapsed time of 0.424 ms and a maximum observed timer gap of 0.666 ms. Cold preparation is paid during Viewer startup.
+Cold projection preparation has a median elapsed time of 3053.0 ms and a maximum observed timer gap of 16.5 ms. Warm history calls have a median elapsed time of 0.783 ms and a maximum observed timer gap of 1.340 ms. Cold preparation is paid during Viewer startup.
 
 The procedure uses byte-identical private SQLite backups for each mode and fresh
 process. Three process pairs per operation each perform one cold call and three
@@ -101,7 +101,7 @@ Each command receives its own database backup through `LLV_STATE_DIR`.
 
 ## Verification
 
-The full touched-test gate completed 28 explicit files against `7367fd9f3658` with zero new failures. It recorded 6 failures reproduced on the base and 3 intermittent assertions under its confirmation rules. Branch and baseline runs took 49.879 s and 9.840 s respectively. Typecheck and changed-file ESLint passed. Exact known outcomes are in the evidence JSON.
+The full touched-test gate completed 32 explicit files against `e4a86ff27da4` with zero new failures. It recorded 9 failures reproduced on the base and 1 intermittent assertions under its confirmation rules. Branch and baseline runs took 89.560 s and 17.415 s respectively. Typecheck and changed-file ESLint passed. Exact known outcomes are in the evidence JSON.
 
 The hook's `discover` and `plan` functions select every touched and adjacent test.
 The recorded gate adds the startup, legacy-import and fleet-binding integration
