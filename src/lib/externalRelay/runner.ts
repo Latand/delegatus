@@ -660,6 +660,10 @@ export async function runClaimedRequest(
           chain = rounds === 1 ? { continued: owner ? !!conversation.conversationId : !!conversation.sessionId, promptBytes }
             : { continued: chain!.continued, promptBytes: chain!.promptBytes + promptBytes };
         }
+        if (conversation && owner && rounds === 1 && conversation.conversationId && turn) {
+          await releaseConversationAsync(conversation.id, { state: "running", runningRequestId: requestId,
+            pendingCursor: { operationId: `relay-owner-${requestId}`, seen: turn.seen, staticDigest: turn.digest } }, Date.now() + 5000);
+        }
         steps?.observe({});
         stepLog = path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "stdout.log");
         run = prototype ? runPrototypeAnswer(prototype, owner!.messageId, () => {
@@ -837,7 +841,7 @@ export async function runClaimedRequest(
       await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
         ...(conversationEvidence.sessionId || owner && conversation.conversationId && resultDelivered ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
           lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,
-          lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0) } : {}) }, Date.now() + 5000);
+          lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0), pendingCursor: undefined } : {}) }, Date.now() + 5000);
     }
     for (const timer of identityTimers) clearTimeout(timer);
     // The only way out without a completion is a lost lease.

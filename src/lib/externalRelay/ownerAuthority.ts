@@ -76,3 +76,17 @@ export function ownerRelaySpawnAuthorized(clientAttemptId: string | null | undef
       && ownerRelayAuthorized(run.relayId, run.targetId, run.requestId);
   } catch { return false; }
 }
+
+/** A queued continuation remains bound to its durable owner turn after the
+ * request callback has returned. Check the operation and conversation at each
+ * delivery boundary; the in-memory admission callback is only an early guard. */
+export function ownerRelayOperationAuthorized(operationId: string, conversationId: string): boolean {
+  if (!operationId.startsWith("relay-owner-")) return true;
+  try {
+    const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
+    const run = ledger.runs.find(row => row.ownerTurn?.continuation?.operationId === operationId
+      && row.conversationId === conversationId);
+    return !!run?.ownerTurn && !!run.ownerIdentity && procBackend.processIdentity(run.ownerPid) === run.ownerIdentity
+      && ownerRelayAuthorized(run.relayId, run.targetId, run.requestId);
+  } catch { return false; }
+}

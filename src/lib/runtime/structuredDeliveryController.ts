@@ -7,7 +7,7 @@ import { creditGuardBlock } from "@/lib/accounts/creditGuard";
 import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountCreditGuard";
 import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
-import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
+import { ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
 import { pipelineHostHasLiveWork, providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
@@ -996,11 +996,16 @@ export async function bindStructuredDeliveryQueue(
       settled: (operationId: string) => {
         const snapshot = registry.readOnlySnapshot();
         const receipt = operationId.startsWith("spawn_message_") ? snapshot.receipts[operationId.slice("spawn_message_".length)] : null;
-        return !ownerRelaySpawnAuthorized(receipt?.clientAttemptId) || sendIsSettled(snapshot, operationId);
+        const conversationId = Object.values(snapshot.heldDeliveries).find(row => row.command.operationId === operationId)?.conversationId;
+        return !ownerRelaySpawnAuthorized(receipt?.clientAttemptId)
+          || !!conversationId && !ownerRelayOperationAuthorized(operationId, conversationId)
+          || sendIsSettled(snapshot, operationId);
       },
       diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
       authorizeDispatch: (operationId: string, conversationId: string) => {
         authorizeAccountDispatch(conversationId);
+        if (!ownerRelayOperationAuthorized(operationId, conversationId))
+          throw new StructuredSendRefusedError("owner relay continuation authorization revoked");
         if (!operationId.startsWith("spawn_message_")) return;
         const receipt = registry.readOnlySnapshot().receipts[operationId.slice("spawn_message_".length)];
         if (!ownerRelaySpawnAuthorized(receipt?.clientAttemptId))

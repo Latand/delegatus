@@ -75,6 +75,50 @@ test("admission orphan recovery takes the ledger after its lock wait and walks n
     expect(reads).not.toHaveBeenCalled();
   } finally { reads.mockRestore(); dropRun("root"); releaseConversation(record.id); }
 });
+
+test("unchanged held chain resolution does not rewrite retained conversation history", async () => {
+  const seed = reserveChainConversation(relay, target, request(), "owner-tier")!;
+  releaseConversation(seed.id);
+  const rows = Array.from({ length: 299 }, (_, i) => ({ ...seed,
+    id: `00000000-0000-0000-0000-${String(i + 1).padStart(12, "0")}`, anchors: [`unrelated-${i}`],
+    seen: Array.from({ length: 200 }, (_, j) => `seen-${i}-${j}`) }));
+  writeRelayFile(path.join(root, "external-relay/conversations.json"), { v: 2, conversations: [seed, ...rows] });
+  const filename = path.join(root, "external-relay/conversations.json");
+  const before = fs.statSync(filename);
+  const unrelated = request("unknown-root", null);
+  for (let i = 0; i < 3; i++) await (await import("./conversations")).resolveChainConversationAsync(relay, target, unrelated, "owner-tier", Date.now() + 5000);
+  const after = fs.statSync(filename);
+  expect(after.mtimeMs).toBe(before.mtimeMs);
+  expect(after.size).toBe(before.size);
+});
+
+test("restart reconciles a delivered pending cursor, while proven refusal keeps the prior cursor", async () => {
+  const api = await import("./conversations");
+  const settlement = await import("@/lib/runtime/sendSettlement");
+  const record = reserveChainConversation(relay, target, request(), "owner-tier")!;
+  releaseConversation(record.id, { conversationId: "conversation_pinned", seen: ["before"], staticDigest: "old",
+    pendingCursor: { operationId: "relay-owner-delivered", seen: ["before", "consumed"], staticDigest: "new" } });
+  const lookup = spyOn(settlement, "resolveSendReceipt").mockResolvedValue({
+    state: "delivered", conversationId: "conversation_pinned", acceptedAt: new Date().toISOString(),
+    settledAt: new Date().toISOString(),
+  } as never);
+  try {
+    const reply = request("next", "root");
+    const recovered = await api.resolveChainConversationAsync(relay, target, reply, "owner-tier", Date.now() + 5000);
+    expect(recovered).toMatchObject({ seen: ["before", "consumed"], staticDigest: "new" });
+    expect(recovered?.pendingCursor).toBeUndefined();
+    lookup.mockResolvedValueOnce({ state: "failed" } as never);
+    releaseConversation(record.id, { pendingCursor: { operationId: "relay-owner-refused", seen: ["lost"], staticDigest: "refused" } });
+    const refused = await api.resolveChainConversationAsync(relay, target, reply, "owner-tier", Date.now() + 5000);
+    expect(refused).toMatchObject({ seen: ["before", "consumed"], staticDigest: "new" });
+    expect(refused?.pendingCursor).toBeUndefined();
+    lookup.mockResolvedValueOnce(null as never);
+    releaseConversation(record.id, { pendingCursor: { operationId: "relay-owner-unbound", seen: ["never-sent"], staticDigest: "unbound" } });
+    const unbound = await api.resolveChainConversationAsync(relay, target, reply, "owner-tier", Date.now() + 5000);
+    expect(unbound).toMatchObject({ seen: ["before", "consumed"], staticDigest: "new" });
+    expect(unbound?.pendingCursor).toBeUndefined();
+  } finally { lookup.mockRestore(); releaseConversation(record.id); }
+});
 test("a missing Claude session resets its prompt while preserving anchors and reservation", () => {
   const record = reserveChainConversation(relay, target, request(), "member")!;
   Object.assign(record, { sessionId: "00000000-0000-0000-0000-000000000000", seen: ["old"], staticDigest: "old" });

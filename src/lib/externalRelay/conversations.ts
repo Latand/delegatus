@@ -14,9 +14,48 @@ export type RelayConversation = {
   engine: "claude" | "codex"; sessionId: string | null; accountId: string | null; cwd: string | null;
   turns: number; turnsSinceCompaction: number; createdAt: string; lastTurnAt: string;
   seen: string[]; staticDigest: string | null; lastPromptTokens: number | null; compactions: number;
+  pendingCursor?: { operationId: string; seen: string[]; staticDigest: string };
   state: "idle" | "running" | "broken"; runningRequestId: string | null;
 };
 const file = () => statePath("external-relay/conversations.json");
+type ConversationCacheEntry = { size: number; mtimeMs: number; ino: number; rows: RelayConversation[]; scopes: Map<string, RelayConversation[]> };
+const cacheHost = globalThis as typeof globalThis & { __llvRelayConversationCache?: Map<string, ConversationCacheEntry> };
+const conversationCache = cacheHost.__llvRelayConversationCache ??= new Map<string, ConversationCacheEntry>();
+async function cachedConversationRows(): Promise<RelayConversation[]> {
+  const filename = file();
+  const stat = await fs.promises.stat(filename).catch(error => (error as NodeJS.ErrnoException).code === "ENOENT" ? null : Promise.reject(error));
+  if (!stat) return [];
+  const cached = conversationCache.get(filename);
+  if (cached?.size === stat.size && cached.mtimeMs === stat.mtimeMs && cached.ino === stat.ino) return cached.rows;
+  const rows = readConversationRows();
+  rememberConversationRows(rows);
+  return rows;
+}
+async function cachedScopeRows(relay: PairedRelay, target: RelayTargetSettings, request: ExternalRelayRequest): Promise<RelayConversation[]> {
+  const filename = file();
+  const stat = await fs.promises.stat(filename).catch(error => (error as NodeJS.ErrnoException).code === "ENOENT" ? null : Promise.reject(error));
+  if (!stat) return [];
+  const cached = conversationCache.get(filename);
+  if (cached?.size === stat.size && cached.mtimeMs === stat.mtimeMs && cached.ino === stat.ino)
+    return (cached.scopes.get(`${relay.id}\u0000${target.id}\u0000${request.chat?.key ?? ""}`) ?? []).map(row => ({ ...row }));
+  await cachedConversationRows();
+  return cachedScopeRows(relay, target, request);
+}
+function rememberConversationRows(rows: RelayConversation[]) {
+  const filename = file();
+  try {
+    const stat = fs.statSync(filename);
+    conversationCache.delete(filename);
+    const scopes = new Map<string, RelayConversation[]>();
+    for (const row of rows) {
+      const key = `${row.relayId}\u0000${row.targetId}\u0000${row.chatKey}`;
+      const group = scopes.get(key) ?? [];
+      group.push(row); scopes.set(key, group);
+    }
+    conversationCache.set(filename, { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino, rows, scopes });
+    while (conversationCache.size > 8) conversationCache.delete(conversationCache.keys().next().value!);
+  } catch { conversationCache.delete(filename); }
+}
 function readConversationRows(migrate = false): RelayConversation[] {
   try {
     const value = JSON.parse(fs.readFileSync(file(), "utf8"));
@@ -26,7 +65,10 @@ function readConversationRows(migrate = false): RelayConversation[] {
       !["claude", "codex"].includes(r.engine) || !["running", "idle", "broken"].includes(r.state) || !Array.isArray(r.seen) ||
       value.v === 2 && (typeof r.requesterKey !== "string" || !["member", "admin", "owner", "owner-tier"].includes(r.authority) ||
         !Array.isArray(r.anchors) || r.anchors.length > 200 || r.seen.length > 200 ||
-        [...r.anchors, ...r.seen].some(id => typeof id !== "string")))) throw new Error("invalid conversations");
+        [...r.anchors, ...r.seen].some(id => typeof id !== "string") ||
+        r.pendingCursor !== undefined && (!r.pendingCursor || typeof r.pendingCursor.operationId !== "string" ||
+          !Array.isArray(r.pendingCursor.seen) || r.pendingCursor.seen.length > 200 ||
+          r.pendingCursor.seen.some(id => typeof id !== "string") || typeof r.pendingCursor.staticDigest !== "string")))) throw new Error("invalid conversations");
     // Old per-chat sessions own only reserved files. They cannot supply chain authority.
     if (value.v === 1) {
       if (migrate) for (const row of value.conversations) deleteConversationFiles(row);
@@ -43,7 +85,7 @@ function readConversationRows(migrate = false): RelayConversation[] {
 }
 export function readConversations(): RelayConversation[] { return withViewerOperation("external-relay.chains", () => readConversationRows()); }
 function change<T>(action: (rows: RelayConversation[]) => T): T {
-  return withViewerOperation("external-relay.chains", () => withFileLock(file(), () => { const rows = readConversationRows(true); const result = action(rows); writeRelayFile(file(), { v: 2, conversations: rows }); return result; }));
+  return withViewerOperation("external-relay.chains", () => withFileLock(file(), () => { const rows = readConversationRows(true); const result = action(rows); writeRelayFile(file(), { v: 2, conversations: rows }); rememberConversationRows(rows); return result; }));
 }
 export function conversationAuthority(requester?: ExternalRelayRequester | null, ownerTier = false): ConversationAuthority | null {
   return !requester ? null : ownerTier ? "owner-tier" : requester.is_owner ? "owner" : requester.is_admin ? "admin" : "member";
@@ -99,17 +141,46 @@ export function resolveChainConversation(...args: Parameters<typeof resolveChain
 }
 /** Persist learned bot anchors even while the resolved turn is held. */
 export async function resolveChainConversationAsync(relay: PairedRelay, target: RelayTargetSettings, request: ExternalRelayRequest, authority: ConversationAuthority, until: number): Promise<RelayConversation | null> {
-  if (!fs.existsSync(file())) return null;
-  return changeAsync(rows => {
-    sweepAction([relay], readRunLedger().runs, Date.now(), undefined, relay.id, false)(rows);
-    const record = resolveChain(rows, relay, target, request, authority);
-    return record ? { ...record } : null;
-  }, until);
+  const rows = await cachedScopeRows(relay, target, request);
+  const anchorsBefore = new Map(rows.map(row => [row.id, row.anchors.join("\u0000")]));
+  const record = resolveChain(rows, relay, target, request, authority);
+  const learned = rows.some(row => anchorsBefore.get(row.id) !== row.anchors.join("\u0000"));
+  if (learned) {
+    await changeAsync(current => {
+      resolveChain(current, relay, target, request, authority);
+      return undefined;
+    }, until);
+  }
+  let resolved = record ? { ...record } : null;
+  const pending = resolved?.pendingCursor;
+  if (pending) {
+    const { resolveSendReceipt } = await import("@/lib/runtime/sendSettlement");
+    const receipt = await resolveSendReceipt(pending.operationId);
+    if (receipt?.state === "delivered" && receipt.conversationId === resolved!.conversationId) {
+      const advanced = await changeAsync(rows => {
+        const live = rows.find(row => row.id === resolved!.id);
+        if (live?.pendingCursor?.operationId === pending.operationId) {
+          live.seen = pending.seen; live.staticDigest = pending.staticDigest; delete live.pendingCursor;
+        }
+        return live ? { ...live } : null;
+      }, until);
+      resolved = advanced;
+    } else if (receipt?.state === "failed" || !receipt && !readRunLedger().runs.some(run =>
+      run.ownerTurn?.continuation?.operationId === pending.operationId && run.conversationId === resolved!.conversationId)) {
+      const cleared = await changeAsync(rows => {
+        const live = rows.find(row => row.id === resolved!.id);
+        if (live?.pendingCursor?.operationId === pending.operationId) delete live.pendingCursor;
+        return live ? { ...live } : null;
+      }, until);
+      resolved = cleared;
+    }
+  }
+  return resolved;
 }
 function reservation(relay: PairedRelay, target: RelayTargetSettings, request: ExternalRelayRequest, authority: ConversationAuthority) {
   return (rows: RelayConversation[]) => {
     let record = resolveChainConversation(rows, relay, target, request, authority);
-    if (record?.state === "running") return null;
+    if (record?.state === "running" || record?.pendingCursor) return null;
     if (record && (record.state === "broken" || transcriptBytes(record) > 32 * 1024 * 1024)) fresh(record);
     if (!record) {
       const owned = rows.filter(row => row.relayId === relay.id);
@@ -143,8 +214,8 @@ export function releaseConversation(id: string, patch: Partial<RelayConversation
 export async function releaseConversationAsync(id: string, patch: Partial<RelayConversation>, until: number): Promise<void> {
   await changeAsync(rows => { const record = rows.find(r => r.id === id); if (record) Object.assign(record, { state: "idle", runningRequestId: null }, patch); }, until);
 }
-function changeAsync<T>(action: (rows: RelayConversation[]) => T, until: number): Promise<T> {
-  return withViewerOperation("external-relay.chains", () => withFileLockAsync(file(), () => { const rows = readConversationRows(true); const result = action(rows); writeRelayFile(file(), { v: 2, conversations: rows }); return result; }, until));
+function changeAsync<T>(action: (rows: RelayConversation[]) => T, until: number, shouldWrite: (result: T) => boolean = () => true): Promise<T> {
+  return withViewerOperation("external-relay.chains", () => withFileLockAsync(file(), () => { const rows = readConversationRows(true); const result = action(rows); if (shouldWrite(result)) { writeRelayFile(file(), { v: 2, conversations: rows }); rememberConversationRows(rows); } return result; }, until));
 }
 export function resetConversation(record: RelayConversation) { fresh(record); releaseConversation(record.id, record); }
 export function prepareConversationAccount(record: RelayConversation, account: AccountContext) {

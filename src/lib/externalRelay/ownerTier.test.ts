@@ -70,6 +70,26 @@ test("owner prompt isolates the single request and escapes every data section", 
   expect(ownerRunPrompt(r, instruction(), 30)).not.toContain("[handoff]");
 });
 
+test("owner continuation sends each unseen service and recovered message once", async () => {
+  const { ownerContinuationPrompt } = await import("./ownerRun");
+  const r = request();
+  r.input.conversation = [
+    { ...r.input.conversation[0]!, id: "seen-message" },
+    { ...r.input.conversation[0]!, id: "new-message" },
+  ];
+  r.input.respond_to = "new-message";
+  const owner = { ...instruction(), localContext: { resolution: "history" as const, questionIds: [], origins: {},
+    conversation: [
+      { ...r.input.conversation[0]!, id: "seen-message" },
+      { ...r.input.conversation[0]!, id: "new-message" },
+      { ...r.input.conversation[0]!, id: "recovered-message" },
+    ] } };
+  const turn = ownerContinuationPrompt(r, owner, 1, { seen: ["seen-message"], staticDigest: null });
+  const sections = [...turn.prompt.matchAll(/<conversation>\n([^]*?)\n<\/conversation>/g)].map(match => JSON.parse(match[1]!));
+  expect(sections.flat().map((message: { id: string }) => message.id)).toEqual(["new-message", "recovered-message"]);
+  expect(turn.seen).toEqual(["seen-message", "new-message", "recovered-message"]);
+});
+
 test("final answer redacts before truncation, keeps sentinels and counts Unicode code points", () => {
   const r = request(); const owner = instruction();
   expect(ownerAnswer(" answer ", r, owner)).toEqual({ action: "reply", text: "answer", reply_to: "m1" });
@@ -501,9 +521,60 @@ test("continuation observation waits for an assistant after the delivered user",
       { timestamp: at, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "new request" }] } } ];
     fs.writeFileSync(transcript, records.map(r => JSON.stringify(r)).join("\n") + "\n");
     expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "running" });
+    fs.appendFileSync(transcript, JSON.stringify({ timestamp: "2026-10-17T12:00:00.500Z", payload: { type: "tool_output", message: "x".repeat(200_000) } }) + "\n");
     fs.appendFileSync(transcript, JSON.stringify({ timestamp: "2026-10-17T12:00:01Z", payload: { type: "agent_message", message: "New answer" } }) + "\n");
     expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "ended", finalText: "New answer" });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Claude continuation observation retains a delivered turn across large tool output", async () => {
+  const { observeOwnerContinuation } = await import("./ownerRun");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-claude-continuation-"));
+  const transcript = path.join(root, "transcript.jsonl"); const id = "conversation_claude";
+  const at = "2026-10-17T12:00:00Z";
+  const registry = { conversation: () => ({ id, engine: "claude", generations: [{ path: transcript }] }) } as unknown as AgentRegistry;
+  const sources = { registry: () => registry, liveness: async () => [{ reason: "host_alive_turn_idle", lastRecordAt: "2026-10-17T12:00:02Z" }],
+    now: () => Date.parse("2026-10-17T12:00:03Z") } as unknown as Pick<SeatTickSources, "registry" | "liveness" | "now">;
+  const turn = { clientAttemptId: "relay-owner-claude-fixture", conversationId: id, claimedAt: at,
+    continuation: { operationId: "relay-owner-claude-fixture" } };
+  const receipt = async () => ({ state: "delivered", acceptedAt: at, settledAt: at, conversationId: id });
+  try {
+    const rows = [
+      { type: "user", timestamp: at, message: { content: [{ type: "text", text: "new request" }] } },
+      { type: "assistant", timestamp: at, message: { content: [{ type: "tool_use", name: "read_file" }] } },
+      { type: "user", timestamp: at, message: { content: [{ type: "tool_result", content: "x".repeat(200_000) }] } },
+      { type: "assistant", timestamp: "2026-10-17T12:00:01Z", message: { content: [{ type: "text", text: "New Claude answer" }] } },
+    ];
+    fs.writeFileSync(transcript, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+    expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "ended", finalText: "New Claude answer" });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("queued owner continuation authority is bound to its durable operation and conversation", async () => {
+  const { ownerRelayOperationAuthorized } = await import("./ownerAuthority");
+  const { procBackend } = await import("@/lib/proc");
+  const { writeRelayFile } = await import("./store");
+  const previous = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-operation-authority-"));
+  process.env.LLV_STATE_DIR = root;
+  const requestId = "operation-authority-fixture";
+  const operationId = `relay-owner-${requestId}`;
+  try {
+    writeRelayFile(externalRelayFile("relays"), { v: 1, relays: [{ id: "relay-fixture", paused: false,
+      targets: [{ id: "target-fixture", enabled: true, ownerTier: true }] }] });
+    reserveRun({ requestId, leaseId: "lease-fixture", relayId: "relay-fixture", targetId: "target-fixture",
+      childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid)!,
+      runDir: root, startedAt: new Date().toISOString(), conversationId: "conversation_pinned",
+      ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, continuation: { operationId } } });
+    expect(ownerRelayOperationAuthorized(operationId, "conversation_pinned")).toBe(true);
+    expect(ownerRelayOperationAuthorized(operationId, "conversation_other")).toBe(false);
+    writeRelayFile(externalRelayFile("relays"), { v: 1, relays: [{ id: "relay-fixture", paused: false,
+      targets: [{ id: "target-fixture", enabled: true, ownerTier: false }] }] });
+    expect(ownerRelayOperationAuthorized(operationId, "conversation_pinned")).toBe(false);
+  } finally {
+    dropRun(requestId); fs.rmSync(root, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
 });
 
 

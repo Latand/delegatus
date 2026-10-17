@@ -1,7 +1,7 @@
 import { seatRecipientVerdict, seatRecipientVerdictAsync, SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
-import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
+import { ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import crypto from "node:crypto";
 import path from "node:path";
 
@@ -1100,6 +1100,11 @@ function heldDrainProgress(
 }
 
 function ownerFirstPromptAllowed(registry: AgentRegistry, operationId: string): boolean {
+  if (operationId.startsWith("relay-owner-")) {
+    const snapshot = registry.readOnlySnapshot();
+    const conversationId = Object.values(snapshot.heldDeliveries).find(row => row.command.operationId === operationId)?.conversationId;
+    return !!conversationId && ownerRelayOperationAuthorized(operationId, conversationId);
+  }
   if (!operationId.startsWith("spawn_message_")) return true;
   const receipt = registry.readOnlySnapshot().receipts[operationId.slice("spawn_message_".length)];
   return ownerRelaySpawnAuthorized(receipt?.clientAttemptId);
