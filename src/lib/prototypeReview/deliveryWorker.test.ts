@@ -11,6 +11,7 @@ import { PROTOTYPE_DELIVERY_ATTENTION_MS, prototypeDeliveryPhase, prototypeRevie
 import { isPrototypeReplica } from "./replica";
 import { withPrototypeReviewSummaries } from "./read";
 import { prototypeWorld, type PrototypeWorld } from "./world";
+import { clearSeatRoundsForTests, insertSeatRound } from "./seatRounds";
 import type { PrototypeDecision, PrototypeReviewRead } from "./types";
 
 import { criticLane } from "./criticGate.fixture";
@@ -391,4 +392,47 @@ test("poll recovery rotates across rounds whose poll locks remain owned", async 
   } finally { service.mockRestore(); }
   expect(seen.length).toBeLessThanOrEqual(48);
   expect(seen).toContain(rounds[16]!.id);
+});
+
+test("post and poll recovery cursors finish each bounded task page before advancing", async () => {
+  const tasks = Array.from({ length: 32 }, (_, taskIndex) => {
+    const rounds = Array.from({ length: 4 }, (_, roundIndex) => {
+      const n = taskIndex * 4 + roundIndex + 1;
+      const id = `pr_${n.toString(16).padStart(32, "0")}`;
+      return { id, taskId: `task-${String(taskIndex).padStart(2, "0")}`, project: "project-a", title: `Round ${n}`,
+        createdAt: "2026-10-01T00:00:00Z", publicationKey: id, inputDigest: "fixture", source: { conversationId: null }, variants: [],
+        questions: roundIndex >= 2 ? [{ id: "question", text: "Choose?", options: [{ label: "Yes" }] }] : undefined,
+        telegramPost: { key: id, state: roundIndex < 2 ? "pending" as const : "sent" as const, at: "2026-10-01T00:00:00Z" },
+        ...(roundIndex >= 2 ? { telegramPolls: { key: id, questions: [{ questionId: "question", state: "pending" as const }] } } : {}) };
+    });
+    return { ...task(), id: `task-${String(taskIndex).padStart(2, "0")}`, prototypeReviews: rounds };
+  });
+  saveTasks(tasks);
+  const seatRounds = Array.from({ length: 40 }, (_, index) => {
+    const n = 1000 + index;
+    const id = `pr_${n.toString(16).padStart(32, "0")}`;
+    return { id, taskId: null, project: "project-a", title: `Seat round ${n}`, createdAt: "2026-10-01T00:00:00Z",
+      publicationKey: id, inputDigest: "fixture", source: { conversationId: null }, variants: [],
+      ...(index >= 20 ? { questions: [{ id: "question", text: "Choose?", options: [{ label: "Yes" }] }] } : {}),
+      telegramPost: { key: id, state: index < 20 ? "pending" as const : "sent" as const, at: "2026-10-01T00:00:00Z" },
+      ...(index >= 20 ? { telegramPolls: { key: id, questions: [{ questionId: "question", state: "pending" as const }] } } : {}) };
+  });
+  for (const round of seatRounds) insertSeatRound(round);
+  const posted: string[] = [];
+  const polled: string[] = [];
+  const post = spyOn(telegramPost, "postPrototypeReviewToTelegram").mockImplementation(async round => { posted.push(round.id); throw new Error("post lock is held"); });
+  const service = spyOn(telegramService, "telegramBotService").mockReturnValue({
+    hasReviewPollWork: (id: string) => { polled.push(id); return true; },
+  } as unknown as ReturnType<typeof telegramService.telegramBotService>);
+  try {
+    for (let pass = 0; pass < 24; pass++) {
+      try {
+        await sweepPrototypeDeliveries({ now: () => Date.parse("2026-10-02T00:00:00Z"), delivery: { recover: async () => null,
+          send: async () => ({ state: "sent" as const }), retry: async () => ({ state: "sent" as const }) },
+          world: { ...prototypeWorld, orchestrator: () => null } }, { force: true, limit: 16 });
+      } catch { /* The post lock refusal is the behavior under test. */ }
+    }
+  } finally { post.mockRestore(); service.mockRestore(); clearSeatRoundsForTests(); }
+  expect(new Set(posted).size).toBe(84);
+  expect(new Set(polled).size).toBe(84);
 });

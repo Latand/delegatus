@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
+import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { deleteTask, patchTask, createTask } from "@/lib/tasks/commands";
 import { loadTasks, loadTasksFile, mutateTasksFile, mutateTasks, mutateLinkedTasks, taskFeedSource, mutateTaskPrototypeRound } from "@/lib/tasks/store";
 import { BOARD_TASKS_PER_PROJECT_LIMIT } from "@/lib/tasks/commands";
@@ -243,11 +244,20 @@ test("a linked prototype semantic write stamps one row with the indexed project 
   expect(taskFingerprints).toBeLessThanOrEqual(4);
   expect(find(file, "linked-0000")!.sync!.s.text).toBe("9999999999000.001." + installPrefix(SELF));
   const database = new Database(db);
-  const plan = database.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN SELECT MAX(json_extract(value_json,'$.sync.s.text'))
-    FROM state_rows INDEXED BY state_rows_task_project WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?`).all(key)
+  const stampedPlan = database.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN SELECT json_extract(value_json,'$.sync.s.text')
+    FROM state_rows INDEXED BY state_rows_task_stamp_text WHERE collection='tasks' AND json_valid(value_json)
+      AND json_extract(value_json,'$.project')=? AND json_type(value_json,'$.sync.s.text')='text'
+    ORDER BY json_extract(value_json,'$.sync.s.text') DESC LIMIT 1`).all(key).map(row => row.detail).join(" ");
+  const legacyPlan = database.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN SELECT round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000)
+    FROM state_rows INDEXED BY state_rows_task_legacy_stamp WHERE collection='tasks' AND json_valid(value_json)
+      AND json_extract(value_json,'$.project')=? AND json_type(value_json,'$.sync.s.text') IS NULL
+    ORDER BY round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000) DESC LIMIT 1`).all(key)
     .map(row => row.detail).join(" ");
   database.close();
-  expect(plan).toContain("state_rows_task_project");
+  expect(stampedPlan).toContain("state_rows_task_stamp_text");
+  expect(stampedPlan).not.toContain("TEMP B-TREE");
+  expect(legacyPlan).toContain("state_rows_task_legacy_stamp");
+  expect(legacyPlan).not.toContain("TEMP B-TREE");
 });
 
 test("deleting a linked task writes its tombstone and the project floor in the same commit; a refused write writes neither", () => {
@@ -644,4 +654,31 @@ test("a bounded prototype write retains linked watermarks, no-op revisions and p
   const bookkeeping = find(file, task.id)!;
   expect(bookkeeping.sync!.s).toEqual(changed.sync!.s);
   expect(find(file, peer.id)).toEqual(peer);
+});
+
+test("linked prototype stamps include aliased peer rows and preserve exact legacy milliseconds", () => {
+  setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+  const { file, db } = linkedInstall();
+  const task = create(file, "Prototype task");
+  const peer = create(file, "Legacy peer");
+  const round: PrototypeReviewRound = { id: `pr_${"d".repeat(32)}`, taskId: task.id, project: key, title: "Before",
+    createdAt: "2026-10-01T00:00:00.000Z", source: { conversationId: null }, publicationKey: "alias-watermark", inputDigest: "fixture", variants: [] };
+  mutateTasks(tasks => { tasks.find(t => t.id === task.id)!.prototypeReviews = [round]; return { tasks, result: undefined }; }, file);
+  const database = new Database(db);
+  const legacy = { id: peer.id, project: "old-project", machine: PEER, text: "Legacy peer", status: "inbox", placement: "unplaced",
+    assignments: [], createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.004Z" };
+  database.query("UPDATE state_rows SET value_json=? WHERE collection='tasks' AND row_key=?").run(JSON.stringify(legacy), `t:${peer.id}`);
+  database.close();
+  try {
+    expect(persistProjectAliases([
+      { source: "old-project", target: "middle-project", displayName: "Widget" },
+      { source: "middle-project", target: key, displayName: "Widget" },
+    ])).toBe(true);
+    mutateTaskPrototypeRound(task.id, round.id, held => { held!.title = "After"; }, file);
+    expect(find(file, task.id)!.sync!.s.text).toBe("1790812800004.001." + installPrefix(SELF));
+    const peerDatabase = new Database(db);
+    const unchanged = peerDatabase.query<{ value_json: string }, [string]>("SELECT value_json FROM state_rows WHERE collection='tasks' AND row_key=?").get(`t:${peer.id}`)!;
+    peerDatabase.close();
+    expect(JSON.parse(unchanged.value_json)).toEqual(legacy);
+  } finally { resetProjectAliasesForTests(); }
 });

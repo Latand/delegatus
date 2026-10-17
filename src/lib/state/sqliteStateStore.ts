@@ -412,6 +412,18 @@ function openRawDatabase(filename: string): Database {
         db.exec(`CREATE INDEX IF NOT EXISTS state_rows_task_project
             ON state_rows(json_extract(value_json,'$.project'), row_key)
             WHERE collection='tasks' AND json_valid(value_json)`);
+        for (const field of ["text", "status", "look", "place", "links", "machine", "handover"] as const) {
+          db.exec(`CREATE INDEX IF NOT EXISTS state_rows_task_stamp_${field}
+              ON state_rows(json_extract(value_json,'$.project'), json_extract(value_json,'$.sync.s.${field}') DESC)
+              WHERE collection='tasks' AND json_valid(value_json) AND json_type(value_json,'$.sync.s.${field}')='text'`);
+        }
+        db.exec(`CREATE INDEX IF NOT EXISTS state_rows_task_legacy_stamp
+            ON state_rows(json_extract(value_json,'$.project'), round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000) DESC)
+            WHERE collection='tasks' AND json_valid(value_json)
+              AND (json_type(value_json,'$.sync.s.text') IS NULL OR json_type(value_json,'$.sync.s.status') IS NULL
+                OR json_type(value_json,'$.sync.s.look') IS NULL OR json_type(value_json,'$.sync.s.place') IS NULL
+                OR json_type(value_json,'$.sync.s.links') IS NULL OR json_type(value_json,'$.sync.s.machine') IS NULL
+                OR json_type(value_json,'$.sync.s.handover') IS NULL)`);
         db.exec(`CREATE INDEX IF NOT EXISTS state_rows_controller_active
             ON state_rows(collection, controller_active, row_order)`);
         db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS pipeline_delivery_owner
@@ -1482,20 +1494,40 @@ export class SqliteStateCollection<T> {
     });
   }
 
-  /** Project-scoped replica watermark without materializing task rows. The
-      partial expression index excludes every other state collection/project. */
-  maxTaskProjectStamp(project: string, prefix: string): string | null {
+  /** Project-scoped replica watermark from indexed group maxima, without
+      materializing or aggregating task rows. */
+  maxTaskProjectStamp(projects: readonly string[], prefix: string): string | null {
     const fields = ["text", "status", "look", "place", "links", "machine", "handover"] as const;
-    const ms = "CAST(MAX(0, MIN(9999999999999, COALESCE(CAST((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000 AS INTEGER),0))) AS INTEGER)";
-    const fallback = `printf('%013d.000.%s',${ms},?)`;
-    const effective = fields.map(field => `COALESCE(json_extract(value_json,'$.sync.s.${field}'),${fallback})`);
-    const rowStamp = `max(${effective.join(",")})`;
-    const row = this.readDb.query<{ stamp: string | null }, string[]>(`
-      SELECT MAX(${rowStamp}) AS stamp FROM state_rows
-      INDEXED BY state_rows_task_project
-      WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
-    `).get(...effective.map(() => prefix), project);
-    return row?.stamp ?? null;
+    if (!projects.length) return null;
+    let newest: string | null = null;
+    for (const project of new Set(projects)) {
+      for (const field of fields) {
+        const stamp = this.readDb.query<{ stamp: string }, [string]>(`
+          SELECT json_extract(value_json,'$.sync.s.${field}') AS stamp FROM state_rows
+          INDEXED BY state_rows_task_stamp_${field}
+          WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
+            AND json_type(value_json,'$.sync.s.${field}')='text'
+          ORDER BY json_extract(value_json,'$.sync.s.${field}') DESC LIMIT 1
+        `).get(project)?.stamp;
+        if (stamp && (!newest || stamp > newest)) newest = stamp;
+      }
+      const ms = this.readDb.query<{ ms: number }, [string]>(`
+        SELECT round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000) AS ms FROM state_rows
+        INDEXED BY state_rows_task_legacy_stamp
+        WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
+          AND (json_type(value_json,'$.sync.s.text') IS NULL OR json_type(value_json,'$.sync.s.status') IS NULL
+            OR json_type(value_json,'$.sync.s.look') IS NULL OR json_type(value_json,'$.sync.s.place') IS NULL
+            OR json_type(value_json,'$.sync.s.links') IS NULL OR json_type(value_json,'$.sync.s.machine') IS NULL
+            OR json_type(value_json,'$.sync.s.handover') IS NULL)
+        ORDER BY round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000) DESC LIMIT 1
+      `).get(project)?.ms;
+      if (ms !== undefined && Number.isFinite(ms)) {
+        const bounded = Math.max(0, Math.min(9_999_999_999_999, ms));
+        const fallback = `${String(bounded).padStart(13, "0")}.000.${prefix}`;
+        if (!newest || fallback > newest) newest = fallback;
+      }
+    }
+    return newest;
   }
 
   /** A bounded read/modify/write transaction. No collection materialization.

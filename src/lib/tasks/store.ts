@@ -616,9 +616,13 @@ function taskSyncWrite(filePath: string): { write: TaskSyncWrite; companion: Non
   const puts = new Map<string, TombstoneRow>();
   const removed = new Set<string>();
   const preservedStamps = new Set<string>();
+  const aliases = projectAliasSnapshot().aliases;
   const write: TaskSyncWrite = {
     linked: context.all, self: context.self, now: Date.now,
-    projectWatermark: project => openTaskCollection(legacyDatabasePath(filePath)).maxTaskProjectStamp(project, context.self!.prefix),
+    projectWatermark: project => {
+      const projects = [project, ...Object.keys(aliases).filter(alias => canonicalProject(alias) === project)];
+      return openTaskCollection(legacyDatabasePath(filePath)).maxTaskProjectStamp(projects, context.self!.prefix);
+    },
     read: (key) => puts.get(key) ?? (removed.has(key) ? null : companion.get(key)),
     put: (row) => { const key = tombstoneRowKey(row); puts.set(key, row); removed.delete(key); },
     remove: (key) => { puts.delete(key); removed.add(key); },
