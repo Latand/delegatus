@@ -42,7 +42,7 @@ export async function callTaskChannel(channel: TaskChannel, body: string, capabi
   const identity = { ...channel.identity };
   const bytes = Buffer.byteLength(body);
   const metadata: TaskChannelRequest = { nonce: channel.nonce, capability, deadlineAt, bytes,
-    headers: [...headers].filter(([name]) => ["accept", "content-type", "mcp-protocol-version", "mcp-session-id"].includes(name)) };
+    headers: [...headers].filter(([name]) => ["accept", "content-type", "mcp-protocol-version", "mcp-session-id", "user-agent"].includes(name)) };
   const header = JSON.stringify(metadata);
   if (Buffer.byteLength(header) > TASK_CHANNEL_METADATA_BYTES || bytes + Buffer.byteLength(header) + 2 > TASK_CHANNEL_INPUT_BYTES) throw new Error("task channel input exceeds its bound");
   return new Promise<Response>((resolve, reject) => {

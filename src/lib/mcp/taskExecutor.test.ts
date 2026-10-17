@@ -112,6 +112,27 @@ test.skipIf(process.platform !== "linux")("the real task channel preserves comma
   expect((await privateCall(channel, "unknown_private_tool", {})).status).toBe(403);
 });
 
+for (const engine of ["codex-mcp-client", "claude-code"]) test.skipIf(process.platform !== "linux")(`${engine} private channel returns JSON once across worker restart`, async () => {
+  for (let generation = 0; generation < 2; generation++) {
+    const executor = create();
+    try {
+      const channel = await privateChannel(executor);
+      for (const invalid of [false, true]) {
+        const name = invalid ? "create_task" : "get_task";
+        const args = invalid ? { clientRequestId: `format-invalid-${engine}`, project: "fixture", text: "Inspect the transport", details: 42 } : { taskId: seedTaskId };
+        const response = await callTaskChannel(channel, JSON.stringify({ jsonrpc: "2.0", id: "format-fixture", method: "tools/call", params: { name, arguments: args } }), capability,
+          new Headers({ accept: "application/json, text/event-stream", "content-type": "application/json", "user-agent": `${engine}/fixture` }), Date.now() + 30_000, new AbortController().signal);
+        expect(response.status).toBe(200);
+        const wire = await response.json() as { result: { content: Array<{ type: string; text: string }>; structuredContent?: unknown; isError?: boolean } };
+        expect(wire.result.structuredContent).toBeUndefined();
+        expect(wire.result.content).toHaveLength(1);
+        expect(JSON.parse(wire.result.content[0].text)).toMatchObject(invalid ? { ok: false, code: "TASK_INVALID_FIELD" } : { ok: true, toolName: "get_task" });
+        expect(wire.result.isError === true).toBe(invalid);
+      }
+    } finally { await executor.close(); }
+  }
+});
+
 test.skipIf(process.platform !== "linux")("private receipt replay observes external capability rotation and worker replacement", async () => {
   const executor = create({ LLV_TOKEN: "fixture-perimeter-key", PORT: "" });
   const token = capabilities[5]!;
