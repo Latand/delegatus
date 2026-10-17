@@ -213,9 +213,10 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.answers.open": "Останні відповіді",
 
   "relayChats.heading": "Чати ретранслятора",
-  "relayChats.hint": "Що ця інсталяція відповіла через ретранслятор: розмова кожного чату й кожна разова відповідь. Лише для читання: пише в них тільки ретранслятор.",
+  "relayChats.hint": "Що ця інсталяція відповіла через ретранслятор: розмова кожного ланцюжка відповідей й кожна разова відповідь. Лише для читання: пише в них тільки ретранслятор.",
   "relayChats.chat": "Чат {chat}",
-  "relayChats.context.member": "учасники",
+  "relayChats.context.member": "учасник",
+  "relayChats.context.admin": "адміністратор",
   "relayChats.context.owner": "власник",
   "relayChats.empty": "Тут ще нічого не відповіли. Разова відповідь з'являється тут на {days} днів, розмова чату після її першого ходу, коли розмови за чатами ввімкнено.",
   "relayChats.readOnly": "Лише читання",

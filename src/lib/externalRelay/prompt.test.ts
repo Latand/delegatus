@@ -94,3 +94,36 @@ test("action retry guidance accounts for post-execution denials", () => {
   expect(prompt).not.toContain("unless its result was error or denied");
   expect(prompt).toContain("An action denial may hide a completed effect: finish without further calls.");
 });
+
+
+test("owner continuation sends unseen data and refreshes changed instructions", async () => {
+  const { ownerContinuationPrompt, ownerRunPrompt } = await import("./ownerRun");
+  const request = requestSchema.parse(await Bun.file(`${import.meta.dir}/fixtures/service-wire/claimed_rc_owner.json`).json().then(value => value.request));
+  const owner = { messageId: request.input.respond_to!, text: "Continue fixture", requestText: null };
+  const record = { seen: [], staticDigest: null } as unknown as import("./conversations").RelayConversation;
+  const first = ownerContinuationPrompt(request, owner, 1, record);
+  const next = { ...record, seen: first.seen, staticDigest: first.digest };
+  const continued = ownerContinuationPrompt(request, owner, 1, next);
+  expect(continued.prompt).not.toContain("<service_instructions>");
+  expect(continued.prompt).not.toContain("[You work for the owner");
+  expect(continued.prompt).toContain("<owner_request>");
+  expect(Buffer.byteLength(continued.prompt)).toBeLessThan(Buffer.byteLength(ownerRunPrompt(request, owner, 1)) / 10);
+  request.input.tools = [];
+  expect(ownerContinuationPrompt(request, owner, 1, next).prompt).toContain("<service_instructions>");
+  expect(ownerContinuationPrompt(request, owner, 1, record).prompt).toContain("<service_instructions>");
+});
+
+
+test("owner continuation carries an unseen explicit reply alongside local outbound context", async () => {
+  const { ownerContinuationPrompt } = await import("./ownerRun");
+  const request = requestSchema.parse(contextRequest);
+  request.input.conversation[0]!.reply_to = "unseen-parent";
+  request.input.conversation.unshift({ ...request.input.conversation[0]!, id: "unseen-parent", text: "Explicit fixture context", reply_to: null,
+    author: { key: "fixture-bot", name: "Assistant", self: true } });
+  const owner = { messageId: request.input.respond_to!, text: "Continue fixture", requestText: null,
+    localContext: { resolution: "explicit_parent" as const, questionIds: [], origins: {}, conversation: [] } };
+  const first = ownerContinuationPrompt(request, owner, 1, { seen: [], staticDigest: null });
+  const prompt = ownerContinuationPrompt(request, owner, 1, { seen: [], staticDigest: first.digest }).prompt;
+  expect(prompt).toContain("<local_outbound_context>"); expect(prompt).toContain("<owner_reply_context>");
+  expect(ownerContinuationPrompt(request, owner, 1, { seen: ["unseen-parent"], staticDigest: first.digest }).prompt).not.toContain("<owner_reply_context>");
+});

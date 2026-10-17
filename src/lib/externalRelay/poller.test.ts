@@ -971,3 +971,15 @@ test("a claim already waiting when drain begins is held until its busy bound wit
     expect(slots[1]).toEqual([{ target_id: "target_1", free: 0 }]);
   } finally { accountManager.resolveHeadlessSpawn = resolve; release(); stopExternalRelayPollers(); releaseDrain(drainFile(), "claim-wait"); updateRelayStore(store => ({ ...store, relays: originalRelays })); await server.close(); }
 });
+
+
+test("chain and legacy local switches never advertise an unagreed wire feature", () => {
+  const file = path.join(root, "external-relay/switches.json");
+  const previous = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ v: 1, chat_conversations: true, chain_conversations: true, compact: true }));
+    expect(relayClaimCapabilities()).toEqual({ kinds: ["answer", "compact"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"] });
+    setRelaySwitch("compact", false); expect(relayClaimCapabilities().kinds).toEqual(["answer"]);
+  } finally { if (previous) fs.writeFileSync(file, previous); else fs.rmSync(file, { force: true }); }
+});

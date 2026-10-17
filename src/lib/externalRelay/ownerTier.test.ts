@@ -468,3 +468,126 @@ for (const failure of ["write", "read"] as const) test(`owner ${trigger} stops t
     dropRun(requestId);
   }
 });
+
+
+test("continued owner hard cap interrupts the shared host without launching", async () => {
+  const { continueOwnerAgent } = await import("./ownerRun");
+  const stops: string[] = []; let sends = 0;
+  const run = continueOwnerAgent({ request: request(), owner: instruction(), target, accountId: "answer", hardCapMs: 50,
+    conversationId: "conversation_pinned", prompt: "new turn", onConversation: () => {}, ports: {
+      launch: async () => { throw Error("unexpected launch"); },
+      continue: async () => { sends++; return { ok: true, structured: true, target: "conversation_pinned", outcome: "held", operationId: "relay-owner-rq_1" }; },
+      observe: async () => ({ state: "running", firstMessagePending: true }),
+      stop: async (_id, action) => { stops.push(action); }, pollMs: 1,
+    } });
+  expect(await run.done).toMatchObject({ status: "timeout" });
+  expect(sends).toBe(1); expect(stops).toEqual(["interrupt"]);
+});
+
+test("continuation observation waits for an assistant after the delivered user", async () => {
+  const { observeOwnerContinuation } = await import("./ownerRun");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-continuation-"));
+  const transcript = path.join(root, "transcript.jsonl"); const id = "conversation_pinned";
+  const at = "2026-10-17T12:00:00Z";
+  const registry = { conversation: () => ({ id, engine: "codex", generations: [{ path: transcript }] }) } as unknown as AgentRegistry;
+  const sources = { registry: () => registry, liveness: async () => [{ reason: "host_alive_turn_idle", lastRecordAt: "2026-10-17T12:00:02Z" }], now: () => Date.parse("2026-10-17T12:00:03Z") } as unknown as Pick<SeatTickSources, "registry" | "liveness" | "now">;
+  const turn = { clientAttemptId: "relay-owner-fixture", conversationId: id, claimedAt: at, continuation: { operationId: "relay-owner-fixture" } };
+  const receipt = async () => ({ state: "delivered", acceptedAt: at, settledAt: at, conversationId: id });
+  try {
+    expect(await observeOwnerContinuation(turn, sources, async () => null)).toMatchObject({ state: "running", firstMessagePending: true });
+    expect(await observeOwnerContinuation(turn, sources, async () => ({ ...await receipt(), state: "failed" }) as never)).toMatchObject({ state: "failed" });
+    expect(await observeOwnerContinuation(turn, sources, async () => ({ ...await receipt(), conversationId: "conversation_other" }) as never)).toMatchObject({ state: "running", firstMessagePending: true });
+    const records = [ { timestamp: "2026-10-17T11:59:59Z", payload: { type: "agent_message", message: "Old answer" } },
+      { timestamp: at, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "new request" }] } } ];
+    fs.writeFileSync(transcript, records.map(r => JSON.stringify(r)).join("\n") + "\n");
+    expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "running" });
+    fs.appendFileSync(transcript, JSON.stringify({ timestamp: "2026-10-17T12:00:01Z", payload: { type: "agent_message", message: "New answer" } }) + "\n");
+    expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "ended", finalText: "New answer" });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("restart custody for an unadmitted continuation forces interrupt and retires only its operation", async () => {
+  const { settleOwnerContinuation } = await import("./ownerRun");
+  const rows = { own: { id: "own", conversationId: "conversation_pinned", command: { operationId: "own-operation" }, state: "queued", text: "own" },
+    peer: { id: "peer", conversationId: "conversation_pinned", command: { operationId: "peer-operation" }, state: "queued", text: "peer" } };
+  const registry = { conversationDeliverySnapshot: () => ({ heldDeliveries: rows }), deliveryWrite: async (_meta: unknown, action: () => void) => { action(); return { acquired: true }; },
+    terminalizeHeldDelivery: (id: "own" | "peer") => { rows[id].state = "failed"; rows[id].text = ""; } } as unknown as AgentRegistry;
+  const requestId = "continuation-restart-custody";
+  const run = { requestId, relayId: "relay_fixture", targetId: target.id, leaseId: "lease_fixture", conversationId: "conversation_pinned",
+    ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, continuation: { operationId: "own-operation" }, cancel: "kill" as const, admissionComplete: false },
+    ownerPid: process.pid, ownerIdentity: "fixture", childPid: null, childIdentity: null, runDir: "", startedAt: "2026-10-17T12:00:00Z" };
+  reserveRun(run, 1);
+  try {
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { confirmOwnerStop } from "./src/lib/externalRelay/ownerRun";
+      import { readRunLedger } from "./src/lib/externalRelay/store";
+      const stops=[];
+      const run=readRunLedger().runs.find(r=>r.requestId==="continuation-restart-custody");
+      const confirmed=await confirmOwnerStop(run,{ launch:async()=>{throw Error("unexpected launch")},observe:async()=>({state:"running"}),stop:async(_id,action)=>{stops.push(action)} });
+      console.log(JSON.stringify({confirmed,stops}));
+    `], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+    const output = await new Response(child.stdout).text();
+    expect(await child.exited).toBe(0);
+    expect(JSON.parse(output)).toEqual({ confirmed: true, stops: ["interrupt"] });
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn).toMatchObject({ cancel: "interrupt", confirmed: true });
+    expect(await settleOwnerContinuation("own-operation", "conversation_pinned", registry)).toBe(true);
+    expect(rows.own.text).toBe(""); expect(rows.peer).toMatchObject({ state: "queued", text: "peer" });
+  } finally { dropRun(requestId); }
+});
+
+
+test("owner continuation requires its original account and a current transcript before delivery", async () => {
+  const { sendOwnerContinuation } = await import("./ownerRun");
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const delivery = await import("@/lib/runtime/structuredMessageDelivery");
+  const own = createManagedClaudeAccount("Pinned fixture"), peer = createManagedClaudeAccount("Peer fixture");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-account-preflight-")); const transcript = path.join(root, "session.jsonl");
+  fs.writeFileSync(transcript, "fixture");
+  const record = { id: "conversation_pinned", engine: "claude", generations: [{ id: "fixture-session", path: transcript, accountId: own.id }] };
+  const lookup = spyOn(agentRegistry(), "conversation").mockImplementation(() => record as never);
+  let pick: "own" | "peer" | "exhausted" = "own";
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation((_engine, requested, _excluded, _project, _model, unavailable) => {
+    expect(requested).toBe(own.id); expect(unavailable).toContain(peer.id); expect(unavailable).not.toContain(own.id);
+    return pick === "exhausted" ? { kind: "exhausted", resetsAt: null } : { kind: "available", account: { accountId: pick === "own" ? own.id : peer.id } as never };
+  });
+  const dispatch = spyOn(delivery, "enqueueStructuredMessage").mockImplementation(async (request, deps) => {
+    expect(request.clientMessageId).toBe("relay-owner-fixture"); expect(await deps?.idleContinuationAllowed?.()).toBe(true);
+    return { ok: true, structured: true, target: record.id, outcome: "held", operationId: "own-operation" };
+  });
+  const turn = { clientAttemptId: "relay-owner-fixture", conversationId: record.id, claimedAt: "2026-10-17T12:00:00Z", continuation: { operationId: "own-operation" } };
+  const selectedTarget = { ...target, engine: "claude" as const };
+  try {
+    expect(await sendOwnerContinuation(turn, "new turn", selectedTarget, () => {})).toMatchObject({ ok: true });
+    for (const failed of ["peer", "exhausted"] as const) { pick = failed; expect(await sendOwnerContinuation(turn, "new turn", selectedTarget, () => {})).toMatchObject({ ok: false, admission: "refused" }); }
+    lookup.mockReturnValueOnce(null);
+    expect(await sendOwnerContinuation(turn, "new turn", selectedTarget, () => {})).toMatchObject({ ok: false, admission: "refused" });
+    record.engine = "codex";
+    expect(await sendOwnerContinuation(turn, "new turn", selectedTarget, () => {})).toMatchObject({ ok: false, admission: "refused" });
+    record.engine = "claude";
+    fs.rmSync(transcript); expect(await sendOwnerContinuation(turn, "new turn", selectedTarget, () => {})).toMatchObject({ ok: false, admission: "refused" });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    await expect(sendOwnerContinuation(turn, "new turn", selectedTarget, () => { throw Error("revoked"); })).rejects.toThrow("revoked");
+  } finally { lookup.mockRestore(); selection.mockRestore(); dispatch.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("revoking an unadmitted continuation interrupts without killing its pinned host", async () => {
+  const controls = await import("@/lib/conversation/actions");
+  const actions: string[] = [];
+  const control = spyOn(controls, "applyConversationAction").mockImplementation(async (request): Promise<import("@/lib/conversation/actions").ConversationActionResult> => {
+    actions.push(request.action); return { status: 200, body: { ok: true, structured: true, target: request.conversationId, outcome: "delivered" } };
+  });
+  const requestId = "revoked-unadmitted-continuation";
+  reserveRun({ requestId, relayId: "revoked-continuation-relay", targetId: target.id, leaseId: "fixture-lease",
+    conversationId: "conversation_pinned", ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
+      continuation: { operationId: "revoked-own-operation" }, admissionComplete: false },
+    ownerPid: process.pid, ownerIdentity: "fixture", childPid: null, childIdentity: null, runDir: "",
+    startedAt: "2026-10-17T10:00:00Z" }, 1);
+  try {
+    await revokeOwnerRuns("revoked-continuation-relay");
+    expect(readRunLedger().runs.find(row => row.requestId === requestId)?.ownerTurn).toMatchObject({ cancel: "interrupt", confirmed: true });
+    expect(actions).not.toContain("kill");
+  } finally { control.mockRestore(); dropRun(requestId); }
+});
