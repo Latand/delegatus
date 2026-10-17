@@ -2582,24 +2582,26 @@ export class SqliteAgentRegistryStore {
 
   /** The callback must finish inside the transaction; no lazy object escapes. */
   private matchingRowKeys(collection: RowCollection, field: LookupField, values: readonly string[]): string[] {
-    const placeholders = values.map(() => "?").join(",");
+    const distinct = [...new Set(values)];
+    if (!distinct.length) return [];
     const jsonPath = LOOKUP_PATHS[field];
-    if (this.changesReady && (collection === "receipts" || collection === "entries" && field === "structuredHost.kind")
+    const mapped = this.changesReady && (collection === "receipts" || collection === "entries" && field === "structuredHost.kind")
       && this.db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='registry_records'")
-        .get()?.sql.includes("a.collection=c.collection AND a.row_key=c.row_key")) {
-      // The compound view cannot prove the partial index's collection
-      // predicate through its identity join. Start at the collection index, then
-      // validate the exact currently mapped archive version by primary key.
-      return this.db.query<{ row_key: string }, string[]>(`SELECT row_key,row_order FROM registry_hot_rows
-        WHERE collection='${collection}' AND json_extract(value_json,'${jsonPath}') IN (${placeholders})
-        UNION ALL SELECT a.row_key,a.row_order FROM registry_archive a CROSS JOIN registry_cold c
-        WHERE a.collection='${collection}' AND json_extract(a.value_json,'${jsonPath}') IN (${placeholders})
-          AND c.collection=a.collection AND c.row_key=a.row_key AND c.archive_id=a.id
-        ORDER BY row_order`).all(...values, ...values).map(row => row.row_key);
-    }
-    return this.db.query<{ row_key: string }, string[]>(`SELECT row_key FROM ${this.recordsSource}
-      WHERE collection=? AND json_extract(value_json,'${jsonPath}') IN (${placeholders}) ORDER BY row_order`)
-      .all(collection, ...values).map(row => row.row_key);
+        .get()?.sql.includes("a.collection=c.collection AND a.row_key=c.row_key");
+    // With multiple IN bindings plus ORDER BY, SQLite can prefer collection
+    // order and inspect every retained payload. Each distinct value gets one
+    // field-index seek; merge only its matches in the original collection order.
+    const rows = distinct.flatMap(value => mapped
+      ? this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM registry_hot_rows
+          WHERE collection='${collection}' AND json_extract(value_json,'${jsonPath}') IN (?)
+          UNION ALL SELECT a.row_key,a.row_order FROM registry_archive a CROSS JOIN registry_cold c
+          WHERE a.collection='${collection}' AND json_extract(a.value_json,'${jsonPath}') IN (?)
+            AND c.collection=a.collection AND c.row_key=a.row_key AND c.archive_id=a.id
+          ORDER BY row_order`).all(value, value)
+      : this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM ${this.recordsSource}
+          WHERE collection=? AND json_extract(value_json,'${jsonPath}') IN (?) ORDER BY row_order`)
+        .all(collection, value));
+    return rows.sort((a, b) => a.row_order - b.row_order).map(row => row.row_key);
   }
 
   /** Diagnostic attribution needs one client id, including a conserving

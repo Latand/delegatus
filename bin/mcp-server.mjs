@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 
 import { appDirIn } from "./appDir.mjs";
+import { mcpProcessIdentity, watchMcpOwner } from "./mcp-lifetime.mjs";
 import {
   cliRuntimeHostConfig,
   discardUnsupportedApiCredentials,
@@ -211,6 +212,7 @@ function stopChild(current, signal = null) {
 
 function shutdown(signal = null) {
   closing = true;
+  stopWatchingOwner?.();
   clearInterval(heartbeatTimer);
   if (protocolProbeTimer) clearInterval(protocolProbeTimer);
   if (restartTimer) clearTimeout(restartTimer);
@@ -224,7 +226,8 @@ function transportFailure(result, protocolError) {
   const verdict = result?.structuredContent;
   if (verdict?.ok === false && (verdict.code === "tool_failed" || verdict.code === "outcome_unknown")) {
     const reason = typeof verdict.error === "string" ? verdict.error : "";
-    if (/^Viewer control (?:is unreachable|did not reconnect|dispatch timed out)/.test(reason)
+    if (/^Viewer MCP request (?:failed|refused|returned a malformed)/.test(reason)
+      || /^Viewer control (?:is unreachable|did not reconnect|dispatch timed out)/.test(reason)
       || (verdict.code === "outcome_unknown" && /(?:connection was refused|connection failed|Viewer did not answer)/.test(reason))) return true;
   }
   const text = [protocolError?.message, ...(Array.isArray(result?.content) ? result.content.map((item) => item?.text) : [])]
@@ -318,7 +321,8 @@ function sendInitialization(current) {
 function start(selected) {
   const env = { ...process.env };
   if (selected.revision) env.LLV_HOT_STATE_RELEASE_REVISION = selected.revision;
-  const current = spawn(bunRuntime, [selected.entry], viewerChildProcessOptions({ cwd: selected.root, env, stdio: admissionStdio() }));
+  env.LLV_MCP_PARENT_IDENTITY = mcpProcessIdentity(process.pid) ?? String(process.pid);
+  const current = spawn(bunRuntime, ["--preload", lifetimePreload(selected), selected.entry], viewerChildProcessOptions({ cwd: selected.root, env, stdio: admissionStdio() }));
   const owned = { timer: null };
   ownedChildren.set(current, owned);
   const forget = () => {
@@ -429,14 +433,22 @@ function ensureChild() {
   }
   return null;
 }
+function lifetimePreload(selected) {
+  const current = join(selected.root, "bin", "mcp-lifetime.mjs");
+  return existsSync(current) ? current : join(packageRoot, "bin", "mcp-lifetime.mjs");
+}
+
 if (nativeHookMode) {
   const selected = selectedRuntime();
   const env = { ...process.env };
   if (selected.revision) env.LLV_HOT_STATE_RELEASE_REVISION = selected.revision;
-  const hook = spawn(bunRuntime, [selected.entry, "--native-caller-hook"], viewerChildProcessOptions({ cwd: selected.root, env, stdio: "inherit" }));
+  env.LLV_MCP_PARENT_IDENTITY = mcpProcessIdentity(process.pid) ?? String(process.pid);
+  const hook = spawn(bunRuntime, ["--preload", lifetimePreload(selected), selected.entry, "--native-caller-hook"], viewerChildProcessOptions({ cwd: selected.root, env, stdio: "inherit" }));
   const owned = { timer: null }; ownedChildren.set(hook, owned);
+  const stopWatchingHookOwner = watchMcpOwner(() => stopChild(hook, "SIGTERM"));
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => stopChild(hook, signal));
   const code = await new Promise(resolve => { hook.once("error", () => resolve(1)); hook.once("exit", code => resolve(code ?? 1)); });
+  stopWatchingHookOwner();
   if (owned.timer) clearTimeout(owned.timer); ownedChildren.delete(hook);
   process.exit(code);
 }
@@ -473,6 +485,8 @@ const input = createInterface({ input: process.stdin }).on("line", (line) => {
   shutdown();
 });
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => shutdown(signal));
+let stopWatchingOwner;
+stopWatchingOwner = watchMcpOwner(() => shutdown("SIGTERM"));
 process.on("beforeExit", () => {
   if (!heartbeatPath) return;
   try {

@@ -1,3 +1,4 @@
+import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -301,6 +302,33 @@ test("successor thread methods use the structured fork, resume, read, name, and 
     },
   });
   client.close();
+});
+
+test("account thread resume reads all five memory states on the same client", async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "account-memory-source-")); process.env.LLV_STATE_DIR = root;
+  const configs: Array<{ features: { memories?: boolean } }> = [];
+  const { start } = clientWith((fake, message) => {
+    if (message.method === "initialize") fake.respond(requestId(message), {});
+    else if (message.method === "config/read") fake.respond(requestId(message), { config: { mcp_servers: {} } });
+    else if (message.method === "thread/resume") {
+      configs.push((message.params as { config: typeof configs[number] }).config);
+      fake.respond(requestId(message), { thread: { id: "fixture-thread" } });
+    }
+  });
+  const client = await start({ protocolProfile: "thread-control" });
+  try {
+    for (const state of SOURCE_STATES) {
+      chooseSource(state);
+      await client.resumeThread("fixture-thread", { cwd: root });
+      expect(configs.at(-1)!.features.memories).toBe(sourceTurnsEnginesOff(state) ? false : undefined);
+    }
+    expect(configs[1]).toEqual(configs[0]);
+  } finally {
+    client.close();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("post-dispatch fork protocol failures have an unknown outcome", async () => {

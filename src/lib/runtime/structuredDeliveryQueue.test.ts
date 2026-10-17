@@ -3411,3 +3411,163 @@ for (const kind of ["interrupt", "kill"] as const) test(`a revoked seat can stil
   await queue.drain();
   expect(acted).toBe(1);
 });
+
+
+// Seat inbox: a deterministic host changes turns only when the test releases it.
+function inboxHarness(count = 8, overrides: Partial<StructuredDeliveryQueuePort> = {}) {
+  const inputs: StructuredDeliveryEffect[] = Array.from({ length: count }, (_, i) => ({
+    id: `inbox-effect-${i}`, kind: "runtime.send", eventSeq: i + 1,
+    payload: { kind: "send", operationId: `inbox-${i}`, conversationId: "conversation_inbox",
+      text: `answer ${i}`, policy: i === 6 ? "interrupt-active" : i === 7 ? "queue" : "steer-or-queue",
+      origin: i <= 6 ? { kind: "operator" } : { kind: "agent", role: "seat-tick" } },
+  }));
+  const rows = new Map(inputs.map(e => [e.payload.operationId as string, { status: "queued", revision: 1,
+    admittedAt: `2026-10-17T06:00:${String(e.eventSeq).padStart(2, "0")}.000Z`, reason: null as string | null, turnId: null as string | null }]));
+  const sends: QueueEntry[] = [];
+  const bindings: Array<{ id: string; members: readonly string[] }> = [];
+  let running = true, interrupts = 0;
+  const engine: EngineHost = { ...host(async () => ({ outcome: "rejected", reason: "dead-host" })),
+    supportsSteer: false, supportsQueuedSend: false, sendWaitsForRunningTurn: true,
+    ...{ coalescesQueuedInput: true },
+    health: async () => ({ ...idleState(), ...(running ? { status: "active", activeTurnRef: "incumbent" } : {}) }),
+    send: async (entry, _proof, authorize) => {
+      authorize?.(); sends.push(entry); running = true;
+      return { outcome: "turn-started", turnId: entry.id };
+    },
+    interrupt: async () => { interrupts++; },
+  };
+  const port: StructuredDeliveryQueuePort = {
+    ...{ coalescesConversation: () => true, bindDeliveryBatch: async (id: string, members: readonly string[]) => {
+      bindings.push({ id, members }); return true;
+    } },
+    seatRecipient: () => ({ kind: "open" }),
+    effects: async () => inputs,
+    status: async id => rows.get(id) ?? null,
+    hostClaim: async () => "fixture-owner",
+    transition: async (id, state, details, options) => {
+      const row = rows.get(id)!;
+      if (["delivered", "failed", "uncertain"].includes(row.status)) throw new Error("terminal receipt");
+      if (options?.fromStatuses && !(options.fromStatuses as readonly string[]).includes(row.status)) throw new Error("compare-and-set refused");
+      Object.assign(row, { status: state, revision: row.revision + 1 }, details);
+    },
+    ...overrides,
+  };
+  const queue = new StructuredDeliveryQueue(port, () => engine);
+  return { queue, port, engine, inputs, rows, sends, bindings, idle: () => { running = false; }, interrupts: () => interrupts };
+}
+
+test("seat inbox acceptance: six answers, chat and wake reach one turn without interrupt", async () => {
+  const h = inboxHarness();
+  await h.queue.drain();
+  expect(h.sends).toHaveLength(0);
+  h.idle(); await h.queue.drain();
+  expect(h.sends).toHaveLength(1);
+  expect(h.sends[0]!.parts?.map(p => p.operationId)).toEqual(h.inputs.map(e => String(e.payload.operationId)));
+  expect([...h.rows.values()].map(r => r.status)).toEqual(Array(8).fill("delivered"));
+  expect(new Set([...h.rows.values()].map(r => r.turnId))).toEqual(new Set([h.sends[0]!.id]));
+  expect(h.bindings).toHaveLength(1);
+  expect(h.interrupts()).toBe(0);
+});
+
+test("seat inbox priority preserves ordinary admission order across a forty-message backlog", async () => {
+  const h = inboxHarness(41);
+  const claims: string[] = [], requeues: string[] = [];
+  const transition = h.port.transition;
+  h.port.transition = async (id, status, details, options) => {
+    if (status === "delivering") claims.push(id);
+    if (status === "queued") requeues.push(id);
+    await transition(id, status, details, options);
+  };
+  h.inputs.forEach((e, i) => Object.assign(e.payload, { text: i === 40 ? "c".repeat(80) : String(i).padStart(3, "0") + "o".repeat(14997),
+    policy: i === 40 ? "interrupt-active" : "queue", origin: i === 40 ? { kind: "operator" } : { kind: "agent" },
+    ...(i === 40 ? { runtime: { model: "claude-opus-4-7" } } : {}) }));
+  h.idle(); await h.queue.drain();
+  expect(claims).toHaveLength(3);
+  expect(requeues).toEqual([]);
+  expect([...h.rows.entries()].filter(([, row]) => row.status === "queued").map(([id]) => id))
+    .toEqual(h.inputs.slice(2, 40).map(e => String(e.payload.operationId)));
+  for (let i = 1; i < 21; i++) { h.idle(); await h.queue.drain(); }
+  expect(h.sends).toHaveLength(20);
+  expect(h.sends[0]!.parts?.map(p => p.operationId)).toEqual(["inbox-0", "inbox-1", "inbox-40"]);
+  expect(h.sends[0]!.runtime).toEqual({ model: "claude-opus-4-7" });
+  expect(h.sends[0]!.content!.text).toContain("38 older messages are held for your next turn.");
+  const ordinary = h.sends.flatMap(e => e.parts?.map(p => p.operationId) ?? [e.id]).filter(id => id !== "inbox-40");
+  expect(ordinary).toEqual(h.inputs.slice(0, 40).map(e => String(e.payload.operationId)));
+  expect([...h.rows.values()].every(r => r.status === "delivered")).toBe(true);
+});
+
+test("seat inbox overflow notice counts only older ordinary members still eligible after a lost claim", async () => {
+  const h = inboxHarness(41);
+  h.inputs.forEach((e, i) => Object.assign(e.payload, { text: i === 40 ? "chat" : String(i).padStart(3, "0") + "o".repeat(14997),
+    policy: i === 40 ? "interrupt-active" : "queue", origin: i === 40 ? { kind: "operator" } : { kind: "agent" } }));
+  const transition = h.port.transition;
+  h.port.transition = async (...args) => args[0] === "inbox-0" && args[1] === "delivering"
+    ? (h.rows.get("inbox-0")!.status = "failed", Promise.reject(new Error("compare-and-set lost")))
+    : transition(...args);
+  h.idle(); await h.queue.drain();
+  expect(h.sends[0]!.parts?.map(part => part.operationId)).toEqual(["inbox-1", "inbox-40"]);
+  expect(h.sends[0]!.content!.text).toContain("38 older messages are held for your next turn.");
+});
+
+for (const reason of ["stale-turn", "dead-host"] as const) test(`seat inbox ${reason} returns every member to queued`, async () => {
+  const h = inboxHarness(3); h.idle();
+  h.engine.send = async entry => { h.sends.push(entry); return { outcome: "rejected", reason }; };
+  await h.queue.drain();
+  expect(h.sends[0]!.parts).toHaveLength(3);
+  expect([...h.rows.values()].map(r => r.status)).toEqual(Array(3).fill("queued"));
+});
+
+test("seat inbox unknown write terminalizes every member and never resends", async () => {
+  const h = inboxHarness(3); h.idle();
+  h.engine.send = async entry => { h.sends.push(entry); throw new Error("lost acknowledgement after write"); };
+  await h.queue.drain(); await h.queue.drain();
+  expect(h.sends).toHaveLength(1);
+  expect([...h.rows.values()].map(r => r.status)).toEqual(Array(3).fill("uncertain"));
+});
+
+test("seat inbox binding refusal sends nothing and releases every delivering member", async () => {
+  const h = inboxHarness(3, { ...{ bindDeliveryBatch: async () => false } }); h.idle();
+  await h.queue.drain();
+  expect(h.sends).toHaveLength(0);
+  expect([...h.rows.values()].map(r => r.status)).toEqual(Array(3).fill("queued"));
+});
+
+test("seat inbox excludes a lost compare-and-set and recomputes membership", async () => {
+  const h = inboxHarness(3); h.idle();
+  const transition = h.port.transition;
+  h.port.transition = async (...args) => args[0] === "inbox-1" && args[1] === "delivering" ? (h.rows.get("inbox-1")!.status = "failed", Promise.reject(new Error("compare-and-set lost"))) : transition(...args);
+  await h.queue.drain();
+  expect(h.sends[0]!.parts?.map(p => p.operationId)).toEqual(["inbox-0", "inbox-2"]);
+  expect(h.rows.get("inbox-1")!.status).toBe("failed");
+});
+
+for (const boundary of ["preparation", "after-binding"] as const) test(`seat inbox per-member authorization refusal at ${boundary} fails only that member before recomposition`, async () => {
+  let bound = false;
+  const attempts: string[] = [];
+  const h = inboxHarness(3, { authorizeDispatch: id => { if (id === "inbox-1" && (boundary === "preparation" || bound)) throw new StructuredSendRefusedError("withdrawn"); },
+    ...{ bindDeliveryBatch: async (id: string) => { attempts.push(id); bound = true; return true; } } }); h.idle();
+  await h.queue.drain();
+  expect(h.sends).toHaveLength(0);
+  expect([...h.rows.values()].map(r => r.status)).toEqual(["queued", "failed", "queued"]);
+  await h.queue.drain();
+  expect(h.sends[0]!.parts?.map(p => p.operationId)).toEqual(["inbox-0", "inbox-2"]);
+  if (boundary === "after-binding") expect(attempts[0]).not.toBe(attempts[1]);
+});
+
+for (const verdict of ["revoked", "unknown"] as const) test(`seat inbox ${verdict} at engine write applies to the entire batch`, async () => {
+  let bound = false;
+  const h = inboxHarness(3, { seatRecipient: () => bound ? { kind: verdict, reason: "seat authority changed" } : { kind: "open" },
+    ...{ bindDeliveryBatch: async () => { bound = true; return true; } } }); h.idle();
+  await h.queue.drain();
+  expect(h.sends).toHaveLength(0);
+  expect([...h.rows.values()].map(r => r.status)).toEqual(Array(3).fill(verdict === "revoked" ? "failed" : "queued"));
+});
+
+for (const enabled of [false, undefined]) test(`seat inbox scope falls back to individual sends when eligibility is ${enabled}`, async () => {
+  const positive = inboxHarness(3); positive.idle(); await positive.queue.drain();
+  expect(positive.sends[0]!.parts).toHaveLength(3);
+  const h = inboxHarness(3, { ...{ coalescesConversation: () => enabled } });
+  for (let i = 0; i < 3; i++) { h.idle(); await h.queue.drain(); }
+  expect(h.sends).toHaveLength(3);
+  expect(h.sends.every(e => !e.parts)).toBe(true);
+});

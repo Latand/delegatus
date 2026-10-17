@@ -24,6 +24,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "workers.machineRunning": "{machine} на машині",
 
   "memory.save.failed": "Не вдалося зберегти перемикач спільної пам’яті. Спробуйте ще раз.",
+  "memory.last.memorySource": "Останній хід оператора: джерело пам’яті інсталяції призупинило добір нотаток Claude і Codex.",
   "memory.last.projectOff": "Останній хід оператора: спільну пам’ять для проєкту було вимкнено.",
   "memory.last.noKey": "Останній хід оператора: ключа OpenRouter не було.",
   "memory.last.notOwner": "Останній хід оператора: ця версія вже не обслуговувала запити.",

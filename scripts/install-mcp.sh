@@ -10,14 +10,14 @@
 # The server name must stay "viewer" (or an isViewerMcpServer() match in
 # src/lib/mcp/presentation.ts) so transcript calls render as Viewer cards.
 #
-# LLV_MCP_TRANSPORT=http REMOVES the viewer registration from the
+# The default (LLV_MCP_TRANSPORT=http) REMOVES the viewer registration from the
 # Viewer-managed Codex accounts. Codex layers a thread's config over
 # config.toml key by key, so whatever an account registers wins over the
 # per-launch choice: a stdio `command` cannot take a `url`, and a `url` cannot
 # be switched back. With nothing registered, the Viewer writes the whole viewer
 # table into each thread itself, over HTTP when that launch carries a
 # capability and can pass LLV_TOKEN, and over stdio otherwise.
-# LLV_MCP_TRANSPORT=stdio (or no flag) registers the stdio launcher again and
+# LLV_MCP_TRANSPORT=stdio registers the stdio launcher again and
 # rewrites a leftover `url` registration back to it. Claude spawns need no
 # registration change: the Viewer writes their whole MCP config itself. The
 # operator's own configs stay stdio, since only a Viewer-launched agent carries
@@ -79,7 +79,7 @@ add_claude() { # $1 = label, $2 = CLAUDE_CONFIG_DIR or "" for the user default
   fi
 }
 
-TRANSPORT="${LLV_MCP_TRANSPORT:-}"
+TRANSPORT="${LLV_MCP_TRANSPORT:-http}"
 
 codex_stdio_block() {
   printf '\n[mcp_servers.viewer]\ncommand = "bun"\nargs = ["%s"]\n' "$MCP_BIN"

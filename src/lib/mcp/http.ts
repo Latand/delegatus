@@ -4,11 +4,16 @@ import type { NextRequest } from "next/server";
 
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { TASK_EXECUTOR_TOOLS, viewerTaskExecutor } from "./taskExecutor";
+import { mcpHttpRefusal as refusal } from "./httpResponse";
 
 import {
   createProductionViewerMcpService,
   createViewerMcpServer,
   MCP_HTTP_CLIENT_ID,
+  MCP_TOOL_NAMES,
+  taskExecutorFailure,
+  type McpToolName,
   type McpToolService,
 } from "./server";
 
@@ -31,9 +36,12 @@ import {
  * per-launch secret the stdio server reads from its inherited environment: the
  * registry holds only its digest, a relaunch rotates it and clears the old one,
  * and it resolves to exactly one conversation. A migration also keeps a pending
- * successor digest valid beside the predecessor's until commit. A request whose capability is
- * missing, malformed, unknown or rotated away is refused before any MCP
- * message is read.
+ * successor digest valid beside the predecessor's until commit. A presented
+ * capability that is malformed, unknown or rotated away is refused before
+ * dispatch. Without one, Linux adapters prove their kernel peer and exact
+ * request body; compatibility adapters authenticate as the MCP service and
+ * retain unidentified authority. The tool policy still resolves native proof
+ * and operator approval before permitting an operation.
  *
  * The capability identifies; it does not admit. Reaching the route at all
  * takes whatever every other Viewer route takes — LLV_TOKEN when one is
@@ -68,12 +76,7 @@ function productionService(): Promise<McpToolService> {
 }
 
 async function productionConversationForCapability(capability: string): Promise<string | null> {
-  const { capabilityConversationResolver } = await import("./bindings");
-  const { agentRegistry } = await import("@/lib/agent/registry");
-  return capabilityConversationResolver(
-    capability,
-    (digest) => agentRegistry().conversationIdForSpawnCapabilityDigest(digest),
-  )();
+  return viewerTaskExecutor().identifyCapability(capability);
 }
 
 const INFLIGHT_KEY = Symbol.for("llv.mcp.httpInflight");
@@ -109,15 +112,6 @@ export function setMcpHttpDependenciesForTests(dependencies: McpHttpDependencies
   testDependencies = dependencies;
 }
 
-/** A JSON-RPC error with no request id, which is what a refusal before any
-    message was read can honestly carry. */
-function refusal(status: number, code: number, message: string, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }), {
-    status,
-    headers: { "content-type": "application/json", "cache-control": "no-store", ...headers },
-  });
-}
-
 /** GET (a standalone server-to-client stream) and DELETE (ending a session)
     have nothing to act on in a stateless server; the transport spec answers
     both with 405. */
@@ -133,19 +127,54 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
   const crossOrigin = rejectCrossOrigin(request);
   if (crossOrigin) return crossOrigin;
 
-  const capability = request.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER)?.trim() ?? "";
-  if (!CAPABILITY_PATTERN.test(capability)) {
+  let body: unknown;
+  let nativePeer: import("@/lib/processIdentity").ProcessIdentity | undefined;
+  let unidentified = false;
+  const nativeHeader = request.headers.get("x-delegatus-mcp-peer");
+  let capability = request.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER)?.trim() ?? "";
+  if (nativeHeader && !request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) {
+    try {
+      const raw = await request.text();
+      const { verifyNativePeer } = await import("./nativePeer");
+      nativePeer = await verifyNativePeer(nativeHeader, raw);
+      body = JSON.parse(raw);
+      capability = `native:${nativePeer.pid}:${nativePeer.startIdentity}:${nativePeer.bootEpoch}`;
+    } catch { return refusal(403, -32001, "The native MCP peer could not be authenticated."); }
+  }
+  if (!nativeHeader && !request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER) && request.headers.get("x-delegatus-mcp-unattributed") === "1") {
+    const { internalServiceClaim } = await import("@/lib/agent/callerClaims");
+    const claim = internalServiceClaim(request, { readOnly: true });
+    unidentified = claim.claim === "valid" && claim.service === "mcp";
+    if (unidentified) capability = "unidentified-local-mcp";
+  }
+  if (!nativePeer && !unidentified && !CAPABILITY_PATTERN.test(capability)) {
     return refusal(403, -32001, `The Viewer MCP endpoint requires the ${VIEWER_SPAWN_CAPABILITY_HEADER} header carrying this agent's launch capability.`);
   }
+  // Small framed bodies can combine authentication and task dispatch in one
+  // executor request. Larger or unframed bodies keep authentication first.
+  const length = request.headers.get("content-length");
+  let bodyRead = !!nativePeer;
+  let parseFailed = false;
+  if (!bodyRead && !testDependencies && length !== null && /^\d{1,5}$/.test(length) && Number(length) <= 16_384) {
+    bodyRead = true;
+    try { body = await request.json(); }
+    catch { parseFailed = true; }
+  }
+  const earlyMessages = bodyRead && !parseFailed ? jsonRpcMessages(body) : [];
+  const earlyTool = earlyMessages.length === 1 && earlyMessages[0]?.method === "tools/call"
+    ? (earlyMessages[0].params as { name?: unknown } | undefined)?.name : undefined;
+  const executorAuthenticates = !testDependencies && typeof earlyTool === "string" && TASK_EXECUTOR_TOOLS.has(earlyTool);
   let conversationId: string | null;
   try {
-    conversationId = testDependencies
+    // Native identity and approval are resolved by the full tool policy using
+    // this authenticated peer's ancestry. A PID alone grants no tool access.
+    conversationId = executorAuthenticates ? null : nativePeer || unidentified ? "local-peer" : testDependencies
       ? testDependencies.conversationForCapability(capability)
       : await productionConversationForCapability(capability);
   } catch {
     return refusal(503, -32002, "The Viewer could not read its agent registry to identify this caller; retry the call.");
   }
-  if (!conversationId) {
+  if (!executorAuthenticates && !conversationId) {
     return refusal(403, -32001, "This launch capability names no current agent: it is unknown or was rotated by a later launch.");
   }
 
@@ -156,9 +185,9 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
     return refusal(503, -32002, "The Viewer MCP tool service is not available yet; retry the call.");
   }
 
-  let body: unknown;
   try {
-    body = await request.json();
+    if (parseFailed) throw new Error("invalid JSON");
+    if (!bodyRead) body = await request.json();
   } catch {
     return refusal(400, -32700, "Parse error: the request body is not JSON.");
   }
@@ -194,12 +223,33 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
   request.signal.addEventListener("abort", abandon, { once: true });
   if (request.signal.aborted) abandon();
 
-  const server = createViewerMcpServer(service);
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-  });
+  // A stateless single-tool POST cannot observe registrations for other tools.
+  // Discovery, batches, unknown names and other protocol methods keep the full
+  // catalog and the SDK's existing error behavior.
+  const requested = messages.length === 1 && messages[0]?.method === "tools/call"
+    ? (messages[0].params as { name?: unknown } | undefined)?.name : undefined;
+  const tools = typeof requested === "string" && (MCP_TOOL_NAMES as readonly string[]).includes(requested)
+    ? [requested as McpToolName] : undefined;
+  let server: ReturnType<typeof createViewerMcpServer> | undefined;
   try {
+    if (!testDependencies && typeof requested === "string" && TASK_EXECUTOR_TOOLS.has(requested)) {
+      try {
+        // Keep ingress parsing and executor admission on separate loop turns.
+        await new Promise<void>(resolve => setImmediate(resolve));
+        return await viewerTaskExecutor().callHttpTool(requested, body, request,
+          nativePeer ? { nativePeer } : unidentified ? {} : { capability }, {
+            signal: registered.get(inflightKey(capability, connectionId, messages[0]?.id))?.signal ?? request.signal,
+          });
+      } catch (error) {
+        const args = (messages[0]?.params as { arguments?: unknown } | undefined)?.arguments;
+        const result = taskExecutorFailure(requested, args && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {}, error);
+        return Response.json({ jsonrpc: "2.0", id: messages[0]?.id, result: {
+          content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, isError: true,
+        } });
+      }
+    }
+    server = createViewerMcpServer(service, tools);
+    const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
     const response = await transport.handleRequest(request, {
       parsedBody: body,
@@ -207,7 +257,7 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
         token: capability,
         clientId: MCP_HTTP_CLIENT_ID,
         scopes: [],
-        extra: { cancelSignal: (requestId: unknown) => registered.get(inflightKey(capability, connectionId, requestId))?.signal ?? null },
+        extra: { nativePeer, unidentified, cancelSignal: (requestId: unknown) => registered.get(inflightKey(capability, connectionId, requestId))?.signal ?? null },
       },
     });
     if (response.ok && messages.length === 1 && messages[0]?.method === "initialize") {
@@ -221,6 +271,6 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
     }
     /* JSON-response mode answers only once every response is ready, so the
        request is complete here and nothing is left to stream. */
-    await server.close().catch(() => undefined);
+    await server?.close().catch(() => undefined);
   }
 }

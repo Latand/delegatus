@@ -12,7 +12,7 @@ import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 // Opt in with the installed CLI. A loopback Messages API owns every response;
 // no account, credential store, external provider or Viewer is contacted.
 const binary = process.env.LLV_CLAUDE_BINARY;
-test.skipIf(!binary).each(["combined-replay", "serialized-delivery"] as const)(
+test.skipIf(!binary).each(["combined-replay", "serialized-delivery", "seat-inbox"] as const)(
   "installed Claude queue protocol with loopback API: %s", async (mode) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-native-queue-"));
     const config = path.join(directory, ".claude");
@@ -26,12 +26,15 @@ test.skipIf(!binary).each(["combined-replay", "serialized-delivery"] as const)(
     const replays: Array<Array<{ type: string; text?: string }>> = [];
     const wireInputs: Array<Record<string, unknown>> = [];
     let apiCalls = 0;
+    let releaseFirst!: () => void;
+    const firstResponse = new Promise<void>(resolve => { releaseFirst = resolve; });
 
     const event = (type: string, data: unknown) => `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
     const api = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
       if (new URL(request.url).pathname !== "/v1/messages") return new Response("{}", { status: 404 });
       apiCalls++;
       await request.json();
+      if (mode === "seat-inbox" && apiCalls === 1) await firstResponse;
 
       const message = { id: `msg_fixture_${apiCalls}`, type: "message", role: "assistant", model: "fixture-model",
         content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
@@ -97,8 +100,32 @@ test.skipIf(!binary).each(["combined-replay", "serialized-delivery"] as const)(
         effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
         status: async id => journal.operationResult(id)?.receipt ?? null,
         hostClaim: async () => "fixture-owner",
+        ...{ coalescesConversation: () => mode === "seat-inbox", bindDeliveryBatch: async () => true },
         transition: async (...args) => { journal.transitionOperation(...args); },
       }, () => host, undefined, undefined, undefined, undefined, undefined, undefined, { passBudgetMs: 20 });
+      if (mode === "seat-inbox") {
+        const incumbent = { kind: "send" as const, operationId: "incumbent", idempotencyKey: "incumbent", conversationId, text: "initial turn", policy: "queue" as const };
+        journal.executeOperation(incumbent);
+        await queue.drain();
+        await wait(() => apiCalls === 1);
+        const answers = Array.from({ length: 6 }, (_, i) => ({ ...incumbent, operationId: `answer-${i}`, idempotencyKey: `answer-${i}`, text: `verbatim answer ${i}` }));
+        answers.forEach(input => journal.executeOperation(input));
+        await queue.drain();
+        expect(wireInputs.filter(f => f.type === "user")).toHaveLength(1);
+        releaseFirst();
+        await wait(() => rawKinds.filter(k => k === "result").length === 1);
+        await queue.drain();
+        await wait(() => rawKinds.filter(k => k === "result").length === 2);
+        expect(rawKinds.filter(k => k === "user")).toHaveLength(2);
+        const rows = ledger.load(host.identity.sessionId);
+        expect(rows).toHaveLength(2);
+        expect(rows[1]!.entry.parts?.map(p => p.operationId)).toEqual(answers.map(a => a.operationId));
+        for (const a of answers) expect(journal.operationResult(a.operationId)?.receipt).toMatchObject({ status: "delivered", turnId: rows[1]!.entry.id });
+        expect(wireInputs.filter(f => f.type === "control_request")).toHaveLength(0);
+        expect(replays).toHaveLength(2);
+        expect(rows[1]!.delivered).toBe(true);
+        return;
+      }
       if (mode === "combined-replay") {
         // Deliberately bypass the queue only to observe the native protocol. Each
         // promise handles release rejection; the probe claims no receipt for a
@@ -149,7 +176,7 @@ test.skipIf(!binary).each(["combined-replay", "serialized-delivery"] as const)(
       expect(new Set(rows.map(row => row.engineMessageId)).size).toBe(4);
       expect(replays.every(blocks => blocks.filter(block => block.type === "text").length === 1)).toBe(true);
     } finally {
-      await host?.release(); api.stop(true); journal.close(); fs.rmSync(directory, { recursive: true, force: true });
+      releaseFirst(); await host?.release(); api.stop(true); journal.close(); fs.rmSync(directory, { recursive: true, force: true });
     }
   }, 60_000,
 );

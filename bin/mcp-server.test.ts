@@ -59,6 +59,75 @@ for (const runtime of ["node", "bun"]) {
   }, 15_000);
 }
 
+// The keeper deliberately retains the MCP input writer after its agent dies.
+// This exercises kernel/process ownership independently of transport EOF.
+for (const runtime of ["node", "bun"]) {
+  for (const mode of ["stdio", "native-hook"]) {
+    for (const target of ["agent", "launcher"]) {
+      test.skipIf(process.platform !== "linux")(`${runtime} ${mode} reaps its bundle after ${target} hard death with inherited stdin`, async () => {
+        const { root, launcher } = installedPackage(`
+          const fs = await import("node:fs");
+          process.stdin.resume(); process.on("SIGTERM", () => {});
+          fs.writeFileSync(process.env.LLV_TEST_PID, String(process.pid));
+          setInterval(() => {}, 1000);
+        `);
+        const pidsFile = path.join(root, "owned.json");
+        const bundleFile = path.join(root, "bundle.pid");
+        const ownerFile = path.join(root, "owner.mjs");
+        fs.writeFileSync(ownerFile, `
+          import { spawn } from "node:child_process";
+          import fs from "node:fs";
+          const launcher = spawn(${JSON.stringify(Bun.which(runtime))}, ${JSON.stringify([launcher, ...(mode === "native-hook" ? ["--native-caller-hook"] : [])])}, { stdio: ["pipe", "ignore", "inherit"] });
+          const keeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", launcher.stdin, "ignore"] });
+          fs.writeFileSync(${JSON.stringify(pidsFile)}, JSON.stringify({ launcher: launcher.pid, keeper: keeper.pid }));
+          setInterval(() => {}, 1000);
+        `);
+        const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("LLV_") && !key.startsWith("DELEGATUS_")));
+        const owner = spawn(process.execPath, [ownerFile], { cwd: root, env: {
+          ...environment, NODE_ENV: "test", HOME: root, XDG_CONFIG_HOME: root, TMPDIR: root,
+          LLV_STATE_DIR: path.join(root, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
+          LLV_BUN_EXECUTABLE: process.execPath, LLV_TEST_PID: bundleFile,
+        }, stdio: ["ignore", "ignore", "pipe"] });
+        const identities = new Map<number, string>();
+        const identity = (pid: number) => {
+          try { const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").at(-1)!.split(" ");
+            return ["Z", "X"].includes(stat[0]!) ? null : stat[19]!;
+          } catch { return null; }
+        };
+        const record = (pid: number) => { const value = identity(pid); if (value) identities.set(pid, value); return pid; };
+        const alive = (pid: number) => identities.has(pid) && identity(pid) === identities.get(pid);
+        const until = async (condition: () => boolean, ms: number) => {
+          const end = Date.now() + ms;
+          while (!condition() && Date.now() < end) await Bun.sleep(10);
+          expect(condition()).toBe(true);
+        };
+        let diagnostics = "";
+        owner.stderr?.on("data", chunk => { diagnostics += String(chunk); });
+        record(owner.pid!);
+        try {
+          await until(() => fs.existsSync(pidsFile), 5_000);
+          const pids = JSON.parse(fs.readFileSync(pidsFile, "utf8")) as { launcher: number; keeper: number };
+          record(pids.launcher); record(pids.keeper);
+          await until(() => fs.existsSync(bundleFile), 5_000);
+          const bundle = record(Number(fs.readFileSync(bundleFile, "utf8")));
+          expect(alive(bundle)).toBe(true);
+          // A stopped bundle cannot run a JavaScript parent-death timer.
+          if (target === "launcher" && alive(bundle)) process.kill(bundle, "SIGSTOP");
+          const doomed = target === "agent" ? owner.pid! : pids.launcher;
+          if (alive(doomed)) process.kill(doomed, "SIGKILL");
+          await until(() => !alive(pids.launcher) && !alive(bundle), 3_000);
+          expect(alive(pids.keeper)).toBe(true);
+          if (target === "launcher") expect(alive(owner.pid!)).toBe(true);
+        } catch (error) { throw new Error(`${String(error)}\n${diagnostics}`); }
+        finally {
+          for (const pid of identities.keys()) if (alive(pid)) process.kill(pid, "SIGKILL");
+          await until(() => [...identities.keys()].every(pid => !alive(pid)), 3_000);
+        }
+      }, 15_000);
+    }
+  }
+}
+
 /** Result fields consumed by these fixture-specific RPC assertions. */
 interface TestRpcResponse {
   id?: number | string;

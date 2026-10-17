@@ -893,7 +893,7 @@ Tests: a table test drives each launch builder of 3.2 for "not chosen",
 `delegatus/importing`, `delegatus/draining`, `delegatus/active` and `engines`, and asserts the
 Claude settings (`autoMemoryEnabled`, the env flag) and the Codex arguments
 and thread config (`features.memories`); "not chosen" and `importing` match
-today's output byte for byte. In the engines position a stage report gets no
+today's output byte for byte for non-clean launches. In the engines position a stage report gets no
 lesson request, a launch gets no rules, the curator admission answers paused.
 A clean launch is clean in all five. A resume after a change of the setting
 follows the new value. The route refuses cross-origin and non-operator
@@ -903,6 +903,15 @@ the curator dropped and one the curator never saw: in `delegatus/draining` and
 `delegatus/active` it injects no entry and records `memorySource`, before any
 candidate query or spend; in "not chosen", `importing` and `engines` it selects
 as today.
+
+The byte-for-byte compatibility promise covers non-clean launches in "not
+chosen" and `importing`. A clean Claude launch without `claudeConfigDir` uses
+an inline settings fallback that previously omitted both engine-memory off
+fields; this slice adds `autoMemoryEnabled: false` and
+`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` there so the existing clean-launch promise
+also holds on that path. The committed host regression pins the legacy inline
+body for non-clean starts and the two permitted additions for clean fresh and
+adopted starts in both compatibility states.
 
 **Slice 2: backup and candidates.** The import job, the manifest,
 `role_memory_import`, writer resolution, the loop-monitor label.

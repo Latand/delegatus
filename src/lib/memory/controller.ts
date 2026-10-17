@@ -1,3 +1,4 @@
+import { engineMemoryOff } from "@/lib/memory/source";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { structuredContent } from "@/lib/runtime/structuredContent";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
@@ -153,6 +154,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     if (!Number.isFinite(remaining) || remaining <= 0) { reason = "timeout"; return ""; }
     if (request.signal.aborted) { reason = "cancelled"; return ""; }
     if (!viewerReleaseOwnsTraffic()) { reason = "notOwner"; return ""; }
+    if (engineMemoryOff()) { reason = "memorySource"; return ""; }
     if (!sharedMemoryEnabled(project)) { reason = "projectOff"; return ""; }
     const key = readOpenRouterApiKey();
     if (!key) { reason = "noKey"; return ""; }
@@ -169,8 +171,8 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     return await injectMemory({ prompt, origin, engine: engine, project, conversation: conversationId, requestId, context }, {
       deadline, signal: request.signal,
       activity: event => { try { index.recordInjectionActivity(event); if (event === "noMatches") index.recordUnmatchedTurn(conversationId, requestId); } catch { /* optional ledger */ } },
-      enabled: () => sharedMemoryEnabled(project), ownsTraffic: () => viewerReleaseOwnsTraffic(),
-      reason: value => { reason = value === "noCandidates" && candidateReason ? candidateReason : value; },
+      enabled: () => !engineMemoryOff() && sharedMemoryEnabled(project), ownsTraffic: () => viewerReleaseOwnsTraffic(),
+      reason: value => { reason = value === "projectOff" && engineMemoryOff() ? "memorySource" : value === "noCandidates" && candidateReason ? candidateReason : value; },
       candidates: deadline => index.injectionCandidates(recallQuery, project, engine, conversationId, deadline, { cwd, reason: value => { candidateReason = value; } }),
       reserve: ceiling => {
         mutateOperatorAsks(file => {

@@ -1,3 +1,4 @@
+import { engineMemoryOff } from "@/lib/memory/source";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -65,7 +66,7 @@ async function optionalFile(file: string): Promise<Buffer | null> {
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 async function engineMemory(start: MemoryEngineStart, clean: boolean) {
-  if (clean || start.nativeMemoryEnabled === false) return [];
+  if (engineMemoryOff({ cleanMemory: clean }) || start.nativeMemoryEnabled === false) return [];
   const home = start.home ?? path.join(start.env?.HOME ?? process.env.HOME ?? os.homedir(), start.engine === "codex" ? ".codex" : ".claude");
   let file: string;
   if (start.engine === "codex") {

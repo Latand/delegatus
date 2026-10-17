@@ -1,3 +1,4 @@
+import { engineMemoryOff } from "@/lib/memory/source";
 import { CodexSocketTransport, type CodexTransport, type CodexSocketOwner } from "./codexSocketTransport";
 import { codexOperatorQuestionPolicy } from "@/lib/agent/operatorQuestionPolicy";
 import { memoryField, memoryKillText } from "./agentMemoryState";
@@ -1373,6 +1374,8 @@ export class CodexAppServerHost implements EngineHost {
       value unknown, keeps admission fail-closed, and schedules discovery on
       the next image send. */
   private imageInputSupport: "supported" | "unsupported" | "unknown" = "unknown";
+  /** Effective connector after Codex merges the account's registered server. */
+  viewerMcpTransport: "stdio" | "http" | null = null;
   private requestedModel: string | undefined;
   private readonly reroutedModels = new Map<string, string>();
   private realtimeDeliveryEpoch = 0;
@@ -1490,8 +1493,8 @@ export class CodexAppServerHost implements EngineHost {
     const subagentFeatures = codexSubagentConfig(features, options.allowSubagents === true);
     const granted = grantedPlugins(options.plugins);
     if (!options.allowSubagents) subagentFeatures.plugins = granted.length > 0;
-    /* A clean launch reads none of Codex's own memories. */
-    if (options.cleanMemory || options.nativeMemoryEnabled === false) subagentFeatures.memories = false;
+    /* Clean launches and the installation's Delegatus choice disable native memory. */
+    if (engineMemoryOff(options) || options.nativeMemoryEnabled === false) subagentFeatures.memories = false;
     const args = [
       "-c", `agents.enabled=${options.allowSubagents === true}`,
       ...(options.allowSubagents === true ? [] : ["-c", 'approvals_reviewer="user"']),
@@ -1591,6 +1594,10 @@ export class CodexAppServerHost implements EngineHost {
         features,
         options.cleanMemory === true,
       );
+      const viewer = record(record(config.mcp_servers)?.viewer);
+      provisional.viewerMcpTransport = viewer?.enabled === true
+        ? typeof viewer.command === "string" ? "stdio" : typeof viewer.url === "string" ? "http" : null
+        : null;
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
       const cleanup = questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome);
       if (questionPolicy) config.tools = questionPolicy.tools;

@@ -1,3 +1,4 @@
+import { batchPartContent, verifyBatchMembership } from "./inboxBatch";
 import path from "node:path";
 
 import { agentRegistry, type RegistryFile } from "@/lib/agent/registry";
@@ -139,6 +140,25 @@ export function claudeMessageProvenance(
   const provenance: Record<string, DeliveredMessageProvenance> = {};
   for (const state of states) {
     if (!state.delivered || !state.engineMessageId) continue;
+    if (state.entry.parts) {
+      const parts = state.entry.parts;
+      if (!verifyBatchMembership(state.entry, parts[0]?.operationId ?? "", parts[0]?.contentDigest)) continue;
+      provenance[state.engineMessageId] = { origin: "agent", parts: parts.map(part => {
+        let resolved: DeliveredMessageProvenance | null = null;
+        try {
+          resolved = entryProvenance({ ...state, entry: { ...state.entry, id: part.operationId,
+            origin: part.origin, selectedContext: part.selectedContext, parts: undefined } }, transcriptPath, snapshot);
+        } catch { /* A part with unavailable authorship stays unattributed. */ }
+        const submissionId = resolved?.submissionId ?? (part.operationId.startsWith(SPAWN_MESSAGE_PREFIX)
+          ? `${SPAWN_CLIENT_MESSAGE_PREFIX}${part.operationId.slice(SPAWN_MESSAGE_PREFIX.length)}` : undefined);
+        const mandate = submissionId ? mandateForDelivery(submissionId, seatMandates()) : null;
+        const source = (part.referenceTo ? parts.find(p => p.operationId === part.referenceTo) : part)!;
+        return { operationId: part.operationId, text: batchPartContent(state.entry, part).text, textStart: part.textStart, textEnd: part.textEnd,
+          imageStart: source.imageStart, imageEnd: source.imageEnd,
+          provenance: { ...(resolved ?? { origin: "agent" as const }), ...(mandate ? { mandate } : {}) } };
+      }) };
+      continue;
+    }
     let resolved: DeliveredMessageProvenance | null;
     try {
       resolved = entryProvenance(state, transcriptPath, snapshot);
@@ -149,7 +169,7 @@ export function claudeMessageProvenance(
       ?? (state.entry.id.startsWith(SPAWN_MESSAGE_PREFIX)
         ? `${SPAWN_CLIENT_MESSAGE_PREFIX}${state.entry.id.slice(SPAWN_MESSAGE_PREFIX.length)}` : undefined);
     const mandate = submissionId ? mandateForDelivery(submissionId, seatMandates()) : null;
-    if (mandate) resolved = { ...(resolved ?? { origin: "agent" }), mandate };
+    if (mandate) resolved = { ...(resolved ?? { origin: "agent" as const }), mandate };
     if (resolved) provenance[state.engineMessageId] = resolved;
   }
   return provenance;

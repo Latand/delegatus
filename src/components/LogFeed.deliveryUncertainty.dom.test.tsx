@@ -2,7 +2,7 @@
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 
 import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
-import { act } from "react";
+import { act, useSyncExternalStore } from "react";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
@@ -82,7 +82,13 @@ import { writeProfile } from "./runtimeProfile";
 import { enqueueOutbox, updateOutbox, visibleOutbox, readOutbox, resetOutboxForTests, retryOutbox, cancelOutbox, publishTranscriptEchoes } from "./conversation/outbox";
 
 let snapshotReceipts: RuntimeReceipt[] = [];
+const snapshotReceiptListeners = new Set<() => void>();
 let realReceiptHook = false;
+
+function publishSnapshotReceipts(receipts: RuntimeReceipt[]): void {
+  snapshotReceipts = receipts;
+  for (const listener of snapshotReceiptListeners) listener();
+}
 
 const realFetch = globalThis.fetch;
 
@@ -110,7 +116,12 @@ beforeEach(() => {
     },
     useRuntimeReceiptsForArtifact: (path, conversationId) => {
       const real = useRuntimeReceiptsForArtifact(path, conversationId);
-      return !realReceiptHook && (path === "/codex-snapshot.jsonl" || conversationId === "conv-snapshot") ? snapshotReceipts : real;
+      const snapshot = useSyncExternalStore(
+        (listener) => { snapshotReceiptListeners.add(listener); return () => snapshotReceiptListeners.delete(listener); },
+        () => snapshotReceipts,
+        () => [],
+      );
+      return !realReceiptHook && (path === "/codex-snapshot.jsonl" || conversationId === "conv-snapshot") ? snapshot : real;
     },
   });
 });
@@ -1558,8 +1569,7 @@ for (const laterDraft of ["pending immutable request", "pending immutable reques
           await settle(() => composerControls(mounted.host).type(laterDraft));
           await pasteImage(mounted.host, "later-image");
           journal.transitionOperation("operation-pending", "delivering");
-          snapshotReceipts = [journal.transitionOperation("operation-pending", "delivered").receipt];
-          await settle(() => mounted.root.render(surface()));
+          await settle(() => publishSnapshotReceipts([journal.transitionOperation("operation-pending", "delivered").receipt]));
           expect(readOutbox(file.conversationId!)[0]?.state).toBe("delivered");
           expect(sends).toEqual([original]);
           expect(mounted.host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe(laterDraft);

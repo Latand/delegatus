@@ -1,3 +1,4 @@
+import { chooseSource } from "../fixtures/source";
 import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
@@ -119,6 +120,15 @@ function hostingFixture() {
     observe: async () => ({ state: "running" as const }), archive: () => {} };
   return { sources, seats, lives, bodies, seat, ports, controller: productionCurationController(sources, ports), tick: { ...tickInput(), project: PROJECT, now: NOW } };
 }
+test("the engines memory source pauses curator admission and preserves its store", async () => {
+  fixture(); const f = hostingFixture(); f.seat();
+  chooseSource("engines");
+  const before = machinePass();
+  expect(await f.controller.launchIfDue(f.tick)).toContain("paused, memory off");
+  expect(f.bodies).toHaveLength(0); expect(machinePass()).toEqual(before);
+  chooseSource("unchosen");
+});
+
 test("enabled settings with a gone designated host never launch or resume curation", async () => {
   fixture(); const f = hostingFixture(), id = f.seat();
   f.lives.set(id, { ...f.lives.get(id)!, host: { state: "gone", kind: "none", pid: null }, lifecycle: "gone" });
