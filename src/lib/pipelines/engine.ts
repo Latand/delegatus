@@ -1566,9 +1566,15 @@ export function defaultPipelinePorts(
       return gate.check(key);
     },
     cpuAdmissionReconcile: async (admission) => {
-      const waiting = machineCpuPressureGate()
-        ? await selectControllerPipelines("pending-stage")
-        : [];
+      let waiting: Pipeline[];
+      try {
+        waiting = machineCpuPressureGate() ? await selectControllerPipelines("pending-stage") : [];
+      } catch (error) {
+        if (!(error instanceof StateSnapshotChangedError)) throw error;
+        // Preserve every ticket and its FIFO age until this lane is observed.
+        requestPipelineTick();
+        return;
+      }
       const drain = admission?.drainHold ? admission.drainHold() : activeDrain();
       const publication = admission?.structuredDeliveryPublication?.()
         ?? (structuredHostsEnabled() ? structuredDeliveryPublicationState() : "ready");
@@ -10400,7 +10406,7 @@ async function settleStaleControllerFlow(error: unknown, ports: PipelinePorts): 
   await drainPendingStaleControllerFlows(ports);
 }
 
-export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean }> {
+export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean; retry?: boolean }> {
   const scoped = Boolean(controllerPipelineKeys());
   let completePhase!: () => void;
   const phaseDone = new Promise<void>(resolve => { completePhase = resolve; });
@@ -10480,6 +10486,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         if (error instanceof StateSnapshotChangedError) {
           followUp = true;
           await settleStaleControllerFlow(error, ports);
+          return;
         }
         console.error("[pipelines] CPU admission polling failed", error);
       })
@@ -10755,14 +10762,14 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     if (error instanceof StateSnapshotChangedError) {
       followUp = true;
       await settleStaleControllerFlow(error, ports);
-      return { pipelines: scoped ? [] : await loadPipelinesAsync(), changed: false };
+      return { pipelines: scoped ? [] : await loadPipelinesAsync(), changed: false, ...(scoped ? { retry: true } : {}) };
     }
     /* The store fails closed on malformed state, but this tick runs inside
        the shared reconcile pass — flows, workflows, and the task inbox must
        keep ticking when only the pipelines registry is unreadable. */
     if (!(error instanceof PipelineStoreError)) throw error;
     console.error("[pipelines] skipping tick; registry unreadable", error);
-    return { pipelines: [], changed: false };
+    return { pipelines: [], changed: false, ...(scoped ? { retry: true } : {}) };
   } finally {
     await stopAdmissionPolling();
     ports.stageBranchProtections = previousStageBranchProtections;

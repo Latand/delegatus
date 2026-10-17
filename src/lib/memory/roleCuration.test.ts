@@ -87,15 +87,15 @@ test("a start reads exactly its four scopes across projects and never another ro
   expect(store.learnedRulesBlock("boundary-p", "visual-critic")).not.toContain(fixtures[1]![1]!);
 });
 
-test("curation order retains ranked rules ahead of old uncurated rules and protects the new lesson", () => {
+test("curation order evicts the lowest curated rule while uncurated rules wait for review", () => {
   const make = (id: string, extra: Partial<Rule> = {}): Rule => ({ kind: "rule", id, scope: "role:retention:builder", rule: `${id} ${"word ".repeat(10)}`, why, hints: [], state: "active", source: request().source, createdAt: "2026-10-11T00:00:00.000Z", changedAt: "2026-10-11T00:00:00.000Z", ...extra });
   const best = make("best", { curatedAt: "now" });
   const low = make("low", { curatedAt: "now" });
   const old = make("old");
   const incoming = make("incoming");
   const result = appendRule([low, best, old], incoming, "now", scopeChars([best, low, incoming]));
-  expect(result.archived).toEqual([old.id]);
-  expect(result.active.map(r => r.id)).toEqual([incoming.id, low.id, best.id]);
+  expect(result.archived).toEqual([low.id]);
+  expect(result.active.map(r => r.id)).toEqual([old.id, incoming.id, best.id]);
   const repeat = appendRule([old, incoming, low, best], { ...make("repeat"), rule: old.rule }, "now");
   expect(repeat.active.map(r => r.id)).toEqual([incoming.id, old.id, low.id, best.id]);
 });
@@ -177,6 +177,6 @@ test("an engine start bounds aliased scopes by curation order without changing t
   const block = store.learnedRulesBlock("alias-budget-current", "builder");
   const selected = rules.filter(row => block.includes(`[${row.id}]`));
   expect(scopeChars(selected)).toBeLessThanOrEqual(10_000);
-  for (const row of rules.filter(row => row.curatedAt)) expect(block).toContain(row.rule);
+  for (const row of rules.filter(row => !row.curatedAt)) expect(block).toContain(row.rule);
   expect(fixtureRows().snapshot()).toEqual(before);
 });

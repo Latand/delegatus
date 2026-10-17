@@ -1,3 +1,4 @@
+import { validTelegramPublicationPart } from "./telegramPublication";
 import { sharedLinkState } from "./runtimeState";
 import { randomBytes, randomUUID } from "node:crypto";
 
@@ -181,6 +182,7 @@ export function incomingSync(grant: Grant, input: unknown): { status: number; bo
   if (partialShared.size) for (const [id, pending] of partialShared) if (Date.now() - pending.at > 600_000) partialShared.delete(id);
   if (!input || typeof input !== "object" || (input as Record<string, unknown>).v !== 1) return { status: 400, body: { error: "malformed" } };
   const wire = input as Record<string, unknown>;
+  if (wire.tp !== undefined && !validTelegramPublicationPart(wire.tp)) return { status: 400, body: { error: "malformed" } };
   if (wire.sm !== undefined && !validSeatMessagePart(wire.sm)) return { status: 400, body: { error: "malformed" } };
   if (typeof wire.store !== "string" || !/^[0-9a-f-]{36}$/.test(wire.store) || typeof wire.now !== "number" || !Number.isSafeInteger(wire.now)) return { status: 400, body: { error: "malformed" } };
   // A recreated store on A is rebuilt by A's own resync (M.8); B only records it.

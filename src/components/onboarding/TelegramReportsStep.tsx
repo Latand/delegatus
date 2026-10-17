@@ -121,6 +121,14 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
     setFailed(null);
     const outcome: TelegramReportsOutcome = link.trim() ? { link: link.trim(), name: name.trim() }
       : chatChosen ? { chat: choice!, name: name.trim(), ...(choice === inUse && settings?.reportTelegram?.topicId ? { topicId: settings.reportTelegram.topicId } : {}) } : null;
+    /* «Log only» or a chat the bot already lists shows as stored at once; a
+       refusal puts the stored choice back beside the reason (audit B30, B42).
+       A pasted link waits: the server proves the chat with Telegram. */
+    const before = { settings, saved };
+    if (!outcome || !("link" in outcome)) {
+      if (settings) setSettings({ ...settings, reportTelegram: outcome ?? { chat: null } });
+      setSaved(outcome ? { chat: outcome.chat, name: outcome.name, topicId: outcome.topicId } : null);
+    }
     try {
       const response = await fetch("/api/projects/settings", {
         method: "PUT",
@@ -139,6 +147,7 @@ export function TelegramReportsStep({ project, onSaved, onSkip }: {
       setSaved(updated.reportTelegram?.chat ? { chat: updated.reportTelegram.chat, name: updated.reportTelegram.name ?? name.trim(), topicId: updated.reportTelegram.topicId } : null);
       onSaved(outcome);
     } catch (error) {
+      if (!outcome || !("link" in outcome)) { setSettings(before.settings); setSaved(before.saved); }
       setFailed(error instanceof Error ? error.message : "");
     } finally {
       setSaving(false);

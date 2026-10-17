@@ -241,7 +241,11 @@ export class RuntimeHost {
         if (typeof afterEventSeq !== "number" || !Number.isSafeInteger(afterEventSeq) || afterEventSeq < 0) {
           throw new Error("runtime effect cursor is invalid");
         }
-        result = this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq);
+        if (request.params?.conditional === true) {
+          const version = this.journal.effectPageVersion();
+          result = request.params.knownVersion === version ? { version, unchanged: true }
+            : { version, effects: this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq) };
+        } else result = this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq);
       } else if (request.method === "producer-cursor") {
         const producerKind = request.params?.producerKind;
         const eventKeyPrefix = request.params?.eventKeyPrefix;

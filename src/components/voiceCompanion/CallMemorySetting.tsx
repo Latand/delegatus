@@ -1,10 +1,10 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocale } from "@/lib/i18n";
 import { callDuration } from "./CompanionSpend";
 import type { CallMemoryRow } from "@/lib/voiceCompanion/callMemoryTypes";
 
-export function CallMemorySetting({ enabled, busy, onChange }: { enabled: boolean; busy: boolean; onChange(value: boolean): void }) {
+export function CallMemorySetting({ enabled, busy, onChange, refusal }: { enabled: boolean; busy: boolean; onChange(value: boolean): void; /** The server's refusal of the switch, read right under it. */ refusal?: ReactNode }) {
   const { t, locale } = useLocale();
   const [calls, setCalls] = useState<CallMemoryRow[]>([]);
   const [retained, setRetained] = useState(0);
@@ -31,6 +31,7 @@ export function CallMemorySetting({ enabled, busy, onChange }: { enabled: boolea
       {t("voiceCompanion.memory.title")}
       <input type="checkbox" role="switch" checked={enabled} disabled={disabled} aria-label={t("voiceCompanion.memory.title")} onChange={event => onChange(event.target.checked)} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
     </label>
+    {refusal}
     <p className="text-muted">{t("voiceCompanion.memory.provider")}</p>
     <div role="status" className="mt-2 min-h-5 text-muted">{loading ? t("voiceCompanion.memory.loading") : error ? t("voiceCompanion.memory.error") : calls.length ? "" : t("voiceCompanion.memory.empty")}</div>
     {error ? <button type="button" onClick={() => void request()} disabled={writing} className="min-h-11 underline">{t("voiceCompanion.memory.retry")}</button> : null}

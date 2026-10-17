@@ -8,6 +8,7 @@ import type { TeamView } from "@/lib/team/contract";
 
 import { MemberAvatar } from "./MemberAvatar";
 import { surfaceName } from "./MembersTab";
+import { errorText } from "./SignInCard";
 import { BUTTON, relativeTime, teamRequest } from "./ui";
 
 /*
@@ -44,19 +45,25 @@ export function SessionsTab({ view }: { view: TeamView }) {
   }, []);
   useEffect(() => { void load(); }, [load]);
 
-  const signOut = async (session: SessionRow) => {
-    if (session.current) {
-      await teamRequest("/api/team/session/sign-out", { body: {} });
-      window.location.replace("/sign-in");
-      return;
-    }
-    await teamRequest("/api/team/sessions", { method: "DELETE", body: { id: session.id } });
-    await load();
+  /* Ending a session cannot be taken back, so it waits: the pressed row (or
+     «everywhere else») reads «Ending…» and sends once, a refusal says why,
+     and this device leaves for sign-in only once its sign-out held (audit F2). */
+  const [ending, setEnding] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const end = async (key: string, run: () => ReturnType<typeof teamRequest>, after: () => void | Promise<void>) => {
+    if (ending) return;
+    setEnding(key);
+    setError(null);
+    const answer = await run();
+    if (!answer.ok) setError(errorText(t, answer));
+    else await after();
+    if (!answer.ok || key !== "current") await load();
+    setEnding(null);
   };
-  const signOutElsewhere = async () => {
-    await teamRequest("/api/team/sessions", { method: "DELETE", body: { all: true } });
-    await load();
-  };
+  const signOut = (session: SessionRow) => session.current
+    ? end("current", () => teamRequest("/api/team/session/sign-out", { body: {} }), () => { window.location.replace("/sign-in"); })
+    : end(session.id, () => teamRequest("/api/team/sessions", { method: "DELETE", body: { id: session.id } }), () => {});
+  const signOutElsewhere = () => end("others", () => teamRequest("/api/team/sessions", { method: "DELETE", body: { all: true } }), () => {});
 
   const groups = useMemo(() => {
     const byMember = new Map<string, SessionRow[]>();
@@ -74,9 +81,10 @@ export function SessionsTab({ view }: { view: TeamView }) {
     <div className="flex flex-col gap-4" data-team-sessions={sessions ? sessions.length : "loading"}>
       {others ? (
         <div className="flex justify-end">
-          <button type="button" className={BUTTON.small} onClick={() => void signOutElsewhere()} data-team-sign-out-all="">{t("team.sessions.signOutAll")}</button>
+          <button type="button" disabled={ending !== null} className={BUTTON.small} onClick={() => void signOutElsewhere()} data-team-sign-out-all="">{t(ending === "others" ? "team.sessions.ending" : "team.sessions.signOutAll")}</button>
         </div>
       ) : null}
+      {error ? <p role="alert" className="rounded-control bg-danger-soft px-3 py-2 text-ui text-danger" data-team-sessions-error="">{error}</p> : null}
       {!sessions ? <div className="py-10 text-center text-ui text-muted">{t("common.loadingCap")}</div> : null}
       {groups.map(({ member, rows }) => (
         <section key={member.id} aria-label={member.name}>
@@ -99,8 +107,8 @@ export function SessionsTab({ view }: { view: TeamView }) {
                     {t(`team.via.${session.method}` as MessageKey)}
                   </p>
                 </div>
-                <button type="button" className={BUTTON.text} onClick={() => void signOut(session)} data-team-session-end="">
-                  {t(session.current ? "team.sessions.signOut" : "team.sessions.end")}
+                <button type="button" disabled={ending !== null} className={BUTTON.text} onClick={() => void signOut(session)} data-team-session-end="">
+                  {t(ending === (session.current ? "current" : session.id) ? "team.sessions.ending" : session.current ? "team.sessions.signOut" : "team.sessions.end")}
                 </button>
               </li>
             ))}

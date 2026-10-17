@@ -268,6 +268,7 @@ export function usePhonePipelineActs({ ports, acts, onClosed }: {
     stageId: stage?.stageId ?? null,
     stageName: stage?.stageName ?? null,
     expectedAttempt: stage?.expectedAttempt ?? null,
+    pipeline,
   });
   const closeLane = (pipeline: Pipeline): void => {
     acts.begin({ pipelineId: pipeline.id, action: "close" });

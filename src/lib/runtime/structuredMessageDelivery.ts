@@ -130,7 +130,7 @@ export interface StructuredMessageDependencies {
   enabled?: () => boolean;
   client?: () => RuntimeHostClient | null;
   registry?: () => AgentRegistry;
-  kick?: () => void;
+  kick?: (freshAdmission?: boolean) => void;
   requestMigrationTick?: () => void;
   startupFailed?: () => boolean;
   startupRecovered?: () => void;
@@ -2153,7 +2153,11 @@ export async function enqueueStructuredMessage(
         nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
       });
     }
-    (dependencies.kick ?? kickStructuredDeliveryQueue)();
+    // Only a newly committed pending operation owns an immediate admission
+    // wake. Replays and observer kicks retain the listing failure backoff.
+    const kick = dependencies.kick ?? kickStructuredDeliveryQueue;
+    if (result.replayed === false && (receipt.status === "queued" || receipt.status === "pending")) kick(true);
+    else kick();
     const outcome = receipt.status === "delivering" || receipt.status === "delivered" ? receipt.status : "queued";
     return {
       ok: true,

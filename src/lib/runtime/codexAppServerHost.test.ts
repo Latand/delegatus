@@ -125,6 +125,37 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
+test("a self-updated CLI whose schema extends a pin additively starts under that pin and says so", async () => {
+  const server = new FakeAppServer("unpinned-cli");
+  const schemas = (name: string) => fs.readFileSync(path.join(import.meta.dir, "../accounts/protocol/0.163.0", `${name}.json`), "utf8");
+  const generated: string[] = [];
+  const host = await CodexAppServerHost.start({
+    cwd: "/repo", binary: "codex-fixture", readProtocolVersion: () => "0.162.7", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    generateProtocolSchemas: async binary => { generated.push(binary); return { stable: schemas("stable"), experimental: schemas("experimental") }; },
+  });
+  try {
+    const health = await host.health();
+    // The registry keeps the pin, so a successor reconnects under the same reviewed contract.
+    expect(health.protocolVersion).toBe("0.162.1");
+    expect(health.diagnostics?.version).toBe("0.162.7");
+    expect(health.diagnostics?.protocol).toMatchObject({ schemaVersion: "0.162.1",
+      unpinnedCli: { cliVersion: "0.162.7", cliSchemaDigest: createHash("sha256").update(schemas("experimental")).digest("hex") } });
+    expect(generated).toEqual(["codex-fixture"]);
+    expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
+  } finally { await host.release(); }
+});
+
+test("a self-updated CLI with a breaking schema is refused before spawning", async () => {
+  const server = new FakeAppServer("breaking-cli");
+  let spawned = false;
+  await expect(CodexAppServerHost.start({
+    cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
+    spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
+    generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
+  })).rejects.toThrow("CLI 0.162.8 has no pinned schema and is not an additive extension of pin 0.162.1. Pin the CLI to a supported version");
+  expect(spawned).toBe(false);
+});
+
 test("quarantines unknown notifications and late responses without killing a healthy host", async () => {
   const server = new FakeAppServer("protocol-anomaly");
   const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });

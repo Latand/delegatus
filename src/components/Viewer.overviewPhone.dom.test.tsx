@@ -423,7 +423,9 @@ test("⋯ lists the hidden tasks of every project, and Show brings one back", as
 
   await tap(hidden.querySelector("[data-phone-hidden-show]"));
   await until(() => taskPatches.length > 0);
-  expect(taskPatches[0]).toEqual({ url: "/api/tasks/t-off", body: { board: "shown" } });
+  /* The desktop tray's own write: through the task controller, fenced on the
+     row the phone drew. */
+  expect(taskPatches).toEqual([{ url: "/api/tasks/t-off", body: { board: "shown", expectedProject: ATLAS, expectedRevision: REVISION } }]);
 });
 
 

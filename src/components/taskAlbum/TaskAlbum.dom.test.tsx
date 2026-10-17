@@ -258,3 +258,35 @@ test("a page loaded with 'load more' keeps its marks after the album was marked 
   expect(freshTiles()).toEqual(["newest", "middle"]);
   expect(document.querySelector("[data-album-item='oldest']")!.getAttribute("data-album-item-new")).toBe("0");
 });
+
+/* Audit F1: a failed «Show older» with pictures on screen says so beside the button, which retries. */
+test("a failed 'load more' says so beside the button, and the next press clears it and loads the page", async () => {
+  albumAnswers = [
+    { ...PAGE, items: [item("newest", 3_000, true, STAGE)], total: 3, nextCursor: "1", lastOpenedAt: 1_500, newCount: 2 },
+    { ...PAGE, items: [item("middle", 2_000, false, OTHER), item("oldest", 1_000, false, STAGE)], total: 3, nextCursor: null, lastOpenedAt: 3_000, newCount: 0 },
+  ];
+  const served = globalThis.fetch;
+  let refuseMore = true;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (refuseMore && String(input).includes("cursor=1")) return new Response("{}", { status: 503 });
+    return served(input, init);
+  }) as typeof fetch;
+  try {
+    const host = await mountButton();
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-album-button='task-1']")!.click());
+    await settle(60);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-album-more]")!.click());
+    await settle(60);
+    expect(document.querySelector("[data-album-more-failed]")?.textContent).toBe(translate("en", "album.loadMoreFailed"));
+    expect(document.querySelector("[data-album-item='newest']")).not.toBeNull();
+    expect(document.querySelector("[data-album-more]")).not.toBeNull();
+
+    refuseMore = false;
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-album-more]")!.click());
+    await settle(60);
+    expect(document.querySelector("[data-album-more-failed]")).toBeNull();
+    expect(document.querySelector("[data-album-item='oldest']")).not.toBeNull();
+  } finally {
+    globalThis.fetch = served;
+  }
+});

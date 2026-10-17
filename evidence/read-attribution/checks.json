@@ -1,0 +1,440 @@
+{
+  "schema": 1,
+  "utc": "2026-10-16T15:53:44.172495+00:00",
+  "startingCommit": "8ba30644e03105bbcdf55c99891f1b9d5d00af6b",
+  "mainObserved": "26d057f4626168aff625de7be0aab61298466b1d",
+  "runtime": "Bun 1.4.0",
+  "procedure": "Explicit test files, one process per file, isolated HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR and a closed Viewer control URL; heavy commands run through the installed gate wrapper. Red existing files were rerun on the starting commit under the same isolation.",
+  "sourceHashes": {
+    "scripts/benchmark-read-attribution.ts": "5cc8ae3afa61a65535735b6cc81727aef703a1de0c4ea63836195db12eb6a88f",
+    "src/lib/activity/store.ts": "58d4b745c82c851178cf72630ddf48f4bfdc8d869a6db491e4a5a99082618f99",
+    "src/lib/agent/sqliteRegistryStore.ts": "807b5e87e7a398dd660ba941fa3934f2d530595ac07e3352ff62efc9fdd64cb9",
+    "src/lib/externalRelay/ownerBridgeContext.ts": "c6b100f831d2ac0b33ee52f1c5099027cb8fd1611891feb550ffb06780f6decf",
+    "src/lib/mcp/boardSelection.ts": "cff7749923db748a46278a95737f73f3c1f6c4ea6893f81509da5b101f77d715",
+    "src/lib/mcp/server.ts": "492b90b1a8d107d8084c6b758cb4f64d56a840fd892d2db9f595c2b38396436f",
+    "src/lib/memory/index.ts": "e6f160a19ddf26ff6fe020116066469f2271b9150aeffe8e97bee24f1ce7a317",
+    "src/lib/performanceSpans.ts": "636e68ba8984c412e85a70a80b3100505e9a72a24af8b4a1988714c3fd03f125",
+    "src/lib/readAttribution.test.ts": "534b9ac074b35614596c89b081795acd70fd63b59e1fa10ef47ec511aa50dc58",
+    "src/lib/readAttribution.ts": "b1996c9b4d3d7b446e320eb39623036456f5e6c851a74930959fce682a02ede5",
+    "src/lib/readAttributionFixture.ts": "b6a26f4475aab4c7ba2d76ee06f5cd363b6c5da3fa869b22240f72baf22ae6c6",
+    "src/lib/reviewHistory/reader.ts": "c453245e5dd87e83fc9fb8c08c87dcb91eb2f58bfa5016290ac2256cb6415862",
+    "src/lib/runtime/cpuAdmission.ts": "637d2e2e2d88d4ce01244d668c1fcd4e906aa324375e348d8560cf7da7116bda",
+    "src/lib/runtime/deliveryProgress.ts": "0ed76a9795218548915f6f46b997b1c9c694115f4b7a889126fcac4141684320",
+    "src/lib/runtime/deploymentLedger.ts": "7fa2a00704bd6ece86d87c5f9eb47ed361c34c3c822c9f446aa0f9f92d893635",
+    "src/lib/runtime/handoffQueueStore.ts": "932e7f824d66b672b64b5e9cd80a10886b6384c8c52d4809f228a2f4d1f1969b",
+    "src/lib/runtime/runtimeImageStore.ts": "6f3a472ac8e09f833d28fffa907d07fe8c56ec57a31768abd0623a4b37315e60",
+    "src/lib/search/transcriptSearch.ts": "7ab5452c691921650e86a020e3d2934d76cc00b7f9e63a018d75143232d3be5a",
+    "src/lib/sqliteReadAttribution.test.ts": "223bbd5fc45afdbbb13031708746f44e952439e9fbd0ae0c1f2abb8755c7aa6b",
+    "src/lib/sqliteReadAttribution.ts": "e4aa258b789eb73f0cb20dcc829ba80b06e64a4bad6951787f7823297ee21251",
+    "src/lib/state/currentDatabase.ts": "caec76d702d70c53b525c71becab3da0919ec3d8f2da93ad3f2277f635399066",
+    "src/lib/state/durability.ts": "1db72877f908996cc45af64da3522ab686b336964f54c2cf01dd0396247de576",
+    "src/lib/state/sqliteStateStore.ts": "e4d9843b46aadaf1fd05f380ea6a05b497095c47402f4b05b42b004f1631bb58",
+    "src/lib/team/store.ts": "7acd3dbf80791d1f7b02c04cefa5a7b6c250dc91042b6dfbf2b66d2e4d66074f",
+    "src/lib/telegram/bot/outbound.ts": "a0be6e2de724766613fd612b4f1df396e1f0c189016ea355e3afeba8d1e8431b",
+    "src/lib/telegram/bot/store.ts": "5f350815bdce40d7cf0aa357c0069dd0c83b46b3f72323995d6e73b1b0ad7ae9",
+    "src/lib/viewerLoopMonitor.ts": "d212219081d9a2914f9776740aa4252b98680356e4eef1c48993fb072cca0cf9"
+  },
+  "results": [
+    {
+      "file": "src/lib/readAttribution.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 0.2683918939437717,
+      "passedCases": 6,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/sqliteReadAttribution.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 0.3822602101135999,
+      "passedCases": 7,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/performanceSpans.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 1.6570141538977623,
+      "passedCases": 9,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/state/sqliteStateStore.readCache.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 3.7579222458880395,
+      "passedCases": 11,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/state/sqliteStateStore.bounded.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 4.069436132907867,
+      "passedCases": 10,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/state/sqliteStateStore.lifecycle.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 0.5815820239949971,
+      "passedCases": 2,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/state/durability.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 9.007113291881979,
+      "passedCases": 22,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/agent/sqliteRegistryStore.readOnlyView.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 2.567202440928668,
+      "passedCases": 22,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/agent/sqliteRegistryStore.refresh.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 5.551872160984203,
+      "passedCases": 4,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/agent/sqliteRegistryStore.history.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 36.42527351202443,
+      "passedCases": 12,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/mcp/server.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 22.866394092096016,
+      "passedCases": 99,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/mcp/largeReads.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 0.6142788070719689,
+      "passedCases": 8,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/memory/index.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 6.0289157750085,
+      "passedCases": 62,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/runtime/cpuAdmission.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 0.6924894379917532,
+      "passedCases": 27,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/runtime/deliveryProgress.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 1.2042085411958396,
+      "passedCases": 21,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/runtime/deploymentLedger.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 0.3118381800595671,
+      "passedCases": 6,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/runtime/handoffQueueStore.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 0.5762984999455512,
+      "passedCases": 8,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/runtime/runtimeImageStore.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 0.6725564659573138,
+      "passedCases": 32,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/search/transcriptSearch.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 3.931897204136476,
+      "passedCases": 53,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/team/team.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 2.100367459934205,
+      "passedCases": 53,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/telegram/bot/store.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 0.33078913507051766,
+      "passedCases": 11,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/telegram/bot/outbound.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 1.2524630688130856,
+      "passedCases": 14,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/activity/requestLedger.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 0.3531594448722899,
+      "passedCases": 11,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/activity/ingest.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 7.928942215163261,
+      "passedCases": 12,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/reviewHistory/reader.test.ts",
+      "exit": 1,
+      "preexisting": true,
+      "failures": [
+        "fresh unowned production process imports GETs without claiming ownership or initializing state"
+      ],
+      "seconds": 15.061654114862904,
+      "passedCases": 72,
+      "failedCases": 1
+    },
+    {
+      "file": "src/lib/externalRelay/ownerBridgeContext.test.ts",
+      "exit": 1,
+      "preexisting": true,
+      "failures": [
+        "an adjacent published report does not resolve without an explicit reply",
+        "an explicit reply retains its report context even with a substantive instruction",
+        "an owner instruction does not inherit the preceding report (message text)",
+        "an owner instruction does not inherit the preceding report (request text)",
+        "chat cannot turn stale chat text into report context",
+        "intervening-message cannot turn stale chat text into report context",
+        "publish transport retains the exact reference and resolves a report absent from relay history",
+        "target cannot turn stale chat text into report context",
+        "unknown-reply cannot turn stale chat text into report context",
+        "unpublished cannot turn stale chat text into report context"
+      ],
+      "seconds": 1.0501134779769927,
+      "passedCases": 10,
+      "failedCases": 10
+    },
+    {
+      "file": "src/lib/pipelines/startupResponsiveness.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 9.813890741905198,
+      "passedCases": 14,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/pipelines/controllerLease.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 1.5890375280287117,
+      "passedCases": 8,
+      "failedCases": 0
+    },
+    {
+      "file": "src/lib/runtime/accountCreditGuard.tick.test.ts",
+      "exit": 0,
+      "preexisting": false,
+      "failures": [],
+      "seconds": 3.801735097076744,
+      "passedCases": 7,
+      "failedCases": 0
+    },
+    {
+      "file": "lint",
+      "exit": 0,
+      "seconds": 5.464583760127425
+    },
+    {
+      "file": "types",
+      "exit": 0,
+      "seconds": 16.7912219541613
+    },
+    {
+      "file": "scenario",
+      "exit": 0,
+      "seconds": 27.58632143889554
+    },
+    {
+      "file": "privacy",
+      "exit": 0,
+      "seconds": 8.953095861012116
+    },
+    {
+      "file": "build",
+      "exit": 0,
+      "seconds": 195.7037729069125
+    }
+  ],
+  "baseline": [
+    {
+      "file": "src/lib/runtime/deliveryProgress.test.ts",
+      "exit": 0,
+      "failures": [],
+      "passedCases": 21,
+      "failedCases": 0,
+      "betweenTestErrors": false
+    },
+    {
+      "file": "src/lib/reviewHistory/reader.test.ts",
+      "exit": 1,
+      "failures": [
+        "fresh unowned production process imports GETs without claiming ownership or initializing state"
+      ],
+      "passedCases": 72,
+      "failedCases": 1,
+      "betweenTestErrors": false
+    },
+    {
+      "file": "src/lib/externalRelay/ownerBridgeContext.test.ts",
+      "exit": 1,
+      "failures": [
+        "an adjacent published report does not resolve without an explicit reply",
+        "an explicit reply retains its report context even with a substantive instruction",
+        "an owner instruction does not inherit the preceding report (message text)",
+        "an owner instruction does not inherit the preceding report (request text)",
+        "chat cannot turn stale chat text into report context",
+        "intervening-message cannot turn stale chat text into report context",
+        "publish transport retains the exact reference and resolves a report absent from relay history",
+        "target cannot turn stale chat text into report context",
+        "unknown-reply cannot turn stale chat text into report context",
+        "unpublished cannot turn stale chat text into report context"
+      ],
+      "passedCases": 10,
+      "failedCases": 10,
+      "betweenTestErrors": false
+    }
+  ],
+  "lint": {
+    "before": [
+      {
+        "file": "src/lib/mcp/boardSelection.ts",
+        "rule": "@typescript-eslint/no-explicit-any",
+        "message": "Unexpected any. Specify a different type."
+      },
+      {
+        "file": "src/lib/mcp/boardSelection.ts",
+        "rule": "@typescript-eslint/no-explicit-any",
+        "message": "Unexpected any. Specify a different type."
+      },
+      {
+        "file": "src/lib/state/currentDatabase.ts",
+        "rule": "prefer-const",
+        "message": "'handle' is never reassigned. Use 'const' instead."
+      }
+    ],
+    "after": [
+      {
+        "file": "src/lib/mcp/boardSelection.ts",
+        "rule": "@typescript-eslint/no-explicit-any",
+        "message": "Unexpected any. Specify a different type."
+      },
+      {
+        "file": "src/lib/mcp/boardSelection.ts",
+        "rule": "@typescript-eslint/no-explicit-any",
+        "message": "Unexpected any. Specify a different type."
+      },
+      {
+        "file": "src/lib/state/currentDatabase.ts",
+        "rule": "prefer-const",
+        "message": "'handle' is never reassigned. Use 'const' instead."
+      }
+    ],
+    "introduced": []
+  },
+  "mainCompatibility": [
+    {
+      "file": "src/lib/agent/sqliteRegistryStore.ts",
+      "clean": true
+    },
+    {
+      "file": "src/lib/performanceSpans.ts",
+      "clean": true
+    },
+    {
+      "file": "src/lib/state/currentDatabase.ts",
+      "clean": true
+    },
+    {
+      "file": "src/lib/viewerLoopMonitor.ts",
+      "clean": true
+    }
+  ],
+  "hostedChecks": "Await pipeline publication; not run by this local campaign.",
+  "newFailures": [],
+  "transactionRegression": {
+    "test": "transaction JSON bytes belong to the connection that supplied the row",
+    "redOn": "c94a87d851511ba11cb7f5e64ceadd54c220c5aa",
+    "redReason": "decoded bytes were charged to the persistent reader instead of the transaction connection",
+    "green": true
+  }
+}

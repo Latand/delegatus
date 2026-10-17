@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
+import { keysOwnerGate } from "@/lib/keys/access";
 import { translate } from "@/lib/i18n/core";
 import { operatorLocale } from "@/lib/operator/settings";
 import { withReportDestinations } from "@/lib/projects/reportDestination";
@@ -51,8 +52,12 @@ export async function POST(req: NextRequest) {
   const service = telegramBotService();
   try {
     switch (body.action) {
-      case "connect":
+      case "connect": {
+        /* The token is a catalog key: connecting takes the Keys page's owner gate. */
+        const refusal = keysOwnerGate(req);
+        if (refusal) return refusal;
         return NextResponse.json({ bot: withReportDestinations(await service.connect(body.token)) });
+      }
       case "refresh":
         return NextResponse.json({ bot: withReportDestinations(await service.refresh()) });
       case "chat":

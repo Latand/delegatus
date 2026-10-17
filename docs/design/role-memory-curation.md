@@ -323,6 +323,11 @@ pass) for the MCP guard.
 
 ### 3.2 Retention: curation fills the 10 000 characters
 
+Implementation update, 2026-10-16: [memory-delivery-ledger.md](memory-delivery-ledger.md#curation-admission-and-budget)
+supersedes the budget behavior below. Never-curated rules remain active through
+budget overflow, scopes at 90% with pending lessons make curation due early,
+and a committed curator partition must meet the character bound.
+
 - **The bound** stays 10 000 code points per scope, measured on what an
   agent reads: the rendered lines `- [id] rule`, which no longer carry Why
   (3.5). The analysis found the Why lines were 36 % of the builder's block,

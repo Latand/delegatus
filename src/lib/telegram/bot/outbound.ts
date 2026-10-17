@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import type { Database } from "bun:sqlite";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
@@ -13,7 +14,7 @@ export interface OutboundMessage extends TelegramPublishReceipt {
   sendKey: string;
   target: PublicationTarget | null;
 }
-export interface OutboundRow { key: string; message: OutboundMessage; attempts: number }
+export interface OutboundRow { key: string; message: OutboundMessage; attempts: number; reserved?: true }
 export const outboundKey = (m: TelegramPublishReceipt) => JSON.stringify([m.botId, m.chatId, m.messageId]);
 export const samePublicationTarget = (a: PublicationTarget | null, b: PublicationTarget | null) =>
   !!a && !!b && a.relayId === b.relayId && a.apiBase === b.apiBase && a.targetId === b.targetId && a.ownerId === b.ownerId;
@@ -29,7 +30,7 @@ function outboundAttempt<T>(filename: string, write: boolean, work: (db: Databas
   return stateLockAttempt("telegram.outbound-state", () => {
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("Telegram outbound custody requires the Bun runtime");
-    const db = openCurrentDatabase(filename, () => new sqlite.Database(filename, { readonly: !write, strict: true }));
+    const db = openCurrentDatabase(filename, () => observeSqlite(new sqlite.Database(filename, { readonly: !write, strict: true }), "telegram-outbound"));
     try {
       db.exec("PRAGMA busy_timeout = 0");
       if (write) {
@@ -42,8 +43,22 @@ function outboundAttempt<T>(filename: string, write: boolean, work: (db: Databas
         db.exec("CREATE TABLE IF NOT EXISTS relay_owner_turns (scope TEXT PRIMARY KEY, request_id TEXT NOT NULL, at INTEGER NOT NULL, previous_at INTEGER NOT NULL)");
         db.exec("CREATE TABLE IF NOT EXISTS relay_owner_contexts (key TEXT PRIMARY KEY, at INTEGER NOT NULL, previous_at INTEGER NOT NULL)");
         db.exec("CREATE INDEX IF NOT EXISTS relay_owner_contexts_retention ON relay_owner_contexts(at, key)");
+        db.exec("CREATE TABLE IF NOT EXISTS relay_publication_results (key TEXT PRIMARY KEY, reason TEXT NOT NULL)");
+        db.exec("CREATE TABLE IF NOT EXISTS relay_outbound_handoffs (key TEXT PRIMARY KEY, link TEXT NOT NULL, destination TEXT NOT NULL, due INTEGER NOT NULL DEFAULT 0)");
+        const handoffColumns = db.query<{ name: string }, []>("PRAGMA table_info(relay_outbound_handoffs)").all();
+        if (!handoffColumns.some(column => column.name === "due")) {
+          db.exec("ALTER TABLE relay_outbound_handoffs ADD COLUMN due INTEGER NOT NULL DEFAULT 0");
+          db.exec("UPDATE relay_outbound_handoffs SET due=COALESCE((SELECT due FROM relay_outbound WHERE relay_outbound.key=relay_outbound_handoffs.key), 0)");
+          db.exec("DELETE FROM relay_outbound_handoffs WHERE key IN (SELECT key FROM relay_outbound WHERE state<>'forwarding')");
+        }
+        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_handoff_link_due ON relay_outbound_handoffs(link, due, key)");
+        db.exec("DROP INDEX IF EXISTS relay_outbound_handoff_due");
+        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_unrouted_due ON relay_outbound(due, key) WHERE state = 'unrouted'");
         db.exec("CREATE TABLE IF NOT EXISTS relay_publication_cooldowns (key TEXT PRIMARY KEY, until_ms INTEGER NOT NULL)");
+        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_expiry ON relay_outbound(date, key) WHERE state IN ('pending', 'unrouted', 'forwarding')");
+        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_expiry_forwarding ON relay_outbound(date, key) WHERE state IN ('unrouted', 'forwarding')");
         db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_retention ON relay_outbound(date, key) WHERE state <> 'pending'");
+        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_retention_eligible ON relay_outbound(date, key) WHERE state NOT IN ('pending', 'forwarding')");
         db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_due ON relay_outbound(due, key) WHERE state = 'pending'");
         db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_questions ON relay_outbound(bot_id, chat_id, topic_id, date DESC, message_id DESC) WHERE is_question = 1");
         db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_group ON relay_outbound(bot_id, chat_id, topic_id, send_key, date DESC, message_id DESC)");
@@ -59,7 +74,12 @@ function outboundAttempt<T>(filename: string, write: boolean, work: (db: Databas
     });
 }
 function pruneOutbound(db: Database, before: number): void {
-  db.query("DELETE FROM relay_outbound WHERE key IN (SELECT key FROM relay_outbound WHERE state <> 'pending' AND date < ? ORDER BY date, key LIMIT 64)").run(before);
+  const old = db.query<{ key: string }, [number]>("SELECT key FROM relay_outbound WHERE state NOT IN ('pending', 'forwarding') AND date < ? ORDER BY date, key LIMIT 64").all(before);
+  for (const row of old) {
+    db.query("DELETE FROM relay_outbound_handoffs WHERE key=?").run(row.key);
+    db.query("DELETE FROM relay_publication_results WHERE key=?").run(row.key);
+    db.query("DELETE FROM relay_outbound WHERE key=?").run(row.key);
+  }
 }
 const exists = (db: Database) => !!db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='relay_outbound'").get();
 
@@ -68,6 +88,7 @@ export const isOutboundQuestion = (message: Pick<OutboundMessage, "origin" | "te
 
 export async function recordOutbound(filename: string, message: OutboundMessage): Promise<void> {
   await outboundState(filename, true, db => {
+    expireForwardingOutbound(db, message.date * 1000);
     const key = outboundKey(message);
     const old = db.query<{ value_json: string }, [string]>("SELECT value_json FROM relay_outbound WHERE key=?").get(key);
     if (old && old.value_json !== JSON.stringify(message)) throw new Error("Telegram outbound receipt conflict");
@@ -98,15 +119,44 @@ export async function pendingOutbound(filename: string, now: number): Promise<Ou
   if (!fs.existsSync(filename)) return [];
   return outboundState(filename, false, db => exists(db) ? db.query<{ key: string; value_json: string; attempts: number }, [number]>(
     "SELECT key, value_json, attempts FROM relay_outbound WHERE state='pending' AND due<=? ORDER BY due, key LIMIT 16")
-    .all(now).map(r => ({ key: r.key, message: JSON.parse(r.value_json), attempts: r.attempts })) : []);
+    .all(now).map(r => ({ key: r.key, message: parseSqliteJson(r.value_json, db), attempts: r.attempts })) : []);
 }
-export async function settleOutbound(filename: string, row: OutboundRow, published: boolean, now: number, delayMs?: number): Promise<void> {
+export async function settleOutbound(filename: string, row: OutboundRow, published: boolean, now: number, delayMs?: number, terminalReason?: string, reason = "retry"): Promise<void> {
   await outboundState(filename, true, db => {
     pruneOutbound(db, Math.floor(now / 1000) - 30 * 86400);
-    db.query("UPDATE relay_outbound SET state=?, due=?, attempts=attempts+1 WHERE key=? AND state='pending' AND attempts=?")
-      .run(published ? "published" : "pending", now + (delayMs ?? Math.min(300000, 1000 * 2 ** Math.min(row.attempts, 9))), row.key, row.attempts);
+    db.query("UPDATE relay_outbound SET state=?, due=?, attempts=attempts+? WHERE key=? AND state='pending' AND attempts=?")
+      .run(published ? "published" : terminalReason ? "terminal" : "pending",
+        now + (delayMs ?? Math.min(300000, 1000 * 2 ** Math.min(Math.max(0, row.attempts - (row.reserved ? 1 : 0)), 9))),
+        row.reserved ? 0 : 1, row.key, row.attempts);
+    if (db.query<{ n: number }, []>("SELECT changes() AS n").get()?.n)
+      db.query("INSERT INTO relay_publication_results VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET reason=excluded.reason")
+        .run(row.key, published ? "published" : terminalReason ?? reason);
   });
 }
+
+/** Reserve before HTTP, so a process death cannot reset the attempt budget. */
+export async function reserveOutboundAttempt(filename: string, row: OutboundRow, now: number): Promise<OutboundRow | null> {
+  return outboundState(filename, true, db => {
+    const result = db.query("UPDATE relay_outbound SET attempts=attempts+1, due=? WHERE key=? AND state='pending' AND attempts=?")
+      .run(now + Math.min(300000, 1000 * 2 ** Math.min(row.attempts, 9)), row.key, row.attempts);
+    return result.changes ? { ...row, attempts: row.attempts + 1, reserved: true } : null;
+  });
+}
+
+/** Indexed, finite housekeeping, including rows that never found a route. */
+function expireOutboundStates(db: Database, now: number, includePending: boolean): void {
+  const states = includePending ? "('pending', 'unrouted', 'forwarding')" : "('unrouted', 'forwarding')";
+  const expired = db.query<{ key: string }, [number]>(`SELECT key FROM relay_outbound
+    WHERE state IN ${states} AND date<=? ORDER BY date, key LIMIT 16`)
+    .all(Math.floor(now / 1000) - 86400);
+  for (const row of expired) {
+    db.query("DELETE FROM relay_outbound_handoffs WHERE key=?").run(row.key);
+    db.query("UPDATE relay_outbound SET state='terminal' WHERE key=?").run(row.key);
+    db.query("INSERT INTO relay_publication_results VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET reason=excluded.reason").run(row.key, "expired");
+  }
+}
+export function expireOutbound(db: Database, now: number): void { expireOutboundStates(db, now, true); }
+export function expireForwardingOutbound(db: Database, now: number): void { expireOutboundStates(db, now, false); }
 
 /** Only a confirmed publication reference may supply the scope. An exact
  * parent reserves its send group. At most 32 receipts and 64 KiB of text
@@ -140,7 +190,7 @@ export async function scopedOutbound(filename: string, botId: string, chatId: st
     const result: OutboundMessage[] = [];
     for (const row of messageId === undefined ? [...group, ...rows] : [...rows, ...group]) {
       if (row.value_json === null) continue;
-      const message = JSON.parse(row.value_json) as OutboundMessage;
+      const message = parseSqliteJson(row.value_json, db) as OutboundMessage;
       if (seen.has(message.messageId)) continue;
       seen.add(message.messageId);
       const size = Buffer.byteLength(message.text);

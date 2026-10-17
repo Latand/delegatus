@@ -1,3 +1,4 @@
+import { observeSqlite } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
 import { readBridgeReportLog } from "@/lib/bridge/store";
@@ -24,7 +25,7 @@ function recordedChatId(alias: string): string | null {
   if (!fs.existsSync(file)) return null;
   const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
   if (!sqlite) throw new Error("owner report context requires the Bun runtime");
-  const db = openCurrentDatabase(file, () => new sqlite.Database(file, { readonly: true }));
+  const db = openCurrentDatabase(file, () => observeSqlite(new sqlite.Database(file, { readonly: true }), "owner-bridge"));
   try {
     return db.query<{ chat_id: string }, [string, string]>("SELECT chat_id FROM chats WHERE lower(alias) = ? OR chat_id = ?")
       .get(alias.trim().toLowerCase(), alias.trim())?.chat_id ?? null;

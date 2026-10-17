@@ -29,6 +29,11 @@ export function scopeHeading(scope: string): string {
 
 /** Four matching scopes, each rendered as separate rules with their ids. */
 export function renderLearnedRules(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], maxBytes = Infinity): string {
+  return renderLearnedRulesSelection(scopes, maxBytes).block;
+}
+
+/** Metadata and text share the same byte-ceiling selection. */
+export function renderLearnedRulesSelection(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], maxBytes = Infinity) {
   const selected = scopes.map(entry => ({ scope: entry.scope, rules: [...entry.rules] }));
   let block = renderBlock(selected);
   let omitted = 0;
@@ -41,7 +46,7 @@ export function renderLearnedRules(scopes: readonly { scope: string; rules: read
     block = renderBlock(selected);
   }
   if (omitted) console.warn(`[role-memory] omitted ${omitted} lowest-ranked rules from this engine start at the byte ceiling`);
-  return block;
+  return { block, rules: selected.flatMap(scope => scope.rules) };
 }
 
 function renderBlock(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[]): string {

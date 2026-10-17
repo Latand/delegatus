@@ -127,3 +127,15 @@ export function codexSubagentConfig(features: readonly CodexFeature[], allowSuba
     ...configuredKeys.filter((key) => !CODEX_SINGLE_AGENT_FEATURES.has(CODEX_FEATURE_ALIASES[key] ?? key)),
   ].map((name) => [name, false]));
 }
+
+/** Resolve the memory feature once for a launch and share it with both the
+ * delivery ledger and app-server config. Codex's denied-subagent policy turns
+ * off memories even when the account config enables them. */
+export async function codexNativeMemoryEnabled(codexHome: string | undefined, allowSubagents: boolean | undefined, cleanMemory: boolean): Promise<boolean> {
+  if (cleanMemory || allowSubagents !== true) return false;
+  if (!codexHome) return true;
+  let config: { features?: { memories?: boolean }; memories?: { use_memories?: boolean } } = {};
+  try { config = Bun.TOML.parse(await fs.promises.readFile(path.join(codexHome, "config.toml"), "utf8")) as typeof config; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  return config.features?.memories !== false && config.memories?.use_memories !== false;
+}

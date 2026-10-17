@@ -530,6 +530,10 @@ export interface EngineAccountsState extends EngineAccountsSnapshot {
   /** Redeems one usage-limit reset credit on a Codex account (#1373) — no
       confirmation step — and shows the new window the provider answers with. */
   useResetCredit: (accountId: string) => Promise<boolean>;
+  /** Draws an edit of an existing account's label and endpoint on every row
+      at once (audit B32); the answer takes the drawn values back. A read that
+      lands meanwhile replaces them with the server's. */
+  drawAccount?: (accountId: string, patch: Pick<AccountOption, "label" | "provider">) => () => void;
 }
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -1044,14 +1048,26 @@ export function createEngineAccountsStore(
       const settle = (restored: "done" | "failed") => {
         if (summary) patchSnapshot({ removal: { kind: "removed", summary: { ...summary, restored } } });
       };
+      /* The row is back at once, its sign-in unchecked until the refresh, and
+         the offer is gone (audit B37); a refusal takes the row off and offers
+         it again. "Already listed" (404) means it is back. */
+      const offer = snapshot.hidden.find((account) => account.id === accountId) ?? { id: accountId, label: summary?.label ?? accountId };
+      const drawn = !snapshot.accounts.some((account) => account.id === accountId);
+      if (drawn) patchSnapshot({ accounts: [{ id: accountId, label: offer.label, kind: "legacy", authPresent: true, authHealth: "unknown", loginPending: false, loginState: "idle", deviceAuth: null }, ...snapshot.accounts] });
+      patchSnapshot({ hidden: snapshot.hidden.filter((account) => account.id !== accountId) });
+      settle("done");
       try {
         const response = await fetcher(addUrl, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ action: "restore", id: accountId }),
         });
-        if (!response.ok) throw new Error("restore failed");
+        if (!response.ok && response.status !== 404) throw new Error("restore failed");
       } catch {
+        patchSnapshot({
+          accounts: drawn ? snapshot.accounts.filter((account) => account.id !== accountId) : snapshot.accounts,
+          hidden: snapshot.hidden.some((account) => account.id === accountId) ? snapshot.hidden : [...snapshot.hidden, offer],
+        });
         settle("failed");
         /* Offered from account setup, with no summary open, the failure is
            said in the panel's notice line. */
@@ -1065,6 +1081,17 @@ export function createEngineAccountsStore(
       await refresh();
       return true;
     });
+  };
+
+  const drawAccount = (accountId: string, patch: Pick<AccountOption, "label" | "provider">): (() => void) => {
+    const held = snapshot.accounts.find((account) => account.id === accountId);
+    if (!held) return () => {};
+    const drawn = { ...held, ...patch };
+    patchSnapshot({ accounts: snapshot.accounts.map((account) => (account.id === accountId ? drawn : account)) });
+    return () => {
+      /* Only the drawn row goes back: a read that answered since is the server's. */
+      if (snapshot.accounts.some((account) => account === drawn)) patchSnapshot({ accounts: snapshot.accounts.map((account) => (account === drawn ? held : account)) });
+    };
   };
 
   const copyTerminalCommand = (accountId: string): Promise<boolean> => {
@@ -1264,6 +1291,7 @@ export function createEngineAccountsStore(
     copyTerminalCommand,
     refreshLimits,
     useResetCredit,
+    drawAccount,
   };
 }
 
@@ -1310,6 +1338,7 @@ export function useEngineAccounts(engine: Engine): EngineAccountsState {
     copyTerminalCommand: store.copyTerminalCommand,
     refreshLimits: store.refreshLimits,
     useResetCredit: store.useResetCredit,
+    drawAccount: store.drawAccount,
   };
 }
 

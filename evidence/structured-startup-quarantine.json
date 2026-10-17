@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "comparisonRevision": "02f9301fc32370210a4af533c1204741c6436f52",
+  "recordedAt": "2026-10-16T12:46:34.744598+00:00",
+  "runtime": "Bun 1.4.0",
+  "input": {
+    "method": "SQLite backup from a read-only source; one immutable offline backup for all six runs",
+    "rows": {
+      "conversations": 7213,
+      "deliveryOperationOwners": 10487,
+      "entries": 6275,
+      "heldDeliveries": 5341,
+      "lineageEdges": 6289,
+      "memberships": 5187,
+      "migrationIntents": 54,
+      "pendingSupersedence": 1,
+      "receipts": 6476
+    },
+    "sha256": "57a4d7f3d40f886da0a19a24456b4d7a6df5cc366186f74c11a2f15a69805a5c",
+    "isolation": "Every child has private HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR. The standalone driver claims a test temp root before dynamic imports.",
+    "transformation": "Current entries, receipts, held deliveries, delivery operation owners, migration intents and pending supersedence rows and cold pointers removed from each fresh copy; retained conversations, lineage, memberships and immutable archive versions preserved; one deterministic handover refusal added."
+  },
+  "procedure": {
+    "command": "bash scripts/gate-slot.sh bun scripts/startup-retry-benchmark.ts \"$OFFLINE_REGISTRY\"",
+    "order": [
+      "main-1",
+      "candidate-1",
+      "main-2",
+      "candidate-2",
+      "main-3",
+      "candidate-3"
+    ],
+    "clock": "Frozen wall clock, one simulated hour; scheduler callbacks advanced to their actual deadlines; jitter disabled.",
+    "cpu": "process.cpuUsage user plus system during the scheduler replay",
+    "load": "One busy Codex handover row held by the child process claim. Runtime journal is private. Transcript refresh is a counted stub. No native engine is launched."
+  },
+  "sourceSha256": {
+    "scripts/startup-retry-benchmark.ts": "3383e4dbed8b6b49fd9cb4e117f2bdbfc8cf0fb0c67311d322a7e06cbd654610",
+    "src/lib/runtime/registry.ts": "037adc864f6f16002daba49424336080454ff93fd8f4ab357e7a762dbef39e88",
+    "src/lib/runtime/startup.ts": "0f8f1854856b618edf9c0b002b673c434d7287b5fb7c00ad9f671d9eb358f151",
+    "src/lib/runtime/startupRowRetries.ts": "5462ddf1e62b0969b7b461ea437aaacdfc6c456d096c6c63a04e9115dbadc9bd",
+    "src/lib/runtime/startupSnapshot.ts": "c6cdc3ce5f441a468e12cc379c854c2898814dce48f2e4604cd4943d8f4663af",
+    "src/lib/runtime/structuredDeliveryController.ts": "d8b5621b246d040a6c9f0d3ff7bd72ae020acfed26b0e67a689350b7c17ce3eb",
+    "src/lib/viewerLoopMonitor.ts": "83c16dc1470a68335ae92b98f2bf474f38e6e1b3c8ef1dbd42a75d550d37def0"
+  },
+  "samples": {
+    "main": [
+      {
+        "simulatedHours": 1,
+        "retainedConversations": 7213,
+        "fullPasses": 17,
+        "rowPasses": 0,
+        "cpuMs": 6591.656,
+        "elapsedMs": 6035.687826000001
+      },
+      {
+        "simulatedHours": 1,
+        "retainedConversations": 7213,
+        "fullPasses": 17,
+        "rowPasses": 0,
+        "cpuMs": 6505.94,
+        "elapsedMs": 5975.592162999999
+      },
+      {
+        "simulatedHours": 1,
+        "retainedConversations": 7213,
+        "fullPasses": 17,
+        "rowPasses": 0,
+        "cpuMs": 6990.233,
+        "elapsedMs": 6398.255616
+      }
+    ],
+    "candidate": [
+      {
+        "simulatedHours": 1,
+        "retainedConversations": 7213,
+        "fullPasses": 1,
+        "rowPasses": 8,
+        "cpuMs": 3126.144,
+        "elapsedMs": 3262.3733230000003
+      },
+      {
+        "simulatedHours": 1,
+        "retainedConversations": 7213,
+        "fullPasses": 1,
+        "rowPasses": 8,
+        "cpuMs": 3256.962,
+        "elapsedMs": 3429.8909860000003
+      },
+      {
+        "simulatedHours": 1,
+        "retainedConversations": 7213,
+        "fullPasses": 1,
+        "rowPasses": 8,
+        "cpuMs": 2672.624,
+        "elapsedMs": 2897.607544
+      }
+    ]
+  },
+  "medianCpuMs": {
+    "main": 6591.656,
+    "candidate": 3126.144
+  }
+}

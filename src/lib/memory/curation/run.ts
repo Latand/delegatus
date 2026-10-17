@@ -73,17 +73,19 @@ export async function launchCurationIfDue(input: SeatTickCheckInput, ports: Cura
   if (!roleMemoryEnabled()) return "curation: paused, memory off";
   if (!input.settings.enabled) return "curation: paused, wakes off";
   const eligible: { project: string; wakeAt: number }[] = [];
-  let reason = "no designated seat";
+  let reason = "no designated seat", quietEligible = false;
   // Read every designated project's own delivery stamp before choosing a machine host.
   for (const project of [...new Set([...ports.sources.activeSeats(), input.project].map(canonicalProject))].sort()) {
     const host = await hostAdmission(project, ports);
     if (host.held !== null) { if (project === canonicalProject(input.project)) reason = host.held; continue; }
-    if (!curationStatus(project, ports.sources.now()).active) continue;
+    const status = curationStatus(project, ports.sources.now());
+    if (!status.active) continue;
+    if (!status.due) { quietEligible = true; continue; }
     eligible.push({ project, wakeAt: host.wakeAt });
   }
   eligible.sort((a, b) => b.wakeAt - a.wakeAt || (a.project < b.project ? -1 : a.project > b.project ? 1 : 0));
   const project = eligible[0]?.project;
-  if (!project) return `curation: paused, no eligible project: ${reason}`;
+  if (!project) return quietEligible ? null : `curation: paused, no eligible project: ${reason}`;
   const held = admissionHeld(project, ports); if (held) return held;
   const seat = ports.sources.seatFor(project).active;
   const conversation = seat?.conversationId ? ports.sources.registry().conversation(seat.conversationId as `conversation_${string}`) : null;

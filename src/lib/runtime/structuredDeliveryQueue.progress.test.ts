@@ -1,4 +1,6 @@
-import { expect, test } from "bun:test";
+import { DeliveryEffectPages } from "./deliveryEffectPages";
+import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
+import { expect, test, setSystemTime } from "bun:test";
 
 import type { DeliveryReceipt, EngineHost, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import { DeliveryProgressStore } from "./deliveryProgress";
@@ -958,4 +960,93 @@ test("an inherited delivering fence shows a truthful stall under the successor w
     expect(text).toContain(translate(lang, "delivery.wait.dispatching"));
   }
   expect(target.inputs).toEqual(["op-hung"]);
+});
+
+
+test("a watchdog wake during an older listing immediately owes a fresh pass", async () => {
+  const time = clock();
+  const journal = fakeJournal();
+  const progress = new DeliveryProgressStore(null, time.now);
+  const target = fakeHost(delivered);
+  const gate = deferred<void>();
+  const base = journal.port({ progress });
+  let listings = 0;
+  const queue = queueFor({ ...base, effects: async (...args) => {
+    const snapshot = await base.effects(...args);
+    if (++listings === 1) await gate.promise;
+    return snapshot;
+  } }, { "conversation-a": target.engine }, { safetyPassMs: 5000, now: time.now });
+  const first = queue.drain();
+  while (listings === 0) await Promise.resolve();
+  journal.admit("op-during-list", "conversation-a");
+  progress.note("op-during-list", "conversation-a", { waitReason: "checking", nextWakeMs: 0 });
+  time.advance(5000);
+  await queue.tick();
+  gate.resolve();
+  await first;
+  expect(target.inputs).toEqual(["op-during-list"]);
+  expect(listings).toBe(2);
+  queue.retire();
+});
+
+
+test("a cached listing timeout delivers a free recipient and stale terminal effects never repeat input", async () => {
+  const journal = fakeJournal();
+  const progress = new DeliveryProgressStore(null);
+  let turn: string | null = "busy-turn";
+  const target = fakeHost(delivered, () => idleState(turn));
+  journal.admit("cached-send", "conversation-a");
+  let fail = false;
+  let retries = 0;
+  const base = journal.port({ progress });
+  const pages = new DeliveryEffectPages({ effectBatch: async (kinds, after) => {
+    if (fail) throw new RuntimeHostUnavailableError("runtime host request timed out");
+    return base.effects(kinds, after);
+  } } as RuntimeHostClient, () => { retries++; });
+  const queue = queueFor({ ...base, effects: (...args) => pages.read(...args), takeEffectsReadFailure: () => pages.takeReadFailure() }, { "conversation-a": target.engine }, {});
+  await queue.drain();
+  expect(progress.get("cached-send")?.waitReason).toBe("awaiting-turn");
+  fail = true;
+  turn = null;
+  await queue.drain();
+  expect(target.inputs).toEqual(["cached-send"]);
+  expect(retries).toBe(1);
+  // Another positively admitted message owns an immediate new pass; the old
+  // cached terminal operation still cannot actuate again.
+  journal.admit("next-admission", "conversation-b");
+  await queue.drainAfterAdmission(true);
+  expect(target.inputs).toEqual(["cached-send"]);
+  expect(progress.get("cached-send")?.terminal?.state).toBe("delivered");
+  expect(retries).toBe(2);
+  queue.retire();
+});
+
+test("a fresh admission immediately replaces the wake of a failed listing", async () => {
+  const journal = fakeJournal();
+  const target = fakeHost(delivered);
+  const base = journal.port();
+  let fail = true;
+  const queue = queueFor({ ...base, effects: (...args) => {
+    if (fail) return Promise.reject(new Error("listing timed out"));
+    return base.effects(...args);
+  } }, { "conversation-a": target.engine }, {});
+  await expect(queue.drain()).rejects.toThrow("listing timed out");
+  fail = false;
+  journal.admit("fresh-after-failure", "conversation-a");
+  await queue.drainAfterAdmission(true);
+  expect(target.inputs).toEqual(["fresh-after-failure"]);
+  queue.retire();
+});
+
+test("observer admission barriers retain the failed listing budget without new journal work", async () => {
+  const journal = fakeJournal();
+  const base = journal.port();
+  let reads = 0;
+  const queue = queueFor({ ...base, effects: async () => { reads++; throw new Error("listing unavailable"); } }, {}, {});
+  setSystemTime(new Date("2026-10-16T12:00:00Z"));
+  try {
+    await expect(queue.drain()).rejects.toThrow("listing unavailable");
+    for (let index=0; index<100; index++) await queue.drainAfterAdmission();
+    expect(reads).toBe(1);
+  } finally { queue.retire(); setSystemTime(); }
 });

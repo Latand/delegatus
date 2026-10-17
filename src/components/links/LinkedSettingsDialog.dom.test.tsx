@@ -483,3 +483,60 @@ test("cached successful sync ages to stale while metadata reads fail", async () 
     window.setInterval = realWindowInterval;
   }
 });
+
+/* Audit B18: a sharing choice flips at once and a refusal flips it back with the reason. */
+function heldShare(known: { key: string; name: string }[]) {
+  const patches: unknown[] = [];
+  let refuse: () => void = () => {};
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url === "/api/links/shared" && method === "PATCH") {
+      patches.push(JSON.parse(String(init!.body)));
+      await new Promise<void>((resolve) => { refuse = resolve; });
+      return Response.json({ error: "cannot-share" }, { status: 400 });
+    }
+    if (url === "/api/links/shared") return Response.json({ shared: { v: 1, all: false, projects: [] }, known, states: [] });
+    if (url === "/api/links") return Response.json(view("ok"));
+    if (url === "/api/links/codes") return Response.json({ codes: [] });
+    if (url === "/api/links/peers") return Response.json({ peers: [] });
+    if (url === "/api/links/grants") return Response.json({ grants: [] });
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  return { patches, refuse: () => act(async () => { refuse(); await new Promise((resolve) => setTimeout(resolve, 0)); }) };
+}
+
+test("a project's sharing checkbox flips at once while the write is held, sends once, and a refusal flips it back with the reason", async () => {
+  const server = heldShare([{ key: "repo-widgets", name: "Widgets" }]);
+  await mount();
+  const host = document.body as unknown as HTMLElement;
+  const box = () => host.querySelector<HTMLInputElement>('[data-shared-project="repo-widgets"] input[type="checkbox"]')!;
+  expect(box().checked).toBe(false);
+  await act(async () => { box().click(); });
+  expect(box().checked).toBe(true);
+  expect(box().disabled).toBe(false);
+  await act(async () => { box().click(); });
+  expect(server.patches).toEqual([{ project: "repo-widgets", enabled: true }]);
+  await server.refuse();
+  expect(box().checked).toBe(false);
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
+});
+
+test("the project menu's share switch flips at once and a refusal flips it back and marks the row failed", async () => {
+  const { ShareProjectRow } = await import("./ShareProjectRow");
+  const server = heldShare([{ key: "repo-widgets", name: "Widgets" }]);
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  root = createRoot(host as unknown as HTMLElement);
+  await act(async () => { root!.render(<ShareProjectRow project="repo-widgets" variant="menu" />); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  const row = () => host.querySelector<HTMLElement>("[data-share-project]")!;
+  expect(row().dataset.shareProject).toBe("off");
+  await act(async () => { host.querySelector<HTMLElement>("[data-share-project-switch]")!.click(); });
+  expect(row().dataset.shareProject).toBe("on");
+  await act(async () => { host.querySelector<HTMLElement>("[data-share-project-switch]")!.click(); });
+  expect(server.patches).toHaveLength(1);
+  await server.refuse();
+  expect(row().dataset.shareProject).toBe("off");
+  expect(host.textContent).toContain(translate("en", "links.shareFailed"));
+});

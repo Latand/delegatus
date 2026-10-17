@@ -8800,18 +8800,20 @@ export class AgentRegistry {
       conversation; deriving the account from the path layout stays in the
       account manager only as recovery for artifacts the registry never saw. */
   transcriptAccountId(engine: AgentEngine, artifactPath: string): string | null {
-    const snapshot = this.readOnlySnapshot();
-    for (const conversation of Object.values(snapshot.conversations)) {
-      if (conversation.engine !== engine) continue;
-      const generation = conversation.generations.find((item) => item.path === artifactPath);
-      if (generation?.accountId) return generation.accountId;
-      if (conversation.continuityPaths.includes(artifactPath)) {
-        const current = conversation.generations.at(-1);
-        if (current?.accountId) return current.accountId;
+    return this.readKeyed(file => {
+      for (const conversation of registryConversationsForPath(file, artifactPath)) {
+        if (conversation.engine !== engine) continue;
+        const generation = conversation.generations.find((item) => item.path === artifactPath);
+        if (generation?.accountId) return generation.accountId;
+        if (conversation.continuityPaths.includes(artifactPath)) {
+          const current = conversation.generations.at(-1);
+          if (current?.accountId) return current.accountId;
+        }
       }
-    }
-    const receipt = Object.values(snapshot.receipts).find((item) => item.artifactPath === artifactPath && item.engine === engine);
-    return receipt?.accountId ?? null;
+      const receipt = registryRowsMatching(file, "receipts", "artifactPath", artifactPath)
+        .find((item) => item.engine === engine);
+      return receipt?.accountId ?? null;
+    });
   }
 
   updateConversationLaunchProfile(

@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -150,19 +151,19 @@ type HostRow = {
   remote_mode: "solo" | "team" | null; team_history: number; pulled_member: string | null; unknown_authors: number;
 };
 
-function parseIds(value: string): string[] {
+function parseIds(value: string, db: BunDatabase): string[] {
   try {
-    const ids = JSON.parse(value) as unknown;
+    const ids = parseSqliteJson(value, db) as unknown;
     return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
   } catch {
     return [];
   }
 }
 
-function parseExcluded(value: string): Partial<Record<ExclusionReason, number>> {
+function parseExcluded(value: string, db: BunDatabase): Partial<Record<ExclusionReason, number>> {
   const out: Partial<Record<ExclusionReason, number>> = {};
   try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
+    const parsed = parseSqliteJson(value, db) as Record<string, unknown>;
     for (const reason of EXCLUSION_REASONS) {
       const count = parsed?.[reason];
       if (typeof count === "number" && Number.isSafeInteger(count) && count > 0) out[reason] = count;
@@ -173,7 +174,7 @@ function parseExcluded(value: string): Partial<Record<ExclusionReason, number>> 
   return out;
 }
 
-function storedInput(row: InputRow): StoredInput {
+function storedInput(row: InputRow, db: BunDatabase): StoredInput {
   return {
     key: row.key,
     version: row.version,
@@ -183,7 +184,7 @@ function storedInput(row: InputRow): StoredInput {
     surface: row.surface as Surface,
     hash: row.hash,
     conversation: row.conversation,
-    ids: parseIds(row.ids),
+    ids: parseIds(row.ids, db),
     author: row.author,
   };
 }
@@ -206,7 +207,7 @@ export class ActivityStore {
   static open(file: string = activityStorePath()): ActivityStore {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const Database = sqliteDatabase();
-    const db = new Database(file, { create: true, strict: true });
+    const db = observeSqlite(new Database(file, { create: true, strict: true }), "activity");
     try {
       db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
       db.exec(`
@@ -300,7 +301,7 @@ export class ActivityStore {
   static openReadOnly(file: string = activityStorePath()): ActivityStore | null {
     if (!fs.existsSync(file)) return null;
     const Database = sqliteDatabase();
-    const db = new Database(file, { readonly: true, strict: true });
+    const db = observeSqlite(new Database(file, { readonly: true, strict: true }), "activity");
     try {
       db.exec("PRAGMA busy_timeout = 250; PRAGMA query_only = ON;");
       if ((db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0) < SCHEMA_VERSION) {
@@ -341,7 +342,7 @@ export class ActivityStore {
     if (!row) return null;
     let facts: TranscriptFactsState;
     try {
-      facts = JSON.parse(row.facts) as TranscriptFactsState;
+      facts = parseSqliteJson(row.facts, this.db) as TranscriptFactsState;
     } catch {
       return null;
     }
@@ -413,10 +414,10 @@ export class ActivityStore {
     if (existing) {
       const row = this.db.query<InputRow, [string, string]>("SELECT * FROM activity_inputs WHERE host = ? AND key = ?").get(LOCAL_HOST_KEY, existing);
       if (!row) return false;
-      const ids = [...new Set([...parseIds(row.ids), ...candidate.ids])].sort();
+      const ids = [...new Set([...parseIds(row.ids, this.db), ...candidate.ids])].sort();
       const at = Math.min(row.at, candidate.at);
       const author = row.author ?? candidate.author ?? null;
-      if (ids.length !== parseIds(row.ids).length || at !== row.at || author !== row.author) {
+      if (ids.length !== parseIds(row.ids, this.db).length || at !== row.at || author !== row.author) {
         this.db.query("UPDATE activity_inputs SET ids = ?, at = ?, author = ?, version = ? WHERE host = ? AND key = ?")
           .run(JSON.stringify(ids), at, author, this.nextVersion(), LOCAL_HOST_KEY, existing);
       }
@@ -510,7 +511,7 @@ export class ActivityStore {
     return this.db.query<InputRow, [string, number, number]>(
       "SELECT key, version, at, project, kind, surface, hash, conversation, ids, author FROM activity_inputs WHERE host = ? AND at >= ? AND at <= ? ORDER BY at",
     ).all(host, start, end).map((row) => {
-      const input = storedInput(row);
+      const input = storedInput(row, this.db);
       return {
         at: input.at, host: label, project: input.project, kind: input.kind, surface: input.surface,
         ids: input.ids, textHash: input.hash, conversation: input.conversation, author: input.author,
@@ -522,7 +523,7 @@ export class ActivityStore {
   localRowsAfter(version: number, limit: number): StoredInput[] {
     return this.db.query<InputRow, [string, number, number]>(
       "SELECT key, version, at, project, kind, surface, hash, conversation, ids, author FROM activity_inputs WHERE host = ? AND version > ? ORDER BY version LIMIT ?",
-    ).all(LOCAL_HOST_KEY, version, limit).map(storedInput);
+    ).all(LOCAL_HOST_KEY, version, limit).map(row => storedInput(row, this.db));
   }
 
   /** Drop everything pulled from `host`, before it is read again whole. */
@@ -549,7 +550,7 @@ export class ActivityStore {
       attemptAt: row.attempt_at,
       error: row.error,
       cursor: row.cursor,
-      excluded: parseExcluded(row.excluded),
+      excluded: parseExcluded(row.excluded, this.db),
       remoteMode: row.remote_mode,
       teamHistory: row.team_history === 1,
       pulledMember: row.pulled_member,

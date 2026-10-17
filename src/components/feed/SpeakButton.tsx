@@ -133,6 +133,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
   const { locale, t } = useLocale();
   const isMobile = useIsMobile();
   const [info, setInfo] = useState<BackendInfo | null>(backendInfo);
+  const [picked, setPicked] = useState<BackendInfo | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [localPhase, setLocalPhase] = useState<"idle" | "loading" | "playing">("idle");
@@ -424,6 +425,10 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
 
   const pickBackend = async (backend: BackendId, model?: FishAudioModel, voice?: string): Promise<boolean> => {
     if (info.lockedByEnv && ((model === undefined && voice === undefined) || backend !== info.backend)) return false;
+    /* The menu shows the choice at once (audit B23) from a predicted copy kept
+       beside the stored one, so the open menu is not remounted and keeps its
+       saving guard and its error line; a refusal drops the copy. */
+    setPicked({ ...info, backend, options: info.options.map((candidate) => candidate.id === backend ? { ...candidate, ...(model ? { model } : {}), ...(voice ? { voice } : {}) } : candidate) });
     try {
       const response = await fetch("/api/tts/backend", {
         method: "POST",
@@ -437,6 +442,8 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
       return true;
     } catch {
       return false;
+    } finally {
+      if (mounted.current) setPicked(null);
     }
   };
 
@@ -472,8 +479,8 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
         <SpeakMenu
           key={`${option.id}/${option.model}/${option.voice}/${option.available}/${option.voiceLockedByEnv}`}
           anchorRef={triggerRef}
-          info={info}
-          option={option}
+          info={picked ?? info}
+          option={(picked ?? info).options.find((candidate) => candidate.id === (picked ?? info).backend) ?? option}
           chars={text.length}
           notice={error ?? speechError}
           freeReplay={freeReplay}
