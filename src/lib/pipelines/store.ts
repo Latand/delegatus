@@ -249,6 +249,24 @@ function isStageSuspension(value: unknown): boolean {
     && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt));
 }
 
+function isPublicationTextRepair(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const repair = value as Record<string, unknown>;
+  return typeof repair.sha === "string" && /^[0-9a-f]{40}$/i.test(repair.sha)
+    && (repair.pullRequestHead === undefined || typeof repair.pullRequestHead === "string" && /^[0-9a-f]{40}$/i.test(repair.pullRequestHead))
+    && typeof repair.stageId === "string" && typeof repair.detail === "string"
+    && Number.isSafeInteger(repair.attempt) && (repair.attempt as number) >= 1
+    && Number.isSafeInteger(repair.rounds) && (repair.rounds as number) >= 0
+    && Number.isSafeInteger(repair.maxRounds) && (repair.maxRounds as number) >= (repair.rounds as number)
+    && ["title", "body", "title/body"].includes(String(repair.part))
+    && ["pending", "answered", "exhausted"].includes(String(repair.state))
+    && (repair.reportSeq === null || Number.isSafeInteger(repair.reportSeq))
+    && typeof repair.requestedAt === "string" && Number.isFinite(Date.parse(repair.requestedAt))
+    && (repair.delivered === undefined || typeof repair.delivered === "boolean")
+    && (repair.answeredAt === undefined || typeof repair.answeredAt === "string" && Number.isFinite(Date.parse(repair.answeredAt)));
+}
+
 function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
@@ -307,6 +325,7 @@ function isAttempt(value: unknown, index: number): boolean {
       && ["passedSha", "acceptedSha", "mainSha"].every((key) => typeof (attempt.publicationIntegration as Record<string, unknown>)[key] === "string"
         && /^[0-9a-f]{40}$/i.test((attempt.publicationIntegration as Record<string, string>)[key]))
     )) &&
+    isPublicationTextRepair(attempt.publicationTextRepair) &&
     (attempt.publicationRetry === undefined || (
       attempt.publicationRetry !== null && typeof attempt.publicationRetry === "object"
       && !Array.isArray(attempt.publicationRetry)

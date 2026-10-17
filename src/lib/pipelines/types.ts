@@ -298,8 +298,8 @@ export type PipelineStageProvenance = {
 
 /** A stage attempt's own completion report (graph slice 2): the intent the
     attempt stated through the MCP tool. The attempt settles when its turn
-    completes, on this verdict; a second call before settlement replaces this
-    record, and one after it is refused. */
+    completes, on this verdict. An explicit PR privacy rewrite request later
+    admits only a replacement summary, retaining verdict and provenance. */
 export type PipelineStageReport = {
   /** Shared with the pipeline's attributed journal entry for this call. */
   seq: number;
@@ -465,6 +465,24 @@ export type PipelineStageAttempt = {
       a refusal of an unchanged head, or a push interrupted before it landed.
       Each failed operation is counted once; `exhausted` waits for retry-stage. */
   publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
+  /** Bounded PR summary corrections preserve the accepted verdict and SHA.
+      Persisted before delivery so a restart reuses the same request. */
+  publicationTextRepair?: {
+    sha: string;
+    /** Legacy terminal outputs stay local; its PR still names the published head. */
+    pullRequestHead?: string;
+    stageId: string;
+    attempt: number;
+    rounds: number;
+    maxRounds: number;
+    detail: string;
+    part: "title" | "body" | "title/body";
+    state: "pending" | "answered" | "exhausted";
+    reportSeq: number | null;
+    requestedAt: string;
+    delivered?: boolean;
+    answeredAt?: string;
+  };
   /** Authoritative projection of the embedded flow. The generation is a
       content digest, so reconciliation remains idempotent across processes and
       independently committed flow/pipeline writes. */

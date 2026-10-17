@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { HeldDelivery } from "@/lib/accounts/migration/contracts";
 import type { Pipeline, PipelineEdgeActivation, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
@@ -163,6 +164,15 @@ export function projectPipelineEvents(pipelines: Pipeline[]): LifecycleEventInpu
             key: `pipeline:${pipeline.id}:stage:${run.stageId}:attempt:${attempt.n}:provider:${recovery.at}:${recovery.action}`,
             type: recovery.action === "wait" ? "stage_waiting" : "stage_relaunched",
             at: recovery.at, summary: recovery.summary,
+          });
+        }
+        const rewrite = attempt.publicationTextRepair;
+        if (rewrite && rewrite.state !== "answered") {
+          events.push({ ...lineage,
+            key: attemptKey(pipeline, run.stageId, attempt, `summary-rewrite:${rewrite.rounds}:${rewrite.state}:${createHash("sha256").update(rewrite.detail).digest("hex").slice(0, 16)}`),
+            type: rewrite.state === "exhausted" ? "stage_blocked" : "stage_waiting",
+            at: rewrite.requestedAt,
+            summary: rewrite.detail,
           });
         }
         const type = ATTEMPT_EVENT_TYPE[attempt.state];
