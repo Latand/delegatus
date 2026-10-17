@@ -1,3 +1,4 @@
+import { engineMemoryOff } from "@/lib/memory/source";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -153,8 +154,8 @@ export function viewerMcpServerEntry(
 /**
  * How a newly spawned agent reaches the Viewer MCP tools (`LLV_MCP_TRANSPORT`).
  *
- * `stdio` (the default) starts `bin/mcp-server.mjs` beside every agent, one Bun
- * process each. `http` points the agent at the Viewer's own shared endpoint,
+ * `stdio` starts `bin/mcp-server.mjs` beside an agent. `http` (the default
+ * preference) points the agent at the Viewer's own shared endpoint,
  * `/api/mcp`, so no per-agent server process exists at all. The flag is read
  * when a spawn's configuration is written, so it moves NEW spawns only: an
  * agent already running keeps the transport it was launched with, and stdio
@@ -165,7 +166,8 @@ type McpEnvironment = Readonly<Record<string, string | undefined>>;
 export type ViewerMcpTransport = "stdio" | "http";
 
 export function viewerMcpTransport(source: McpEnvironment = process.env): ViewerMcpTransport {
-  return source[VIEWER_MCP_TRANSPORT_ENV]?.trim().toLowerCase() === "http" ? "http" : "stdio";
+  const configured = source[VIEWER_MCP_TRANSPORT_ENV]?.trim().toLowerCase();
+  return !configured || configured === "http" ? "http" : "stdio";
 }
 
 /**
@@ -525,13 +527,14 @@ export function applyClaudeSpawnPolicy(
     ...excludedProjectMcpServers,
   ])];
   if (disabledMcpjsonServers.length > 0) approvalSettings.disabledMcpjsonServers = disabledMcpjsonServers;
+  const memoryOff = engineMemoryOff(options);
   atomicWrite(result.settingsPath, JSON.stringify({
     ...settingsWithoutMcp,
     ...approvalSettings,
-    ...(options.cleanMemory ? { autoMemoryEnabled: false } : {}),
+    ...(memoryOff ? { autoMemoryEnabled: false } : {}),
     // Claude reapplies settings.env after startup, over the child's launch env.
     env: { ...(record(settingsWithoutMcp.env) ?? {}), ...publicationIdentity,
-      ...(options.cleanMemory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}) },
+      ...(memoryOff ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}) },
     hooks: { ...hooks, PreToolUse: preToolUse,
       ...(memoryHook ? { UserPromptSubmit: [...promptHooks, { hooks: [memoryHook] }] } : {}) },
   }, null, 2) + "\n", 0o600);

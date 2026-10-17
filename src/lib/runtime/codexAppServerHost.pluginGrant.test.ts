@@ -230,18 +230,20 @@ test("a stored profile naming an ungrantable plugin gets no grant at all", async
 
 /* Not a plugin case: the same fake app-server, reused for the transport a
    thread's Viewer server gets under LLV_MCP_TRANSPORT=http. */
-test("with the HTTP flag, only an app-server holding a capability gives its thread the shared endpoint", async () => {
+test("the default prefers HTTP with a capability and records inherited stdio correctly", async () => {
   const previous = { transport: process.env.LLV_MCP_TRANSPORT, token: process.env.LLV_TOKEN };
-  process.env.LLV_MCP_TRANSPORT = "http";
+  delete process.env.LLV_MCP_TRANSPORT;
   delete process.env.LLV_TOKEN;
-  const viewerFor = async (env: Record<string, string>) => {
+  const viewerFor = async (env: Record<string, string>, registered = false) => {
     const server = new FakeAppServer();
-    server.configuredServers = { playwright: { command: "npx" } };
+    if (!registered) server.configuredServers = { playwright: { command: "npx" } };
     const host = await startHost({ cwd: "/repo", env: { NODE_ENV: "test", ...env } as NodeJS.ProcessEnv, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
     const config = (server.requests.find((request) => request.method === "thread/start")
       ?.params as { config: { mcp_servers: Record<string, Record<string, unknown>> } }).config;
     await host.release();
-    return config.mcp_servers.viewer!;
+    const viewer = config.mcp_servers.viewer!;
+    expect(host.viewerMcpTransport).toBe(typeof viewer.command === "string" ? "stdio" : "http");
+    return viewer;
   };
   try {
     const withCapability = await viewerFor({ LLV_SPAWN_CAPABILITY: "c".repeat(43) });
@@ -256,6 +258,9 @@ test("with the HTTP flag, only an app-server holding a capability gives its thre
     const without = await viewerFor({});
     expect(without).toHaveProperty("command");
     expect(without).not.toHaveProperty("url");
+    const inherited = await viewerFor({ LLV_SPAWN_CAPABILITY: "c".repeat(43) }, true);
+    expect(inherited).toHaveProperty("command");
+    expect(inherited).not.toHaveProperty("url");
   } finally {
     for (const [name, value] of [["LLV_MCP_TRANSPORT", previous.transport], ["LLV_TOKEN", previous.token]] as const) {
       if (value === undefined) delete process.env[name];

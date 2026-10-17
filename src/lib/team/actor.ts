@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { callerConversationId, directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { matchesOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { pairedTelegramOwner } from "@/lib/externalRelay/store";
 
 import { MEMBER_REQUIRED_CODE, type TeamActor } from "./contract";
 import { requestSession, teamMode, type LiveSession } from "./sessions";
@@ -28,9 +29,16 @@ type ActorRequest = Pick<NextRequest, "headers" | "cookies">;
 /** Called only with the owner identity from an authenticated relay pairing. */
 export function telegramOwnerActor(userId: string): Extract<TeamActor, { kind: "member" | "operator" }> | null {
   const store = existingTeamStore();
-  if (!store?.owner()) return { kind: "operator" };
+  const owner = store?.owner();
+  if (!store || !owner) return { kind: "operator" };
   const member = store.memberByTelegram(userId);
-  return member?.status === "active" ? { kind: "member", memberId: member.id } : null;
+  if (member) return member.status === "active" ? { kind: "member", memberId: member.id } : null;
+  // Relay pairing and team sign-in keep independent identities. A paired
+  // owner can answer as the active install owner without enrolling Telegram as
+  // a sign-in method. An existing link or revoked membership stays decisive.
+  if (owner.status === "active" && !owner.telegram && pairedTelegramOwner(userId))
+    return { kind: "member", memberId: owner.id };
+  return null;
 }
 
 /** Recheck durable authors before an automatic retry as well as a new send. */

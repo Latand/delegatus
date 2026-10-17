@@ -27,21 +27,39 @@ concurrency:
 
 jobs:
   newcomer:
-    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository)
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
+      - name: Determine whether npm publication succeeded
+        if: github.event_name == 'workflow_run'
+        id: npm-publication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" --paginate --jq '[.jobs[] | select(.name == "publish") | .conclusion][0] // ""')"
+          if [[ "$conclusion" == "success" ]]; then
+            printf 'npm_succeeded=true\n' >> "$GITHUB_OUTPUT"
+            echo "npm publication succeeded; checking its immutable release receipt"
+          else
+            printf 'npm_succeeded=false\n' >> "$GITHUB_OUTPUT"
+            echo "npm publication did not succeed (job conclusion: ${conclusion:-unavailable}); skipping macOS install check"
+          fi
       # workflow_run's github.sha names main. The publisher's immutable receipt
       # names the release instead, including recovery dispatches from main.
       - uses: actions/download-artifact@v4
-        if: github.event_name == 'workflow_run'
+        if: github.event_name == 'workflow_run' && steps.npm-publication.outputs.npm_succeeded == 'true'
         with:
           name: release-receipt
           path: ${{ runner.temp }}/release-receipt
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Read the published revision
-        if: github.event_name == 'workflow_run'
+        if: github.event_name == 'workflow_run' && steps.npm-publication.outputs.npm_succeeded == 'true'
         id: release
         shell: bash
         run: |
@@ -51,22 +69,29 @@ jobs:
           [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
           printf 'tag=%s\nrevision=%s\n' "$tag" "$revision" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         with:
           ref: ${{ steps.release.outputs.revision || github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         with:
           bun-version: "1.4.0"
       - uses: actions/setup-node@v4
+        if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         with:
           node-version: 24
       - name: Install checkout dependencies
+        if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         run: bun install --frozen-lockfile
       - name: Install the heavy-gate lock utility
+        if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         run: brew install flock
       - name: Verify prompt and detection regressions
+        if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         run: bun test bin/agent-binaries.test.ts landing/site/copy.test.ts scripts/newcomer-install.test.ts src/lib/accounts/codexAppServer.test.ts
       - name: Prepare checkout tarball or exact npm release
+        if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         id: package
         env:
           RELEASE_REF: ${{ steps.release.outputs.tag && format('refs/tags/{0}', steps.release.outputs.tag) || github.ref }}
@@ -100,6 +125,7 @@ jobs:
             echo "target=${tarball[0]}" >> "$GITHUB_OUTPUT"
           fi
       - name: Rehearse clean first start without logins or agent runs
+        if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         env:
           NEWCOMER_PACKAGE: ${{ steps.package.outputs.target }}
         # Node supervises the probe; the installed launcher uses its own Bun.

@@ -62,6 +62,8 @@ import { STAGED_RECOVERY_PREFIX, stagedLaunchRecovery, type StagedLaunchRecovery
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 
 export type SpawnedStructuredHost = EngineHost & {
+  /** Effective MCP transport when account config constrained the preference. */
+  readonly viewerMcpTransport?: "stdio" | "http" | null;
   identity: { threadId: string; path: string | null } | { sessionId: string };
   onStateChange(listener: (state: HostState) => void): () => void;
   /** The canonical phrase of a terminal CLI exit, when the host recognized one
@@ -2643,6 +2645,7 @@ export async function spawnStructuredConversation(
       }
     }, () => {});
     host = await withinDurableSetup(startingHost);
+    if (host.viewerMcpTransport) input.registry.setReceiptViewerMcpTransport(input.receipt.launchId, host.viewerMcpTransport);
     const identity = hostIdentity(input.engine, host, input);
     key = identity.key;
     if (resumeKey && sessionKeyId(key) !== sessionKeyId(resumeKey)) {
