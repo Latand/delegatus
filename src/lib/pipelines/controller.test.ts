@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -361,3 +361,139 @@ test("every settled cycle starts the spawn completion-notice sweep, and a sweep 
   expect(sweeps).toBe(3);
   expect(logged).toContain("[flow pipeline controller] spawn notice sweep failed to start");
 });
+
+
+test("one failed cycle settles before trailing success, with one phase failure", async () => {
+  let reject!: (error: Error) => void;
+  let release!: () => void;
+  let entered!: () => void;
+  const first = new Promise<never>((_, fail) => { reject = fail; });
+  const trailing = new Promise<{ changed: boolean }>(resolve => { release = () => resolve({ changed: false }); });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const errors: unknown[] = [];
+  let calls = 0;
+  const controller = new FlowPipelineController({ now: () => 0,
+    tickPipelines: () => { calls++; entered(); return calls === 1 ? first : trailing; },
+    tickFlows: async () => ({ changed: false }), log: (_, error) => { if (error) errors.push(error); },
+  }, { maxPasses: 1 });
+  let settled = false;
+  const failure = new Error("one admission refusal");
+  const result = controller.tick().catch(error => { settled = true; expect(error).toBe(failure); });
+  await started;
+  for (let i = 0; i < 953; i++) controller.tick("signal");
+  reject(failure);
+  for (let i = 0; i < 40; i++) await Promise.resolve();
+  const observed = settled;
+  release();
+  await result;
+  expect(observed).toBe(true);
+  expect(errors).toEqual([failure]);
+});
+
+test("continuous wakes cannot extend a controller request beyond its cycle budget", async () => {
+  let calls = 0;
+  const controller: FlowPipelineController = new FlowPipelineController({ now: () => 0,
+    tickPipelines: async () => { calls++; if (calls < 12) controller.tick("more"); return { changed: false }; },
+    tickFlows: async () => ({ changed: false }),
+  }, { maxPasses: 1 });
+  await controller.tick();
+  expect(calls).toBeLessThanOrEqual(2);
+});
+
+test("watchdog keeps only one observer while its poll remains in flight", async () => {
+  let reject!: (error: Error) => void;
+  const pending = new Promise<void>((_, fail) => { reject = fail; });
+  let callback!: () => void;
+  let polls = 0;
+  const logs: unknown[] = [];
+  const controller = { tick: () => pending, recover: async () => {}, poll: () => { polls++; return pending; } } as unknown as FlowPipelineController;
+  startFlowPipelineControllerRuntime(controller, {}, {
+    registerTick: () => () => {}, scheduleInterval: fn => { callback = fn; return {}; },
+    log: (_, error) => { logs.push(error); },
+  });
+  for (let i = 0; i < 31; i++) callback();
+  const failure = new Error("one watchdog refusal");
+  reject(failure);
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  expect(polls).toBe(1);
+  expect(logs).toEqual([failure]);
+});
+
+
+test.each([1, 2, 3])("one deferred error with 953 wakes, 31 polls and 9 remote waiters, repeat %i", async repeat => {
+  const { registerPipelineTick, requestPipelineTick } = await import("./controllerSignal");
+  const { StateLockDeferredError } = await import("@/lib/state/lockWait");
+  const { POST } = await import("@/app/api/pipelines/tick/route");
+  const { NextRequest } = await import("next/server");
+  let reject!: (error: Error) => void, release!: () => void, entered!: () => void;
+  const first = new Promise<never>((_, fail) => { reject = fail; });
+  const trailing = new Promise<{ changed: boolean }>(resolve => { release = () => resolve({ changed: false }); });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  let calls = 0, phase = 0, requested = 0, watchdog = 0, route = 0;
+  const controller = new FlowPipelineController({ now: () => 0,
+    tickPipelines: () => { calls++; entered(); return calls === 1 ? first : trailing; },
+    tickFlows: async () => ({ changed: false }),
+    log: (_, error) => { if (error) phase++; },
+  }, { maxPasses: 1 });
+  const unregister = registerPipelineTick(() => controller.tick("signal"));
+  const log = spyOn(console, "error").mockImplementation((message) => { if (String(message).includes("requested tick failed")) requested++; });
+  let poll!: () => void;
+  const pollController = { poll: () => controller.poll(), recover: async () => {}, tick: () => controller.tick() } as FlowPipelineController;
+  startFlowPipelineControllerRuntime(pollController, {}, {
+    registerTick: () => () => {}, scheduleInterval: callback => { poll = callback; return {}; }, log: () => { watchdog++; },
+  });
+  const drain = async () => { for (let i = 0; i < 80; i++) await Promise.resolve(); };
+  try {
+    requestPipelineTick(); await started;
+    for (let i = 1; i < 953; i++) { requestPipelineTick(); await Promise.resolve(); }
+    for (let i = 0; i < 31; i++) poll();
+    const replies = Array.from({ length: 9 }, () => POST.withDependencies(new NextRequest("http://127.0.0.1:19000/api/pipelines/tick", {
+      method: "POST", headers: { host: "127.0.0.1:19000", origin: "http://127.0.0.1:19000" },
+    }), () => controller.tick("remote-signal")).catch(() => { route++; }));
+    reject(new StateLockDeferredError("fixture.admission"));
+    await drain();
+    const failuresBeforeTrailingSettlement = requested + watchdog;
+    release(); await Promise.all(replies); await drain();
+    console.log(JSON.stringify({ workload: "deferred-tick-fanout", repeat, wakes: 953, polls: 31, remoteWaiters: 9, phase, requested, watchdog, route, failuresBeforeTrailingSettlement, calls }));
+    expect(phase).toBe(1);
+    expect(requested).toBe(1);
+    expect(watchdog).toBe(1);
+    expect(route).toBe(0);
+    expect(failuresBeforeTrailingSettlement).toBe(2);
+    expect(calls).toBeLessThanOrEqual(2);
+  } finally { release(); await drain(); unregister(); log.mockRestore(); }
+});
+
+
+test("initial and trailing cycles share the same request deadline", async () => {
+  let now = 0, calls = 0;
+  const controller: FlowPipelineController = new FlowPipelineController({ now: () => now,
+    tickPipelines: async () => { calls++; now += 6; controller.tick("more"); return { changed: false }; },
+    tickFlows: async () => { now += 6; return { changed: false }; },
+  }, { maxPasses: 1, requestDeadlineMs: 10 });
+  await controller.tick();
+  expect(calls).toBe(1);
+  now = 20;
+  await controller.tick();
+  expect(calls).toBe(2);
+});
+
+
+test("fresh controller processes retain bounded observers after a restart", async () => {
+  for (let generation = 1; generation <= 2; generation++) {
+    const root = fs.mkdtempSync(path.join(sandbox, `generation-${generation}-`));
+    for (const directory of ["home", "config", "tmp", "state"]) fs.mkdirSync(path.join(root, directory));
+    const child = Bun.spawn([process.execPath, "test", path.join(import.meta.dir, "controller.test.ts"), "-t", "one deferred error with 953"], {
+      env: { ...process.env, HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"), TMPDIR: path.join(root, "tmp"), LLV_STATE_DIR: path.join(root, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const deadline = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    try {
+      const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect({ code, errors: code ? stderr : "" }).toEqual({ code: 0, errors: "" });
+      const records = stdout.split("\n").filter(line => line.startsWith("{\"workload\"")).map(line => JSON.parse(line));
+      expect(records).toHaveLength(3);
+      for (const record of records) expect(record).toMatchObject({ requested: 1, watchdog: 1, route: 0, calls: 2 });
+    } finally { clearTimeout(deadline); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited; }
+  }
+}, 30_000);

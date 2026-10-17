@@ -13,7 +13,7 @@ import { FILE_SCAN_RETRY_SECONDS, isFileScanIncompleteError } from "@/lib/scanne
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import type { FileEntry } from "@/lib/types";
 
-import { registerPipelineTick } from "./controllerSignal";
+import { PIPELINE_TICK_REQUEST_MS, registerPipelineTick } from "./controllerSignal";
 import { PIPELINE_REMOTE_ACTIONS } from "./controllerCapabilities";
 import { procBackend } from "@/lib/proc";
 import { tickPipelinesController } from "./controllerPass";
@@ -55,6 +55,7 @@ export interface FlowPipelineControllerPorts {
   tickPipelines: (entries: FileEntry[]) => Promise<TickResult>;
   tickFlows: (entries: FileEntry[]) => Promise<TickResult>;
   now?: () => number;
+  monotonicNow?: () => number;
   scheduleTimeout?: (callback: () => void, delayMs: number) => TimeoutHandle;
   clearTimeout?: (timer: TimeoutHandle) => void;
   publishHeartbeat?: (heartbeat: FlowPipelineControllerHeartbeat) => void;
@@ -71,6 +72,7 @@ export interface FlowPipelineControllerPorts {
 export interface FlowPipelineControllerOptions {
   phaseDeadlineMs?: number;
   maxPasses?: number;
+  requestDeadlineMs?: number;
 }
 
 interface ActivePhase<T = unknown> {
@@ -143,6 +145,8 @@ export class FlowPipelineController {
   private readonly ports: Required<FlowPipelineControllerPorts>;
   private readonly phaseDeadlineMs: number;
   private readonly maxPasses: number;
+  private readonly requestDeadlineMs: number;
+  private requestDeadline = 0;
 
   constructor(ports: FlowPipelineControllerPorts, options: FlowPipelineControllerOptions = {}) {
     this.ports = {
@@ -150,6 +154,7 @@ export class FlowPipelineController {
       scan: ports.scan ?? (async () => ({ files: [], complete: true })),
       handoffHeld: ports.handoffHeld ?? (() => false),
       now: ports.now ?? Date.now,
+      monotonicNow: ports.monotonicNow ?? ports.now ?? (() => performance.now()),
       scheduleTimeout: ports.scheduleTimeout ?? ((callback, delayMs) => setTimeout(callback, delayMs)),
       clearTimeout: ports.clearTimeout ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)),
       publishHeartbeat: ports.publishHeartbeat ?? (() => undefined),
@@ -163,6 +168,7 @@ export class FlowPipelineController {
     };
     this.phaseDeadlineMs = options.phaseDeadlineMs ?? DEFAULT_PHASE_DEADLINE_MS;
     this.maxPasses = options.maxPasses ?? DEFAULT_MAX_PASSES;
+    this.requestDeadlineMs = options.requestDeadlineMs ?? PIPELINE_TICK_REQUEST_MS;
   }
 
   tick(trigger = "signal"): Promise<void> {
@@ -172,9 +178,12 @@ export class FlowPipelineController {
       this.trailingTrigger = trigger;
       return this.running;
     }
+    this.requestDeadline = this.ports.monotonicNow() + this.requestDeadlineMs;
     this.running = this.runRequestedCycles(trigger).finally(() => {
+      // A failed generation settles immediately. Later work gets a fresh
+      // request and cannot hold this generation's observers or error alive.
       this.running = null;
-      if (this.trailingCycleRequested) return this.tick(this.trailingTrigger);
+      this.trailingCycleRequested = false;
     });
     return this.running;
   }
@@ -189,11 +198,15 @@ export class FlowPipelineController {
 
   private async runRequestedCycles(initialTrigger: string): Promise<void> {
     let trigger = initialTrigger;
-    do {
+    // One initial cycle and one coalesced trailing cycle share one deadline.
+    // The watchdog covers further wakes.
+    for (let cycles = 0; cycles < 2 && this.ports.monotonicNow() < this.requestDeadline; cycles++) {
       this.trailingCycleRequested = false;
       await this.runCycle(trigger);
+      await Promise.resolve(); // Include wakes queued by the idle publication.
+      if (!this.trailingCycleRequested) break;
       trigger = this.trailingTrigger;
-    } while (this.trailingCycleRequested);
+    }
   }
 
   private async runCycle(trigger: string): Promise<void> {
@@ -202,7 +215,7 @@ export class FlowPipelineController {
     let entries: FileEntry[] = [];
     let scanComplete = false;
     for (let pass = 1; pass <= this.maxPasses; pass += 1) {
-      if (this.ports.handoffHeld()) return;
+      if (this.ports.handoffHeld() || this.ports.monotonicNow() >= this.requestDeadline) return;
       lastPass = pass;
       const pipelineOutcome = await this.runPhase(
         "pipelines",
@@ -302,6 +315,7 @@ export class FlowPipelineController {
     trigger: string,
     work: () => Promise<T>,
   ): Promise<PhaseOutcome<T>> {
+    if (this.ports.monotonicNow() >= this.requestDeadline) return { state: "timed-out" };
     const active = this.activePhases.get(phase);
     if (active) {
       this.publish({ cycle, pass, trigger, phase, state: "blocked", startedAt: active.startedAt });
@@ -320,7 +334,7 @@ export class FlowPipelineController {
 
     let releaseDeadline = () => {};
     const deadline = new Promise<{ state: "timed-out" }>((resolve) => { releaseDeadline = () => resolve({ state: "timed-out" }); });
-    const timer = this.ports.scheduleTimeout(releaseDeadline, this.phaseDeadlineMs);
+    const timer = this.ports.scheduleTimeout(releaseDeadline, Math.min(this.phaseDeadlineMs, Math.max(0, this.requestDeadline - this.ports.monotonicNow())));
     const outcome = await Promise.race<PhaseOutcome<T>>([
       promise.then(
         (value) => ({ state: "completed", value }),
@@ -380,6 +394,7 @@ interface FlowPipelineControllerRuntimePorts {
 interface FlowPipelineControllerRuntimeState {
   __llvFlowPipelineWatchdog?: FlowPipelineWatchdogHandle;
   __llvFlowPipelineUnregister?: () => void;
+  __llvFlowPipelinePolling?: boolean;
 }
 
 export function startFlowPipelineControllerRuntime(
@@ -390,9 +405,13 @@ export function startFlowPipelineControllerRuntime(
   state.__llvFlowPipelineUnregister?.();
   state.__llvFlowPipelineUnregister = ports.registerTick(() => controller.tick("signal"));
   if (!state.__llvFlowPipelineWatchdog) {
-    state.__llvFlowPipelineWatchdog = ports.scheduleInterval(() => void controller.poll().catch((error) => {
-      ports.log("[flow pipeline controller] watchdog reconciliation failed", error);
-    }), FLOW_PIPELINE_WATCHDOG_MS);
+    state.__llvFlowPipelineWatchdog = ports.scheduleInterval(() => {
+      if (state.__llvFlowPipelinePolling) return;
+      state.__llvFlowPipelinePolling = true;
+      void controller.poll().catch((error) => {
+        ports.log("[flow pipeline controller] watchdog reconciliation failed", error);
+      }).finally(() => { state.__llvFlowPipelinePolling = false; });
+    }, FLOW_PIPELINE_WATCHDOG_MS);
     state.__llvFlowPipelineWatchdog.unref?.();
   }
   void controller.recover().catch((error) => {
@@ -404,6 +423,7 @@ const controllerHost = globalThis as typeof globalThis & {
   __llvFlowPipelineController?: FlowPipelineController;
   __llvFlowPipelineWatchdog?: ReturnType<typeof setInterval>;
   __llvFlowPipelineUnregister?: () => void;
+  __llvFlowPipelinePolling?: boolean;
 };
 
 export function flowPipelineController(): FlowPipelineController {
