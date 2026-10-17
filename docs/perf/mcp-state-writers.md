@@ -1286,3 +1286,35 @@ The native SQL observer control now declares its isolated temporary parent as
 `/tmp` boundary rejects a test isolated under another temporary tree. The
 matrix collector already supplied its boundary explicitly; this fixture fix
 changes none of the recorded samples.
+
+## Receipt contention and initialization recovery (2026-10-17)
+
+Focused regressions in `src/lib/mcp/http.test.ts` exercise the production HTTP
+handler and a real stdio SDK child, with private home, config, temp and state
+directories. Each regression also ran independently against the pre-fix branch
+at `d72c31992`, with the same test and lock-holder fixture.
+
+A separate process holds `BEGIN IMMEDIATE` on `mcp-receipts.sqlite` for 1.2
+seconds after a stdio `list_flows` warmup. A fresh keyed call completed on both
+versions. The pre-fix Viewer timer gap reached 1235.006 ms and failed the 50 ms
+bound. With asynchronous receipt admission, the gap was 8.392 ms and the
+largest measured synchronous SQL attempt was 0.525 ms. The keyed response
+replays, and a subsequent send plus its original-key retry produces one
+delivery.
+
+The startup regression first warms a task call, then holds the receipt write
+lock for 6.2 seconds while the first inline read and send initialize together.
+Both receive explicit errors after the five-second admission budget, with no
+delivery. Once the holder exits, the same Viewer serves the original read key,
+a fresh read key, and the original send key; replaying that send produces no
+second delivery. The pre-fix branch fails the first recovery assertion because
+its rejected inline initializer remains cached.
+
+`src/lib/mcp/server.test.ts` also exercises every receipt write transition
+under a held lock and verifies that a contended completion retries persistence
+without repeating its binding. Its concurrent-start fixture now uses the same
+async initializer as production, checks only asynchronous admission diagnostics,
+and retains its schema migration, stored receipt and child cleanup assertions.
+Failed constructor attempts close their connections before retrying. These
+focused observations supplement the historical matrix above; they do not
+replace or recalculate its samples.

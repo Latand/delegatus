@@ -7,8 +7,11 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { NextRequest } from "next/server";
+import { ownFixtureChild, reapFixtureChildren } from "./ownedFixtureChildren";
+import { awaitFixtureFile } from "./fixtureBarrier";
 
 /**
  * The shared Streamable HTTP endpoint, driven at its public boundary.
@@ -187,6 +190,7 @@ beforeAll(async () => {
 afterAll(async () => {
   listener?.stop(true);
   await (await import("./taskExecutor")).viewerTaskExecutor().close();
+  await reapFixtureChildren();
   setAgentRegistryForTests(null);
   for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key];
   Object.assign(process.env, originalEnv);
@@ -215,6 +219,79 @@ function agentClient(agent: Agent): Promise<Client> {
 function payloadOf(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {
   return (result.structuredContent ?? {}) as Record<string, unknown>;
 }
+
+async function holdReceiptLock(holdMs: number) {
+  const filename = path.join(process.env.LLV_STATE_DIR!, "mcp-receipts.sqlite");
+  new SqliteMcpReceiptStore(filename).close();
+  const ready = path.join(sandbox, `lock-${crypto.randomUUID()}`);
+  const release = `${ready}-release`;
+  const child = ownFixtureChild(Bun.spawn([process.execPath, path.join(import.meta.dir, "receiptStoreProbeChild.ts"),
+    "hold-sqlite", filename, ready, release, String(holdMs)], { env: process.env, stdout: "pipe", stderr: "pipe" }));
+  await awaitFixtureFile(ready);
+  return { child, async close() {
+    fs.writeFileSync(release, "released");
+    expect(await child.exited).toBe(0);
+    expect(await new Response(child.stderr).text()).toBe("");
+  } };
+}
+
+test("HTTP retries a failed first inline initialization and original keys without repeating a write", async () => {
+  const client = await agentClient(alice);
+  // The task executor warms the HTTP wrapper without opening its inline store.
+  await client.callTool({ name: "get_task", arguments: { taskId: "missing-task" } });
+  const lock = await holdReceiptLock(6200);
+  const args = { limit: 1, clientRequestId: "first-inline-read" };
+  try {
+    const [read, write] = await Promise.all([
+      client.callTool({ name: "list_flows", arguments: args }),
+      send(client, "first-inline-send"),
+    ]);
+    expect(read.isError).toBe(true);
+    expect(write.isError).toBe(true);
+    expect(JSON.stringify(read.content)).toMatch(/state admission timed out|database is locked/);
+    expect(deliveries).toHaveLength(0);
+    expect(await lock.child.exited).toBe(0);
+    expect(payloadOf(await client.callTool({ name: "list_flows", arguments: args }))).toMatchObject({ ok: true });
+    expect(payloadOf(await client.callTool({ name: "list_flows", arguments: { limit: 1, clientRequestId: "after-inline-failure" } })))
+      .toMatchObject({ ok: true });
+    expect(payloadOf(await send(client, "first-inline-send"))).toMatchObject({ ok: true });
+    expect(payloadOf(await send(client, "first-inline-send"))).toMatchObject({ ok: true, replayed: true });
+    expect(deliveries).toHaveLength(1);
+  } finally { await lock.close(); await client.close(); }
+}, 20_000);
+
+test("forwarded stdio receipt contention yields on the Viewer and preserves replay", async () => {
+  const client = new Client({ name: "receipt-contention", version: "1" });
+  const transport = new StdioClientTransport({ command: process.execPath,
+    args: [path.join(import.meta.dir, "entry.ts")],
+    env: Object.fromEntries(Object.entries({ ...process.env, LLV_SPAWN_CAPABILITY: alice.capability })
+      .filter((entry): entry is [string, string] => entry[1] !== undefined)), stderr: "pipe" });
+  await client.connect(transport);
+  await client.callTool({ name: "list_flows", arguments: { limit: 1 } });
+  const lock = await holdReceiptLock(1200);
+  const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
+  const start = performance.now();
+  let previous = start, maxGapMs = 0;
+  const timer = setInterval(() => {
+    const now = performance.now(); maxGapMs = Math.max(maxGapMs, now - previous); previous = now;
+  }, 5);
+  const args = { limit: 1, clientRequestId: "stdio-held-receipt" };
+  try {
+    expect(payloadOf(await client.callTool({ name: "list_flows", arguments: args }))).toMatchObject({ ok: true });
+    await new Promise<void>(resolve => setTimeout(resolve, 10));
+    const slices = performanceSpans.snapshot(start).records.filter(row => row.kind === "sync"
+      && performanceSites[row.site] === "state.write-wait");
+    const maxSliceMs = Math.max(0, ...slices.map(row => row.maxMs));
+    console.info(`[receipt contention] ${JSON.stringify({ maxGapMs, maxSliceMs })}`);
+    expect(maxGapMs).toBeLessThan(50);
+    expect(slices.length).toBeGreaterThan(0);
+    expect(maxSliceMs).toBeLessThan(50);
+    expect(payloadOf(await client.callTool({ name: "list_flows", arguments: args }))).toMatchObject({ ok: true, replayed: true });
+    expect(payloadOf(await send(client, "stdio-held-send"))).toMatchObject({ ok: true });
+    expect(payloadOf(await send(client, "stdio-held-send"))).toMatchObject({ ok: true, replayed: true });
+    expect(deliveries).toHaveLength(1);
+  } finally { clearInterval(timer); await lock.close(); await client.close(); }
+}, 20_000);
 
 test("task HTTP execution preserves protocol validation, exact text, caller receipts and replay", async () => {
   const client = await agentClient(alice);

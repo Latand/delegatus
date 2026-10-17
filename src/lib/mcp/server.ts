@@ -15,6 +15,8 @@ import { prototypePublishSchema } from "@/lib/prototypeReview/input";
 import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
+import { stateDatabaseBusy, stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
 import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/limits";
 import { operatorLocale } from "@/lib/operator/settings";
@@ -1724,6 +1726,8 @@ type StoredSqliteReceipt = {
 };
 
 export interface SqliteMcpReceiptStoreOptions {
+  /** Async callers use zero-timeout attempts and yield between retries. */
+  busyTimeoutMs?: number;
   legacyFilePath?: string;
   readReceiptCountCap?: number;
   readReceiptByteCap?: number;
@@ -1756,24 +1760,46 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
        pragmas run before the schema transaction. */
     this.db = openCurrentDatabase(filename, () => {
       const db = new sqlite.Database(filename, { create: true, strict: true });
-      db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA auto_vacuum = INCREMENTAL;");
-      return db;
+      try {
+        db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(options.busyTimeoutMs ?? 5000))}`);
+        const walEnabled = () => db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal";
+        if (!walEnabled()) {
+          try { db.exec("PRAGMA journal_mode = WAL"); }
+          catch (error) {
+            // A concurrent opener can finish the mode switch while this
+            // connection's read-to-write upgrade is refused immediately.
+            if (!stateDatabaseBusy(error) || !walEnabled()) throw error;
+          }
+        }
+        db.exec("PRAGMA synchronous = FULL");
+        db.exec("PRAGMA journal_size_limit = 67108864");
+        db.exec("PRAGMA auto_vacuum = INCREMENTAL");
+        return db;
+      } catch (error) {
+        db.close();
+        throw error;
+      }
     }, { reopened: () => this.initializeSchema() });
     this.readReceiptCountCap = Math.max(1, Math.floor(options.readReceiptCountCap ?? FILE_RECEIPT_CAP));
     this.readReceiptByteCap = Math.max(1, Math.floor(options.readReceiptByteCap ?? SQLITE_READ_RECEIPT_BYTE_CAP));
     this.boundedPendingTtlMs = Math.max(1, Math.floor(options.boundedPendingTtlMs ?? SQLITE_BOUNDED_PENDING_TTL_MS));
     this.now = options.now ?? Date.now;
-    this.initializeSchema();
-    this.importLegacyFile(options.legacyFilePath);
-    this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.pruneBoundedReceipts(this.now());
-      this.db.exec("COMMIT");
+      this.initializeSchema();
+      this.importLegacyFile(options.legacyFilePath);
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        this.pruneBoundedReceipts(this.now());
+        this.db.exec("COMMIT");
+      } catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+        throw error;
+      }
+      this.secureFiles();
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      this.db.close();
       throw error;
     }
-    this.secureFiles();
   }
 
   claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim {
@@ -1979,7 +2005,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
    * Creates the tables and adds every column a database from an earlier
    * schema lacks, in ONE write transaction. Several MCP processes start cold
    * against the same database at once; the write lock makes one of them
-   * inspect and migrate while the others wait on `busy_timeout` and then find
+   * inspect and migrate while the others retry admission and then find
    * the columns already there. Two processes that both inspected first would
    * both ALTER, and the second would throw "duplicate column name".
    */
@@ -2147,6 +2173,30 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       }
     }
   }
+}
+
+/** Retry only receipt transactions, never the tool binding they protect. Each
+ * failed attempt has rolled back before yielding, including schema startup. */
+export async function openAsyncMcpReceiptStore(
+  filename: string,
+  options: Omit<SqliteMcpReceiptStoreOptions, "busyTimeoutMs"> = {},
+): Promise<McpRecoveryReceiptStore & { close(): void }> {
+  const attempt = <T>(phase: string, operation: () => T): Promise<T> =>
+    withViewerOperation("mcp.receipts", () => waitForStateLock(`mcp.receipts.${phase}`,
+      () => stateLockAttempt(`mcp.receipts.${phase}`, operation, "mcp-receipts"),
+      { waitMs: 5000, subject: "mcp-receipts" }));
+  const store = await attempt("initialize", () => new SqliteMcpReceiptStore(filename, { ...options, busyTimeoutMs: 0 }));
+  return {
+    claim: (...args) => attempt("claim", () => store.claim(...args)),
+    complete: (...args) => attempt("complete", () => store.complete(...args)),
+    release: (...args) => attempt("release", () => store.release(...args)),
+    lookup: (...args) => attempt("lookup", () => store.lookup(...args)),
+    markDispatching: (...args) => attempt("dispatch", () => store.markDispatching(...args)),
+    bindCreatedTarget: (...args) => attempt("bind", () => store.bindCreatedTarget(...args)),
+    fenceUndispatched: (...args) => attempt("fence", () => store.fenceUndispatched(...args)),
+    settle: (...args) => attempt("settle", () => store.settle(...args)),
+    close: () => store.close(),
+  };
 }
 
 function stable(value: unknown): unknown {
@@ -4725,14 +4775,18 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
           return taskExecutorFailure(name, args, error);
         }
       }
-      inline ??= createProductionViewerMcpService(hostHealthProbe, false, true);
+      if (!inline) {
+        const created = createProductionViewerMcpService(hostHealthProbe, false, true);
+        inline = created;
+        created.catch(() => { if (inline === created) inline = undefined; });
+      }
       return (await inline).callTool(name, args, context);
     } };
   }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
   return withMcpDispatchTurns(createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
-    new SqliteMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
+    await openAsyncMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
       legacyFilePath: statePath("mcp-receipts.json"),
     }),
     viewerMcpToolPolicy(undefined, hostHealthProbe),
