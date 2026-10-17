@@ -454,7 +454,7 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
 export { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 
 export interface SeatTickSources {
-  memoryProblems?: (project: string, shown: readonly string[]) => SeatTickSignalInput[];
+  memoryProblems?: (project: string, shown: readonly string[], recipient: { conversationId: string; seatEpoch: number } | null) => SeatTickSignalInput[];
   recordRuleReports?: (project: string, at: string) => void;
   /** The waits «Waiting for you» routes to this project's seat
       (docs/design/attention-auto-resolve.md), read from the board projection
@@ -2285,7 +2285,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   const openIds = new Set(hotLanes.filter(isOpen).map((lane) => lane.id));
   return {
     ...input, now, pipelines, tasks, ownLanes,
-    ...(sources.memoryProblems ? { signals: [...input.signals.filter(signal => !signal.id.startsWith("memory-problem:")), ...sources.memoryProblems(input.project, input.state.itemsShown ?? [])] } : {}),
+    ...(sources.memoryProblems ? { signals: [...input.signals.filter(signal => !signal.id.startsWith("memory-problem:")), ...sources.memoryProblems(input.project, input.state.itemsShown ?? [], input.seat?.conversationId ? input.seat : null)] } : {}),
     events: input.events.map((event) => ({ ...event, pipelineTerminal: event.pipelineId !== null && !openIds.has(event.pipelineId) })),
     settings: effectiveSeatTickSettings(sources.settings(input.project), now, SEAT_TICK_WAKE_INTERVAL_MS),
     changeFingerprint: changeFingerprint(pipelines, tasks, input.children, input.pullRequests, input.pullRequestsUnavailable, ownLanes, input.settledDeploys, input.settledMaintenance),
@@ -2458,7 +2458,7 @@ export async function gatherSeatTickInput(
     pullRequests,
     pullRequestsUnavailable,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...signals(canonical, seat, sources), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? []) ?? []), ...await diskPressureSignals(sources)],
+    signals: [...signals(canonical, seat, sources), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

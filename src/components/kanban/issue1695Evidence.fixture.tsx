@@ -1,3 +1,4 @@
+import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplatePicker";
 import { AttentionCard } from "@/components/runtime/AttentionCard";
 import { codexAttentionActions, projectCodexAttentionActions } from "@/lib/runtime/codexAttentionActions";
 import { questionsResolution } from "@/components/runtime/ConversationAttention";
@@ -2736,6 +2737,7 @@ function transcriptOf(pathname: string): string {
 }
 
 const params = new URLSearchParams(location.search);
+const PIPELINE_INIT = params.get("pipelineinit");
 
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md). The seat made the lanes on five open
    tasks and spawned the export implementer; `&many=1` fills the board to about a hundred cards, a third
@@ -3832,6 +3834,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   const method = (init?.method ?? "GET").toUpperCase();
+  if (PIPELINE_INIT && url.pathname === "/api/pipelines/preflight") return PIPELINE_INIT === "refused"
+    ? new Response(JSON.stringify({ error: "initialization refused for the Delegatus state directory", code: "initialization_refused", path: "/project" }), { status: 403 })
+    : json({ ok: true, repoDir: "/project", gitCommonDir: "/project/.git", worktreeParent: "/" });
   if (WORKER_SCENE && url.pathname === "/api/operator/settings") {
     return json({ ok: true, locale: { value: new URLSearchParams(location.search).get("lang") ?? "en", source: "chosen", changedAt: iso(0) }, timeZone: null });
   }
@@ -4853,7 +4858,7 @@ const diskDensity = new URLSearchParams(location.search).get("disk-density");
 // Mount the production dock beside the Viewer for shared desktop-host cases.
 const dockWidth = new URLSearchParams(location.search).get("dockWidth");
 if (dockWidth === "440" || dockWidth === "360") localStorage.setItem(`llvOrchestratorPanelWidth:${PROJECT}`, dockWidth);
-createRoot(document.getElementById("root")!).render(dockWidth === "440" || dockWidth === "360" ? (
+createRoot(document.getElementById("root")!).render(PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>

@@ -33469,6 +33469,49 @@ describe("full autonomy", () => {
 });
 
 
+describe("pipeline repository initialization", () => {
+  browserTest("the picker admits a new folder and shows a concrete refusal", async () => {
+    const out = path.resolve(".artifacts/pipeline-repository-initialization");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle"));
+    const browserTemp = fs.mkdtempSync(path.join(os.tmpdir(), "browser-"));
+    const browserTempFd = fs.openSync(browserTemp, "r");
+    // Keep Chromium's Unix socket path short while its files stay in stage scratch.
+    const socketRoot = process.platform === "linux" ? "/proc/" + process.pid + "/fd/" + browserTempFd : browserTemp;
+    let browser: Browser | undefined;
+    const readings: unknown[] = [];
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: socketRoot } });
+      for (const width of [390, 1280]) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        for (const state of ["ready", "refused"]) {
+          const { context, page, pageErrors } = await openFixture(browser, server.base + "?pipelineinit=" + state,
+            { width, height: 900 }, scheme, lang, "reduce", width === 390);
+          try {
+            const expected = state === "ready" ? "ready" : "blocked";
+            const picker = page.locator('[data-pipeline-picker-state="' + expected + '"]');
+            await picker.waitFor();
+            const text = await picker.innerText();
+            if (state === "refused") expect(text).toContain("initialization refused for the Delegatus state directory");
+            expect(text).not.toContain("pipelinePreflight.initialization_refused");
+            const dialog = page.getByRole("dialog");
+            const box = await dialog.boundingBox();
+            expect(box).toBeTruthy();
+            expect(box!.x).toBeGreaterThanOrEqual(0);
+            expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+            expect(box!.y + box!.height).toBeLessThanOrEqual(901);
+            expect(pageErrors).toEqual([]);
+            const screenshot = width + "-" + scheme + "-" + lang + "-" + state + ".png";
+            await page.screenshot({ path: path.join(out, screenshot) });
+            readings.push({ width, scheme, lang, state, screenshot, box });
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser?.close(); server.stop(); fs.closeSync(browserTempFd); fs.rmSync(browserTemp, { recursive: true, force: true }); }
+    fs.mkdirSync("evidence/pipeline-repository-initialization", { recursive: true });
+    fs.writeFileSync("evidence/pipeline-repository-initialization/readings.json", JSON.stringify(readings, null, 2) + "\n");
+  }, 120_000);
+});
+
 describe("saved decision delivery", () => {
   browserTest("C: the Decisions badge and panel retain saved answers until delivery", async () => {
     const out = path.resolve(".artifacts/answer-delivery/frames"); fs.mkdirSync(out, { recursive: true });

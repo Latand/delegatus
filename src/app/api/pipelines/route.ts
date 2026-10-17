@@ -193,6 +193,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
     return NextResponse.json({
       ok: true,
       pipeline: result.pipeline,
+      ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
       ...(result.queued ? { queued: result.queued } : {}),
       ...(result.warnings?.length ? { warnings: result.warnings } : {}),
       ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}),

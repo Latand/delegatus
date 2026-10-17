@@ -368,6 +368,91 @@ function openDatabase(filename: string): Database {
   catch (error) { throw classifyStateError(error, "state database initialization"); }
 }
 
+/** Schema creation and the read-only readiness probe share one inventory. */
+const stateSchema = [
+  `CREATE TABLE IF NOT EXISTS state_collections (
+    collection TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
+    revision INTEGER NOT NULL,
+    change_floor INTEGER NOT NULL DEFAULT 0,
+    migration_id TEXT NOT NULL,
+    imported_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS state_rows (
+    collection TEXT NOT NULL,
+    row_key TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    row_order INTEGER NOT NULL,
+    row_revision INTEGER NOT NULL,
+    controller_active INTEGER NOT NULL CHECK(controller_active IN (0, 1)),
+    PRIMARY KEY(collection, row_key),
+    FOREIGN KEY(collection) REFERENCES state_collections(collection) ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS state_rows_collection_order
+    ON state_rows(collection, row_order)`,
+  `CREATE INDEX IF NOT EXISTS state_rows_task_project
+    ON state_rows(json_extract(value_json,'$.project'), row_key)
+    WHERE collection='tasks' AND json_valid(value_json)`,
+  ...["text", "status", "look", "place", "links", "machine", "handover"].map(field => `CREATE INDEX IF NOT EXISTS state_rows_task_stamp_${field}
+      ON state_rows(json_extract(value_json,'$.project'), json_extract(value_json,'$.sync.s.${field}') DESC)
+      WHERE collection='tasks' AND json_valid(value_json) AND json_type(value_json,'$.sync.s.${field}')='text'`),
+  `CREATE INDEX IF NOT EXISTS state_rows_task_legacy_stamp
+    ON state_rows(json_extract(value_json,'$.project'), round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000) DESC)
+    WHERE collection='tasks' AND json_valid(value_json)
+      AND (json_type(value_json,'$.sync.s.text') IS NULL OR json_type(value_json,'$.sync.s.status') IS NULL
+        OR json_type(value_json,'$.sync.s.look') IS NULL OR json_type(value_json,'$.sync.s.place') IS NULL
+        OR json_type(value_json,'$.sync.s.links') IS NULL OR json_type(value_json,'$.sync.s.machine') IS NULL
+        OR json_type(value_json,'$.sync.s.handover') IS NULL)`,
+  `CREATE INDEX IF NOT EXISTS state_rows_controller_active
+    ON state_rows(collection, controller_active, row_order)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS pipeline_delivery_owner
+    ON state_rows(json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.delivery.target.branch'))
+    WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery.active') = 1
+      AND json_extract(value_json, '$.delivery.disposition') = 'owner'`,
+  `CREATE INDEX IF NOT EXISTS pipeline_delivery_history
+    ON state_rows(collection, json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.delivery.target.branch'), json_extract(value_json, '$.delivery.epoch') DESC)
+    WHERE collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS pipeline_creation_request
+    ON state_rows(collection, json_extract(value_json, '$.creationRequest.key'))
+    WHERE collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json) AND json_extract(value_json, '$.creationRequest.key') IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS pipeline_delivery_unclaimed ON state_rows(row_key)
+    WHERE collection = 'pipelines' AND json_valid(value_json)
+      AND json_extract(value_json, '$.delivery') IS NULL
+      AND json_extract(value_json, '$.publication') = 'remote-branch'
+      AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed')`,
+  `CREATE TABLE IF NOT EXISTS state_changes (
+    collection TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    row_key TEXT NOT NULL,
+    operation TEXT NOT NULL CHECK(operation IN ('upsert', 'delete')),
+    PRIMARY KEY(collection, revision, row_key),
+    FOREIGN KEY(collection) REFERENCES state_collections(collection) ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS state_changes_collection_revision
+    ON state_changes(collection, revision)`,
+  `CREATE TABLE IF NOT EXISTS state_leases (
+    collection TEXT PRIMARY KEY,
+    owner_token TEXT NOT NULL,
+    owner_pid INTEGER NOT NULL,
+    owner_start_identity TEXT,
+    acquired_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS state_imports (
+    collection TEXT PRIMARY KEY REFERENCES state_collections(collection) ON DELETE CASCADE,
+    source_name TEXT NOT NULL,
+    source_sha256 TEXT,
+    source_bytes INTEGER NOT NULL,
+    row_count INTEGER NOT NULL,
+    row_digest TEXT NOT NULL,
+    gap TEXT,
+    release TEXT,
+    imported_at TEXT NOT NULL,
+    mirror_sha256 TEXT,
+    mirror_revision INTEGER
+  )`,
+];
+const stateSchemaNames = stateSchema.map(sql => /^CREATE (?:UNIQUE )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)/.exec(sql)![1]!);
+
 function openRawDatabase(filename: string): Database {
   const db = connectRawDatabase(filename);
   try {
@@ -377,100 +462,21 @@ function openRawDatabase(filename: string): Database {
         // Missing schema still follows the fenced initialization path below.
         const objects = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type IN ('table','index','trigger')").all();
         const names = new Set(objects.map(row => row.name));
-        if (["state_collections", "state_rows", "state_changes", "state_leases", "state_imports",
-          "state_rows_collection_order", "state_rows_controller_active", "state_changes_collection_revision",
-          "pipeline_delivery_owner", "pipeline_delivery_history", "pipeline_creation_request", "pipeline_delivery_unclaimed",
+        if ([...stateSchemaNames,
           "pipeline_controller_work", "pipeline_controller_work_order", "pipeline_controller_work_insert",
           "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
           && pipelineControllerReferencesReady(db, names)
           && pipelineEvidenceIndexReady(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
           && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")) return db;
+        // The readiness check above is read-only. Any path below can mutate
+        // the shared database, so an older or partial schema may only be
+        // repaired by the release that currently owns SQLite writes.
+        assertSqliteInitializationAuthority(filename);
         db.exec("PRAGMA journal_mode = WAL");
         db.exec("PRAGMA auto_vacuum = INCREMENTAL");
         db.exec("BEGIN IMMEDIATE");
-        db.exec(`CREATE TABLE IF NOT EXISTS state_collections (
-            collection TEXT PRIMARY KEY,
-            schema_version INTEGER NOT NULL,
-            revision INTEGER NOT NULL,
-            change_floor INTEGER NOT NULL DEFAULT 0,
-            migration_id TEXT NOT NULL,
-            imported_at TEXT NOT NULL
-          )`);
-        db.exec(`CREATE TABLE IF NOT EXISTS state_rows (
-            collection TEXT NOT NULL,
-            row_key TEXT NOT NULL,
-            value_json TEXT NOT NULL,
-            row_order INTEGER NOT NULL,
-            row_revision INTEGER NOT NULL,
-            controller_active INTEGER NOT NULL CHECK(controller_active IN (0, 1)),
-            PRIMARY KEY(collection, row_key),
-            FOREIGN KEY(collection) REFERENCES state_collections(collection) ON DELETE CASCADE
-          )`);
-        db.exec(`CREATE INDEX IF NOT EXISTS state_rows_collection_order
-            ON state_rows(collection, row_order)`);
-        db.exec(`CREATE INDEX IF NOT EXISTS state_rows_task_project
-            ON state_rows(json_extract(value_json,'$.project'), row_key)
-            WHERE collection='tasks' AND json_valid(value_json)`);
-        for (const field of ["text", "status", "look", "place", "links", "machine", "handover"] as const) {
-          db.exec(`CREATE INDEX IF NOT EXISTS state_rows_task_stamp_${field}
-              ON state_rows(json_extract(value_json,'$.project'), json_extract(value_json,'$.sync.s.${field}') DESC)
-              WHERE collection='tasks' AND json_valid(value_json) AND json_type(value_json,'$.sync.s.${field}')='text'`);
-        }
-        db.exec(`CREATE INDEX IF NOT EXISTS state_rows_task_legacy_stamp
-            ON state_rows(json_extract(value_json,'$.project'), round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000) DESC)
-            WHERE collection='tasks' AND json_valid(value_json)
-              AND (json_type(value_json,'$.sync.s.text') IS NULL OR json_type(value_json,'$.sync.s.status') IS NULL
-                OR json_type(value_json,'$.sync.s.look') IS NULL OR json_type(value_json,'$.sync.s.place') IS NULL
-                OR json_type(value_json,'$.sync.s.links') IS NULL OR json_type(value_json,'$.sync.s.machine') IS NULL
-                OR json_type(value_json,'$.sync.s.handover') IS NULL)`);
-        db.exec(`CREATE INDEX IF NOT EXISTS state_rows_controller_active
-            ON state_rows(collection, controller_active, row_order)`);
-        db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS pipeline_delivery_owner
-            ON state_rows(json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.delivery.target.branch'))
-            WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery.active') = 1
-              AND json_extract(value_json, '$.delivery.disposition') = 'owner'`);
-        db.exec(`CREATE INDEX IF NOT EXISTS pipeline_delivery_history
-            ON state_rows(collection, json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.delivery.target.branch'), json_extract(value_json, '$.delivery.epoch') DESC)
-            WHERE collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json)`);
-        db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS pipeline_creation_request
-            ON state_rows(collection, json_extract(value_json, '$.creationRequest.key'))
-            WHERE collection IN ('pipelines', 'pipelines_archive') AND json_valid(value_json) AND json_extract(value_json, '$.creationRequest.key') IS NOT NULL`);
-        db.exec(`CREATE INDEX IF NOT EXISTS pipeline_delivery_unclaimed ON state_rows(row_key)
-            WHERE collection = 'pipelines' AND json_valid(value_json)
-              AND json_extract(value_json, '$.delivery') IS NULL
-              AND json_extract(value_json, '$.publication') = 'remote-branch'
-              AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed')`);
-        db.exec(`CREATE TABLE IF NOT EXISTS state_changes (
-            collection TEXT NOT NULL,
-            revision INTEGER NOT NULL,
-            row_key TEXT NOT NULL,
-            operation TEXT NOT NULL CHECK(operation IN ('upsert', 'delete')),
-            PRIMARY KEY(collection, revision, row_key),
-            FOREIGN KEY(collection) REFERENCES state_collections(collection) ON DELETE CASCADE
-          )`);
-        db.exec(`CREATE INDEX IF NOT EXISTS state_changes_collection_revision
-            ON state_changes(collection, revision)`);
-        db.exec(`CREATE TABLE IF NOT EXISTS state_leases (
-            collection TEXT PRIMARY KEY,
-            owner_token TEXT NOT NULL,
-            owner_pid INTEGER NOT NULL,
-            owner_start_identity TEXT,
-            acquired_at INTEGER NOT NULL
-          )`);
-        db.exec(`CREATE TABLE IF NOT EXISTS state_imports (
-            collection TEXT PRIMARY KEY REFERENCES state_collections(collection) ON DELETE CASCADE,
-            source_name TEXT NOT NULL,
-            source_sha256 TEXT,
-            source_bytes INTEGER NOT NULL,
-            row_count INTEGER NOT NULL,
-            row_digest TEXT NOT NULL,
-            gap TEXT,
-            release TEXT,
-            imported_at TEXT NOT NULL,
-            mirror_sha256 TEXT,
-            mirror_revision INTEGER
-          )`);
+        for (const sql of stateSchema) db.exec(sql);
         const collectionColumns = db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all();
         if (!collectionColumns.some((column) => column.name === "change_floor")) {
           db.exec("ALTER TABLE state_collections ADD COLUMN change_floor INTEGER NOT NULL DEFAULT 0");
