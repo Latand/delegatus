@@ -4,11 +4,11 @@ import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { refuseAnonymous, teamActor } from "@/lib/team";
 import { parsePrototypeInput, PrototypeError } from "./input";
 import { prototypeCriticGate, criticRefusal } from "./criticGate";
-import { publishPrototype, withPrototypeState } from "./store";
+import { findPrototypeRound, publishPrototype, withPrototypeState } from "./store";
 import { operatorDecisionRound, operatorDecisions, readPrototypeReviews, readSeatRounds } from "./read";
 import { findSeatRound, loadSeatRounds } from "./seatRounds";
 import { loadTasksForList } from "@/lib/tasks/store";
-import { decidePrototype, refreshPrototypeDelivery, prototypeDelivery, type PrototypeDelivery } from "./decision";
+import { decidePrototype, refreshPrototypeDelivery, prototypeDelivery, type PrototypeDelivery, type PrototypeDeliveryPorts } from "./decision";
 import { prototypeWorld, taskForPrototype, type PrototypeCaller, type PrototypeWorld } from "./world";
 import { deliverPrototypeDecision } from "./deliveryWorker";
 import { runsElsewhere } from "@/lib/links/linked";
@@ -39,6 +39,7 @@ export async function resendTelegramPOST(request: NextRequest, world: PrototypeW
     const body = await request.json();
     const { round } = resendTarget(request, body?.reviewId, world);
     if (typeof body.clientRequestId !== "string" || !body.clientRequestId.trim() || body.clientRequestId.length > 200) throw new PrototypeError("clientRequestId is required");
+    if (round.decision) throw new PrototypeError("Рішення вже збережено. Щоб доставити відповідь поточному координатору, натисніть «Надіслати ще раз» біля стану доставки рішення.", 409);
     const key = `${round.id}:resend:${body.clientRequestId.trim()}`;
     const telegramPost = await postPrototypeReviewToTelegram(round, key);
     return NextResponse.json({ reviewId: round.id, telegramPost }, { headers: { "cache-control": "private, no-store" } });
@@ -154,9 +155,10 @@ export async function reviewPOST(request: NextRequest,taskId: string,world: Prot
     taskForPrototype(taskId,caller,true);
     const body = await request.json() as DecidePrototypeInput | { reviewId: string; retry: true };
     if (!body || typeof body !== "object" || typeof body.reviewId !== "string" || ("retry" in body && body.retry !== true)) throw new PrototypeError("invalid decision");
-    /* The decision is durable before the answer, and the answer never waits
-       for the seat: its message goes from the background delivery. */
-    if (decidePrototype(request,taskId,body,world)) deliverPrototypeDecision(taskId,body.reviewId,{ delivery, world, now });
+    /* A new decision is durable before the initial save answers; explicit
+       retries wait for the delivery worker's verdict. */
+    if ("retry" in body) await retryPrototypeDecision(request,taskId,body.reviewId,{ delivery, world, now });
+    else if (decidePrototype(request,taskId,body,world)) deliverPrototypeDecision(taskId,body.reviewId,{ delivery, world, now });
     return NextResponse.json(readPrototypeReviews(taskForPrototype(taskId,caller)),{ headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error, "POST /api/tasks/[id]/prototypes"); }
 }
@@ -209,7 +211,24 @@ export async function decisionsPOST(request: NextRequest,world: PrototypeWorld =
       if (!task) throw new PrototypeError("review not found",404);
       taskId = taskForPrototype(task.id,caller,true).id;
     }
-    if (decidePrototype(request,taskId,body,world)) deliverPrototypeDecision(taskId,body.reviewId,{ delivery, world, now: Date.now });
+    if ("retry" in body) await retryPrototypeDecision(request,taskId,body.reviewId,{ delivery, world, now: Date.now });
+    else if (decidePrototype(request,taskId,body,world)) deliverPrototypeDecision(taskId,body.reviewId,{ delivery, world, now: Date.now });
     return NextResponse.json(operatorDecisions(key),{ headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error, "POST /api/projects/decisions"); }
+}
+
+/** An explicit resend waits for its delivery verdict instead of acknowledging a
+ * counter reset. Unknown execution never grants permission to send again. */
+async function retryPrototypeDecision(request: NextRequest, taskId: string | null, reviewId: string,
+  ports: PrototypeDeliveryPorts): Promise<void> {
+  if (decidePrototype(request, taskId, { reviewId, retry: true }, ports.world)) {
+    await deliverPrototypeDecision(taskId, reviewId, ports);
+    const decision = await withPrototypeState(() => findPrototypeRound(taskId, reviewId)?.decision);
+    if (decision?.delivery.state === "uncertain") throw new PrototypeError(
+      "Доставку попередньої спроби не підтверджено. Перевіряємо повідомлення та підтверджені пробудження поточного координатора. Повторне надсилання призупинено через ризик дублювання; збережена відповідь залишається у формі.", 409);
+    if (decision?.delivery.state === "failed") throw new PrototypeError(
+      "Збережену відповідь поки не вдалося доставити. Delegatus повторить спробу в межах бюджету доставки.", 503);
+    if (decision?.delivery.state === "no-orchestrator" || !decision?.delivery.conversationId) throw new PrototypeError(
+      "Відповідь збережено. Для доставки потрібен чинний координатор проєкту.", 409);
+  }
 }

@@ -154,3 +154,50 @@ for (const explicitRetry of [false, true]) test(`seat channel: a saved answer fo
     setSystemTime();
   }
 });
+
+
+test("an exhausted uncertain answer already carried by a confirmed successor wake settles across process restarts", async () => {
+  setSystemTime(new Date("2026-10-16T08:00:00Z"));
+  const root = path.join(process.env.TMPDIR!, "confirmed-answer-wake");
+  const peer = await startComposerPayloadRuntime(root, { secondConversation: true, holdFirstTurn: true });
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(root, "rt.sock");
+  try {
+    const { emptySeatTickState } = await import("@/lib/monitor/types");
+    const { seatTickSignalVersion, seatTickWakeCommit } = await import("@/lib/monitor/seatTick");
+    const { writeSeatTickState } = await import("@/lib/monitor/seatTickState");
+    const { currentSeat } = await import("@/lib/orchestrator/seatChannel");
+    const { telegramPostSignals } = await import("./telegramPostSignals");
+    const id = `pr_${"9".repeat(32)}`;
+    const next = peer.successor!;
+    const project = "confirmed-answer-project";
+    beginOrchestratorSeatIntent({ project, mandate: "coordinate", mode: "existing", clientRequestId: "confirmed-answer-seat" });
+    completeOrchestratorSeatIntent({ project, clientRequestId: "confirmed-answer-seat", conversationId: next.conversationId, path: next.artifactPath });
+    const seat = currentSeat(project)!;
+    insertSeatRound({ id, taskId: null, project, title: "Preserved answer", createdAt: new Date().toISOString(), source: { conversationId: peer.conversationId }, publicationKey: "confirmed-answer-wake", inputDigest: "fixture", variants: [],
+      decision: { at: new Date().toISOString(), chosen: [], comment: "Proceed once.", revision: 1,
+        delivery: { state: "uncertain", conversationId: peer.conversationId, operationId: "old-uncertain-operation", clientMessageId: `prototype-decision:${id}`, text: "Saved answer: proceed once.", attempts: 10, exhaustedAt: new Date().toISOString() } } });
+    const signal = telegramPostSignals(project, [], [findSeatRound(id)!])[0]!;
+    const text = `- [signal] ${signal.id} — ${signal.label}`;
+    const response = await peer.handle(new Request("http://localhost/api/runtime/send", { method: "POST", body: JSON.stringify({ conversationId: next.conversationId, operationId: "confirmed-wake-operation", idempotencyKey: "confirmed-answer-wake", text }) }));
+    expect(response.status).toBe(202);
+    const operationId = (await response.json()).operationId;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try { await Promise.race([peer.waitForDelivery(next.conversationId, 1), new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("wake did not reach successor")), 10000); })]); }
+    finally { clearTimeout(timeout); }
+    expect(next.delivered).toHaveLength(1);
+    expect(next.delivered[0]!.text).toBe(text);
+    const receipt = await peer.handle(new Request(`http://localhost/api/runtime/operations/${operationId}`));
+    expect((await receipt.json()).send.state).toBe("delivered");
+    const version = seatTickSignalVersion(signal, { conversationId: seat.conversationId!, seatEpoch: seat.seatEpoch });
+    const commit = { proposal: false, reasons: [], fingerprint: "confirmed-answer", eventsThrough: 0, children: [], itemsShown: [version], itemLines: [{ version, line: text }] };
+    const state = { ...emptySeatTickState(), seatEpoch: seat.seatEpoch, outstandingWake: { clientMessageId: "confirmed-answer-wake", conversationId: next.conversationId, seatEpoch: seat.seatEpoch, operationId, text, commit } };
+    writeSeatTickState(project, seatTickWakeCommit(state, commit, Date.now()));
+    for (let restart = 0; restart < 2; restart++) {
+      const child = Bun.spawn([process.execPath, new URL("./answerDeliveryChild.fixture.ts", import.meta.url).pathname], { env: { ...process.env, NODE_ENV: "test" }, stdout: "pipe", stderr: "pipe" });
+      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(code).toBe(0); expect(stderr).not.toContain("error:"); expect(JSON.parse(stdout).attempts).toBe(0);
+      expect(findSeatRound(id)!.decision!.delivery).toMatchObject({ state: "sent", operationId: "old-uncertain-operation", wakeReceipt: { conversationId: next.conversationId, seatEpoch: seat.seatEpoch } });
+    }
+    expect(peer.delivered).toHaveLength(0); expect(next.delivered).toHaveLength(1);
+  } finally { await peer.close(); setSystemTime(); }
+});

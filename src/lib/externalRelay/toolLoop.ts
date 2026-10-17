@@ -5,6 +5,8 @@ import { readRelaySwitches } from "./switches";
 import type { PairedRelay } from "./store";
 import type { RelayToolCallRecord } from "./answers";
 
+export const RELAY_TOOL_ROUNDS = 8;
+
 export function mayQuote(audience: string | undefined, requester: ExternalRelayRequester | null | undefined): boolean {
   return audience === undefined || (audience === "admin" && requester?.is_admin === true) ||
     (audience === "owner" && requester?.is_owner === true);
@@ -48,7 +50,7 @@ export async function toolSleep(ms: number, signal: AbortSignal): Promise<void> 
 }
 /** Request-scoped memory only. The service owns the durable C6 ledger. */
 export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest, lease: {
-  signal: AbortSignal; lose: () => void; ack: () => Promise<boolean>;
+  signal: AbortSignal; lose: () => void; ack: () => Promise<boolean>; beforeSend?: () => void | Promise<void>;
 }, runtime: ToolLoopRuntime = {}, onProgress?: (tool: string, done: boolean, failed: boolean) => void, onToolState?: (pending: boolean) => void) {
   // I8/C8 admission and the authoritative index belong to the service. The
   // feature gates only the amended owner semantics; legacy 2a owner reads stay.
@@ -111,7 +113,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           else actionSent = true;
         }
         const response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(request.request_id)}/tool-calls`, "POST", body,
-          relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal });
+          relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal, beforeSend: lease.beforeSend });
         if (rejectionCode) return refused(rejectionCode);
         const parsed = toolCallResultSchema.safeParse(response.body);
         if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool) throw new ExternalRelayError("malformed");
