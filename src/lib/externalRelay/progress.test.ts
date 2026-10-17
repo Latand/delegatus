@@ -93,3 +93,11 @@ test("the web search events pass only when the profile has web search, and nothi
   // A search reaches the service as a tool progress line.
   expect(progressForEvent({ type: "tool", phase: "start", tool: "web_search", ok: null })).toMatchObject({ kind: "tool_start", tool: "web_search", status: "running" });
 });
+
+test("image items are admitted only in the negotiated image profile", () => {
+  for (const type of ["image_generation", "image_generation_call"]) {
+    const line = JSON.stringify({ type: "item.completed", item: { type } });
+    expect(mapAgentLine("codex", line, { webSearch: false, imageGeneration: true })).toEqual([{ type: "tool", phase: "done", tool: "image_generation", ok: null }]);
+    expect(mapAgentLine("codex", line)[0]?.type).toBe("violation");
+  }
+});

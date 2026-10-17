@@ -3177,3 +3177,158 @@ for (const retry of [false, true]) test(`owner completion rechecks cutoff after 
     expect(completions).toHaveLength(retry ? 2 : 1);
   } finally { release(); lookup.mockRestore(); await server.close(); }
 });
+
+
+test("negotiated rich completion preserves the guide, schema, table and URL button", async () => {
+  const { richRequest } = await import("./rich.fixture");
+  const request = richRequest(); request.request_id = "rq_rich_roundtrip";
+  const text = "# Report\n\n| A | B |\n|---|---|\n| x | y |\n\n" + "x".repeat(5000);
+  const buttons = [[{ text: "Open", url: "https://example.com/report" }]];
+  const captures: unknown[] = [];
+  const server = await startTestRelay((req, body) => { if (req.url?.endsWith("/complete")) captures.push(body); return { body: { status: "ok" } }; });
+  const paired = relay(`${server.origin}/v1`);
+  const fake = stub(`const a=process.argv.slice(2); const prompt=await Bun.stdin.text();
+    const schema=JSON.parse(await Bun.file(a[a.indexOf('--output-schema')+1]).text());
+    if (!prompt.includes('<format>') || !prompt.includes(${JSON.stringify(JSON.stringify(request.input.format))}) || !schema.properties.format || !schema.properties.buttons) process.exit(2);
+    await Bun.write(a[a.indexOf('--output-last-message')+1], JSON.stringify(${JSON.stringify({action:"reply",text,reply_to:"m1",format:"rich_markdown",buttons})}));`);
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: fake });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text, format: "rich_markdown", buttons } });
+    expect(captures).toEqual([result]);
+  } finally { await server.close(); }
+});
+
+test("v2 invalid_format downgrades once while legacy completion retries stay unchanged", async () => {
+  const bodies: unknown[] = [];
+  const server = await startTestRelay((_req, body) => {
+    bodies.push(body);
+    return bodies.length === 1 ? { status: 422, body: { error: { code: "invalid_format" } } } : { body: {} };
+  });
+  try {
+    const result = await completeRelayRequest(relay(`${server.origin}/v1`), "rq_rich_downgrade", { lease_id: sampleRequest.lease_id, outcome: "answered", duration_ms: 1,
+      answer: { action: "reply", text: "# Short", reply_to: null, format: "rich_markdown", buttons: [] } }, () => Date.now() + 5000);
+    expect(result.delivery).toBe("accepted");
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toMatchObject({ answer: { format: "plain", text: "# Short" } });
+  } finally { await server.close(); }
+});
+
+test("attachment readiness fallback preserves rich text and URL buttons", async () => {
+  const bodies: { answer?: Record<string, unknown> }[] = [];
+  const server = await startTestRelay((_req, body) => {
+    bodies.push(body as typeof bodies[number]);
+    return bodies.length === 1 ? { status: 422, body: { error: { code: "attachment_not_ready" } } } : { body: {} };
+  });
+  const buttons = [[{ text: "Open", url: "https://example.com/" }]];
+  try {
+    const result = await completeRelayRequest(relay(`${server.origin}/v1`), "rq_attachment_downgrade", {
+      lease_id: sampleRequest.lease_id, outcome: "answered", duration_ms: 1,
+      answer: { action: "reply", text: "# Short", reply_to: null, format: "rich_markdown", buttons, attachments: [{ attachment_id: "a0-fixture", kind: "document" }] },
+    }, () => Date.now() + 5000);
+    expect(result.delivery).toBe("accepted");
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]?.answer).toMatchObject({ format: "rich_markdown", buttons });
+    expect(bodies[1]?.answer?.attachments ?? []).toEqual([]);
+  } finally { await server.close(); }
+});
+
+
+test.each(["ok","lease_lost","refused","media_only_refused","outside","ignore"])("negotiated generated attachment crosses runner and upload (%s)", async mode => {
+  const { richRequest } = await import("./rich.fixture");
+  const sharp = (await import("sharp")).default;
+  const bytes = await sharp({create:{width:2,height:2,channels:3,background:"red"}}).png().toBuffer();
+  const request=richRequest(true); request.request_id=`rq_image_${mode}`;
+  const sent: unknown[]=[]; let puts=0;
+  const server=await startTestRelay((req,body)=>{
+    if(req.method==="PUT") {
+      puts++;
+      expect(body).toEqual(bytes);
+      expect(req.headers["delegatus-relay-lease"]).toBe(request.lease_id);
+      if(mode==="lease_lost") return {status:409,body:{error:{code:"lease_lost"}}};
+      if(mode.includes("refused")) return {status:415,body:{error:{code:"unsupported_media_type"}}};
+      return {status:201,body:{attachment_id:req.url!.split("/").at(-1),mime_type:"image/png",filename:"exec-1.png",sha256:req.headers["delegatus-relay-sha256"],byte_size:bytes.length,expires_at:"2027-01-01T00:00:00Z"}};
+    }
+    if(req.url?.endsWith("/complete")) sent.push(body);
+    return {body:{status:"ok"}};
+  });
+  let seenRunDir="";
+  const marker=path.join(root,`image-home-${mode}`);
+  const command=stub(`import fs from 'node:fs'; import path from 'node:path';
+    const a=process.argv.slice(2),out=a[a.indexOf('--output-last-message')+1];
+    await Bun.stdin.text();
+    const dir=path.join(process.env.CODEX_HOME,'generated_images','thread_image');fs.mkdirSync(dir,{recursive:true});
+    const file=path.join(dir,'exec-1.png');fs.writeFileSync(file,Buffer.from(${JSON.stringify(bytes.toString("base64"))},'base64'));
+    await Bun.write(${JSON.stringify(marker)},path.dirname(out));
+    console.log(JSON.stringify({type:'thread.started',thread_id:'thread_image'}));
+    console.log(JSON.stringify({type:'item.completed',item:{type:'image_generation_call'}}));
+    await Bun.write(out,JSON.stringify({action:${JSON.stringify(mode==="ignore"?"ignore":"reply")},text:${JSON.stringify(mode==="media_only_refused"?"":"Picture")},reply_to:'m1',format:'plain',buttons:[],attachments:[{path:${mode==="outside"?JSON.stringify(path.join(root,"outside.png")):"file"},kind:'photo',caption:'Picture'}]}));`);
+  const paired=relay(`${server.origin}/v1`);
+  try {
+    const result=await runClaimedRequest(paired,request,undefined,{command});
+    seenRunDir=fs.readFileSync(marker,"utf8");
+    if(mode==="lease_lost") {expect(result).toBeNull();expect(sent).toEqual([]);}
+    else if(mode==="media_only_refused") expect(result).toMatchObject({outcome:"failed",reason:"invalid_answer"});
+    else if(mode==="ignore") expect(result).toMatchObject({outcome:"answered",answer:{action:"ignore",text:"",format:"plain",buttons:[]}});
+    else if(mode==="outside" || mode==="refused") {expect(result).toMatchObject({outcome:"answered"});expect(result && "answer" in result ? result.answer.attachments??[]:[]).toEqual([]);}
+    else {expect(result).toMatchObject({outcome:"answered",answer:{attachments:[{kind:"photo",caption:"Picture"}]}});}
+    expect(puts).toBe(mode==="outside" || mode==="ignore"?0:1);
+    expect(fs.existsSync(seenRunDir)).toBe(false);
+    const record=readAnswerRecord(paired.id,request.target_id,request.request_id);
+    expect(record).toHaveProperty("features",request.features);
+    expect(JSON.stringify(record)).not.toContain(seenRunDir);
+    if(mode==="outside") expect(record).toHaveProperty("drops",[{part:"attachment",index:0,reason:"outside_run"}]);
+    if(mode.includes("refused")) expect(record).toHaveProperty("drops",[{part:"attachment",reason:"unsupported_media_type"}]);
+  } finally {await server.close();}
+});
+
+
+test.each(["claude","codex"])("owner %s returns rich text, buttons and a document through the real MCP binding", async engine=>{
+  const { richRequest }=await import("./rich.fixture");
+  const { viewerMcpBindings, productionDomainDependencies }=await import("@/lib/mcp/bindings");
+  const ownerHome=fs.mkdtempSync(path.join("/tmp","relay-rich-owner-"));
+  fs.mkdirSync(path.join(ownerHome,"handoff")); const file=path.join(ownerHome,"handoff","report.md");fs.writeFileSync(file,"# Report");
+  const oldHome=process.env.HOME, oldState=process.env.LLV_STATE_DIR; process.env.HOME=ownerHome; process.env.LLV_STATE_DIR=path.join(ownerHome,"state");
+  const request=richRequest(true);request.request_id=`rq_owner_rich_${engine}`;
+  request.input.requester={key:"u1",is_owner:true,is_admin:true,is_anonymous_admin:false,can_delete_messages:true,can_restrict_members:true};
+  const events:string[]=[];
+  const server=await startTestRelay((req)=>{
+    if(req.method==="PUT") {events.push("upload");return {status:201,body:{attachment_id:req.url!.split("/").at(-1),mime_type:"text/markdown",filename:"report.md",byte_size:8,sha256:req.headers["delegatus-relay-sha256"],expires_at:"2027-01-01T00:00:00Z"}};}
+    if(req.url?.endsWith("/complete"))events.push("complete");
+    return {body:{status:"ok"}};
+  });
+  const paired=relay(`${server.origin}/v1`);paired.targets[0]={...paired.targets[0]!,ownerTier:true,engine};
+  updateRelayStore(s=>({...s,relays:[paired]}));
+  const conversationId=`conversation_owner_rich_${engine}`;
+  const binding=(via?:{deputy:string},kind="agent")=>viewerMcpBindings(undefined,{get:async()=>({}),post:async()=>({})},{...productionDomainDependencies,callerAttribution:()=>({kind,conversationId,role:null,...(via?{via}:{})})} as never);
+  const own=binding();let observedError:unknown;
+  const text=("# Report\n\n"+"Long report. ".repeat(500)).trimEnd();
+  try {
+    const result=await runClaimedRequest(paired,request,undefined,{timeoutMs:10000,ownerPorts:{
+      launch:async body=>{expect(body.prompt).toContain("<format>");expect(body.prompt).toContain("relay_answer");return {status:202,body:{conversationId}};},
+      observe:async()=>{
+        try{
+          await expect(binding({deputy:"seat"}).relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
+          await expect(binding(undefined,"voice-gateway").relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
+          await own.relay_answer({format:"rich_markdown",buttons:[[{text:"Open",url:"https://example.com/report"}]],attachments:[{path:file,kind:"document",caption:"Report"}]});
+        }catch(error){observedError=error;}
+        return {state:"ended",finalText:text};
+      },stop:async()=>{},pollMs:1}});
+    if(observedError)throw observedError;
+    expect(result).toMatchObject({outcome:"answered",answer:{text,format:"rich_markdown",buttons:[[{text:"Open"}]],attachments:[{kind:"document",caption:"Report"}]}});
+    expect(events).toEqual(["upload","complete"]);
+    await expect(own.relay_answer({format:"plain"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
+  }finally{await server.close(); if(oldHome===undefined)delete process.env.HOME;else process.env.HOME=oldHome; if(oldState===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=oldState;fs.rmSync(ownerHome,{recursive:true,force:true});}
+});
+
+
+test("negotiated tool rounds reject plain over the cap and preserve their rich answer parts", async()=>{
+  const {richRequest}=await import("./rich.fixture");
+  const request=richRequest();request.input.tools=x1Request("member").input.tools;
+  const rich=await runLoopCase({request,plan:`return round===1?{action:'call',text:'',reply_to:null,format:'plain',buttons:[],calls:[call('search_docs',{query:'x'})]}:{action:'reply',text:'# Result\\n\\n'+'Long text. '.repeat(500),reply_to:'m1',format:'rich_markdown',buttons:[[{text:'Open',url:'https://example.com/'}]]};`});
+  expect(rich.completion).toMatchObject({outcome:"answered",answer:{format:"rich_markdown",buttons:[[{text:"Open"}]]}});
+  expect(rich.rounds).toHaveLength(2);
+  for(const round of rich.rounds) {expect(round.prompt).toContain("<format>");expect(round.schema.properties).toHaveProperty("format");}
+  const plain=richRequest();plain.request_id="rq_plain_cap";
+  const refused=await runLoopCase({request:plain,plan:`return {action:'reply',text:'x'.repeat(4001),reply_to:null,format:'plain',buttons:[]};`});
+  expect(refused.completion).toMatchObject({outcome:"failed",reason:"invalid_answer"});
+});

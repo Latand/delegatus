@@ -1,3 +1,6 @@
+import { answerCapabilities, checkedAnswerV2, checkedRoundV2, withAnswerParts, answerFiles, type AnswerDrop } from "./answerV2";
+import { stageGeneratedAttachments, uploadAnswerAttachments, type StagedAttachment } from "./attachments";
+import { openOwnerAnswer } from "./ownerAnswer";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
@@ -27,8 +30,6 @@ import { relayCall, ExternalRelayError, isUnknownFeatureRefusal } from "./client
 import {
   answerSchema,
   replyAnswerSchema,
-  checkedAnswer,
-  checkedRound,
   roundSchema,
   type ExternalRelayDecision,
   handoffAnswerSchema,
@@ -141,9 +142,11 @@ export async function completeRelayRequest(
   until: () => number,
   allowOwnerReply?: () => boolean,
   onUnknownFeature?: () => Promise<unknown>,
+  plainMax = 4000,
 ): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery }> {
   let wait = 1000;
   let attempted = false;
+  let downgraded = false;
   while (true) {
     if (attempted && Date.now() >= until()) return { body, delivery: "unconfirmed" };
     attempted = true;
@@ -166,6 +169,22 @@ export async function completeRelayRequest(
     } catch (error) {
       if (isUnknownFeatureRefusal(error)) await onUnknownFeature?.();
       if (error instanceof ExternalRelayError) {
+        const v2 = body.outcome === "answered" && body.answer.format !== undefined;
+        if (v2 && error.status === 409 && error.code === "already_completed") return { body, delivery: "accepted" };
+        if (v2 && !downgraded && (error.status === 422 && ["invalid_format", "attachment_not_ready"].includes(error.code) || error.status === 415 || error.status === 400 && error.code === "malformed")) {
+          downgraded = true;
+          if (body.outcome === "answered" && body.answer.text.trim() && [...body.answer.text].length <= plainMax) {
+            if (error.status === 422 && error.code === "attachment_not_ready") {
+              const answer = { ...body.answer }; delete answer.attachments;
+              body = { ...body, answer };
+            } else {
+              const { action, text, reply_to } = body.answer;
+              body = { ...body, answer: { action, text, reply_to, format: "plain", buttons: [] } };
+            }
+          } else body = failed(body.lease_id, "invalid_answer");
+          continue;
+        }
+        if (v2 && [415,422].includes(error.status)) return { body, delivery: "refused" };
         if (error.status === 413 && body.outcome === "answered") {
           body = failed(body.lease_id, "invalid_answer");
           continue;
@@ -179,6 +198,7 @@ export async function completeRelayRequest(
       }
       if (Date.now() >= until())
         return { body, delivery: "unconfirmed" };
+      if (body.outcome === "answered" && body.answer.format !== undefined && error instanceof ExternalRelayError && error.status === 429 && error.retryAfterSeconds !== null) wait = Math.max(1, error.retryAfterSeconds * 1000);
       await new Promise((resolve) => setTimeout(resolve, Math.min(wait, Math.max(0, until() - Date.now()))));
       wait = Math.min(wait * 2, 5000);
     }
@@ -204,6 +224,7 @@ export async function runClaimedRequest(
   }
   const parsed = requestSchema.safeParse(raw);
   const request = parsed.success ? parsed.data : null;
+  const caps = request ? answerCapabilities(request, relay.targets.find(t => t.id === request.target_id)?.engine ?? "") : null;
   const rawId =
     raw && typeof raw === "object"
       ? (raw as Record<string, unknown>).request_id
@@ -254,6 +275,7 @@ export async function runClaimedRequest(
     chatKey: request?.chat?.key ?? null,
     requester: request?.input.requester ?? null,
     input: rawRequest.input,
+    ...(request?.features ? { features: request.features } : {}),
   });
   inflight.add(requestId);
   let releaseRequested = false;
@@ -269,9 +291,14 @@ export async function runClaimedRequest(
   let cadenceTimer: ReturnType<typeof setTimeout> | null = null;
   let heartbeatStopped = false;
   let pendingBeat: Promise<void> | null = null;
-  let finishing: Promise<ExternalRelayCompletion> | null = null;
+  let finishing: Promise<ExternalRelayCompletion | null> | null = null;
+  let ownerParts: ReturnType<typeof openOwnerAnswer> | null = null;
+  let stagedAttachments: StagedAttachment[] = [];
+  const answerDrops: AnswerDrop[] = [];
+  const generatedFiles: string[] = [];
+  const generatedSources = new Map<string, Set<string>>();
   const loopRecord = () => loop ? { rounds, toolCalls: loop.records } : {};
-  const finish = (body: ExternalRelayCompletion): Promise<ExternalRelayCompletion> => {
+  const finish = (body: ExternalRelayCompletion): Promise<ExternalRelayCompletion | null> => {
     if (finishing) return finishing;
     finishing = (async () => {
     leaveRelayHold(requestId);
@@ -280,6 +307,7 @@ export async function runClaimedRequest(
         if (releaseRequested) void pendingBeat.catch(() => console.error("External relay heartbeat refresh failed during demotion"));
         else await pendingBeat;
       }
+      if (caps?.rich && leaseUnavailable) return null;
       // Persist the local decision before any delivery wait: a restart must
       // leave the generated answer and early declines inspectable.
       if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
@@ -297,10 +325,28 @@ export async function runClaimedRequest(
         delivery: "unconfirmed",
         ...loopRecord(),
       });
+      if (body.outcome === "answered" && body.answer.action === "reply" && caps?.media && request && stagedAttachments.length && !releaseRequested) {
+        try {
+          body.answer.attachments = await uploadAnswerAttachments(relay, request, stagedAttachments, deadline.at, callAbort.signal, answerDrops,
+            { authorize: () => { if (leaseUnavailable || allowOwnerReply && !allowOwnerReply()) throw new Error("relay authorization revoked"); } });
+        } catch (error) {
+          if (leaseUnavailable || callAbort.signal.aborted || error instanceof ExternalRelayError && (error.status === 404 || error.status === 409 && error.code === "lease_lost")) {
+            leaseUnavailable = true;
+            recorder?.annotateV2({ outcome: "lease_lost", drops: answerDrops });
+            return null;
+          }
+          answerDrops.push({part:"attachment",reason:"upload_failed"});
+          if (allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
+        }
+        if (body.outcome === "answered" && !body.answer.text.trim() && !body.answer.attachments?.length) body = failed(body.lease_id, "invalid_answer");
+      }
+      if (body.outcome === "answered" && body.answer.action === "reply" && caps?.rich && !body.answer.text.trim() && !body.answer.attachments?.length) body = failed(body.lease_id, "invalid_answer");
+      if (caps?.rich) recorder?.annotateV2({ drops: answerDrops, attachments: stagedAttachments.map(({id,kind,filename,size,sha256}) => ({attachment_id:id,kind,filename,bytes:size,sha256})), ...(body.outcome === "answered" ? { answer: body.answer } : {outcome:`${body.outcome}:${body.reason}`}) });
       const deliveryStart = Date.now();
       const until = releaseRequested ? deliveryStart : deadline.at;
-      const sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature);
+      const sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
       const completion = sent.body;
+      if (caps?.rich && sent.body !== body) recorder?.annotateV2({ drops: [...answerDrops, {part:"answer",reason:"service_downgrade"}] });
       claimTerminal = sent.delivery !== "refused";
       terminalCompletion = claimTerminal ? completion : null;
       try { await settleClaim(claimTerminal ? "terminal" : "release"); }
@@ -633,18 +679,23 @@ export async function runClaimedRequest(
       // Service tools never read the Delegatus board; their names stay local.
       steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
     } : undefined);
+    if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, [relay.credential], () => !leaseUnavailable && !callAbort.signal.aborted && allowOwnerReply!());
     let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
     let completion: ExternalRelayDecision | null = null;
     for (rounds = 1; rounds <= (loop ? 8 : 1); rounds++) {
       if (Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
       const final = rounds === 8 || !!loop && loop.callsLeft() === 0;
       runFinished = false;
+      let previousImages = new Set<string>();
+      if (caps?.generate && conversation?.sessionId) {
+        try { previousImages = new Set(withViewerOperation("relay.attachments", () => fs.readdirSync(path.join(conversationCodexHome(conversation!), "generated_images", conversation!.sessionId!)))); } catch { /* New image directory. */ }
+      }
       try {
         if (rounds === 1 && activeDrain()) {
           await releaseAdmission();
           if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
         }
-        const roundPrompt = loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }) : answerPrompt(request);
+        const roundPrompt = loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }, target.engine) : answerPrompt(request, target.engine);
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
         if (conversation && rounds === 1) turn = conversationTurnPrompt(request, conversation, frame);
         const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt;
@@ -670,10 +721,11 @@ export async function runClaimedRequest(
           effort: target.effort,
           account: selectedAccount(),
           ["prompt"]: conversation ? persistentPrompt : roundPrompt,
-          schema: loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent })) : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
+          schema: withAnswerParts(loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent })) : offersHandoff(request) ? handoffAnswerSchema : answerSchema, caps!),
           runDir: loop ? path.join(runDir, `round-${rounds}`) : runDir,
           hardCapMs: target.hardCapMinutes * 60_000,
           webSearch: profile.webSearch,
+          ...(caps?.generate ? { imageGeneration: { readableRoot: conversation?.cwd ?? path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "cwd") } } : {}),
           runtime,
           onEvent: (event) => {
             if (steps) return;
@@ -717,6 +769,8 @@ export async function runClaimedRequest(
       // The request deadline bounds admission and delivery retries. A run
       // already launched remains protected by its lease and configured cap.
       result = await launchedRun.done;
+      ownerParts?.close();
+      if (ownerParts) { stagedAttachments = ownerParts.parts().attachments; answerDrops.push(...ownerParts.drops); }
       if (conversation) {
         if (result.sessionId) conversation.sessionId = result.sessionId;
         else { conversationBroken = true; if (result.status === "done") result = { ...result, status: "failed" }; }
@@ -727,8 +781,20 @@ export async function runClaimedRequest(
       cancelStalledRun();
       if (leaseUnavailable) return null;
       const decision = result?.status === "done"
-        ? loop && !final ? checkedRound(result.answer, request, { handoff: !loop.actionSent, ignore: !loop.sawUnknown }) : checkedAnswer(result.answer, request, { handoff: !loop?.actionSent, ignore: !loop?.sawUnknown })
+        ? loop && !final ? checkedRoundV2(result.answer, request, caps!, { handoff: !loop.actionSent, ignore: !loop.sawUnknown }, answerDrops) : checkedAnswerV2(result.answer, request, caps!, { handoff: !loop?.actionSent, ignore: !loop?.sawUnknown, stagedAttachments: owner ? stagedAttachments.length : 0 }, answerDrops)
         : null;
+      if (caps?.generate && !owner && result?.imageHome && result.threadId) {
+        const directory = path.join(result.imageHome, "generated_images", result.threadId);
+        let names = new Set<string>();
+        try { names = new Set(withViewerOperation("relay.attachments", () => fs.readdirSync(directory)).filter(name => !previousImages.has(name))); } catch { /* No generated files. */ }
+        const owned = generatedSources.get(directory) ?? new Set<string>();
+        for (const name of names) { generatedFiles.push(path.join(directory, name)); owned.add(name); }
+        generatedSources.set(directory, owned);
+        if (decision && !("kind" in decision) && decision.action === "reply") stagedAttachments = await stageGeneratedAttachments(answerFiles(decision), directory, names, runDir, caps, answerDrops, generatedSources);
+      } else if (caps?.generate && !owner && decision && !("kind" in decision) && answerFiles(decision).length) {
+        stagedAttachments = await stageGeneratedAttachments(answerFiles(decision), null, new Set(), runDir, caps, answerDrops, generatedSources);
+      }
+      if (leaseUnavailable) return null;
       if (steps && decision && !("kind" in decision)) {
         steps.observe({ writingAnswer: true });
         if (steps.changeDue(Date.now())) { pendingBeat = beat(true); await pendingBeat; }
@@ -783,6 +849,8 @@ export async function runClaimedRequest(
     if (cadenceTimer) clearTimeout(cadenceTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     callAbort.abort();
+    ownerParts?.dispose();
+    for (const file of generatedFiles) { try { fs.rmSync(file, {force:true}); } catch { console.error("Relay generated image cleanup failed"); } }
     if (conversation) {
       const compacted = conversationEvidence.compacted;
       await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,

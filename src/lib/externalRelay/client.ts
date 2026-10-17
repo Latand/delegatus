@@ -2,6 +2,7 @@ import dns from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import { Readable } from "node:stream";
 import {
   descriptorSchema,
   targetsSchema,
@@ -91,13 +92,15 @@ export async function relayCall<T = unknown>(
     onResponseStatus?: (status: number) => void;
     /** Trusted caller rechecks its body after DNS, immediately before emission. */
     prepareBody?: () => unknown;
+    binary?: { bytes: Buffer; headers: Record<string, string> };
   } = {},
 ): Promise<{ status: number; body: T | null }> {
   const { url, address } = await targetWithSignal(apiBase, options.signal, options.detailedErrors);
   if (!url.pathname.endsWith("/v1") || !route.startsWith("/"))
     throw new ExternalRelayError("invalid_address");
   const outgoing = options.prepareBody ? options.prepareBody() : body;
-  const encoded = outgoing === undefined ? null : Buffer.from(JSON.stringify(outgoing));
+  options.signal?.throwIfAborted();
+  const encoded = options.binary?.bytes ?? (outgoing === undefined ? null : Buffer.from(JSON.stringify(outgoing)));
   const transport = url.protocol === "https:" ? https : http;
   return await new Promise((resolve, reject) => {
     const request = transport.request(
@@ -120,6 +123,7 @@ export async function relayCall<T = unknown>(
                 "Content-Length": String(encoded.length),
               }
             : {}),
+          ...options.binary?.headers,
           ...(credential ? { Authorization: `Bearer ${credential}` } : {}),
         },
       },
@@ -137,6 +141,9 @@ export async function relayCall<T = unknown>(
           chunks.push(chunk);
         });
         response.on("end", async () => {
+          // A binary refusal can arrive before the body has drained. Close
+          // that owned upload before a retry starts another transfer.
+          if (options.binary) request.destroy();
           if (!response.complete) {
             reject(new ExternalRelayError("unreachable"));
             return;
@@ -177,7 +184,7 @@ export async function relayCall<T = unknown>(
             );
             return;
           }
-          try { await waitForStateLock("relay.publication-reference", () => recordPublishedRelayReference(apiBase, route, method, outgoing, status, parsed), { waitMs: 5000 }); }
+          try { if (!options.binary) await waitForStateLock("relay.publication-reference", () => recordPublishedRelayReference(apiBase, route, method, outgoing, status, parsed), { waitMs: 5000 }); }
           catch { reject(new ExternalRelayError("publication_context_unavailable")); return; }
           resolve({ status, body: parsed as T });
         });
@@ -187,7 +194,13 @@ export async function relayCall<T = unknown>(
     request.setTimeout(options.timeoutMs ?? 5_000, () =>
       request.destroy(new ExternalRelayError("unreachable")),
     );
-    request.end(encoded ?? undefined);
+    if (options.binary && encoded) {
+      const bytes = encoded;
+      const source = Readable.from((function* () { for (let offset = 0; offset < bytes.length; offset += 65536) yield bytes.subarray(offset, offset + 65536); })());
+      request.once("close", () => source.destroy());
+      source.on("error", error => request.destroy(error));
+      source.pipe(request);
+    } else request.end(encoded ?? undefined);
   });
 }
 /**
@@ -293,4 +306,12 @@ export async function fetchRelayTargets(
   if (result.status !== 200 || !parsed.success)
     throw new ExternalRelayError("malformed", result.status);
   return parsed.data.targets;
+}
+
+/** Raw lease upload, sharing the JSON transport's DNS pin, redirect refusal,
+ * response cap and error parser. It never records a publish-route receipt. */
+export function relayPutBytes<T = unknown>(apiBase: string, route: string, bytes: Buffer, headers: Record<string, string>, credential?: string,
+  options: { signal?: AbortSignal; maxBytes?: number; timeoutMs?: number; prepareBody?: () => unknown } = {}) {
+  return relayCall<T>(apiBase, route, "PUT", undefined, credential, { ...options,
+    binary: { bytes, headers: { ...headers, "Content-Length": String(bytes.length) } } });
 }

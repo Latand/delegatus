@@ -263,7 +263,9 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
 export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"];
 export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
   const switches = readRelaySwitches();
-  const features = switches.chat_conversations ? [...CLAIM_FEATURES, "chat_conversations"] : CLAIM_FEATURES;
+  const rich = switches.rich_media && relay?.features?.includes("relay_rich_messages");
+  const baseFeatures = switches.chat_conversations ? [...CLAIM_FEATURES, "chat_conversations"] : CLAIM_FEATURES;
+  const features = [...baseFeatures, ...(rich ? ["relay_rich_messages", ...(relay?.features?.includes("relay_media_out") ? ["relay_media_out"] : [])] : [])];
   return { kinds: switches.compact ? ["answer", "compact"] : ["answer"],
     features: switches.owner_tools && relay?.features?.includes(RELAY_OWNER_TOOLS)
       ? [...features, RELAY_OWNER_TOOLS] : features };

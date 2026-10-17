@@ -14,6 +14,7 @@ export type ViewerOperation = "tasks.note" | "mcp.receipts" | "mcp.tasks.executo
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "pipelines.evidence" | "pipelines.get" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
   | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
+  | "relay.attachments" | "relay.attachments.upload"
   | "external-relay.owner-history"
   | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
   | "codex.protocol-admission"
