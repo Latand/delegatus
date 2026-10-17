@@ -33054,6 +33054,27 @@ describe("independent panel scroll", () => {
           row.inputs = inputs;
           for (const [name, value] of Object.entries(inputs)) check(value === 0, `${layout.name}: ${name} over the strip left the page at ${value}`);
 
+          /* 5b. Tab onto the strip moves nothing: the page stays where the operator read, and Enter then returns it. */
+          await setScroll(page, PAGE, "end");
+          await settle(page);
+          const beforeTab = await pageTop(page);
+          await page.evaluate((selector) => {
+            const tabbable = [...document.querySelectorAll<HTMLElement>("a[href], button, input, textarea, select, [tabindex]")].filter((el) => !el.matches(":disabled") && el.tabIndex >= 0 && getComputedStyle(el).visibility !== "hidden");
+            const strip = document.querySelector<HTMLElement>(`${selector} > button`)!;
+            tabbable[tabbable.indexOf(strip) - 1]!.focus({ preventScroll: true });
+          }, RETURN);
+          await page.keyboard.press("Tab");
+          await settle(page);
+          const afterTab = await stripReading(page);
+          row.tab = { from: beforeTab, to: await pageTop(page), focus: afterTab.focus, shown: afterTab.shown };
+          check(await page.evaluate((selector) => document.activeElement === document.querySelector(`${selector} > button`), RETURN), `${layout.name}: Tab did not land on the strip`);
+          check(Math.abs((await pageTop(page)) - beforeTab) <= 1, `${layout.name}: Tab onto the strip moved the page ${beforeTab} → ${await pageTop(page)}`);
+          check(afterTab.shown, `${layout.name}: the strip is hidden after Tab landed on it`);
+          await page.screenshot({ path: path.join(out, `tab-${layout.name}-light-en.png`) });
+          await page.keyboard.press("Enter");
+          await settle(page);
+          check((await pageTop(page)) === 0 && (await stripReading(page)).focus === "TEXTAREA in the seat", `${layout.name}: Enter after Tab left the page at ${await pageTop(page)} with focus ${(await stripReading(page)).focus}`);
+
           /* 6. The lock holds: a column at its top, wheel up, the page stays. */
           await setScroll(page, PAGE, "end");
           await setScroll(page, column, 0);

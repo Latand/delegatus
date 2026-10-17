@@ -95,6 +95,9 @@ test("the strip that returns the page to the seat is pinned to the page and cost
   expect(strip.get("height")).toBe("0");
   expect(Number(strip.get("z-index"))).toBeGreaterThan(Number(declarationsFor(".kb .seat-grip").get("z-index")));
   expect(declarationsFor(".kb .kb-page > .seat-return > button").get("height")).toBe("32px");
+  /* Tab onto the strip leaves the page where it is: the button cancels the scroll padding that would make the browser scroll to reveal it. */
+  expect(declarationsFor(".kb .kb-page:has(> .seat-return)").get("scroll-padding-top")).toBe("32px");
+  expect(declarationsFor(".kb .kb-page > .seat-return > button").get("scroll-margin-top")).toBe("-32px");
   expect(declarationsFor(".kb .kb-page:has(> .seat-return) > .board-frame").get("height")).toBe("max(440px, 100% - 32px)");
   expect(declarationsFor(".kb .kb-page:has(> .seat-return) > .board-frame").get("height")).not.toBe(declarationsFor(".kb .board-frame").get("height"));
 });

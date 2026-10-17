@@ -63,6 +63,12 @@
         "Enter": 0,
         "Space": 0
       },
+      "tab": {
+        "from": 655,
+        "to": 655,
+        "focus": "BUTTON",
+        "shown": true
+      },
       "lock": {
         "from": 655,
         "to": 655
@@ -72,7 +78,7 @@
         "room": 54
       },
       "finger": {
-        "first": 14,
+        "first": 28,
         "second": 0
       },
       "withoutStrip": {
@@ -143,6 +149,12 @@
         "Enter": 0,
         "Space": 0
       },
+      "tab": {
+        "from": 580,
+        "to": 580,
+        "focus": "BUTTON",
+        "shown": true
+      },
       "lock": {
         "from": 580,
         "to": 580
@@ -152,7 +164,7 @@
         "room": 54
       },
       "finger": {
-        "first": 17,
+        "first": 0,
         "second": 0
       },
       "withoutStrip": {
@@ -219,6 +231,12 @@
         "click": 0,
         "Enter": 0,
         "Space": 0
+      },
+      "tab": {
+        "from": 580,
+        "to": 580,
+        "focus": "BUTTON",
+        "shown": true
       },
       "lock": {
         "from": 580,

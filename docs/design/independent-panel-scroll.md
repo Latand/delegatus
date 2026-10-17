@@ -151,7 +151,7 @@ under 800 px tall starts with the seat folded, so it draws none there until the 
 phone draws none because its document does not scroll and the seat card never leaves the screen. While
 the strip is shown it covers the top 32 px of the page, so a composer scrolled to within that distance
 of the page's top has its first line under it; the page's scroll padding brings the caret clear on the
-first keystroke. A strip that holds focus when the wheel hides it hands focus to the composer. Driver
+first keystroke. Tab onto the strip moves nothing (the button's negative scroll margin cancels the padding), so Enter or Space then returns the page. A strip that holds focus when the wheel hides it hands focus to the composer. Driver
 case: "a strip pinned to the page returns it to the seat"; readings in
 `evidence/panel-scroll/return.json`.
 
