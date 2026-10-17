@@ -152,6 +152,11 @@ export async function resolveChainConversationAsync(relay: PairedRelay, target: 
     }, until);
   }
   let resolved = record ? { ...record } : null;
+  if (resolved?.state === "running" && !readRunLedger().runs.some(run => run.requestId === resolved!.runningRequestId)) {
+    await sweepConversationsAsync([relay], Date.now(), until, relay.id);
+    const recoveredRows = await cachedScopeRows(relay, target, request);
+    resolved = resolveChain(recoveredRows, relay, target, request, authority);
+  }
   const pending = resolved?.pendingCursor;
   if (pending) {
     const { resolveSendReceipt } = await import("@/lib/runtime/sendSettlement");
