@@ -145,3 +145,94 @@ test("a rejected long id beside a full page cannot become a malformed log cursor
   expect(second.rows.map(decodeWireRow).map(row => row.id)).toEqual([tasks[PAGE_ROWS]!.id]);
   expect(second.more).toBe(false);
 });
+
+test("scan checkpoints an all-rejected task window and reaches the next valid task", async () => {
+  const invalid = Array.from({ length: 2_048 }, (_, index) => task(`0-invalid-${String(index).padStart(5, "0")}`));
+  const expected = task(validId);
+  const f = fixture([...invalid, expected]);
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const first = readScanPage("", f.filter);
+    expect(first.rows).toEqual([]);
+    expect(first.next).toMatch(/^t:[0-9a-f-]{36}$/);
+    const modulePath = path.join(import.meta.dir, "taskFeed.ts");
+    const program = `const { readScanPage } = await import(${JSON.stringify(modulePath)});
+      const filter = ${JSON.stringify({ ...f.filter, projects: [project] })};
+      filter.projects = new Set(filter.projects);
+      console.log(JSON.stringify(readScanPage(${JSON.stringify(first.next)}, filter)));`;
+    const child = Bun.spawn([process.execPath, "-e", program], { cwd: process.cwd(), env: { ...process.env, LLV_STATE_OWNER: undefined }, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(exit, stderr).toBe(0);
+    const second = JSON.parse(stdout) as ReturnType<typeof readScanPage>;
+    expect(second.rows.map(decodeWireRow).map(row => row.id)).toEqual([expected.id]);
+    expect(second.next).toBeNull();
+    expect(warning).toHaveBeenCalledTimes(2_048);
+  } finally { warning.mockRestore(); }
+});
+
+test("log checkpoints an all-rejected long-key window and reaches the next valid task", () => {
+  const invalid = Array.from({ length: 4_000 }, (_, index) => task(`0-invalid-${String(index).padStart(5, "0")}-${"x".repeat(70)}`));
+  const expected = task(validId);
+  const f = fixture([...invalid, expected]);
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const first = readLogPage([0], f.filter);
+    if (first.kind !== "page") throw new Error("expected a log page");
+    expect(first.rows).toEqual([]);
+    expect(first.more).toBe(true);
+    expect(isPosition(first.cursor)).toBe(true);
+    expect(first.cursor[1]).toMatch(/^x:[0-9a-f-]{36}$/);
+    const second = readLogPage(first.cursor, f.filter);
+    if (second.kind !== "page") throw new Error("expected a log page");
+    expect(second.rows.map(decodeWireRow).map(row => row.id)).toEqual([expected.id]);
+    expect(second.more).toBe(false);
+    expect(warning).toHaveBeenCalledTimes(4_000);
+  } finally { warning.mockRestore(); }
+});
+
+test("scan checkpoints rejected tombstones at the work limit", () => {
+  const invalid = Array.from({ length: 2_048 }, (_, index) => `0-invalid-${String(index).padStart(5, "0")}`);
+  const f = fixture([...invalid, validId].map(id => task(id)));
+  const source = taskFeedSource(f.filePath)!;
+  mutateTasks(() => ({ tasks: [], result: null }), f.filePath);
+  const tombstones = tombstoneCollection(source.database, true)!;
+  const gone = nextStamp(null, Date.parse(at), self.prefix);
+  tombstones.boundedPatch(invalid.length + 1, tx => {
+    for (const id of [...invalid, validId]) tx.put({ id, project, gone, o: self.prefix });
+  });
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const first = readScanPage("g:", f.filter);
+    expect(first.rows).toEqual([]);
+    expect(first.next).toMatch(/^g:[0-9a-f-]{36}$/);
+    const second = readScanPage(first.next!, f.filter);
+    expect(second.rows).toEqual([{ id: validId, project, gone }]);
+    expect(second.next).toBeNull();
+    expect(warning).toHaveBeenCalledTimes(2_048);
+  } finally { warning.mockRestore(); }
+});
+
+test("log checkpoints an all-rejected tombstone window and reaches the next valid deletion", () => {
+  const invalid = Array.from({ length: 4_000 }, (_, index) => `0-invalid-${String(index).padStart(5, "0")}-${"x".repeat(70)}`);
+  const f = fixture([...invalid, validId].map(id => task(id)));
+  const source = taskFeedSource(f.filePath)!;
+  const start = source.revision();
+  mutateTasks(() => ({ tasks: [], result: null }), f.filePath);
+  const gone = nextStamp(null, Date.parse(at), self.prefix);
+  tombstoneCollection(source.database, true)!.boundedPatch(invalid.length + 1, tx => {
+    for (const id of [...invalid, validId]) tx.put({ id, project, gone, o: self.prefix });
+  });
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const first = readLogPage([start], f.filter);
+    if (first.kind !== "page") throw new Error("expected a log page");
+    expect(first.rows).toEqual([]);
+    expect(first.more).toBe(true);
+    expect(first.cursor[1]).toMatch(/^x:[0-9a-f-]{36}$/);
+    const second = readLogPage(first.cursor, f.filter);
+    if (second.kind !== "page") throw new Error("expected a log page");
+    expect(second.rows).toEqual([{ id: validId, project, gone }]);
+    expect(second.more).toBe(false);
+    expect(warning).toHaveBeenCalledTimes(4_000);
+  } finally { warning.mockRestore(); }
+});

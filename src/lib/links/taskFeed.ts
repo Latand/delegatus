@@ -18,6 +18,7 @@ import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { initializeStateCollections, readStateCollectionRevision, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
+import { databaseFileIdentity } from "@/lib/state/currentDatabase";
 import { withoutStoredLessonsIn } from "@/lib/memory/roleStore";
 
 import { decodeWireRow, encodeTask, MalformedRow, type WireRow } from "./taskWire";
@@ -32,6 +33,85 @@ const LOG_BATCH = 400;
 const MAX_LOG_ENTRIES = 4_000;
 const SCAN_BATCH = 512;
 const MAX_SCAN_KEYS = 2_048;
+const PAGE_CURSOR_TTL = 30 * 24 * 60 * 60 * 1_000;
+
+type PageCursorMode = "scan-task" | "scan-tombstone" | "log";
+type PageCursorRecord = { key: string; token: string; mode: PageCursorMode | "expiry"; cursor: string; revision: number | null; expires: number };
+const pageCursorSeed = {
+  collection: "task_page_cursors", schemaVersion: 1, migrationId: "bounded-task-page-cursors",
+  key: (row: PageCursorRecord) => row.key, loadRecords: (): PageCursorRecord[] => [],
+};
+const pageCursorCollections = new Map<string, { identity: string | null; collection: SqliteStateCollection<PageCursorRecord> }>();
+
+function pageCursors(database: string): SqliteStateCollection<PageCursorRecord> {
+  const identity = databaseFileIdentity(database);
+  const held = pageCursorCollections.get(database);
+  if (held?.identity === identity) return held.collection;
+  if (!stateCollectionsInitialized(database, [pageCursorSeed])) initializeStateCollections(database, [pageCursorSeed]);
+  const collection = new SqliteStateCollection<PageCursorRecord>(database, {
+    collection: pageCursorSeed.collection, schemaVersion: 1, busyMessage: "task page cursor busy", key: pageCursorSeed.key,
+    clone: structuredClone,
+    decode: (value) => {
+      if (!value || typeof value !== "object") return null;
+      const row = value as Partial<PageCursorRecord>;
+      return typeof row.key === "string" && typeof row.token === "string"
+        && (row.mode === "scan-task" || row.mode === "scan-tombstone" || row.mode === "log" || row.mode === "expiry")
+        && typeof row.cursor === "string" && (row.revision === null || Number.isSafeInteger(row.revision))
+        && Number.isSafeInteger(row.expires) ? row as PageCursorRecord : null;
+    }, strictDecode: true,
+  });
+  pageCursorCollections.set(database, { identity, collection });
+  return collection;
+}
+
+const paddedExpiry = (expires: number) => String(expires).padStart(16, "0");
+
+function resolvePageCursor(database: string, token: string, mode: PageCursorMode): PageCursorRecord | null {
+  const collection = pageCursors(database);
+  const record = collection.get(`p:${token}`);
+  if (!record || record.mode !== mode) return null;
+  if (record.expires > Date.now()) return record;
+  collection.boundedPatch(2, tx => { tx.delete(record.key); tx.delete(`e:${paddedExpiry(record.expires)}:${token}`); });
+  return null;
+}
+
+function checkpoint(database: string, mode: PageCursorMode, cursor: string, revision: number | null, reserved?: (token: string) => boolean): string {
+  const collection = pageCursors(database);
+  let token = "";
+  for (let nonce = 0; ; nonce++) {
+    const tokenBytes = createHash("sha256").update(JSON.stringify([database, mode, revision, cursor, nonce])).digest().subarray(0, 16);
+    tokenBytes[6] = (tokenBytes[6]! & 0x0f) | 0x40;
+    tokenBytes[8] = (tokenBytes[8]! & 0x3f) | 0x80;
+    const hex = tokenBytes.toString("hex");
+    token = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    if (!reserved?.(token)) break;
+  }
+  const expires = Date.now() + PAGE_CURSOR_TTL;
+  const key = `p:${token}`;
+  const row: PageCursorRecord = { key, token, mode, cursor, revision, expires };
+  const previous = collection.get(key);
+  const expiryKey = `e:${paddedExpiry(expires)}:${token}`;
+  const expiry: PageCursorRecord = { ...row, key: expiryKey, mode: "expiry", cursor: "", revision: null };
+  collection.boundedPatch(previous ? 3 : 2, tx => {
+    if (previous) tx.delete(`e:${paddedExpiry(previous.expires)}:${token}`);
+    tx.put(row);
+    tx.put(expiry);
+  });
+  // Expiry keys are ordered, so cleanup visits at most one bounded batch.
+  const expired = collection.keyRange("e:", `e:${paddedExpiry(Date.now())}:\uffff`, 512);
+  if (expired.length) collection.boundedPatch(expired.length * 2, tx => {
+    for (const entry of expired) { tx.delete(entry.key); tx.delete(`p:${entry.token}`); }
+  });
+  return token;
+}
+
+function scanCursor(database: string, cursor: string, continuation: string, continuationCursor: string, mode: PageCursorMode, reserved?: (token: string) => boolean): string {
+  if (cursor === continuationCursor) return continuation;
+  if (mode === "scan-task" && /^t:[0-9a-f-]{36}$/.test(cursor)) return cursor;
+  if (mode === "scan-tombstone" && /^g:[0-9a-f-]{36}$/.test(cursor)) return cursor;
+  if (cursor === "g:") return cursor;
+  return `${mode === "scan-task" ? "t" : "g"}:${checkpoint(database, mode, cursor, null, reserved)}`;
+}
 
 export function isPosition(value: unknown): value is Position {
   return Array.isArray(value) && (value.length === 1 || value.length === 2) && Number.isSafeInteger(value[0]) && (value[0] as number) >= 0
@@ -255,7 +335,9 @@ export function readLogPage(after: Position, filter: FeedFilter): LogPage {
   if (!source) return { kind: "page", rows: [], cursor: after, more: false, withheld: [] };
   const exportable = exportableTasks(filter);
   const current = resumeOmittedTasks(source, filter, exportable);
-  const [revision, key = ""] = after;
+  const [revision, wireKey = ""] = after;
+  const checkpointed = wireKey.startsWith("x:") ? resolvePageCursor(source.database, wireKey.slice(2), "log") : null;
+  const key = checkpointed?.revision === revision ? checkpointed.cursor : wireKey;
   // Unchanged eligibility context leaves omissions off the idle read path.
   if (revision > current) return { kind: "resync" };
   if (revision === current && !key) return { kind: "page", rows: [], cursor: after, more: false, withheld: [] };
@@ -263,6 +345,7 @@ export function readLogPage(after: Position, filter: FeedFilter): LogPage {
   const page = new Page(source.database);
   let cursor: Position = after;
   let continuation: Position = after;
+  let continuationCursor: Position = [revision, key];
   let scanned = 0;
   let position = { revision, key };
   for (;;) {
@@ -296,7 +379,7 @@ export function readLogPage(after: Position, filter: FeedFilter): LogPage {
         return { kind: "page", rows: page.rows, cursor: ended, more: true, withheld: page.withheld };
       }
       cursor = [entry.revision, entry.key];
-      if (isPosition(cursor)) continuation = cursor;
+      if (isPosition(cursor)) { continuation = cursor; continuationCursor = cursor; }
       scanned++;
     }
     const exhausted = batch.entries.length < LOG_BATCH;
@@ -305,7 +388,11 @@ export function readLogPage(after: Position, filter: FeedFilter): LogPage {
       return { kind: "page", rows: page.rows, cursor: [batch.revision], more: false, withheld: page.withheld };
     }
     if (scanned >= MAX_LOG_ENTRIES) {
-      return { kind: "page", rows: page.rows, cursor: continuation, more: true, withheld: page.withheld };
+      const progressed = cursor[0] !== continuationCursor[0] || cursor[1] !== continuationCursor[1];
+      const next = progressed
+        ? [cursor[0], `x:${checkpoint(source.database, "log", cursor[1] ?? "", cursor[0])}`] as Position
+        : continuation;
+      return { kind: "page", rows: page.rows, cursor: next, more: true, withheld: page.withheld };
     }
     position = { revision: cursor[0], key: cursor[1] ?? "" };
   }
@@ -323,10 +410,12 @@ export function readScanPage(after: string, filter: FeedFilter): ScanPage {
   if (!source) return { rows: [], next: null, withheld: [] };
   const page = new Page(source.database);
   const exportable = exportableTasks(filter);
-  let cursor = after;
-  // Older peers accept only UUID-shaped scan keys. A rejected legacy id may
-  // be visited internally, but cannot become the next page's wire cursor.
+  const token = after.startsWith("t:") || after.startsWith("g:") ? after.slice(2) : "";
+  const taskCheckpoint = after.startsWith("t:") ? resolvePageCursor(source.database, token, "scan-task") : null;
+  const tombstoneCheckpoint = after.startsWith("g:") ? resolvePageCursor(source.database, token, "scan-tombstone") : null;
+  let cursor = taskCheckpoint?.cursor ?? tombstoneCheckpoint?.cursor ?? after;
   let continuation = after;
+  let continuationCursor = cursor;
   let read = 0;
   if (!cursor.startsWith("g:")) {
     let from = cursor.startsWith("t:") ? cursor : "t:";
@@ -339,12 +428,12 @@ export function readScanPage(after: string, filter: FeedFilter): ScanPage {
           if (!page.add(row.row, row.bytes, task.id, row.stub)) return { rows: page.rows, next: continuation, withheld: page.withheld };
         }
         cursor = `t:${task.id}`;
-        if (/^t:[0-9a-f-]{36}$/.test(cursor)) continuation = cursor;
+        if (/^t:[0-9a-f-]{36}$/.test(cursor)) { continuation = cursor; continuationCursor = cursor; }
       }
-      if (batch.length < SCAN_BATCH) { cursor = continuation = "g:"; break; }
+      if (batch.length < SCAN_BATCH) { cursor = continuation = continuationCursor = "g:"; break; }
       from = cursor;
     }
-    if (!cursor.startsWith("g:")) return { rows: page.rows, next: continuation, withheld: page.withheld };
+    if (!cursor.startsWith("g:")) return { rows: page.rows, next: scanCursor(source.database, cursor, continuation, continuationCursor, "scan-task", token => !!source.get(token)), withheld: page.withheld };
   }
   const tombstones = tombstoneCollection(source.database, false);
   if (!tombstones) return { rows: page.rows, next: null, withheld: page.withheld };
@@ -357,9 +446,12 @@ export function readScanPage(after: string, filter: FeedFilter): ScanPage {
         if (!page.add(gone, Buffer.byteLength(JSON.stringify(gone)), tomb.id, false)) return { rows: page.rows, next: continuation, withheld: page.withheld };
       }
       cursor = tombstoneRowKey(tomb);
-      if (/^g:[0-9a-f-]{36}$/.test(cursor)) continuation = cursor;
+      if (/^g:[0-9a-f-]{36}$/.test(cursor)) { continuation = cursor; continuationCursor = cursor; }
     }
     if (batch.length < SCAN_BATCH) return { rows: page.rows, next: null, withheld: page.withheld };
   }
-  return { rows: page.rows, next: continuation, withheld: page.withheld };
+  const mode = cursor.startsWith("g:") ? "scan-tombstone" : "scan-task";
+  return { rows: page.rows, next: scanCursor(source.database, cursor, continuation, continuationCursor, mode, token => mode === "scan-task"
+    ? !!source.get(token)
+    : !!tombstones.get(tombstoneKey(token))), withheld: page.withheld };
 }
