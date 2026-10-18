@@ -1120,7 +1120,7 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
 /*
  * The relay's chat conversations (relay-slice3.md §4) in the conversation
  * list: the paired service is an entry of the sidebar (the phone's project
- * sheet) under its own name, its leaf lists one row per chat and context with
+ * sheet) under its own name, its leaf lists one row per chain and authority with
  * long target names, and a row opens the conversation in the agent window —
  * the open chats on its left, the transcript in the reader, «Read only» where
  * a composer would be, and no field to type into. The single answers the
@@ -1134,7 +1134,11 @@ browserTest("external relay: the relay's chats and single answers in the convers
   const { base, stop } = await serveFixture();
   const out = path.resolve(".artifacts/external-relay");
   fs.mkdirSync(out, { recursive: true });
-  const launched = await chromium.launchServer({ headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+  const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+  const launched = await chromium.launchServer({ headless: true, ignoreDefaultArgs: ["--hide-scrollbars"],
+    args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}),
+    ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+  }).catch(error => { if (tempFd !== null) fs.closeSync(tempFd); stop(); throw error; });
   const browserPid = launched.process().pid ?? null;
   const browser = await chromium.connect(launched.wsEndpoint());
   const readings: Record<string, unknown>[] = [];
@@ -1167,7 +1171,7 @@ browserTest("external relay: the relay's chats and single answers in the convers
         const list = await page.evaluate(() => ({
           rail: (document.querySelector('[data-rail-project="relay-chats-relay-1"]') as HTMLElement | null)?.innerText.trim() ?? null,
           railDimmed: (document.querySelector('[data-rail-project="relay-chats-relay-1"]') as HTMLElement | null)?.className.includes("opacity-70") ?? null,
-          rows: Array.from(document.querySelectorAll<HTMLElement>("[data-relay-chat]")).map((row) => ({ context: row.getAttribute("data-relay-chat-context"), text: row.innerText.replace(/\s+/g, " ").trim(), height: Math.round(row.getBoundingClientRect().height) })),
+          rows: Array.from(document.querySelectorAll<HTMLElement>("[data-relay-chat]")).map((row) => ({ authority: row.getAttribute("data-relay-chat-authority"), text: row.innerText.replace(/\s+/g, " ").trim(), height: Math.round(row.getBoundingClientRect().height) })),
           deleteButtons: document.querySelectorAll("[data-relay-chats-rows] [data-delete-file], [data-relay-chats-rows] button[aria-label*='elete'], [data-relay-chats-rows] button[aria-label*='идал']").length,
           answers: Array.from(document.querySelectorAll<HTMLElement>("[data-relay-answer]")).map((row) => ({
             id: row.getAttribute("data-relay-answer"), dot: row.querySelector("[data-relay-answer-dot]")?.getAttribute("data-relay-answer-dot") ?? null,
@@ -1258,9 +1262,9 @@ browserTest("external relay: the relay's chats and single answers in the convers
         });
         await page.screenshot({ path: path.join(out, `${label}-window.png`) });
         readings.push({ label, list, window: windowReading });
-        const heading = locale === "uk" ? "Чат QmF6x9 · учасники · Support bot" : "Chat QmF6x9 · members · Support bot";
+        const heading = locale === "uk" ? "Чат QmF6x9 · учасник · Support bot" : "Chat QmF6x9 · member · Support bot";
         if (!list.rows[0]?.text.includes(heading)) failures.push(`${label}: the first row reads ${JSON.stringify(list.rows[0])}`);
-        if (list.rows.length !== 5 || list.rows[1]?.context !== "owner") failures.push(`${label}: the rows read ${JSON.stringify(list.rows)}`);
+        if (list.rows.length !== 5 || list.rows[1]?.authority !== "owner") failures.push(`${label}: the rows read ${JSON.stringify(list.rows)}`);
         if (list.deleteButtons) failures.push(`${label}: a relay chat row offers to delete`);
         if (!phone && list.railDimmed) failures.push(`${label}: the sidebar entry is dimmed`);
         if (windowReading.overflow) failures.push(`${label}: the page scrolls sideways`);
@@ -1276,7 +1280,7 @@ browserTest("external relay: the relay's chats and single answers in the convers
       } finally { await context.close(); }
     }
   } finally {
-    await browser.close(); await launched.close(); stop();
+    await browser.close(); await launched.close(); if (tempFd !== null) fs.closeSync(tempFd); stop();
     if (launched.process().exitCode === null && launched.process().signalCode === null) {
       failures.push(`the browser ${browserPid} outlived its close`);
       await stopFixtureProcess(launched.process());

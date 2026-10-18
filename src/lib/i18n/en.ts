@@ -214,9 +214,10 @@ export const en = {
   "externalRelay.answers.open": "Recent answers",
 
   "relayChats.heading": "Relay chats",
-  "relayChats.hint": "What this install answered through the relay: each chat's conversation and each single answer. Read only: only the relay writes in them.",
+  "relayChats.hint": "What this install answered through the relay: each reply chain's conversation and each single answer. Read only: only the relay writes in them.",
   "relayChats.chat": "Chat {chat}",
-  "relayChats.context.member": "members",
+  "relayChats.context.member": "member",
+  "relayChats.context.admin": "admin",
   "relayChats.context.owner": "owner",
   "relayChats.empty": "Nothing answered here yet. A single answer appears here for {days} days, a chat's conversation after its first turn while per-chat conversations are on.",
   "relayChats.readOnly": "Read only",
