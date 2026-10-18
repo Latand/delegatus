@@ -249,13 +249,13 @@ Must not: repeat feature descriptions from the README; link a planned page.
 Headings and what each states:
 
 1. `# Getting started`. One paragraph: from nothing to an orchestrator
-   working on your project, and a first pipeline that ends in a pull request.
+   working on your project, and a first pipeline that delivers its branch or pull request.
 2. `## What you need` (G1, G2, G3, G21, G22, G23):
    - Bun 1.4 or newer, with its install command.
    - Claude Code or Codex, with both install commands; the orchestrator runs
      on one of them. GitHub Copilot is optional and runs single agents only.
-   - `git`, and a project folder that is a git repository: a pipeline works
-     in a git worktree and refuses a folder that is not one.
+   - `git` and a project folder: a pipeline initializes a safe plain folder
+     with its first local commit before provisioning its worktree.
    - For pull requests and merging: a GitHub `origin` and the GitHub CLI
      (`gh`) signed in. Without them the merge setting says it needs a GitHub
      pull request, and a stopped merge names the signed-out `gh`.
@@ -323,7 +323,7 @@ Headings and what each states:
    passes** (link to the workflows page section).
 9. `## If something does not start`: one line each for: no agent CLI found
    (G6); account signed out (Engines step); port busy (G7); only Copilot
-   installed (G3); "not a git repository" (G21); no pull request or merge
+   installed (G3); repository initialization refused (G21); no pull request or merge
    (G22). Point to the README's Configuration section for options and
    environment variables.
 10. `## Next`: Core concepts; Everyday workflows; phone access
@@ -598,7 +598,7 @@ and the reviewer's spot-checks (the acceptance asks for at least twenty).
 | G18 | Clone commands; build after pull; `bun dev` needs the runtime host | `README.md:71-79` |
 | G19 | Docker test profile on 8901; production in `docs/docker.md` | `README.md:1050-1064`; `docker-compose.yml:125-134`; `docs/docker.md:5-14` |
 | G20 | Website install prompt steps; Windows → WSL 2 | `landing/site/copy.js:6-60`; `landing/wrangler.jsonc:20` |
-| G21 | A pipeline needs a git repository | `src/lib/pipelines/preflight.ts:56,190`; `src/lib/pipelines/engine.ts:10672` |
+| G21 | A safe plain folder receives a local repository and first commit before provisioning | `src/lib/pipelines/initializeRepository.ts`; `docs/pipelines.md#create-and-inspect` |
 | G22 | Merge needs a GitHub pull request and `gh` signed in | `src/lib/i18n/en.ts:589,2753` |
 | G23 | Windows: Claude Code only natively; WSL 2 | `README.md:1025-1034` |
 

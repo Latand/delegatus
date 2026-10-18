@@ -1255,7 +1255,7 @@ export async function preflightPipelineRepository(
     });
     const json = (await response.json().catch(() => null)) as (PipelineRepoPreflight & { error?: string }) | null;
     if (response.ok && json?.ok) return json;
-    if (json && !json.ok && json.code) return { ok: false, code: json.code, path: json.path };
+    if (json && !json.ok && json.code) return { ok: false, code: json.code, path: json.path, ...(json.code === "initialization_refused" && json.error ? { error: json.error } : {}) };
     return { ok: false, code: "missing", path: repoDir, error: translate(getLocale(), "pipelineModel.failed", { status: response.status }) };
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
