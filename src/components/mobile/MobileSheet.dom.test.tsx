@@ -571,17 +571,13 @@ test("a tap and the click that ends it switch the detent once; a drag and its cl
   expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
 });
 
-test("Enter and Space on the focused handle each switch the detent once, and Tab reaches the handle first", () => {
-  const { host, dialog, grab } = openExpandable();
-  const focusable = [...host.querySelectorAll("button")];
-  expect(focusable[0]).toBe(grab as unknown);
+test("the handle is the first control Tab meets in the sheet and takes focus", () => {
+  const { host, grab } = openExpandable();
+  const first = host.querySelector("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])");
+  expect(first).toBe(grab as never);
   (grab as unknown as HTMLButtonElement).focus();
-  expect(dom.document.activeElement).toBe(grab as unknown);
-  /* A native button turns Enter and Space into one click; the page does that, so the test sends the click. */
-  for (const expected of ["expanded", "collapsed", "expanded"]) {
-    flushSync(() => grab.click());
-    expect(dialog.getAttribute("data-mobile2-detent")).toBe(expected);
-  }
+  expect(dom.document.activeElement).toBe(grab as never);
+  /* Enter and Space on a button are one click with no pointer press; the browser case sends the real keys. */
 });
 
 test("a plain sheet keeps its handle as a plain, unfocusable strip", () => {
