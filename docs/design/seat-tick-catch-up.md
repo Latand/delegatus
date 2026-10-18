@@ -10,7 +10,10 @@ The controller records the first observed unreachable time. The gather also
 records a gone seat observed by liveness. Failed delivery preserves this time.
 For a legacy row without this field, the last confirmed wake bounds the
 undelivered window. The wake says host loss may have occurred later; the bound
-does not claim the host died at that instant. A landed wake clears it. Once it exceeds the configured wake
+does not claim the host died at that instant. A catch-up landing clears it.
+A normal landing clears it only within the interval frozen in its plan. An
+older already-admitted wake keeps its immutable payload and preserves a long
+gap for the next fresh catch-up. Once it exceeds the configured wake
 interval, a wake becomes a catch-up.
 
 The catch-up gathers all retained, actionable held outcomes through its snapshot:
@@ -32,7 +35,8 @@ This change claims no performance improvement.
 it; the JSON decoder and SQLite accounting preserve it; epoch replacement
 resets it. The decision reads it and the landing clears it. A frozen wake's
 optional `catchUp` plan records the outage window, one report key and the
-previous owed keys observed at preparation. The decision produces the plan;
+previous owed keys observed at preparation. The plan also retains the configured wake interval for delayed settlement.
+The decision produces the plan;
 the controller freezes its text; the legacy decoder and accounting retain it;
 the landing verifies complete visible bullets before granting credit. Only
 confirmed delivery announces the represented versions. A refused or held send
@@ -46,10 +50,11 @@ key through its normal report or `coversOwed` evidence.
 The audit keeps its global 500-row ring plus independent 500-row project rings.
 The two diagnostic readers select a project before applying their row limit.
 At the normal five-minute cadence a project retains over 41 hours, covering a
-13-hour outage. At most 128 project rings remain; creation evicts the least
-recently modified ring. Each append retains bounded files under the existing
-journal transaction. Readers fall back to the legacy global file until a
-project has its first new check.
+13-hour outage. Each project retains at most 500 rows regardless of the number
+of peer projects. Each append touches its project ring and the global ring
+under the existing journal transaction. The first append seeds the project
+ring from the matching rows in the bounded legacy global file. Readers use
+that global file until the project's first new check.
 
 Regression coverage lives in `src/lib/monitor/seatTickController.catchUp.test.ts`
 and `src/lib/monitor/journalStore.test.ts`: native truncated completed/open tails

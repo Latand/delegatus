@@ -1434,6 +1434,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
   const text = payload.text;
   if (renderedVerdict.kind === "wake") renderedVerdict.items = [...payload.items];
   const commit = seatTickWakeCommitPlan(renderedVerdict, {
+    wakeIntervalMs: input.settings.wakeIntervalMs,
     fingerprint: input.changeFingerprint,
     eventsThrough: input.events.at(-1)?.seq ?? input.state.eventsThrough ?? 0,
     terminalChildren,

@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -16,7 +15,6 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 const {
   MONITOR_RUN_HISTORY,
   SEAT_TICK_RUN_HISTORY,
-  SEAT_TICK_PROJECT_HISTORY,
   appendRunRecord,
   appendSeatTickRecord,
   readRunRecords,
@@ -249,19 +247,27 @@ describe("seat tick check journal", () => {
     expect(readSeatTickRecords(SEAT_TICK_RUN_HISTORY, file, "busy-project")).toHaveLength(SEAT_TICK_RUN_HISTORY);
   });
 
-  test("the project-history cap survives a fresh writer process", () => {
+  test("the first project append preserves its available pre-upgrade audit", () => {
+    const file = path.join(SANDBOX, "legacy-project.ndjson");
+    const old = check({ project: "project", detail: "old refusal" });
+    fs.writeFileSync(file, [old, check({ project: "peer" })].map(row => JSON.stringify(row)).join("\n") + "\n");
+    appendSeatTickRecord(check({ project: "project", detail: "after upgrade" }), file);
+    expect(readSeatTickRecords(10, file, "project").map(row => row.detail)).toEqual(["old refusal", "after upgrade"]);
+  });
+
+  test("the per-project row bound survives a fresh writer and many peer projects", () => {
     const file = path.join(SANDBOX, "bounded-projects.ndjson");
-    appendSeatTickRecord(check({ project: "old-project" }), file);
-    const oldest = path.join(`${file}.projects`, `${createHash("sha256").update("old-project").digest("hex")}.ndjson`);
-    fs.utimesSync(oldest, 1, 1);
-    for (let i = 1; i < SEAT_TICK_PROJECT_HISTORY; i++) appendSeatTickRecord(check({ project: `project-${i}` }), file);
+    for (let i = 0; i < SEAT_TICK_RUN_HISTORY; i++) appendSeatTickRecord(check({ project: "quiet-project", detail: `check ${i}` }), file);
+    for (let i = 0; i < 130; i++) appendSeatTickRecord(check({ project: `peer-${i}` }), file);
+    expect(readSeatTickRecords(SEAT_TICK_RUN_HISTORY, file, "quiet-project")).toHaveLength(SEAT_TICK_RUN_HISTORY);
     const code = `const { appendSeatTickRecord } = await import(${JSON.stringify(path.join(import.meta.dir, "journalStore.ts"))});
-      appendSeatTickRecord(${JSON.stringify(check({ project: "new-project" }))}, ${JSON.stringify(file)});`;
+      appendSeatTickRecord(${JSON.stringify(check({ project: "quiet-project", detail: "after restart" }))}, ${JSON.stringify(file)});`;
     const child = spawnSync(process.execPath, ["-e", code], { env: { ...process.env }, encoding: "utf8", timeout: 30_000 });
     expect(child.status).toBe(0);
-    expect(fs.readdirSync(`${file}.projects`)).toHaveLength(SEAT_TICK_PROJECT_HISTORY);
-    expect(fs.existsSync(oldest)).toBe(false);
-    expect(readSeatTickRecords(1, file, "new-project")).toHaveLength(1);
+    const own = readSeatTickRecords(SEAT_TICK_RUN_HISTORY + 1, file, "quiet-project");
+    expect(own).toHaveLength(SEAT_TICK_RUN_HISTORY);
+    expect(own[0]!.detail).toBe("check 1");
+    expect(own.at(-1)!.detail).toBe("after restart");
   });
 
   test("retention drops the oldest lines rather than growing without bound", () => {

@@ -875,6 +875,8 @@ export interface SeatTickPolicy {
  * from anything else would credit the seat with a different message.
  */
 export interface SeatTickWakeCommit {
+  /** Interval at preparation, used to preserve an outage across a delayed landing. */
+  wakeIntervalMs?: number;
   catchUp?: { key: string; from: string; through: string; covers: string[] };
   diskPressure?: { episode: string; version: string };
   /** Versions of agenda items carried by this frozen delivery plan. */

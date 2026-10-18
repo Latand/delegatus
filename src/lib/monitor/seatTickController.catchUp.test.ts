@@ -1,5 +1,5 @@
 import { recordSeatDeployment, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
-import { expect, test, fs, path, SANDBOX, harness, childFixture, childRig, runSeatTickCheck, NOW, MINUTE, PROJECT, CONVERSATION, OVERDUE, terminalEvent, spawn, SeatTickAccounting, defaultSeatTickSettings, writeSeatTickState, emptySeatTickState } from "./seatTickController.fixture";
+import { expect, test, fs, path, SANDBOX, harness, childFixture, childRig, runSeatTickCheck, NOW, MINUTE, PROJECT, CONVERSATION, OVERDUE, outstandingWake, terminalEvent, spawn, SeatTickAccounting, defaultSeatTickSettings, writeSeatTickState, emptySeatTickState } from "./seatTickController.fixture";
 import { readLivenessTranscriptEvidence } from "@/lib/lifecycle/transcript";
 import { agentLivenessSnapshot } from "@/lib/lifecycle/liveness";
 import type { AgentLivenessSources } from "@/lib/lifecycle/liveness";
@@ -175,4 +175,20 @@ test("a legacy dead-seat row catches up its entire pre-upgrade delivery gap", as
   for (const lane of lanes) expect(rig.sent[0]!.text).toContain(lane.id);
   expect(rig.sent[0]!.text).toContain("host loss may have occurred later");
   expect(rig.deps.readState!(PROJECT).announcedLanes).toHaveLength(35);
+});
+
+test("an old frozen wake landing after the outage preserves one fresh catch-up", async () => {
+  const stateFile = path.join(fs.mkdtempSync(path.join(SANDBOX, "delayed-old-wake-")), "state.json");
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, unreachableSince: FROM,
+    outstandingWake: outstandingWake({ text: "old frozen wake", preparedAt: FROM }) }, stateFile);
+  const first = recoveryRig({ stateFile, wakeState: "landed" });
+  await runSeatTickCheck(PROJECT, first.deps);
+  expect(first.sent).toHaveLength(0);
+  expect(first.deps.readState!(PROJECT).unreachableSince).toBe(FROM);
+  const next = recoveryRig({ stateFile, now: NOW + 61 * MINUTE });
+  await runSeatTickCheck(PROJECT, next.deps);
+  expect(next.sent).toHaveLength(1);
+  for (const lane of lanes) expect(next.sent[0]!.text).toContain(lane.id);
+  expect(next.deps.readState!(PROJECT).reportsOwed).toHaveLength(1);
+  expect(next.deps.readState!(PROJECT).unreachableSince).toBeNull();
 });

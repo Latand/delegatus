@@ -2033,6 +2033,7 @@ function wakeItems(context: {
 export function seatTickWakeCommitPlan(
   verdict: SeatTickVerdict,
   context: {
+    wakeIntervalMs?: number;
     fingerprint: string;
     eventsThrough: number;
     /** The terminal children the check saw (#1465). Only those the wake
@@ -2052,7 +2053,7 @@ export function seatTickWakeCommitPlan(
 ): SeatTickWakeCommit | null {
   const { fingerprint, eventsThrough } = context;
   const note = { ...(context.autonomyShown ? { autonomyShown: context.autonomyShown } : {}), ...(context.noteShown === undefined ? {} : { noteShown: context.noteShown }), ...(context.autonomySummaryFor ? { autonomySummaryFor: context.autonomySummaryFor } : {}) };
-  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], announcedMaintenance: [], shownChildren: [], ...note };
+  if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], announcedMaintenance: [], shownChildren: [], ...note, ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}) };
   if (verdict.kind !== "wake") return null;
   const framed = context.frozenText === undefined ? null : `\n${context.frozenText}\n`;
   const carriedLines = context.frozenText === undefined ? null : new Set(context.frozenText.split("\n"));
@@ -2123,6 +2124,7 @@ export function seatTickWakeCommitPlan(
   }
   return {
     ...(catchUp ? { catchUp } : {}),
+    ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}),
     proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough: deliveredThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
     ...(verdict.activeStallTokens ? { activeStallTokens: verdict.activeStallTokens } : {}),
     ...(disk ? { diskPressure: { episode: disk.diskPressureEpisode!, version: disk.itemVersion! } } : {}),
@@ -2166,6 +2168,8 @@ export function seatTickWakeCommit(
     ? recordOwed(commit.catchUp ? (state.reportsOwed ?? []).filter(entry => !commit.catchUp!.covers.includes(entry.key)) : state.reportsOwed ?? [],
       state.reportsOwedDropped ?? 0, commit.reportsOwed, received)
     : null;
+  const clearsOutage = !!commit.catchUp || !state.unreachableSince
+    || (commit.wakeIntervalMs !== undefined && now - Date.parse(state.unreachableSince) <= commit.wakeIntervalMs);
   const eventsThrough = Math.max(state.eventsThrough ?? 0, commit.eventsThrough);
   /* What the seat now holds of its own note (#2030); a plan that predates the
      field leaves the record as it was. */
@@ -2174,6 +2178,7 @@ export function seatTickWakeCommit(
     return {
       ...state,
       ...note,
+      unreachableSince: clearsOutage ? null : state.unreachableSince,
       lastWakeAt: received,
       lastProposalAt: at,
       lastWakeReasons: [],
@@ -2201,7 +2206,7 @@ export function seatTickWakeCommit(
   return {
     ...state,
     ...note,
-    unreachableSince: null,
+    unreachableSince: clearsOutage ? null : state.unreachableSince,
     lastWakeAt: received,
     lastWakeReasons: carried,
     lastWakeFingerprint: commit.fingerprint,

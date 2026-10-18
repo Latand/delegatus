@@ -65,6 +65,7 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
       && isoOrNull((raw.catchUp as Record<string, unknown>).from) && isoOrNull((raw.catchUp as Record<string, unknown>).through)
       ? { catchUp: { key: String((raw.catchUp as Record<string, unknown>).key), from: String((raw.catchUp as Record<string, unknown>).from),
         through: String((raw.catchUp as Record<string, unknown>).through), covers: conversationIds((raw.catchUp as Record<string, unknown>).covers) } } : {}),
+    ...(typeof raw.wakeIntervalMs === "number" && Number.isFinite(raw.wakeIntervalMs) && raw.wakeIntervalMs > 0 ? { wakeIntervalMs: raw.wakeIntervalMs } : {}),
     proposal: raw.proposal === true,
     reasons: (Array.isArray(raw.reasons) ? raw.reasons : [])
       .filter((entry): entry is SeatTickWakeReasonKind => SEAT_TICK_WAKE_REASON_KINDS.includes(entry as SeatTickWakeReasonKind)),
