@@ -232,15 +232,20 @@ replaces §9.2's "the custom range belongs to «Токени» only".
 Rendered evidence comes from the board-geometry driver's `activity-tokens`
 case over `src/lib/activity/tokenEvidence.fixture.ts` (invented history
 written through the ingest's own commit) and is recorded in
-`evidence/activity-tokens/ui.json`: ten states at 1440, 1024 and 390 px,
-light and dark, Ukrainian and English, 120 frames with no failed check, made
-from the commit the record names. The frames stay outside the repository.
+`evidence/activity-tokens/ui.json`: fourteen states (seven days, the free range
+open and applied, one project, by member, by account, by kind, the coverage
+popover, the drawer, a range wholly before counting, loading, a failed read,
+nothing counted yet, and the Time tab on the free range) at 1440, 1024 and
+390 px, light and dark, Ukrainian and English, 168 frames with no failed check,
+made from the commit the record names. A range that starts before the first
+counted moment reads as a lower bound (amber dot, a leading ≥), and one wholly
+before it says it is not counted. The frames stay outside the repository.
 
 The Time tab over 366 days, measured in the same run on that revision
-(production build, one Chromium, through `scripts/gate-slot.sh`): five reads
-of `GET /api/activity` took 35.1 to 55.2 ms over HTTP for a 1,620,435-byte
-answer, and the page drew 53 week columns, 12,143 elements and two long tasks
-(71 and 85 ms), loaded 320 ms after navigation. That store holds no human or
-agent history, so these timings bound the drawing of 366 days and say nothing
-of a populated read; the populated read is the controlled rehearsal above
-(51.2 ms median, 172.1 ms maximum).
+(production build, one Chromium, through `scripts/gate-slot.sh`) over a store
+with 142 workdays of human input and agent runs: five reads of
+`GET /api/activity` took 106.2 to 131.1 ms over HTTP for a 1,718,684-byte
+answer, and the page drew 53 week columns, 12,199 elements and two long tasks
+(102 and 91 ms), loaded 597 ms after navigation. The weeks before the ledger's
+retained 90 days draw as not read. The populated read in isolation is the
+controlled rehearsal above (51.2 ms median, 172.1 ms maximum).
