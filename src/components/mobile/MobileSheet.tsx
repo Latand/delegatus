@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronUp, X } from "lucide-react";
-import { useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
 import { useModalLayer } from "@/components/modalLayer";
 import { useLocale } from "@/lib/i18n";
@@ -27,10 +27,53 @@ import { Z } from "@/components/layers";
  * A `pinned` block stands between the header and the body, outside the body's
  * scroller, so scrolling the body never carries it away; it bounds and scrolls
  * its own rows (the needs-you sheet's «Готово», docs/design/done-section.md §4.3).
+ *
+ * An `expandable` sheet has a second detent. It opens as above (the first
+ * detent, at most 88 %); a pull of the handle or the header upward, or a flick,
+ * grows it with the finger to nearly the full screen (the second detent, which
+ * leaves the top bar and the safe area showing), where its body is the one
+ * scroller. From there a drag down, or a flick, folds it back to the first
+ * detent, and only from the first detent does a drag close it. A tap on the
+ * handle switches between the two for a person who does not drag.
  */
 
 /** A drag of the handle past this many pixels closes the sheet. */
 export const SHEET_CLOSE_DRAG_PX = 80;
+
+/** An upward drag past this many pixels opens an expandable sheet to its full height. */
+export const SHEET_EXPAND_DRAG_PX = 40;
+
+/** A release faster than this (px per ms) is a flick, whatever the distance. */
+export const SHEET_FLICK_PX_PER_MS = 0.5;
+
+/** A flick needs at least this much travel, so a twitch is not one. */
+const SHEET_FLICK_MIN_PX = 12;
+
+/** A release this long after the last move is a pause, not a flick. */
+const SHEET_FLICK_WINDOW_MS = 120;
+
+/** A drag shorter than this on the handle is a tap. */
+const SHEET_TAP_PX = 6;
+
+/** The expanded detent: the screen less the safe area and the top bar (3.5 rem),
+    so the bar stays visible over the scrim. The sheet's class below says the same,
+    and never goes under the first detent (a landscape phone has less than that). */
+const EXPANDED_HEIGHT = "calc(100% - env(safe-area-inset-top) - 3.5rem)";
+const EXPANDED_CLASS = "h-[calc(100%-env(safe-area-inset-top)-3.5rem)] min-h-[88%] max-h-none";
+
+export type SheetDetent = "collapsed" | "expanded";
+
+/** What a release of the handle does: `velocity` is px per ms, negative upward,
+    and `dy` the drag's signed distance, negative upward. */
+export function sheetRelease({ detent, dy, velocity }: { detent: SheetDetent; dy: number; velocity: number }): "close" | "expand" | "collapse" | "stay" {
+  const flickUp = velocity <= -SHEET_FLICK_PX_PER_MS && dy <= -SHEET_FLICK_MIN_PX;
+  const flickDown = velocity >= SHEET_FLICK_PX_PER_MS && dy >= SHEET_FLICK_MIN_PX;
+  if (detent === "collapsed") {
+    if (dy <= -SHEET_EXPAND_DRAG_PX || flickUp) return "expand";
+    return dy > SHEET_CLOSE_DRAG_PX ? "close" : "stay";
+  }
+  return dy > SHEET_CLOSE_DRAG_PX || flickDown ? "collapse" : "stay";
+}
 
 /** Controls a drag must never start from: a pointer that lands on one is a
     tap on it. */
@@ -55,6 +98,7 @@ export function MobileSheet({
   extra,
   footer,
   pinned,
+  expandable = false,
   full = false,
   titleHidden = false,
   onClose,
@@ -68,6 +112,8 @@ export function MobileSheet({
   footer?: ReactNode;
   /** A block pinned above the scrolling body; it caps its own height. */
   pinned?: ReactNode;
+  /** A second detent at nearly full height, reached by dragging the handle up (see above). */
+  expandable?: boolean;
   /** Fullscreen (the prototype review): no handle, no rounded top, the footer at the screen's foot. */
   full?: boolean;
   /** The title only names the dialog for assistive tech: the body already says what it holds. */
@@ -79,17 +125,48 @@ export function MobileSheet({
 }) {
   const { t } = useLocale();
   const sheetRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ y: number; dy: number } | null>(null);
+  const drag = useRef<{ y: number; dy: number; grab: boolean; start: number; low: number; high: number; lastY: number; lastAt: number; velocity: number } | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useModalLayer({ containerRef: sheetRef, onClose });
+  useEffect(() => () => { if (clearTimer.current) clearTimeout(clearTimer.current); }, []);
+  const detent: SheetDetent = expandable && expanded ? "expanded" : "collapsed";
+
+  /** The height the sheet would have with `height` and `maxHeight` set, in px. */
+  const measure = (sheet: HTMLElement, height: string, maxHeight: string) => {
+    const { height: h, maxHeight: m } = sheet.style;
+    sheet.style.height = height;
+    sheet.style.maxHeight = maxHeight;
+    const px = sheet.offsetHeight;
+    sheet.style.height = h;
+    sheet.style.maxHeight = m;
+    return px;
+  };
 
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     if (full) return;
     /* Only the grab handle and the header's title text start a drag; a
        pointer on the × or another header control is that control's tap. */
     if (isControlTarget(event.target, event.currentTarget)) return;
-    drag.current = { y: event.clientY, dy: 0 };
+    if (clearTimer.current) { clearTimeout(clearTimer.current); clearTimer.current = null; }
     const sheet = sheetRef.current;
-    if (sheet) sheet.style.transition = "none";
+    const grab = event.currentTarget.hasAttribute("data-mobile2-grab");
+    drag.current = { y: event.clientY, dy: 0, grab, start: 0, low: 0, high: 0, lastY: event.clientY, lastAt: performance.now(), velocity: 0 };
+    if (sheet) {
+      sheet.style.transition = "none";
+      if (expandable) {
+        /* Pin the height in px so the sheet can follow the finger up and down
+           between its two detents. */
+        const low = measure(sheet, "auto", "88%");
+        const high = Math.max(low, measure(sheet, EXPANDED_HEIGHT, "none"));
+        const current = detent === "expanded" ? high : low;
+        drag.current.low = low;
+        drag.current.high = high;
+        drag.current.start = current;
+        sheet.style.maxHeight = "none";
+        sheet.style.height = `${current}px`;
+      }
+    }
     const target = event.currentTarget;
     if (typeof target.setPointerCapture === "function") {
       try {
@@ -102,23 +179,61 @@ export function MobileSheet({
   const onPointerMove = (event: ReactPointerEvent<HTMLElement>) => {
     const current = drag.current;
     if (!current) return;
-    current.dy = Math.max(0, event.clientY - current.y);
+    const raw = event.clientY - current.y;
+    const at = performance.now();
+    if (at > current.lastAt) current.velocity = (event.clientY - current.lastY) / (at - current.lastAt);
+    current.lastY = event.clientY;
+    current.lastAt = at;
     const sheet = sheetRef.current;
-    if (sheet) sheet.style.transform = `translateY(${current.dy}px)`;
+    if (!expandable) {
+      current.dy = Math.max(0, raw);
+      if (sheet) sheet.style.transform = `translateY(${current.dy}px)`;
+      return;
+    }
+    current.dy = raw;
+    if (!sheet) return;
+    sheet.style.height = `${Math.min(current.high, Math.max(current.low, current.start - raw))}px`;
+    /* Only the first detent slides off the screen (towards closing); the second shrinks to the first. */
+    sheet.style.transform = detent === "collapsed" ? `translateY(${Math.max(0, raw)}px)` : "";
   };
-  const settle = (close: boolean) => {
+  const settle = (release: boolean) => {
     const current = drag.current;
     if (!current) return;
     drag.current = null;
-    if (close && current.dy > SHEET_CLOSE_DRAG_PX) {
+    const sheet = sheetRef.current;
+    const spring = "transform 200ms cubic-bezier(0.2, 0, 0, 1)";
+    if (!expandable) {
+      if (release && current.dy > SHEET_CLOSE_DRAG_PX) {
+        onClose();
+        return;
+      }
+      if (sheet) {
+        sheet.style.transition = spring;
+        sheet.style.transform = "";
+      }
+      return;
+    }
+    const still = performance.now() - current.lastAt > SHEET_FLICK_WINDOW_MS;
+    const tap = release && current.grab && Math.abs(current.dy) < SHEET_TAP_PX;
+    const outcome = !release ? "stay" : tap ? (detent === "collapsed" ? "expand" : "collapse") : sheetRelease({ detent, dy: current.dy, velocity: still ? 0 : current.velocity });
+    if (outcome === "close") {
       onClose();
       return;
     }
-    const sheet = sheetRef.current;
+    const next: SheetDetent = outcome === "expand" ? "expanded" : outcome === "collapse" ? "collapsed" : detent;
     if (sheet) {
-      sheet.style.transition = "transform 200ms cubic-bezier(0.2, 0, 0, 1)";
+      /* Run the last stretch to the detent in px, then hand the height back to the classes. */
+      sheet.style.transition = "height 200ms cubic-bezier(0.2, 0, 0, 1), transform 200ms cubic-bezier(0.2, 0, 0, 1)";
       sheet.style.transform = "";
+      sheet.style.height = `${next === "expanded" ? current.high : current.low}px`;
+      clearTimer.current = setTimeout(() => {
+        clearTimer.current = null;
+        sheet.style.height = "";
+        sheet.style.maxHeight = "";
+        sheet.style.transition = "";
+      }, 220);
     }
+    setExpanded(next === "expanded");
   };
   const onPointerUp = () => settle(true);
   const onPointerCancel = () => settle(false);
@@ -140,8 +255,9 @@ export function MobileSheet({
         aria-label={title}
         tabIndex={-1}
         data-mobile2-sheet={name}
+        data-mobile2-detent={expandable ? detent : undefined}
         className={`flex flex-col bg-raised shadow-2 outline-none transition-[transform,opacity] duration-[320ms] ease-[cubic-bezier(0.2,0,0,1)] starting:translate-y-6 starting:opacity-0 motion-reduce:transition-none ${
-          full ? "h-full max-h-full rounded-none pt-[env(safe-area-inset-top)]" : "max-h-[88%] rounded-t-[16px]"
+          full ? "h-full max-h-full rounded-none pt-[env(safe-area-inset-top)]" : detent === "expanded" ? `${EXPANDED_CLASS} rounded-t-[16px]` : "max-h-[88%] rounded-t-[16px]"
         } pb-[calc(6px+env(safe-area-inset-bottom))]`}
       >
         {full ? null : (
@@ -160,7 +276,7 @@ export function MobileSheet({
         {pinned}
         {/* A full sheet's body takes the height the header and the footer leave,
             so the footer stands at the foot of the screen whatever the body holds. */}
-        <div className={`min-h-0 overflow-y-auto overflow-x-hidden pb-1 ${full ? "flex-1" : ""}`} data-mobile2-sheet-body>
+        <div className={`min-h-0 overflow-y-auto overflow-x-hidden pb-1 ${full || detent === "expanded" ? "flex-1" : ""}`} data-mobile2-sheet-body>
           {children}
         </div>
         <MobileReceipt store={receiptStore} placement="sheet" />

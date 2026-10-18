@@ -4,7 +4,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import { createReceiptStore, type ReceiptTimers } from "./MobileReceipt";
-import { MobileSheet, MobileSheetRow, SHEET_CLOSE_DRAG_PX } from "./MobileSheet";
+import { MobileSheet, MobileSheetRow, SHEET_CLOSE_DRAG_PX, SHEET_EXPAND_DRAG_PX, SHEET_FLICK_PX_PER_MS, sheetRelease } from "./MobileSheet";
 
 /*
  * The sheet primitive (mobile v2 §2 rule 1, §3.3, §5): a modal over the
@@ -288,4 +288,191 @@ test("a sheet body scrolls vertically and never sideways, sized to content or fu
     expect(classes).not.toContain("overflow-x-auto");
     expect(classes).not.toContain("overflow-x-scroll");
   }
+});
+
+/*
+ * The second detent (an `expandable` sheet, the phone's «Чекають на вас»):
+ * the handle pulls it up to nearly the full screen and back down, a flick does
+ * the same, only the first detent closes. happy-dom has no layout: the sheet's
+ * offsetHeight is read off the inline height the drag pins, and the clock is
+ * the test's, so the flick is deterministic. The browser case in
+ * issue1671Evidence.browser.test.tsx reads the real heights at 390 and 440.
+ */
+const LOW = 300;
+const HIGH = 780;
+let clock = 0;
+const realNow = performance.now.bind(performance);
+beforeEach(() => { clock = 1000; performance.now = () => clock; });
+afterEach(() => { performance.now = realNow; });
+
+function openExpandable(): { host: HTMLElement; dialog: HTMLElement; grab: HTMLElement; header: HTMLElement; closes: () => number } {
+  let closes = 0;
+  const host = mount(
+    <MobileSheet name="attention" title="Needs you · 3" expandable onClose={() => { closes += 1; }}>
+      <button type="button" data-testid="row">row</button>
+    </MobileSheet>,
+  );
+  const dialog = host.querySelector('[data-mobile2-sheet="attention"]') as unknown as HTMLElement;
+  Object.defineProperty(dialog, "offsetHeight", {
+    configurable: true,
+    get: () => {
+      const height = dialog.style.height;
+      if (height.endsWith("px")) return parseFloat(height);
+      return height === "auto" ? LOW : HIGH;
+    },
+  });
+  return {
+    host,
+    dialog,
+    grab: host.querySelector("[data-mobile2-grab]") as unknown as HTMLElement,
+    header: host.querySelector("[data-mobile2-sheet-header]") as unknown as HTMLElement,
+    closes: () => closes,
+  };
+}
+
+/** Drag `target` by `dy` over `ms`, in two moves, and release. */
+function dragBy(target: HTMLElement, dy: number, ms = 400, from = 600) {
+  flushSync(() => target.dispatchEvent(pointer("pointerdown", from)));
+  clock += ms / 2;
+  flushSync(() => target.dispatchEvent(pointer("pointermove", from + dy / 2)));
+  clock += ms / 2;
+  flushSync(() => target.dispatchEvent(pointer("pointermove", from + dy)));
+  return () => flushSync(() => target.dispatchEvent(pointer("pointerup", from + dy)));
+}
+
+test("an expandable sheet opens at the first detent; the others have no detent at all", () => {
+  const { dialog, host } = openExpandable();
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+  expect(dialog.className).toContain("max-h-[88%]");
+  expect(dialog.className).not.toContain("env(safe-area-inset-top)");
+  const plain = open().host;
+  expect(sheet(plain)!.hasAttribute("data-mobile2-detent")).toBe(false);
+  /* A plain sheet ignores an upward pull, as before. */
+  const grab = plain.querySelector("[data-mobile2-grab]") as unknown as HTMLElement;
+  flushSync(() => grab.dispatchEvent(pointer("pointerdown", 600)));
+  flushSync(() => grab.dispatchEvent(pointer("pointermove", 300)));
+  flushSync(() => grab.dispatchEvent(pointer("pointerup", 300)));
+  expect(sheet(plain)!.hasAttribute("data-mobile2-detent")).toBe(false);
+  expect(sheet(plain)!.style.height).toBe("");
+  expect(host).toBeDefined();
+});
+
+test("pulling the handle up grows the sheet with the finger and leaves it at the second detent", () => {
+  const { dialog, grab, closes } = openExpandable();
+  flushSync(() => grab.dispatchEvent(pointer("pointerdown", 600)));
+  expect(dialog.style.height).toBe(`${LOW}px`);
+  flushSync(() => grab.dispatchEvent(pointer("pointermove", 500)));
+  expect(dialog.style.height).toBe(`${LOW + 100}px`);
+  /* It stops at the second detent however far the finger goes. */
+  flushSync(() => grab.dispatchEvent(pointer("pointermove", 0)));
+  expect(dialog.style.height).toBe(`${HIGH}px`);
+  flushSync(() => grab.dispatchEvent(pointer("pointermove", 450)));
+  clock += 500;
+  flushSync(() => grab.dispatchEvent(pointer("pointerup", 450)));
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("expanded");
+  expect(dialog.className).toContain("h-[calc(100%-env(safe-area-inset-top)-3.5rem)]");
+  expect(dialog.className).not.toContain("max-h-[88%]");
+  /* Its body takes the height the header leaves, the list scrolls there. */
+  expect((dialog.querySelector("[data-mobile2-sheet-body]") as unknown as HTMLElement).className.split(" ")).toContain("flex-1");
+  expect(closes()).toBe(0);
+});
+
+test("a short pull springs back; a pull past the expand distance opens", () => {
+  const { dialog, grab } = openExpandable();
+  dragBy(grab, -(SHEET_EXPAND_DRAG_PX - 10))();
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+  dragBy(grab, -(SHEET_EXPAND_DRAG_PX + 10))();
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("expanded");
+});
+
+test("a quick flick up opens it and a quick flick down folds it, whatever the distance", () => {
+  const { dialog, grab, header } = openExpandable();
+  /* 30 px in 40 ms is 0.75 px/ms: under the distance, over the speed. */
+  dragBy(grab, -30, 40)();
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("expanded");
+  dragBy(header, 30, 40)();
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+  /* The same distance slowly does neither. */
+  dragBy(grab, -30, 1000)();
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+});
+
+test("a pause before the lift is not a flick", () => {
+  const { dialog, grab } = openExpandable();
+  flushSync(() => grab.dispatchEvent(pointer("pointerdown", 600)));
+  clock += 20;
+  flushSync(() => grab.dispatchEvent(pointer("pointermove", 570)));
+  clock += 400;
+  flushSync(() => grab.dispatchEvent(pointer("pointerup", 570)));
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+});
+
+test("from the second detent a drag down folds to the first and never closes; the first then closes as before", () => {
+  const { dialog, grab, header, closes } = openExpandable();
+  dragBy(grab, -200)();
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("expanded");
+  /* A short drag down springs back to the second detent. */
+  dragBy(grab, 50)();
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("expanded");
+  /* While it is dragged the sheet shrinks with the finger, no further than the first detent. */
+  flushSync(() => header.dispatchEvent(pointer("pointerdown", 100)));
+  flushSync(() => header.dispatchEvent(pointer("pointermove", 200)));
+  expect(dialog.style.height).toBe(`${HIGH - 100}px`);
+  flushSync(() => header.dispatchEvent(pointer("pointermove", 900)));
+  expect(dialog.style.height).toBe(`${LOW}px`);
+  expect(dialog.style.transform).toBe("");
+  clock += 600;
+  flushSync(() => header.dispatchEvent(pointer("pointerup", 900)));
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+  expect(closes()).toBe(0);
+  /* At the first detent the old rule holds: past 80 px closes. */
+  dragBy(grab, SHEET_CLOSE_DRAG_PX + 20)();
+  expect(closes()).toBe(1);
+});
+
+test("a cancelled drag keeps the detent it started from", () => {
+  const { dialog, grab } = openExpandable();
+  flushSync(() => grab.dispatchEvent(pointer("pointerdown", 600)));
+  clock += 100;
+  flushSync(() => grab.dispatchEvent(pointer("pointermove", 200)));
+  flushSync(() => grab.dispatchEvent(pointer("pointercancel", 200)));
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+});
+
+test("a tap on the handle switches the detent; a tap on the header does not", () => {
+  const { dialog, grab, header } = openExpandable();
+  flushSync(() => grab.dispatchEvent(pointer("pointerdown", 600)));
+  flushSync(() => grab.dispatchEvent(pointer("pointerup", 600)));
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("expanded");
+  flushSync(() => grab.dispatchEvent(pointer("pointerdown", 600)));
+  flushSync(() => grab.dispatchEvent(pointer("pointerup", 600)));
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+  flushSync(() => header.dispatchEvent(pointer("pointerdown", 600)));
+  flushSync(() => header.dispatchEvent(pointer("pointerup", 600)));
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+});
+
+test("the × and Escape close it from the second detent", () => {
+  const { host, grab, closes } = openExpandable();
+  dragBy(grab, -200)();
+  flushSync(() => (host.querySelector("[data-mobile2-close]") as unknown as HTMLElement).click());
+  expect(closes()).toBe(1);
+  flushSync(() => {
+    dom.document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as never);
+  });
+  expect(closes()).toBe(2);
+});
+
+test("what a release does, by detent, distance and speed", () => {
+  const fast = SHEET_FLICK_PX_PER_MS + 0.1;
+  expect(sheetRelease({ detent: "collapsed", dy: -SHEET_EXPAND_DRAG_PX, velocity: 0 })).toBe("expand");
+  expect(sheetRelease({ detent: "collapsed", dy: -SHEET_EXPAND_DRAG_PX + 1, velocity: 0 })).toBe("stay");
+  expect(sheetRelease({ detent: "collapsed", dy: -20, velocity: -fast })).toBe("expand");
+  expect(sheetRelease({ detent: "collapsed", dy: -2, velocity: -fast })).toBe("stay");
+  expect(sheetRelease({ detent: "collapsed", dy: SHEET_CLOSE_DRAG_PX + 1, velocity: 0 })).toBe("close");
+  expect(sheetRelease({ detent: "collapsed", dy: 30, velocity: fast })).toBe("stay");
+  expect(sheetRelease({ detent: "expanded", dy: SHEET_CLOSE_DRAG_PX + 1, velocity: 0 })).toBe("collapse");
+  expect(sheetRelease({ detent: "expanded", dy: 30, velocity: fast })).toBe("collapse");
+  expect(sheetRelease({ detent: "expanded", dy: 30, velocity: 0.1 })).toBe("stay");
+  expect(sheetRelease({ detent: "expanded", dy: -100, velocity: -fast })).toBe("stay");
 });

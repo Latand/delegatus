@@ -1,0 +1,257 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "readings": [
+    {
+      "tag": "390-uk-dark",
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "scheme": "dark",
+      "done": true,
+      "collapsed": {
+        "detent": "collapsed",
+        "top": 101,
+        "bottom": 844,
+        "height": 743,
+        "bodyHeight": 337,
+        "bodyScrolls": true,
+        "handleX": 195,
+        "handleY": 108,
+        "overflow": false
+      },
+      "expanded": {
+        "detent": "expanded",
+        "top": 56,
+        "bottom": 844,
+        "height": 788,
+        "bodyHeight": 382,
+        "bodyScrolls": true,
+        "handleX": 195,
+        "handleY": 63,
+        "overflow": false
+      },
+      "folded": {
+        "detent": "collapsed",
+        "top": 101,
+        "bottom": 844,
+        "height": 743,
+        "bodyHeight": 337,
+        "bodyScrolls": true,
+        "handleX": 195,
+        "handleY": 108,
+        "overflow": false
+      },
+      "scrolled": 370
+    },
+    {
+      "tag": "390-uk-light",
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "scheme": "light",
+      "done": true,
+      "collapsed": {
+        "detent": "collapsed",
+        "top": 101,
+        "bottom": 844,
+        "height": 743,
+        "bodyHeight": 337,
+        "bodyScrolls": true,
+        "handleX": 195,
+        "handleY": 108,
+        "overflow": false
+      },
+      "expanded": {
+        "detent": "expanded",
+        "top": 56,
+        "bottom": 844,
+        "height": 788,
+        "bodyHeight": 382,
+        "bodyScrolls": true,
+        "handleX": 195,
+        "handleY": 63,
+        "overflow": false
+      },
+      "folded": {
+        "detent": "collapsed",
+        "top": 101,
+        "bottom": 844,
+        "height": 743,
+        "bodyHeight": 337,
+        "bodyScrolls": true,
+        "handleX": 195,
+        "handleY": 108,
+        "overflow": false
+      },
+      "scrolled": 370
+    },
+    {
+      "tag": "390-en-light",
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "scheme": "light",
+      "done": true,
+      "collapsed": {
+        "detent": "collapsed",
+        "top": 101,
+        "bottom": 844,
+        "height": 743,
+        "bodyHeight": 337,
+        "bodyScrolls": true,
+        "handleX": 195,
+        "handleY": 108,
+        "overflow": false
+      },
+      "expanded": {
+        "detent": "expanded",
+        "top": 56,
+        "bottom": 844,
+        "height": 788,
+        "bodyHeight": 382,
+        "bodyScrolls": true,
+        "handleX": 195,
+        "handleY": 63,
+        "overflow": false
+      },
+      "folded": {
+        "detent": "collapsed",
+        "top": 101,
+        "bottom": 844,
+        "height": 743,
+        "bodyHeight": 337,
+        "bodyScrolls": true,
+        "handleX": 195,
+        "handleY": 108,
+        "overflow": false
+      },
+      "scrolled": 370
+    },
+    {
+      "tag": "440-uk-dark",
+      "width": 440,
+      "height": 932,
+      "lang": "uk",
+      "scheme": "dark",
+      "done": true,
+      "collapsed": {
+        "detent": "collapsed",
+        "top": 112,
+        "bottom": 932,
+        "height": 820,
+        "bodyHeight": 379,
+        "bodyScrolls": true,
+        "handleX": 220,
+        "handleY": 119,
+        "overflow": false
+      },
+      "expanded": {
+        "detent": "expanded",
+        "top": 56,
+        "bottom": 932,
+        "height": 876,
+        "bodyHeight": 435,
+        "bodyScrolls": true,
+        "handleX": 220,
+        "handleY": 63,
+        "overflow": false
+      },
+      "folded": {
+        "detent": "collapsed",
+        "top": 112,
+        "bottom": 932,
+        "height": 820,
+        "bodyHeight": 379,
+        "bodyScrolls": true,
+        "handleX": 220,
+        "handleY": 119,
+        "overflow": false
+      },
+      "scrolled": 317
+    },
+    {
+      "tag": "440-uk-light",
+      "width": 440,
+      "height": 932,
+      "lang": "uk",
+      "scheme": "light",
+      "done": true,
+      "collapsed": {
+        "detent": "collapsed",
+        "top": 112,
+        "bottom": 932,
+        "height": 820,
+        "bodyHeight": 379,
+        "bodyScrolls": true,
+        "handleX": 220,
+        "handleY": 119,
+        "overflow": false
+      },
+      "expanded": {
+        "detent": "expanded",
+        "top": 56,
+        "bottom": 932,
+        "height": 876,
+        "bodyHeight": 435,
+        "bodyScrolls": true,
+        "handleX": 220,
+        "handleY": 63,
+        "overflow": false
+      },
+      "folded": {
+        "detent": "collapsed",
+        "top": 112,
+        "bottom": 932,
+        "height": 820,
+        "bodyHeight": 379,
+        "bodyScrolls": true,
+        "handleX": 220,
+        "handleY": 119,
+        "overflow": false
+      },
+      "scrolled": 317
+    },
+    {
+      "tag": "390-uk-light-short",
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "scheme": "light",
+      "done": false,
+      "collapsed": {
+        "detent": "collapsed",
+        "top": 101,
+        "bottom": 844,
+        "height": 743,
+        "bodyHeight": 675,
+        "bodyScrolls": true,
+        "handleX": 195,
+        "handleY": 108,
+        "overflow": false
+      },
+      "expanded": {
+        "detent": "expanded",
+        "top": 56,
+        "bottom": 844,
+        "height": 788,
+        "bodyHeight": 720,
+        "bodyScrolls": true,
+        "handleX": 195,
+        "handleY": 63,
+        "overflow": false
+      },
+      "folded": {
+        "detent": "collapsed",
+        "top": 101,
+        "bottom": 844,
+        "height": 743,
+        "bodyHeight": 675,
+        "bodyScrolls": true,
+        "handleX": 195,
+        "handleY": 108,
+        "overflow": false
+      },
+      "scrolled": 0
+    }
+  ]
+}

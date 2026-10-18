@@ -8206,6 +8206,137 @@ browserTest("stage agent row: conversations, parked questions and earlier attemp
   } finally { await browser.close(); stop(); }
 }, 180_000);
 
+/*
+ * The phone's «Чекають на вас» sheet has two detents (MobileSheet `expandable`):
+ * it opens where it always did, the handle pulls it up to nearly the full
+ * screen under the top bar, its list scrolls there, and a drag down folds it
+ * back. At 390 and the iPhone-class 440, dark and light, in uk and en, over the
+ * needs-you fixture with «Готово» (a tall list) and without it (a short one).
+ */
+describe("the «Чекають на вас» sheet pulls up to nearly full height", () => {
+  browserTest("collapsed and expanded at 390 and 440: drag, flick, scroll, fold back, close", async () => {
+    const out = path.resolve(".artifacts/needs-you-detents");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await launchChromium();
+    const readings: Record<string, unknown>[] = [];
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    try {
+      const cases = [
+        { width: 390, scheme: "dark", lang: "uk", done: true },
+        { width: 390, scheme: "light", lang: "uk", done: true },
+        { width: 390, scheme: "light", lang: "en", done: true },
+        { width: 440, scheme: "dark", lang: "uk", done: true },
+        { width: 440, scheme: "light", lang: "uk", done: true },
+        { width: 390, scheme: "light", lang: "uk", done: false },
+      ] as const;
+      for (const { width, scheme, lang, done } of cases) {
+        const height = width === 390 ? 844 : 932;
+        const tag = `${width}-${lang}-${scheme}${done ? "" : "-short"}`;
+        const context = await browser.newContext({ viewport: { width, height }, isMobile: true, hasTouch: true, colorScheme: scheme, reducedMotion: "reduce" });
+        try {
+          await context.addInitScript((value) => localStorage.setItem("llv_lang", value), lang);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          const cdp = await context.newCDPSession(page);
+          await page.goto(`${server.base}?lang=${lang}${done ? "&done=1" : ""}`);
+          await page.waitForSelector('[data-mobile2-open="attention"]', { timeout: 15_000 });
+          if (done) await page.waitForFunction(() => Number(document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? 0) > 18, undefined, { timeout: 15_000 });
+          await page.locator('[data-mobile2-open="attention"]').click();
+          const sheet = page.locator('[data-mobile2-sheet="attention"]');
+          await sheet.waitFor({ timeout: 15_000 });
+          await page.locator("[data-needs-you-row]").first().waitFor();
+          const bar = (await page.locator("[data-mobile2-bar]").boundingBox())!;
+          const read = () => sheet.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            const body = element.querySelector("[data-mobile2-sheet-body]")!;
+            const handle = element.querySelector("[data-mobile2-grab]")!.getBoundingClientRect();
+            return {
+              detent: element.getAttribute("data-mobile2-detent"), top: Math.round(rect.top), bottom: Math.round(rect.bottom), height: Math.round(rect.height),
+              bodyHeight: Math.round(body.getBoundingClientRect().height), bodyScrolls: body.scrollHeight > body.clientHeight,
+              handleX: Math.round(handle.left + handle.width / 2), handleY: Math.round(handle.top + handle.height / 2),
+              overflow: document.documentElement.scrollWidth > innerWidth,
+            };
+          });
+          const touch = async (x: number, steps: Array<[number, number]>) => {
+            await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: steps[0]![1] }] });
+            for (const [at, wait] of steps.slice(1)) {
+              if (wait) await sleep(wait);
+              await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: at }] });
+            }
+            await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+            await sleep(450);
+          };
+          /** A finger path from `from` to `to` in twelve moves, one per 25 ms. */
+          const ramp = (from: number, to: number): Array<[number, number]> => [[0, from], ...Array.from({ length: 12 }, (_, i): [number, number] => [from + ((to - from) * (i + 1)) / 12, 25])];
+
+          /* Collapsed: where the sheet opens today. */
+          const collapsed = await read();
+          expect(collapsed.detent).toBe("collapsed");
+          expect(collapsed.height).toBeLessThanOrEqual(Math.round(height * 0.88) + 1);
+          await page.screenshot({ path: path.join(out, `${tag}-1-collapsed.png`) });
+
+          /* Pulled up by the handle: nearly full height, the top bar left showing. */
+          await touch(collapsed.handleX, ramp(collapsed.handleY, 40));
+          const expanded = await read();
+          expect(expanded.detent).toBe("expanded");
+          expect(expanded.bottom).toBe(height);
+          expect(expanded.top, "the top bar stays visible above the sheet").toBeGreaterThanOrEqual(bar.y + bar.height);
+          expect(expanded.top).toBeLessThanOrEqual(bar.y + bar.height + 8);
+          expect(expanded.height).toBeGreaterThanOrEqual(Math.round(height * 0.9));
+          expect(expanded.height).toBeGreaterThan(collapsed.height);
+          expect(expanded.bodyHeight).toBeGreaterThan(done ? collapsed.bodyHeight : 0);
+          expect(expanded.overflow).toBe(false);
+          await page.screenshot({ path: path.join(out, `${tag}-2-expanded.png`) });
+
+          /* The list scrolls inside the sheet; the sheet stays put. */
+          const body = sheet.locator("[data-mobile2-sheet-body]");
+          let scrolled = 0;
+          if (done) {
+            expect(expanded.bodyScrolls, "the decisions overflow the expanded body").toBe(true);
+            await body.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+            scrolled = await body.evaluate((element) => element.scrollTop);
+            expect(scrolled).toBeGreaterThan(0);
+            const last = await sheet.locator("[data-needs-you-row]").last().evaluate((row) => {
+              const rect = row.getBoundingClientRect();
+              const scroller = row.closest("[data-mobile2-sheet-body]")!.getBoundingClientRect();
+              return { cutAbove: rect.top < scroller.top - 0.5, cutBelow: rect.bottom > scroller.bottom + 0.5 };
+            });
+            expect(last, "the last decision is whole at the scroll edge").toEqual({ cutAbove: false, cutBelow: false });
+            expect((await read()).top).toBe(expanded.top);
+            await page.screenshot({ path: path.join(out, `${tag}-3-expanded-scrolled.png`) });
+            await body.evaluate((element) => { element.scrollTop = 0; });
+          }
+
+          /* A drag down folds it to the first detent; it does not close. */
+          await touch(expanded.handleX, ramp(expanded.handleY, expanded.handleY + 300));
+          const folded = await read();
+          expect(folded.detent).toBe("collapsed");
+          expect(Math.abs(folded.height - collapsed.height)).toBeLessThanOrEqual(2);
+          await page.screenshot({ path: path.join(out, `${tag}-4-folded.png`) });
+
+          /* A flick of 30 px, two moves sent together, opens it: under the 40 px distance, over the speed. */
+          const x = folded.handleX;
+          const y = folded.handleY;
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+          await Promise.all([y - 15, y - 30].map((at) => cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: at }] })));
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          await sleep(450);
+          expect((await read()).detent).toBe("expanded");
+          /* The × closes from the second detent, as before. */
+          await sheet.locator("[data-mobile2-close]").click();
+          await sheet.waitFor({ state: "detached" });
+          expect(errors).toEqual([]);
+          readings.push({ tag, width, height, lang, scheme, done, collapsed, expanded, folded, scrolled });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/needs-you-detents", { recursive: true });
+      fs.writeFileSync("evidence/needs-you-detents/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+});
+
 describe("seat hand-over with evidence answered last", () => {
   browserTest("Claude and Codex keep the opened card at 390 in en and uk", async () => {
     const { base, stop } = await serveFixture();
