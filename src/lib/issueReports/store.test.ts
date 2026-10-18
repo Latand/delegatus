@@ -130,3 +130,17 @@ test("an unrelated preview preserves a publication fence across release and recl
   expect(readIssueReportPreview(digest, directory)).toMatchObject({ state: "publishing" });
   expect(claimIssueReportPublication(digest, CLAIM, directory)).toBe(false);
 });
+
+test("preview digest lookup accepts full and short, excludes receipts, and refuses collisions", async () => {
+  const { resolveIssueReportDigest } = await import("./store");
+  const a = "12345678aaaa" + "a".repeat(52), b = "12345678bbbb" + "b".repeat(52);
+  fs.writeFileSync(path.join(directory, `${a}.json`), "{}");
+  fs.writeFileSync(path.join(directory, `${b}.shown.seat.json`), "{}");
+  expect(await resolveIssueReportDigest(a.slice(0, 8), directory)).toMatchObject({ kind: "match", value: a });
+  expect(await resolveIssueReportDigest(a.toUpperCase(), directory)).toMatchObject({ kind: "match", value: a });
+  fs.writeFileSync(path.join(directory, `${b}.json`), "{}");
+  expect((await resolveIssueReportDigest(a.slice(0, 8), directory)).kind).toBe("ambiguous");
+  expect(await resolveIssueReportDigest(b.slice(0, 12), directory)).toMatchObject({ kind: "match", value: b });
+  expect(await resolveIssueReportDigest("ffffffff", directory)).toEqual({ kind: "none" });
+  expect(await resolveIssueReportDigest("../unsafe", directory)).toEqual({ kind: "none" });
+});

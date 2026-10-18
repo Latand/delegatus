@@ -1,3 +1,4 @@
+import { shortId } from "@/lib/shortIds";
 import { seatTickCatchUp } from "./seatTick";
 import { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 import { defaultSeatTickAdmissionSources } from "./seatTickAdmissionSources";
@@ -1573,7 +1574,7 @@ function eventsSince(
         type: event.type,
         // Enrich older journal summaries from the durable lane while it is hot.
         summary: event.type === "pipeline_merged" && lane
-          ? `pull request #${lane.merge!.prNumber} merged, head ${lane.merge!.mergedHead ?? "unavailable"} — ${redactBounded(lane.task.split("\n")[0] ?? "", OWN_LANE_TITLE_LIMIT)}`
+          ? `pull request #${lane.merge!.prNumber} merged, head ${shortId(lane.merge!.mergedHead ?? "unavailable")} — ${redactBounded(lane.task.split("\n")[0] ?? "", OWN_LANE_TITLE_LIMIT)}`
           : event.summary,
         pipelineId: event.pipelineId,
         /* An open lane is always in the hot store; the archive only ever takes

@@ -1,5 +1,6 @@
 import { expect, spyOn, test, spawn, fs, path, AccountMutationBusyError, accountManager, engineModule, adoptAttempt, defaultPipelinePorts, terminalFlowStageVerdict, tickPipelines, verdictRoutesAsFail, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, projectPipelineEvents, saveTasks, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, durableStageTurnEvidence, REMOTE_BRANCH, create, forbiddenSleep, frozenWallClock, PASS_TEXT, makeStructuredAttempt, pinStageHead, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, SKIP_STAGES, FAIL_EDGE_STAGES, HOST_UNAVAILABLE, failedReceipt, UNVERIFIED_DELIVERY, reviewFlowPausedOnUnscannedImplementer, REVIEWER_BUSY, reviewFlowEndedOnBusyAccount, interruptedSpawnAttempt, legacySpawnAttempt, stageDigest, buildStageOf, REVIEW_FINDING_BLOCK, flowWithFindings, parkedReviewStage, stagedRecoveryHarness, aliveStagedLaunch, stageHostChild, productionHostSeams, activationDrainFixture, expectPipelineLeaseFree, reserveActivationOnly } from "./engine.fixture";
 import type { Snapshot, PipelinePorts } from "./engine.fixture";
+import { shortId } from "@/lib/shortIds";
 
 
 test("a pass whose commit failed retries settlement without rerunning stage work before publishing", async () => {
@@ -213,7 +214,7 @@ test("a worktree head that is not the accepted review head parks without publish
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
   expect(parked.stateDetail).toBe(
-    `review stage head mismatch: the accepted review head is ${accepted}, but the pipeline worktree is at ${unaccepted}; nothing was published`,
+    `review stage head mismatch: the accepted review head is ${shortId(accepted)}, but the pipeline worktree is at ${shortId(unaccepted)}; nothing was published`,
   );
   expect(box.remote()).toBeNull();
   expect(box.order.slice(beforeIngress)).toEqual([]);
@@ -236,7 +237,7 @@ test("a remote that diverged from the accepted head parks review ingress and kee
 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toContain(`review stage could not publish the accepted head ${box.passedSha}`);
+  expect(parked.stateDetail).toContain(`review stage could not publish the accepted head ${shortId(box.passedSha)}`);
   expect(parked.stateDetail).toContain("diverged");
   expect(box.remote()).toBe(foreignRepair);
   expect(h.flows.size).toBe(0);
@@ -256,7 +257,7 @@ test("a push that fails at review ingress parks before the review flow exists", 
 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toContain(`review stage could not publish the accepted head ${box.passedSha}`);
+  expect(parked.stateDetail).toContain(`review stage could not publish the accepted head ${shortId(box.passedSha)}`);
   expect(parked.stateDetail).toContain("publishing the pipeline branch:");
   expect(h.flows.size).toBe(0);
   expect(parked.lastPassedCommit).toBe(box.passedSha);
@@ -1573,7 +1574,7 @@ test("guard values that are present but malformed, or stated on an action they d
   const refusals: Array<[Record<string, unknown>, "expectedStageDigest" | "expectedStageId" | "expectedAttempt"]> = [
     [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: "abc" }, "expectedStageDigest"],
     [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: null }, "expectedStageDigest"],
-    [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: stageDigest(buildStageOf()).toUpperCase() }, "expectedStageDigest"],
+    [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageDigest: "g".repeat(64) }, "expectedStageDigest"],
     [{ action: "retry-stage", expectedStageDigest: stageDigest(buildStageOf()) }, "expectedStageDigest"],
     [{ action: "override-stage", stageId: "build", "prompt": "x", expectedStageId: "build" }, "expectedStageId"],
     [{ action: "skip-stage", expectedStageId: "" }, "expectedStageId"],

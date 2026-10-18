@@ -9,7 +9,8 @@ import { forEachCooperatively } from "@/lib/cooperative";
 import { initializeStateCollections, SqliteStateCollection, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument } from "@/lib/state/registryRecords";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
-import { canonicalProject } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
 import { resolveRole } from "@/lib/roles/registry";
 import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import type { RoleDefinition } from "@/lib/roles/types";
@@ -119,7 +120,7 @@ export function mergeSeededPresets(presets: FlowPreset[], seeds = seededPresetsF
   return [...seeds.filter((preset) => !names.has(preset.name)), ...presets];
 }
 
-let flowsCache: { signature: string; flows: Flow[] } | null = null;
+let flowsCache: { signature: string; aliases: string; flows: Flow[]; projects: ReadonlySet<string> } | null = null;
 const flowStores = new Map<string, SqliteStateCollection<Flow>>();
 const flowSnapshots = new WeakMap<Flow[], Map<string, string>>();
 
@@ -152,10 +153,19 @@ function reviveCachedFlows(flows: Flow[]): Flow[] {
     revision, including revisions committed by another process. */
 export function loadFlows(): Flow[] {
   const before = flowsFileSignature();
-  if (flowsCache?.signature === before) return rememberFlowSnapshot(reviveCachedFlows(flowsCache.flows));
+  const aliases = JSON.stringify(projectAliasSnapshot().aliases);
+  if (flowsCache?.signature === before) {
+    if (flowsCache.aliases !== aliases) {
+      flowsCache = { ...flowsCache, aliases, projects: canonicalProjectKeys(flowsCache.flows.map(flow => flow.project)) };
+    }
+    replaceProjectKeySource("flows", flowsCache.projects);
+    return rememberFlowSnapshot(reviveCachedFlows(flowsCache.flows));
+  }
   const parsed = flowStore().snapshot();
   const after = flowsFileSignature();
-  if (before === after) flowsCache = { signature: after, flows: parsed };
+  const projects = canonicalProjectKeys(parsed.map(flow => flow.project));
+  if (before === after) flowsCache = { signature: after, aliases, flows: parsed, projects };
+  replaceProjectKeySource("flows", projects);
   return rememberFlowSnapshot(reviveCachedFlows(parsed));
 }
 
@@ -452,6 +462,7 @@ export function saveFlows(flows: Flow[]): void {
   if (!baseline) {
     flowStore().replaceSync(flows, { beforePersist: prepareFlowRevisions });
     rememberFlowSnapshot(flows);
+    replaceProjectKeySource("flows", canonicalProjectKeys(flows.map(flow => flow.project)));
     return;
   }
   const localIds = new Set(flows.map((flow) => flow.id));
@@ -466,6 +477,7 @@ export function saveFlows(flows: Flow[]): void {
     return { records: changed, deleteKeys: acceptedDeletes };
   });
   rememberFlowSnapshot(flows);
+  replaceProjectKeySource("flows", canonicalProjectKeys(flows.map(flow => flow.project)));
 }
 
 /** Persist a known changed subset while preserving every omitted flow row. */

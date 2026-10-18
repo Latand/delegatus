@@ -1,3 +1,4 @@
+import { resolveShortId } from "@/lib/shortIds";
 import crypto from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
@@ -129,9 +130,15 @@ export function mutatePrototypeRound<T>(taskId: string | null, reviewId: string,
   });
 }
 export function findPrototypeRound(taskId: string | null, reviewId: string): PrototypeReviewRound | undefined {
-  if (taskId === null) return findSeatRound(reviewId);
+  if (taskId === null) {
+    const rounds = loadSeatRounds();
+    const resolved = resolvePrototypeReviewId(rounds, reviewId);
+    return resolved ? findSeatRound(resolved) : undefined;
+  }
   const task = loadPrototypeTask(taskId);
-  return task?.prototypeReviews?.find(r => r.id === reviewId);
+  const rounds = task?.prototypeReviews ?? [];
+  const resolved = resolvePrototypeReviewId(rounds, reviewId);
+  return resolved ? rounds.find(round => round.id === resolved) : undefined;
 }
 /** Metadata is a task extension in the existing revisioned, linked SQLite store.
     A null task is the seat asking without one: the round goes to the seat's
@@ -243,4 +250,10 @@ async function publishRound(input: PublishPrototypeInput, taskId: string | null,
       if (!committed) await fs.rm(roundDirectory(id),{ recursive: true, force: true });
     }
   });
+}
+
+export function resolvePrototypeReviewId(rounds: readonly Pick<PrototypeReviewRound, "id">[], given: string): string | null {
+  const result = resolveShortId(rounds.map(round => round.id), given);
+  if (result.kind === "ambiguous") throw Object.assign(new PrototypeError("reviewId is ambiguous; pass more characters", 409), { code: "short_id_ambiguous", candidates: result.candidates });
+  return result.kind === "match" ? result.value : null;
 }

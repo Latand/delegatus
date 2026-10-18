@@ -1,13 +1,33 @@
+import { shortId, matchesShortId } from "@/lib/shortIds";
 import path from "node:path";
 import { projectDisplayName } from "@/lib/displayNames";
 import { canonicalProject, projectAliasSnapshot, recordedProjectRemotes } from "./aliases";
 import { projectCurationSnapshot } from "./curation";
 import { reportHeaderName } from "./settings";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
-import { conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
+import { conversationCatalogProjectsSnapshot } from "@/lib/scanner/conversationCatalog";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
+import { projectKeyIndexSnapshot } from "./projectKeyIndex";
 
 type Member = { project: string; displayName?: string; projectName?: string; projectRoot?: string | null; cwd?: string | null; worktree?: string };
+const catalogMembers = new WeakMap<readonly Member[], readonly Member[]>();
+
+function uniqueCatalogMembers(files: readonly Member[] | undefined): readonly Member[] {
+  if (!files) return [];
+  const cached = catalogMembers.get(files);
+  if (cached) return cached;
+  const seen = new Set<string>();
+  const members: Member[] = [];
+  for (const file of files) {
+    const identity = JSON.stringify([file.project, file.displayName, file.projectName, file.projectRoot, file.cwd, file.worktree]);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    members.push(file);
+  }
+  catalogMembers.set(files, members);
+  return members;
+}
+
 type Sources = {
   authorizedSeats?(): readonly { project?: string | null }[];
   callerProject?(): string | null;
@@ -35,7 +55,11 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     return target;
   };
   const last = sources.lastCompletedCatalog?.();
-  const members: readonly Member[] = [...(last?.projectCatalog ?? []), ...(last?.files ?? []), ...conversationCatalogSnapshot()];
+  const memberKeys = new Set([
+    ...conversationCatalogProjectsSnapshot(),
+    ...projectKeyIndexSnapshot(),
+  ]);
+  const members: readonly Member[] = [...(last?.projectCatalog ?? []), ...uniqueCatalogMembers(last?.files), ...[...memberKeys].map(project => ({ project }))];
   const seats = activeOrchestratorSeats();
   const authorized = sources.authorizedSeats?.() ?? [];
   const manualProjects = projectCurationSnapshot().manualProjects;
@@ -97,7 +121,7 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     const project = canonical(key);
     const label = projectDisplayName(project, aliases.displayNames[project] ?? (name && !["Unnamed project", "Unresolved project"].includes(name) ? name : undefined) ?? labels.get(project));
     labels.set(project, label);
-    identify(key, project);
+    identify(key, project); identify(shortId(key), project);
     index(key, project); index(project, project); index(name, project); index(label, project);
     index(reportHeaderName(project), project);
   };
@@ -151,6 +175,7 @@ export function resolveNamedProject(named: string, directory: NamedProjectDirect
   const normalizedNames = normalized ? [...directory.names].filter(([name]) => normalizeProjectName(name) === normalized).flatMap(([, projects]) => [...projects]) : [];
   const identity = [...new Set([
     ...(directory.identities.get(folded) ?? []),
+    ...(/^(repo|dir)-[a-f0-9]{7,31}$/i.test(folded) ? [...directory.identities.keys()].filter(key => matchesShortId(key, folded)).flatMap(key => [...directory.identities.get(key)!]) : []),
     ...(!normalizedNames.length && normalized ? directory.encodedDirectories.get(normalized) ?? [] : []),
   ])].sort();
   const namedCandidates = [...new Set([...(directory.names.get(folded) ?? []), ...normalizedNames])];
@@ -161,7 +186,7 @@ export function resolveNamedProject(named: string, directory: NamedProjectDirect
   if (identity.length > 1 || identityCollision) {
     const candidates = [...new Set([...identity, ...namedCandidates])].sort();
     const candidateNames = candidates.map(project => ({ project, name: directory.labels.get(project) ?? project }));
-    throw new ProjectNameRefusal(`ambiguous project identity "${requested}": ${candidateNames.map(row => `${row.name} (${row.project})`).join(", ")}; ask which project`, {
+    throw new ProjectNameRefusal(`ambiguous project identity "${shortId(requested)}": ${candidateNames.map(row => `${row.name} (${shortId(row.project)})`).join(", ")}; ask which project`, {
       outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false,
       code: "ambiguous_project", candidates, candidateNames,
     });
@@ -173,7 +198,7 @@ export function resolveNamedProject(named: string, directory: NamedProjectDirect
   const details = { outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false };
   if (candidates.length > 1) {
     const candidateNames = candidates.map(project => ({ project, name: directory.labels.get(project) ?? project }));
-    throw new ProjectNameRefusal(`ambiguous project "${requested}": ${candidateNames.map(row => `${row.name} (${row.project})`).join(", ")}; ask which project or pass a project key`, {
+    throw new ProjectNameRefusal(`ambiguous project "${shortId(requested)}": ${candidateNames.map(row => `${row.name} (${shortId(row.project)})`).join(", ")}; ask which project or pass a project key`, {
       ...details, code: "ambiguous_project", candidates, candidateNames,
     });
   }
@@ -181,8 +206,8 @@ export function resolveNamedProject(named: string, directory: NamedProjectDirect
   const closeMatches = [...directory.labels].filter(([project]) => !requireActiveSeat || directory.suggestions.has(project)).map(([project, name]) => ({ project, name, distance: Math.min(projectNameDistance(folded, name.toLowerCase()), projectNameDistance(folded, project.toLowerCase())) }))
     .filter(match => match.distance <= Math.max(2, Math.floor(folded.length / 3)))
     .sort((a, b) => a.distance - b.distance || a.project.localeCompare(b.project)).slice(0, 5).map(({ project, name }) => ({ project, name }));
-  throw new ProjectNameRefusal(`no such project "${requested}"; ${closeMatches.length
-    ? `close matches: ${closeMatches.map(match => `${match.name} (${match.project})`).join(", ")}`
+  throw new ProjectNameRefusal(`no such project "${shortId(requested)}"; ${closeMatches.length
+    ? `close matches: ${closeMatches.map(match => `${match.name} (${shortId(match.project)})`).join(", ")}`
     : "no close matches; pass a known project key, display name or repository name"}`, { ...details, code: "unknown_project", closeMatches });
 }
 

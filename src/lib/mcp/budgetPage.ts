@@ -21,7 +21,8 @@ export async function budgetPage(owner: object, tool: string, args: McpToolArgs,
     if (!held || held.scope !== scope) throw new Error("MCP page cursor expired or filters changed; restart without cursor");
     page = held; offset = held.offset;
   } else page = await load(typeof cursor === "string" ? cursor : null);
-  const token = `mcp-page-${randomBytes(16).toString("hex")}`;
+  let token: string;
+  do { token = `mcp-page-${randomBytes(4).toString("hex")}`; } while (cache.has(token));
   const make = (rows: Record<string, unknown>[]) => {
     const remaining = page.rows.length - offset - rows.length;
     return { ...page.meta, conversations: rows, count: rows.length,
