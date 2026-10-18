@@ -8,7 +8,7 @@ import { admittedSource, PrototypeError, PROTOTYPE_LIMITS, unreadableSource } fr
 import type { PrototypeMedia } from "./types";
 
 const MIME: Record<string, PrototypeMedia["mime"]> = {
-  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".mp4": "video/mp4", ".webm": "video/webm",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif", ".mp4": "video/mp4", ".webm": "video/webm",
 };
 export function mediaFilename(media: PrototypeMedia): string {
   if (!/^[a-f0-9]{64}$/.test(media.id) || !Object.values(MIME).includes(media.mime)) throw new PrototypeError("invalid stored media");

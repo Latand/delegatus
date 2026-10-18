@@ -235,7 +235,10 @@ export function writeDoneProjection(write: DoneWrite, now: number): { inserted: 
         continue;
       }
       if (held.acknowledgedAt) continue;
-      const retainedFrame = held.frame?.unavailable || held.frame?.src.startsWith("/api/image?done=");
+      const storedFrame = held.frame?.unavailable || held.frame?.src.startsWith("/api/image?done=");
+      const mayPromote = Boolean(held.frame?.src.startsWith("/api/image?done=") && !held.frameCheckedAt && next.frameCheckedAt
+        && (!next.frame || Date.parse(next.frameCheckedAt) >= Date.parse(held.at)));
+      const retainedFrame = storedFrame && !mayPromote;
       const refreshed: DoneItemV1 = {
         ...held,
         title: next.title,

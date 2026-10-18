@@ -318,14 +318,23 @@ The projector revisits up to four legacy frames per pass, even if their source
 left the candidate window. An old task-album URL first advances the album's
 bounded transcript index; incomplete indexing retries on a later pass. Inline
 transcript images, available task-album evidence copies and local prototype
-media can recover without network access. The background sweep alone also tries
-up to four PR-body image attachments and the exact named frame in a retained
-remote branch or up to three commits named by that PR. Network requests have
-five-second deadlines, reject redirects and arbitrary hosts, and stop at 4 MiB;
-git reads never fetch, check out or change a ref. A recovered frame is copied
-before its URL is stored. No readable copy: the row shows «Кадри не збереглися»
-(English: “Frames were not retained”). A later image failure, including media
-cap eviction, shows the same label; acknowledgement remains available.
+media can recover without network access. A copied frame selected while an
+album is still indexing remains provisional: the next settled lookup can
+promote it. The owner lock commits the replacement before removing superseded
+bytes, and the projection timestamp prevents a stale copy from replacing a
+newer one.
+
+The background sweep alone also tries up to four PR-body image attachments and
+the exact named frame in a retained local ref, a PR-referenced commit, or the
+PR head commit read through GitHub's tree/blob API. An attachment must positively
+match the requested filename or context; ambiguous attachments fall through to
+named git evidence. These reads never fetch, check out or change a ref. Network
+requests have five-second deadlines, reject redirects and arbitrary hosts, and
+stop at 4 MiB. Supported raster types include GIF alongside PNG, JPEG and WebP.
+A recovered frame is copied before its URL is stored. No readable copy: the row
+shows «Кадри не збереглися» (English: “Frames were not retained”). A later image
+failure, including media cap eviction, shows the same label; acknowledgement
+remains available.
 
 Read-only production diagnosis and its time limits are recorded in
 `docs/verification/done-frames.md`. Rendered cases use the existing kanban and

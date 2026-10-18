@@ -32,7 +32,7 @@ export function doneFrameSource(deps: () => TaskAlbumDeps = productionAlbumDeps)
     const album = /^\/api\/tasks\/([^/]+)\/album\/image$/.exec(url.pathname);
     if (album) {
       const image = await readTaskAlbumImage(decodeURIComponent(album[1]!), url.searchParams.get("id") ?? "", deps());
-      if (!image || image.data.length > PROTOTYPE_LIMITS.imageBytes || !["image/png", "image/jpeg", "image/webp"].includes(image.media)) return null;
+      if (!image || image.data.length > PROTOTYPE_LIMITS.imageBytes || !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(image.media)) return null;
       return await writeMediaCopy(image.data, image.media as PrototypeMedia["mime"], staging);
     }
   } catch { /* A missing or refused source has no drawable bytes. */ }

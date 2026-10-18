@@ -146,6 +146,39 @@ test("recording a finished outcome owns its frame before lane cleanup, and item 
   } finally {fs.rmSync(directory,{recursive:true,force:true});}
 });
 
+test("a settled album frame replaces a provisional design copy, survives source deletion and restart",async () => {
+  await activate();
+  const directory=fs.mkdtempSync(path.join(process.env.HOME!,"done-provisional-"));
+  try {
+    const designPath=path.join(directory,"design.png"),resultPath=path.join(directory,"result.gif");
+    const designBytes=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==","base64");
+    const resultBytes=Buffer.from("R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=","base64");
+    fs.writeFileSync(designPath,designBytes);fs.writeFileSync(resultPath,resultBytes);
+    const sourceURL=(file:string)=>`/api/artifact?${new URLSearchParams({path:file})}`;
+    const chosen={id:"review",title:"Design",taskId:"t-provisional",project:PROJECT,createdAt:iso(T0),source:{conversationId:null,pipelineId:"finished"},publicationKey:"pub",inputDigest:"digest",variants:[{number:1,name:"Design",description:"",frames:[{image:{id:"design",mime:"image/png",bytes:designBytes.length,available:true,url:sourceURL(designPath)},caption:"Design"}],videos:[]}],decision:{chosen:[1]}} as unknown as PrototypeRoundRead;
+    let pass=0;
+    const state=world({pipelines:[lane("finished",{taskIds:["t-provisional"]})],tasks:[task("t-provisional","Rendered result")],rounds:{"t-provisional":[chosen]},album:async()=>pass===0?{frame:null,settled:false}:{frame:{src:sourceURL(resultPath),caption:"Finished result"},settled:true}});
+    const current=ports(state);
+    current.preserveFrame=async(key,frame,_refs,replace,observedAt)=>({frame:await preserveDoneFrame(key,frame,copyDoneFrameSource,observedAt!,replace),settled:true});
+    current.removeFrames=removeDoneMedia;
+    await projectDoneItems(current,{force:true});
+    const provisional=unacknowledgedDoneItems()[0]!.frame!;
+    expect(provisional.src).toContain("done=");expect(unacknowledgedDoneItems()[0]!.frameCheckedAt).toBeNull();
+    pass=1;state.now+=60_000;
+    await projectDoneItems(current,{force:true});
+    const final=unacknowledgedDoneItems()[0]!.frame!;
+    expect(final.src).toContain("done=");expect(final.src).not.toBe(provisional.src);
+    fs.rmSync(directory,{recursive:true,force:true});
+    const request=new NextRequest(`http://localhost${final.src}`,{headers:{host:"localhost"}});
+    const response=await imageGET(request);expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(resultBytes);
+    expect(JSON.parse(await new Promise<string>((resolve,reject)=>{
+      const child=Bun.spawn([process.execPath,path.join(import.meta.dir,"mediaChild.fixture.ts"),"read",final.src],{env:{...process.env},stdout:"pipe",stderr:"pipe"});
+      Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]).then(([out,err,exit])=>exit===0?resolve(out):reject(new Error(err)));
+    }))).toEqual({status:200,bytes:resultBytes.length});
+  } finally {fs.rmSync(directory,{recursive:true,force:true});}
+});
+
 test("legacy frame backfill advances four owners per pass, including rows whose source is no longer a candidate",async () => {
   await activate();
   const at=iso(T0+HOUR);

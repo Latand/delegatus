@@ -1,3 +1,4 @@
+import path from "node:path";
 import { claudeAccountsForPrivacy } from "@/lib/accounts/claude";
 import { codexAccountsForPrivacy } from "@/lib/accounts/codex";
 import { evidenceRoots, underRoot } from "@/lib/artifact/localFile";
@@ -73,7 +74,7 @@ export function productionDoneWorld(options: { recover?: boolean } = {}): DoneWo
   let repositories: NamedProjectDirectory | null = null;
   const labels = new Map<string, Map<string, string>>();
   return {
-    async preserveFrame(key, frame, refs) {
+    async preserveFrame(key, frame, refs, replaceProvisional = false, observedAt = Date.now()) {
       return withViewerOperation("done.frame-source", async () => {
         if (!await prepareDoneFrameSource(frame.src)) return { frame, settled: false };
         let deferred = false;
@@ -93,8 +94,13 @@ export function productionDoneWorld(options: { recover?: boolean } = {}): DoneWo
               if (found) return found;
             }
           }
-          return refs.pr ? recoverDoneFrame({repository:refs.pr.repository,number:refs.pr.number,repoDir:lane.repoDir,branch:lane.branch,name:frame.caption},staging) : null;
-        }, Date.now());
+          let name = frame.caption;
+          try {
+            const sourcePath = new URL(frame.src, "http://localhost").searchParams.get("path");
+            if (sourcePath) name = path.basename(sourcePath);
+          } catch { /* no filename context; recovery requires an exact caption match */ }
+          return refs.pr ? recoverDoneFrame({repository:refs.pr.repository,number:refs.pr.number,repoDir:lane.repoDir,branch:lane.branch,name},staging) : null;
+        }, observedAt, replaceProvisional);
         return deferred ? { frame, settled:false } : { frame:saved, settled:true };
       });
     },

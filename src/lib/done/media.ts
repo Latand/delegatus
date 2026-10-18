@@ -54,38 +54,50 @@ async function save(rows: Entry[]): Promise<void> {
  * Also recover a crash between manifest commit and orphan removal. */
 async function clean(rows: Entry[]): Promise<void> {
   const live = new Set(rows.map(row => row.directory));
+  const byDirectory = new Map(rows.map(row => [row.directory, new Set(row.media.map(mediaFilename))] as const));
   for (const entry of await fs.readdir(doneMediaRoot(), { withFileTypes: true })) {
-    if (!entry.isDirectory() || !/^(?:[a-f0-9]{64}|\.copy-[A-Za-z0-9]+)$/.test(entry.name) || live.has(entry.name)) continue;
-    await fs.rm(path.join(doneMediaRoot(), entry.name), { recursive: true, force: true });
+    if (!entry.isDirectory() || !/^(?:[a-f0-9]{64}|\.copy-[A-Za-z0-9]+)$/.test(entry.name)) continue;
+    if (!live.has(entry.name)) {
+      await fs.rm(path.join(doneMediaRoot(), entry.name), { recursive: true, force: true });
+      continue;
+    }
+    const allowed = byDirectory.get(entry.name)!;
+    for (const file of await fs.readdir(path.join(doneMediaRoot(), entry.name))) {
+      if (/^[a-f0-9]{64}\.(?:png|jpg|webp|gif|mp4|webm)$/.test(file) && !allowed.has(file)) await fs.unlink(path.join(doneMediaRoot(), entry.name, file));
+    }
   }
 }
 async function owned<T>(work: () => Promise<T>): Promise<T> {
   await fs.mkdir(doneMediaRoot(), { recursive: true, mode: 0o700 });
   return withViewerOperation("done.media", () => withFileTransaction(path.join(doneMediaRoot(), "owner.lock"), "done media is busy", work));
 }
-export async function preserveDoneFrame(owner: string, frame: DoneFrame, copy: DoneFrameCopy, now: number): Promise<DoneFrame> {
+export async function preserveDoneFrame(owner: string, frame: DoneFrame, copy: DoneFrameCopy, now: number, replaceProvisional = false): Promise<DoneFrame> {
   if (storedDoneFrame(frame)) return frame;
   return owned(async () => {
     const rows = await index();
     await clean(rows);
     const held = rows.find(row => row.owner === owner);
-    if (held) return held.frame;
+    if (held && (!replaceProvisional || now <= held.at)) return held.frame;
     const staging = await fs.mkdtemp(path.join(doneMediaRoot(), ".copy-"));
     try {
       const after = await copy(frame.src, staging);
-      if (!after) return { ...frame, unavailable: true };
+      if (!after) return held && replaceProvisional ? held.frame : { ...frame, unavailable: true };
       const before = frame.before ? await copy(frame.before, staging) : null;
       const media = [...new Map([after, ...(before ? [before] : [])].map(m => [m.id, m])).values()];
       const filenames = new Set(media.map(mediaFilename));
       for (const name of await fs.readdir(staging)) if (!filenames.has(name)) await fs.unlink(path.join(staging,name));
       const saved = { src: url(owner, after), ...(before ? { before: url(owner, before) } : {}), caption: frame.caption };
       const entry: Entry = { owner, directory: directoryOf(owner), frame: saved, media, at: now };
+      const previous = rows.findIndex(row => row.owner === owner);
+      if (previous >= 0) rows.splice(previous, 1);
       rows.push(entry);
       rows.sort((a,b) => a.at - b.at || a.owner.localeCompare(b.owner));
       const bytes = () => rows.reduce((n,row) => n + row.media.reduce((n,m) => n + m.bytes, 0), 0);
       while (rows.length > DONE_MEDIA_ITEMS || bytes() > DONE_MEDIA_BYTES) rows.shift();
       if (!rows.includes(entry)) return { ...frame, unavailable: true };
-      await fs.rename(staging, path.join(doneMediaRoot(), entry.directory));
+      const ownedDirectory = path.join(doneMediaRoot(), entry.directory);
+      await fs.mkdir(ownedDirectory, { recursive: true, mode: 0o700 });
+      for (const mediaFile of filenames) await fs.rename(path.join(staging, mediaFile), path.join(ownedDirectory, mediaFile));
       await save(rows);
       await clean(rows);
       return saved;

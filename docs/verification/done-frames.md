@@ -58,15 +58,19 @@ both the scratch-path dependency and the memory-index dependency.
 
 ## Verification contract
 
-- `src/lib/done/media.test.ts`: real file copy and production image route after
-  source removal, real-process restart, persisted count and byte caps, owned
-  removal, malformed/oversized sources, manifest ids, cross-origin/capability
-  refusal and path-route/symlink fences.
-- `src/lib/done/source.test.ts`: a legacy album id recovers its exact inline
-  transcript bytes in a fresh process and keeps serving after transcript removal.
-- `src/lib/done/recover.test.ts`: PR attachment allowlist, malformed media and
-  a real local git remote ref containing the named frame; no production writes.
-- `src/lib/done/project.test.ts`: capture at outcome recording, lane removal,
+- `src/lib/done/media.test.ts`: real file and GIF copy and production image
+  route after source removal, real-process restart, persisted count and byte
+  caps, provisional replacement with stale-writer rejection, owned removal,
+  malformed/oversized sources, manifest ids, cross-origin/capability refusal
+  and path-route/symlink fences.
+- `src/lib/done/source.test.ts`: legacy album ids recover exact inline PNG and
+  GIF transcript bytes in a fresh process and keep serving after transcript
+  removal.
+- `src/lib/done/recover.test.ts`: filename-matched PR attachments, ambiguous
+  attachment refusal, malformed media and an unfetched remote head blob; local
+  refs remain unchanged.
+- `src/lib/done/project.test.ts`: capture at outcome recording, provisional
+  design-frame promotion after album indexing, source removal and restart,
   acknowledgement Undo and item retention, bounded legacy progress beyond the
   source candidate window.
 - `src/app/api/attention/done/route.test.ts`: the persisted response completes

@@ -24,7 +24,7 @@ export const DONE_PROJECTION_THROTTLE_MS = 30_000;
 const ALBUM_LOOKUPS_PER_PROJECTION = 4;
 
 export interface DoneWorld extends DoneFramePorts {
-  preserveFrame?(key: string, frame: NonNullable<DoneItemV1["frame"]>, refs: DoneItemV1["refs"]): Promise<{ frame: NonNullable<DoneItemV1["frame"]>; settled: boolean }>;
+  preserveFrame?(key: string, frame: NonNullable<DoneItemV1["frame"]>, refs: DoneItemV1["refs"], replaceProvisional?: boolean, observedAt?: number): Promise<{ frame: NonNullable<DoneItemV1["frame"]>; settled: boolean }>;
   removeFrames?(keys: readonly string[]): Promise<void>;
   now(): number;
   forge(): ForgeCacheFile;
@@ -93,7 +93,7 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
     copies += 1;
     migrated.add(row.key);
     const saved = await world.preserveFrame(row.key, row.frame, row.refs);
-    const updated = { ...row, frame: saved.frame, frameCheckedAt: saved.settled ? at : null };
+    const updated = { ...row, frame: saved.frame, frameCheckedAt: row.frameCheckedAt && saved.settled ? at : null };
     held.set(row.key, updated);
     upserts.push(updated);
   }
@@ -120,9 +120,9 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
       frameCheckedAt = answer.settled ? at : null;
       if (frame && world.preserveFrame) {
         copies += 1;
-        const saved = await world.preserveFrame(candidate.key, frame, candidate.refs);
+        const saved = await world.preserveFrame(candidate.key, frame, candidate.refs, Boolean(row?.frame && !row.frame.unavailable && row.frame.src.startsWith("/api/image?done=") && !row.frameCheckedAt && answer.settled), now);
         frame = saved.frame;
-        frameCheckedAt = saved.settled ? at : null;
+        frameCheckedAt = answer.settled && saved.settled ? at : null;
       }
     }
     upserts.push(itemOf(candidate, row, frame, frameCheckedAt, at));

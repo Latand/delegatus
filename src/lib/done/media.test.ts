@@ -11,6 +11,7 @@ import { DONE_MEDIA_BYTES, DONE_MEDIA_ITEMS, doneMediaRoot, preserveDoneFrame, r
 import { copyDoneFrameSource } from "./source";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+const GIF = Buffer.from("R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=", "base64");
 let root: string;
 let previous: string | undefined;
 beforeEach(async () => {
@@ -55,6 +56,52 @@ test("a closed lane's pair still serves through the image route after its worktr
   } finally { await fs.rm(lane.dir,{recursive:true,force:true}); }
 });
 
+test("a raster GIF copied from a lane path remains served after its source is removed",async () => {
+  const lane = await source(GIF);
+  const gifPath = path.join(lane.dir,"after.gif");
+  try {
+    await fs.rename(lane.file,gifPath);
+    const frame = {src:`/api/artifact?${new URLSearchParams({path:gifPath})}`,caption:"GIF result"};
+    const saved = await preserveDoneFrame("task:gif-path",frame,copyDoneFrameSource,10);
+    expect(saved.unavailable).toBeUndefined();
+    await fs.rm(lane.dir,{recursive:true,force:true});
+    const response = await imageGET(request(saved.src));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/gif");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(GIF);
+  } finally { await fs.rm(lane.dir,{recursive:true,force:true}); }
+});
+
+test("a newer settled frame replaces a provisional copy and a stale writer cannot roll it back",async () => {
+  const first=await source(PNG),second=await source(GIF);
+  try {
+    const gifPath=path.join(second.dir,"after.gif"); await fs.rename(second.file,gifPath);
+    const gifFrame={src:`/api/artifact?${new URLSearchParams({path:gifPath})}`,caption:"Settled"};
+    const provisional=await preserveDoneFrame("task:promote",first.frame,copyDoneFrameSource,100);
+    const settled=await preserveDoneFrame("task:promote",gifFrame,copyDoneFrameSource,200,true);
+    expect(settled.src).not.toBe(provisional.src);
+    const stale=await preserveDoneFrame("task:promote",first.frame,copyDoneFrameSource,150,true);
+    expect(stale.src).toBe(settled.src);
+    await fs.rm(first.dir,{recursive:true,force:true});await fs.rm(second.dir,{recursive:true,force:true});
+    const response=await imageGET(request(settled.src));expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/gif");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(GIF);
+    const entry=(await manifest())[0];
+    expect((await fs.readdir(path.join(doneMediaRoot(),entry.directory))).sort()).toEqual([`${entry.media[0].id}.gif`]);
+  } finally {await fs.rm(first.dir,{recursive:true,force:true});await fs.rm(second.dir,{recursive:true,force:true});}
+});
+
+test("a refused replacement keeps the already retained provisional frame",async () => {
+  const lane=await source();
+  try {
+    const saved=await preserveDoneFrame("task:refused-upgrade",lane.frame,copyDoneFrameSource,100);
+    const refused=await preserveDoneFrame("task:refused-upgrade",{...lane.frame,src:"/api/artifact?path=/missing/result.png"},async()=>null,200,true);
+    expect(refused).toEqual(saved);
+    await fs.rm(lane.dir,{recursive:true,force:true});
+    const response=await imageGET(request(saved.src));expect(response.status).toBe(200);await response.arrayBuffer();
+  } finally {await fs.rm(lane.dir,{recursive:true,force:true});}
+});
+
 test("the count bound persists across real process restarts; eviction removes the owned bytes",async () => {
   const lane = await source();
   try {
@@ -93,6 +140,13 @@ test("missing, malformed, over-size and remote sources produce a missing-frame s
   for (const src of ["/api/artifact?path=/missing/frame.png","https://example.invalid/frame.png","//example.invalid/frame.png"]) {
     expect((await preserveDoneFrame("task:missing",{src,caption:"Missing"},copyDoneFrameSource,4)).unavailable).toBe(true);
   }
+  const malformedGif=await source(Buffer.from("not a GIF"));
+  const malformedGifPath=path.join(malformedGif.dir,"invalid.gif");
+  try {
+    await fs.rename(malformedGif.file,malformedGifPath);
+    const frame={src:`/api/artifact?${new URLSearchParams({path:malformedGifPath})}`,caption:"Malformed GIF"};
+    expect((await preserveDoneFrame("task:malformed-gif",frame,copyDoneFrameSource,5)).unavailable).toBe(true);
+  } finally {await fs.rm(malformedGif.dir,{recursive:true,force:true});}
   expect((await fs.readdir(doneMediaRoot())).some(name=>name.startsWith(".copy-"))).toBe(false);
 });
 
