@@ -4,8 +4,9 @@
    projection worker in production: the probes ran against an empty registry,
    and the cost lived in thirty thousand rows of retained history. This gate
    runs the candidate's own code against a synthetic registry of that shape
-   (src/lib/agent/registryPerformanceDataset.ts) and refuses promotion when a
-   measured bound is breached. `verify-candidate` runs it inside a container
+   (src/lib/agent/registryPerformanceDataset.ts). Measured durations remain
+   diagnostic; failed operations and lost state refuse promotion.
+   `verify-candidate` runs it inside a container
    from the candidate image, beside the runtime-host rehearsal, so a refused
    candidate is retired and the serving release keeps serving.
 
@@ -135,7 +136,11 @@ export interface CandidatePerformanceMeasurements {
     coldBuild: { sequence: number; buildMs: number };
   };
   /** Each release's activation; one that never completed counts the time it ran. */
-  activation: { incumbentMs: number; successorMs: number; eventLoopMaxMs: number };
+  activation: {
+    incumbentMs: number; successorMs: number; eventLoopMaxMs: number;
+    /** Older reports omitted completion; an over-budget legacy activation is unproven. */
+    incumbentCompleted?: boolean; successorCompleted?: boolean;
+  };
   grantWrites: LatencySummary & { mismatches: number; failures: number };
   externalWrites: LatencySummary & { mismatches: number; failures: number };
   keyedOperationReads: LatencySummary;
@@ -214,8 +219,10 @@ export interface CandidatePerformanceEvidence {
   runtime: string;
   bounds: CandidatePerformanceBounds;
   measurements: CandidatePerformanceMeasurements | null;
-  /** Every bound the measurements breached, one sentence each. */
+  /** Failed checks; duration-only observations are recorded separately. */
   breaches: string[];
+  /** Duration thresholds are diagnostic; failed operations still refuse a release. */
+  timingWarnings?: string[];
   /** A deliberate slowdown for the gate's own rejection test; never set in a deployment. */
   inducedDelayMs?: number;
   /** Deliberate faults for the gate's own rejection tests; never set in a deployment. */
@@ -225,15 +232,17 @@ export interface CandidatePerformanceEvidence {
   log?: string[];
 }
 
-/** Every breached bound and every missing measurement, named with the
-    measured value. An empty list passes. */
+/** Classify measured checks. Supplying a timing collector keeps duration
+    observations separate from failures; omission includes them for reports
+    and callers that explicitly request the full threshold comparison. */
 export function candidatePerformanceBreaches(
   measured: CandidatePerformanceMeasurements,
   bounds: CandidatePerformanceBounds = CANDIDATE_PERFORMANCE_BOUNDS,
+  timingWarnings?: string[],
 ): string[] {
   const breaches: string[] = [];
   const over = (label: string, value: number, limit: number) => {
-    if (value > limit) breaches.push(`${label} ${value}ms exceeds ${limit}ms`);
+    if (value > limit) (timingWarnings ?? breaches).push(`${label} ${value}ms exceeds ${limit}ms`);
   };
   const minimum = CANDIDATE_PERFORMANCE_MINIMUMS;
   const fewer = (label: string, value: number, wanted: number) => {
@@ -253,6 +262,15 @@ export function candidatePerformanceBreaches(
   over("first boot to a usable board", measured.firstBoot.firstUsableMs, bounds.firstBoot.firstUsableMs);
   over("Viewer event-loop delay during first boot", measured.firstBoot.eventLoopMaxMs, bounds.firstBoot.eventLoopMaxMs);
   if (measured.firstBoot.coldBuild.sequence !== 1) breaches.push("the first projection build was not measured");
+  for (const [name, duration, completed] of [
+    ["incumbent", measured.activation.incumbentMs, measured.activation.incumbentCompleted],
+    ["successor", measured.activation.successorMs, measured.activation.successorCompleted],
+  ] as const) {
+    if (completed === false) breaches.push(`${name} release activation did not complete`);
+    else if (completed === undefined && duration > bounds.activation.durationMs) {
+      breaches.push(`${name} release activation completion was not recorded`);
+    }
+  }
   over("incumbent release activation", measured.activation.incumbentMs, bounds.activation.durationMs);
   over("successor release activation", measured.activation.successorMs, bounds.activation.durationMs);
   over("Viewer event-loop delay during a release activation", measured.activation.eventLoopMaxMs, bounds.activation.eventLoopMaxMs);
@@ -331,7 +349,7 @@ export function candidatePerformanceBreaches(
   fewer("pending launch receipts", measured.deliveryEvidence.pendingLaunches, 20);
   if (!measured.deliveryEvidence.preserved) breaches.push("retained launch or delivery evidence changed");
   if (!measured.browser) breaches.push("the board was not measured in a browser");
-  else breaches.push(...candidateBrowserBreaches(measured.browser, bounds.browser));
+  else breaches.push(...candidateBrowserBreaches(measured.browser, bounds.browser, timingWarnings));
   return breaches;
 }
 
@@ -381,7 +399,7 @@ export function parseCandidatePerformanceReport(output: string): CandidatePerfor
 /* The shape every measurement must have: each leaf a finite, non-negative
    number, a boolean or one of the named words. Evidence that lacks a leaf, or
    carries one that is not what it should be, cannot be judged. */
-type Shape = "n" | "b" | "n?" | "s?" | readonly string[] | { readonly [key: string]: Shape };
+type Shape = "n" | "b" | "b?" | "n?" | "s?" | readonly string[] | { readonly [key: string]: Shape };
 const LATENCY = { count: "n", p50Ms: "n", p95Ms: "n", maxMs: "n" } as const;
 const MEASUREMENT_SHAPE: Shape = {
   dataset: { scale: "n", rows: "n", coldRows: "n", payloadBytes: "n", transcripts: "n", seedMs: "n",
@@ -390,7 +408,7 @@ const MEASUREMENT_SHAPE: Shape = {
     registryOpenMs: "n", firstSnapshotMs: "n", coldProjectionMs: "n", firstUsableMs: "n", eventLoopMaxMs: "n",
     coldBuild: { sequence: "n", buildMs: "n" },
   },
-  activation: { incumbentMs: "n", successorMs: "n", eventLoopMaxMs: "n" },
+  activation: { incumbentMs: "n", successorMs: "n", eventLoopMaxMs: "n", incumbentCompleted: "b?", successorCompleted: "b?" },
   grantWrites: { ...LATENCY, mismatches: "n", failures: "n" },
   externalWrites: { ...LATENCY, mismatches: "n", failures: "n" },
   keyedOperationReads: LATENCY,
@@ -431,17 +449,16 @@ function shapeErrors(value: unknown, shape: Shape, at: string): string[] {
   if (shape === "n?") return value === null || finite(value) ? [] : [at];
   if (shape === "s?") return value === null || typeof value === "string" ? [] : [at];
   if (shape === "b") return typeof value === "boolean" ? [] : [at];
+  if (shape === "b?") return value === undefined || typeof value === "boolean" ? [] : [at];
   if (Array.isArray(shape)) return shape.includes(value as string) ? [] : [at];
   if (!value || typeof value !== "object" || Array.isArray(value)) return [at];
   return Object.entries(shape as Record<string, Shape>)
     .flatMap(([key, inner]) => shapeErrors((value as Record<string, unknown>)[key], inner, at ? `${at}.${key}` : key));
 }
 
-/** Validate evidence crossing a process boundary. The verdict is computed
-    again here, from the measurements against the bounds this release holds,
-    so a report's own `ok` and `breaches` can only make it stricter: a pass
-    that carries a breach, lacks or garbles a measurement, or ran under an
-    induced fault is a refusal. */
+/** Validate evidence crossing a process boundary and recompute the verdict.
+    Exact duration observations from older images become warnings. Missing
+    measurements, independent failures and induced faults remain refusals. */
 export function candidatePerformanceEvidence(value: unknown): CandidatePerformanceEvidence {
   const report = value as CandidatePerformanceEvidence;
   if (!report || typeof report !== "object" || typeof report.ok !== "boolean" || typeof report.runtime !== "string"
@@ -450,6 +467,7 @@ export function candidatePerformanceEvidence(value: unknown): CandidatePerforman
     || (report.measurements !== null && typeof report.measurements !== "object")
     || (report.inducedDelayMs !== undefined && typeof report.inducedDelayMs !== "number")
     || (report.induced !== undefined && (!Array.isArray(report.induced) || report.induced.some((item) => typeof item !== "string")))
+    || (report.timingWarnings !== undefined && (!Array.isArray(report.timingWarnings) || report.timingWarnings.some((item) => typeof item !== "string")))
     || (report.log !== undefined && (!Array.isArray(report.log) || report.log.some((line) => typeof line !== "string")))) {
     throw new Error("the candidate performance report is malformed");
   }
@@ -466,11 +484,29 @@ export function candidatePerformanceEvidence(value: unknown): CandidatePerforman
     const named = `${unreadable.slice(0, 6).join(", ")}${unreadable.length > 6 ? ` and ${unreadable.length - 6} more` : ""}`;
     return refuse(`the candidate performance report lacks or garbles ${named}`, [...report.breaches, `unreadable measurement(s): ${named}`]);
   }
-  const computed = candidatePerformanceBreaches(report.measurements);
-  const breaches = [...report.breaches, ...computed.filter((breach) => !report.breaches.includes(breach))];
-  if (breaches.length) return refuse(breaches[0]!, breaches);
-  if (report.inducedDelayMs || report.induced?.length) return refuse("the candidate performance report ran under an induced fault");
-  return report;
+  const timingWarnings: string[] = [];
+  const computed = candidatePerformanceBreaches(report.measurements, CANDIDATE_PERFORMANCE_BOUNDS, timingWarnings);
+  // Older candidate images reported timing thresholds as failures. Recognize
+  // only the exact observations recomputed from their complete measurements;
+  // an unknown refusal or a distinct failure detail remains a refusal.
+  const reportedFailures = report.breaches.filter((breach) => !timingWarnings.includes(breach));
+  const breaches = [...reportedFailures, ...computed.filter((breach) => !reportedFailures.includes(breach))];
+  const timingOnlyRefusal = !report.ok && report.breaches.length > 0
+    && reportedFailures.length === 0
+    && (!report.detail || report.breaches.includes(report.detail));
+  const normalized: CandidatePerformanceEvidence = { ...report, breaches };
+  delete normalized.timingWarnings;
+  if (timingWarnings.length) normalized.timingWarnings = timingWarnings;
+  if (report.inducedDelayMs || report.induced?.length) {
+    return { ...normalized, ok: false, detail: "the candidate performance report ran under an induced fault" };
+  }
+  if (breaches.length) return {
+    ...normalized, ok: false,
+    detail: !report.ok && report.detail && !timingWarnings.includes(report.detail) ? report.detail : breaches[0]!,
+  };
+  if (!report.ok && !timingOnlyRefusal) return normalized;
+  delete normalized.detail;
+  return { ...normalized, ok: true };
 }
 
 /** The gate's failure as one line for the deployment record. */

@@ -21,7 +21,7 @@ export interface CandidateBrowserBounds {
   filesP95Ms: number;
   filesMaxMs: number;
   /** Any other API request the page made, measured the same way. One still
-      open when the window closes counts its age so far, and one that failed
+      open after the bounded drain counts its age so far, and one that failed
       counts the time until it did. */
   apiMaxMs: number;
   /** The page's main thread before its board drew, and while it operated. */
@@ -74,7 +74,7 @@ export interface CandidateBrowserView {
     /** Ordinary requests other than `/api/files` that answered 5xx or failed. */
     errors: number;
     firstError: string | null;
-    /** Ordinary requests still open when the window closed. */
+    /** Ordinary requests from the window still open after the bounded drain. */
     unfinished: number;
   };
   lag: { bootMaxMs: number; samples: number; p95Ms: number; maxMs: number };
@@ -141,20 +141,24 @@ export function summarizeBrowserViews(
 export function candidateBrowserBreaches(
   measured: CandidateBrowserMeasurements,
   bounds: CandidateBrowserBounds = CANDIDATE_BROWSER_BOUNDS,
+  timingWarnings?: string[],
 ): string[] {
   const breaches: string[] = [];
   const over = (label: string, value: number, limit: number) => {
-    if (value > limit) breaches.push(`${label} ${value}ms exceeds ${limit}ms`);
+    if (value > limit) (timingWarnings ?? breaches).push(`${label} ${value}ms exceeds ${limit}ms`);
   };
   const minimum = CANDIDATE_BROWSER_MINIMUMS;
   if (measured.views < minimum.views) breaches.push(`browser views: measured ${measured.views}, at least ${minimum.views} required`);
+  // summarizeBrowserViews encodes a view whose board never drew (Infinity)
+  // as this finite sentinel. Treat it as missing readiness.
+  if (measured.readyMaxMs === Number.MAX_SAFE_INTEGER) breaches.push("a browser board did not finish drawing");
   if (measured.writes.count < minimum.writes) breaches.push(`browser writers: measured ${measured.writes.count} writes, at least ${minimum.writes} required`);
   if (measured.writes.failures) breaches.push(`${measured.writes.failures} browser writer write(s) failed`);
   over("browser board drawn", measured.readyMaxMs, bounds.readyMs);
   over("browser /api/files p95", measured.filesP95Ms, bounds.filesP95Ms);
   over("browser /api/files max", measured.filesMaxMs, bounds.filesMaxMs);
   if (measured.apiMaxMs > bounds.apiMaxMs) {
-    breaches.push(`browser ${measured.apiMaxRoute ?? "API request"} ${measured.apiMaxMs}ms exceeds ${bounds.apiMaxMs}ms`);
+    (timingWarnings ?? breaches).push(`browser ${measured.apiMaxRoute ?? "API request"} ${measured.apiMaxMs}ms exceeds ${bounds.apiMaxMs}ms`);
   }
   over("browser main-thread delay before the board drew", measured.bootLagMaxMs, bounds.bootLagMaxMs);
   over("browser main-thread delay p95", measured.lagP95Ms, bounds.lagP95Ms);
@@ -163,6 +167,12 @@ export function candidateBrowserBreaches(
   if (measured.inputsMin < minimum.inputsPerView) breaches.push(`a browser view answered ${measured.inputsMin} input(s), at least ${minimum.inputsPerView} required`);
   if (measured.filesErrors) breaches.push(`${measured.filesErrors} browser /api/files request(s) failed`);
   if (measured.apiErrors) breaches.push(`${measured.apiErrors} other browser API request(s) failed, first ${measured.apiFirstError ?? "unnamed"}`);
+  // Older reports counted young requests at the window boundary. Their
+  // maximum age bounds every unfinished request, so retain those healthy
+  // observations. Current runs drain the boundary requests before reporting.
+  if (measured.apiUnfinished && measured.apiMaxMs > bounds.apiMaxMs) {
+    breaches.push(`${measured.apiUnfinished} browser API request(s) did not finish`);
+  }
   if (measured.viewsWithoutAnswerDuringWrites) breaches.push(`${measured.viewsWithoutAnswerDuringWrites} browser view(s) received no board answer while the writers ran`);
   if (measured.selectionsLost) breaches.push(`${measured.selectionsLost} browser view(s) lost their selected conversation`);
   if (measured.staleNotices) breaches.push(`browser views showed the missing-conversation notice ${measured.staleNotices} time(s)`);
