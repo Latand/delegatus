@@ -51,7 +51,7 @@ import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/promp
 import { canonicalOrchestratorProject, orchestratorSeatEverHeld, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { pipelineCompletedUnreviewed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
-import { loadArchivedPipelines, loadPipelinesForList } from "@/lib/pipelines/store";
+import { loadArchivedPipelinesForList, loadPipelinesForList } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types";
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
@@ -677,7 +677,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     activeSeats: () => activeSeatsByCurrentProject().map((seat) => seat.project),
     workerCounts: projectWorkerCounts,
     pipelines: () => loadPipelinesForList(),
-    archivedPipelines: () => loadArchivedPipelines(),
+    archivedPipelines: () => loadArchivedPipelinesForList(),
     tasks: () => loadTasks(),
     lifecycleJournal: readLifecycleJournal,
     seatDeployments: (conversationId) => seatDeploymentsFor(conversationId),

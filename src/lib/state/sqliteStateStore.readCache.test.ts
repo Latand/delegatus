@@ -173,7 +173,7 @@ test("the active, archive and task working set fits together without repeated de
   const decode = (value: unknown) => { decodes++; return value as Row; };
   const collections = [
     { collection: "active-fixture", characters: 30 * 1024 * 1024 },
-    { collection: "archive-fixture", characters: 74 * 1024 * 1024 },
+    { collection: "pipelines_archive", characters: 110 * 1024 * 1024 },
     { collection: "tasks-fixture", characters: 8 * 1024 * 1024 },
   ];
   initializeStateCollections(filename, collections.map(({ collection, characters }) => ({ collection,

@@ -27,3 +27,31 @@ test("relay sessions are refused beside a readable ordinary Claude project", () 
   for (const file of [hidden, ordinary]) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, "{}"); }
   expect(pathAllowed(hidden)).toBe(false); expect(pathAllowed(ordinary)).toBe(true);
 });
+
+
+test("album root snapshots keep realpath and relay refusals current within a read", async () => {
+  const { productionAlbumWorld } = await import("@/lib/taskAlbum/world");
+  const account = createManagedClaudeAccount("Album fixture");
+  const ordinary = path.join(account.projectsDir, "album", "ordinary.jsonl");
+  const hidden = path.join(account.projectsDir, "-tmp-llv-relay-conv-00000000-0000-0000-0000-000000000000", "album.jsonl");
+  const outside = path.join(SANDBOX, "outside.jsonl");
+  const link = path.join(account.projectsDir, "album", "link.jsonl");
+  for (const file of [ordinary, hidden, outside]) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, "{}"); }
+  fs.symlinkSync(ordinary, link);
+  const album = productionAlbumWorld();
+  for (const [file, allowed] of [[ordinary, true], [hidden, false], [outside, false], [link, true]] as const) {
+    expect(pathAllowed(file)).toBe(allowed);
+    expect(album.transcriptAllowed(file)).toBe(allowed);
+  }
+  await Promise.resolve();
+  fs.unlinkSync(link); fs.symlinkSync(outside, link);
+  expect(pathAllowed(link)).toBe(false);
+  expect(album.transcriptAllowed(link)).toBe(false);
+  fs.unlinkSync(ordinary);
+  expect(album.transcriptAllowed(ordinary)).toBe(false);
+  const added = createManagedClaudeAccount("Later album fixture");
+  const addedPath = path.join(added.projectsDir, "album", "new.jsonl");
+  fs.mkdirSync(path.dirname(addedPath), { recursive: true }); fs.writeFileSync(addedPath, "{}");
+  expect(album.transcriptAllowed(addedPath)).toBe(false);
+  expect(productionAlbumWorld().transcriptAllowed(addedPath)).toBe(true);
+});
