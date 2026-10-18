@@ -29,6 +29,10 @@ import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projec
 import { seatTickWakeCommit, seatTickWakeCommitPlan } from "@/lib/monitor/seatTick";
 import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
+import { loadTasks } from "@/lib/tasks/store";
+import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
+import { groupHideState } from "@/lib/tasks/groupHide";
+import { commitTaskMembership } from "@/lib/tasks/membership";
 
 const PROJECT = "curation-fixture";
 const NOW = Date.parse("2026-10-11T00:00:00Z");
@@ -121,6 +125,26 @@ function hostingFixture() {
     observe: async () => ({ state: "running" as const }), archive: () => {} };
   return { sources, seats, lives, bodies, seat, ports, controller: productionCurationController(sources, ports), tick: { ...tickInput(), project: PROJECT, now: NOW } };
 }
+test("curator admission joins a hidden system task without an open board task", async () => {
+  fixture(); const f = hostingFixture(); f.seat();
+  expect(await f.controller.launchIfDue(f.tick)).toContain("launched");
+  const body = f.bodies[0];
+  expect(body.taskId).toBeString();
+  // Exercise the real shared reservation membership prerequisite, including
+  // the conversation which makes board:hidden alone insufficient.
+  admitReservedLaunch({ engine: "codex", cwd: dir, explicitProject: PROJECT, clientAttemptId: String(body.clientAttemptId), role: "curator", taskIds: [String(body.taskId)] },
+    { conversationId: "conversation_fixture_curator", launchId: "launch_fixture_curator" }, reason => { throw new Error(reason); }, {
+      commit: input => commitTaskMembership(input, path.join(dir, "tasks.json")), pipelineContext: () => null, projectForCwd: () => PROJECT,
+    });
+  const tasks = loadTasks(path.join(dir, "tasks.json"));
+  expect(tasks).toHaveLength(1);
+  expect(tasks.filter(task => task.status !== "done")).toHaveLength(0);
+  expect(tasks[0].assignments[0].conversationId).toBe("conversation_fixture_curator");
+  expect(groupHideState(tasks[0], { members: [], pipelines: [] }).hidden).toBe(true);
+  expect(readPass(String(body.clientAttemptId))?.conversationId).toBe("conversation_fixture_curator");
+  expect(await f.controller.reconcile(PROJECT)).toBeNull();
+  expect(loadTasks(path.join(dir, "tasks.json"))).toHaveLength(1);
+});
 test("the engines memory source pauses curator admission and preserves its store", async () => {
   fixture(); const f = hostingFixture(); f.seat();
   chooseSource("engines");
@@ -808,7 +832,8 @@ test("stubbed launch, restart reconcile and settle keep no board card", async ()
   expect(await controller.launchIfDue(tick)).toContain("deployment"); expect(machinePass()).toBeNull();
   sources.latestDeployment = () => ({ state: "ok", value: null });
   expect(await controller.launchIfDue(tick)).toContain("launched"); await controller.launchIfDue(tick); expect(bodies).toHaveLength(1);
-  expect(bodies[0]).toMatchObject({ role: "curator", cwd: dir, mcpServers: ["viewer"] }); expect(bodies[0]).not.toHaveProperty("taskId");
+  expect(bodies[0]).toMatchObject({ role: "curator", cwd: dir, mcpServers: ["viewer"] }); expect(bodies[0].taskId).toBeString();
+  expect(loadTasks(path.join(dir, "tasks.json")).find(task => task.id === bodies[0].taskId)).toMatchObject({ status: "done", board: "hidden" });
   now += 1000; endedTurn = true; expect(await controller.reconcile(PROJECT)).toContain("settled"); expect(archived).toHaveLength(1); expect(machinePass()).toBeNull();
   expect(projectView(PROJECT).curation?.passes[0].state).toBe("succeeded");
 });

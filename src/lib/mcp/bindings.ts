@@ -123,10 +123,10 @@ import { EMPTY_DENY_LIST, type PublicDenyList } from "@/lib/bridge/publicSafe";
 import { issueReportApprovalForm, issueReportApprovalReplies, issueReportDecisionApproves, issueReportFormLanguage } from "@/lib/issueReports/approvalForm";
 import { delegatusIssueRepository, issueReportFinder, issueReportPublisher, type IssueReportFinder, type IssueReportPublisher } from "@/lib/issueReports/publish";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
-import { ISSUE_REPORT_MAX_BODY_CHARS, ISSUE_REPORT_MAX_TITLE_CHARS, scrubIssueReport } from "@/lib/issueReports/scrub";
+import { ISSUE_REPORT_MAX_BODY_CHARS, ISSUE_REPORT_MAX_TITLE_CHARS } from "@/lib/issueReports/scrub";
 import { claimIssueReportPublication, markIssueReportShown, readIssueReportPreview, recordIssueReportPreview, releaseIssueReportPublication, settleIssueReportPublication, type IssueReportPreview, type IssueReportPublication } from "@/lib/issueReports/store";
 import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
-import { renderPlain, renderReport, type TaskChanges } from "@/lib/bridge/reportRender";
+import { renderPlain, type TaskChanges } from "@/lib/bridge/reportRender";
 import { SEAT_SECTION_IDS, type SeatSectionId } from "@/lib/bridge/reportWords";
 import { deployTaskChanges, projectSnapshots } from "@/lib/bridge/taskChanges";
 import { renderTelegram, type PullRequestLookup } from "@/lib/bridge/telegramReport";
@@ -171,7 +171,8 @@ import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
 import { leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
-import { RoleMemoryRefusal, storedLessonTexts, withoutStoredLessons } from "@/lib/memory/roleStore";
+import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
+import { withoutStoredLessonsAsync, renderReportAsync, scrubIssueReportAsync } from "@/lib/memory/privacy";
 import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -1933,7 +1934,7 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     const hintWarnings: string[] = [];
     try { deny = await issueReportDenyList(control, dependencies); }
     catch { hintWarnings.push("Known-name hints are unavailable; review names and identities yourself."); }
-    return { hints: scrubIssueReport(report, deny), hintWarnings };
+    return { hints: await scrubIssueReportAsync(report, deny), hintWarnings };
   };
   /* The preview's own lines follow the operator's interface language, English while none is known. */
   const previewLanguage = (dependencies.operatorLocale ? dependencies.operatorLocale() : operatorLocale()) ?? "en";
@@ -2339,6 +2340,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
   if (result.queued) {
     return redactPayload({
       ...pipelineAcknowledgement(result.pipeline),
+      ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
       queued: true,
       queuedBecause: result.queued.reason,
       note: PIPELINE_CREATION_QUEUED_NOTE,
@@ -2351,6 +2353,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
      had just sent them — a median 10 KB per create. get_pipeline reads it. */
   return redactPayload({
     ...pipelineAcknowledgement(result.pipeline),
+    ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.warnings?.length ? { warnings: result.warnings } : {}),
     ...newLegacyReviewFields(result),
@@ -3677,7 +3680,7 @@ async function bridgeReport(
     const deployKey = [key, ...covers].find((entry) => entry.startsWith("deploy:")) ?? null;
     const tasks = deployKey && project ? deployReportTaskChanges(project, deployKey, dependencies) : null;
     if (deployKey && project && !tasks) warnings.push("No task changes are listed: this deploy has no board snapshot to compare, because it settled before snapshots existed or aged out.");
-    const rendered = renderReport({
+    const rendered = await renderReportAsync({
       class: reportClass,
       deploy: deployKey !== null,
       name: project ? reportHeaderName(project, locale ?? "en") : "Delegatus",
@@ -3961,8 +3964,8 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
   }
   /* Role memory is never optional here: a store that cannot be read throws
      LESSON_PRIVACY_UNAVAILABLE, and nothing is sent unchecked. */
-  const lessons = storedLessonTexts();
-  return { accounts, people, local, projects, lessons };
+  // The shared leased worker reads authoritative lessons at filtering time.
+  return { accounts, people, local, projects };
 }
 
 async function telegramPeople(control: ViewerControlDependencies, requireComplete = false): Promise<string[]> {
@@ -5271,7 +5274,7 @@ async function sendMessageToOrchestrator(
         return await dispatchControl(control)("/api/orchestrator/message", {
           project, machine: link.install, text: bound?.sendPayload
             ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
-            : orchestratorRelayEgressText(requiredMessageText(args)),
+            : await orchestratorRelayEgressText(requiredMessageText(args)),
           clientMessageId: bound?.downstreamKey ?? orchestratorSendDownstreamKey(key),
         }, callerCapabilityHeaders());
       } catch (error) {
@@ -7384,8 +7387,8 @@ function orchestratorSendDownstreamKey(key: string): string {
 }
 
 /** Only a send leaving this installation crosses the learned-rule boundary. */
-function orchestratorRelayEgressText(message: string): string {
-  try { return withoutStoredLessons(message); }
+async function orchestratorRelayEgressText(message: string): Promise<string> {
+  try { return await withoutStoredLessonsAsync(message); }
   catch (error) {
     if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
     throw error;
@@ -7413,7 +7416,7 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
     throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
   }
   const link = project && text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
-  const outgoing = link ? orchestratorRelayEgressText(message) : message;
+  const outgoing = link ? await orchestratorRelayEgressText(message) : message;
   return {
     // Relay receipts belong to the exact sender, never its successor seat.
     caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },

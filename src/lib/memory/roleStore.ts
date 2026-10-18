@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { performanceSpans } from "@/lib/performanceSpans";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -578,7 +580,15 @@ export function storedLessonTexts(): string[] {
 const LESSON_MATCHER_SOURCE_LIMIT = 32_000;
 interface LessonMatcher { pattern: RegExp; prefilter: RegExp | null }
 interface LessonSource { source: string; words: string[]; anchor?: string }
-let matcherCache: { key: string; matchers: LessonMatcher[]; skipped: number } | null = null;
+type MatcherCache = { key: string; matchers: LessonMatcher[]; skipped: number; texts: string[]; exact?: RegExp[] };
+const matcherHost = globalThis as typeof globalThis & { __delegatusLessonMatcher?: MatcherCache };
+let privacyPhase: ((phase: "compile" | "match") => void) | undefined;
+/** Installed only by the leased worker; carries static phase names, never text. */
+export function observeLessonPrivacyPhase(observer: typeof privacyPhase) { privacyPhase = observer; }
+function privacyWork<T>(phase: "compile" | "match", work: () => T): T {
+  privacyPhase?.(phase);
+  return withViewerOperation(`memory.privacy.${phase}`, () => performanceSpans.sync(`privacy.${phase}`, work));
+}
 /** The readable store revision and file identity, without cloning its rows. */
 const privacyRevisionHost = globalThis as typeof globalThis & {
   __llvLessonPrivacyRevision?: { file: string; signature: string; revision: string };
@@ -604,14 +614,18 @@ export function storedLessonRevision(): string {
 /** Bounded alternatives in longest-first order, cached for this store signature. */
 function storedLessonMatchers(): LessonMatcher[] {
   const signature = storedLessonRevision();
-  if (matcherCache?.key === signature) return matcherCache.matchers;
+  if (matcherHost.__delegatusLessonMatcher?.key === signature) return matcherHost.__delegatusLessonMatcher.matchers;
+  return privacyWork("compile", () => compileStoredLessonMatchers(signature));
+}
+function compileStoredLessonMatchers(signature: string): LessonMatcher[] {
   const { rows: all } = readableRows();
-  if (matcherCache?.key !== signature) {
+  if (matcherHost.__delegatusLessonMatcher?.key !== signature) {
     const matchers: LessonMatcher[] = [];
     let skipped = 0;
     const sources: LessonSource[] = [];
     const frequency = new Map<string, number>();
-    for (const text of lessonTextsOf(all)) {
+    const texts = lessonTextsOf(all);
+    for (const text of texts) {
       const source = lessonPatternSource(text);
       if (!source) continue;
       const wrapped = `(?:${source})`;
@@ -660,10 +674,21 @@ function storedLessonMatchers(): LessonMatcher[] {
     }
     compile(chunk);
     if (storedLessonRevision() !== signature) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE);
-    matcherCache = { key: signature, matchers, skipped };
+    matcherHost.__delegatusLessonMatcher = { key: signature, matchers, skipped, texts };
     if (skipped) console.warn(`stored-lesson matcher skipped ${skipped} oversized or uncompilable lesson text(s)`);
   }
-  return matcherCache.matchers;
+  return matcherHost.__delegatusLessonMatcher.matchers;
+}
+
+/** Exact per-lesson occurrences preserve report hint ordering and overlaps.
+ * These patterns and replacement chunks share one revision and one cache slot. */
+export function storedLessonPatterns(): readonly RegExp[] {
+  storedLessonMatchers();
+  const held = matcherHost.__delegatusLessonMatcher!;
+  return held.exact ??= privacyWork("compile", () => held.texts.flatMap(text => {
+    const source = lessonPatternSource(text);
+    return source === null ? [] : [new RegExp(source, "giu")];
+  }));
 }
 
 /** Merge matches on the original text: earliest start wins, and a tie goes
@@ -696,17 +721,28 @@ function withholdLessons(text: string, chunks: readonly LessonMatcher[]): string
   return pieces.join("");
 }
 
+/** Class-only reports need existence, including a lesson equal to the marker. */
+export function hasStoredLesson(text: string): boolean {
+  const chunks = storedLessonMatchers();
+  return privacyWork("match", () => chunks.some(chunk => {
+    if (chunk.prefilter && !chunk.prefilter.test(text)) return false;
+    chunk.pattern.lastIndex = 0;
+    return chunk.pattern.test(text);
+  }));
+}
+
 /** The text with every stored lesson it quotes withheld. */
 export function withoutStoredLessons(text: string): string {
   if (!text) return text;
-  return withholdLessons(text, storedLessonMatchers());
+  const chunks = storedLessonMatchers();
+  return privacyWork("match", () => withholdLessons(text, chunks));
 }
 
 /** withoutStoredLessons over every text a record holds, however deep; the
     record itself when none quotes a lesson. */
 export function withoutStoredLessonsIn<T>(value: T, options: { requireComplete?: boolean } = {}): T {
   const matchers = storedLessonMatchers();
-  if (options.requireComplete && matcherCache?.skipped) {
+  if (options.requireComplete && matcherHost.__delegatusLessonMatcher?.skipped) {
     throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "a stored lesson could not be compiled by the privacy matcher; nothing was sent");
   }
   if (!matchers.length) return value;
@@ -727,7 +763,7 @@ export function withoutStoredLessonsIn<T>(value: T, options: { requireComplete?:
     }
     return item;
   };
-  return walk(value) as T;
+  return privacyWork("match", () => walk(value) as T);
 }
 
 /** Where the stored lessons are kept as the publication gate's known values:

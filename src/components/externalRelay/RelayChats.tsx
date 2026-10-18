@@ -27,7 +27,7 @@ import { outcomeText, relayErrorText } from "./ExternalRelaySection";
  * answers this install kept (relay.md §B.9) in the operator's conversation
  * list. A paired service with either is one entry of the sidebar under its own
  * name; its leaf lists them the way a project's Conversations lists its own,
- * one row per chat and context and one per answered request, and a row opens
+ * one row per reply chain and authority and one per answered request, and a row opens
  * in the agent window, read only: only the relay writes in these sessions, so
  * the reader has no composer and nothing here resumes, forks or deletes them.
  */
@@ -77,7 +77,7 @@ export function relayChatsCatalog(payload: RelayChatsPayload | null): ProjectCat
 
 /** A chat's conversation in words: the chat, whose session it is, and the target that answers there. */
 export function relayChatTitle(t: TFunction, chat: RelayChatRow): string {
-  return [t("relayChats.chat", { chat: shortChatKey(chat.chatKey) }), t(chat.context === "owner" ? "relayChats.context.owner" : "relayChats.context.member"), chat.targetName].filter(Boolean).join(" · ");
+  return [t("relayChats.chat", { chat: shortChatKey(chat.chatKey) }), t(`relayChats.context.${chat.authority}`), chat.targetName].filter(Boolean).join(" · ");
 }
 
 const DOT_TONE: Record<string, string> = { success: "tone-success", warning: "tone-warning", danger: "tone-danger", accent: "tone-accent", neutral: "tone-neutral" };
@@ -383,7 +383,7 @@ export function RelayChatsView({ relayId, payload, mobileShell = null }: { relay
         {chats.length ? (
           <div data-relay-chats-rows="" className="space-y-1.5">
             {chats.map(({ chat, file }) => (
-              <div key={chat.id} data-relay-chat={chat.id} data-relay-chat-context={chat.context}>
+              <div key={chat.id} data-relay-chat={chat.id} data-relay-chat-authority={chat.authority}>
                 <QuietFileRow file={file} activeSubtree={false} deletable={false} onOpen={openChat} />
               </div>
             ))}

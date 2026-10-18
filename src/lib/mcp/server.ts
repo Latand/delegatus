@@ -3931,7 +3931,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     spec: z.string().optional().describe("Acceptance criteria shared by every stage."),
     crossProjectRequest: z.string().optional()
       .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
-    repoDir: z.string().min(1).describe("Absolute path of the existing git repository the pipeline worktree is cut from."),
+    repoDir: z.string().min(1).describe("Absolute path of the project folder. A safe new folder receives a local main repository and first commit before provisioning. Existing repositories keep their remotes."),
     project: z.string().optional().describe("Optional project key, display name or repository name, in any letter case with surrounding whitespace. Must agree with repoDir; unknown, ambiguous or contradictory values refuse before claim or dispatch."),
     baseBranch: z.string().optional().describe("Branch the worktree is based on. A draft that pins this must also pass baseRef."),
     baseRef: z.string().optional().describe("Commit the pipeline is pinned to. Required when a draft (autoStart:false) pins baseBranch — resolve the SHA yourself."),

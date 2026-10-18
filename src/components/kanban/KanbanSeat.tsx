@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronUp } from "lucide-react";
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 import { seatGrowth } from "@/lib/composerScroll";
@@ -15,6 +16,9 @@ import {
   clampSeatHeight, clampSeatTopWidth, clampSeatWidth, publishSeatSignal, SEAT_KEY_STEP, SEAT_SIDE_MAX_WIDTH, SEAT_SIDE_MIN_WIDTH,
   SEAT_TOP_MIN_WIDTH, expandKanbanSeat, useKanbanSeat,
 } from "./kanbanSeatStore";
+
+/* The height of the strip that returns the page to the seat (`.seat-return`). */
+const SEAT_RETURN_HEIGHT = 32;
 
 /* The most steps one measurement of the seat's growth takes (#1734). */
 const SEAT_GROWTH_PASSES = 8;
@@ -276,6 +280,54 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
     seat.setHeight(current + (event.key === "ArrowDown" ? SEAT_KEY_STEP : -SEAT_KEY_STEP));
   }, [height, seat]);
 
+  /* The way back up (#3029). The seat's feed and the board's columns keep their
+     wheel to themselves, so once the page has scrolled down to the tasks the
+     only parts of it left under the pointer are heads and gaps. A strip pinned
+     to the top of the page belongs to the page scroller, so a wheel, a
+     trackpad or a finger over it scrolls the page, and it stays under the
+     pointer the whole way up. It shows only while the seat's head is above it. */
+  const [returnShown, setReturnShown] = useState(false);
+  const returnable = !side && !seat.collapsed;
+  useEffect(() => {
+    const head = sectionRef.current?.querySelector<HTMLElement>("[data-seat-head]");
+    const page = sectionRef.current?.parentElement;
+    if (!returnable || !head || !page || typeof IntersectionObserver === "undefined") {
+      setReturnShown(false);
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      if (!entry) return;
+      setReturnShown(!entry.isIntersecting && entry.boundingClientRect.top < (entry.rootBounds?.top ?? 0) + SEAT_RETURN_HEIGHT);
+    }, { root: page, rootMargin: `-${SEAT_RETURN_HEIGHT}px 0px 0px 0px`, threshold: 0 });
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, [returnable]);
+
+  /* The strip hides once the head is back, so focus moves into the seat: the
+     composer, or the fold when the seat shows no composer. */
+  const focusSeat = useCallback(() => {
+    const section = sectionRef.current;
+    (section?.querySelector<HTMLElement>("[data-orchestrator-conversation] textarea")
+      ?? section?.querySelector<HTMLElement>("[data-seat-collapse]"))?.focus({ preventScroll: true });
+  }, []);
+
+  const returnToSeat = useCallback(() => {
+    const page = sectionRef.current?.parentElement;
+    if (!page) return;
+    const calm = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    page.scrollTo({ top: 0, behavior: calm ? "auto" : "smooth" });
+    focusSeat();
+  }, [focusSeat]);
+
+  /* A strip that hides while it holds focus (the page was scrolled up by the
+     wheel, not by the strip) would drop focus to the body: it goes to the seat. */
+  useEffect(() => {
+    if (returnShown) return;
+    const strip = sectionRef.current?.parentElement?.querySelector<HTMLElement>(":scope > [data-seat-return]");
+    if (strip && strip.contains(document.activeElement)) focusSeat();
+  }, [returnShown, focusSeat]);
+
   const sized = !side && !seat.collapsed && topWidth !== null;
   const style = side
     ? (seat.collapsed ? undefined : ({ "--seat-w": `${width}px` } as CSSProperties))
@@ -285,6 +337,15 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
     } as CSSProperties);
   return (
     <>
+      {returnable ? (
+        <div className="seat-return" data-seat-return="" {...(returnShown ? { "data-shown": "" } : {})}>
+          <button type="button" onClick={returnToSeat} aria-label={t("orchPanel.seatReturnAria")} title={t("orchPanel.seatReturnHint")}>
+            <ChevronUp aria-hidden />
+            <span>{t("orchPanel.seatReturn")}</span>
+            <span className="hint">{t("orchPanel.seatReturnHint")}</span>
+          </button>
+        </div>
+      ) : null}
       <a
         className="skip-board"
         href={`#${boardId}`}
