@@ -15,6 +15,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { PIPELINE_TICK_REQUEST_MS, registerPipelineTick } from "./controllerSignal";
 import { PIPELINE_REMOTE_ACTIONS } from "./controllerCapabilities";
+import { withoutControllerPipelineScope } from "./controllerScope";
 import { procBackend } from "@/lib/proc";
 import { tickPipelinesController } from "./controllerPass";
 import { archiveSettledPipelines, loadPipelines } from "./store";
@@ -185,14 +186,14 @@ export class FlowPipelineController {
       this.scheduledFollowup = null;
     }
     this.requestDeadline = this.ports.monotonicNow() + this.requestDeadlineMs;
-    this.running = this.runRequestedCycles(trigger).finally(() => {
+    this.running = withoutControllerPipelineScope(() => this.runRequestedCycles(trigger).finally(() => {
       // A failed generation settles immediately. Later work gets a fresh
       // request and cannot hold this generation's observers or error alive.
       const followupTrigger = this.trailingCycleRequested ? this.trailingTrigger : null;
       this.running = null;
       this.trailingCycleRequested = false;
       if (followupTrigger !== null) this.scheduleFollowup(followupTrigger);
-    });
+    }));
     return this.running;
   }
 
