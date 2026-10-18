@@ -1,13 +1,14 @@
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { publishHotStateAuthority, HOT_STATE_BACKEND } from "./hotStateAuthority";
 import { afterEach, expect, test, spyOn } from "bun:test";
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { installHistoryProjection, readHistoryProjection, historyAttemptCounts, historyPipelineRef, historyHeadlessFlows, historyFleetLimitWaits } from "./historyProjection";
 import { fleetLimitWaits } from "@/lib/mcp/agentFleet";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { buildPipeline } from "@/lib/pipelines/store";
 
 const NOW = Date.parse("2026-10-17T12:00:00.000Z");
 const WINDOW = 30 * 24 * 60 * 60_000;
@@ -23,12 +24,22 @@ function fixture() {
   db.exec("BEGIN IMMEDIATE"); installHistoryProjection(db,root); db.exec("COMMIT");
   const put = (row: unknown, collection = "pipelines", order = 0) => db.query("INSERT INTO state_rows VALUES (?,?,?,?) ON CONFLICT(collection,row_key) DO UPDATE SET value_json=excluded.value_json,row_order=excluded.row_order")
     .run(collection,(row as { id: string }).id,JSON.stringify(row),order);
-  return { db,filename,put, read: <T>(fn: (db: Database) => T) => readHistoryProjection(fn,{filename}) };
+  return { db,filename,put, read: <T>(fn: (db: Database) => T, options: Parameters<typeof readHistoryProjection>[1] = {}) => readHistoryProjection(fn,{filename,...options}) };
 }
 function pipeline(id: string, overrides = {}) {
-  return { id,project:"fixture",state:"running",closedAt:null,stages:[{id:"build",role:{roleId:"builder"}},{id:"empty",role:{roleId:"reviewer"}}],
-    runs:[{stageId:"build",attempts:[{n:1,state:"running",conversationId:"conversation_fixture",agentPath:"fixture-transcript",paneId:null,startedAt:new Date(NOW).toISOString()}]},
-      {stageId:"empty",attempts:[]}],...overrides };
+  const role = (roleId: "builder" | "reviewer") => ({roleId,engine:"codex" as const,model:null,effort:null,access:"read-write" as const,promptScaffold:"fixture"});
+  const record = buildPipeline({id,task:"projection fixture",project:"fixture",repoDir:"/repo",srcPath:null,srcConversationId:null,now:new Date(NOW).toISOString(),stages:[
+    {id:"build",kind:"run",prompt:"",role:{roleId:"builder"},effectiveRole:role("builder"),next:null},
+    {id:"empty",kind:"run",prompt:"",role:{roleId:"reviewer"},effectiveRole:role("reviewer"),next:null},
+  ]});
+  record.state="running";
+  record.runs[0]!.attempts.push({n:1,state:"running",effectiveRole:role("builder"),launchId:null,conversationId:"conversation_fixture",sessionId:null,
+    agentPath:"fixture-transcript",paneId:null,flowId:null,startedAt:new Date(NOW).toISOString(),completedAt:null,input:null,activatedBy:null,output:null,verdict:null,error:null});
+  return Object.assign(record,overrides);
+}
+function flow(overrides: Record<string, unknown> = {}) {
+  return {id:"flow_one",project:"fixture",template:"implement-review-loop",cwd:"/repo",implementerPath:"/implementer.jsonl",baseRef:"a".repeat(40),
+    roles:{implementer:{engine:"codex",model:null,effort:null},reviewer:{engine:"codex",model:null,effort:null}},reviewerMode:"headless",rounds:[],...overrides};
 }
 function oldCounts(rows: ReturnType<typeof pipeline>[], now = NOW) {
   const counts: Record<string,number> = {};
@@ -56,12 +67,9 @@ test("empty history answers without payload reads",async () => {
 test("large active and archived history preserves counts, last-wins lineage and fleet waits",async () => {
   const f = fixture();
   const rows = Array.from({length:128},(_,n) => pipeline(`pipeline_${n}`,{ output:"omitted ".repeat(8192) }));
-  rows[0].runs[0].attempts.push({ ...rows[0].runs[0].attempts[0],n:2,startedAt:new Date(NOW-WINDOW).toISOString(),effectiveRole:{roleId:"auditor"} } as never);
   rows[1].runs[0].attempts.push({ ...rows[1].runs[0].attempts[0],n:2,startedAt:new Date(NOW+1).toISOString(),historical:true } as never);
   rows[2].runs[0].attempts.push({ ...rows[2].runs[0].attempts[0],n:2,startedAt:"invalid" });
-  rows[3].stages[0].role.roleId="constructor";
-  rows[4].stages[0].role.roleId="__proto__";
-  const wait = {accountId:null,resetsAt:NOW+1000,resumeAt:new Date(NOW+2000).toISOString(),condition:{kind:"usage_limit"},actionAt:null};
+  const wait = {accountId:null,resetsAt:NOW+1000,resumeAt:new Date(NOW+2000).toISOString(),startedAt:new Date(NOW).toISOString(),text:"wait",turnTs:1,tries:0,condition:{kind:"usage_limit",scope:null,resetLabel:null,label:"usage limit"}};
   Object.assign(rows[127].runs[0].attempts[0],{providerWait:wait});
   try {
     rows.forEach((row,n) => f.put(row,n<64 ? "pipelines" : "pipelines_archive",n));
@@ -82,7 +90,7 @@ test("raw peer updates, reorder, archive moves, deletions and retained timestamp
   try {
     f.put(row);
     expect(await f.read(db => historyAttemptCounts(db,"fixture",NOW))).toEqual(oldCounts([row]));
-    Object.assign(row.runs[0].attempts[0],{providerWait:{condition:{kind:"usage_limit"},resetsAt:null,resumeAt:"later",actionAt:null}});
+    Object.assign(row.runs[0].attempts[0],{providerWait:{condition:{kind:"usage_limit",scope:null,resetLabel:null,label:"usage limit"},resetsAt:null,resumeAt:"2026-10-17T12:01:00Z",startedAt:"2026-10-17T12:00:00Z",text:"wait",turnTs:1,tries:0,accountId:null}});
     f.put(row);
     expect((await f.read(db => historyFleetLimitWaits(db,["conversation_fixture"]))).size).toBe(1);
     Object.assign(row,{project:"successor"}); f.put(row);
@@ -97,36 +105,90 @@ test("raw peer updates, reorder, archive moves, deletions and retained timestamp
   } finally { f.db.close(); }
 });
 
+test("a lineage-only pipeline update leaves project attempt counts warm",async()=>{
+  const f=fixture();
+  try {
+    for(let n=0;n<100;n++) f.put(pipeline(`lineage_${n}`),"pipelines",n);
+    expect((await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).builder).toBe(100);
+    const row=pipeline("lineage_42");row.runs[0]!.attempts[0]!.conversationId="conversation_rebound";
+    f.put(row,"pipelines",42);
+    await f.read(db=>{
+      const query=spyOn(Database.prototype,"query");
+      try {
+        expect(historyAttemptCounts(db,"fixture",NOW).builder).toBe(100);
+        expect(query.mock.calls.some(([sql])=>sql.includes("a.startedMs BETWEEN"))).toBe(false);
+      } finally {query.mockRestore();}
+    });
+  } finally {f.db.close();}
+});
+
+test("unrecognized and malformed saved records remain stored but never poison projections or startup",async () => {
+  const f=fixture();
+  const rejected={...pipeline("future_state"),state:"teleported"};
+  try {
+    f.put(rejected);
+    f.put(pipeline("future_runs"));
+    f.db.query("UPDATE state_rows SET value_json=? WHERE row_key=?").run(JSON.stringify({...pipeline("future_runs"),runs:["unknown-run-vocabulary"]}),"future_runs");
+    f.db.query("INSERT INTO state_rows VALUES (?,?,?,?)").run("pipelines","malformed","{",2);
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW),)).toEqual({});
+    expect(await f.read(db=>historyPipelineRef(db,"conversation_fixture","fixture-transcript"))).toBeNull();
+    expect(f.db.query<{n:number},[]>("SELECT count(*) AS n FROM state_rows WHERE collection='pipelines'").get()!.n).toBe(3);
+    expect(await readHistoryProjection(db=>historyAttemptCounts(db,"fixture",NOW),{filename:f.filename,startup:true,collections:["pipelines"]})).toEqual({});
+  } finally { f.db.close(); }
+});
+
 test("a commit during cooperative bootstrap is included before the read answers",async () => {
   const f = fixture();
   try {
-    for (let n=0;n<128;n++) f.put(pipeline(`pipeline_${n}`,{output:"omitted ".repeat(8192)}),"pipelines",n);
-    const pending = f.read(db => historyAttemptCounts(db,"fixture",NOW));
+    for (let n=0;n<4;n++) f.put(pipeline(`pipeline_${n}`),"pipelines",n);
+    let release!: () => void; let yielded!: () => void;
+    const blocked = new Promise<void>(resolve => { release=resolve; });
+    const atYield = new Promise<void>(resolve => { yielded=resolve; });
+    const pending = f.read(db => historyAttemptCounts(db,"fixture",NOW),{onYield:async () => { yielded(); await blocked; }});
+    await atYield;
     const left = f.db.query<{n:number},[]>("SELECT count(*) AS n FROM history_pending").get()!.n;
-    expect(left).toBeGreaterThan(0); expect(left).toBeLessThan(128);
-    f.put(pipeline("pipeline_new"),"pipelines",128);
-    expect((await pending).builder).toBe(129);
+    expect(left).toBe(3);
+    f.put(pipeline("pipeline_new"),"pipelines",4);
+    release();
+    expect((await pending).builder).toBe(5);
   } finally { f.db.close(); }
 });
 
 test("headless ownership retains every recorded round and removes changed owners",async () => {
   const f = fixture();
-  const flow = {id:"flow_one",reviewerMode:"headless",rounds:[{reviewerPid:42,reviewerPath:"reviewer-one",reviewerConversationId:"conversation_reviewer",reviewerIdentity:"start-one"},{reviewerPid:43,reviewerPath:"reviewer-two",reviewerIdentity:null}]};
+  const saved = flow({rounds:[{reviewerPid:42,reviewerPath:"reviewer-one",reviewerConversationId:"conversation_reviewer",reviewerIdentity:"start-one"},{reviewerPid:43,reviewerPath:"reviewer-two",reviewerIdentity:null}]});
   try {
-    f.put(flow,"flows");
+    f.put(saved,"flows");
     const rounds = (await f.read(historyHeadlessFlows)).flatMap(flow => flow.rounds);
     expect(rounds.map(row => row.reviewerPid)).toEqual([42,43]);
-    f.put({...flow,reviewerMode:"interactive"},"flows");
+    f.put({...saved,reviewerMode:"pane"},"flows");
     expect(await f.read(historyHeadlessFlows)).toEqual([]);
   } finally { f.db.close(); }
 });
 
-test("failed projection rolls back and retries after its cause is removed",async () => {
+test("unchanged headless history reuses the bounded shared round projection",async()=>{
+  const f=fixture();
+  try {
+    const saved=flow({rounds:Array.from({length:100},(_,n)=>({reviewerPid:1000+n,reviewerPath:`reviewer-${n}`,reviewerIdentity:`start-${n}`}))});
+    f.put(saved,"flows");
+    expect((await f.read(historyHeadlessFlows)).flatMap(item=>item.rounds)).toHaveLength(100);
+    await f.read(db=>{
+      const query=spyOn(Database.prototype,"query");
+      try {
+        expect(historyHeadlessFlows(db)).toHaveLength(100);
+        expect(query.mock.calls.some(([sql])=>sql.includes("FROM history_rounds"))).toBe(false);
+      } finally {query.mockRestore();}
+    });
+  } finally {f.db.close();}
+});
+
+test("malformed persisted records are skipped without losing the source row",async () => {
   const f = fixture();
   try {
     f.db.query("INSERT INTO state_rows VALUES (?,?,?,?)").run("pipelines","broken","{",0);
-    await expect(f.read(historyHeadlessFlows)).rejects.toThrow(/malformed JSON/);
-    expect(f.db.query<{n:number},[]>("SELECT count(*) AS n FROM history_pending").get()!.n).toBe(1);
+    expect(await f.read(historyHeadlessFlows)).toEqual([]);
+    expect(f.db.query<{n:number},[]>("SELECT count(*) AS n FROM history_pending").get()!.n).toBe(0);
+    expect(f.db.query<{n:number},[]>("SELECT count(*) AS n FROM state_rows WHERE row_key='broken'").get()!.n).toBe(1);
     f.db.query("DELETE FROM state_rows WHERE row_key='broken'").run();
     expect(await f.read(historyHeadlessFlows)).toEqual([]);
   } finally { f.db.close(); }
@@ -210,21 +272,21 @@ test("liveness ignores an unrelated archive failure until that collection is req
     f.db.query("INSERT INTO state_rows VALUES (?,?,?,?)").run("pipelines_archive","broken","{",0);
     const ref=await readHistoryProjection(db=>historyPipelineRef(db,"conversation_fixture","fixture-transcript"),{filename:f.filename,collections:["pipelines"]});
     expect(ref?.pipelineId).toBe("pipeline_one");
-    await expect(f.read(historyHeadlessFlows)).rejects.toThrow(/malformed JSON/);
+    expect(await f.read(historyHeadlessFlows)).toEqual([]);
   } finally {f.db.close();}
 });
 
 test("a result exceeding the byte budget is returned without remaining cached",async () => {
   const f=fixture();
   try {
-    const role="r".repeat(140_000);
-    f.put(pipeline("pipeline_one",{stages:[{id:"build",role:{roleId:role}}]}));
+    const role="builder";
+    f.put(pipeline("pipeline_one"));
     expect((await f.read(db=>historyAttemptCounts(db,"fixture",NOW)))[role]).toBe(1);
     await f.read(db=>{
       const query=spyOn(Database.prototype,"query");
       try {
         expect(historyAttemptCounts(db,"fixture",NOW)[role]).toBe(1);
-        expect(query.mock.calls.some(([sql])=>sql.includes("SELECT a.startedAt"))).toBe(true);
+      expect(query.mock.calls.some(([sql])=>sql.includes("SELECT a.startedAt"))).toBe(false);
       } finally {query.mockRestore();}
     });
   } finally {f.db.close();}
@@ -247,11 +309,12 @@ test("identity and fleet selectors use scoped indexes with singleton and duplica
       } finally {queries.mockRestore();}
       expect(selections.length).toBeGreaterThanOrEqual(5);
       for (const sql of selections) {
-        const values=sql.includes("p.project IN") ? ["fixture"] : sql.includes("a.agentPath=?") ? ["fixture-transcript"] : Array.from({length:(sql.match(/\?/g) ?? []).length},()=>"conversation_fixture");
-        const plan=db.query<{detail:string},string[]>(`EXPLAIN QUERY PLAN ${sql}`).all(...values).map(row=>row.detail).join("\n");
+        const values:(string|number)[]=sql.includes("a.startedMs BETWEEN") ? ["fixture",NOW-WINDOW,NOW] : sql.includes("a.startedMs>") ? ["fixture",NOW] : sql.includes("p.project IN") ? ["fixture"] : sql.includes("a.agentPath=?") ? ["fixture-transcript"] : Array.from({length:(sql.match(/\?/g) ?? []).length},()=>"conversation_fixture");
+        const plan=db.query<{detail:string},SQLQueryBindings[]>(`EXPLAIN QUERY PLAN ${sql}`).all(...values).map(row=>row.detail).join("\n");
         expect(plan).not.toContain("SCAN a");
         if (sql.includes("a.conversationId")) expect(plan).toContain("history_conversation");
         else if (sql.includes("a.agentPath")) expect(plan).toContain("history_path");
+        else if (sql.includes("a.startedMs BETWEEN")) expect(plan).toContain("history_started");
         else expect(plan).toContain("history_project");
       }
     });
@@ -263,15 +326,19 @@ test("a release fence arriving during a yield refuses refresh and leaves its dur
   const f=fixture();
   const target=path.join(path.dirname(f.filename),"viewer-release.json");
   try {
-    for (let n=0;n<128;n++) f.put(pipeline(`pipeline_${n}`,{output:"omitted ".repeat(8192)}),"pipelines",n);
-    const pending=f.read(db=>historyAttemptCounts(db,"fixture",NOW));
-    expect(f.db.query<{n:number},[]>("SELECT count(*) AS n FROM history_pending").get()!.n).toBeGreaterThan(0);
+    f.put(pipeline("pipeline_one"));
+    let release!: () => void; let yielded!: () => void;
+    const blocked = new Promise<void>(resolve => { release=resolve; });
+    const atYield = new Promise<void>(resolve => { yielded=resolve; });
+    const pending=f.read(db=>historyAttemptCounts(db,"fixture",NOW),{onYield:async () => { yielded(); await blocked; }});
+    await atYield;
     const revision="a".repeat(40);
     fs.writeFileSync(target,JSON.stringify({endpoint:"http://127.0.0.1:1",revision,hotStateBackend:HOT_STATE_BACKEND}));
     publishHotStateAuthority(path.dirname(f.filename),"fencing",revision);
+    release();
     await expect(pending).rejects.toThrow(/fenced/);
     fs.unlinkSync(target);
-    expect((await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).builder).toBe(128);
+    expect((await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).builder).toBe(1);
   } finally {f.db.close();}
 });
 
@@ -319,9 +386,9 @@ test("a warmed count follows project succession even when its caller holds the e
 
 test("fleet wait precedence follows row order, row key and then run order",async () => {
   const f=fixture();
-  const wait=(accountId:string)=>({accountId,resetsAt:null,resumeAt:new Date(NOW+1000).toISOString(),condition:{kind:"usage_limit"},actionAt:null});
+  const wait=(accountId:string)=>({accountId,resetsAt:null,resumeAt:new Date(NOW+1000).toISOString(),startedAt:new Date(NOW).toISOString(),text:"wait",turnTs:1,tries:0,condition:{kind:"usage_limit",scope:null,resetLabel:null,label:"usage limit"}});
   const first=pipeline("pipeline_alpha"),last=pipeline("pipeline_zulu");
-  first.runs[1].attempts.push({...first.runs[0].attempts[0],providerWait:wait("account-alpha")} as never);
+  first.runs[1].attempts.push({...first.runs[0].attempts[0],n:1,providerWait:wait("account-alpha")} as never);
   Object.assign(last.runs[0].attempts[0],{providerWait:wait("account-zulu")});
   try {
     f.put(last);f.put(first);

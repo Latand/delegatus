@@ -11,6 +11,8 @@ import { stateLockAttempt, stateLockDeferral, waitForStateLock } from "./lockWai
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { AgentLivenessPipelineRef, LivenessFlow } from "@/lib/lifecycle/liveness";
 import type { fleetLimitWaits } from "@/lib/mcp/agentFleet";
+import { isStoredPipeline } from "@/lib/pipelines/store";
+import { decodeFlow } from "@/lib/reviewHistory/decode";
 
 const tracked = (row: string) => `${row}.collection IN ('pipelines','pipelines_archive','flows')`;
 const enqueue = (row: string) => `INSERT INTO history_pending SELECT ${row}.collection,${row}.row_key WHERE ${tracked(row)} ON CONFLICT(collection,row_key) DO NOTHING;`;
@@ -23,7 +25,7 @@ const triggers = [
 export function historyProjectionReady(db: Database): boolean {
   const rows = db.query<{ name: string; sql: string }, []>("SELECT name,sql FROM sqlite_master WHERE name LIKE 'history_%'").all();
   const names = new Set(rows.map(row => row.name));
-  return ["history_meta", "history_pending", "history_inputs", "history_runs", "history_attempts", "history_rounds", "history_projects", "history_conversation", "history_path", "history_project", "history_reviewer"].every(name => names.has(name))
+  return ["history_meta", "history_flow_meta", "history_count_meta", "history_pending", "history_inputs", "history_runs", "history_attempts", "history_rounds", "history_projects", "history_count_projects", "history_conversation", "history_path", "history_project", "history_reviewer", "history_started"].every(name => names.has(name))
     && triggers.every(sql => rows.some(row => row.sql === sql));
 }
 
@@ -33,20 +35,26 @@ export function historyProjectionReady(db: Database): boolean {
 export function installHistoryProjection(db: Database, directory: string): void {
   if (historyProjectionReady(db) || !mayRunStateStartupMutation(directory)) return;
   for (const sql of triggers) db.exec(`DROP TRIGGER IF EXISTS ${sql.split(" ")[2]!}`);
-  for (const table of ["history_meta","history_pending","history_inputs","history_projects","history_runs","history_attempts","history_rounds"]) db.exec(`DROP TABLE IF EXISTS ${table}`);
+  for (const table of ["history_meta","history_flow_meta","history_count_meta","history_pending","history_inputs","history_projects","history_count_projects","history_runs","history_attempts","history_rounds"]) db.exec(`DROP TABLE IF EXISTS ${table}`);
   for (const sql of [
     "CREATE TABLE history_meta(generation TEXT NOT NULL,revision INTEGER NOT NULL)",
     "INSERT INTO history_meta VALUES (lower(hex(randomblob(16))),0)",
+    "CREATE TABLE history_flow_meta(revision INTEGER NOT NULL)",
+    "INSERT INTO history_flow_meta VALUES (0)",
+    "CREATE TABLE history_count_meta(revision INTEGER NOT NULL)",
+    "INSERT INTO history_count_meta VALUES (0)",
     "CREATE TABLE history_pending(collection TEXT NOT NULL,row_key TEXT NOT NULL,PRIMARY KEY(collection,row_key))",
     "CREATE TABLE history_inputs(collection TEXT NOT NULL,row_key TEXT NOT NULL,row_order INTEGER NOT NULL,project TEXT,state TEXT,input BLOB NOT NULL,PRIMARY KEY(collection,row_key))",
     "CREATE TABLE history_projects(project TEXT PRIMARY KEY,revision INTEGER NOT NULL)",
+    "CREATE TABLE history_count_projects(project TEXT PRIMARY KEY,revision INTEGER NOT NULL)",
     "CREATE TABLE history_runs(collection TEXT NOT NULL,row_key TEXT NOT NULL,run INTEGER NOT NULL,role TEXT NOT NULL,PRIMARY KEY(collection,row_key,run))",
     `CREATE TABLE history_attempts(collection TEXT NOT NULL,row_key TEXT NOT NULL,run INTEGER NOT NULL,attempt INTEGER NOT NULL,
-      stageId TEXT,n INTEGER,state TEXT,historical INTEGER,conversationId TEXT,agentPath TEXT,paneId TEXT,startedAt TEXT,role TEXT,providerWait TEXT,
+      stageId TEXT,n INTEGER,state TEXT,historical INTEGER,conversationId TEXT,agentPath TEXT,paneId TEXT,startedAt TEXT,startedMs INTEGER,role TEXT,providerWait TEXT,
       PRIMARY KEY(collection,row_key,run,attempt))`,
     "CREATE INDEX history_conversation ON history_attempts(conversationId,collection,historical)",
     "CREATE INDEX history_path ON history_attempts(agentPath,collection,historical)",
     "CREATE INDEX history_project ON history_inputs(project,collection,row_key)",
+    "CREATE INDEX history_started ON history_attempts(startedMs,collection,row_key)",
     `CREATE TABLE history_rounds(row_key TEXT NOT NULL,round INTEGER NOT NULL,reviewerPath TEXT,reviewerConversationId TEXT,
       reviewerPid INTEGER,reviewerIdentity TEXT,PRIMARY KEY(row_key,round))`,
     "CREATE INDEX history_reviewer ON history_rounds(reviewerPid)",
@@ -71,20 +79,36 @@ const flowSql = `WITH source AS MATERIALIZED (SELECT jsonb(value_json) AS payloa
  'reviewerPid',json_extract(r.value,'$.reviewerPid'),'reviewerIdentity',json_extract(r.value,'$.reviewerIdentity')) ORDER BY r.key) FROM json_each(payload,'$.rounds') r)) AS input FROM source`;
 
 function projectOne(db: Database, collection: string, key: string): void {
-  const row = db.query<{ project: string | null; state: string | null; row_order: number }, [string,string]>(
-    "SELECT json_extract(value_json,'$.project') AS project,json_extract(value_json,'$.state') AS state,row_order FROM state_rows WHERE collection=? AND row_key=?").get(collection,key);
+  const raw = db.query<{ value_json: string; row_order: number }, [string,string]>(
+    "SELECT value_json,row_order FROM state_rows WHERE collection=? AND row_key=? AND json_valid(value_json)").get(collection,key);
+  let decoded: unknown = null;
+  if (raw) {
+    try { decoded = JSON.parse(raw.value_json) as unknown; } catch { /* malformed persisted records remain stored and excluded */ }
+  }
+  const accepted = raw && (collection === "flows" ? decodeFlow(decoded) !== null : isStoredPipeline(decoded));
+  const row = accepted ? db.query<{ project: string | null; state: string | null; row_order: number }, [string,string]>(
+    "SELECT json_extract(value_json,'$.project') AS project,json_extract(value_json,'$.state') AS state,row_order FROM state_rows WHERE collection=? AND row_key=?").get(collection,key) : null;
   const input = row ? db.query<{ input: Uint8Array }, [string,string]>(collection === "flows" ? flowSql : pipelineSql).get(collection,key)!.input : null;
+  const oldCountSignature = collection === "flows" ? "" : countSignature(db,collection,key);
+  const newCountSignature = collection === "flows" || !input ? "" : countSignatureFromInput(db,input);
   const before = db.query<{ project: string | null; same: number }, [Uint8Array | null,number | null,string | null,string | null,string,string]>(
     "SELECT project,(input IS ? AND row_order IS ? AND project IS ? AND state IS ?) AS same FROM history_inputs WHERE collection=? AND row_key=?")
     .get(input,row?.row_order ?? null,row?.project ?? null,row?.state ?? null,collection,key);
   if (before?.same) return;
   const projects = collection === "flows" ? [] : [...new Set([before?.project,row?.project].filter((value): value is string => typeof value === "string"))];
+  const countChanged = collection !== "flows" && (before?.project !== row?.project || oldCountSignature !== newCountSignature);
   db.exec("UPDATE history_meta SET revision=revision+1");
+  if(collection==="flows") db.exec("UPDATE history_flow_meta SET revision=revision+1");
+  if(countChanged) db.exec("UPDATE history_count_meta SET revision=revision+1");
   for (const project of projects) {
     db.query("INSERT INTO history_projects SELECT ?,revision FROM history_meta WHERE 1 ON CONFLICT(project) DO UPDATE SET revision=excluded.revision").run(project);
+    if (countChanged) db.query("INSERT INTO history_count_projects SELECT ?,revision FROM history_count_meta WHERE 1 ON CONFLICT(project) DO UPDATE SET revision=excluded.revision").run(project);
   }
   const forgetEmptyProjects = () => {
-    for (const project of projects) db.query("DELETE FROM history_projects WHERE project=? AND NOT EXISTS (SELECT 1 FROM history_inputs WHERE project=? AND collection IN ('pipelines','pipelines_archive'))").run(project,project);
+    for (const project of projects) {
+      db.query("DELETE FROM history_projects WHERE project=? AND NOT EXISTS (SELECT 1 FROM history_inputs WHERE project=? AND collection IN ('pipelines','pipelines_archive'))").run(project,project);
+      db.query("DELETE FROM history_count_projects WHERE project=? AND NOT EXISTS (SELECT 1 FROM history_inputs WHERE project=? AND collection IN ('pipelines','pipelines_archive'))").run(project,project);
+    }
   };
   for (const table of ["history_runs","history_attempts","history_inputs"]) db.query(`DELETE FROM ${table} WHERE collection=? AND row_key=?`).run(collection,key);
   if (collection === "flows") db.query("DELETE FROM history_rounds WHERE row_key=?").run(key);
@@ -100,14 +124,31 @@ function projectOne(db: Database, collection: string, key: string): void {
   db.query(`INSERT INTO history_runs SELECT ?,?,r.key,COALESCE((SELECT json_extract(s.value,'$.role') FROM json_each(?,'$.roles') s
     WHERE json_extract(s.value,'$.id')=json_extract(r.value,'$.stageId') LIMIT 1),'unassigned') FROM json_each(?,'$.runs') r`).run(collection,key,input,input);
   db.query(`INSERT INTO history_attempts SELECT ?,?,r.key,a.key,json_extract(r.value,'$.stageId'),
-    ${["n","state","historical","conversationId","agentPath","paneId","startedAt","role","providerWait"].map(field => `json_extract(a.value,'$.${field}')`).join(",")}
+    ${["n","state","historical","conversationId","agentPath","paneId","startedAt"].map(field => `json_extract(a.value,'$.${field}')`).join(",")},
+    CASE WHEN julianday(json_extract(a.value,'$.startedAt')) IS NOT NULL THEN CAST((julianday(json_extract(a.value,'$.startedAt'))-2440587.5)*86400000 AS INTEGER) END,
+    ${["role","providerWait"].map(field => `json_extract(a.value,'$.${field}')`).join(",")}
     FROM json_each(?,'$.runs') r,json_each(r.value,'$.attempts') a`).run(collection,key,input);
 }
 
+function countSignature(db: Database, collection: string, key: string): string {
+  const roles=db.query<{role:string},[string,string]>("SELECT role FROM history_runs WHERE collection=? AND row_key=? ORDER BY run").all(collection,key).map(row=>row.role);
+  const attempts=db.query<{role:string|null;startedAt:string|null},[string,string]>(`SELECT COALESCE(a.role,r.role) AS role,a.startedAt FROM history_attempts a
+    JOIN history_runs r USING(collection,row_key,run) WHERE a.collection=? AND a.row_key=? ORDER BY a.run,a.attempt`).all(collection,key);
+  return JSON.stringify([roles,attempts]);
+}
+function countSignatureFromInput(db:Database,input:Uint8Array): string {
+  const json=db.query<{json:string},[Uint8Array]>("SELECT json(?) AS json").get(input)!.json;
+  const value=JSON.parse(json) as {roles:Array<{id:string;role:string}>;runs:Array<{stageId:string;attempts:Array<{role?:string;startedAt?:string|null}>}>};
+  const role=(stageId:string)=>value.roles.find(item=>item.id===stageId)?.role ?? "unassigned";
+  return JSON.stringify([value.runs.map(run=>role(run.stageId)),value.runs.flatMap(run=>run.attempts.map(attempt=>({role:attempt.role ?? role(run.stageId),startedAt:attempt.startedAt ?? null}))) ]);
+}
+
 type CountCache = { stamp: string; at: number; until: number; value: Record<string,number> };
-type Shared = { connections: Map<string,Database>; counts: Map<string,CountCache> };
+type HeadlessRow={row_key:string;reviewerPath:string|null;reviewerConversationId:string|null;reviewerPid:number;reviewerIdentity:string|null};
+type Shared = { connections: Map<string,Database>; counts: Map<string,CountCache>; headless: Map<string,{revision:number;rows:HeadlessRow[];flows:LivenessFlow[];bytes:number}> };
 const host = globalThis as typeof globalThis & { __delegatusHistoryProjectionV1?: Shared };
-const shared = host.__delegatusHistoryProjectionV1 ??= { connections: new Map(), counts: new Map() };
+const shared = host.__delegatusHistoryProjectionV1 ??= { connections: new Map(), counts: new Map(), headless: new Map() };
+shared.headless ??= new Map();
 
 function connection(filename: string): Database {
   let db = shared.connections.get(filename);
@@ -144,6 +185,8 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
   signal?: AbortSignal;
   startup?: boolean;
   deadlineMs?: number;
+  /** Deterministic scheduling seam for interleaving tests. */
+  onYield?: () => Promise<void>;
 } = {}): Promise<T> {
   const filename = options.filename ?? statePath("state.sqlite");
   const collections = options.collections ?? ["pipelines","pipelines_archive","flows"];
@@ -164,7 +207,7 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
         db.exec("BEGIN");
         try {
           const pending = db.query<{ collection: string; row_key: string }, SQLQueryBindings[]>(pendingSql).get(...collections);
-          if (!pending) { const value = withViewerOperation("history.read", () => read(db)); db.exec("COMMIT"); return { value }; }
+          if (!pending) { assertWriter(); const value = withViewerOperation("history.read", () => read(db)); db.exec("COMMIT"); return { value }; }
           db.exec("ROLLBACK");
         } catch (error) { try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ } throw error; }
         if (performance.now() > deadline) throw new FileTransactionBusyError("history projection preparation exceeded its deadline");
@@ -183,6 +226,7 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
         } catch (error) { try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ } throw error; }
       });
       if (answer) return answer.value;
+      if (options.onYield) await options.onYield();
       if (performance.now() - slice >= 4) { await new Promise<void>(resolve => setTimeout(resolve,0)); slice = performance.now(); }
     }
   }, { signal: options.signal, waitMs: Math.max(0,deadline-performance.now()) }));
@@ -197,9 +241,21 @@ export function historyPipelineRef(db: Database, conversationId: string | null, 
 }
 
 export function historyHeadlessFlows(db: Database): LivenessFlow[] {
-  const rows = db.query<{ row_key: string; reviewerPath: string | null; reviewerConversationId: string | null; reviewerPid: number; reviewerIdentity: string | null }, []>(
-    "SELECT r.* FROM history_rounds r JOIN history_inputs p ON p.collection='flows' AND p.row_key=r.row_key ORDER BY p.row_order,p.row_key,r.round").all();
-  return rows.map(row => ({ reviewerMode: "headless" as const, rounds: [row] }));
+  const generation=db.query<{generation:string},[]>("SELECT generation FROM history_meta").get()!.generation;
+  const revision=db.query<{revision:number},[]>("SELECT revision FROM history_flow_meta").get()!.revision;
+  const key=JSON.stringify([db.filename,databaseFileIdentity(db.filename),generation]);
+  let cached=shared.headless.get(key);
+  if (!cached || cached.revision!==revision) {
+    const rows:HeadlessRow[] = db.query<HeadlessRow, []>(
+      "SELECT r.* FROM history_rounds r JOIN history_inputs p ON p.collection='flows' AND p.row_key=r.row_key ORDER BY p.row_order,p.row_key,r.round").all();
+    const flows=rows.map(row => ({ reviewerMode: "headless" as const, rounds: [row] }));
+    const bytes=Buffer.byteLength(JSON.stringify(flows))+rows.length*8;
+    if (bytes<=256*1024) {
+      cached={revision,rows,flows,bytes}; shared.headless.delete(key); shared.headless.set(key,cached);
+      while(shared.headless.size>2 || [...shared.headless.values()].reduce((sum,item)=>sum+item.bytes,0)>256*1024) shared.headless.delete(shared.headless.keys().next().value!);
+    } else { shared.headless.delete(key); cached={revision,rows,flows,bytes:Infinity}; }
+  } else { shared.headless.delete(key); shared.headless.set(key,cached); }
+  return cached.flows;
 }
 
 /** Counts stay valid until a timestamp crosses a window edge. The shared LRU
@@ -208,7 +264,7 @@ export function historyAttemptCounts(db: Database, project: string, now: number)
   project = canonicalProject(project);
   const projects = [...new Set([project,...Object.keys(projectAliasSnapshot().aliases).filter(key => canonicalProject(key) === project)])].sort();
   const placeholders = projects.map(() => "?").join(",");
-  const revisions = db.query<{ project: string; revision: number }, SQLQueryBindings[]>(`SELECT * FROM history_projects WHERE project IN (${placeholders}) ORDER BY project`).all(...projects);
+  const revisions = db.query<{ project: string; revision: number }, SQLQueryBindings[]>(`SELECT * FROM history_count_projects WHERE project IN (${placeholders}) ORDER BY project`).all(...projects);
   const generation = db.query<{generation:string},[]>("SELECT generation FROM history_meta").get()!.generation;
   const stamp = JSON.stringify([databaseFileIdentity(db.filename),generation,projects,revisions]);
   const key = JSON.stringify([db.filename,project]);
@@ -220,11 +276,15 @@ export function historyAttemptCounts(db: Database, project: string, now: number)
     CROSS JOIN history_runs r ON r.collection=p.collection AND r.row_key=p.row_key WHERE p.collection IN ('pipelines','pipelines_archive') AND p.project IN (${placeholders})`).all(...projects);
   const value: Record<string,number> = {};
   for (const row of runs) value[row.role] ??= 0;
-  const attempts = db.query<{ startedAt: string | null; role: string }, SQLQueryBindings[]>(`SELECT a.startedAt,COALESCE(a.role,r.role) AS role FROM history_inputs p INDEXED BY history_project
-    CROSS JOIN history_attempts a ON a.collection=p.collection AND a.row_key=p.row_key
-    CROSS JOIN history_runs r ON r.collection=a.collection AND r.row_key=a.row_key AND r.run=a.run WHERE p.collection IN ('pipelines','pipelines_archive') AND p.project IN (${placeholders}) AND a.startedAt IS NOT NULL`).all(...projects);
+  const cutoff=now-30*24*60*60_000;
+  const window=30*24*60*60_000;
+  const attempts = db.query<{ startedAt: string | null; role: string }, SQLQueryBindings[]>(`SELECT a.startedAt,COALESCE(a.role,r.role) AS role FROM history_attempts a INDEXED BY history_started
+    CROSS JOIN history_inputs p ON p.collection=a.collection AND p.row_key=a.row_key
+    CROSS JOIN history_runs r ON r.collection=a.collection AND r.row_key=a.row_key AND r.run=a.run WHERE p.collection IN ('pipelines','pipelines_archive') AND p.project IN (${placeholders}) AND a.startedMs BETWEEN ? AND ?`).all(...projects,cutoff,now);
   let until = Infinity;
-  const window = 30 * 24 * 60 * 60_000;
+  const future=db.query<{at:number|null},SQLQueryBindings[]>(`SELECT MIN(startedMs) AS at FROM history_attempts a INDEXED BY history_started
+    JOIN history_inputs p ON p.collection=a.collection AND p.row_key=a.row_key WHERE p.collection IN ('pipelines','pipelines_archive') AND p.project IN (${placeholders}) AND a.startedMs>?`).get(...projects,now)?.at;
+  if (future!==null && future!==undefined) until=Math.min(until,future);
   for (const attempt of attempts) {
     const at = Date.parse(attempt.startedAt ?? "");
     if (!Number.isFinite(at)) continue;

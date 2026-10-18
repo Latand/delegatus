@@ -16,7 +16,9 @@ import type { FileEntry } from "@/lib/types";
 import { completedGenerationSelection, type CompletedGenerationRead } from "./inventorySelection";
 import {
   agentLivenessSnapshot,
+  activeHeadlessTranscriptPaths,
   evaluateLiveness,
+  headlessRoundProcess,
   HOSTED_RECOVERY_MAX,
   livenessRecordIsLive,
   STARTING_GRACE_MS,
@@ -27,6 +29,47 @@ import { projectLivenessEvents } from "./projector";
 import { readLivenessTranscriptEvidence, type LivenessTranscript, type LivenessTranscriptEvidence } from "./transcript";
 
 const sandboxes: string[] = [];
+
+test("headless round verdicts reuse unchanged dead owners and recheck live identities",()=>{
+  let now=10,probes=0,identity="start-a";
+  const probe=livenessProbe({now:()=>now,pidAlive:()=>{probes++;return true;},processIdentity:()=>identity});
+  const round={reviewerPid:2_147_000_001,reviewerIdentity:"start-a"};
+  expect(headlessRoundProcess(round,probe)).toBe("alive");
+  expect(headlessRoundProcess(round,probe)).toBe("alive");
+  expect(probes).toBe(1);
+  now+=1001;identity="start-b";
+  expect(headlessRoundProcess(round,probe)).toBe("gone");
+  expect(headlessRoundProcess(round,probe)).toBe("gone");
+  expect(probes).toBe(2);
+});
+
+test("a round without a saved identity stays unproven after its pid is reused",()=>{
+  let now=10,alive=false,probes=0;
+  const probe=livenessProbe({now:()=>now,pidAlive:()=>{probes++;return alive;},processIdentity:()=>"new-start"});
+  const round={reviewerPid:2_147_000_002,reviewerIdentity:null};
+  expect(headlessRoundProcess(round,probe)).toBe("gone");
+  expect(headlessRoundProcess(round,probe)).toBe("gone");
+  expect(probes).toBe(1);
+  now+=1001;alive=true;
+  expect(headlessRoundProcess(round,probe)).toBe("unproven");
+  expect(probes).toBe(2);
+});
+
+test("confirmed dead historical rounds are pruned while live and unproven owners remain",()=>{
+  const flows=[{reviewerMode:"headless" as const,rounds:[
+    {reviewerPid:31001,reviewerIdentity:"dead-start",reviewerPath:"/dead.jsonl",reviewerConversationId:null},
+    {reviewerPid:31002,reviewerIdentity:"live-start",reviewerPath:"/live.jsonl",reviewerConversationId:null},
+    {reviewerPid:31003,reviewerIdentity:null,reviewerPath:"/unproven.jsonl",reviewerConversationId:null},
+  ]}];
+  let probes=0;
+  const probe=livenessProbe({now:()=>10,pidAlive:pid=>{probes++;return pid!==31001;},processIdentity:pid=>pid===31002?"live-start":null});
+  const registry={entries:{},conversations:{}} as never;
+  expect([...activeHeadlessTranscriptPaths(flows,registry,probe,true)]).toEqual(["/live.jsonl","/unproven.jsonl"]);
+  expect(flows[0]!.rounds.map(round=>round.reviewerPath)).toEqual(["/live.jsonl","/unproven.jsonl"]);
+  const firstProbes=probes;
+  expect([...activeHeadlessTranscriptPaths(flows,registry,probe,true)]).toEqual(["/live.jsonl","/unproven.jsonl"]);
+  expect(probes).toBe(firstProbes);
+});
 
 afterEach(() => {
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });

@@ -551,7 +551,22 @@ export function headlessRoundProcess(
   round: { reviewerPid?: number | null; reviewerIdentity?: string | null },
   probe: LivenessProbe,
 ): "alive" | "gone" | "unproven" {
-  return headlessRoundVerdict(round, probe);
+  const pid=round.reviewerPid;
+  if (!Number.isInteger(pid) || (pid ?? 0)<=0) return "unproven";
+  const key=`${pid}:${round.reviewerIdentity ?? "?"}`;
+  const shared=globalThis as typeof globalThis & {__delegatusHeadlessVerdictsV1?:WeakMap<object,Map<string,{verdict:"alive"|"gone"|"unproven";until:number}>>};
+  const caches=shared.__delegatusHeadlessVerdictsV1 ??= new WeakMap();
+  const cacheKey=probe.cacheKey ?? probe;
+  let cache=caches.get(cacheKey);
+  if(!cache){cache=new Map();caches.set(cacheKey,cache);}
+  const now=probe.now();
+  const prior=cache.get(key);
+  if (prior && ((prior.verdict==="gone" && round.reviewerIdentity) || now<prior.until)) { cache.delete(key);cache.set(key,prior);return prior.verdict; }
+  const verdict=headlessRoundVerdict(round,probe);
+  const until=verdict==="gone" && round.reviewerIdentity ? Infinity : now+1000;
+  cache.delete(key);cache.set(key,{verdict,until});
+  while(cache.size>2048)cache.delete(cache.keys().next().value!);
+  return verdict;
 }
 
 function turnStateFromEvidence(evidence: LivenessTranscriptEvidence | null, entry: LivenessTranscript): LifecycleTurnState {
@@ -827,22 +842,29 @@ function hostedTranscriptPaths(snapshot: LivenessRegistrySnapshot, probe: Livene
   return hosted;
 }
 
-function activeHeadlessTranscriptPaths(
-  flows: readonly LivenessFlow[],
+export function activeHeadlessTranscriptPaths(
+  flows: LivenessFlow[],
   registry: LivenessRegistrySnapshot,
   probe: LivenessProbe,
+  pruneConfirmedGone = false,
 ): Set<string> {
   const paths = new Set<string>();
-  for (const flow of flows) {
+  for (let flowIndex=0;flowIndex<flows.length;flowIndex++) {
+    const flow=flows[flowIndex]!;
     if (flow.reviewerMode !== "headless") continue;
-    for (const round of flow.rounds) {
-      if (!Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0) continue;
+    for (let roundIndex=0;roundIndex<flow.rounds.length;) {
+      const round=flow.rounds[roundIndex]!;
+      if (!Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0) { roundIndex++; continue; }
+      const verdict=headlessRoundProcess(round,probe);
+      if (pruneConfirmedGone && verdict==="gone" && round.reviewerIdentity) { flow.rounds.splice(roundIndex,1); continue; }
       const path = round.reviewerPath
         ?? (round.reviewerConversationId ? canonicalConversation(registry, round.reviewerConversationId)?.generations.at(-1)?.path : null);
       // Selection must retain every owner the final liveOnly predicate protects.
       // An unreadable identity cannot drop a recorded PID before it is judged.
-      if (path && headlessRoundProcess(round, probe) !== "gone") paths.add(path);
+      if (path && verdict !== "gone") paths.add(path);
+      roundIndex++;
     }
+    if(pruneConfirmedGone&&flow.rounds.length===0)flows.splice(flowIndex--,1);
   }
   return paths;
 }
@@ -1083,7 +1105,7 @@ async function livenessSnapshotWithin(
   const flows = await (sources.flows?.forLiveness ? sources.flows.forLiveness(projectionOptions) : sources.flows?.() ?? []);
   const hostedPaths = new Set([
     ...hostedTranscriptPaths(registry, sources.probe),
-    ...activeHeadlessTranscriptPaths(flows, registry, sources.probe),
+    ...activeHeadlessTranscriptPaths(flows, registry, sources.probe, Boolean(sources.flows?.forLiveness)),
   ]);
   const indexProjectionMs = phaseClock() - projectionStartedAt;
 

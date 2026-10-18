@@ -25,7 +25,9 @@ The persisted tables contain project/state headers, stage roles, attempt identit
 state, timestamps and provider waits, plus the four headless reviewer ownership
 fields used by liveness. Liveness resolves lineage by conversation/path indexes;
 fleet resolves waits from the bounded answer's conversation IDs. The count reader
-uses the project index. Explicit join ordering keeps singleton and multi-value
+uses a count-specific per-project revision and an index over normalized attempt
+timestamps, so lineage-only updates keep warmed counts and time-window reads
+exclude expired history. Explicit join ordering keeps singleton and multi-value
 selectors scoped to these indexes.
 
 Pipeline and archive records contribute to curator counts. Counts retain the
@@ -40,9 +42,12 @@ project key.
 One `globalThis` owner shared by compiled Next bundles holds an LRU of at most
 64 count results, charging at most 256 KiB of serialized UTF-16 keys, stamps and
 results, and at most two database connections. Eviction drops the oldest count
-result or closes the oldest connection. A count result expires on project
-revision, database identity/generation, alias membership, clock reversal or the
-next attempt-window boundary. Persisted projection rows follow their source
+result or closes the oldest connection. A count result expires on count-affecting
+project revision, database identity/generation, alias membership, clock reversal
+or the next attempt-window boundary. A separate bounded LRU caches headless
+rounds across Next bundles; its two entries share a 256 KiB ceiling. Confirmed
+dead process identities stay memoized, while live and unproven identities are
+rechecked after one second. Persisted projection rows follow their source
 identities; deletion/rebinding removes their derived rows. Empty project headers
 are removed, while the database clock prevents revision reuse after recreation.
 
