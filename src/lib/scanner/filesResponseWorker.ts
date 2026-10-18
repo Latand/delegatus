@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { StateWriteHealth } from "@/lib/state/diskFull";
+import { startupDiagnostic } from "@/lib/startupDiagnostics";
 import { statePath } from "@/lib/configDir";
 
 import type { FileCatalogScan } from "./index";
@@ -192,7 +193,8 @@ function retire(worker: ResidentWorker, reason: string): void {
   if (worker.retired) return;
   worker.retired = true;
   pool.__llvFilesResponseWorkerLastRetirement = reason;
-  console.warn(`[files response worker] retired: ${reason}`, {
+  const log = reason === "viewer exit" ? (...args: unknown[]) => startupDiagnostic("info", ...args) : console.warn;
+  log(`[files response worker] retired: ${reason}`, {
     pid: worker.child.pid ?? null, rssBytes: worker.rssBytes,
   });
   if (pool.__llvFilesResponseWorker === worker) pool.__llvFilesResponseWorker = null;

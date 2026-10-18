@@ -6819,7 +6819,10 @@ export class AgentRegistry {
     const result = applyIdentityWaveMigration(prepared, { ...input, commitExternalPathRekeys: value => { rekeys = value; } });
     return withAccountMutationLock(() => this.mutate((file) => {
       validatePreparedState?.();
-      if (!isDeepStrictEqual(file, observed)) throw new Error("identity migration state changed while reading evidence; retry at startup");
+      // Materialize the lazy mutation view before comparison. Bun inspects
+      // constructors during deep comparison, which can dirty a synthetic row
+      // (or reject an unchanged proxy) before the migration writes anything.
+      if (!isDeepStrictEqual(clone(file), observed)) throw new Error("identity migration state changed while reading evidence; retry at startup");
       if (rekeys.length) input.commitExternalPathRekeys?.(rekeys);
       Object.assign(file, prepared);
       return result;
