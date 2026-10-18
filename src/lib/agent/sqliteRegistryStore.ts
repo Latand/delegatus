@@ -1198,12 +1198,90 @@ export class SqliteAgentRegistryStore {
     this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
     this.secureFiles();
     this.importFirstBoot(options.initialSnapshot, options.verifyImport);
+    if (options.allowArchiveMigration !== false) this.prepareCallerIndexes();
     if (options.allowArchiveMigration !== false) {
       assertStateStartupMutation(path.dirname(filename), "failed launch repair indexes");
       this.db.run(`CREATE INDEX IF NOT EXISTS registry_rows_failure_repair ON registry_rows(collection,
         json_extract(value_json,'$.state'),json_extract(value_json,'$.failureRepairState'),row_order)`);
     }
     if (this.changesReady) this.refreshColdKeys();
+  }
+
+  /** Only the legacy root-role fallback needs a cross-conversation ordering.
+      Store its scalar result on writes, including writes by older releases. */
+  private prepareCallerIndexes(): void {
+    if (this.meta("caller_indexes_version") === "1") return;
+    assertStateStartupMutation(path.dirname(this.filename), "MCP caller indexes");
+    const role = (value: string) => `(SELECT json_extract(g.value,'$.launchProfile.role')
+      FROM json_each(${value},'$.generations') g
+      WHERE COALESCE(json_extract(g.value,'$.launchProfile.role'),'')!='' ORDER BY CAST(g.key AS INTEGER) DESC LIMIT 1)`;
+    this.runAtomically([
+      `CREATE TABLE IF NOT EXISTS registry_caller_roots (conversation_id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, row_order INTEGER NOT NULL)`,
+      `CREATE INDEX IF NOT EXISTS registry_caller_roots_latest ON registry_caller_roots(updated_at DESC,row_order DESC)`,
+      `CREATE INDEX IF NOT EXISTS registry_caller_agent_pid ON registry_rows(collection,json_extract(value_json,'$.host.agent.pid'),row_order)`,
+      `CREATE INDEX IF NOT EXISTS registry_caller_structured_pid ON registry_rows(collection,json_extract(value_json,'$.structuredHost.process.pid'),row_order)`,
+      `CREATE TRIGGER registry_caller_roots_insert AFTER INSERT ON registry_rows WHEN NEW.collection='conversations' BEGIN
+        INSERT INTO registry_caller_roots SELECT NEW.row_key,json_extract(NEW.value_json,'$.updatedAt'),NEW.row_order WHERE ${role("NEW.value_json")}='root'; END`,
+      `CREATE TRIGGER registry_caller_roots_update AFTER UPDATE ON registry_rows WHEN NEW.collection='conversations' OR OLD.collection='conversations' BEGIN
+        DELETE FROM registry_caller_roots WHERE conversation_id=OLD.row_key AND OLD.collection='conversations';
+        INSERT INTO registry_caller_roots SELECT NEW.row_key,json_extract(NEW.value_json,'$.updatedAt'),NEW.row_order WHERE NEW.collection='conversations' AND ${role("NEW.value_json")}='root'; END`,
+      `CREATE TRIGGER registry_caller_roots_delete AFTER DELETE ON registry_rows WHEN OLD.collection='conversations' BEGIN
+        DELETE FROM registry_caller_roots WHERE conversation_id=OLD.row_key; END`,
+      `INSERT INTO registry_caller_roots SELECT row_key,json_extract(value_json,'$.updatedAt'),row_order FROM registry_rows WHERE collection='conversations' AND ${role("value_json")}='root'`,
+      `INSERT INTO registry_meta(key,value) VALUES ('caller_indexes_version','1')`,
+    ]);
+  }
+
+  /** One capability's generations, plus any independent ancestry evidence.
+      Raw identity fields do not consult grants or materialize their dependencies. */
+  mcpCallerSnapshot(conversationId: string, ancestry: readonly number[], configuredRootId: string | null): {
+    snapshot: Pick<RegistryFile, "conversations" | "entries">; rootConversationId: string | null;
+  } {
+    this.db.exec("BEGIN");
+    try {
+      const read = (collection: "conversations" | "entries", key: string) => {
+        const row = this.db.query<{ value_json: string; row_order: number }, [string, string]>(
+          "SELECT value_json,row_order FROM registry_rows WHERE collection=? AND row_key=?").get(collection, key);
+        this.onRowPayloadRead?.(collection, row ? 1 : 0);
+        return row ? { value: this.parseRow(collection, key, row.value_json, true), order: row.row_order } : null;
+      };
+      const ids = new Set([conversationId]);
+      for (const pid of new Set(ancestry)) {
+        for (const field of ["host.agent.pid", "structuredHost.process.pid"]) {
+          const paths = this.db.query<{ path: string }, [number]>(`SELECT json_extract(value_json,'$.artifactPath') AS path
+            FROM registry_rows WHERE collection='entries' AND json_extract(value_json,'$.${field}')=? ORDER BY row_order`).all(pid);
+          for (const { path } of paths) {
+            for (const row of this.db.query<{ conversation_id: string }, [string]>(
+              "SELECT DISTINCT conversation_id FROM registry_generation_identities WHERE path=?").all(path)) ids.add(row.conversation_id);
+          }
+        }
+      }
+      const selected = [...ids].flatMap(id => { const row = read("conversations", id); return row ? [{ id, ...row }] : []; })
+        .sort((a, b) => a.order - b.order);
+      const snapshot: Pick<RegistryFile, "conversations" | "entries"> = { conversations: {}, entries: {} };
+      for (const { id, value } of selected) {
+        const conversation = this.normalizePartial({ version: 2, entries: {}, receipts: {}, conversations: { [id]: value } }).conversations[id];
+        if (!conversation) continue;
+        snapshot.conversations[id] = conversation;
+        for (const generation of conversation.generations) {
+          const key = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
+          if (snapshot.entries[key]) continue;
+          const entry = read("entries", key);
+          if (entry) {
+            const normalized = this.normalizePartial({ version: 2, entries: { [key]: entry.value }, receipts: {} }).entries[key];
+            if (normalized && normalized.artifactPath === generation.path) snapshot.entries[key] = normalized;
+          }
+        }
+      }
+      const configured = configuredRootId && this.db.query("SELECT 1 FROM registry_rows WHERE collection='conversations' AND row_key=?").get(configuredRootId);
+      const rootConversationId = configured ? configuredRootId : this.db.query<{ conversation_id: string }, []>(
+        "SELECT conversation_id FROM registry_caller_roots ORDER BY updated_at DESC,row_order DESC LIMIT 1").get()?.conversation_id ?? null;
+      this.db.exec("COMMIT");
+      return { snapshot, rootConversationId };
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      throw error;
+    }
   }
 
   /** Indexed keys only, including cold history. Payload reads are bounded by

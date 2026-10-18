@@ -27,25 +27,36 @@ test("real MCP binding checks the live pass before dispatch and receipt replay",
   snapshot.conversations[caller] = { id: caller, agentRole: "curator", projectOwnership: { project: "mcp-fixture" }, generations: [], continuityPaths: [] } as never;
   snapshot.receipts.fixture = { conversationId: caller, agentRole: "curator", clientAttemptId: pass.id, explicitProject: "mcp-fixture", state: "completed", launchId: "fixture", artifactPath: null } as never;
   const dependencies: ViewerMcpDomainDependencies = { ...productionDomainDependencies, registrySnapshot: () => snapshot, curatorSnapshot: () => snapshot, curatorAdmission: async () => {}, callerAttribution: () => ({ kind: "agent", conversationId: caller, role: snapshot.conversations[caller].agentRole ?? null }), attentionAuthority: () => ({ kind: "worker", conversationId: caller, role: "curator" } as never) };
+  let resolutions = 0;
+  const resolveCaller = dependencies.callerAttribution!;
+  dependencies.callerAttribution = () => { resolutions++; return resolveCaller(); };
   const policy = viewerMcpToolPolicy(dependencies, false, () => ({ registrySnapshot: () => snapshot } as never));
   expect(policy.permit("create_task", {})).toHaveProperty("allowed", false);
   expect(policy.permit("curate_rules", { action: "apply" })).toHaveProperty("allowed", true);
   const service = createMcpToolService(viewerMcpBindings(undefined, undefined, dependencies), new MemoryMcpReceiptStore(), policy);
-  const read = await service.callTool("curate_rules", { clientRequestId: "read-fixture", action: "read", scope });
+  const call = async (args: Parameters<typeof service.callTool>[1]) => {
+    const before = resolutions;
+    const result = await service.callTool("curate_rules", args);
+    expect(resolutions - before).toBe(1);
+    return result;
+  };
+  resolutions = 0;
+  const read = await call({ clientRequestId: "read-fixture", action: "read", scope });
+  expect(resolutions).toBe(1);
   expect(read.ok).toBe(true); expect(read).toHaveProperty("revision", 1);
   const args = { clientRequestId: "apply-fixture", action: "apply", scopes: [{ scope, revision: 1, order: [id] }] };
-  expect((await service.callTool("curate_rules", args)).ok).toBe(true);
-  expect((await service.callTool("curate_rules", args)).ok).toBe(true);
+  expect((await call(args)).ok).toBe(true);
+  expect((await call(args)).ok).toBe(true);
   expect(readPass(pass.id)!.counts.calls).toBe(1);
   dependencies.curatorAdmission = async () => { throw new DeliveryAdmissionRefusedError("seat wake expired"); };
-  const blocked = await service.callTool("curate_rules", { clientRequestId: "stale-seat-read", action: "read", scope });
+  const blocked = await call({ clientRequestId: "stale-seat-read", action: "read", scope });
   expect(blocked.ok).toBe(false); expect(blocked).toHaveProperty("details.code", "CURATE_CALLER");
   expect(readPass(pass.id)!.counts.calls).toBe(1);
   dependencies.curatorAdmission = async () => {
     let checks = 0;
     return () => { if (++checks > 1) throw new DeliveryAdmissionRefusedError("fixture host expired during read"); };
   };
-  const unhosted = await service.callTool("curate_rules", { clientRequestId: "host-expired-during-read", action: "read", scope });
+  const unhosted = await call({ clientRequestId: "host-expired-during-read", action: "read", scope });
   expect(unhosted.ok).toBe(false); expect(unhosted).toHaveProperty("details.code", "CURATE_CALLER");
   expect(unhosted).not.toHaveProperty("rules");
   dependencies.curatorAdmission = async () => {};
@@ -54,10 +65,10 @@ test("real MCP binding checks the live pass before dispatch and receipt replay",
     if (++reads === 2) queueMicrotask(() => patchPass(pass.id, { state: "succeeded", endedAt: "2026-10-17T12:00:00.000Z" }));
     return snapshot;
   };
-  const revoked = await service.callTool("curate_rules", { clientRequestId: "revoked-during-read", action: "read", scope });
+  const revoked = await call({ clientRequestId: "revoked-during-read", action: "read", scope });
   expect(revoked.ok).toBe(false); expect(revoked).toHaveProperty("details.code", "CURATE_CALLER");
   expect(revoked).not.toHaveProperty("rules");
-  const replay = await service.callTool("curate_rules", args);
+  const replay = await call(args);
   expect(replay.ok).toBe(false); expect(replay).toHaveProperty("details.code", "CURATE_CALLER");
 });
 

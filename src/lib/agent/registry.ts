@@ -1,3 +1,4 @@
+import { liveRootSession } from "@/lib/root/adopt";
 import { StateLockDeferredError, waitForStateLock } from "@/lib/state/lockWait";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
@@ -5964,6 +5965,15 @@ export class AgentRegistry {
         structured: !!entry?.structuredHost || typeof entry?.structuredHostOperationId === "string",
       };
     });
+  }
+
+  /** Caller identity reads only its generation keys, without a grant expansion. */
+  mcpCallerSnapshot(conversationId: string, ancestry: readonly number[], configuredRootId: string | null) {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+      return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.mcpCallerSnapshot(conversationId, ancestry, configuredRootId));
+    }
+    const snapshot = this.readOnlySnapshot();
+    return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
   }
 
   conversationIdForSpawnCapabilityDigest(digest: string): ViewerConversationId | null {
