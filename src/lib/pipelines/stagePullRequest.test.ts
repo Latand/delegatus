@@ -47,7 +47,7 @@ async function fixture(task?: string) {
   const calls: string[][] = [];
   let exists = false, refuse = false, loseResponse = false;
   let expectedBody = "Stage implementation summary.";
-  let prShape: "fork" | "head" | "ambiguous" | undefined;
+  let prShape: "fork" | "head" | "ambiguous" | "closed" | "merged" | "branch" | "number" | undefined;
   let race: { call: number; kind: "pause" | "release" } | undefined;
   f.h.ports.exec = async (command, args, cwd, env, options) => {
     if (command === "gh") {
@@ -62,10 +62,13 @@ async function fixture(task?: string) {
         else current.delivery!.active = false;
         savePipelines([current]);
       }
-      if (args[0] === "pr" && args[1] === "list") {
-        const row = { number: 17, headRefName: p.branch, baseRefName: "main", state: "OPEN", isCrossRepository: prShape === "fork",
+      if (args[0] === "pr" && (args[1] === "list" || args[1] === "view")) {
+        const row = { number: prShape === "number" ? 18 : 17, headRefName: prShape === "branch" ? "other-head" : p.branch, baseRefName: "main", state: prShape === "closed" ? "CLOSED" : prShape === "merged" ? "MERGED" : "OPEN", isCrossRepository: prShape === "fork",
           headRefOid: prShape === "head" ? "f".repeat(40) : await f.git(f.origin, "rev-parse", `refs/heads/${p.branch}`) };
-        return { code: 0, stdout: JSON.stringify(exists ? (prShape === "ambiguous" ? [row, { ...row, number: 18 }] : [row]) : []), stderr: "" };
+        if (args[1] === "view") return { code: exists ? 0 : 1, stdout: exists ? JSON.stringify(row) : "", stderr: "" };
+        const base = args.indexOf("--base");
+        return { code: 0, stdout: JSON.stringify(exists && (base < 0 || args[base + 1] === row.baseRefName) && row.state === "OPEN"
+          ? (prShape === "ambiguous" ? [row, { ...row, number: 18 }] : [row]) : []), stderr: "" };
       }
       if (args[0] === "pr" && args[1] === "create") {
         if (refuse) return { code: 1, stdout: "", stderr: "forge refused" };
@@ -77,16 +80,22 @@ async function fixture(task?: string) {
     }
     return realExec(command, args.map(a => a === REMOTE ? f.origin : a), cwd, env, options);
   };
-  const finish = async (summary = "Stage implementation summary.") => {
+  const finish = async (summary = "Stage implementation summary.", n: 1 | 2 = 1) => {
     f.h.setConversationActive(false);
-    await engineModule.reportStageCompletion({ verdict: "pass", summary }, { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, f.h.ports);
-    await tickPipelines([finishReported(f.h, "/codex/stage-1.jsonl", "pass", summary)], f.h.ports);
+    await engineModule.reportStageCompletion({ verdict: "pass", summary }, { kind: "agent", role: n === 1 ? "builder" : "reviewer", conversationId: `conversation_stage_${n}` }, f.h.ports);
+    await tickPipelines([finishReported(f.h, `/codex/stage-${n}.jsonl`, "pass", summary)], f.h.ports);
     return loadPipelines().find(p => p.id === f.id)!;
   };
   const commit = async () => {
     await f.git(f.worktree, "commit", "--allow-empty", "-m", "stage output");
   };
   return { ...f, calls, finish, commit, setExpectedBody: (body: string) => { expectedBody = body; }, setPrShape: (shape: typeof prShape) => { exists = true; prShape = shape; }, setRace: (call: number, kind: "pause" | "release") => { race = { call, kind }; }, setMissing: () => { exists = false; }, setExisting: () => { exists = true; }, setRefused: (value = true) => { refuse = value; }, setLost: () => { loseResponse = true; },
+    link: (successor = true) => {
+      const current = loadPipelines().find(lane => lane.id === f.id)!;
+      current.delivery!.target.pr = 17;
+      if (successor) current.baseBranch = p.branch;
+      savePipelines([current]); exists = true;
+    },
     close: () => { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); } };
 }
 
@@ -108,6 +117,128 @@ test("C: an existing delivery PR is discovered without another create", async ()
     f.setExisting(); await f.commit();
     expect((await f.finish()).delivery?.target.pr).toBe(17);
     expect(f.calls.filter(a => a[1] === "create")).toHaveLength(0);
+  } finally { f.close(); }
+});
+
+test.each([true, false])("linked PR accepts the published stage regardless of lane base (successor: %s)", async successor => {
+  const f = await fixture();
+  try {
+    f.link(successor); await f.commit();
+    const p = await f.finish();
+    expect(p.state).toBe("running");
+    expect(p.cursor).toMatchObject({ stageId: "review", state: "pending" });
+    expect(p.runs[0]!.attempts[0]!.state).toBe("passed");
+    expect(p.publishedCommit).toBe(await f.git(f.worktree, "rev-parse", "HEAD"));
+    expect(f.calls.filter(args => args[1] === "create")).toHaveLength(0);
+    expect(f.calls.find(args => args[1] === "view")).toContain("17");
+  } finally { f.close(); }
+});
+
+test.each([false, true])("an unchanged successor still verifies its linked PR (closed: %s)", async closed => {
+  const f = await fixture();
+  try {
+    f.link(); if (closed) f.setPrShape("closed");
+    const p = await f.finish();
+    expect(p.lastPassedCommit).toBe(p.baseRef);
+    expect(p.state).toBe(closed ? "needs_decision" : "running");
+    expect(p.cursor?.stageId).toBe(closed ? "build" : "review");
+    expect(f.calls.find(args => args[1] === "view")).toContain("17");
+    if (closed) expect(p.stateDetail).toContain("state (expected OPEN, received CLOSED)");
+  } finally { f.close(); }
+});
+
+test.each([
+  ["closed", "state"], ["merged", "state"], ["fork", "isCrossRepository"],
+  ["head", "headRefOid"], ["branch", "headRefName"], ["number", "number"],
+] as const)("linked PR refuses a mismatched %s with its field", async (shape, field) => {
+  const f = await fixture();
+  try {
+    f.link(); f.setPrShape(shape); await f.commit();
+    const p = await f.finish();
+    expect(p.state).toBe("needs_decision");
+    expect(p.cursor).toMatchObject({ stageId: "build", state: "committing" });
+    expect(p.stateDetail).toContain(field);
+    expect(f.calls.filter(args => args[1] === "create")).toHaveLength(0);
+  } finally { f.close(); }
+});
+
+test.each(["skip-stage", "retry-stage", "publish"] as const)("blocked linked PR admits %s after publication settled", async action => {
+  const f = await fixture();
+  try {
+    f.link(); f.setPrShape("closed"); await f.commit();
+    const parked = await f.finish();
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.delivery?.operation).toMatchObject({ state: "settled", passedStage: false, result: { ok: true } });
+    // Split controller and Git phases as the serving scheduler does. An old
+    // successful push must not revive a later PR refusal between seat reads.
+    let entered!: () => void, release!: () => void;
+    const checking = new Promise<void>(resolve => { entered = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const exec = f.h.ports.exec;
+    const ticking = tickPipelines([], { ...f.h.ports, exec: async (...args) => {
+      if (args[0] === "gh" && args[1].some(arg => arg.includes("isCrossRepository"))) { entered(); await held; }
+      return exec(...args);
+    } });
+    let result: Awaited<ReturnType<typeof engineModule.patchPipeline>>;
+    try {
+      await Promise.race([checking, ticking]);
+      result = await engineModule.patchPipeline(f.id, { action }, f.h.ports);
+    } finally { release(); await ticking; }
+    expect(result.error).toBeUndefined();
+    if (action === "skip-stage") {
+      await engineModule.settlePendingRemoteActions(f.h.ports);
+      const skipped = loadPipelines().find(lane => lane.id === f.id)!;
+      expect(skipped.remoteAction?.error).toBeUndefined();
+      expect(skipped.cursor?.stageId).toBe("review");
+      expect(skipped.runs[0]!.attempts[0]!.state).toBe("skipped");
+    } else {
+      expect(result.pipeline?.state).toBe("running");
+      f.setPrShape(undefined);
+      await tickPipelines([], f.h.ports);
+      expect(loadPipelines().find(lane => lane.id === f.id)!.cursor?.stageId).toBe("review");
+    }
+  } finally { f.close(); }
+});
+
+test("a terminal PR refusal stays parked after controller restart and accepts skip-stage", async () => {
+  const f = await fixture();
+  try {
+    f.link(); await f.commit(); await f.finish();
+    await tickPipelines([], f.h.ports);
+    f.setPrShape("closed");
+    const parked = await f.finish("Review passed.", 2);
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.cursor).toMatchObject({ stageId: "review", state: "committing" });
+    const driver = `
+      const { defaultPipelinePorts, tickPipelines, patchPipeline } = await import("@/lib/pipelines/engine");
+      const { loadPipelines } = await import("@/lib/pipelines/store");
+      const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
+      const { realExec } = await import("@/lib/workflows/provision");
+      registerPipelineTick(async () => {});
+      let forgeReads = 0;
+      const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(f.h.ports.now())},
+        conversationAgentActive: async () => false, conversationDeliveryOutstanding: () => false,
+        paneAgentAlive: async () => false, stageHostResident: async () => false,
+        durableTurnEvidence: async () => null, remoteActionSupported: () => true,
+        exec: async (command, args, cwd, env, options) => {
+          if (command === "gh") { forgeReads++; return { code: 1, stdout: "", stderr: "" }; }
+          return realExec(command, args.map(arg => arg === ${JSON.stringify(REMOTE)} ? ${JSON.stringify(f.origin)} : arg), cwd, env, options);
+        } };
+      await tickPipelines([], ports);
+      const lane = loadPipelines().find(lane => lane.id === ${JSON.stringify(f.id)});
+      const result = await patchPipeline(lane.id, { action: "skip-stage", expectedStageId: "review", expectedAttempt: 1 }, ports);
+      console.log(JSON.stringify({ state: lane.state, forgeReads, error: result.error ?? null, action: result.pipeline?.remoteAction?.action }));
+    `;
+    const result = await realExec(process.execPath, ["-e", driver], process.cwd(), {
+      LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_RUNTIME_HOST_CONTROL_URL: "http://127.0.0.1:1",
+    }, { timeoutMs: 30_000 });
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual({ state: "needs_decision", forgeReads: 0, error: null, action: "skip-stage" });
+    await engineModule.settlePendingRemoteActions(f.h.ports);
+    const skipped = loadPipelines().find(lane => lane.id === f.id)!;
+    expect(skipped.remoteAction?.error).toBeUndefined();
+    expect(skipped.state).toBe("completed");
+    expect(skipped.runs[1]!.attempts[0]!.state).toBe("skipped");
   } finally { f.close(); }
 });
 

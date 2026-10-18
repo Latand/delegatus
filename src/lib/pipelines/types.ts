@@ -187,10 +187,10 @@ export type PipelineEdgeActivation = {
   edge: PipelineEdgeKind;
   /** On a fail activation: the source's budget was spent, so this is the
       one handoff past it (#1868). It spends no reviewed round, and the
-      target's pass follows the source's pass edge, except a terminal advance
-      gate gets one final re-check (#2247). */
+      target's pass follows the source's pass edge or completes, with no
+      further review. */
   budgetSpent?: true;
-  /** The terminal gate must judge the spent fix once more; a fail parks. */
+  /** Legacy terminal re-check activation retained for existing records. */
   budgetRecheck?: true;
 };
 
@@ -700,8 +700,8 @@ export type PipelineStageAttempt = {
       the lane kept going instead of parking on it. */
   decisionRequested?: boolean;
   /** Set on the failed attempt whose findings were handed along a spent fail
-      edge (#1868): they went to the fix stage. A terminal advance gate gets one
-      final re-check (#2247). The verdict and findings stay on this attempt. */
+      edge (#1868): they went to the fix stage, whose pass follows this gate's
+      pass edge or completes. The verdict and findings stay on this attempt. */
   budgetSpent?: boolean;
   /** On a `budgetSpent` attempt: the head that review judged (#1938), compared
       with the head the fix writes to decide whether the lane may move on. */
@@ -926,7 +926,8 @@ export type PipelineDelivery = {
     epoch: number;
     sha: string;
     requestKey?: string;
-    /** This reservation continues the committing pass, rather than an unrelated park. */
+    /** This reservation continues the committing pass. False records that its
+        successful push reached a later refusal, which needs an explicit retry. */
     passedStage?: boolean;
     /** Admission snapshot, checked before an asynchronous publisher starts. */
     fence?: string;
