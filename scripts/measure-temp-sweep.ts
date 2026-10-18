@@ -5,11 +5,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { scanProcesses, runTempSweep } from "../src/lib/tempSweep";
 import { diskVolumes, readDiskPressure } from "../src/lib/state/diskPressure";
 import { WorktreeSweepWorker } from "../src/lib/pipelines/worktreeSweepWorker";
 
 const after = process.argv.includes("--after");
+const revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-sweep-measure-"));
 const prior = process.env.SWEEP_TEST_ROOT;
 process.env.SWEEP_TEST_ROOT = root;
@@ -45,6 +47,8 @@ try {
     try {
       await new Promise(resolve => setTimeout(resolve, 10));
       const cpu = process.cpuUsage(), start = performance.now();
+      const requestsFile = path.join(root, "requests");
+      const requestsBefore = fs.existsSync(requestsFile) ? fs.readFileSync(requestsFile, "utf8").trim().split("\n").filter(Boolean).length : 0;
       if (worker) {
         if (kind === "T2") await runTempSweep({ ...process.env, LLV_TEMP_SWEEP: "dry-run" }); else await readDiskPressure();
       } else {
@@ -54,9 +58,13 @@ try {
         if (kind === "H3") diskVolumes(roots);
       }
       const wallMs = performance.now() - start, used = process.cpuUsage(cpu);
+      const requestsAfter = fs.existsSync(requestsFile) ? fs.readFileSync(requestsFile, "utf8").trim().split("\n").filter(Boolean).length : 0;
       await new Promise(resolve => setTimeout(resolve, 10));
       console.log(JSON.stringify({ mode: after ? "after" : "before", kind, run, processes: 340,
-        paths: 44_000, roots: roots.length, wallMs, cpuMs: (used.user + used.system) / 1000, maxLoopMs, load: os.loadavg() }));
+        paths: 44_000, roots: roots.length, revision,
+        executionPath: !after ? "direct-scan" : kind === "H3"
+          ? requestsAfter > requestsBefore ? "helper-refresh" : "viewer-client-cache-hit" : "helper-request",
+        wallMs, cpuMs: (used.user + used.system) / 1000, maxLoopMs, load: os.loadavg() }));
     } finally { clearInterval(timer); }
   }
 } finally {
