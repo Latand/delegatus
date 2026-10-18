@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronRight, ChevronUp } from "lucide-react";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { Segmented } from "../ActivityDashboard";
 import { roleName } from "../format";
@@ -206,9 +206,10 @@ function TimeAndTokensChart({ answer, ctx, height }: { answer: TokensAnswer; ctx
           <text x={width - 4} y={tokenTop - 4} fontSize={10} textAnchor="end" fill="var(--color-muted)" className="tabular-nums" data-token-strip-max="">{compact(tokenMax, locale)}</text>
           <line x1={left} x2={width} y1={tokenTop} y2={tokenTop} stroke="var(--color-border)" strokeDasharray="2 3" shapeRendering="crispEdges" />
           <line x1={left} x2={width} y1={tokenTop + tokenH} y2={tokenTop + tokenH} stroke="var(--color-border)" shapeRendering="crispEdges" />
+          {/* All kinds summed, so the strip takes the overview's series colour: a grey here would read as one token kind of the meter above. */}
           {answer.series.map((bucket, index) => {
             const h = (tokenTotals[index]! / tokenMax) * tokenH;
-            return h > 0 ? <rect key={bucket.start} x={left + index * band + band / 2 - barW} y={tokenTop + tokenH - h} width={barW * 2} height={h} rx={2} fill="var(--color-muted)" /> : null;
+            return h > 0 ? <rect key={bucket.start} x={left + index * band + band / 2 - barW} y={tokenTop + tokenH - h} width={barW * 2} height={h} rx={2} fill="var(--mark-series-1)" data-token-strip-bar="" /> : null;
           })}
         </svg>
       ) : null}
@@ -241,6 +242,20 @@ function splitBy(answer: TokensAnswer, project: string, dimension: "role" | "mod
   return [...out.entries()].sort((a, b) => b[1] - a[1]);
 }
 
+const DETAIL_SHOWN = 5;
+
+/** A project's split, cut to its largest entries; a cut list ends with the
+    rest as one item, so every line adds up to the row's total. */
+function SplitItems({ entries, name, ctx }: { entries: Array<[string, number]>; name(key: string): string; ctx: Ctx }) {
+  const { pt, locale } = ctx;
+  const shown = entries.length > DETAIL_SHOWN + 1 ? entries.slice(0, DETAIL_SHOWN) : entries;
+  const rest = entries.slice(shown.length);
+  const value = (amount: number) => <b className="font-semibold tabular-nums text-primary">{compact(amount, locale)}</b>;
+  const items = shown.map(([key, amount]) => <>{name(key)} {value(amount)}</>);
+  if (rest.length) items.push(<span data-token-detail-rest="">{pt("other", { count: rest.length })} {value(rest.reduce((sum, [, amount]) => sum + amount, 0))}</span>);
+  return <span data-token-split={entries.reduce((sum, [, amount]) => sum + amount, 0)}><Items items={items} /></span>;
+}
+
 export function Variant2(props: VariantProps) {
   const { answer: chosen, ctx, desktop, project, filters } = props;
   const { pt, locale } = ctx;
@@ -255,22 +270,27 @@ export function Variant2(props: VariantProps) {
     return { human: time.humanHours, agents: Math.round(time.agentHours) };
   };
   const hoursText = (value: number) => pt("time.hours", { value: value.toLocaleString(locale === "uk" ? "uk-UA" : "en-GB") });
+  const costNote = (
+    <div data-token-figure="cost">
+      <div className="text-[12px] text-secondary"><Optional ctx={ctx} />{pt("extra.cost", { value: money(cost, locale) })}</div>
+      <div className="mt-0.5 text-[11px] text-muted">{pt("extra.costNote")}</div>
+    </div>
+  );
   const tokensFigure = (
     <div data-token-figure="tokens">
       <Hero answer={answer} ctx={ctx} size={desktop ? 32 : 26} />
       <div className="mt-3"><KindMeter counts={answer.totals} ctx={ctx} compactLabels /></div>
-      <div className="mt-2.5 text-[12px] text-secondary"><Optional ctx={ctx} />{pt("extra.cost", { value: money(cost, locale) })}</div>
-      <div className="mt-0.5 text-[11px] text-muted">{pt("extra.costNote")}</div>
+      {desktop ? null : <div className="mt-2.5">{costNote}</div>}
     </div>
   );
-  const timeFigure = (key: "you" | "agents") => (
-    <div data-token-figure={key}>
+  const timeFigure = (key: "you" | "agents", style?: CSSProperties) => (
+    <div data-token-figure={key} style={style}>
       <div className="flex h-5 items-center gap-[7px] text-[12px] font-semibold text-secondary">
         <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-[3px]" style={{ background: key === "you" ? "var(--mark-you)" : "var(--mark-supervised)" }} />
         {pt(key === "you" ? "time.you" : "time.agents")}
       </div>
       <div className="mt-1 flex items-baseline gap-2 whitespace-nowrap">
-        <span className={`font-semibold leading-none tracking-[-0.02em] text-primary ${key === "you" ? (desktop ? "text-[44px]" : "text-[26px]") : desktop ? "text-[32px]" : "text-[26px]"}`}>
+        <span data-token-hours="" className={`font-semibold leading-none tracking-[-0.02em] text-primary ${key === "you" ? (desktop ? "text-[44px]" : "text-[26px]") : desktop ? "text-[32px]" : "text-[26px]"}`}>
           {key === "agents" ? <span className="mr-1 align-[0.18em] text-[0.62em] font-medium text-muted">≈</span> : null}
           {hoursText(key === "you" ? answer.time.humanHours : Math.round(answer.time.agentHours))}
         </span>
@@ -300,9 +320,9 @@ export function Variant2(props: VariantProps) {
               <span className="text-right font-semibold text-primary" title={exact(totalOf(data.counts), locale)}>{compact(totalOf(data.counts), locale)}</span>
             </button>
             {open && entry.key ? (
-              <div className="grid gap-[5px] bg-sunken px-[18px] pb-3 pt-0.5 text-[12px] leading-[1.45] text-muted max-sm:px-3" data-token-project-detail="">
-                <DetailLine label={pt("by.role")}><Items items={splitBy(answer, entry.key, "role").slice(0, 5).map(([role, value]) => <>{roleName(role, ctx.t)} <b className="font-semibold tabular-nums text-primary">{compact(value, locale)}</b></>)} /></DetailLine>
-                <DetailLine label={pt("by.model")}><Items items={splitBy(answer, entry.key, "model").slice(0, 5).map(([model, value]) => <>{entityName("model", model, ctx)} <b className="font-semibold tabular-nums text-primary">{compact(value, locale)}</b></>)} /></DetailLine>
+              <div className="grid gap-[5px] bg-sunken px-[18px] pb-3 pt-0.5 text-[12px] leading-[1.45] text-muted max-sm:px-3" data-token-project-detail={totalOf(data.counts)}>
+                <DetailLine label={pt("by.role")}><SplitItems entries={splitBy(answer, entry.key, "role")} name={(role) => roleName(role, ctx.t)} ctx={ctx} /></DetailLine>
+                <DetailLine label={pt("by.model")}><SplitItems entries={splitBy(answer, entry.key, "model")} name={(model) => entityName("model", model, ctx)} ctx={ctx} /></DetailLine>
               </div>
             ) : null}
           </li>
@@ -323,11 +343,7 @@ export function Variant2(props: VariantProps) {
     return (
       <div className="grid grid-cols-[minmax(0,1fr)_420px] items-start gap-4">
         <Card className="px-[22px] pb-3.5 pt-5" testId="main">
-          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1.1fr)] gap-6">
-            {timeFigure("you")}
-            {timeFigure("agents")}
-            {tokensFigure}
-          </div>
+          <FigureGrid you={(style) => timeFigure("you", style)} agents={(style) => timeFigure("agents", style)} tokens={tokensFigure} cost={costNote} />
           <div className="mt-[18px] border-t border-border pt-3">
             <TimeAndTokensChart answer={answer} ctx={ctx} height={300} />
           </div>
@@ -343,9 +359,9 @@ export function Variant2(props: VariantProps) {
   return (
     <>
       <div className="grid grid-cols-2 gap-2">
-        <Card className="px-4 py-3">{timeFigure("you")}</Card>
-        <Card className="px-4 py-3">{timeFigure("agents")}</Card>
-        <Card className="col-span-2 px-4 py-3">{tokensFigure}</Card>
+        <Card className="px-4 py-3" testId="you">{timeFigure("you")}</Card>
+        <Card className="px-4 py-3" testId="agents">{timeFigure("agents")}</Card>
+        <Card className="col-span-2 px-4 py-3" testId="tokens">{tokensFigure}</Card>
       </div>
       <Card className="px-3 pb-2 pt-3" testId="days">
         <TimeAndTokensChart answer={answer} ctx={ctx} height={250} />
@@ -355,6 +371,30 @@ export function Variant2(props: VariantProps) {
         <div className="border-t border-border">{projectRows}</div>
       </Card>
     </>
+  );
+}
+
+/** The three figures of the desktop card. Wide, «Ви» and «Агенти» share the
+    first row and the price note fills the space under them beside the taller
+    tokens column; narrower, the two hour figures stack so they never sit on
+    one baseline and read as one equation, with the note under them. */
+function FigureGrid({ you, agents, tokens, cost }: { you(style: CSSProperties): ReactNode; agents(style: CSSProperties): ReactNode; tokens: ReactNode; cost: ReactNode }) {
+  const [box, width] = useWidth<HTMLDivElement>();
+  const wide = width >= 640;
+  return (
+    <div
+      ref={box}
+      className="grid gap-x-6 gap-y-4"
+      style={wide
+        ? { gridTemplateColumns: "minmax(0,1fr) minmax(0,0.9fr) minmax(0,1.1fr)", gridTemplateAreas: "'you agents tokens' 'cost cost tokens'", gridTemplateRows: "auto 1fr" }
+        : { gridTemplateColumns: "minmax(0,1fr) minmax(0,1.15fr)", gridTemplateAreas: "'you tokens' 'agents tokens' 'cost tokens'", gridTemplateRows: "auto auto 1fr" }}
+      data-token-figures={wide ? "wide" : "stacked"}
+    >
+      {you({ gridArea: "you" })}
+      {agents({ gridArea: "agents" })}
+      <div style={{ gridArea: "tokens" }}>{tokens}</div>
+      <div style={{ gridArea: "cost" }} className="self-end">{cost}</div>
+    </div>
   );
 }
 
@@ -615,7 +655,11 @@ function SortHeader({ label, column, sort, onSort, align = "right", optional = f
 
 function Folds({ answer, ctx, desktop }: { answer: TokensAnswer; ctx: Ctx; desktop: boolean }) {
   const { pt, locale } = ctx;
-  const [open, setOpen] = useState<{ top: boolean; lanes: boolean }>({ top: desktop, lanes: false });
+  /* On a desktop both extras open side by side, each five two-line rows, so
+     neither leaves an empty page beside a collapsed neighbour. */
+  const [open, setOpen] = useState<{ top: boolean; lanes: boolean }>({ top: desktop, lanes: desktop });
+  /* The header's project chip already names the project a filter chose. */
+  const showProject = answer.query.project === null;
   const top = topConversations(answer.query.from, answer.query.to, answer.query).slice(0, 5);
   const lanes = laneRows(answer.query.from, answer.query.to, answer.query).slice(0, 5);
   const fold = (key: "top" | "lanes", title: string, body: ReactNode) => (
@@ -641,7 +685,7 @@ function Folds({ answer, ctx, desktop }: { answer: TokensAnswer; ctx: Ctx; deskt
             <li key={row.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 border-t border-border px-[18px] py-2 text-[12px] first:border-t-0 max-sm:px-3.5">
               <span className="min-w-0">
                 <span className="block truncate font-semibold text-accent">{row.title}</span>
-                <span className="block truncate text-muted">{[entityName("project", row.project ?? "", ctx), roleName(row.role, ctx.t), entityName("model", row.model, ctx)].join(" · ")}</span>
+                <span className="block truncate text-muted" data-token-top-meta="">{[...(showProject ? [entityName("project", row.project ?? "", ctx)] : []), roleName(row.role, ctx.t), entityName("model", row.model, ctx)].join(" · ")}</span>
               </span>
               <span className="font-semibold tabular-nums text-primary">{compact(totalOf(row.counts), locale)}</span>
             </li>
@@ -682,7 +726,7 @@ function WindowChart({ account, answer, ctx, height = 84 }: { account: string; a
   const endX = left + (peaks.length - 1) * band + band / 2;
   const line = (key: "fiveHour" | "weekly") => peaks.map((peak, index) => `${index ? "L" : "M"}${left + index * band + band / 2},${y(peak[key])}`).join(" ");
   return (
-    <div>
+    <div data-token-windows="">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-secondary">
         <span className="font-semibold"><Optional ctx={ctx} />{pt("account.windows")}</span>
         <span className="flex items-center gap-1.5"><svg width="14" height="6" aria-hidden><line x1="0" x2="14" y1="3" y2="3" stroke="var(--color-primary)" strokeWidth="2" /></svg>{pt("account.weekly")}</span>
@@ -727,10 +771,13 @@ export function Variant4(props: VariantProps) {
     account,
     answer: tokensAnswer({ ...answer.query, stack: "model", list: "model", filters: { ...answer.query.filters, account: account.id } }),
   }));
+  /* One scale for every account's day chart, so bar heights compare across the cards. */
+  const sharedMax = Math.max(0, ...accounts.flatMap(({ answer: accountAnswer }) => accountAnswer.series.map((bucket) => bucket.parts.reduce((sum, part) => sum + totalOf(part.counts), 0))));
   const cards = accounts.map(({ account, answer: accountAnswer }) => {
     const keys = stackKeys(accountAnswer);
     return (
-      <Card key={account.id} className={desktop ? "px-[18px] pb-3 pt-4" : "px-4 pb-3 pt-4"} testId={`account-${account.id}`}>
+      /* Side by side, each card's eight sections sit on the rows of one shared grid, so a legend that wraps in one card moves the same section in all three. */
+      <Card key={account.id} className={desktop ? "row-span-8 grid grid-rows-subgrid px-[18px] pb-3 pt-4" : "px-4 pb-3 pt-4"} testId={`account-${account.id}`}>
         <div className="flex items-baseline justify-between gap-2">
           <span className="truncate text-[13px] font-semibold text-primary">{account.label}</span>
           <span className="whitespace-nowrap text-[11.5px] text-muted">{pt("account.plan", { plan: account.plan })}</span>
@@ -743,7 +790,7 @@ export function Variant4(props: VariantProps) {
         <div className="mt-3"><KindMeter counts={accountAnswer.totals} ctx={ctx} compactLabels /></div>
         <div className="mt-3 border-t border-border pt-2 text-[11.5px] font-semibold text-secondary">{pt("account.byModel")}</div>
         <div className="mt-1"><Legend dimension="model" keys={keys} ctx={ctx} /></div>
-        <div className="mt-1"><ColumnChart series={accountAnswer.series} dimension="model" height={130} ctx={ctx} bucket={accountAnswer.bucket} testId={`account-${account.id}`} /></div>
+        <div className="mt-1"><ColumnChart series={accountAnswer.series} dimension="model" height={130} ctx={ctx} bucket={accountAnswer.bucket} testId={`account-${account.id}`} scaleMax={sharedMax} /></div>
         <div className="mt-2 border-t border-border pt-2"><WindowChart account={account.id} answer={accountAnswer} ctx={ctx} /></div>
       </Card>
     );
@@ -766,7 +813,7 @@ export function Variant4(props: VariantProps) {
   if (desktop) {
     return (
       <div className="flex flex-col gap-4">
-        <div className="grid grid-cols-3 items-start gap-4">{cards}</div>
+        <div className="grid grid-cols-3 gap-x-4 gap-y-0" data-token-accounts="">{cards}</div>
         {tabs}
       </div>
     );

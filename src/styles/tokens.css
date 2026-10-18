@@ -195,10 +195,12 @@
   --mark-series-other: var(--border-strong);
   /* The four token kinds are a neutral ink ramp, so a kind never reads as a
      model, role or person: cache reads (most of every total) are the quietest
-     step, output the darkest. Every kind is also printed with its number. */
+     step, output the darkest. Every kind is also printed with its number.
+     Fresh input clears 3:1 on the card; neighbouring steps sit at least 2:1
+     apart. */
   --mark-kind-1: #c4c0b7;
-  --mark-kind-2: #98948b;
-  --mark-kind-3: #6b6861;
+  --mark-kind-2: #928e85;
+  --mark-kind-3: #5e5b55;
   --mark-kind-4: #2f2e2b;
 
   /* ── §1.6 Motion ───────────────────────────────────────────────────────── */

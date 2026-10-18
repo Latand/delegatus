@@ -720,10 +720,15 @@ Sizes: XS under half a day, S about a day, M two to three days, L a week.
 - Where: no new view. One range control serves the whole page and gains
   «Період…», so your time and agent time also take a free range.
 - Desktop: a third figure «Токени» beside «Ви» and «Агенти», with the kind
-  meter under it; a thin one-colour row of token columns under the day chart,
-  on the same day axis, its scale printed inside the plot; the Projects list
+  meter under it; the price estimate fills the space under the two hour
+  figures. Where the card is narrower (1024 px), «Ви» and «Агенти» stack so the
+  two numbers never share a baseline. A thin row of token columns under the
+  day chart, on the same day axis, its scale printed inside the plot, in the
+  overview's series colour, a hue no token kind uses; the Projects list
   gains a «Токени» column, and an opened project row shows its split by role
-  and by model. Grouping by model across projects lives in the drawer.
+  and by model: the five largest entries, then «Інші (N)» with the rest, so
+  each line adds up to the row. Grouping by model across projects lives in
+  the drawer.
 - Phone: a «Токени» tile beside the existing tiles; the token row under the
   day list; the tokens column in project rows.
 - Extras shown: E1 («≈ $…» once, under the tokens figure).
@@ -740,8 +745,9 @@ Sizes: XS under half a day, S about a day, M two to three days, L a week.
   rows by «Моделі» (switch: Ролі, Проєкти, Учасники, Акаунти), columns Нові
   вхідні · Читання з кешу · Запис у кеш · Вихідні · Міркування ·
   Запити · Кеш % · ≈ Вартість, and a sparkline per row; columns sort on click.
-  Under it, two folding tables: «Найбільші розмови» and «За лейнами й
-  задачами». The hatched start of the area is labelled «До 11 вересня не
+  Under it, two folding tables side by side, both open on a desktop:
+  «Найбільші розмови» (without the project in each row while one project is
+  chosen) and «За лейнами й задачами». The hatched start of the area is labelled «До 11 вересня не
   пораховано».
 - Phone: the table becomes one card per row (name, total, a one-colour bar of
   the row's size, the kinds as a 2×2 grid with «З кешу» for cache reads); the date inputs replace the drag selection.
@@ -755,7 +761,9 @@ Sizes: XS under half a day, S about a day, M two to three days, L a week.
 - Desktop: one card per provider account, side by side: tokens per day stacked
   by model, with the account's 5-hour and weekly window usage as a line over
   the same days, the latest weekly share printed right of the line's end.
-  Each card prints its four kinds as the kind meter. Under the cards, tabs
+  Each card prints its four kinds as the kind meter. The day charts share one
+  scale, and the cards' sections sit on one grid, so bars and baselines
+  compare across cards. Under the cards, tabs
   «Учасники · Ролі · Проєкти» with ranked lists that carry no colour swatch
   or bar, only the total and share, since the cards' colours mean models. The project filter applies to every card.
 - Phone: the account cards stack; the tabs follow.
@@ -793,7 +801,12 @@ Sizes: XS under half a day, S about a day, M two to three days, L a week.
   labelled once; text contrast in both themes. The driver also measures chart
   text against its own drawing, 4 px between axis labels, no line through a
   value label, no text under the open phone range, no kind segment under 6 px,
-  and the four kinds printed in every variant but the table.
+  and the four kinds printed in every variant but the table. It also measures
+  the fresh-input segment at 3:1 or more against its card, variant 2's day
+  strip apart from every kind swatch, its split lines adding up to the project
+  row and its hour figures apart or stacked, variant 3's folds level and its
+  conversation rows free of the chosen project, and variant 4's day charts on
+  one scale and one line.
 
 ## 10. Tests
 

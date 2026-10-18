@@ -268,7 +268,7 @@ function tickLabel(bucket: SeriesBucket, index: number, buckets: SeriesBucket[],
   return monthChanged ? dateText(bucket.start, locale, { day: "numeric", month: "short" }) : String(day);
 }
 
-export function ColumnChart({ series, dimension, height, ctx, bucket, otherCount = 0, testId }: {
+export function ColumnChart({ series, dimension, height, ctx, bucket, otherCount = 0, testId, scaleMax }: {
   series: SeriesBucket[];
   dimension: TokenDimension;
   height: number;
@@ -276,6 +276,8 @@ export function ColumnChart({ series, dimension, height, ctx, bucket, otherCount
   bucket: "hour" | "day" | "week";
   otherCount?: number;
   testId?: string;
+  /** A tallest value shared with sibling charts, so their bars compare. */
+  scaleMax?: number;
 }) {
   const { locale, pt } = ctx;
   const [box, width] = useWidth<HTMLDivElement>();
@@ -287,7 +289,7 @@ export function ColumnChart({ series, dimension, height, ctx, bucket, otherCount
   const innerW = Math.max(0, width - left - 4);
   const innerH = height - bottom - top;
   const totals = series.map((entry) => entry.parts.reduce((sum, part) => sum + totalOf(part.counts), 0));
-  const max = niceMax(Math.max(0, ...totals));
+  const max = niceMax(Math.max(scaleMax ?? 0, ...totals));
   const band = series.length ? innerW / series.length : 0;
   const barW = Math.max(3, Math.min(30, band * 0.64));
   const every = band >= 30 ? 1 : band >= 16 ? 2 : band >= 9 ? 4 : 7;
@@ -302,7 +304,7 @@ export function ColumnChart({ series, dimension, height, ctx, bucket, otherCount
           {[0, 0.5, 1].map((fraction) => (
             <g key={fraction}>
               <line x1={left} x2={width} y1={y(max * fraction)} y2={y(max * fraction)} stroke="var(--color-border)" strokeWidth={1} shapeRendering="crispEdges" />
-              <text x={left - 6} y={y(max * fraction) + 3.5} textAnchor="end" fontSize={10} fill="var(--color-muted)" className="tabular-nums">{fraction === 0 ? "0" : compact(max * fraction, locale)}</text>
+              <text x={left - 6} y={y(max * fraction) + 3.5} textAnchor="end" fontSize={10} fill="var(--color-muted)" className="tabular-nums" data-token-scale-top={fraction === 1 ? "" : undefined}>{fraction === 0 ? "0" : compact(max * fraction, locale)}</text>
             </g>
           ))}
           {series.map((entry, index) => {

@@ -8034,7 +8034,58 @@ function readTokenFrame() {
   }
   const segments6 = Array.from(document.querySelectorAll<HTMLElement>("[data-token-segment]")).map((el) => el.getBoundingClientRect().width).filter((width) => width < 6).map((width) => Math.round(width * 10) / 10);
   const meterValues = Array.from(document.querySelectorAll<HTMLElement>("[data-token-meter] [data-token-kind]")).map((el) => ({ kind: el.dataset.tokenKind ?? "", text: (el.textContent ?? "").replace(/\s+/g, " ").trim() }));
+  /* Colours as drawn: each meter segment's contrast with its card, and the day strip's fill beside the kind swatches. */
+  const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+  const luminance = (value: string) => {
+    const [r = 0, g = 0, b = 0] = rgb(value).map((channel) => { const c = channel / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a: string, b: string) => { const [x, y] = [luminance(a), luminance(b)].sort((m, n) => n - m); return Math.round(((x! + 0.05) / (y! + 0.05)) * 100) / 100; };
+  const cardColor = (el: Element) => getComputedStyle(el.closest("[data-token-card]") ?? page).backgroundColor;
+  const segmentContrast = Array.from(document.querySelectorAll<HTMLElement>("[data-token-segment]")).map((el) => ({ kind: el.dataset.tokenSegment ?? "", ratio: contrast(getComputedStyle(el).backgroundColor, cardColor(el)) }));
+  const kindSwatches = [...new Set(Array.from(document.querySelectorAll<HTMLElement>("[data-token-segment]")).map((el) => getComputedStyle(el).backgroundColor))];
+  const stripBar = document.querySelector("[data-token-strip-bar]");
+  const stripFill = stripBar ? getComputedStyle(stripBar).fill : null;
+  /* How far apart a colour pair sits in hue and lightness: a grey beside a grey of near lightness is one kind to a reader. */
+  const colourGap = (a: string, b: string) => { const [p, q] = [rgb(a), rgb(b)]; return Math.round(Math.hypot(p[0]! - q[0]!, p[1]! - q[1]!, p[2]! - q[2]!)); };
+  const stripVsKinds = stripFill ? kindSwatches.map((swatch) => ({ swatch, gap: colourGap(stripFill, swatch), ratio: contrast(stripFill, swatch) })) : [];
+  /* Variant 2's open project row: every split line adds up to the row's total. */
+  const projectTotal = Number(document.querySelector<HTMLElement>("[data-token-project-detail]")?.dataset.tokenProjectDetail ?? NaN);
+  const splits = Array.from(document.querySelectorAll<HTMLElement>("[data-token-split]")).map((el) => ({ sum: Number(el.dataset.tokenSplit), rest: el.querySelector("[data-token-detail-rest]")?.textContent ?? null, items: (el.textContent ?? "").split(" · ").length }));
+  /* Variant 2's hour figures: two numbers on one baseline need clear air between them. */
+  const figure = (key: string) => document.querySelector(`[data-token-figure="${key}"] [data-token-hours]`)?.getBoundingClientRect() ?? null;
+  const you = figure("you");
+  const agents = figure("agents");
+  const figuresGap = you && agents && Math.abs(you.bottom - agents.bottom) < 2 ? Math.round(agents.left - you.right) : null;
+  /* The figures' columns hold about the same height of content, so neither leaves an empty block beside the other. */
+  const figuresBox = document.querySelector<HTMLElement>("[data-token-figures]");
+  const heightOf = (key: string) => figuresBox?.querySelector(`[data-token-figure="${key}"]`)?.getBoundingClientRect().height ?? 0;
+  const figuresEmpty = figuresBox
+    ? Math.round(figuresBox.dataset.tokenFigures === "wide"
+      ? Math.abs(heightOf("tokens") - (Math.max(heightOf("you"), heightOf("agents")) + heightOf("cost")))
+      : Math.abs(heightOf("tokens") - (heightOf("you") + heightOf("agents") + heightOf("cost"))))
+    : null;
+  /* Variant 3: the folds' heights side by side, and project names in the largest conversations' meta lines. */
+  const folds = Array.from(document.querySelectorAll<HTMLElement>("[data-token-card^=fold-]")).map((el) => ({ key: el.dataset.tokenCard ?? "", top: Math.round(el.getBoundingClientRect().top), height: Math.round(el.getBoundingClientRect().height) }));
+  const topMeta = Array.from(document.querySelectorAll<HTMLElement>("[data-token-top-meta]")).map((el) => el.textContent ?? "");
+  /* Variant 4: each account card's day chart and windows chart on one line, and one scale over the day charts. */
+  const accountCharts = Array.from(document.querySelectorAll<HTMLElement>("[data-token-card^=account-]")).map((card) => {
+    const chart = card.querySelector("[data-token-chart^=account-]");
+    const windows = card.querySelector("[data-token-windows]");
+    return { card: card.dataset.tokenCard ?? "", chartTop: chart ? Math.round(chart.getBoundingClientRect().top) : null, windowsTop: windows ? Math.round(windows.getBoundingClientRect().top) : null, scaleTop: chart?.querySelector("[data-token-scale-top]")?.textContent ?? null };
+  });
   return {
+    segmentContrast,
+    stripFill,
+    stripVsKinds,
+    projectTotal: Number.isNaN(projectTotal) ? null : projectTotal,
+    splits,
+    figuresGap,
+    figuresEmpty,
+    figuresLayout: document.querySelector<HTMLElement>("[data-token-figures]")?.dataset.tokenFigures ?? null,
+    folds,
+    topMeta,
+    accountCharts,
     svgCut,
     tickGaps,
     crossed,
@@ -8128,6 +8179,28 @@ async function activityTokensMain(): Promise<void> {
         }
       }
       if (variant === 2) must(reading.legends === 0 && /^663[,.]7/.test(reading.stripMax ?? ""), `${name}: ${reading.legends} legends; the strip's scale reads ${JSON.stringify(reading.stripMax)}`);
+      /* The fresh-input segment is a graphical object: 3:1 against its card. */
+      for (const segment of reading.segmentContrast) must(segment.kind !== "input" || segment.ratio >= 3, `${name}: the ${segment.kind} segment has ${segment.ratio}:1 against its card`);
+      if (variant === 2) {
+        /* The day strip sums every kind, so it must not look like any one kind's swatch. */
+        must(reading.stripFill !== null && reading.stripVsKinds.length > 0 && reading.stripVsKinds.every((entry) => entry.gap >= 80), `${name}: the day strip ${reading.stripFill} sits near a kind swatch ${JSON.stringify(reading.stripVsKinds)}`);
+        must(reading.projectTotal !== null && reading.splits.length === 2 && reading.splits.every((split) => Math.abs(split.sum - reading.projectTotal!) <= 1), `${name}: the project's split lines ${JSON.stringify(reading.splits)} do not add up to ${reading.projectTotal}`);
+        must(reading.splits.every((split) => split.items <= 6), `${name}: a split line lists ${JSON.stringify(reading.splits.map((split) => split.items))} entries`);
+        if (!size.phone) {
+          must(reading.figuresGap === null || reading.figuresGap >= 24, `${name}: the hour figures sit ${reading.figuresGap}px apart on one baseline (${reading.figuresLayout})`);
+          /* The critic's empty block was 190 px tall; up to 80 px is the ordinary air between two groups of text. */
+          must(reading.figuresEmpty !== null && reading.figuresEmpty <= 80, `${name}: ${reading.figuresEmpty}px empty under the hour figures beside the tokens column (${reading.figuresLayout})`);
+        }
+      }
+      if (variant === 3) {
+        /* On the phone the fold starts closed. */
+        must((size.phone || reading.topMeta.length > 0) && reading.topMeta.every((meta) => !meta.includes("orchard-client")), `${name}: the largest conversations repeat the filtered project: ${JSON.stringify(reading.topMeta)}`);
+        if (!size.phone) must(reading.folds.length === 2 && reading.folds[0]!.top === reading.folds[1]!.top && Math.abs(reading.folds[0]!.height - reading.folds[1]!.height) <= 4, `${name}: the optional folds ${JSON.stringify(reading.folds)} sit at uneven heights`);
+      }
+      if (variant === 4) {
+        must(reading.accountCharts.length === 3 && new Set(reading.accountCharts.map((chart) => chart.scaleTop)).size === 1, `${name}: the account day charts use their own scales ${JSON.stringify(reading.accountCharts)}`);
+        if (!size.phone) must(new Set(reading.accountCharts.map((chart) => chart.chartTop)).size === 1 && new Set(reading.accountCharts.map((chart) => chart.windowsTop)).size === 1, `${name}: the account cards' charts are out of line ${JSON.stringify(reading.accountCharts)}`);
+      }
       must(reading.segments.length === 5 && reading.segments.every((segment) => segment.whole), `${name}: range segments ${JSON.stringify(reading.segments)}`);
       must(reading.chips.some((chip) => chip.includes("orchard-client")), `${name}: no orchard-client filter chip (${JSON.stringify(reading.chips)})`);
       if (state === "open") {
