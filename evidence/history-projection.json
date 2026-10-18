@@ -14,7 +14,7 @@
     "src/lib/memory/curation/evalServer.fixture.ts": "45c1087520ce820aefa710c45a6fc22831abad214ebe111caa3b41eafbe65082",
     "src/lib/memory/curation/read.ts": "ccd355c588504843c23a59d32f600e4fdb371f7e464bd2841853f2ea2f8526af",
     "src/lib/memory/curation/reviewLessons.test.ts": "40a1b315e5d7ea1cbaa8f683b847f76ade70305d234a7ad6f476fcae9ddb7320",
-    "src/lib/state/historyProjection.test.ts": "be15d2d8c2a9760527c855853b03fdd68b6203362697d025dce3761753f889bf",
+    "src/lib/state/historyProjection.test.ts": "5b2c29cb5f6d3685022f52b2c438aaff42e9ae5af62a8a741dec1c42ad500951",
     "src/lib/state/historyProjection.ts": "da72efab0a5d2560422ae92537bc24888d7a4ce513d6d3f4823b3326d2b33bf0",
     "src/lib/state/hotStateStores.sqlite.test.ts": "7fc03817862035c24d6efe986291ef97ed1cb786491e98a58c20fe7545c5a215",
     "src/lib/state/pipelineEvidenceIndex.ts": "adfecb6309684ad3e235aef6549e78d7ce4e857867c46ea0913648d8a9eaec2c",
