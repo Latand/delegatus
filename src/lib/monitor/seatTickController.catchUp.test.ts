@@ -1,3 +1,4 @@
+import { seatTickWakeCommit } from "./seatTick";
 import { recordSeatDeployment, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 import { expect, test, fs, path, SANDBOX, harness, childFixture, childRig, runSeatTickCheck, NOW, MINUTE, PROJECT, CONVERSATION, OVERDUE, outstandingWake, terminalEvent, spawn, SeatTickAccounting, defaultSeatTickSettings, writeSeatTickState, emptySeatTickState } from "./seatTickController.fixture";
 import { readLivenessTranscriptEvidence } from "@/lib/lifecycle/transcript";
@@ -191,4 +192,13 @@ test("an old frozen wake landing after the outage preserves one fresh catch-up",
   for (const lane of lanes) expect(next.sent[0]!.text).toContain(lane.id);
   expect(next.deps.readState!(PROJECT).reportsOwed).toHaveLength(1);
   expect(next.deps.readState!(PROJECT).unreachableSince).toBeNull();
+});
+
+test("an ordinary wake received within the interval closes its gap even if confirmation arrives later", () => {
+  const receivedAt = new Date(Date.parse(FROM) + 5 * MINUTE).toISOString();
+  const state = seatTickWakeCommit({ ...emptySeatTickState(), unreachableSince: FROM }, {
+    proposal: false, reasons: ["interval"], fingerprint: "received-quickly", eventsThrough: 0, children: [], wakeIntervalMs: 60 * MINUTE,
+  }, NOW, receivedAt);
+  expect(state.lastWakeAt).toBe(receivedAt);
+  expect(state.unreachableSince).toBeNull();
 });
