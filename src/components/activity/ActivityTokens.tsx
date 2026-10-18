@@ -15,7 +15,7 @@ import { MarkPatterns } from "./marks";
 import { writeRange, type PageRange } from "./pageParams";
 import {
   BY_KEYS, chartBuckets, ColumnChart, compact, CoverageDot, entityName, exact, foldWeeks, inputTotal, KindMeter, Legend, money, namedKeys,
-  Optional, OWNER_BY, percent, RankedList, rangeCounted, TOKEN_BY, TOKEN_KINDS, tokenTotal, tokenTrust,
+  coverageLines, Optional, OWNER_BY, percent, RankedList, rangeCounted, TOKEN_BY, TOKEN_KINDS, tokenTotal, tokenTrust,
   type ListEntry, type TokenBy, type TokenCtx,
 } from "./tokenParts";
 
@@ -310,7 +310,10 @@ export function ActivityTokensBody({ answer, by, onBy, project, onProject, membe
       {trust === "none" ? (
         <p className="mt-2 text-[13px] text-secondary" data-token-none="">{t("activity.tokens.emptyNone")}</p>
       ) : counted === "none" ? (
-        <p className="mt-2 text-[13px] text-secondary" data-token-uncounted="">{t("activity.tokens.emptyUncounted")}</p>
+        <div className="mt-2 grid gap-1 text-[13px] text-secondary" data-token-uncounted-card="">
+          <p data-token-uncounted="">{t("activity.tokens.emptyUncounted")}</p>
+          <p className="text-[12px] text-muted" data-token-counted-from="">{coverageLines(ctx)[0]}</p>
+        </div>
       ) : (
         <>
           <div className="mt-1 flex items-baseline gap-2 whitespace-nowrap">
@@ -329,9 +332,11 @@ export function ActivityTokensBody({ answer, by, onBy, project, onProject, membe
       )}
     </div>
   );
-  const chart = trust === "none" ? null : (
+  /* A range wholly before counting has nothing to draw: the card names the first counted day instead. */
+  const uncounted = buckets.some((bucket) => !bucket.counted);
+  const chart = trust === "none" || counted === "none" ? null : (
     <div className="mt-[18px] border-t border-border pt-3">
-      {legendKeys.length ? <div className="mb-2"><Legend keys={legendKeys} by={by} named={named} ctx={ctx} /></div> : null}
+      {legendKeys.length || uncounted ? <div className="mb-2"><Legend keys={legendKeys} by={by} named={named} uncounted={uncounted} ctx={ctx} /></div> : null}
       <ColumnChart buckets={buckets} bucket={weekly ? "week" : answer.params.bucket} by={by} named={named} height={phone ? 200 : 280} ctx={ctx} />
     </div>
   );
@@ -358,7 +363,7 @@ export function ActivityTokensBody({ answer, by, onBy, project, onProject, membe
   const anything = trust !== "none" && counted !== "none";
   if (!phone) {
     return (
-      <div className={`grid grid-cols-[minmax(0,1fr)_420px] items-start gap-4 ${dim}`} data-token-tab="desktop" data-activity-loaded="tokens">
+      <div className={`grid ${anything ? "grid-cols-[minmax(0,1fr)_420px]" : "grid-cols-1"} items-start gap-4 ${dim}`} data-token-tab="desktop" data-activity-loaded="tokens">
         <section className="rounded-[12px] border border-border bg-card px-[22px] pb-3.5 pt-5 shadow-1" data-token-card="main">{figure}{chart}</section>
         {anything ? (
           <section className="overflow-hidden rounded-[12px] border border-border bg-card shadow-1" data-token-card="breakdown">

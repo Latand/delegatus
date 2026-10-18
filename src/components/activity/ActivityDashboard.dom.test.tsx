@@ -166,10 +166,14 @@ const tokenDeps = {
   accounts: () => new Map([["account-a", "Claude · A"]]),
 };
 
+/** While set, the tokens route answers 500, as a failed read does. */
+let tokensFail = false;
+
 globalThis.fetch = (async (resource: string | URL | Request) => {
   const url = new URL(String(resource), "http://localhost");
   if (url.pathname === "/api/activity/tokens") {
     tokenRequests.push(url.searchParams);
+    if (tokensFail) return new Response(JSON.stringify({ error: "fixture" }), { status: 500 });
     try {
       return new Response(JSON.stringify(await activityTokensResponse(url.searchParams, viewer ?? SOLO, tokenDeps)), { status: 200 });
     } catch (error) {
@@ -670,6 +674,8 @@ describe("the Tokens tab", () => {
     expect($("[data-token-coverage]")!.getAttribute("data-token-coverage")).toBe("lower");
     expect($("[data-token-hero]")!.textContent).toBe(`≥ ${compact(TOKEN_TOTAL + 10, "en")}`);
     expect($("[data-token-coverage]")!.getAttribute("aria-label")).toContain(t("activity.tokens.coverage.partial"));
+    /* The hatch of the days before counting is named in words beside the series. */
+    expect($("[data-token-legend-uncounted]")!.textContent).toBe(t("activity.tokens.chart.legendUncounted"));
     await unmount();
     await open("/activity?view=tokens&from=2026-08-01&to=2026-08-10&stack=model&list=model");
     expect($("[data-token-coverage]")!.getAttribute("data-token-coverage")).toBe("lower");
@@ -682,6 +688,11 @@ describe("the Tokens tab", () => {
     expect($("[data-token-meter]")).toBeNull();
     expect($("[data-token-empty]")).toBeNull();
     expect($("[data-token-none]")).toBeNull();
+    /* No chart of placeholders: the card names the first counted day, and the page has no second column. */
+    expect($("[data-token-chart]")).toBeNull();
+    expect($("[data-token-counted-from]")!.textContent).toMatch(/\d/);
+    expect($('[data-token-card="breakdown"]')).toBeNull();
+    expect($("[data-token-tab]")!.className).toContain("grid-cols-1");
     await unmount();
     /* A counted range with input but no output has nothing to divide reasoning by. */
     await open("/activity?view=tokens&from=2026-09-04&to=2026-09-04&stack=model&list=model");
@@ -691,6 +702,29 @@ describe("the Tokens tab", () => {
     for (const peak of [1, 2, 3, 4, 9, 1e6]) {
       const labels = axisFractions(peak).map((fraction) => fraction === 0 ? "0" : compact(niceMax(peak) * fraction, "en"));
       expect(new Set(labels).size).toBe(labels.length);
+    }
+  });
+
+  test("a share that is not zero never reads 0%", () => {
+    expect(percent(0, "en")).toBe("0%");
+    expect(percent(0.004, "en")).toBe("<1%");
+    expect(percent(0.0001, "uk")).toStartWith("<1");
+    expect(percent(0.006, "en")).toBe("1%");
+  });
+
+  test("the phone's failed read offers a Retry at least 44 px tall, and it reads again", async () => {
+    wide = false;
+    tokensFail = true;
+    try {
+      await open("/activity?view=tokens&range=7d");
+      const retry = $("[data-activity-failed] button")!;
+      expect(retry.textContent).toBe(t("activity.retry"));
+      expect(retry.className).toContain("h-11");
+      tokensFail = false;
+      await click(retry);
+      expect($("[data-token-hero]")!.textContent).toBe(compact(TOKEN_TOTAL, "en"));
+    } finally {
+      tokensFail = false;
     }
   });
 

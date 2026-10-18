@@ -11,7 +11,7 @@ import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
 import { memberLabel } from "./ActivityMembers";
 import type { TokenBy } from "./pageParams";
 import { ENGINE_NAMES, intlLocale, projectName, roleName } from "./format";
-import { Tooltip, type TipAnchor } from "./marks";
+import { Swatch, Tooltip, type TipAnchor } from "./marks";
 
 /*
  * The pieces the Tokens tab draws with (docs/design/activity-token-usage.md
@@ -52,7 +52,9 @@ export function exact(value: number, locale: Locale): string {
 }
 
 export function percent(share: number, locale: Locale): string {
-  return new Intl.NumberFormat(intlLocale(locale), { style: "percent", maximumFractionDigits: 0 }).format(share);
+  const format = new Intl.NumberFormat(intlLocale(locale), { style: "percent", maximumFractionDigits: 0 });
+  /* A share that is not zero never reads «0%», which says nothing was used. */
+  return share > 0 && Math.round(share * 100) === 0 ? `<${format.format(0.01)}` : format.format(share);
 }
 
 /** «≈ $1 574», cents below ten dollars: the sign leads in both languages, as API price pages print it. */
@@ -444,6 +446,15 @@ export function ColumnChart({ buckets, bucket, by, named, height, ctx }: {
   const y = (value: number) => top + innerH - (value / max) * innerH;
   const colour = (key: string) => (by === "kind" ? kindColor(key as TokenKind) : seriesColor(key, named));
   const hovered = tip ? buckets[tip.index] : null;
+  /* Days that are not counted yet are one hatched band over the whole height
+     of the plot, so no edge of it lines up with a value on the axis. */
+  const uncountedRuns: Array<{ from: number; to: number }> = [];
+  buckets.forEach((entry, index) => {
+    if (entry.counted) return;
+    const last = uncountedRuns.at(-1);
+    if (last && last.to === index - 1) last.to = index;
+    else uncountedRuns.push({ from: index, to: index });
+  });
 
   /* A tick names its month where the month changes since the last tick drawn. */
   const ticks: Array<{ index: number; text: string }> = [];
@@ -473,9 +484,22 @@ export function ColumnChart({ buckets, bucket, by, named, height, ctx }: {
               <text x={left - 6} y={y(max * fraction) + 3.5} textAnchor="end" fontSize={10} fill="var(--color-muted)" className="tabular-nums" data-token-scale-top={fraction === 1 ? "" : undefined}>{fraction === 0 ? "0" : compact(max * fraction, locale)}</text>
             </g>
           ))}
+          {uncountedRuns.map((run) => (
+            <rect
+              key={run.from}
+              x={left + run.from * band}
+              y={top}
+              width={(run.to - run.from + 1) * band}
+              height={innerH}
+              fill="url(#activity-hatch-unread)"
+              opacity={0.7}
+              aria-hidden
+              data-token-unread={run.to - run.from + 1}
+            />
+          ))}
           {buckets.map((entry, index) => {
             const x = left + index * band + (band - barW) / 2;
-            if (!entry.counted) return <rect key={entry.start} x={x} y={top + innerH * 0.55} width={barW} height={innerH * 0.45} rx={3} fill="url(#activity-hatch-unread)" aria-hidden data-token-unread="" />;
+            if (!entry.counted) return null;
             let base = top + innerH;
             const columnTop = y(totals[index]!);
             return (
@@ -548,8 +572,8 @@ function ChartTipRow({ color, value, label }: { color: string; value: string; la
   );
 }
 
-/** The chart's legend: identity is never colour alone. */
-export function Legend({ keys, by, named, ctx }: { keys: readonly string[]; by: TokenBy; named: readonly string[]; ctx: TokenCtx }) {
+/** The chart's legend: identity is never colour alone, and the hatch is named. */
+export function Legend({ keys, by, named, uncounted = false, ctx }: { keys: readonly string[]; by: TokenBy; named: readonly string[]; uncounted?: boolean; ctx: TokenCtx }) {
   return (
     <ul className="flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11.5px] text-secondary" data-token-legend="">
       {keys.map((key) => (
@@ -558,6 +582,12 @@ export function Legend({ keys, by, named, ctx }: { keys: readonly string[]; by: 
           {entityName(by, key, ctx)}
         </li>
       ))}
+      {uncounted ? (
+        <li className="flex items-center gap-1.5 whitespace-nowrap" data-token-legend-uncounted="">
+          <Swatch kind="unread" />
+          {ctx.t("activity.tokens.chart.legendUncounted")}
+        </li>
+      ) : null}
     </ul>
   );
 }
@@ -602,8 +632,8 @@ export function RankedList({ rows, by, named, total, selected, onSelect, ctx }: 
                 <span className="truncate text-[13px] font-semibold text-primary" title={name}>{name}</span>
                 <span className="flex shrink-0 items-baseline gap-2 text-[12px] tabular-nums">
                   {row.cost !== undefined ? <span className="text-muted" data-token-row-cost="">{row.cost}</span> : null}
-                  <span className="font-semibold text-primary" title={exact(value, locale)}>{compact(value, locale)}</span>
-                  <span className="w-[38px] text-right text-muted">{total ? percent(value / total, locale) : "—"}</span>
+                  <span className="font-semibold text-primary" title={exact(value, locale)} data-token-row-value={value}>{compact(value, locale)}</span>
+                  <span className="w-[38px] text-right text-muted" data-token-row-share="">{total ? percent(value / total, locale) : "—"}</span>
                 </span>
               </div>
               {by === "kind" ? null : (

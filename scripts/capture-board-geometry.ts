@@ -8062,7 +8062,36 @@ function readTokenFrame() {
     .map(({ el, r }) => `${(el.textContent ?? "").trim() || el.getAttribute("aria-label") || el.tagName}:${Math.round(r.height)}`);
   const tooltip = document.querySelector("[role=tooltip]");
   const drawer = document.querySelector("[data-activity-drawer] [role=dialog]");
+  /* The rows the header's controls sit in: centres closer than 14 px share one. */
+  const centres = leaves.map((el) => { const r = el.getBoundingClientRect(); return r.top + r.height / 2; }).sort((a, b) => a - b);
+  const headerRows = centres.reduce((rows, centre, index) => (index === 0 || centre - centres[index - 1]! > 14 ? rows + 1 : rows), 0);
+  /* The «Other» colour wherever the page draws it, against its card. */
+  const otherContrast = Array.from(page.querySelectorAll<Element>('[style*="mark-series-other"], [fill*="mark-series-other"]')).map((el) => {
+    const colour = el instanceof SVGElement ? getComputedStyle(el).fill : getComputedStyle(el).backgroundColor;
+    return { where: el.tagName.toLowerCase(), ratio: contrast(colour, cardColor(el)) };
+  });
+  const plot = document.querySelector("[data-token-chart] svg");
+  const bands = Array.from(document.querySelectorAll<SVGRectElement>("rect[data-token-unread]")).map((el) => el.getBoundingClientRect().height);
+  const gridlines = Array.from(document.querySelectorAll<SVGLineElement>("[data-token-chart] svg line")).map((el) => el.getBoundingClientRect().top);
+  const mainCard = document.querySelector('[data-token-card="main"]')?.getBoundingClientRect();
+  const tabEl = document.querySelector("[data-token-tab]")?.getBoundingClientRect();
   return {
+    headerRows,
+    otherContrast,
+    /* A band is drawn over the plot's whole height (gridline to gridline). */
+    bandCoversPlot: plot && gridlines.length > 1 ? bands.map((height) => Math.round((height / (Math.max(...gridlines) - Math.min(...gridlines))) * 100) / 100) : [],
+    legendUncounted: document.querySelector("[data-token-legend-uncounted]")?.textContent ?? null,
+    chartDrawn: document.querySelector("[data-token-chart]") !== null,
+    countedFrom: document.querySelector("[data-token-counted-from]")?.textContent ?? null,
+    mainCardShare: mainCard && tabEl ? Math.round((mainCard.width / tabEl.width) * 100) / 100 : null,
+    zeroShares: Array.from(document.querySelectorAll<HTMLElement>("[data-token-row]")).filter((row) => Number(row.querySelector("[data-token-row-value]")?.getAttribute("data-token-row-value") ?? 0) > 0 && /(^|[^\d.,<])0\s?%/.test(row.querySelector("[data-token-row-share]")?.textContent ?? "")).map((row) => row.dataset.tokenRow ?? ""),
+    retry: (() => { const button = document.querySelector<HTMLElement>("[data-activity-failed] button"); return button ? { text: (button.textContent ?? "").trim(), height: Math.round(button.getBoundingClientRect().height) } : null; })(),
+    unreadSpan: document.querySelector("[data-activity-unread-span]")?.textContent ?? null,
+    questionCaps: Array.from(document.querySelectorAll("[data-activity-cap]")).filter((cap) => cap.textContent === "?").length,
+    rhythmRowCount: document.querySelectorAll("[data-activity-rhythm-row]").length,
+    rhythmNote: document.querySelector("[data-activity-rhythm-capped]")?.textContent ?? null,
+    dayRows: document.querySelectorAll("[data-activity-day]").length,
+    daysNote: document.querySelector("[data-activity-days-capped]")?.textContent ?? null,
     loading: document.querySelector("[data-activity-skeleton]") !== null,
     alert: document.querySelector("[role=alert]")?.textContent ?? null,
     scaleLabels: Array.from(document.querySelectorAll("[data-token-chart] svg text:not([data-token-tick])")).map((text) => (text.textContent ?? "").trim()),
@@ -8306,6 +8335,15 @@ async function activityTokensMain(): Promise<void> {
       must(reading.tickGaps.length === 0, `${name}: axis labels closer than 4px: ${JSON.stringify(reading.tickGaps)}`);
       must(reading.overlaps.length === 0, `${name}: header controls overlap: ${JSON.stringify(reading.overlaps)}`);
       must(reading.segments.length === 5 && reading.segments.every((segment) => segment.whole), `${name}: range segments ${JSON.stringify(reading.segments)}`);
+      /* One header row at 1440 on both tabs, in both languages. */
+      if (size.width === 1440 && state !== "loading" && state !== "error" && state !== "range-open") must(reading.headerRows === 1, `${name}: the header runs over ${reading.headerRows} rows`);
+      must(reading.otherContrast.every((entry) => entry.ratio >= 3), `${name}: «Other» against its card ${JSON.stringify(reading.otherContrast)}`);
+      must(reading.zeroShares.length === 0, `${name}: rows with tokens read 0%: ${JSON.stringify(reading.zeroShares)}`);
+      if (reading.unread > 0 && state !== "empty-range") {
+        const word = lang === "uk" ? "Не пораховано" : "Not counted";
+        must(reading.legendUncounted === word, `${name}: the legend names the hatch ${JSON.stringify(reading.legendUncounted)}`);
+        must(reading.bandCoversPlot.length > 0 && reading.bandCoversPlot.every((ratio) => ratio >= 0.95), `${name}: uncounted bands cover ${JSON.stringify(reading.bandCoversPlot)} of the plot, so an edge could read as a value`);
+      }
       if (size.phone) {
         must(reading.covered.length === 0, `${name}: the range fields cover ${JSON.stringify(reading.covered)}`);
         must(reading.small.length === 0, `${name}: controls under 44px: ${JSON.stringify(reading.small)}`);
@@ -8329,16 +8367,20 @@ async function activityTokensMain(): Promise<void> {
         must((reading.hero ?? "").startsWith("≥") === (partly || state === "coverage"), `${name}: figure ${reading.hero}`);
       }
       if (state === "empty-range") {
-        /* The main card states that the period is not counted; no figure, share, cost or meter stands beside it. */
-        must(reading.hero === null && reading.unread >= 4 && reading.coverage === "lower", `${name}: figure ${reading.hero}, coverage ${reading.coverage}, ${reading.unread} uncounted days drawn`);
+        /* The main card states that the period is not counted and names the first counted day; no figure, share, cost, meter or chart stands beside it. */
+        must(reading.hero === null && reading.unread === 0 && !reading.chartDrawn && reading.coverage === "lower", `${name}: figure ${reading.hero}, coverage ${reading.coverage}, ${reading.unread} uncounted marks, chart ${reading.chartDrawn}`);
         must(reading.uncounted === (lang === "uk" ? "Цей період ще не пораховано." : "This range is not counted yet."), `${name}: the main card reads ${reading.uncounted}`);
+        must(/\d/.test(reading.countedFrom ?? ""), `${name}: the card does not name the first counted day: ${reading.countedFrom}`);
         must(reading.empty === null && reading.extras.length === 0 && reading.meterValues.length === 0, `${name}: the card still draws ${JSON.stringify({ empty: reading.empty, extras: reading.extras.length, meter: reading.meterValues.length })}`);
         must(!/≥|≈ \$|\b0\s?%/.test(reading.cardText), `${name}: the card prints a number for nothing: ${reading.cardText}`);
         must(!/немає|No tokens in this range/.test(`${reading.uncounted}`), `${name}: claims there are no tokens`);
-        must(new Set(reading.scaleLabels).size === reading.scaleLabels.length && reading.scaleLabels.length > 0, `${name}: axis labels ${JSON.stringify(reading.scaleLabels)}`);
+        must(!size.phone ? (reading.mainCardShare ?? 0) >= 0.99 : true, `${name}: the card spans ${reading.mainCardShare} of the row, leaving a blank column`);
       }
       if (state === "loading") must(reading.loading && reading.hero === null && reading.alert === null, `${name}: loading ${reading.loading}, figure ${reading.hero}, alert ${reading.alert}`);
-      if (state === "error") must(reading.alert !== null && reading.hero === null && !reading.loading, `${name}: error alert ${reading.alert}, figure ${reading.hero}`);
+      if (state === "error") {
+        must(reading.alert !== null && reading.hero === null && !reading.loading, `${name}: error alert ${reading.alert}, figure ${reading.hero}`);
+        must(reading.retry !== null && reading.retry.text === (lang === "uk" ? "Повторити" : "Retry") && (!size.phone || reading.retry.height >= 44), `${name}: the error offers ${JSON.stringify(reading.retry)}`);
+      }
       if (state === "by-account") {
         must(reading.by === "account" && reading.rows.includes("claude:default") && reading.rows.includes("codex:default"), `${name}: by ${reading.by}, rows ${JSON.stringify(reading.rows)}`);
         must(new Set(reading.rowNames).size === reading.rowNames.length, `${name}: two accounts share a name: ${JSON.stringify(reading.rowNames)}`);
@@ -8376,11 +8418,25 @@ async function activityTokensMain(): Promise<void> {
       if (state === "coverage") markTokenBackfill(store, 0);
     }
 
-    /* The Time tab over 366 days in a real browser: read, render and long tasks. */
-    {
-      const context = await browser!.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "light", reducedMotion: "reduce" });
+    /* The Time tab over 366 days in a real browser: read, render and long tasks. The desktop page and the phone's list
+       must end within a few screens, and the history before the ledger is one labelled span, never a mark per week. */
+    for (const { width, height, phone, theme, lang } of [
+      { width: 1440, height: 900, phone: false, theme: "light" as const, lang: "en" as const },
+      { width: 1440, height: 900, phone: false, theme: "dark" as const, lang: "uk" as const },
+      { width: 390, height: 844, phone: true, theme: "light" as const, lang: "uk" as const },
+      { width: 390, height: 844, phone: true, theme: "dark" as const, lang: "en" as const },
+    ]) {
+      const name = `time-year-${width}-${theme}-${lang}`;
+      const context = await browser!.newContext({
+        viewport: { width, height },
+        colorScheme: theme,
+        locale: lang === "uk" ? "uk-UA" : "en-GB",
+        reducedMotion: "reduce",
+        ...(phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
+      });
       await context.addCookies([{ name: "llv_member", value: owner, url: baseUrl }]);
       await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
       const page = await context.newPage();
       await page.addInitScript(() => {
         const tasks: number[] = [];
@@ -8398,11 +8454,27 @@ async function activityTokensMain(): Promise<void> {
         caps: Array.from(document.querySelectorAll("[data-activity-pair] text")).map((text) => (text.textContent ?? "").trim()),
         nodes: document.querySelectorAll("*").length,
       }));
-      report.timeYearRender = { loadedMs, ...measured };
-      must(measured.pairs > 0 && measured.pairs <= 54, `the Time chart over 366 days draws ${measured.pairs} columns`);
-      must(measured.caps.some((text) => text !== "?" && text !== ""), `the year's column caps read ${JSON.stringify(measured.caps.slice(0, 12))}`);
-      await page.screenshot({ path: path.join(OUT_DIR, "time-year-1440-light-en.png") });
-      shots.push(path.join(OUT_DIR, "time-year-1440-light-en.png"));
+      const firstReading = await page.evaluate(readTokenFrame);
+      await page.setViewportSize({ width, height: Math.min(firstReading.scrollHeight, 7_000) });
+      await page.waitForTimeout(300);
+      const reading = await page.evaluate(readTokenFrame);
+      frames[name] = { loadedMs, ...measured, reading };
+      if (!phone && theme === "light") report.timeYearRender = { loadedMs, ...measured };
+      must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
+      must(reading.cut.length === 0 && reading.offscreen.length === 0 && reading.svgCut.length === 0, `${name}: cut text ${JSON.stringify({ cut: reading.cut, offscreen: reading.offscreen, svgCut: reading.svgCut })}`);
+      must(reading.scrollHeight <= height * (phone ? 6 : 4), `${name}: the page is ${reading.scrollHeight}px tall, over ${phone ? 6 : 4} screens`);
+      if (phone) {
+        must(reading.dayRows > 0 && reading.dayRows <= 31 && reading.daysNote === (lang === "uk" ? "Показано останні 31 день" : "Showing the last 31 days"), `${name}: ${reading.dayRows} day rows, note ${reading.daysNote}`);
+      } else {
+        must(measured.pairs > 0 && measured.pairs <= 54, `${name}: the Time chart over 366 days draws ${measured.pairs} columns`);
+        must(measured.caps.some((text) => text !== "?" && text !== ""), `${name}: the year's column caps read ${JSON.stringify(measured.caps.slice(0, 12))}`);
+        must(reading.questionCaps <= 2, `${name}: ${reading.questionCaps} weeks print «?»`);
+        must(reading.unreadSpan !== null && /\d/.test(reading.unreadSpan), `${name}: the unread history is not stated once in words (${reading.unreadSpan})`);
+        must(reading.rhythmRowCount > 0 && reading.rhythmRowCount <= 92 && reading.rhythmNote === (lang === "uk" ? "Показано останні 92 дні" : "Showing the last 92 days"), `${name}: Rhythm draws ${reading.rhythmRowCount} rows, note ${reading.rhythmNote}`);
+        must(reading.headerRows === 1, `${name}: the header runs over ${reading.headerRows} rows`);
+      }
+      await page.screenshot({ path: path.join(OUT_DIR, `${name}.png`) });
+      shots.push(path.join(OUT_DIR, `${name}.png`));
       await context.close();
     }
 

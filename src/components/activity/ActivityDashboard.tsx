@@ -10,7 +10,7 @@ import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
 import { useLocale, type Locale, type MessageKey, type TFunction } from "@/lib/i18n";
 
 import { TokensCountingDrawer } from "./ActivityCountingDrawer";
-import { ActivityDesktop, type TokensTab } from "./ActivityDesktop";
+import { ActivityDesktop, ActivityFailed, type TokensTab } from "./ActivityDesktop";
 import { ActivityMemberBreakdown, ActivityMemberFilter, countedLabel, countedWording, MEMBER_FORBIDDEN, memberFromSearch, type MemberChoice } from "./ActivityMembers";
 import { ActivityScopeChip } from "./ActivityProjectPicker";
 import { ActivityRangeControl } from "./ActivityRangeControl";
@@ -36,6 +36,9 @@ export type { ActivityView } from "./pageParams";
 type ProjectSort = "human" | "agent";
 
 const REFRESH_MS = 60_000;
+/** Longer ranges than this show only the newest PHONE_DAYS days as rows. */
+const PHONE_DAYS_LIMIT_FROM = 92;
+const PHONE_DAYS = 31;
 const DESKTOP_QUERY = "(min-width: 1024px)";
 
 function subscribeDesktop(onChange: () => void) {
@@ -841,7 +844,9 @@ export function ActivityDashboard({ initialRange, initialView, initialBy = "mode
       : rows.sort((a, b) => b.humanMs - a.humanMs || b.wallMs - a.wallMs);
   }, [data, sort]);
   const projectMax = Math.max(0, ...projects.map((row) => Math.max(row.humanMs, row.wallMs)));
-  const days = useMemo(() => [...(data?.days ?? [])].reverse(), [data]);
+  /* Past 92 days (a year) a row per day is a page of its own: the phone keeps the newest month and says so. */
+  const dayRowsCapped = (data?.days.length ?? 0) > PHONE_DAYS_LIMIT_FROM;
+  const days = useMemo(() => [...(data?.days ?? [])].reverse().slice(0, dayRowsCapped ? PHONE_DAYS : undefined), [data, dayRowsCapped]);
   const hosts = data?.coverage.hosts ?? [];
   const tz = data?.params.tz ?? "Europe/Kyiv";
   const totals = data?.totals;
@@ -966,9 +971,7 @@ export function ActivityDashboard({ initialRange, initialView, initialBy = "mode
 
         {onTokens ? (
           <>
-            {tokenRead.failed && !answer ? (
-              <div role="alert" className="rounded-[12px] border border-border bg-warning-soft px-4 py-3 text-[12px] text-warning">{viewerT("activity.failed")}</div>
-            ) : null}
+            {tokenRead.failed && !answer ? <ActivityFailed t={viewerT} onRetry={tokenRead.retry} phone /> : null}
             {answer ? (
               <ActivityTokensBody
                 answer={answer}
@@ -990,9 +993,7 @@ export function ActivityDashboard({ initialRange, initialView, initialBy = "mode
           </>
         ) : null}
 
-        {!onTokens && failed && !data ? (
-          <div role="alert" className="rounded-[12px] border border-border bg-warning-soft px-4 py-3 text-[12px] text-warning">{t("activity.failed")}</div>
-        ) : null}
+        {!onTokens && failed && !data ? <ActivityFailed t={t} onRetry={() => void load(range, project, member)} phone /> : null}
 
         {onTokens ? null : data && totals ? (
           <div className={`flex flex-col gap-4 transition-opacity ${loading ? "opacity-60" : ""}`} data-activity-loaded={data.range.key}>
@@ -1066,6 +1067,7 @@ export function ActivityDashboard({ initialRange, initialView, initialBy = "mode
             {view === "days" ? (
               <section className="rounded-[12px] border border-border bg-card px-4 pb-1.5 pt-3" aria-label={t("activity.view.days")} data-activity-days="">
                 <DayAxis />
+                {dayRowsCapped ? <p className="pb-1 text-[11px] text-muted" data-activity-days-capped="">{t("activity.days.capped")}</p> : null}
                 <ul>
                   {days.map((day) => (
                     <DayRow key={day.date} day={day} tz={tz} nowMs={data.range.now} names={names} hosts={hosts} locale={locale} t={t} />

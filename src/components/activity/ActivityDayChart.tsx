@@ -20,7 +20,7 @@ import { DayTip, HourTip, type TipContext } from "./tips";
  */
 
 /** Longer ranges than this draw one pair per week. */
-const DAILY_LIMIT = 92;
+export const DAILY_LIMIT = 92;
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -165,7 +165,21 @@ export function ActivityDayChart({ context, bounds }: { context: TipContext; bou
     .filter((span) => span.end > span.start)) : [];
   const hourX = (at: number) => axisW + slot * ((at - (day0?.start ?? 0)) / HOUR);
 
-  const capLabel = (col: Column): { text: string; tone: string; strong: boolean } | null => {
+  /* A year's weeks before the request ledger begins would each print «?».
+     The leading run of them is one hatched span with one label instead. */
+  const leadingUnread = (() => {
+    if (!weekly) return 0;
+    let run = 0;
+    for (const col of cols) {
+      const { flagged, complete, humanHours } = facts(col);
+      if (flagged || (!unread && (complete || humanHours > 0))) break;
+      run += 1;
+    }
+    return run >= 2 ? run : 0;
+  })();
+
+  const capLabel = (col: Column, index = -1): { text: string; tone: string; strong: boolean } | null => {
+    if (index >= 0 && index < leadingUnread) return null;
     const { flagged, complete, humanHours } = facts(col);
     const unknown = unread || flagged || (!complete && humanHours === 0);
     if (!month) {
@@ -254,9 +268,19 @@ export function ActivityDayChart({ context, bounds }: { context: TipContext; bou
               </g>
             );
           })}
+          {leadingUnread ? (
+            <g aria-hidden data-activity-unread-span={leadingUnread}>
+              <rect x={axisW + 1} y={top} width={Math.max(2, slot * leadingUnread - 2)} height={H} fill={MARK_FILL.unread} opacity={0.75} />
+              <text x={axisW + 4} y={top - 6} fontSize={11} fontWeight={600} fill="var(--color-secondary)">
+                {leadingUnread === cols.length
+                  ? t("activity.chart.unreadAll")
+                  : t("activity.chart.unreadBefore", { date: dayMonth(cols[leadingUnread]!.day, locale, tz) })}
+              </text>
+            </g>
+          ) : null}
           {cols.map((col, index) => {
             const { you, agents } = pairX(index);
-            const cap = today ? null : capLabel(col);
+            const cap = today ? null : capLabel(col, index);
             const label = today ? null : xLabel(col, index);
             return (
               <g key={col.key} data-activity-pair={col.key}>

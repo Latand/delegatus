@@ -74,12 +74,13 @@ function Skeleton() {
   );
 }
 
-function Failed({ t, onRetry }: { t: TFunction; onRetry(): void }) {
+/** The load error with its Retry; on the phone the button is a 44 px target. */
+export function ActivityFailed({ t, onRetry, phone = false }: { t: TFunction; onRetry(): void; phone?: boolean }) {
   return (
-    <div role="alert" className="mt-[18px] flex items-center gap-3 rounded-[12px] border border-border bg-card px-[22px] py-5 text-[13px] text-secondary shadow-1">
+    <div role="alert" className={`flex items-center gap-3 rounded-[12px] border border-border bg-card text-[13px] text-secondary shadow-1 ${phone ? "px-4 py-3" : "mt-[18px] px-[22px] py-5"}`} data-activity-failed="">
       <TriangleAlert className="h-4 w-4 shrink-0 text-warning" aria-hidden />
       <span className="flex-1">{t("activity.failed")}</span>
-      <button type="button" onClick={onRetry} className="h-8 rounded-[8px] border border-border bg-card px-3 text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+      <button type="button" onClick={onRetry} className={`${phone ? "h-11 min-w-11" : "h-8"} rounded-[8px] border border-border bg-card px-3 text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}>
         {t("activity.retry")}
       </button>
     </div>
@@ -171,7 +172,7 @@ export function ActivityDesktop({ tab, onTab, data, range, onRange, today, scope
 
         {onTokens ? (
           <>
-            {tokens.failed && !answer ? <Failed t={t} onRetry={tokens.onRetry} /> : null}
+            {tokens.failed && !answer ? <ActivityFailed t={t} onRetry={tokens.onRetry} /> : null}
             {answer ? (
               <div className="mt-[18px]">
                 <ActivityTokensBody
@@ -194,7 +195,7 @@ export function ActivityDesktop({ tab, onTab, data, range, onRange, today, scope
           </>
         ) : (
           <>
-            {failed && !data ? <Failed t={t} onRetry={onRetry} /> : null}
+            {failed && !data ? <ActivityFailed t={t} onRetry={onRetry} /> : null}
 
             {context && data && data.member.selection === "all" ? (
               <div className={`mt-[18px] transition-opacity ${loading ? "opacity-60" : ""}`}>
