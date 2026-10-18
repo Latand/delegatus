@@ -3,8 +3,9 @@ import { createViewerLoopMonitor } from "./viewerLoopMonitor";
 import { performanceProcess, createPerformanceSpans } from "./performanceSpans";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 
-test("the default loop sink keeps gap and summary diagnostics behind the CLI debug choice", async () => {
+test.each(["viewer", "runtime-host"])("the default %s loop sink retains gap and summary diagnostics in quiet mode", async role => {
   const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+  const previousOwner = process.env.LLV_STATE_OWNER;
   const lines: string[] = [];
   const write = spyOn(process.stderr, "write").mockImplementation(((line: string, done: () => void) => {
     lines.push(String(line)); done(); return true;
@@ -14,15 +15,20 @@ test("the default loop sink keeps gap and summary diagnostics behind the CLI deb
   const drain = async () => { for (let i = 0; i < 4; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
   try {
     process.env.LLV_QUIET_DIAGNOSTICS = "1";
+    process.env.LLV_STATE_OWNER = role;
     at = 61_000; monitor.tick(); await drain();
-    expect(lines).toEqual([]);
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length))).toMatchObject({ role, gapMs: 60_990 });
+    expect(JSON.parse(lines[1]!.slice("[performance summary] ".length))).toMatchObject({ role });
     delete process.env.LLV_QUIET_DIAGNOSTICS;
     at = 122_000; monitor.tick(); await drain();
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toStartWith("[viewer loop-gap] ");
-    expect(lines[1]).toStartWith("[performance summary] ");
+    expect(lines).toHaveLength(4);
+    expect(lines[2]).toStartWith("[viewer loop-gap] ");
+    expect(lines[3]).toStartWith("[performance summary] ");
   } finally {
     monitor.stop(); write.mockRestore();
+    if (previousOwner === undefined) delete process.env.LLV_STATE_OWNER;
+    else process.env.LLV_STATE_OWNER = previousOwner;
     if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
     else process.env.LLV_QUIET_DIAGNOSTICS = previous;
   }

@@ -3,10 +3,11 @@
  * when a start misbehaves — structured-host startup phases, the identity-wave
  * migration summary, limits probes that found no CLI or no login.
  *
- * `bin/cli.mjs` sets `LLV_QUIET_DIAGNOSTICS=1` for the processes it starts
- * unless `DELEGATUS_DEBUG=1` asks for them, so a newcomer's terminal shows the
- * banner and real errors. Anything started another way (the Docker services,
- * `bun dev`, a test) prints them as before. Errors never go through here.
+ * `bin/cli.mjs` sets `LLV_QUIET_DIAGNOSTICS=1` for children of an interactive
+ * terminal launch unless `DELEGATUS_DEBUG=1` asks for diagnostics. Journal and
+ * non-TTY launches clear that choice. Other entry points (`bun dev`, Docker)
+ * print diagnostics by default. Loop-gap and performance-summary evidence
+ * always bypasses quiet mode. Errors never go through here.
  */
 export const QUIET_DIAGNOSTICS_ENV = "LLV_QUIET_DIAGNOSTICS";
 

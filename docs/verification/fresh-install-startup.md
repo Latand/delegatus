@@ -72,22 +72,34 @@ unchanged.
 
 ## Terminal lines removed or demoted
 
-The launcher already sets LLV_QUIET_DIAGNOSTICS unless DELEGATUS_DEBUG=1.
-These changes complete that choice at the diagnostic producers:
+The launcher sets LLV_QUIET_DIAGNOSTICS only when stdout is a TTY,
+JOURNAL_STREAM is absent and DELEGATUS_DEBUG is disabled. Non-TTY stdout
+covers service managers, redirected files and pipes; JOURNAL_STREAM also
+keeps journal launches diagnostic when stdout happens to be a terminal.
+Both cases clear an inherited quiet flag before starting either child.
+
+The current diagnostic policy is:
 
 | Line | New behaviour |
 | --- | --- |
 | Launcher copy of “Delegatus sends a random id…” (en and uk) | Removed. The Viewer's existing first-run notice and durable marker remain responsible for disclosure. |
 | “Reads logs from ~/.claude/projects, ~/.codex/sessions, ~/.copilot/session-state.” (en and uk) | Printed with DELEGATUS_DEBUG=1. |
-| `[runtime host] journal <subphase>: <done>/<total>, committed batches <count>` | Debug output under the CLI; the startup evidence file still records progress. Fresh runs previously printed schema, receipt-backfill, integrity-check and hash-chain lines. Checkpoint-reconciliation follows the same rule on existing state. |
-| `[viewer loop-gap] <JSON>` | Debug output under the CLI, for both Viewer and runtime-host diagnostics. |
-| `[performance summary] <JSON>` | Debug output under the CLI, including later minute summaries. |
+| `[runtime host] journal <subphase>: <done>/<total>, committed batches <count>` | Debug output in a quiet terminal; the startup evidence file still records progress. Fresh runs previously printed schema, receipt-backfill, integrity-check and hash-chain lines. Checkpoint-reconciliation follows the same rule on existing state. |
+| `[viewer loop-gap] <JSON>` | Always written to stderr for both Viewer and runtime host, including quiet terminals. |
+| `[performance summary] <JSON>` | Always written to stderr, including later minute summaries and quiet terminals. |
 | `[files response worker] retired: viewer exit`, with pid and rssBytes | Debug output for normal shutdown. Unexpected retirement warnings remain visible. |
 | `[flow pipeline controller] scan-dependent flow phase skipped: still scanning, retry in 5 s` | Debug output; the next controller cycle still retries. |
 
-Direct service launches continue to send diagnostics to their journal.
-DELEGATUS_DEBUG=1 restores them in a CLI terminal. URL/readiness, installation
-instructions, phone-access guidance and real errors remain visible.
+The original #3056 change incorrectly applied quiet mode to CLI service
+launches and discarded loop evidence in the shared sink. The earlier claim
+that service launches kept their diagnostics was false for services using the
+CLI. CLI service launches now send startup and loop diagnostics to their
+journal. DELEGATUS_DEBUG=1 restores startup diagnostics in a CLI terminal.
+Loop evidence bypasses quiet mode everywhere, using the existing asynchronous,
+bounded stderr sink and its dropped-line counter. The monitor has no separate
+durable line log, so quiet mode must never discard these records.
+URL/readiness, installation instructions, phone-access guidance and real
+errors remain visible.
 
 The install-ping sender and src/lib/activity were left to their owning lanes.
 
@@ -135,3 +147,20 @@ modules and GET / answered HTTP 200.
 The eight focused test files passed 110 cases in total. The 34 migration cases
 also passed under Bun 1.4.3. The new fresh-state cases fail against a25592be
 and pass with the correction under both interpreters.
+
+## Service diagnostics regression verification
+
+`bin/cli.exposure.integration.test.ts` starts the real CLI with isolated stub
+Viewer and runtime-host entry points. Both drive the production loop monitor
+with a fixed clock: one gap and one minute summary per child. Cases cover
+piped stdout, JOURNAL_STREAM, a real pseudo-terminal, journal metadata with a
+terminal, and DELEGATUS_DEBUG=1. An inherited quiet flag is cleared in service
+and debug cases; an interactive start keeps startup diagnostics quiet. All
+cases require both loop records from each child to reach the launcher's output.
+`src/lib/viewerLoopMonitor.test.ts` also checks the default sink for both roles
+with quiet mode enabled and disabled. The existing backpressure check in
+`src/lib/performanceSpans.test.ts` retains the queue and byte bounds.
+
+These regressions fail against the source at 6a1ea0d9 and pass with the
+correction. The historical captures and counts above describe #3056; this
+correction makes no performance claim.

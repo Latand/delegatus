@@ -1,4 +1,3 @@
-import { startupDiagnosticsQuiet } from "./startupDiagnostics";
 import { readAttribution, startReadAttributionSampler } from "./readAttribution";
 import { performanceSpans, performanceSites, performanceProcess } from "./performanceSpans";
 import { startLoopWatchdog } from "./loopWatchdog";
@@ -31,9 +30,9 @@ export type ViewerOperation = "worktrees.sweep" | "history.prepare" | "history.r
 type Operation = { name: ViewerOperation; start: number; end?: number };
 const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 
-/** A slow journal must not grow the heap or block the loop that it measures. */
+/** Stall evidence stays visible even in a quiet terminal. A slow journal must
+ * not grow the heap or block the loop that it measures. */
 export function createLoopLogSink(write = (line: string, done: () => void) => {
-  if (startupDiagnosticsQuiet()) { done(); return; }
   process.stderr.write(`${line}\n`, done);
 }) {
   const queue: string[] = [];
