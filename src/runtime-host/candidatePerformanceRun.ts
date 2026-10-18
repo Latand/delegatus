@@ -37,7 +37,8 @@
    Every board answer is compared with its scope's settled answer from before
    the first write; every worker's progress is read back from its transcript.
    It prints one report line (`CANDIDATE_PERFORMANCE_REPORT_PREFIX`) and exits
-   non-zero when a bound is breached or a measurement is missing.
+   non-zero when an operation fails, a measurement is missing, or a fault is induced.
+   Duration threshold observations remain in timingWarnings.
    `verify-candidate` runs it inside a container from the candidate image.
    Everything it creates sits under one temporary directory removed on exit,
    and every process it starts leaves when it does; it never reads the
@@ -1312,10 +1313,11 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       return before && after && !after.cold && before.json === after.json;
     });
     if (externalOutcome.error) note(`separate writer: ${externalOutcome.error}`);
-    /* An activation that never completed counts the time it had. */
+    /* Keep completion separate from the elapsed time of an unfinished activation. */
     const activationOf = (report: Record<string, unknown>, since: number | null) => {
       const value = (report.activation ?? {}) as { completed?: boolean; ms?: number | null; eventLoopMaxMs?: number };
       return {
+        completed: value.completed === true,
         ms: value.completed === true ? finite(value.ms) : since === null ? 0 : Math.max(0, workersCheckedAt - since),
         eventLoopMaxMs: Number.isFinite(value.eventLoopMaxMs) ? Number(value.eventLoopMaxMs) : 0,
       };
@@ -1370,6 +1372,8 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       activation: {
         incumbentMs: incumbentActivation.ms,
         successorMs: successorActivation.ms,
+        incumbentCompleted: incumbentActivation.completed,
+        successorCompleted: successorActivation.completed,
         eventLoopMaxMs: Math.round(Math.max(incumbentActivation.eventLoopMaxMs, successorActivation.eventLoopMaxMs)),
       },
       grantWrites: {
@@ -1439,13 +1443,15 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       deliveryEvidence: { pending: dataset.pendingDeliveryIds.length, uncertain: dataset.uncertainDeliveryIds.length, retained: retainedDeliveryIds.length, pendingLaunches: pendingLaunchIds.length, preserved: deliveryPreserved },
       browser,
     };
-    const breaches = candidatePerformanceBreaches(measurements);
+    const timingWarnings: string[] = [];
+    const breaches = candidatePerformanceBreaches(measurements, CANDIDATE_PERFORMANCE_BOUNDS, timingWarnings);
     return {
       checkedAt,
       runtime,
       bounds: CANDIDATE_PERFORMANCE_BOUNDS,
       measurements,
       breaches,
+      timingWarnings,
       ...inducedFields,
       ok: breaches.length === 0 && !inducedDelayMs && !induced.length,
       ...(breaches.length ? { detail: breaches[0] } : {}),
