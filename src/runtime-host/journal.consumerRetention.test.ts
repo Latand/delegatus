@@ -100,6 +100,87 @@ test("keyed checkpoint retirement matches the anti-join through held consumers a
   }
 });
 
+test("eligible compaction clears legacy and late orphan checkpoints", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "journal-orphan-checkpoints-"));
+  const filename = path.join(directory, "events.sqlite");
+  let journal = new RuntimeJournal(filename, { maxEvents: 2, now: () => 100 });
+  const db = new Database(filename);
+  try {
+    journal.registerConsumer("consumer");
+    const events = Array.from({ length: 3 }, (_, id) => journal.append({
+      scope: "system:fixture", kind: "fixture.history", payload: { id },
+    }));
+    for (const event of events) journal.markConsumerCompleted(event.eventId, "consumer");
+
+    db.exec("CREATE TABLE reference_checkpoints AS SELECT * FROM consumer_checkpoints");
+    const insertCheckpoint = (table: string, eventId: string) => db.query(
+      `INSERT INTO ${table}(event_id, consumer, completed_at) VALUES (?, 'consumer', 100)`,
+    ).run(eventId);
+    const assertMatchesAntiJoin = () => {
+      db.exec(`DELETE FROM reference_checkpoints WHERE NOT EXISTS (
+        SELECT 1 FROM events WHERE events.event_id = reference_checkpoints.event_id)`);
+      expect(db.query("SELECT * FROM consumer_checkpoints ORDER BY event_id, consumer").all())
+        .toEqual(db.query("SELECT * FROM reference_checkpoints ORDER BY event_id, consumer").all());
+      expect(db.query(`SELECT COUNT(*) AS count FROM consumer_checkpoints
+        WHERE NOT EXISTS (SELECT 1 FROM events WHERE events.event_id = consumer_checkpoints.event_id)`)
+        .get()).toEqual({ count: 0 });
+    };
+
+    // A checkpoint left by an older release is reconciled while the journal
+    // opens, before any append can pay for a whole-table anti-join.
+    journal.close();
+    insertCheckpoint("consumer_checkpoints", "legacy-retired-event");
+    insertCheckpoint("reference_checkpoints", "legacy-retired-event");
+    journal = new RuntimeJournal(filename, { maxEvents: 2, now: () => 100 });
+    assertMatchesAntiJoin();
+
+    // A late completion after retirement used to recreate the same orphan.
+    journal.markConsumerCompleted(events[0]!.eventId, "consumer");
+    insertCheckpoint("reference_checkpoints", events[0]!.eventId);
+    journal.append({ scope: "system:fixture", kind: "fixture.history", payload: { id: 3 } });
+    journal.compact();
+    assertMatchesAntiJoin();
+
+    // Reopening also reconciles legacy residue left by a prior release.
+    journal.close();
+    insertCheckpoint("consumer_checkpoints", "legacy-after-reopen");
+    insertCheckpoint("reference_checkpoints", "legacy-after-reopen");
+    journal = new RuntimeJournal(filename, { maxEvents: 2, now: () => 100 });
+    journal.append({ scope: "system:fixture", kind: "fixture.history", payload: { id: 4 } });
+    journal.compact();
+    assertMatchesAntiJoin();
+  } finally {
+    db.close();
+    journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a late completion for a retired event cannot recreate an orphan checkpoint", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "journal-late-checkpoint-"));
+  const filename = path.join(directory, "events.sqlite");
+  const journal = new RuntimeJournal(filename, { maxEvents: 2, now: () => 100 });
+  const db = new Database(filename);
+  try {
+    journal.registerConsumer("consumer");
+    const events = Array.from({ length: 3 }, (_, id) => journal.append({
+      scope: "system:fixture", kind: "fixture.history", payload: { id },
+    }));
+    for (const event of events) journal.markConsumerCompleted(event.eventId, "consumer");
+    journal.compact();
+    journal.markConsumerCompleted(events[0]!.eventId, "consumer");
+    journal.append({ scope: "system:fixture", kind: "fixture.history", payload: { id: 3 } });
+    journal.compact();
+    expect(db.query(`SELECT COUNT(*) AS count FROM consumer_checkpoints
+      WHERE NOT EXISTS (SELECT 1 FROM events WHERE events.event_id = consumer_checkpoints.event_id)`)
+      .get()).toEqual({ count: 0 });
+  } finally {
+    db.close();
+    journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("append checkpoint deletion uses indexed event and checkpoint lookups", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "journal-checkpoint-plan-"));
   const filename = path.join(directory, "events.sqlite");

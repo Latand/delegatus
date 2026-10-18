@@ -518,6 +518,7 @@ export class RuntimeJournal {
       this.metaSetDefault("host_epoch", "1");
       this.metaSetDefault("health", "ready");
       this.metaSetDefault("files_revision", "0");
+      this.reconcileCheckpointOrphans();
       this.sessionHostMetadata = new SessionHostMetadata(this.db);
       this.initialization = this.initialize();
     } catch (error) {
@@ -543,6 +544,21 @@ export class RuntimeJournal {
 
   private startupProgress(subphase: RuntimeJournalStartupProgress["subphase"], done: number, total: number, committedBatches = 0): void {
     this.startupOptions.onStartupProgress?.({ subphase, done, total, committedBatches });
+  }
+
+  private reconcileCheckpointOrphans(): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      // Older releases could checkpoint a completion after its event retired.
+      // Reconcile that legacy residue on open, keeping every append's cleanup
+      // bounded to the event ids retired by that append.
+      this.db.exec(`DELETE FROM consumer_checkpoints WHERE NOT EXISTS (
+        SELECT 1 FROM events WHERE events.event_id = consumer_checkpoints.event_id)`);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw error;
+    }
   }
 
   private *backfillProducerReceipts(): Generator<void> {
@@ -1719,7 +1735,9 @@ export class RuntimeJournal {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.registerConsumer(consumer);
-      this.db.query("INSERT INTO consumer_checkpoints(event_id, consumer, completed_at) VALUES (?, ?, ?) ON CONFLICT(event_id, consumer) DO NOTHING").run(eventId, consumer, this.now());
+      this.db.query(`INSERT INTO consumer_checkpoints(event_id, consumer, completed_at)
+        SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM events WHERE event_id = ?)
+        ON CONFLICT(event_id, consumer) DO NOTHING`).run(eventId, consumer, this.now(), eventId);
       // Recursive projections may finish before their parent. Only advance over
       // a contiguous completed prefix, preserving every hole for ordered replay.
       const pending = this.db.query<{ seq: number }, [number, string]>(`
