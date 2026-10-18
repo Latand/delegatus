@@ -1,12 +1,12 @@
 "use client";
 
 import { rowStateWord } from "@/components/mobile/mobileBoardModel";
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { useLocale } from "@/lib/i18n";
 import { RoleEmblem, frameRoleName } from "@/components/RoleFrameMark";
 
-import { setHostedColumnLeft } from "../shellLayout";
+import { hostedSheetEdge, setHostedColumnLeft, useHostedSheetEdge } from "../shellLayout";
 import { ChevronRight, CloseGlyph, MaximizeGlyph } from "./kanbanGlyphs";
 import type { OpenAgent } from "./openAgents";
 
@@ -79,13 +79,27 @@ export function AgentWindow({ agents, current, pending, onJump, onStep, onClose,
   const count = agents.length;
   const frameRef = useRef<HTMLElement>(null);
   const readerRef = useRef<HTMLDivElement>(null);
+  const [covered, setCovered] = useState(0);
+  const sheetEdge = useHostedSheetEdge();
   /* The document preview opens over this window and keeps its floor of
      conversation measured from the column the conversation is drawn in, which
-     starts after the window's own list. */
+     starts after the window's own list. It reads the window's own edge too:
+     where it takes the column whole, the list gives way with it. The part of
+     the column the sheet stands over is left empty, so the conversation wraps
+     at the sheet's edge and no line is cut under it. A sheet that covers the
+     column whole leaves the column laid out as it was. */
+  const measureRef = useRef<() => void>(() => {});
   useLayoutEffect(() => {
     const reader = readerRef.current;
+    const frame = frameRef.current;
     if (!reader) return;
-    const publish = () => setHostedColumnLeft(reader.getBoundingClientRect().left);
+    const publish = () => {
+      const column = reader.getBoundingClientRect();
+      setHostedColumnLeft(column.left, frame?.getBoundingClientRect().left ?? column.left);
+      const edge = hostedSheetEdge();
+      setCovered(edge > column.left ? Math.max(0, Math.round(column.right - edge)) : 0);
+    };
+    measureRef.current = publish;
     publish();
     window.addEventListener("resize", publish);
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(publish) : null;
@@ -96,6 +110,7 @@ export function AgentWindow({ agents, current, pending, onJump, onStep, onClose,
       setHostedColumnLeft(0);
     };
   }, []);
+  useLayoutEffect(() => measureRef.current(), [sheetEdge]);
   /* The window is modal: Tab and Shift+Tab go round it and never reach the
      board, the header or the sidebar under its scrim. Listened for on the
      document, because the reader is a portal whose key events never pass
@@ -145,7 +160,14 @@ export function AgentWindow({ agents, current, pending, onJump, onStep, onClose,
           </div>
           <OpenAgentsList agents={agents} current={current} onJump={onJump} onClose={onClose} onCloseAll={onCloseAll} />
         </nav>
-        <div ref={readerRef} className="aw-reader">{children}</div>
+        <div
+          ref={readerRef}
+          className="aw-reader"
+          {...(covered > 0 ? { "data-sheet-covered": "" } : {})}
+          style={covered > 0 ? ({ "--aw-sheet-inset": `${covered}px` } as CSSProperties) : undefined}
+        >
+          {children}
+        </div>
       </section>
     </div>
   );

@@ -6,6 +6,7 @@
       "height": 900,
       "lang": "uk",
       "scheme": "light",
+      "dragged": null,
       "host": "window",
       "file": "plan",
       "preview": {
@@ -22,6 +23,7 @@
       },
       "inset": 504,
       "viewport": 1440,
+      "cut": [],
       "conversationVisible": 376,
       "takesColumn": false
     },
@@ -30,6 +32,7 @@
       "height": 900,
       "lang": "uk",
       "scheme": "light",
+      "dragged": null,
       "host": "window",
       "file": "log",
       "preview": {
@@ -46,6 +49,7 @@
       },
       "inset": 504,
       "viewport": 1440,
+      "cut": [],
       "conversationVisible": 376,
       "takesColumn": false
     },
@@ -54,6 +58,7 @@
       "height": 900,
       "lang": "uk",
       "scheme": "light",
+      "dragged": null,
       "host": "board",
       "sheetWidth": 560,
       "inset": 0,
@@ -64,6 +69,7 @@
       "height": 900,
       "lang": "en",
       "scheme": "dark",
+      "dragged": null,
       "host": "window",
       "file": "plan",
       "preview": {
@@ -80,6 +86,7 @@
       },
       "inset": 504,
       "viewport": 1440,
+      "cut": [],
       "conversationVisible": 376,
       "takesColumn": false
     },
@@ -88,6 +95,7 @@
       "height": 900,
       "lang": "en",
       "scheme": "dark",
+      "dragged": null,
       "host": "window",
       "file": "log",
       "preview": {
@@ -104,6 +112,7 @@
       },
       "inset": 504,
       "viewport": 1440,
+      "cut": [],
       "conversationVisible": 376,
       "takesColumn": false
     },
@@ -112,16 +121,270 @@
       "height": 900,
       "lang": "en",
       "scheme": "dark",
+      "dragged": null,
       "host": "board",
       "sheetWidth": 560,
       "inset": 0,
       "viewport": 1440
     },
     {
+      "width": 1440,
+      "height": 900,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 1060,
+        "width": 380
+      },
+      "column": {
+        "left": 504,
+        "width": 928
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1440,
+      "cut": [],
+      "conversationVisible": 556,
+      "takesColumn": false
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 1060,
+        "width": 380
+      },
+      "column": {
+        "left": 504,
+        "width": 928
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1440,
+      "cut": [],
+      "conversationVisible": 556,
+      "takesColumn": false
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "board",
+      "sheetWidth": 380,
+      "inset": 0,
+      "viewport": 1440
+    },
+    {
+      "width": 1320,
+      "height": 860,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 824,
+        "width": 496
+      },
+      "column": {
+        "left": 504,
+        "width": 808
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1320,
+      "cut": [],
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 1320,
+      "height": 860,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 824,
+        "width": 496
+      },
+      "column": {
+        "left": 504,
+        "width": 808
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1320,
+      "cut": [],
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 1320,
+      "height": 860,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "board",
+      "sheetWidth": 560,
+      "inset": 0,
+      "viewport": 1320
+    },
+    {
+      "width": 1320,
+      "height": 860,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 824,
+        "width": 496
+      },
+      "column": {
+        "left": 504,
+        "width": 808
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1320,
+      "cut": [],
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 1320,
+      "height": 860,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 824,
+        "width": 496
+      },
+      "column": {
+        "left": 504,
+        "width": 808
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1320,
+      "cut": [],
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 1320,
+      "height": 860,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "board",
+      "sheetWidth": 560,
+      "inset": 0,
+      "viewport": 1320
+    },
+    {
+      "width": 1320,
+      "height": 860,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 940,
+        "width": 380
+      },
+      "column": {
+        "left": 504,
+        "width": 808
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1320,
+      "cut": [],
+      "conversationVisible": 436,
+      "takesColumn": false
+    },
+    {
+      "width": 1320,
+      "height": 860,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 940,
+        "width": 380
+      },
+      "column": {
+        "left": 504,
+        "width": 808
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1320,
+      "cut": [],
+      "conversationVisible": 436,
+      "takesColumn": false
+    },
+    {
+      "width": 1320,
+      "height": 860,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "board",
+      "sheetWidth": 380,
+      "inset": 0,
+      "viewport": 1320
+    },
+    {
       "width": 1200,
       "height": 800,
       "lang": "uk",
       "scheme": "light",
+      "dragged": null,
       "host": "window",
       "file": "plan",
       "preview": {
@@ -138,6 +401,7 @@
       },
       "inset": 504,
       "viewport": 1200,
+      "cut": [],
       "conversationVisible": 320,
       "takesColumn": false
     },
@@ -146,6 +410,7 @@
       "height": 800,
       "lang": "uk",
       "scheme": "light",
+      "dragged": null,
       "host": "window",
       "file": "log",
       "preview": {
@@ -162,6 +427,7 @@
       },
       "inset": 504,
       "viewport": 1200,
+      "cut": [],
       "conversationVisible": 320,
       "takesColumn": false
     },
@@ -170,6 +436,7 @@
       "height": 800,
       "lang": "uk",
       "scheme": "light",
+      "dragged": null,
       "host": "board",
       "sheetWidth": 560,
       "inset": 0,
@@ -180,6 +447,7 @@
       "height": 800,
       "lang": "en",
       "scheme": "dark",
+      "dragged": null,
       "host": "window",
       "file": "plan",
       "preview": {
@@ -196,6 +464,7 @@
       },
       "inset": 504,
       "viewport": 1200,
+      "cut": [],
       "conversationVisible": 320,
       "takesColumn": false
     },
@@ -204,6 +473,7 @@
       "height": 800,
       "lang": "en",
       "scheme": "dark",
+      "dragged": null,
       "host": "window",
       "file": "log",
       "preview": {
@@ -220,6 +490,7 @@
       },
       "inset": 504,
       "viewport": 1200,
+      "cut": [],
       "conversationVisible": 320,
       "takesColumn": false
     },
@@ -228,16 +499,270 @@
       "height": 800,
       "lang": "en",
       "scheme": "dark",
+      "dragged": null,
       "host": "board",
       "sheetWidth": 560,
       "inset": 0,
       "viewport": 1200
     },
     {
+      "width": 1200,
+      "height": 800,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 824,
+        "width": 376
+      },
+      "column": {
+        "left": 504,
+        "width": 688
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1200,
+      "cut": [],
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 1200,
+      "height": 800,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 824,
+        "width": 376
+      },
+      "column": {
+        "left": 504,
+        "width": 688
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1200,
+      "cut": [],
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 1200,
+      "height": 800,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "board",
+      "sheetWidth": 380,
+      "inset": 0,
+      "viewport": 1200
+    },
+    {
+      "width": 1100,
+      "height": 760,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 256,
+        "width": 844
+      },
+      "column": {
+        "left": 476,
+        "width": 616
+      },
+      "list": {
+        "left": 256,
+        "width": 220
+      },
+      "inset": 476,
+      "viewport": 1100,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 1100,
+      "height": 760,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 256,
+        "width": 844
+      },
+      "column": {
+        "left": 476,
+        "width": 616
+      },
+      "list": {
+        "left": 256,
+        "width": 220
+      },
+      "inset": 476,
+      "viewport": 1100,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 1100,
+      "height": 760,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "board",
+      "sheetWidth": 560,
+      "inset": 0,
+      "viewport": 1100
+    },
+    {
+      "width": 1100,
+      "height": 760,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 256,
+        "width": 844
+      },
+      "column": {
+        "left": 476,
+        "width": 616
+      },
+      "list": {
+        "left": 256,
+        "width": 220
+      },
+      "inset": 476,
+      "viewport": 1100,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 1100,
+      "height": 760,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 256,
+        "width": 844
+      },
+      "column": {
+        "left": 476,
+        "width": 616
+      },
+      "list": {
+        "left": 256,
+        "width": 220
+      },
+      "inset": 476,
+      "viewport": 1100,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 1100,
+      "height": 760,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "board",
+      "sheetWidth": 560,
+      "inset": 0,
+      "viewport": 1100
+    },
+    {
+      "width": 1100,
+      "height": 760,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 256,
+        "width": 844
+      },
+      "column": {
+        "left": 476,
+        "width": 616
+      },
+      "list": {
+        "left": 256,
+        "width": 220
+      },
+      "inset": 476,
+      "viewport": 1100,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 1100,
+      "height": 760,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 256,
+        "width": 844
+      },
+      "column": {
+        "left": 476,
+        "width": 616
+      },
+      "list": {
+        "left": 256,
+        "width": 220
+      },
+      "inset": 476,
+      "viewport": 1100,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 1100,
+      "height": 760,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "board",
+      "sheetWidth": 380,
+      "inset": 0,
+      "viewport": 1100
+    },
+    {
       "width": 1000,
       "height": 700,
       "lang": "uk",
       "scheme": "light",
+      "dragged": null,
       "host": "window",
       "file": "plan",
       "preview": {
@@ -254,6 +779,7 @@
       },
       "inset": 228,
       "viewport": 1000,
+      "cut": [],
       "conversationVisible": 320,
       "takesColumn": false
     },
@@ -262,6 +788,7 @@
       "height": 700,
       "lang": "uk",
       "scheme": "light",
+      "dragged": null,
       "host": "window",
       "file": "log",
       "preview": {
@@ -278,6 +805,7 @@
       },
       "inset": 228,
       "viewport": 1000,
+      "cut": [],
       "conversationVisible": 320,
       "takesColumn": false
     },
@@ -286,6 +814,7 @@
       "height": 700,
       "lang": "uk",
       "scheme": "light",
+      "dragged": null,
       "host": "board",
       "sheetWidth": 560,
       "inset": 0,
@@ -296,6 +825,7 @@
       "height": 700,
       "lang": "en",
       "scheme": "dark",
+      "dragged": null,
       "host": "window",
       "file": "plan",
       "preview": {
@@ -312,6 +842,7 @@
       },
       "inset": 228,
       "viewport": 1000,
+      "cut": [],
       "conversationVisible": 320,
       "takesColumn": false
     },
@@ -320,6 +851,7 @@
       "height": 700,
       "lang": "en",
       "scheme": "dark",
+      "dragged": null,
       "host": "window",
       "file": "log",
       "preview": {
@@ -336,6 +868,7 @@
       },
       "inset": 228,
       "viewport": 1000,
+      "cut": [],
       "conversationVisible": 320,
       "takesColumn": false
     },
@@ -344,21 +877,653 @@
       "height": 700,
       "lang": "en",
       "scheme": "dark",
+      "dragged": null,
       "host": "board",
       "sheetWidth": 560,
       "inset": 0,
       "viewport": 1000
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 620,
+        "width": 380
+      },
+      "column": {
+        "left": 228,
+        "width": 764
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 1000,
+      "cut": [],
+      "conversationVisible": 392,
+      "takesColumn": false
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 620,
+        "width": 380
+      },
+      "column": {
+        "left": 228,
+        "width": 764
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 1000,
+      "cut": [],
+      "conversationVisible": 392,
+      "takesColumn": false
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "board",
+      "sheetWidth": 380,
+      "inset": 0,
+      "viewport": 1000
+    },
+    {
+      "width": 920,
+      "height": 800,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 548,
+        "width": 372
+      },
+      "column": {
+        "left": 228,
+        "width": 684
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 920,
+      "cut": [],
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 920,
+      "height": 800,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 548,
+        "width": 372
+      },
+      "column": {
+        "left": 228,
+        "width": 684
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 920,
+      "cut": [],
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 920,
+      "height": 800,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "board",
+      "sheetWidth": 560,
+      "inset": 0,
+      "viewport": 920
+    },
+    {
+      "width": 920,
+      "height": 800,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 548,
+        "width": 372
+      },
+      "column": {
+        "left": 228,
+        "width": 684
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 920,
+      "cut": [],
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 920,
+      "height": 800,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 548,
+        "width": 372
+      },
+      "column": {
+        "left": 228,
+        "width": 684
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 920,
+      "cut": [],
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 920,
+      "height": 800,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "board",
+      "sheetWidth": 560,
+      "inset": 0,
+      "viewport": 920
+    },
+    {
+      "width": 920,
+      "height": 800,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 548,
+        "width": 372
+      },
+      "column": {
+        "left": 228,
+        "width": 684
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 920,
+      "cut": [],
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 920,
+      "height": 800,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 548,
+        "width": 372
+      },
+      "column": {
+        "left": 228,
+        "width": 684
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 920,
+      "cut": [],
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 920,
+      "height": 800,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "board",
+      "sheetWidth": 380,
+      "inset": 0,
+      "viewport": 920
+    },
+    {
+      "width": 900,
+      "height": 700,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 8,
+        "width": 892
+      },
+      "column": {
+        "left": 228,
+        "width": 664
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 900,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 900,
+      "height": 700,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 8,
+        "width": 892
+      },
+      "column": {
+        "left": 228,
+        "width": 664
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 900,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 900,
+      "height": 700,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "board",
+      "sheetWidth": 560,
+      "inset": 0,
+      "viewport": 900
+    },
+    {
+      "width": 900,
+      "height": 700,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 8,
+        "width": 892
+      },
+      "column": {
+        "left": 228,
+        "width": 664
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 900,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 900,
+      "height": 700,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 8,
+        "width": 892
+      },
+      "column": {
+        "left": 228,
+        "width": 664
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 900,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 900,
+      "height": 700,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "board",
+      "sheetWidth": 560,
+      "inset": 0,
+      "viewport": 900
+    },
+    {
+      "width": 900,
+      "height": 700,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 8,
+        "width": 892
+      },
+      "column": {
+        "left": 228,
+        "width": 664
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 900,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 900,
+      "height": 700,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 8,
+        "width": 892
+      },
+      "column": {
+        "left": 228,
+        "width": 664
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 900,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 900,
+      "height": 700,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "board",
+      "sheetWidth": 380,
+      "inset": 0,
+      "viewport": 900
+    },
+    {
+      "width": 850,
+      "height": 800,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 8,
+        "width": 842
+      },
+      "column": {
+        "left": 228,
+        "width": 614
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 850,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 850,
+      "height": 800,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 8,
+        "width": 842
+      },
+      "column": {
+        "left": 228,
+        "width": 614
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 850,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 850,
+      "height": 800,
+      "lang": "uk",
+      "scheme": "light",
+      "dragged": null,
+      "host": "board",
+      "sheetWidth": 530,
+      "inset": 0,
+      "viewport": 850
+    },
+    {
+      "width": 850,
+      "height": 800,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 8,
+        "width": 842
+      },
+      "column": {
+        "left": 228,
+        "width": 614
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 850,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 850,
+      "height": 800,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 8,
+        "width": 842
+      },
+      "column": {
+        "left": 228,
+        "width": 614
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 850,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 850,
+      "height": 800,
+      "lang": "en",
+      "scheme": "dark",
+      "dragged": null,
+      "host": "board",
+      "sheetWidth": 530,
+      "inset": 0,
+      "viewport": 850
+    },
+    {
+      "width": 850,
+      "height": 800,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 8,
+        "width": 842
+      },
+      "column": {
+        "left": 228,
+        "width": 614
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 850,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 850,
+      "height": 800,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 8,
+        "width": 842
+      },
+      "column": {
+        "left": 228,
+        "width": 614
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 850,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 850,
+      "height": 800,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "board",
+      "sheetWidth": 380,
+      "inset": 0,
+      "viewport": 850
     },
     {
       "width": 700,
       "height": 900,
       "lang": "uk",
       "scheme": "light",
+      "dragged": null,
       "host": "window",
       "file": "plan",
       "preview": {
-        "left": 228,
-        "width": 472
+        "left": 8,
+        "width": 692
       },
       "column": {
         "left": 228,
@@ -370,7 +1535,8 @@
       },
       "inset": 228,
       "viewport": 700,
-      "conversationVisible": 0,
+      "cut": [],
+      "conversationVisible": -220,
       "takesColumn": true
     },
     {
@@ -378,11 +1544,12 @@
       "height": 900,
       "lang": "uk",
       "scheme": "light",
+      "dragged": null,
       "host": "window",
       "file": "log",
       "preview": {
-        "left": 228,
-        "width": 472
+        "left": 8,
+        "width": 692
       },
       "column": {
         "left": 228,
@@ -394,7 +1561,8 @@
       },
       "inset": 228,
       "viewport": 700,
-      "conversationVisible": 0,
+      "cut": [],
+      "conversationVisible": -220,
       "takesColumn": true
     },
     {
@@ -402,6 +1570,7 @@
       "height": 900,
       "lang": "uk",
       "scheme": "light",
+      "dragged": null,
       "host": "board",
       "sheetWidth": 380,
       "inset": 0,
@@ -412,11 +1581,12 @@
       "height": 900,
       "lang": "en",
       "scheme": "dark",
+      "dragged": null,
       "host": "window",
       "file": "plan",
       "preview": {
-        "left": 228,
-        "width": 472
+        "left": 8,
+        "width": 692
       },
       "column": {
         "left": 228,
@@ -428,7 +1598,8 @@
       },
       "inset": 228,
       "viewport": 700,
-      "conversationVisible": 0,
+      "cut": [],
+      "conversationVisible": -220,
       "takesColumn": true
     },
     {
@@ -436,11 +1607,12 @@
       "height": 900,
       "lang": "en",
       "scheme": "dark",
+      "dragged": null,
       "host": "window",
       "file": "log",
       "preview": {
-        "left": 228,
-        "width": 472
+        "left": 8,
+        "width": 692
       },
       "column": {
         "left": 228,
@@ -452,7 +1624,8 @@
       },
       "inset": 228,
       "viewport": 700,
-      "conversationVisible": 0,
+      "cut": [],
+      "conversationVisible": -220,
       "takesColumn": true
     },
     {
@@ -460,6 +1633,70 @@
       "height": 900,
       "lang": "en",
       "scheme": "dark",
+      "dragged": null,
+      "host": "board",
+      "sheetWidth": 380,
+      "inset": 0,
+      "viewport": 700
+    },
+    {
+      "width": 700,
+      "height": 900,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 8,
+        "width": 692
+      },
+      "column": {
+        "left": 228,
+        "width": 464
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 700,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 700,
+      "height": 900,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 8,
+        "width": 692
+      },
+      "column": {
+        "left": 228,
+        "width": 464
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 700,
+      "cut": [],
+      "conversationVisible": -220,
+      "takesColumn": true
+    },
+    {
+      "width": 700,
+      "height": 900,
+      "lang": "en",
+      "scheme": "light",
+      "dragged": 380,
       "host": "board",
       "sheetWidth": 380,
       "inset": 0,

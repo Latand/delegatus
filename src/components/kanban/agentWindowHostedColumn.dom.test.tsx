@@ -1,11 +1,11 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { installActEnv } from "@/test-helpers/actEnv";
 
-import { hostedColumnInset } from "../shellLayout";
+import { hostedColumnInset, hostedWindowInset, setHostedSheetLeft } from "../shellLayout";
 import { AgentWindow } from "./AgentWindow";
 
 installActEnv();
@@ -27,6 +27,8 @@ Object.assign(globalThis, {
 });
 
 let column = 228;
+const windowEdge = 8;
+const columnRight = 992;
 const observers: Array<() => void> = [];
 class TestResizeObserver {
   constructor(private readonly callback: () => void) {}
@@ -43,11 +45,17 @@ class TestResizeObserver {
 const proto = dom.HTMLElement.prototype as unknown as { getBoundingClientRect: () => DOMRect };
 const original = proto.getBoundingClientRect;
 proto.getBoundingClientRect = function (this: HTMLElement) {
-  const left = this.classList.contains("aw-reader") ? column : 0;
-  return { left, right: left, top: 0, bottom: 0, width: 0, height: 0, x: left, y: 0, toJSON() {} } as DOMRect;
+  const reader = this.classList.contains("aw-reader");
+  const left = reader ? column : this.classList.contains("agent-window") ? windowEdge : 0;
+  const right = reader ? columnRight : left;
+  return { left, right, top: 0, bottom: 0, width: right - left, height: 0, x: left, y: 0, toJSON() {} } as DOMRect;
 };
 
 let root: Root | null = null;
+
+afterAll(() => {
+  proto.getBoundingClientRect = original;
+});
 
 afterEach(async () => {
   await act(async () => root?.unmount());
@@ -72,6 +80,8 @@ test("the window publishes the left edge of its conversation column and withdraw
   expect(hostedColumnInset()).toBe(0);
   await mount();
   expect(hostedColumnInset()).toBe(228);
+  /* The window's own edge goes with it: where the sheet takes the column whole, the list gives way. */
+  expect(hostedWindowInset()).toBe(8);
 
   /* A resize that moves the column (the list narrows below 1200 px) is followed. */
   column = 256;
@@ -88,5 +98,25 @@ test("the window publishes the left edge of its conversation column and withdraw
   await act(async () => root!.unmount());
   root = null;
   expect(hostedColumnInset()).toBe(0);
-  proto.getBoundingClientRect = original;
+  expect(hostedWindowInset()).toBe(0);
+});
+
+test("the conversation wraps at the edge of a sheet standing over the right of the column", async () => {
+  const slotInset = () => dom.document.querySelector<HTMLElement>(".aw-reader")!.style.getPropertyValue("--aw-sheet-inset");
+  await mount();
+  expect(slotInset()).toBe("");
+
+  /* A sheet 452 px wide at a 1000 px viewport leaves the column its right 192 px to give up. */
+  await act(async () => setHostedSheetLeft(800));
+  expect(slotInset()).toBe("192px");
+  expect(dom.document.querySelector(".aw-reader")!.hasAttribute("data-sheet-covered")).toBe(true);
+  /* The sheet widens or narrows: the inset follows its edge. */
+  await act(async () => setHostedSheetLeft(560));
+  expect(slotInset()).toBe("432px");
+  /* A sheet that took the whole column leaves it laid out as it was. */
+  await act(async () => setHostedSheetLeft(8));
+  expect(slotInset()).toBe("");
+  await act(async () => setHostedSheetLeft(0));
+  expect(slotInset()).toBe("");
+  expect(dom.document.querySelector(".aw-reader")!.hasAttribute("data-sheet-covered")).toBe(false);
 });

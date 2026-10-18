@@ -7,10 +7,10 @@ import { installActEnv } from "@/test-helpers/actEnv";
 import { formatArtifactFragment } from "@/lib/artifact/fragment";
 import { setLocale } from "@/lib/i18n";
 
-import { setHostedColumnLeft, setLeftShellInset } from "../shellLayout";
+import { hostedSheetEdge, setHostedColumnLeft, setLeftShellInset } from "../shellLayout";
 import { useModalLayer } from "../modalLayer";
 import { useMenuDismiss } from "../kanban/kanbanMenus";
-import { ArtifactPreviewHost, roomForSheet } from "./ArtifactPreviewHost";
+import { ArtifactPreviewHost, hostedRoom, hostedSheetWidth, roomForSheet } from "./ArtifactPreviewHost";
 import { artifactMetaUrl } from "./artifactResource";
 import { openArtifactPreview } from "./previewBus";
 
@@ -586,21 +586,37 @@ test("the desktop sheet yields to the orchestrator dock so the board keeps its 3
 
 /* Over the full-screen agent window the conversation is the window's right
    column, which starts after the window's margin and its agent list. */
-test("opened over the agent window, the sheet keeps 320px of conversation measured from its column", async () => {
+test("opened over the agent window, the sheet keeps 320px of conversation measured from its column, or takes the window", async () => {
   /* The column's left edge at the widths the window stands in: 8 + 220 below
-     1200 px, and behind the 248 px sidebar from 1100 px up. */
-  expect(roomForSheet(1_440, 504, true)).toBe(616);
-  expect(1_440 - 504 - Math.min(560, roomForSheet(1_440, 504, true))).toBeGreaterThanOrEqual(320);
-  expect(roomForSheet(1_200, 504, true)).toBe(376);
-  expect(1_200 - 504 - roomForSheet(1_200, 504, true)).toBe(320);
+     1100 px, 248 + 8 + 220 from 1100 px up; the window itself starts at 8 / 256. */
+  const visible = (stored: number, viewport: number, column: number, frame: number) => viewport - column - hostedSheetWidth(stored, viewport, column, frame);
+  expect(hostedSheetWidth(560, 1_440, 504, 256)).toBe(560);
+  expect(visible(560, 1_440, 504, 256)).toBeGreaterThanOrEqual(320);
+  expect(hostedSheetWidth(560, 1_200, 504, 256)).toBe(376);
+  expect(visible(560, 1_200, 504, 256)).toBe(320);
   /* 1000 px: the 560 the board geometry would give is cut to the floor. */
-  expect(roomForSheet(1_000, 228, true)).toBe(452);
-  expect(1_000 - 228 - Math.min(560, roomForSheet(1_000, 228, true))).toBe(320);
-  /* Where the minimum sheet and the floor no longer fit, the sheet takes the column whole. */
-  expect(roomForSheet(700, 228, true)).toBe(472);
-  expect(roomForSheet(907, 228, true)).toBe(679);
-  expect(roomForSheet(908, 228, true)).toBe(360);
-  expect(roomForSheet(500, 228, true)).toBe(380);
+  expect(hostedSheetWidth(560, 1_000, 228, 8)).toBe(452);
+  expect(visible(560, 1_000, 228, 8)).toBe(320);
+  /* Where the narrowest useful sheet and the floor no longer fit, the sheet takes the window whole, however wide it was stored. */
+  for (const [viewport, column, frame] of [[700, 228, 8], [850, 228, 8], [900, 228, 8], [1_100, 476, 256], [1_150, 476, 256]] as const) {
+    for (const stored of [380, 560, 700]) {
+      expect(hostedSheetWidth(stored, viewport, column, frame), `${viewport} stored ${stored}`).toBe(viewport - frame);
+      expect(viewport - hostedSheetWidth(stored, viewport, column, frame), `${viewport} stored ${stored}`).toBeLessThanOrEqual(column);
+    }
+  }
+  /* The only widths left are at most the room, or the whole window: nothing lands between, stored or dragged. */
+  for (let viewport = 500; viewport <= 1_700; viewport += 7) {
+    for (const [column, frame] of [[228, 8], [504, 256], [476, 256]] as const) {
+      for (const stored of [380, 420, 560, 900]) {
+        const width = hostedSheetWidth(stored, viewport, column, frame);
+        const room = hostedRoom(viewport, column);
+        if (room === null) expect(width, `${viewport}/${column}`).toBe(Math.max(380, viewport - frame));
+        else expect(viewport - column - width, `${viewport}/${column}/${stored}`).toBeGreaterThanOrEqual(320);
+      }
+    }
+  }
+  expect(hostedRoom(908, 228)).toBe(360);
+  expect(hostedRoom(907, 228)).toBeNull();
   /* The board's geometry is the same function without a host. */
   expect(roomForSheet(1_000, 228)).toBe(452);
   expect(roomForSheet(700, 228)).toBe(380);
@@ -618,19 +634,24 @@ test("the sheet sizes itself to the agent window's column while the window is op
   /* The board: the CSS clamp, whose max()/min() this DOM does not parse, so no pixel width is written. */
   expect(surface()!.getAttribute("style")).not.toContain("px;");
 
-  await act(async () => setHostedColumnLeft(228));
+  await act(async () => setHostedColumnLeft(228, 8));
   expect(surface()!.getAttribute("data-artifact-preview-inset")).toBe("228");
   expect(surface()!.getAttribute("style")).toContain("width: 452px");
+  /* The window is told where the sheet's edge stands, to wrap its conversation there. */
+  expect(hostedSheetEdge()).toBe(548);
 
   /* The window's list narrows or the viewport shrinks: the sheet follows both. */
   await act(async () => happy.happyDOM.setViewport({ width: 700, height: 760 }));
   await act(async () => {
     dom.dispatchEvent(new dom.Event("resize") as never);
   });
-  expect(surface()!.getAttribute("style")).toContain("width: 472px");
+  /* Too narrow for the floor: the sheet takes the window whole, the list included. */
+  expect(surface()!.getAttribute("style")).toContain("width: 692px");
+  expect(hostedSheetEdge()).toBe(8);
 
   await act(async () => setHostedColumnLeft(0));
   expect(surface()!.getAttribute("data-artifact-preview-inset")).toBe("0");
+  expect(hostedSheetEdge()).toBe(0);
   happy.happyDOM.setViewport({ width: 1_024, height: 768 });
 });
 
