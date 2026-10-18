@@ -12,7 +12,7 @@ import { pipelineHasPullRequest } from "@/lib/forge/resolve";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot, projectAliasResolver } from "@/lib/projects/aliases";
-import { replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
+import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
 import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
@@ -1671,9 +1671,16 @@ export function withDeliveryPublicationDetail(pipeline: Pipeline): Pipeline {
  * Anything that mutates a pipeline goes through `withPipelineMutation`, and
  * anything that overlays one takes `loadPipelinesForProjection`.
  */
+const pipelineProjectKeys = new WeakMap<readonly Pipeline[], { aliases: string; projects: ReadonlySet<string> }>();
 export function loadPipelinesForList(): readonly Pipeline[] {
   const pipelines = cachedPipelines();
-  replaceProjectKeySource("pipelines", pipelines.map(pipeline => canonicalProject(pipeline.project)));
+  const aliases = JSON.stringify(projectAliasSnapshot().aliases);
+  let membership = pipelineProjectKeys.get(pipelines);
+  if (membership?.aliases !== aliases) {
+    membership = { aliases, projects: canonicalProjectKeys(pipelines.map(pipeline => pipeline.project)) };
+    pipelineProjectKeys.set(pipelines, membership);
+  }
+  replaceProjectKeySource("pipelines", membership.projects);
   return pipelines;
 }
 
@@ -1905,7 +1912,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
 
 export function savePipelines(pipelines: Pipeline[]): void {
   pipelineStore().replaceSync(pipelines);
-  replaceProjectKeySource("pipelines", pipelines.map(pipeline => canonicalProject(pipeline.project)));
+  replaceProjectKeySource("pipelines", canonicalProjectKeys(pipelines.map(pipeline => pipeline.project)));
 }
 
 /** Settled records leave the hot registry after this long; the archive keeps

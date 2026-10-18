@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 
 import { loadPipelineListRecords, projectPipelineCompactRows, selectPipelineListRecords } from "./listProjection";
 import { archiveSettledPipelines, buildPipeline, findPipelineRecord, loadArchivedPipelines, loadPipelinesForList, savePipelines } from "./store";
+import { projectKeyIndexSnapshot } from "@/lib/projects/projectKeyIndex";
 import type { Pipeline } from "./types";
 
 test("compiled stores share readonly data while nested snapshots and aborted mutations stay independent", async () => {
@@ -69,6 +70,34 @@ test("compiled stores share readonly data while nested snapshots and aborted mut
     unchanged();
   } finally {
     if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("warm pipeline list reads reuse project membership for the cached registry", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-project-membership-"));
+  const prior = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  try {
+    const records = Array.from({ length: 100 }, (_, index) => buildPipeline({
+      id: `membership-${index}`, task: `Membership ${index}`, project: `project-${index % 5}`, repoDir: "/repo",
+      stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+        effectiveRole: { roleId: null, engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-write", promptScaffold: null } }],
+      srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z",
+    }));
+    savePipelines(records);
+    const shared = loadPipelinesForList();
+    const stat = spyOn(fs, "statSync");
+    try {
+      for (let pass = 0; pass < 3; pass++) expect(loadPipelinesForList()).toBe(shared);
+      expect(stat.mock.calls.filter(([filename]) => String(filename).endsWith("project-aliases.json")).length).toBeLessThanOrEqual(9);
+    } finally { stat.mockRestore(); }
+    fs.writeFileSync(path.join(root, "project-aliases.json"), JSON.stringify({ schemaVersion: 1, aliases: { "project-0": "renamed-project" }, displayNames: {} }));
+    loadPipelinesForList();
+    expect(projectKeyIndexSnapshot().has("renamed-project")).toBe(true);
+  } finally {
+    if (prior === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = prior;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

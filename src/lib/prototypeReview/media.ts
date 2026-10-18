@@ -8,7 +8,7 @@ import { openedAt, streamWindow } from "@/lib/artifact/localFile";
 import { PrototypeError } from "./input";
 import { prototypeRoot, roundMedia, sniffPrototype, storedMediaPath } from "./store";
 import { prototypeWorld, taskForPrototype, type PrototypeWorld } from "./world";
-import { findSeatRound } from "./seatRounds";
+import { loadSeatRounds } from "./seatRounds";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { PrototypeReviewRound } from "./types";
 import { resolveShortId } from "@/lib/shortIds";
@@ -16,7 +16,7 @@ import { resolveShortId } from "@/lib/shortIds";
 /** The round a media read names: the task's, or with no task a seat's own
     pictures, read only from the seat's project. */
 function mediaRound(taskId: string,reviewId: string,kind: "image" | "video",caller: ReturnType<PrototypeWorld["caller"]>): PrototypeReviewRound | undefined {
-  const rounds = taskId ? taskForPrototype(taskId,caller).prototypeReviews ?? [] : kind === "image" ? [findSeatRound(reviewId)].filter((r): r is PrototypeReviewRound => !!r) : [];
+  const rounds = taskId ? taskForPrototype(taskId,caller).prototypeReviews ?? [] : kind === "image" ? loadSeatRounds() : [];
   const resolution = resolveShortId(rounds.map(round => round.id), reviewId);
   if (resolution.kind === "ambiguous") throw new PrototypeError("review id is ambiguous; pass more characters", 409);
   const round = resolution.kind === "match" ? rounds.find(candidate => candidate.id === resolution.value) : undefined;

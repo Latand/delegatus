@@ -147,6 +147,8 @@ beforeEach(async () => {
   bot = newBot();
 });
 afterEach(async () => {
+  const { shutdownTaskPageWorker } = await import("@/lib/links/taskPageWorker");
+  await shutdownTaskPageWorker();
   await bot.remove();
 });
 afterAll(() => {

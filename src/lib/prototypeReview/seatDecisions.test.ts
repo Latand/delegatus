@@ -4,13 +4,14 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 import { saveTasks, loadTasks } from "@/lib/tasks/store";
 import { GET as imageGET } from "@/app/api/image/route";
+import { prototypeMediaGET } from "./media";
 import { decisionsGET, decisionsPOST as decisionsRoutePOST, publishPOST, reviewReadPOST, reviewScopePOST } from "./http";
 import { resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
 import { decidePrototype, prototypeDecisionText } from "./decision";
 import { seatDecisionNotices } from "./read";
 import { prototypeReviewNotices } from "./model";
 import { publishPrototype, roundDirectory } from "./store";
-import { clearSeatRoundsForTests, loadSeatRounds } from "./seatRounds";
+import { clearSeatRoundsForTests, insertSeatRound, loadSeatRounds } from "./seatRounds";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 import type { OperatorDecisionsRead, PrototypeDecision, PrototypeReviewRead, PrototypeReviewRound, PublishPrototypeInput } from "./types";
 import { questions } from "./questionnaire.fixture";
@@ -180,6 +181,29 @@ test("an existing seat round's pictures are served without a task and survive an
   const image = await imageGET(request(url));
   expect(image.status).toBe(200);
   expect(Buffer.from(await image.arrayBuffer())).toEqual(PNG);
+});
+
+test("taskless image reads resolve short review ids, reject collisions, and keep the project fence", async () => {
+  const root = await fs.mkdtemp(path.join(process.env.HOME!, "seat-prefix-source-")); roots.push(root);
+  await fs.writeFile(path.join(root, "v1.png"), PNG);
+  const input = { clientRequestId: "seat-prefix", title: "Which layout?", questions: one,
+    variants: [{ number: 1, name: "Compact", description: "Tight.", frames: [{ path: path.join(root, "v1.png"), caption: "" }] }] };
+  const round = await publishPrototype(input, null, { conversationId: "conversation_seat" }, "project-a");
+  const media = round.variants[0]!.frames[0]!.image;
+  const short = round.id.slice(0, 11);
+  for (const reviewId of [round.id, short]) {
+    const response = await prototypeMediaGET(request("/api/image"), "", reviewId, media.id.slice(0, 8), "image", seat);
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(PNG);
+  }
+  const foreign: PrototypeWorld = { ...seat, caller: () => ({ conversationId: "conversation_foreign", project: "project-b" }) };
+  expect((await prototypeMediaGET(request("/api/image"), "", short, media.id, "image", foreign)).status).toBe(403);
+
+  const collision = structuredClone(round);
+  collision.id = `${round.id.slice(0, 11)}${round.id[11] === "a" ? "b" : "a"}${round.id.slice(12)}`;
+  collision.publicationKey = "seat-prefix-collision";
+  insertSeatRound(collision);
+  expect((await prototypeMediaGET(request("/api/image"), "", short, media.id, "image", seat)).status).toBe(409);
 });
 
 test("a task-bound decision message stays byte for byte", () => {

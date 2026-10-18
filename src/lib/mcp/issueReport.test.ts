@@ -52,6 +52,8 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await resetPrototypeDeliveryWorkerForTests();
+  const { shutdownTaskPageWorker } = await import("@/lib/links/taskPageWorker");
+  await shutdownTaskPageWorker();
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousState;
   if (previousCapability === undefined) delete process.env[VIEWER_SPAWN_CAPABILITY_ENV];

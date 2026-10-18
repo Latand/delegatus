@@ -10,6 +10,13 @@ const { namedProjectDirectory, resolveNamedProject } = await import("./nameResol
 const { normalizeShortIdArgs } = await import("@/lib/mcp/shortIdArgs");
 const a = "repo-12345678aaaa" + "a".repeat(20), b = "repo-12345678bbbb" + "b".repeat(20);
 
+async function freshProcess(source: string): Promise<string> {
+  const child = Bun.spawn({ cmd: [process.execPath, "-e", source], cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exitCode, stderr).toBe(0);
+  return stdout.trim().split("\n").at(-1)!;
+}
+
 test("short project keys resolve at the boundary and through names; ambiguity never reads an empty board", async () => {
   persistProjectAliases([{ source: "fixture-old", target: a, displayName: "First project" }]);
   expect(await normalizeShortIdArgs({ project: a.slice(0, 13), expectedProject: a.slice(0, 12).toUpperCase() })).toEqual({ project: a, expectedProject: a });
@@ -50,7 +57,12 @@ test("task-only project keys are indexed before short-key writes and collisions 
   const at = "2026-10-16T00:00:00.000Z";
   const task = (id: string, project: string) => ({ id, text: id, project, status: "inbox" as const, placement: "unplaced" as const, assignments: [], createdAt: at, updatedAt: at });
   saveTasks([task("task-only-a", left), task("task-only-b", right)]);
-  await expect(normalizeShortIdArgs({ project: prefix })).rejects.toMatchObject({ details: { code: "ambiguous_project" } });
+  const collision = await freshProcess(`
+    const { normalizeShortIdArgs } = await import("./src/lib/mcp/shortIdArgs.ts");
+    try { await normalizeShortIdArgs({ project: "${prefix}" }); console.log(JSON.stringify({ ok: true })); }
+    catch (error) { console.log(JSON.stringify({ ok: false, code: error.details.code })); }
+  `);
+  expect(JSON.parse(collision)).toEqual({ ok: false, code: "ambiguous_project" });
   let writes = 0;
   const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
   const service = createMcpToolService({ create_task: async () => { writes++; return { task: task("unexpected", right) }; } } as never, new MemoryMcpReceiptStore());
@@ -58,18 +70,17 @@ test("task-only project keys are indexed before short-key writes and collisions 
   expect(refused).toMatchObject({ ok: false, code: "ambiguous_project" });
   expect(writes).toBe(0);
   saveTasks([task("task-only-a", left)]);
-  expect(await normalizeShortIdArgs({ project: left.slice(0, 17) })).toEqual({ project: left });
-  expect(await normalizeShortIdArgs({ project: left })).toEqual({ project: left });
-  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
-  const roundTrip = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore());
-  const listed = await roundTrip.callTool("list_tasks", { project: left.slice(0, 17) });
-  if (!listed.ok) throw new Error(listed.error);
-  expect(listed).toMatchObject({ ok: true, tasks: [{ project: "repo-deadbeef" }] });
-  const returnedProject = (listed.tasks as Array<{ project: string }>)[0]!.project;
-  const created = await roundTrip.callTool("create_task", { clientRequestId: "task-only-round-trip", project: returnedProject, text: "Round-trip task" });
-  if (!created.ok) throw new Error(created.error);
-  expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
-  expect((await import("@/lib/tasks/store")).loadTasks().some(row => row.text === "Round-trip task" && row.project === left)).toBe(true);
+  const fresh = JSON.parse(await freshProcess(`
+    const { viewerMcpBindings } = await import("./src/lib/mcp/bindings.ts");
+    const { createMcpToolService, MemoryMcpReceiptStore } = await import("./src/lib/mcp/server.ts");
+    const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore());
+    const listed = await service.callTool("list_tasks", { project: "${left.slice(0, 17)}" });
+    const guarded = await service.callTool("create_task", { clientRequestId: "fresh-process-expected-project", project: "${left}", expectedProject: "${left.slice(0, 17)}", text: "Fresh process guarded task" });
+    console.log(JSON.stringify({ listed, guarded }));
+  `)) as { listed: Record<string, unknown>; guarded: Record<string, unknown> };
+  expect(fresh.listed).toMatchObject({ ok: true, tasks: [{ id: "task-only-a", project: prefix }] });
+  expect(fresh.guarded).toMatchObject({ ok: true });
+  expect((await import("@/lib/tasks/store")).loadTasks().some(row => row.text === "Fresh process guarded task" && row.project === left)).toBe(true);
 });
 
 test("a short expectedProject preserves an aliased task's stored project guard", async () => {
