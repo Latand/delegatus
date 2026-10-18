@@ -21,6 +21,7 @@ export const performanceSites = [
   "transcript.feed", "transcript.index", "memory.discovery", "memory.refresh",
   "http.render", "privacy.compile", "privacy.match", "privacy.worker",
   "mcp.caller-enumeration", "liveness.snapshot", "proc.scan", "self-update.bytes",
+  "runtime-journal.retention-map",
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";

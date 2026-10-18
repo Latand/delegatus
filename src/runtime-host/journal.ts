@@ -1944,7 +1944,7 @@ export class RuntimeJournal {
       superseded. Pending sends and interrupts retain their existing unknown-
       fate rules. */
   settleStalePendingEffects(
-    registryConversations: ReadonlyMap<string, RuntimeRegistryConversationRetentionState>,
+    registryConversations: Pick<ReadonlyMap<string, RuntimeRegistryConversationRetentionState>, "get">,
     horizonMs = RUNTIME_PENDING_EFFECT_STALE_MS,
   ): { scanned: number; settled: number } {
     this.assertHealthy();
