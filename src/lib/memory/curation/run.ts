@@ -5,6 +5,7 @@ import type { ReportSpawnResult } from "@/lib/telegram/reportSpawn";
 import { effectiveCurationSetting } from "@/lib/monitor/seatTickSettings";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { roleMemoryEnabled } from "../settings";
+import { withSystemRunTask } from "@/lib/tasks/systemRun";
 import { curatorBrief } from "./brief";
 import { admissionHeld, hostAdmission, settle, type CurationAdmissionPorts } from "./admission";
 import { claimPass, curationStatus, currentPass, machinePass, patchPass, readPass, passIsLive, type CuratorPass } from "./store";
@@ -29,6 +30,7 @@ async function launch(pass: CuratorPass, ports: CurationPorts): Promise<string |
   if (!pass.launchBody) pass = patchPass(pass.id, { state: "launching", launchBody: { role: "curator", roleParams: {}, project: pass.project, cwd: pass.repoDir, prompt: curatorBrief(pass.project), title: "Role memory curation", clientAttemptId: pass.id, mcpServers: ["viewer"], notifyLauncher: false } })!;
   const fresh = readPass(pass.id);
   if (!fresh || !passIsLive(fresh)) return null;
+  const launchBody = await withSystemRunTask(pass.launchBody!, new Date(ports.sources.now()).toISOString());
   const heldAgain = admissionHeld(pass.project, ports); if (heldAgain) return heldAgain;
   if (!pass.launchedAt) pass = patchPass(pass.id, { launchedAt: new Date(ports.sources.now()).toISOString() })!;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -39,7 +41,7 @@ async function launch(pass: CuratorPass, ports: CurationPorts): Promise<string |
     if (machinePass()?.id !== pass.id || !passIsLive(readPass(pass.id))) throw Error("curation pass ended");
   };
   const response = await Promise.race([
-    (ports.launch ?? launchAutonomousConversation)(pass.launchBody!, authorize),
+    (ports.launch ?? launchAutonomousConversation)(launchBody, authorize),
     new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), ports.launchTimeoutMs ?? LAUNCH_GRACE_MS); }),
   ]).finally(() => { if (timer) clearTimeout(timer); });
   const ineligibleAfterLaunch = host.guard();
