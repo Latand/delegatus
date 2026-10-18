@@ -2454,6 +2454,14 @@ async function clearEngineTaskNote(pipeline: Pipeline): Promise<void> {
 async function park(pipeline: Pipeline, detail: string, attempt?: PipelineStageAttempt | null, reason?: ParkedTaskReason): Promise<void> {
   const noteReason = reason ?? (detail.startsWith("rate limited until ") ? { kind: "quota-reset" as const } : undefined);
   if (pipeline.state !== "needs_decision" || pipeline.stateDetail !== detail) await writeEngineParkedTaskNote(pipeline, detail, attempt, noteReason);
+  // A successful push cannot discharge a later refusal of the committing
+  // pass (PR verification, head verification or exhausted text repair).
+  // Preserve that decision across ticks; publish/retry explicitly resumes it.
+  const operation = pipeline.delivery?.operation;
+  const accepted = attempt ?? (pipeline.cursor && currentAttempt(pipeline, pipeline.cursor.stageId));
+  if (pipeline.cursor?.state === "committing" && stageHeadAccepted(accepted)
+    && operation?.state === "settled" && operation.result?.ok && operation.sha === pipeline.lastPassedCommit)
+    operation.passedStage = false;
   if (attempt && attempt.state !== "failed") attempt.state = "needs_decision";
   if (attempt?.providerWait?.stageRetry && reason?.kind !== "provider-retry") {
     delete attempt.providerWait.stageRetry;
@@ -5212,8 +5220,8 @@ async function settleStageVerdict(
 
        A spent budget (#1868) hands the findings to the target once more under
        the edge's default `onExhausted: "advance"` and under `stop-after-fix`,
-       and parks under `park`. After that last fix `advance` moves on or
-       re-checks a terminal gate before completion (#2247); `stop-after-fix`
+       and parks under `park`. After that last fix `advance` follows the
+       source's pass edge or completes, with no further review; `stop-after-fix`
        waits in needs_review when the fix wrote a new head (#2187). */
     if (parsed.verdict.blocked === true) {
       await park(pipeline, parsed.verdict.blockedReason!, attempt);
@@ -10779,6 +10787,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           && operation.state === "settled" && operation.result?.ok && operation.result.remote === "published"
           && operation.epoch === pipeline.delivery?.epoch
           && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }))
+          && operation.passedStage !== false
           && ((operation.passedStage === true && awaitingPassedPublication(pipeline)) || passedStagePublicationPark(pipeline, passed));
         const interruptedPublicationCleared = operation?.sha === pipeline.lastPassedCommit
           && operation.epoch === pipeline.delivery?.epoch
