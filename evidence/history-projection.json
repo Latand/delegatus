@@ -14,12 +14,13 @@
     "src/lib/memory/curation/evalServer.fixture.ts": "45c1087520ce820aefa710c45a6fc22831abad214ebe111caa3b41eafbe65082",
     "src/lib/memory/curation/read.ts": "ccd355c588504843c23a59d32f600e4fdb371f7e464bd2841853f2ea2f8526af",
     "src/lib/memory/curation/reviewLessons.test.ts": "40a1b315e5d7ea1cbaa8f683b847f76ade70305d234a7ad6f476fcae9ddb7320",
-    "src/lib/state/historyProjection.test.ts": "db7e9eed9c6283b4a923d7e748be0b6ff84fd14a81a23b554bde2534a4b341bb",
-    "src/lib/state/historyProjection.ts": "512b23755276095474be8bc13c8eb61ba67c1f963f968494753ab53533dc703a",
+    "src/lib/state/historyProjection.test.ts": "34f8c1d21f175b76e4b928b0f3b1472136749a19e417b24c0351993384ed3a72",
+    "src/lib/state/historyProjection.ts": "da72efab0a5d2560422ae92537bc24888d7a4ce513d6d3f4823b3326d2b33bf0",
     "src/lib/state/hotStateStores.sqlite.test.ts": "7fc03817862035c24d6efe986291ef97ed1cb786491e98a58c20fe7545c5a215",
     "src/lib/state/pipelineEvidenceIndex.ts": "adfecb6309684ad3e235aef6549e78d7ce4e857867c46ea0913648d8a9eaec2c",
     "src/lib/viewerInstrumentation.ts": "a6380b54e9645ab5a1943829e4b8200561196f0755d021ad978342e8e0edca6d",
-    "src/lib/viewerLoopMonitor.ts": "3b2de4b962261816de70dbbf0ff6f23a14aff48fc62c6aa2738ee8648230523d"
+    "src/lib/viewerLoopMonitor.ts": "3b2de4b962261816de70dbbf0ff6f23a14aff48fc62c6aa2738ee8648230523d",
+    "scripts/measure-history-deltas.ts": "66d03ac33c6ca1dfe7e5361f5b853f8053bc676ecd04123cfae72f3ba1a540f6"
   },
   "runtime": {
     "bun": "1.4.0",
@@ -995,5 +996,305 @@
   "mainRecheck": {
     "commit": "6ee376c28b7682ac604b0fb3b20eb887db31d4c6",
     "change": "relay tools integrated; subsequent task-index readiness diff reviewed; other main changes concern form delivery; no task readiness/index changes made by this branch"
+  },
+  "refreshMeasurements": {
+    "generatedAt": "2026-10-18T04:10:42.144813+00:00",
+    "sourceBackup": {
+      "backupBytes": 210534400,
+      "backupSha256": "e9fb38ac318e59e71e048852afe9673d07e0cb8e6a8b96858a8cd632baed89d5"
+    },
+    "preparedTemplateSha256": "0270cb97e5ffc964b1dcdee4b34698b15c26062eddfaacd90925d47fee492a3e",
+    "method": {
+      "freshProcessPairsPerOperation": 3,
+      "isolatedCopyPerProcess": true,
+      "readBytes": "Linux main-thread rchar delta",
+      "mainThreadMs": "Linux main-thread schedstat run delta",
+      "windowNow": "2026-10-17T12:00:00.000Z",
+      "livenessFixture": "1000 synthetic accepted headless rounds appended only to each private template"
+    },
+    "source": {
+      "rows": 1169,
+      "jsonBytes": 155462061
+    },
+    "template": {
+      "rows": 1170,
+      "jsonBytes": 155598194,
+      "sha256": "0270cb97e5ffc964b1dcdee4b34698b15c26062eddfaacd90925d47fee492a3e"
+    },
+    "operations": {
+      "update": {
+        "sourceRows": 1170,
+        "sourceJsonBytes": 155598194,
+        "samples": [
+          {
+            "repetition": 1,
+            "before": {
+              "mainThreadMs": 826.456129,
+              "readBytes": 468059033,
+              "decodedJsonBytes": 155462038,
+              "elapsedMs": 827.9522690000001,
+              "maxTimerGapMs": 820.6742570000001
+            },
+            "after": {
+              "mainThreadMs": 8.142342,
+              "readBytes": 540815,
+              "decodedJsonBytes": 0,
+              "elapsedMs": 9.232711999999992,
+              "maxTimerGapMs": 0.08368900000004942
+            },
+            "resultCount": 4113,
+            "transitionedRows": 1,
+            "now": "2026-10-17T12:00:00.000Z"
+          },
+          {
+            "repetition": 2,
+            "before": {
+              "mainThreadMs": 707.86988,
+              "readBytes": 468059158,
+              "decodedJsonBytes": 155462038,
+              "elapsedMs": 709.7752369999998,
+              "maxTimerGapMs": 701.4158329999999
+            },
+            "after": {
+              "mainThreadMs": 11.595769,
+              "readBytes": 540815,
+              "decodedJsonBytes": 0,
+              "elapsedMs": 13.114696000000095,
+              "maxTimerGapMs": 0.840853000000152
+            },
+            "resultCount": 4113,
+            "transitionedRows": 1,
+            "now": "2026-10-17T12:00:00.000Z"
+          },
+          {
+            "repetition": 3,
+            "before": {
+              "mainThreadMs": 794.587915,
+              "readBytes": 468058993,
+              "decodedJsonBytes": 155462038,
+              "elapsedMs": 857.5194529999999,
+              "maxTimerGapMs": 850.069116
+            },
+            "after": {
+              "mainThreadMs": 6.812909,
+              "readBytes": 540815,
+              "decodedJsonBytes": 0,
+              "elapsedMs": 8.094794000000093,
+              "maxTimerGapMs": 0.07552099999998063
+            },
+            "resultCount": 4113,
+            "transitionedRows": 1,
+            "now": "2026-10-17T12:00:00.000Z"
+          }
+        ],
+        "median": {
+          "before": {
+            "mainThreadMs": 794.587915,
+            "readBytes": 468059033,
+            "decodedJsonBytes": 155462038,
+            "elapsedMs": 827.9522690000001
+          },
+          "after": {
+            "mainThreadMs": 8.142342,
+            "readBytes": 540815,
+            "decodedJsonBytes": 0,
+            "elapsedMs": 9.232711999999992
+          }
+        }
+      },
+      "expiry": {
+        "sourceRows": 1170,
+        "sourceJsonBytes": 155598194,
+        "samples": [
+          {
+            "repetition": 1,
+            "before": {
+              "mainThreadMs": 700.034875,
+              "readBytes": 468304835,
+              "decodedJsonBytes": 155462061,
+              "elapsedMs": 700.983876,
+              "maxTimerGapMs": 693.322498
+            },
+            "after": {
+              "mainThreadMs": 1.466282,
+              "readBytes": 73922,
+              "decodedJsonBytes": 0,
+              "elapsedMs": 1.4034229999999752,
+              "maxTimerGapMs": 0.0723680000000968
+            },
+            "resultCount": 4206,
+            "transitionedRows": 1,
+            "now": "2026-10-31T18:43:36.822Z"
+          },
+          {
+            "repetition": 2,
+            "before": {
+              "mainThreadMs": 710.229786,
+              "readBytes": 468304833,
+              "decodedJsonBytes": 155462061,
+              "elapsedMs": 734.6086270000001,
+              "maxTimerGapMs": 727.199318
+            },
+            "after": {
+              "mainThreadMs": 1.99907,
+              "readBytes": 73921,
+              "decodedJsonBytes": 0,
+              "elapsedMs": 1.3056320000000596,
+              "maxTimerGapMs": 0.09035500000004504
+            },
+            "resultCount": 4206,
+            "transitionedRows": 1,
+            "now": "2026-10-31T18:43:36.822Z"
+          },
+          {
+            "repetition": 3,
+            "before": {
+              "mainThreadMs": 682.07197,
+              "readBytes": 468304836,
+              "decodedJsonBytes": 155462061,
+              "elapsedMs": 683.0531990000001,
+              "maxTimerGapMs": 675.3619640000001
+            },
+            "after": {
+              "mainThreadMs": 2.002368,
+              "readBytes": 73921,
+              "decodedJsonBytes": 0,
+              "elapsedMs": 2.038880000000063,
+              "maxTimerGapMs": 0.07771000000002459
+            },
+            "resultCount": 4206,
+            "transitionedRows": 1,
+            "now": "2026-10-31T18:43:36.822Z"
+          }
+        ],
+        "median": {
+          "before": {
+            "mainThreadMs": 700.034875,
+            "readBytes": 468304835,
+            "decodedJsonBytes": 155462061,
+            "elapsedMs": 700.983876
+          },
+          "after": {
+            "mainThreadMs": 1.99907,
+            "readBytes": 73921,
+            "decodedJsonBytes": 0,
+            "elapsedMs": 1.4034229999999752
+          }
+        }
+      },
+      "liveness": {
+        "sourceRows": 1170,
+        "sourceJsonBytes": 155598194,
+        "samples": [
+          {
+            "repetition": 1,
+            "before": {
+              "mainThreadMs": 4.40068,
+              "readBytes": 144002,
+              "decodedJsonBytes": 136133,
+              "elapsedMs": 3.899382000000003,
+              "maxTimerGapMs": 0.11864500000001499
+            },
+            "afterFirst": {
+              "mainThreadMs": 1.000513,
+              "readBytes": 186,
+              "decodedJsonBytes": 0,
+              "elapsedMs": 1.3523069999999962,
+              "maxTimerGapMs": 0.06883799999997109
+            },
+            "after": {
+              "mainThreadMs": 0.296122,
+              "readBytes": 148,
+              "decodedJsonBytes": 0,
+              "elapsedMs": 0.3953599999999824,
+              "maxTimerGapMs": 0.08821600000004537
+            },
+            "beforeRounds": 1000,
+            "beforePidProbes": 1000,
+            "firstAfterRounds": 1000,
+            "firstAfterPidProbes": 0,
+            "afterRounds": 0,
+            "afterPidProbes": 0,
+            "pathCount": 0
+          },
+          {
+            "repetition": 2,
+            "before": {
+              "mainThreadMs": 3.999558,
+              "readBytes": 143927,
+              "decodedJsonBytes": 136133,
+              "elapsedMs": 3.3127119999999763,
+              "maxTimerGapMs": 0.13855199999994738
+            },
+            "afterFirst": {
+              "mainThreadMs": 1.770767,
+              "readBytes": 187,
+              "decodedJsonBytes": 0,
+              "elapsedMs": 1.9166960000000017,
+              "maxTimerGapMs": 0.09459299999997484
+            },
+            "after": {
+              "mainThreadMs": 0,
+              "readBytes": 149,
+              "decodedJsonBytes": 0,
+              "elapsedMs": 0.5466870000000199,
+              "maxTimerGapMs": 0.06911800000000312
+            },
+            "beforeRounds": 1000,
+            "beforePidProbes": 1000,
+            "firstAfterRounds": 1000,
+            "firstAfterPidProbes": 0,
+            "afterRounds": 0,
+            "afterPidProbes": 0,
+            "pathCount": 0
+          },
+          {
+            "repetition": 3,
+            "before": {
+              "mainThreadMs": 4.987952,
+              "readBytes": 143927,
+              "decodedJsonBytes": 136133,
+              "elapsedMs": 4.81473299999999,
+              "maxTimerGapMs": 0.1932170000000042
+            },
+            "afterFirst": {
+              "mainThreadMs": 1.99958,
+              "readBytes": 187,
+              "decodedJsonBytes": 0,
+              "elapsedMs": 2.002186999999992,
+              "maxTimerGapMs": 0.07865500000002612
+            },
+            "after": {
+              "mainThreadMs": 0.614176,
+              "readBytes": 149,
+              "decodedJsonBytes": 0,
+              "elapsedMs": 0.7964890000000082,
+              "maxTimerGapMs": 0.09386699999998882
+            },
+            "beforeRounds": 1000,
+            "beforePidProbes": 1000,
+            "firstAfterRounds": 1000,
+            "firstAfterPidProbes": 0,
+            "afterRounds": 0,
+            "afterPidProbes": 0,
+            "pathCount": 0
+          }
+        ],
+        "median": {
+          "before": {
+            "mainThreadMs": 4.40068,
+            "readBytes": 143927
+          },
+          "afterFirst": {
+            "mainThreadMs": 1.770767,
+            "readBytes": 187
+          },
+          "after": {
+            "mainThreadMs": 0.296122,
+            "readBytes": 149
+          }
+        }
+      }
+    }
   }
 }

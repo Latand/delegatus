@@ -76,6 +76,30 @@ Final repeated measurements and source digests are recorded in
 
 Values are medians. The history corpus has 1,153 records and 153,203,262 JSON bytes; the registry has 52,207 rows and 187,103,963 JSON bytes. Result counts agree in every repetition (4,113 history attempts; one selected registry conversation).
 
+### Refresh and liveness follow-up
+
+On 2026-10-18, three fresh before/after process pairs used clones of one
+210,534,400-byte read-only SQLite backup (SHA-256 and every raw sample are in
+the evidence JSON). The source held 1,169 pipeline, archive and flow records
+with 155,462,061 JSON bytes. Each clone received the same prepared projection
+artifact before its measured call; the liveness template added one flow with
+1,000 synthetic rounds.
+
+| Operation | Transition | Before main-thread ms / bytes | After main-thread ms / bytes | Result |
+| --- | --- | ---: | ---: | --- |
+| Count refresh | One conversation-id update | 794.588 / 468,059,033 | 8.142 / 540,815 | 4,113 attempts in all pairs |
+| Count refresh | One attempt crosses the 30-day window | 700.035 / 468,304,835 | 1.999 / 73,921 | 4,206 attempts in all pairs |
+| Liveness | Repeated snapshot after 1,000 dead rounds | 4.401 / 143,927 | 0.296 / 149 | 1,000 rounds and PID probes before; zero rounds and probes on the repeated read |
+
+The saved operator corpus had no headless rounds, so the liveness copy included
+1,000 valid synthetic historical rounds with nonexistent PIDs. The first
+projected liveness pass retained the same empty path result and performed no
+PID probes because the legacy pass had cached dead-process verdicts. It pruned
+the rounds from its shared cache; the following snapshot visited none. Count
+result parity and the exact boundary timestamp matched across every pair.
+`scripts/measure-history-deltas.ts` records the procedure and writes one raw
+measurement record per isolated process.
+
 Cold projection preparation has a median elapsed time of 3053.0 ms and a maximum observed timer gap of 16.5 ms. Warm history calls have a median elapsed time of 0.783 ms and a maximum observed timer gap of 1.340 ms. Cold preparation is paid during Viewer startup.
 
 The procedure uses byte-identical private SQLite backups for each mode and fresh

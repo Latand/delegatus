@@ -9,6 +9,8 @@ import { installHistoryProjection, readHistoryProjection, historyAttemptCounts, 
 import { fleetLimitWaits } from "@/lib/mcp/agentFleet";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { buildPipeline } from "@/lib/pipelines/store";
+import { livenessProbe } from "@/lib/agent/accountLiveness";
+import { activeHeadlessTranscriptPaths } from "@/lib/lifecycle/liveness";
 
 const NOW = Date.parse("2026-10-17T12:00:00.000Z");
 const WINDOW = 30 * 24 * 60 * 60_000;
@@ -122,6 +124,65 @@ test("a lineage-only pipeline update leaves project attempt counts warm",async()
   } finally {f.db.close();}
 });
 
+test("a count-affecting record update adjusts a warm project summary by that record",async()=>{
+  const f=fixture();
+  try {
+    for(let n=0;n<100;n++) f.put(pipeline(`delta_${n}`),"pipelines",n);
+    expect((await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).builder).toBe(100);
+    const row=pipeline("delta_42");
+    row.runs[0]!.attempts[0]!.startedAt=new Date(NOW-WINDOW-1).toISOString();
+    f.put(row,"pipelines",42);
+    await f.read(db=>{
+      const query=spyOn(Database.prototype,"query");
+      try {
+        expect(historyAttemptCounts(db,"fixture",NOW).builder).toBe(99);
+        expect(query.mock.calls.some(([sql])=>sql.includes("a.startedMs BETWEEN"))).toBe(false);
+      } finally {query.mockRestore();}
+    });
+  } finally {f.db.close();}
+});
+
+test("run role changes and insertions update warm count summaries without a history scan",async()=>{
+  const f=fixture();
+  try {
+    const first=pipeline("role_delta");
+    f.put(first);
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:1,reviewer:0});
+    first.stages[0]!.role.roleId="reviewer";
+    first.stages[0]!.effectiveRole.roleId="reviewer";
+    f.put(first);
+    const inserted=pipeline("role_inserted");
+    f.put(inserted);
+    await f.read(db=>{
+      const query=spyOn(Database.prototype,"query");
+      try {
+        expect(historyAttemptCounts(db,"fixture",NOW)).toEqual({builder:2,reviewer:0});
+        expect(query.mock.calls.some(([sql])=>sql.includes("a.startedMs BETWEEN"))).toBe(false);
+      } finally {query.mockRestore();}
+    });
+  } finally {f.db.close();}
+});
+
+test("crossing the count window expires only rows that passed its boundary",async()=>{
+  const f=fixture();
+  try {
+    const leaving=pipeline("leaving");
+    leaving.runs[0]!.attempts[0]!.startedAt=new Date(NOW-WINDOW+100).toISOString();
+    f.put(leaving,"pipelines",0);
+    f.put(pipeline("staying"),"pipelines",1);
+    expect((await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).builder).toBe(2);
+    const expiryNow=NOW+101;
+    await f.read(db=>{
+      const query=spyOn(Database.prototype,"query");
+      try {
+        expect(historyAttemptCounts(db,"fixture",expiryNow).builder).toBe(1);
+        expect(query.mock.calls.some(([sql])=>sql.includes("a.startedMs>? AND a.startedMs<=?"))).toBe(true);
+        expect(query.mock.calls.some(([sql])=>sql.includes("a.startedMs BETWEEN"))).toBe(false);
+      } finally {query.mockRestore();}
+    });
+  } finally {f.db.close();}
+});
+
 test("unrecognized and malformed saved records remain stored but never poison projections or startup",async () => {
   const f=fixture();
   const rejected={...pipeline("future_state"),state:"teleported"};
@@ -180,6 +241,23 @@ test("unchanged headless history reuses the bounded shared round projection",asy
       } finally {query.mockRestore();}
     });
   } finally {f.db.close();}
+});
+
+test("a repeated liveness snapshot stops visiting confirmed-dead cached rounds",async()=>{
+  const f=fixture();
+  let probes=0;
+  const probe=livenessProbe({now:()=>NOW,pidAlive:()=>{probes++;return false;},processIdentity:()=>null});
+  const registry={entries:{},conversations:{}};
+  try {
+    f.put(flow({rounds:Array.from({length:100},(_,n)=>({reviewerPid:10000+n,reviewerPath:`dead-${n}`,reviewerIdentity:`start-${n}`}))}),"flows");
+    const first=await f.read(historyHeadlessFlows);
+    expect([...activeHeadlessTranscriptPaths(first,registry,probe,true)]).toEqual([]);
+    expect(probes).toBe(100);
+    const second=await f.read(historyHeadlessFlows);
+    expect(second).toHaveLength(0);
+    expect([...activeHeadlessTranscriptPaths(second,registry,probe,true)]).toEqual([]);
+    expect(probes).toBe(100);
+  } finally { f.db.close(); }
 });
 
 test("malformed persisted records are skipped without losing the source row",async () => {

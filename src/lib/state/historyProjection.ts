@@ -112,7 +112,11 @@ function projectOne(db: Database, collection: string, key: string): void {
   };
   for (const table of ["history_runs","history_attempts","history_inputs"]) db.query(`DELETE FROM ${table} WHERE collection=? AND row_key=?`).run(collection,key);
   if (collection === "flows") db.query("DELETE FROM history_rounds WHERE row_key=?").run(key);
-  if (!row || !input) { forgetEmptyProjects(); return; }
+  if (!row || !input) {
+    forgetEmptyProjects();
+    if (countChanged) updateWarmCountCaches(db,before?.project ?? null,null,oldCountSignature,"");
+    return;
+  }
   db.query("INSERT INTO history_inputs VALUES (?,?,?,?,?,?)").run(collection,key,row.row_order,row.project,row.state,input);
   if (collection === "flows") {
     db.query(`INSERT INTO history_rounds SELECT ?,r.key,json_extract(r.value,'$.reviewerPath'),json_extract(r.value,'$.reviewerConversationId'),
@@ -128,6 +132,7 @@ function projectOne(db: Database, collection: string, key: string): void {
     CASE WHEN julianday(json_extract(a.value,'$.startedAt')) IS NOT NULL THEN CAST((julianday(json_extract(a.value,'$.startedAt'))-2440587.5)*86400000 AS INTEGER) END,
     ${["role","providerWait"].map(field => `json_extract(a.value,'$.${field}')`).join(",")}
     FROM json_each(?,'$.runs') r,json_each(r.value,'$.attempts') a`).run(collection,key,input);
+  if (countChanged) updateWarmCountCaches(db,before?.project ?? null,row.project,oldCountSignature,newCountSignature);
 }
 
 function countSignature(db: Database, collection: string, key: string): string {
@@ -143,12 +148,59 @@ function countSignatureFromInput(db:Database,input:Uint8Array): string {
   return JSON.stringify([value.runs.map(run=>role(run.stageId)),value.runs.flatMap(run=>run.attempts.map(attempt=>({role:attempt.role ?? role(run.stageId),startedAt:attempt.startedAt ?? null}))) ]);
 }
 
-type CountCache = { stamp: string; at: number; until: number; value: Record<string,number> };
+type CountCache = { stamp: string; at: number; until: number; value: Record<string,number>; roles: Record<string,number> };
 type HeadlessRow={row_key:string;reviewerPath:string|null;reviewerConversationId:string|null;reviewerPid:number;reviewerIdentity:string|null};
 type Shared = { connections: Map<string,Database>; counts: Map<string,CountCache>; headless: Map<string,{revision:number;rows:HeadlessRow[];flows:LivenessFlow[];bytes:number}> };
 const host = globalThis as typeof globalThis & { __delegatusHistoryProjectionV1?: Shared };
 const shared = host.__delegatusHistoryProjectionV1 ??= { connections: new Map(), counts: new Map(), headless: new Map() };
 shared.headless ??= new Map();
+
+const COUNT_WINDOW_MS = 30 * 24 * 60 * 60_000;
+
+function updateWarmCountCaches(db: Database, oldProject: string | null, newProject: string | null, oldSignature: string, newSignature: string): void {
+  const oldValue = JSON.parse(oldSignature || "[[],[]]") as [string[], Array<{role:string|null;startedAt:string|null}>];
+  const newValue = JSON.parse(newSignature || "[[],[]]") as [string[], Array<{role:string|null;startedAt:string|null}>];
+  for (const [key, cache] of shared.counts) {
+    const [filename, cachedProject] = JSON.parse(key) as [string,string];
+    if (filename !== db.filename) continue;
+    const ownsOld = oldProject !== null && canonicalProject(oldProject) === canonicalProject(cachedProject);
+    const ownsNew = newProject !== null && canonicalProject(newProject) === canonicalProject(cachedProject);
+    if (!ownsOld && !ownsNew) continue;
+    const oldRoles = ownsOld ? oldValue[0] : [];
+    const newRoles = ownsNew ? newValue[0] : [];
+    const roleDelta = new Map<string,number>();
+    for (const role of oldRoles) roleDelta.set(role,(roleDelta.get(role) ?? 0)-1);
+    for (const role of newRoles) roleDelta.set(role,(roleDelta.get(role) ?? 0)+1);
+    const delta = new Map<string,number>();
+    const apply = (attempt: {role:string|null;startedAt:string|null}, amount: number) => {
+      const at = Date.parse(attempt.startedAt ?? "");
+      if (attempt.role && Number.isFinite(at) && at <= cache.at && cache.at - at <= COUNT_WINDOW_MS) delta.set(attempt.role,(delta.get(attempt.role) ?? 0) + amount);
+    };
+    for (const attempt of (ownsOld ? oldValue[1] : [])) apply(attempt,-1);
+    for (const attempt of (ownsNew ? newValue[1] : [])) {
+      apply(attempt,1);
+      const at = Date.parse(attempt.startedAt ?? "");
+      if (Number.isFinite(at) && attempt.role) {
+        if (at > cache.at) cache.until = Math.min(cache.until,at);
+        else if (cache.at - at <= COUNT_WINDOW_MS) cache.until = Math.min(cache.until,at+COUNT_WINDOW_MS+1);
+      }
+    }
+    for (const [role, amount] of delta) cache.value[role] = (cache.value[role] ?? 0) + amount;
+    for (const [role, amount] of roleDelta) {
+      const next=(cache.roles[role] ?? 0)+amount;
+      if (next > 0) { cache.roles[role]=next; cache.value[role] ??= 0; }
+      else {
+        delete cache.roles[role];
+        if ((cache.value[role] ?? 0) <= 0) delete cache.value[role];
+      }
+    }
+    const countProjects = [...new Set([cachedProject,...Object.keys(projectAliasSnapshot().aliases).filter(alias => canonicalProject(alias) === canonicalProject(cachedProject))])].sort();
+    const placeholders = countProjects.map(() => "?").join(",");
+    const revisions = db.query<{project:string;revision:number},SQLQueryBindings[]>(`SELECT project,revision FROM history_count_projects WHERE project IN (${placeholders}) ORDER BY project`).all(...countProjects);
+    const generation = db.query<{generation:string},[]>("SELECT generation FROM history_meta").get()!.generation;
+    cache.stamp = JSON.stringify([databaseFileIdentity(db.filename),generation,countProjects,revisions]);
+  }
+}
 
 function connection(filename: string): Database {
   let db = shared.connections.get(filename);
@@ -269,15 +321,37 @@ export function historyAttemptCounts(db: Database, project: string, now: number)
   const stamp = JSON.stringify([databaseFileIdentity(db.filename),generation,projects,revisions]);
   const key = JSON.stringify([db.filename,project]);
   const cached = shared.counts.get(key);
-  if (cached?.stamp === stamp && now >= cached.at && now < cached.until) {
+  if (cached?.stamp === stamp && now >= cached.at) {
+    if (now < cached.until) {
+      shared.counts.delete(key); shared.counts.set(key,cached); return { ...cached.value };
+    }
+    const crossed = db.query<{startedMs:number;role:string},SQLQueryBindings[]>(`SELECT a.startedMs,COALESCE(a.role,r.role) AS role FROM history_attempts a INDEXED BY history_started
+      CROSS JOIN history_inputs p ON p.collection=a.collection AND p.row_key=a.row_key
+      CROSS JOIN history_runs r ON r.collection=a.collection AND r.row_key=a.row_key AND r.run=a.run
+      WHERE p.collection IN ('pipelines','pipelines_archive') AND p.project IN (${placeholders}) AND (
+        (a.startedMs>? AND a.startedMs<=?) OR (a.startedMs>? AND a.startedMs<=?))`)
+      .all(...projects,cached.at,now,cached.at-COUNT_WINDOW_MS-1,now-COUNT_WINDOW_MS-1);
+    for (const row of crossed) {
+      const amount = row.startedMs > cached.at ? 1 : -1;
+      cached.value[row.role] = (cached.value[row.role] ?? 0) + amount;
+    }
+    const expiring = db.query<{at:number|null},SQLQueryBindings[]>(`SELECT MIN(a.startedMs) AS at FROM history_attempts a INDEXED BY history_started
+      JOIN history_inputs p ON p.collection=a.collection AND p.row_key=a.row_key WHERE p.collection IN ('pipelines','pipelines_archive')
+      AND p.project IN (${placeholders}) AND a.startedMs>=? AND a.startedMs<=?`).get(...projects,now-COUNT_WINDOW_MS,now)?.at;
+    const future = db.query<{at:number|null},SQLQueryBindings[]>(`SELECT MIN(a.startedMs) AS at FROM history_attempts a INDEXED BY history_started
+      JOIN history_inputs p ON p.collection=a.collection AND p.row_key=a.row_key WHERE p.collection IN ('pipelines','pipelines_archive')
+      AND p.project IN (${placeholders}) AND a.startedMs>?`).get(...projects,now)?.at;
+    cached.until = Math.min(expiring === null || expiring === undefined ? Infinity : expiring+COUNT_WINDOW_MS+1,future ?? Infinity);
+    cached.at = now;
     shared.counts.delete(key); shared.counts.set(key,cached); return { ...cached.value };
   }
-  const runs = db.query<{ role: string }, SQLQueryBindings[]>(`SELECT DISTINCT r.role FROM history_inputs p INDEXED BY history_project
-    CROSS JOIN history_runs r ON r.collection=p.collection AND r.row_key=p.row_key WHERE p.collection IN ('pipelines','pipelines_archive') AND p.project IN (${placeholders})`).all(...projects);
+  const runs = db.query<{ role: string; count:number }, SQLQueryBindings[]>(`SELECT r.role,count(*) AS count FROM history_inputs p INDEXED BY history_project
+    CROSS JOIN history_runs r ON r.collection=p.collection AND r.row_key=p.row_key WHERE p.collection IN ('pipelines','pipelines_archive') AND p.project IN (${placeholders}) GROUP BY r.role`).all(...projects);
   const value: Record<string,number> = {};
-  for (const row of runs) value[row.role] ??= 0;
+  const roles:Record<string,number>={};
+  for (const row of runs) { value[row.role] = 0; roles[row.role]=row.count; }
   const cutoff=now-30*24*60*60_000;
-  const window=30*24*60*60_000;
+  const window=COUNT_WINDOW_MS;
   const attempts = db.query<{ startedAt: string | null; role: string }, SQLQueryBindings[]>(`SELECT a.startedAt,COALESCE(a.role,r.role) AS role FROM history_attempts a INDEXED BY history_started
     CROSS JOIN history_inputs p ON p.collection=a.collection AND p.row_key=a.row_key
     CROSS JOIN history_runs r ON r.collection=a.collection AND r.row_key=a.row_key AND r.run=a.run WHERE p.collection IN ('pipelines','pipelines_archive') AND p.project IN (${placeholders}) AND a.startedMs BETWEEN ? AND ?`).all(...projects,cutoff,now);
@@ -291,7 +365,7 @@ export function historyAttemptCounts(db: Database, project: string, now: number)
     if (at > now) until = Math.min(until,at);
     else if (now - at <= window) { value[attempt.role] = (value[attempt.role] ?? 0) + 1; until = Math.min(until,at + window + 1); }
   }
-  shared.counts.delete(key); shared.counts.set(key,{stamp,at:now,until,value});
+  shared.counts.delete(key); shared.counts.set(key,{stamp,at:now,until,value,roles});
   let bytes = 0;
   for (const entry of shared.counts) bytes += JSON.stringify(entry).length * 2;
   while (shared.counts.size > 64 || bytes > 256 * 1024) {
