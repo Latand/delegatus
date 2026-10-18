@@ -1,0 +1,29 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "readings": [
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "before": "Fable · high",
+      "after": "Opus 5.5 · high",
+      "runtimeRequests": 1,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "before": "Fable · high",
+      "after": "Opus 5.5 · high",
+      "runtimeRequests": 1,
+      "pageErrors": []
+    }
+  ]
+}

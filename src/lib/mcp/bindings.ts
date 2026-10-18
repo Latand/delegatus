@@ -1,3 +1,6 @@
+import { relayAnswerOp } from "@/lib/externalRelay/ownerAnswer";
+import { ExternalRelayError as RelayAnswerError } from "@/lib/externalRelay/client";
+import { DocumentRefusal as RelayDocumentRefusal } from "@/lib/telegram/bot/documents";
 import { relayServiceToolsOp } from "@/lib/externalRelay/ownerServiceTools";
 import { readHistoryProjection, historyFleetLimitWaits } from "@/lib/state/historyProjection";
 import { registryReceiptsForConversation } from "@/lib/agent/registry";
@@ -7966,6 +7969,19 @@ export function viewerMcpBindings(
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
+    relay_answer: async (args) => {
+      const caller = attributionOf(domainDependencies);
+      try {
+        const result = caller.kind === "agent" && !caller.via && caller.conversationId
+          ? await relayAnswerOp(caller.conversationId, args) : null;
+        if (result === null) throw new McpToolRefusal("Answer parts exist only during your live owner relay turn.", { code: "relay_answer_unavailable", retryable: false });
+        return result;
+      } catch (error) {
+        if (error instanceof RelayAnswerError || error instanceof RelayDocumentRefusal)
+          throw new McpToolRefusal("Relay answer parts refused: " + error.code, { code: error.code, retryable: false });
+        throw error;
+      }
+    },
     relay_service_tools: async (args) => {
       const caller = attributionOf(domainDependencies);
       const result = caller.kind === "agent" && !caller.via && caller.conversationId

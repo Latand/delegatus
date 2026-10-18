@@ -169,7 +169,7 @@ export async function seatTickDiagnostics(project: string, limit: number, ports:
   }
 
   const bounded = Math.min(Math.max(1, Math.floor(limit)), SEAT_TICK_DIAGNOSTICS_MAX_LIMIT);
-  const journal = (ports.records ?? readSeatTickRecords)(SEAT_TICK_RUN_HISTORY)
+  const journal = (ports.records ? ports.records(SEAT_TICK_RUN_HISTORY) : readSeatTickRecords(SEAT_TICK_RUN_HISTORY, undefined, canonical))
     .filter((record) => record.project === canonical)
     .slice(-bounded);
 

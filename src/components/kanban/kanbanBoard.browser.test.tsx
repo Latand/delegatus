@@ -33875,6 +33875,389 @@ describe("saved decision delivery", () => {
   }, 180_000);
 });
 
+describe("overlays opened from a conversation draw above the full-screen view that hosts it", () => {
+  /*
+   * The agent window (`z-index: 64`) and the stages sheet (62) host conversations. What a conversation
+   * opens — the runtime menu in its composer, the document preview from a link in its feed — is portalled
+   * into <body> and used to sit at 40 and 60, under the window. `reader` is the layer of those hosts and
+   * everything a conversation opens takes its place above it (`src/components/layers.ts`).
+   *
+   * Every check is a hit test: the point at the centre of the overlay's own part answers with that part,
+   * and a real click lands on it. Run on a desktop board (1440 and 1000 wide) in the agent window and in
+   * the stages sheet.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "overlays opened from a conversation"
+   *
+   * Frames go to `.artifacts/reader-overlays/`; measurements to `evidence/reader-overlays/desktop.json`.
+   */
+  const texts: Record<string, string> = {
+    "plan.md": `# Rollout plan\n\n${Array.from({ length: 40 }, (_, step) => `## Step ${step + 1}\n\nRe-run the rebuild against live traffic and compare the alias swap window with step ${step}.\n`).join("\n")}`,
+    "run.txt": Array.from({ length: 80 }, (_, row) => `${String(row + 1).padStart(3, "0")} rebuild shard ${row % 7} finished without errors`).join("\n"),
+  };
+  const PDF = "%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]>>endobj\ntrailer<</Root 1 0 R/Size 4>>\n%%EOF\n";
+  const stubs = async () => {
+    const png = await sharp({ create: { width: 640, height: 360, channels: 3, background: { r: 40, g: 120, b: 200 } } }).png().toBuffer();
+    return {
+      "/api/artifact": (request: Request) => {
+        const url = new URL(request.url), name = path.basename(url.searchParams.get("path") ?? "");
+        const mode = url.searchParams.get("mode");
+        const meta = (kind: string, mime: string, size: number, frame?: string) => Response.json({ name, kind, mime, size, mtimeMs: 1790000000000, etag: "\"fixture\"", ...(frame ? { frame } : {}) });
+        if (name === "plan.md") return mode === "meta" ? meta("text", "text/markdown", texts[name]!.length) : new Response(texts[name], { headers: { "content-type": "text/markdown; charset=utf-8", etag: "\"fixture\"" } });
+        if (name === "run.txt") return mode === "meta" ? meta("text", "text/plain", texts[name]!.length) : new Response(texts[name], { headers: { "content-type": "text/plain; charset=utf-8", etag: "\"fixture\"" } });
+        if (name === "page.html") return mode === "meta" ? meta("text", "text/html", 120, "/api/artifact/frame/notes/page.html") : new Response("<h1>Report</h1>", { headers: { "content-type": "text/html; charset=utf-8", etag: "\"fixture\"" } });
+        if (name === "shot.png") return mode === "meta" ? meta("image", "image/png", png.length) : new Response(png, { headers: { "content-type": "image/png", etag: "\"fixture\"" } });
+        if (name === "report.pdf") return mode === "meta" ? meta("pdf", "application/pdf", PDF.length) : new Response(PDF, { headers: { "content-type": "application/pdf", etag: "\"fixture\"" } });
+        return Response.json({ error: "missing", code: "not-found" }, { status: 404 });
+      },
+      "/api/artifact/frame/notes/page.html": () => new Response("<!doctype html><body style=\"font:16px sans-serif\"><h1>Report</h1><p>Rebuild finished.</p></body>", { headers: { "content-type": "text/html; charset=utf-8" } }),
+    };
+  };
+  /* Every sample point of the part answers with the part itself (or something inside it). */
+  const onTop = (page: Page, selector: string, nth = 0) => page.evaluate(({ selector, nth }) => {
+    const element = document.querySelectorAll<HTMLElement>(selector)[nth];
+    if (!element) return { found: false, hits: [] as boolean[] };
+    const box = element.getBoundingClientRect();
+    const left = Math.max(box.left, 0), right = Math.min(box.right, innerWidth), top = Math.max(box.top, 0), bottom = Math.min(box.bottom, innerHeight);
+    const hits = [[.5, .5], [.15, .25], [.85, .75]].map(([x, y]) => {
+      const hit = document.elementFromPoint(left + (right - left) * x!, top + (bottom - top) * y!);
+      return Boolean(hit && element.contains(hit));
+    });
+    return { found: true, hits, visible: right > left && bottom > top };
+  }, { selector, nth });
+  const expectOnTop = async (page: Page, selector: string, label: string, nth = 0) => {
+    const reading = await onTop(page, selector, nth);
+    expect(reading.found, `${label} exists`).toBe(true);
+    expect(reading.hits, `${label} answers a hit test`).toEqual([true, true, true]);
+  };
+  const SIZES = [{ width: 1440, height: 900, lang: "uk", scheme: "light" }, { width: 1440, height: 900, lang: "en", scheme: "dark" }, { width: 1000, height: 760, lang: "uk", scheme: "light" }, { width: 1000, height: 760, lang: "en", scheme: "dark" }] as const;
+  const LINKS = ["plan", "page", "log", "shot", "report", "gone"] as const;
+
+  browserTest("the runtime menu and every kind of preview land on the full-screen conversation and work", async () => {
+    const out = path.resolve(".artifacts/reader-overlays"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, await stubs());
+    const browserServer = await chromium.launchServer({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    fs.writeFileSync(path.join(out, "browser.pid"), String(browserServer.process()?.pid));
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: unknown[] = [];
+    try {
+      for (const { width, height, lang, scheme } of SIZES) for (const host of ["window", "sheet"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured&overlay-links`, { width, height }, scheme, lang, "reduce");
+        const tag = `${width}-${lang}-${scheme}-${host}`;
+        const frame = (name: string) => page.screenshot({ path: path.join(out, `${tag}-${name}.png`) });
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          await page.locator(`.card[data-id="task:t-search"] .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          if (host === "window") await page.click('.card[data-id="task:t-search"] .pb-pills [data-stage="verify"]');
+          else {
+            await page.click('.card[data-id="task:t-search"] [data-open-stages]');
+            await page.waitForSelector(".gsheet .pane[data-stage]", { timeout: 10_000 });
+            await page.click('.gsheet .gs-graph .pnode[data-stage="verify"]');
+          }
+          const hostSelector = host === "window" ? "[data-agent-window]" : ".gsheet";
+          await page.waitForSelector(`${hostSelector} [data-runtime-pill]`, { timeout: 15_000 });
+          await page.waitForSelector(`${hostSelector} [data-file-link]`, { timeout: 15_000 });
+          await page.waitForTimeout(500);
+          const hostZ = await page.evaluate((selector) => Number(getComputedStyle(document.querySelector(selector)!).zIndex), host === "window" ? ".kb .agent-window" : ".kb .gsheet-scrim");
+          expect(hostZ).toBe(host === "window" ? 64 : 62);
+
+          /* The runtime menu: root panel, then the model list; a real click picks, and the chip says so. */
+          const pill = page.locator(`${hostSelector} [data-runtime-pill]:visible`).first();
+          const before = (await pill.textContent())?.replace(/\s+/g, " ").trim();
+          await pill.click();
+          await page.waitForSelector("[data-runtime-popover]", { timeout: 5_000 });
+          await expectOnTop(page, "[data-runtime-popover]", `${tag} runtime menu`);
+          const rows = await page.locator("[data-runtime-popover] [data-runtime-row]").count();
+          expect(rows).toBeGreaterThan(1);
+          for (let row = 0; row < rows; row++) await expectOnTop(page, "[data-runtime-popover] [data-runtime-row]", `${tag} runtime row ${row}`, row);
+          await frame("runtime-root");
+          await page.click('[data-runtime-popover] [data-runtime-row="submenu"][data-runtime-value="model"]');
+          const models = await page.locator('[data-runtime-popover] [data-runtime-row="model"]').count();
+          expect(models).toBeGreaterThan(1);
+          for (let row = 0; row < models; row++) await expectOnTop(page, '[data-runtime-popover] [data-runtime-row="model"]', `${tag} model row ${row}`, row);
+          await frame("runtime-models");
+          /* A real click on a model that is not the current one changes the chip. */
+          await page.locator('[data-runtime-popover] [data-runtime-row="model"]', { hasText: /^Sonnet$/ }).click();
+          await page.waitForFunction(({ selector, text }) => {
+            const chip = [...document.querySelectorAll<HTMLElement>(selector)].find((element) => element.offsetParent !== null);
+            return chip !== undefined && chip.textContent?.replace(/\s+/g, " ").trim() !== text;
+          }, { selector: `${hostSelector} [data-runtime-pill]`, text: before }, { timeout: 5_000 });
+          const after = (await pill.textContent())?.replace(/\s+/g, " ").trim();
+          expect(after, `${tag} the chip names the model that was picked`).toContain("Sonnet");
+          await page.waitForSelector("[data-runtime-popover]", { state: "detached", timeout: 5_000 }).catch(() => undefined);
+          /* Escape closes the menu alone; the conversation stays. */
+          await pill.click();
+          await page.waitForSelector("[data-runtime-popover]", { timeout: 5_000 });
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-runtime-popover]", { state: "detached", timeout: 5_000 });
+          expect(await page.locator(hostSelector).count()).toBeGreaterThan(0);
+          /* The Account panel, when the pill offers one. */
+          await pill.click();
+          await page.waitForSelector("[data-runtime-popover]");
+          const account = page.locator('[data-runtime-popover] [data-runtime-row="submenu"][data-runtime-value="account"]');
+          let accountPanel = false;
+          if (await account.count()) {
+            await account.click();
+            const accountRows = await page.locator("[data-runtime-popover] [data-runtime-row]").count();
+            for (let row = 0; row < accountRows; row++) await expectOnTop(page, "[data-runtime-popover] [data-runtime-row]", `${tag} account row ${row}`, row);
+            accountPanel = true;
+            await frame("runtime-account");
+          }
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-runtime-popover]", { state: "detached", timeout: 5_000 });
+
+          /* Every kind of preview, opened from a link in the feed. */
+          const preview: Record<string, unknown> = {};
+          for (const name of LINKS) {
+            await page.locator(`${hostSelector} [data-file-link]`, { hasText: name }).first().click();
+            await page.waitForSelector("[data-artifact-preview]", { timeout: 5_000 });
+            await page.waitForFunction(() => document.querySelector("[data-artifact-preview]")?.getAttribute("data-artifact-state") !== "loading", undefined, { timeout: 10_000 });
+            const state = await page.locator("[data-artifact-preview]").getAttribute("data-artifact-state");
+            expect(state, `${tag} ${name} preview state`).toBe(name === "gone" ? "missing" : "ready");
+            await expectOnTop(page, "[data-artifact-preview]", `${tag} ${name} preview`);
+            await expectOnTop(page, `[data-artifact-preview] button[aria-label="${translate(lang, "preview.close")}"]`, `${tag} ${name} close`);
+            await expectOnTop(page, "[data-artifact-preview] [data-preview-open-external]", `${tag} ${name} open-external`);
+            const body = await page.evaluate(() => {
+              const root = document.querySelector<HTMLElement>("[data-artifact-preview]")!;
+              const scroller = [...root.querySelectorAll<HTMLElement>("*")].find((element) => element.scrollHeight > element.clientHeight + 8 && /auto|scroll/.test(getComputedStyle(element).overflowY));
+              const box = root.getBoundingClientRect();
+              const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height * 0.7);
+              return { bodyHit: Boolean(hit && root.contains(hit)), scroller: Boolean(scroller), top: scroller?.scrollTop ?? null, zIndex: Number(getComputedStyle(root).zIndex) };
+            });
+            expect(body.bodyHit).toBe(true);
+            expect(body.zIndex).toBe(65);
+            if (name === "plan" || name === "log") {
+              expect(body.scroller).toBe(true);
+              await page.mouse.move(width - 200, height / 2);
+              await page.mouse.wheel(0, 600);
+              const scrolled = await page.waitForFunction(() => {
+                const root = document.querySelector<HTMLElement>("[data-artifact-preview]")!;
+                return [...root.querySelectorAll<HTMLElement>("*")].some((element) => element.scrollTop > 0 && element.scrollHeight > element.clientHeight);
+              }, undefined, { timeout: 5_000 }).then(() => true, () => false);
+              expect(scrolled, `${tag} ${name} body scrolls under the wheel`).toBe(true);
+            }
+            if (name === "plan") await frame("preview-md");
+            if (name === "gone") await frame("preview-missing");
+            preview[name] = { state, ...body };
+            /* The × leaves the conversation open. */
+            await page.click(`[data-artifact-preview] button[aria-label="${translate(lang, "preview.close")}"]`);
+            await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+            expect(await page.locator(hostSelector).count()).toBeGreaterThan(0);
+          }
+
+          /* Escape, top to bottom: the menu, then the preview, then the window. */
+          await page.locator(`${hostSelector} [data-file-link]`, { hasText: "plan" }).first().click();
+          await page.waitForSelector("[data-artifact-preview]");
+          const feedBox = (await page.locator(`${hostSelector} [data-log-feed-scroller]`).first().boundingBox())!;
+          await page.mouse.click(feedBox.x + 24, feedBox.y + feedBox.height / 2);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+          expect(await page.locator(hostSelector).count(), `${tag} one Escape leaves the conversation open under a preview`).toBeGreaterThan(0);
+
+          /* The reader's ⋯ menu is above the host (regression: it was already). */
+          const menuButton = page.locator(`${hostSelector} [data-reader-menu]`).first();
+          if (await menuButton.count()) {
+            await menuButton.click();
+            await page.waitForSelector(".kb .menu", { timeout: 5_000 });
+            await expectOnTop(page, ".kb .menu", `${tag} reader menu`);
+            await page.keyboard.press("Escape");
+          }
+          expect(pageErrors).toEqual([]);
+          readings.push({ width, height, lang, scheme, host, hostZ, rows, models, accountPanel, before, after, preview, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/reader-overlays", { recursive: true });
+      fs.writeFileSync("evidence/reader-overlays/desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { await browser.close(); browserServer.close(); server.stop(); }
+  }, 600_000);
+
+  browserTest("Escape closes the topmost surface first, and a preview left on the board stays under the menus opened after it", async () => {
+    const out = path.resolve(".artifacts/reader-overlays"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, await stubs());
+    const browserServer = await chromium.launchServer({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    fs.writeFileSync(path.join(out, "browser-escape.pid"), String(browserServer.process()?.pid));
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: unknown[] = [];
+    try {
+      for (const { width, height, lang, scheme } of [SIZES[0], SIZES[3]]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured&overlay-links`, { width, height }, scheme, lang, "reduce");
+        const tag = `${width}-${lang}-${scheme}`;
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          await page.locator(`.card[data-id="task:t-search"] .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await page.click('.card[data-id="task:t-search"] .pb-pills [data-stage="verify"]');
+          await page.waitForSelector("[data-agent-window] [data-file-link]", { timeout: 15_000 });
+          await page.waitForTimeout(500);
+          const open = (selector: string) => page.locator(selector).count();
+          const zOf = (selector: string) => page.evaluate((target) => Number(getComputedStyle(document.querySelector(target)!).zIndex), selector);
+
+          /* The menu opened over the preview closes first, then the preview, then the window. */
+          await page.locator("[data-agent-window] [data-file-link]", { hasText: "plan" }).first().click();
+          await page.waitForSelector("[data-artifact-preview]");
+          await page.waitForFunction(() => document.querySelector("[data-artifact-preview]")?.getAttribute("data-artifact-state") === "ready", undefined, { timeout: 10_000 });
+          await page.locator("[data-agent-window] [data-runtime-pill]:visible").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-runtime-popover]");
+          expect(await zOf("[data-runtime-popover]")).toBeGreaterThan(await zOf("[data-artifact-preview]"));
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-runtime-popover]", { state: "detached", timeout: 5_000 });
+          expect(await open("[data-artifact-preview]"), `${tag} the menu took the first Escape`).toBe(1);
+          expect(await open("[data-agent-window]")).toBe(1);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+          expect(await open("[data-agent-window]"), `${tag} the preview took the second Escape`).toBe(1);
+          await page.keyboard.press("Escape");
+          await page.waitForFunction(() => !document.querySelector("[data-agent-window]"), undefined, { timeout: 5_000 });
+
+          /* A preview that outlives the window, on the plain board: a card's menu opened after it draws above it. */
+          await page.click('.card[data-id="task:t-search"] .pb-pills [data-stage="verify"]');
+          await page.waitForSelector("[data-agent-window] [data-file-link]", { timeout: 15_000 });
+          await page.locator("[data-agent-window] [data-file-link]", { hasText: "log" }).first().click();
+          await page.waitForSelector("[data-artifact-preview]");
+          await page.locator("[data-agent-window] [data-reader-close]").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForFunction(() => !document.querySelector("[data-agent-window]"), undefined, { timeout: 5_000 });
+          expect(await open("[data-artifact-preview]"), `${tag} the preview stays on the board`).toBe(1);
+          await page.locator('.card[data-id="task:t-search"] [data-menu]').evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector(".kb .menu");
+          const previewZ = await zOf("[data-artifact-preview]");
+          const menuZ = await zOf(".kb .menu");
+          expect(menuZ).toBeGreaterThan(previewZ);
+          await expectOnTop(page, ".kb .menu", `${tag} card menu over the preview`);
+          await page.screenshot({ path: path.join(out, `${tag}-board-preview-menu.png`) });
+          /* Escape belongs to the menu opened after the preview, then to the preview. */
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(".kb .menu", { state: "detached", timeout: 5_000 });
+          expect(await open("[data-artifact-preview]"), `${tag} the card menu took the first Escape`).toBe(1);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+
+          /* The same inside the agent window: its ⋯ menu opened over a preview. */
+          await page.click('.card[data-id="task:t-search"] .pb-pills [data-stage="verify"]');
+          await page.waitForSelector("[data-agent-window] [data-file-link]", { timeout: 15_000 });
+          await page.locator("[data-agent-window] [data-file-link]", { hasText: "plan" }).first().click();
+          await page.waitForSelector("[data-artifact-preview]");
+          await page.locator("[data-agent-window] [data-reader-menu]").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector(".kb .menu");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(".kb .menu", { state: "detached", timeout: 5_000 });
+          expect(await open("[data-artifact-preview]"), `${tag} the reader menu took the first Escape`).toBe(1);
+          expect(await open("[data-agent-window]")).toBe(1);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+          expect(await open("[data-agent-window]"), `${tag} the preview took the next Escape`).toBe(1);
+          expect(pageErrors).toEqual([]);
+          readings.push({ width, height, lang, scheme, previewZ, menuZ, menuEscapeFirst: true, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/reader-overlays", { recursive: true });
+      fs.writeFileSync("evidence/reader-overlays/escape-and-board.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { await browser.close(); browserServer.close(); server.stop(); }
+  }, 300_000);
+
+  browserTest("the preview over the agent window keeps 320px of conversation from the column's edge, and the board's geometry is unchanged", async () => {
+    /*
+     * The conversation is the window's right column, which starts after the window's margin and its agent list.
+     * The sheet measures its floor from that edge. Either at least 320px of conversation stay visible, or the
+     * narrowest useful sheet no longer fits beside that floor and the sheet takes the whole window, the list included.
+     * Nothing lands between, whether the width was stored by default or dragged narrower. The conversation wraps at the
+     * sheet's edge: no line of it, no title and no file list is cut there, measured from text ranges.
+     *
+     *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "keeps 320px of conversation"
+     */
+    const out = path.resolve(".artifacts/reader-overlays"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, await stubs());
+    const browserServer = await chromium.launchServer({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    fs.writeFileSync(path.join(out, "browser-geometry.pid"), String(browserServer.process()?.pid));
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: unknown[] = [];
+    /* The named widths, and one between each pair: 850 to 900 and 1100 sit where the stored width once capped the sheet. */
+    const RUNS = [
+      { width: 1440, height: 900 }, { width: 1320, height: 860 }, { width: 1200, height: 800 }, { width: 1100, height: 760 },
+      { width: 1000, height: 700 }, { width: 920, height: 800 }, { width: 900, height: 700 }, { width: 850, height: 800 }, { width: 700, height: 900 },
+    ];
+    /* The default width in both looks, and a width dragged down to the narrowest sheet. */
+    const LOOKS = [["uk", "light", null], ["en", "dark", null], ["en", "light", 380]] as const;
+    try {
+      for (const { width, height } of RUNS) for (const [lang, scheme, dragged] of LOOKS) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured&overlay-links`, { width, height }, scheme, lang, "reduce");
+        const tag = `${width}-${lang}-${scheme}${dragged ? `-dragged${dragged}` : ""}`;
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          if (dragged) await page.evaluate((value) => localStorage.setItem("llvPreviewWidth", String(value)), dragged);
+          await page.locator(`.card[data-id="task:t-search"] .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await page.click('.card[data-id="task:t-search"] .pb-pills [data-stage="verify"]');
+          await page.waitForSelector("[data-agent-window] [data-file-link]", { timeout: 15_000 });
+          await page.waitForTimeout(500);
+          const measure = () => page.evaluate(() => {
+            const preview = document.querySelector<HTMLElement>("[data-artifact-preview]")!.getBoundingClientRect();
+            const column = document.querySelector<HTMLElement>("[data-agent-window] .aw-reader")?.getBoundingClientRect() ?? null;
+            const list = document.querySelector<HTMLElement>("[data-agent-window] .aw-list")?.getBoundingClientRect() ?? null;
+            /* Every line of text the conversation draws, from ranges, cut to the box that clips it; one that crosses the sheet's edge is cut by it. */
+            const edge = preview.left;
+            const cut: string[] = [];
+            const walker = document.createTreeWalker(document.querySelector("[data-agent-window] .aw-reader")!, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              const text = node.textContent ?? "";
+              const owner = node.parentElement;
+              if (!text.trim() || !owner || getComputedStyle(owner).visibility === "hidden") continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const rect of range.getClientRects()) {
+                if (rect.width < 1) continue;
+                let right = rect.right, left = rect.left;
+                for (let clip: HTMLElement | null = owner; clip; clip = clip.parentElement) {
+                  if (getComputedStyle(clip).overflowX === "visible") continue;
+                  const box = clip.getBoundingClientRect();
+                  right = Math.min(right, box.right); left = Math.max(left, box.left);
+                }
+                if (right - left > 1 && left < edge - 0.5 && right > edge + 0.5) cut.push(text.trim().slice(0, 40));
+              }
+            }
+            return {
+              preview: { left: preview.left, width: preview.width },
+              column: column && { left: column.left, width: column.width },
+              list: list && { left: list.left, width: list.width },
+              inset: Number(document.querySelector("[data-artifact-preview]")!.getAttribute("data-artifact-preview-inset")),
+              viewport: innerWidth,
+              cut,
+            };
+          });
+          for (const name of ["plan", "log"]) {
+            await page.locator("[data-agent-window] [data-file-link]", { hasText: name }).first().click();
+            await page.waitForSelector("[data-artifact-preview]", { timeout: 5_000 });
+            await page.waitForFunction(() => document.querySelector("[data-artifact-preview]")?.getAttribute("data-artifact-state") === "ready", undefined, { timeout: 10_000 });
+            await page.waitForTimeout(150);
+            const reading = await measure();
+            const visible = reading.preview.left - reading.column!.left;
+            const takesColumn = visible <= 1;
+            expect(takesColumn || visible >= 319.5, `${tag} ${name}: ${visible}px of conversation left of the preview`).toBe(true);
+            /* Where it takes the column the list gives way with it: the sheet starts at the window's edge. */
+            if (takesColumn) expect(Math.abs(reading.preview.left - reading.list!.left), `${tag} ${name}: the sheet starts at the window's edge`).toBeLessThanOrEqual(1);
+            expect(reading.preview.left + reading.preview.width, `${tag} the sheet reaches the right edge`).toBeCloseTo(width, 0);
+            expect(reading.preview.width, `${tag} the sheet is never narrower than a usable strip`).toBeGreaterThanOrEqual(359.5);
+            expect(reading.cut, `${tag} ${name}: conversation text cut at the sheet's edge`).toEqual([]);
+            if (name === "plan") await page.screenshot({ path: path.join(out, `${tag}-preview-over-window.png`) });
+            readings.push({ width, height, lang, scheme, dragged, host: "window", file: name, ...reading, conversationVisible: visible, takesColumn });
+            await page.click(`[data-artifact-preview] button[aria-label="${translate(lang, "preview.close")}"]`);
+            await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+          }
+          /* A preview that outlives the window sits on the plain board: the board's geometry, untouched. */
+          await page.locator("[data-agent-window] [data-file-link]", { hasText: "plan" }).first().click();
+          await page.waitForSelector("[data-artifact-preview]");
+          await page.locator("[data-agent-window] [data-reader-close]").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForFunction(() => !document.querySelector("[data-agent-window]"), undefined, { timeout: 5_000 });
+          const board = await page.evaluate(() => {
+            const sheet = document.querySelector<HTMLElement>("[data-artifact-preview]")!;
+            return { sheetWidth: sheet.getBoundingClientRect().width, inset: Number(sheet.getAttribute("data-artifact-preview-inset")), viewport: innerWidth };
+          });
+          expect(board.sheetWidth, `${tag} board preview width`).toBeCloseTo(Math.max(380, Math.min(dragged ?? 560, board.viewport - 320 - board.inset)), 0);
+          if (!dragged) await page.screenshot({ path: path.join(out, `${tag}-preview-on-board.png`) });
+          readings.push({ width, height, lang, scheme, dragged, host: "board", ...board });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/reader-overlays", { recursive: true });
+      fs.writeFileSync("evidence/reader-overlays/preview-geometry.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { await browser.close(); browserServer.close(); server.stop(); }
+  }, 1_500_000);
+});
 
 describe("relay reply-chain conversation list", () => {
   browserTest("each chain has its own authority label in both languages and themes", async () => {
