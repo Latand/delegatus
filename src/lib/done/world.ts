@@ -18,6 +18,10 @@ import { loadTasksForList } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import type { DoneWorld } from "./project";
+import { preserveDoneFrame, removeDoneMedia } from "./media";
+import { copyDoneFrameSource, prepareDoneFrameSource } from "./source";
+import { recoverDoneFrame } from "./recover";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 /*
  * The «Готово» projection's view of the Viewer's own records, read-only and
@@ -58,7 +62,7 @@ function evidenceFile(src: string): string | null {
   return file && evidenceRoots().some((root) => underRoot(file, root)) ? file : null;
 }
 
-export function productionDoneWorld(): DoneWorld {
+export function productionDoneWorld(options: { recover?: boolean } = {}): DoneWorld {
   let tasks: Map<string, BoardTask> | null = null;
   const taskList = () => {
     tasks ??= new Map(quietly(() => loadTasksForList(), [] as readonly BoardTask[]).map((task) => [task.id, task] as const));
@@ -69,6 +73,32 @@ export function productionDoneWorld(): DoneWorld {
   let repositories: NamedProjectDirectory | null = null;
   const labels = new Map<string, Map<string, string>>();
   return {
+    async preserveFrame(key, frame, refs) {
+      return withViewerOperation("done.frame-source", async () => {
+        if (!await prepareDoneFrameSource(frame.src)) return { frame, settled: false };
+        let deferred = false;
+        const saved = await preserveDoneFrame(key, frame, async (src, staging) => {
+          const copy = await copyDoneFrameSource(src,staging);
+          if (copy || src !== frame.src) return copy;
+          // Network/git recovery runs on the background sweep. Reads keep
+          // answering the persisted rows while that refinement is pending.
+          if (!options.recover) { deferred = true; return null; }
+          const lane = laneList().find(lane => lane.id === refs.pipelineId);
+          if (!lane) return null;
+          for (const taskId of refs.taskIds ?? []) {
+            const page = await readTaskAlbum(taskId,{limit:ALBUM_PAGE_MAX},productionAlbumDeps());
+            const alternative = page.items.find(item => item.source.stage?.pipelineId === lane.id && item.src !== src);
+            if (alternative) {
+              const found = await copyDoneFrameSource(alternative.src,staging);
+              if (found) return found;
+            }
+          }
+          return refs.pr ? recoverDoneFrame({repository:refs.pr.repository,number:refs.pr.number,repoDir:lane.repoDir,branch:lane.branch,name:frame.caption},staging) : null;
+        }, Date.now());
+        return deferred ? { frame, settled:false } : { frame:saved, settled:true };
+      });
+    },
+    removeFrames: removeDoneMedia,
     now: () => Date.now(),
     forge: () => quietly(() => readForgeCache().data, { schemaVersion: 1 as const, repositories: {} }),
     pipelines: laneList,

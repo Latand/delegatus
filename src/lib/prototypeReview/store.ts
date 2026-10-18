@@ -1,22 +1,18 @@
 import crypto from "node:crypto";
-import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
-import { sniffAgrees } from "@/lib/artifact/serve";
 import { loadTasksForList, mutateTasks, loadPrototypeTask, mutateTaskPrototypeRound } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { admittedSource, expandPrototypeInput, PrototypeError, PROTOTYPE_LIMITS, unreadableSource } from "./input";
-import { openedAt } from "@/lib/artifact/localFile";
+import { expandPrototypeInput, PrototypeError, PROTOTYPE_LIMITS } from "./input";
+import { copyMedia, mediaFilename } from "./copy";
+export { mediaFilename, sniffPrototype } from "./copy";
 import { findSeatRound, insertSeatRound, loadSeatRounds, mutateSeatRound } from "./seatRounds";
 import type { PrototypeMedia, PrototypeReviewRound, PublishPrototypeInput } from "./types";
 
-const MIME: Record<string, PrototypeMedia["mime"]> = {
-  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".mp4": "video/mp4", ".webm": "video/webm",
-};
 export const prototypeRoot = () => statePath("prototype-reviews");
 /** Admission covers only state access; media and network effects run outside it. */
 export function withPrototypeState<T>(work: () => T): Promise<T> {
@@ -68,56 +64,8 @@ export function storedMediaPath(realRoot: string, reviewId: string, media: Proto
   if (!/^pr_[a-f0-9]{32}$/.test(reviewId)) throw new PrototypeError("invalid review id");
   return path.join(realRoot, reviewId, mediaFilename(media));
 }
-export function mediaFilename(media: PrototypeMedia): string {
-  if (!/^[a-f0-9]{64}$/.test(media.id) || !Object.values(MIME).includes(media.mime)) throw new PrototypeError("invalid stored media");
-  const ext = media.mime.split("/")[1] === "jpeg" ? "jpg" : media.mime.split("/")[1];
-  return `${media.id}.${ext}`;
-}
 export function roundMedia(round: PrototypeReviewRound): PrototypeMedia[] {
   return round.variants.flatMap(v => [...v.frames.flatMap(f => [f.image, ...(f.original ? [f.original] : [])]), ...v.videos.map(v => v.media)]);
-}
-export function sniffPrototype(mime: PrototypeMedia["mime"], head: Buffer): boolean {
-  if (mime === "video/mp4") return head.length >= 16 && head.readUInt32BE(0) >= 16
-    && head.subarray(4,8).toString("ascii") === "ftyp" && /^(isom|iso[2-9]|mp4[12]|avc1|dash|M4V |MSNV)$/.test(head.subarray(8,12).toString("ascii"));
-  if (mime === "video/webm") return head.length >= 8 && head.subarray(0,4).equals(Buffer.from([0x1a,0x45,0xdf,0xa3]))
-    && head.includes(Buffer.from("webm"));
-  return sniffAgrees(mime, head);
-}
-async function copyMedia(raw: string, staging: string): Promise<PrototypeMedia> {
-  const mime = MIME[path.extname(raw).toLowerCase()];
-  if (!mime) throw new PrototypeError("media must be PNG, JPEG, WebP, MP4 or WebM");
-  const max = mime.startsWith("video/") ? PROTOTYPE_LIMITS.videoBytes : PROTOTYPE_LIMITS.imageBytes;
-  const real = await admittedSource(raw);
-  let handle;
-  try {
-    // Opened before it is known to be a file, so a pipe under that name must not hold the open.
-    handle = await fs.open(real, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    const pinned = await handle.stat();
-    // The roots are checked against the file that was opened, never against the path again.
-    if (!pinned.isFile() || !await openedAt(handle, real)) throw unreadableSource(raw);
-    if (pinned.size > max) throw new PrototypeError(`one ${mime.startsWith("video/") ? "video" : "image"} exceeds ${max} bytes`);
-    const buffer = Buffer.alloc(Math.min(max + 1, pinned.size + 1));
-    const hash = crypto.createHash("sha256");
-    let size = 0;
-    while (size < buffer.length) {
-      // Bound each synchronous hashing slice, including a maximum-size video.
-      const read = await handle.read(buffer, size, Math.min(256 * 1024, buffer.length - size), size);
-      if (!read.bytesRead) break;
-      hash.update(buffer.subarray(size, size + read.bytesRead));
-      size += read.bytesRead;
-    }
-    if (size !== pinned.size || (await handle.stat()).size !== pinned.size || size > max) throw new PrototypeError("media changed while publishing; nothing was published");
-    const data = buffer.subarray(0,size);
-    if (!sniffPrototype(mime,data.subarray(0,512))) throw new PrototypeError("content does not match the media type",415);
-    const media = { id: hash.digest("hex"), mime, bytes: size };
-    await fs.writeFile(path.join(staging,mediaFilename(media)), data, { flag: "wx", mode: 0o600, flush: true }).catch(error => {
-      if (error.code !== "EEXIST") throw error;
-    });
-    return media;
-  } catch (error) {
-    if (error instanceof PrototypeError) throw error;
-    throw unreadableSource(raw);
-  } finally { await handle?.close(); }
 }
 /** One round's read-modify-write. A null task names the seat's own round,
     which has no task to hand the change (docs/design/operator-decision-forms.md §2.2). */

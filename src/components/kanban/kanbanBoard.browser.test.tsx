@@ -20496,6 +20496,15 @@ describe("agent memory isolation", () => {
  * in uk and en: folded to its head, and a row accepted there leaving the
  * header's count too.
  */
+describe("done frames retained in state", () => {
+  browserTest("desktop frames survive lane removal and missing frames have a label", async () => {
+    const { captureDoneFrames } = await import("./issue1695BrowserHarness");
+    const browser = await chromium.launch({...LAUNCH,ignoreDefaultArgs:["--hide-scrollbars"]});
+    try {expect(await captureDoneFrames(browser,false)).toEqual([]);}
+    finally {await browser.close();}
+  },120_000);
+});
+
 describe("«Готово» in «Чекають на вас»", () => {
   browserTest("the desktop panel ends in «Готово»: thumbnail, groups, acceptance and the counter at 1440 in uk", async () => {
     const out = path.resolve(".artifacts/done-section/desktop");

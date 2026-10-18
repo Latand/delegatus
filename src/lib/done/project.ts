@@ -24,6 +24,8 @@ export const DONE_PROJECTION_THROTTLE_MS = 30_000;
 const ALBUM_LOOKUPS_PER_PROJECTION = 4;
 
 export interface DoneWorld extends DoneFramePorts {
+  preserveFrame?(key: string, frame: NonNullable<DoneItemV1["frame"]>, refs: DoneItemV1["refs"]): Promise<{ frame: NonNullable<DoneItemV1["frame"]>; settled: boolean }>;
+  removeFrames?(keys: readonly string[]): Promise<void>;
   now(): number;
   forge(): ForgeCacheFile;
   pipelines(): readonly Pipeline[];
@@ -82,13 +84,29 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
   const at = new Date(now).toISOString();
   const upserts: DoneItemV1[] = [];
   let albumLookups = 0;
+  let copies = 0;
+  const migrated = new Set<string>();
+  // Migrate persisted frames even when their PR/lane source has left the
+  // current candidate window. Four owners per pass bound cold album indexing.
+  for (const row of held.values()) {
+    if (!row.frame || row.frame.unavailable || row.frame.src.startsWith("/api/image?done=") || row.acknowledgedAt || !world.preserveFrame || copies >= ALBUM_LOOKUPS_PER_PROJECTION) continue;
+    copies += 1;
+    migrated.add(row.key);
+    const saved = await world.preserveFrame(row.key, row.frame, row.refs);
+    const updated = { ...row, frame: saved.frame, frameCheckedAt: saved.settled ? at : null };
+    held.set(row.key, updated);
+    upserts.push(updated);
+  }
   for (const candidate of candidates) {
     const row = held.get(candidate.key);
     if (row?.acknowledgedAt) continue;
     if (!row && (memory.settled.has(candidate.key) || !(Date.parse(candidate.at) >= floor))) continue;
     let frame = row?.frame ?? null;
     let frameCheckedAt = row?.frameCheckedAt ?? null;
-    if (candidate.subject && !frameCheckedAt) {
+    if (candidate.subject && !frameCheckedAt && !migrated.has(candidate.key)) {
+      // Wait to record a new framed outcome until it can own its bytes.
+      // Never persist a fresh lane URL merely because this pass spent its cap.
+      if (world.preserveFrame && copies >= ALBUM_LOOKUPS_PER_PROJECTION) continue;
       const albumAllowed = albumLookups < ALBUM_LOOKUPS_PER_PROJECTION;
       const answer = await lookupDoneFrame(candidate.subject, {
         rounds: (taskId) => world.rounds(taskId),
@@ -100,10 +118,19 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
       });
       frame = answer.frame;
       frameCheckedAt = answer.settled ? at : null;
+      if (frame && world.preserveFrame) {
+        copies += 1;
+        const saved = await world.preserveFrame(candidate.key, frame, candidate.refs);
+        frame = saved.frame;
+        frameCheckedAt = saved.settled ? at : null;
+      }
     }
     upserts.push(itemOf(candidate, row, frame, frameCheckedAt, at));
   }
-  return { projected: true, ...writeDoneProjection({ upserts, limitEpisodes }, now) };
+  const unique = [...new Map(upserts.map(row => [row.key,row])).values()];
+  const { removedKeys, ...counts } = writeDoneProjection({ upserts: unique, limitEpisodes }, now);
+  if (removedKeys.length) await world.removeFrames?.(removedKeys);
+  return { projected: true, ...counts };
 }
 
 function itemOf(candidate: DoneCandidate, row: DoneItemV1 | undefined, frame: DoneItemV1["frame"], frameCheckedAt: string | null, at: string): DoneItemV1 {

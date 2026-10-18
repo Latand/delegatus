@@ -19,6 +19,8 @@ import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 export interface DoneRoutePorts {
   world(): DoneWorld;
   now(): number;
+  /** Production answers the persisted bootstrap while media is refined. */
+  deferProjection?: boolean;
   log?(message: string, error: unknown): void;
 }
 
@@ -34,7 +36,10 @@ export function doneReadHandler(ports: DoneRoutePorts) {
   return async (): Promise<Response> => {
     try {
       try {
-        await projectDoneItems(ports.world());
+        const projection = projectDoneItems(ports.world());
+        if (ports.deferProjection) {
+          void projection.catch(error => (ports.log ?? console.error)("[done] background projection failed",error));
+        } else await projection;
       } catch (error) {
         /* A source that cannot be read this time still leaves the items the
            store already holds to answer with. */

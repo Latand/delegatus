@@ -16,6 +16,10 @@ import { DONE_PROJECTION_THROTTLE_MS, projectDoneItems, resetDoneProjectionThrot
 import { acknowledgeDoneItems, DONE_ACKNOWLEDGED_RETENTION_MS, DONE_MAX_ROWS, DONE_SETTLED_RETENTION_MS, doneRevision, readDoneMemory, readDoneRows, resetDoneCollectionsForTests, unacknowledgedDoneItems, writeDoneProjection } from "./store";
 import { DONE_SWEEP_INTERVAL_MS, runDoneSweepOnce, startDoneSweep, stopDoneSweep } from "./sweep";
 import type { DoneFrame } from "./types";
+import { preserveDoneFrame, removeDoneMedia } from "./media";
+import { copyDoneFrameSource } from "./source";
+import { GET as imageGET } from "@/app/api/image/route";
+import { NextRequest } from "next/server";
 
 /*
  * «Готово» (docs/design/done-section.md §2, §3, §7): one item per finished
@@ -115,6 +119,78 @@ async function activate(): Promise<void> {
 }
 
 const keys = () => unacknowledgedDoneItems().map((item) => item.key).sort();
+
+test("recording a finished outcome owns its frame before lane cleanup, and item retention releases it",async () => {
+  await activate();
+  const directory=fs.mkdtempSync(path.join(process.env.HOME!,"done-projection-lane-"));
+  try {
+    const file=path.join(directory,"frame.png");
+    fs.writeFileSync(file,Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==","base64"));
+    const state=world({pipelines:[lane("finished",{taskIds:["t-frame"]})],tasks:[task("t-frame","Rendered result")],album:async()=>({frame:{src:`/api/artifact?${new URLSearchParams({path:file})}`,caption:"Result"},settled:true})});
+    const current=ports(state);
+    current.preserveFrame=async(key,frame)=>({frame:await preserveDoneFrame(key,frame,copyDoneFrameSource,state.now),settled:true});
+    current.removeFrames=removeDoneMedia;
+    await projectDoneItems(current,{force:true});
+    const item=unacknowledgedDoneItems()[0]!;
+    fs.rmSync(directory,{recursive:true,force:true});
+    const req=new NextRequest(`http://localhost${item.frame!.src}`,{headers:{host:"localhost"}});
+    const held=await imageGET(req);expect(held.status).toBe(200);await held.arrayBuffer();
+    expect(item.frame?.src).toStartWith("/api/image?done=");
+    acknowledgeDoneItems([item.key],{undo:false,surface:"phone",now:state.now});
+    acknowledgeDoneItems([item.key],{undo:true,surface:"phone",now:state.now+1});
+    expect(unacknowledgedDoneItems()[0]?.frame).toEqual(item.frame);
+    acknowledgeDoneItems([item.key],{undo:false,surface:"phone",now:state.now+2});
+    state.now+=DONE_ACKNOWLEDGED_RETENTION_MS+3;
+    await projectDoneItems(current,{force:true});
+    expect((await imageGET(req)).status).toBe(404);
+  } finally {fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test("legacy frame backfill advances four owners per pass, including rows whose source is no longer a candidate",async () => {
+  await activate();
+  const at=iso(T0+HOUR);
+  writeDoneProjection({upserts:Array.from({length:6},(_,n)=>({key:`task:old-${n}`,kind:"task",look:"visible",project:PROJECT,at,createdAt:at,title:"Old result",icon:null,refs:{},frame:{src:`/api/artifact?path=old-${n}.png`,caption:"Result"},frameCheckedAt:at,acknowledgedAt:null,acknowledgedBy:null}))},T0+HOUR);
+  const current=ports(world());const captured:string[]=[];
+  current.preserveFrame=async(key,frame)=>{captured.push(key);return {frame:{...frame,src:`/api/image?done=${encodeURIComponent(key)}&media=saved`},settled:true};};
+  await projectDoneItems(current,{force:true});expect(captured).toEqual(["task:old-0","task:old-1","task:old-2","task:old-3"]);
+  resetDoneCollectionsForTests();
+  await projectDoneItems(current,{force:true});expect(captured).toHaveLength(6);
+  expect(readDoneRows().every(row=>row.frame!.src.startsWith("/api/image?done="))).toBe(true);
+  await projectDoneItems(current,{force:true});expect(captured).toHaveLength(6);
+});
+
+test("a stale projection and an acknowledgement during a held copy cannot replace a retained frame",async () => {
+  await activate();
+  const at=iso(T0+HOUR);
+  const old={key:"task:race",kind:"task" as const,look:"visible" as const,project:PROJECT,at,createdAt:at,title:"Result",icon:null,refs:{},frame:{src:"/api/artifact?path=original.png",caption:"Result"},frameCheckedAt:at,acknowledgedAt:null,acknowledgedBy:null};
+  writeDoneProjection({upserts:[old]},T0+HOUR);
+  let release!:()=>void,started!:()=>void;
+  const held=new Promise<void>(resolve=>{release=resolve;});const ready=new Promise<void>(resolve=>{started=resolve;});
+  const current=ports(world());
+  current.preserveFrame=async(_key,frame)=>{started();await held;return {frame:{...frame,src:"/api/image?done=task%3Arace&media=saved"},settled:true};};
+  const run=projectDoneItems(current,{force:true});await ready;
+  acknowledgeDoneItems([old.key],{undo:false,surface:"phone",now:T0+2*HOUR});
+  release();await run;
+  expect(readDoneRows()[0]?.acknowledgedAt).toBe(iso(T0+2*HOUR));
+  acknowledgeDoneItems([old.key],{undo:true,surface:"phone",now:T0+3*HOUR});
+  const retained={...old,frame:{...old.frame,src:"/api/image?done=task%3Arace&media=kept"}};
+  writeDoneProjection({upserts:[retained]},T0+3*HOUR);
+  writeDoneProjection({upserts:[old]},T0+4*HOUR);
+  expect(readDoneRows()[0]?.frame).toEqual(retained.frame);
+});
+
+test("a full copy pass defers new framed outcomes rather than recording transient lane URLs",async () => {
+  await activate();
+  const ids=Array.from({length:6},(_,i)=>`framed-${i}`);
+  const current=ports(world({pipelines:ids.map(id=>lane(id,{taskIds:[id]})),tasks:ids.map(id=>task(id,"Result")),album:async()=>({frame:{src:"/api/artifact?path=lane-result.png",caption:"Result"},settled:true})}));
+  let copies=0;
+  current.preserveFrame=async(key,frame)=>{copies++;return {frame:{...frame,src:`/api/image?done=${encodeURIComponent(key)}&media=saved`},settled:true};};
+  await projectDoneItems(current,{force:true});
+  expect(copies).toBe(4);expect(readDoneRows()).toHaveLength(4);
+  expect(readDoneRows().every(row=>row.frame?.src.startsWith("/api/image?done="))).toBe(true);
+  resetDoneCollectionsForTests();
+  await projectDoneItems(current,{force:true});expect(copies).toBe(6);expect(readDoneRows()).toHaveLength(6);
+});
 
 test("one item per unit of work: a direct merge, a batch member at the batch's time, never the batch, a PR-less lane, a task with no lane", async () => {
   await activate();
