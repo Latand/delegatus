@@ -7,7 +7,7 @@ export const LOOP_PROFILE_ARM_MS = 30 * 60_000;
 export const LOOP_PROFILE_BYTES = 8192;
 const intervalUs = 10_000, sampleCap = 4096, depthCap = 32, frameCap = 128, topN = 16;
 const sourceFileCap = 8, sourceBytesCap = 2 * 1024 * 1024, sourceFileBytesCap = 1024 * 1024;
-type Frame = { name: string; sourceURL?: string; line: number };
+type Frame = { name: string; sourceURL?: string; line: number; column: number };
 type SourceMetadata = { bytes: number; nearestNames: string[]; staticNames: Set<string> };
 export type LoopProfile = { traces: { frames: Frame[] }[] };
 type Summary = ReturnType<typeof trimLoopProfile>;
@@ -18,9 +18,10 @@ type Emit = (profile: LoopGapProfile) => void;
 /** Runtime names can come from computed property keys. Require cached source
  * metadata to declare the name before it crosses the logging boundary. */
 function location(frame: Frame, root: string, sources: Map<string, SourceMetadata | null>) {
-  const line = frame.line;
+  const { line, column } = frame;
   if (!frame.sourceURL || frame.sourceURL.length > 1024 || !/^[A-Za-z_$][\w$]{0,95}$/.test(frame.name)
-    || !Number.isSafeInteger(line) || line < 1) return null;
+    || !Number.isSafeInteger(line) || line < 1 || line === 4294967295
+    || !Number.isSafeInteger(column) || column < 1 || column === 4294967295) return null;
   let source = frame.sourceURL;
   if (source.startsWith("file:")) {
     try { const url = new URL(source); if (url.search || url.hash || url.host) return null; source = fileURLToPath(url); }
@@ -47,7 +48,7 @@ function location(frame: Frame, root: string, sources: Map<string, SourceMetadat
   if (!metadata || !(emittedViewerFile
     ? metadata.staticNames.has(frame.name)
     : metadata.nearestNames[line - 1] === frame.name)) return null;
-  return { function: frame.name, file, line };
+  return { function: frame.name, file, line, column };
 }
 
 function buildSourceMetadata(text: string, emitted: boolean): SourceMetadata {
@@ -87,7 +88,7 @@ function buildSourceMetadata(text: string, emitted: boolean): SourceMetadata {
  * samples, including samples whose frames privacy filtering omitted. */
 export function trimLoopProfile(raw: LoopProfile, root: string) {
   const sources = new Map<string, SourceMetadata | null>();
-  const frames = new Map<string, { function: string; file: string; line: number; self: number; total: number }>();
+  const frames = new Map<string, { function: string; file: string; line: number; column: number; self: number; total: number }>();
   const count = Math.min(sampleCap, raw.traces.length);
   // Misra-Gries candidates let a hot function arriving late displace earlier
   // one-off frames. Decrements consume prior increments, bounding total work.
@@ -98,7 +99,7 @@ export function trimLoopProfile(raw: LoopProfile, root: string) {
     for (let depth = 0; depth < Math.min(depthCap, trace.frames.length); depth++) {
       const frame = location(trace.frames[depth]!, root, sources);
       if (!frame) continue;
-      const key = `${frame.file}:${frame.line}:${frame.function}`;
+      const key = `${frame.file}:${frame.line}:${frame.column}:${frame.function}`;
       if (seen.has(key)) continue;
       seen.add(key);
       if (candidates.has(key)) candidates.set(key, candidates.get(key)! + 1);
@@ -116,7 +117,7 @@ export function trimLoopProfile(raw: LoopProfile, root: string) {
     for (let depth = 0; depth < Math.min(depthCap, trace.frames.length); depth++) {
       const frame = location(trace.frames[depth]!, root, sources);
       if (!frame) continue;
-      const key = `${frame.file}:${frame.line}:${frame.function}`;
+      const key = `${frame.file}:${frame.line}:${frame.column}:${frame.function}`;
       if (!candidates.has(key)) continue;
       let row = frames.get(key);
       if (!row && frames.size < frameCap) { row = { ...frame, self: 0, total: 0 }; frames.set(key, row); }
@@ -126,8 +127,8 @@ export function trimLoopProfile(raw: LoopProfile, root: string) {
       seen.add(key);
     }
   }
-  const rank = (a: { self: number; total: number; file: string; line: number; function: string }, b: typeof a) =>
-    b.self - a.self || b.total - a.total || a.file.localeCompare(b.file) || a.line - b.line || a.function.localeCompare(b.function);
+  const rank = (a: { self: number; total: number; file: string; line: number; column: number; function: string }, b: typeof a) =>
+    b.self - a.self || b.total - a.total || a.file.localeCompare(b.file) || a.line - b.line || a.column - b.column || a.function.localeCompare(b.function);
   const rows = [...frames.values()].sort(rank).slice(0, topN).map(row => ({ ...row,
     selfWeight: row.self / (count || 1), totalWeight: row.total / (count || 1) }));
   const result = { samples: raw.traces.length, inspectedSamples: count, sampleCap, depthCap, frameCap, topN, rows };
