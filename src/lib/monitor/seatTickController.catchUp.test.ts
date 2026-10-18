@@ -238,7 +238,7 @@ test("cold child ledgers are collected across bounded passes before the catch-up
   expect(text).toContain(`Catch-up after unreachable window ${FROM}`);
   for (const child of children) expect(text).toContain(child.id);
   const accounting = new SeatTickAccounting(f.row().accounting!.filename, f.project);
-  const acknowledged = accounting.collection.snapshot().filter(row => row.kind === "outcome" && row.status === "acknowledged");
+  const acknowledged = accounting.collection.snapshot().flatMap(row => row.kind === "outcome" && row.status === "acknowledged" ? [row] : []);
   expect(acknowledged).toHaveLength(140);
   expect(acknowledged.filter(row => row.tuple.some(value => value.startsWith("second-")))).toHaveLength(70);
   expect(f.row().unreachableSince).toBeNull();
