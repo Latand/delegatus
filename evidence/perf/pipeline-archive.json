@@ -1,0 +1,4545 @@
+{
+  "base": "7ef6d95aa",
+  "runtime": "Bun 1.4.0",
+  "seedInputs": {
+    "limits-history.json": {
+      "sha256": "8fa9f5e66546f36c941e49be284c16a2b64a0eb42a8e88ee54804ace9b64a290",
+      "bytes": 777684,
+      "copiedAt": "2026-10-18T19:12:25.428587+00:00"
+    },
+    "worktree-map.json": {
+      "sha256": "c70ba0439c74c0beebd5666a1f3bc15ef6dda0c4382d5690321a47a913ea62b0",
+      "bytes": 197592,
+      "copiedAt": "2026-10-18T18:49:32.065879+00:00"
+    },
+    "orchestrator-seats.json": {
+      "sha256": "85f487882a46a5aa58e44bcc9c0588a94a49cc595f9932fc3a91c6194b39b2cb",
+      "bytes": 1407259,
+      "copiedAt": "2026-10-18T18:49:32.068879+00:00"
+    },
+    "project-remotes.json": {
+      "sha256": "a1f94d3040c45b57bd6d27d48244c647b0175b04913f5eba4f3172b9f5cc0b23",
+      "bytes": 549,
+      "copiedAt": "2026-10-18T18:49:32.065879+00:00"
+    },
+    "agent-registry.sqlite": {
+      "sha256": "a3dbe8dd94f4696d263e6049d7ad5cbc064a2a9b46dc375bb3f3141fb50f360e",
+      "bytes": 562262016,
+      "copiedAt": "2026-10-18T18:49:31.911878+00:00"
+    },
+    "runtime-events.sqlite": {
+      "sha256": "7ba562a547bd164515141d89bacb78b5bca98c0ee2a47b57ab71987deca75cc1",
+      "bytes": 517599232,
+      "copiedAt": "2026-10-18T19:12:25.818590+00:00"
+    },
+    "state.sqlite": {
+      "sha256": "0feac393f08c55f26ac526638b9a58729e800518bd55759fb3e9982d10751496",
+      "bytes": 220938240,
+      "copiedAt": "2026-10-18T18:49:31.344872+00:00"
+    },
+    "project-catalog.json": {
+      "sha256": "f6b581674250e2c44f0d7eb85a035cad0d1e9e053239708410bae451ee480008",
+      "bytes": 9593330,
+      "copiedAt": "2026-10-18T18:49:32.068879+00:00"
+    },
+    "lifecycle-journal.json": {
+      "sha256": "7d0c4d63f8abda6600cfe8d7903e8d0e5e515a75aeb4baab3b9f7f1ed5db816b",
+      "bytes": 1341699,
+      "copiedAt": "2026-10-18T18:49:32.065879+00:00"
+    },
+    "forge-links.json": {
+      "sha256": "b096b5d129b89c8dc042d6bf711ca20024821f4a345d471e3802d36c4f4e9c87",
+      "bytes": 1368087,
+      "copiedAt": "2026-10-18T19:12:25.428587+00:00"
+    },
+    "project-aliases.json": {
+      "sha256": "0a4f2ad7756f947e9918a1b38c3c017e238dd781a82698e5c24e3cbd62d5a63e",
+      "bytes": 779,
+      "copiedAt": "2026-10-18T18:49:32.065879+00:00"
+    }
+  },
+  "seedCollections": [
+    {
+      "collection": "done_items",
+      "rows": 865,
+      "utf8Bytes": 466213
+    },
+    {
+      "collection": "pipelines",
+      "rows": 251,
+      "utf8Bytes": 34613720
+    },
+    {
+      "collection": "pipelines_archive",
+      "rows": 966,
+      "utf8Bytes": 128066281
+    },
+    {
+      "collection": "tasks",
+      "rows": 2466,
+      "utf8Bytes": 10835449
+    }
+  ],
+  "measuredSourceSha256": {
+    "eslint.config.mjs": "a0d1ea5f833d1fac58b2643592da33c79225087f69a05340742f45b1b503eb9d",
+    "src/lib/done/project.ts": "a909efe2b58ef8dd48c10b69849a139dabc8498f32bb21515b7ffca28aac2cb7",
+    "src/lib/done/sweep.ts": "378cf54918ff601adb9b5753b5951b407b3fcffe0bd6cc19e38fb02794d26993",
+    "src/lib/done/world.ts": "1f06e9d14596d486dd3dd63605997f197c5784ccb702cc4289fa23c12c341c3a",
+    "src/lib/monitor/seatTickSources.ts": "2e28f5b13a0e50ece942fdce76de8efbd4d01f982712b082cde1793a5b5a1535",
+    "src/lib/orchestrator/boardReportRun.ts": "473ede5e91cc7969da309dba9e7688fdcacb9221ab85cb1d94625608827d1cfa",
+    "src/lib/pipelines/store.ts": "d2c3549895f87ef8dd8e156db996f5fb5795a00aceb1bdaaa02669f6754c33d5",
+    "src/lib/scanner/roots.ts": "9b4243ee807bde67cd5e2b861a424d1039fc0d151d15c10f21b9951bf1cfaf69",
+    "src/lib/state/collectionReadCache.ts": "58b9b9c181e67f6d252b1d88aa90e97fedafd6174de865b4639fb937a6e4deea",
+    "src/lib/state/sqliteStateStore.ts": "94c78de0c12982487078a9d303c48ac886d665a29445bcd4b8f4cf319a0a25c0",
+    "src/lib/taskAlbum/world.ts": "4eee066b1062f60bc5eff2863f180f159070a5578e65b816cf85a26579ba49f8",
+    "src/lib/viewerInstrumentation.ts": "840c4683ebb3c889637e3794718c5fe3c836e04a7ea7a9e8449fa5558458c1d4",
+    "src/lib/viewerLoopMonitor.ts": "1d658a70e8f19e4b024c8a2d7db2fb158180571c43c68961c4ff505c23104822"
+  },
+  "method": "Audit M4; two fresh processes per case and budget with identical copied inputs. First iteration cold; 10 ms timer, 300 ms before and 80 ms after calls, no forced GC; profile interval 1 ms. Frame copies/recovery/media removal disabled. Default T6 uses copied forge, limits and deployment ledger. The albums case selects the existing empty-forge fallback to keep four pending album lookups in every pass; both versions use that fallback. External load is recorded and uncontrolled.",
+  "runs": {
+    "before": {
+      "D2": [
+        [
+          {
+            "event": "start",
+            "name": "D2",
+            "utc": "2026-10-18T19:12:27.855Z",
+            "readiness": null,
+            "load": [
+              9.71,
+              11.66,
+              8.8
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "D2",
+            "index": 0,
+            "utc": "2026-10-18T19:12:29.022Z",
+            "wallMs": 769.3390479999999,
+            "cpuMs": 956.809,
+            "maxLoopGapMs": 777.3250870000002,
+            "rssBytes": 544088064,
+            "heapDeltaBytes": 211880310,
+            "rssDeltaBytes": 575442944,
+            "rchar": 133757090,
+            "result": 966,
+            "load": [
+              9.71,
+              11.66,
+              8.8
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 1,
+            "utc": "2026-10-18T19:12:29.653Z",
+            "wallMs": 227.19319300000006,
+            "cpuMs": 234.26,
+            "maxLoopGapMs": 240.73440900000014,
+            "rssBytes": 514256896,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 102731776,
+            "rchar": 23592,
+            "result": 966,
+            "load": [
+              9.71,
+              11.66,
+              8.8
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 2,
+            "utc": "2026-10-18T19:12:30.275Z",
+            "wallMs": 212.25128899999982,
+            "cpuMs": 220.695,
+            "maxLoopGapMs": 232.40173200000027,
+            "rssBytes": 515899392,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 5832704,
+            "rchar": 15319,
+            "result": 966,
+            "load": [
+              9.71,
+              11.66,
+              8.8
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 3,
+            "utc": "2026-10-18T19:12:30.898Z",
+            "wallMs": 219.70767800000021,
+            "cpuMs": 226.485,
+            "maxLoopGapMs": 232.2288520000002,
+            "rssBytes": 514928640,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 138977280,
+            "rchar": 15330,
+            "result": 966,
+            "load": [
+              9.71,
+              11.66,
+              8.8
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 4,
+            "utc": "2026-10-18T19:12:31.522Z",
+            "wallMs": 218.434569,
+            "cpuMs": 220.245,
+            "maxLoopGapMs": 233.68256400000018,
+            "rssBytes": 514850816,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 138444800,
+            "rchar": 15212,
+            "result": 966,
+            "load": [
+              9.42,
+              11.57,
+              8.79
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 5,
+            "utc": "2026-10-18T19:12:32.158Z",
+            "wallMs": 223.74870599999986,
+            "cpuMs": 264.644,
+            "maxLoopGapMs": 246.3179829999999,
+            "rssBytes": 629231616,
+            "heapDeltaBytes": 92267120,
+            "rssDeltaBytes": 117313536,
+            "rchar": 15244,
+            "result": 966,
+            "load": [
+              9.42,
+              11.57,
+              8.79
+            ]
+          },
+          {
+            "event": "end",
+            "name": "D2",
+            "utc": "2026-10-18T19:12:32.159Z"
+          }
+        ],
+        [
+          {
+            "event": "start",
+            "name": "D2",
+            "utc": "2026-10-18T19:12:58.810Z",
+            "readiness": null,
+            "load": [
+              8.69,
+              11.23,
+              8.75
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "D2",
+            "index": 0,
+            "utc": "2026-10-18T19:12:59.955Z",
+            "wallMs": 748.822827,
+            "cpuMs": 900.21,
+            "maxLoopGapMs": 755.947296,
+            "rssBytes": 547131392,
+            "heapDeltaBytes": 212590459,
+            "rssDeltaBytes": 595042304,
+            "rchar": 133756650,
+            "result": 966,
+            "load": [
+              8.69,
+              11.23,
+              8.75
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 1,
+            "utc": "2026-10-18T19:13:00.598Z",
+            "wallMs": 233.17109600000003,
+            "cpuMs": 237.904,
+            "maxLoopGapMs": 252.63011000000006,
+            "rssBytes": 517345280,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 105410560,
+            "rchar": 23727,
+            "result": 966,
+            "load": [
+              8.69,
+              11.23,
+              8.75
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 2,
+            "utc": "2026-10-18T19:13:01.218Z",
+            "wallMs": 209.1023369999998,
+            "cpuMs": 215.499,
+            "maxLoopGapMs": 228.96568799999977,
+            "rssBytes": 519102464,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 6479872,
+            "rchar": 15178,
+            "result": 966,
+            "load": [
+              8.47,
+              11.15,
+              8.74
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 3,
+            "utc": "2026-10-18T19:13:01.873Z",
+            "wallMs": 250.15125800000033,
+            "cpuMs": 257.049,
+            "maxLoopGapMs": 265.34251200000017,
+            "rssBytes": 517869568,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 138600448,
+            "rchar": 15591,
+            "result": 966,
+            "load": [
+              8.47,
+              11.15,
+              8.74
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 4,
+            "utc": "2026-10-18T19:13:02.510Z",
+            "wallMs": 233.3944019999999,
+            "cpuMs": 235.589,
+            "maxLoopGapMs": 246.18169599999965,
+            "rssBytes": 518701056,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 109727744,
+            "rchar": 15496,
+            "result": 966,
+            "load": [
+              8.47,
+              11.15,
+              8.74
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 5,
+            "utc": "2026-10-18T19:13:03.157Z",
+            "wallMs": 230.62690099999963,
+            "cpuMs": 274.948,
+            "maxLoopGapMs": 256.6595500000003,
+            "rssBytes": 632516608,
+            "heapDeltaBytes": 92664430,
+            "rssDeltaBytes": 120020992,
+            "rchar": 15379,
+            "result": 966,
+            "load": [
+              8.47,
+              11.15,
+              8.74
+            ]
+          },
+          {
+            "event": "end",
+            "name": "D2",
+            "utc": "2026-10-18T19:13:03.157Z"
+          }
+        ]
+      ],
+      "T6-evict": [
+        [
+          {
+            "event": "start",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:12:32.849Z",
+            "readiness": null,
+            "load": [
+              9.42,
+              11.57,
+              8.79
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-evict",
+            "index": 0,
+            "utc": "2026-10-18T19:12:33.375Z",
+            "wallMs": 141.57927200000006,
+            "cpuMs": 221,
+            "maxLoopGapMs": 136.21639700000003,
+            "rssBytes": 195551232,
+            "heapDeltaBytes": 52184891,
+            "rssDeltaBytes": 141746176,
+            "rchar": 36613388,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              9.42,
+              11.57,
+              8.79
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 1,
+            "utc": "2026-10-18T19:12:33.767Z",
+            "wallMs": 0.37878699999998844,
+            "cpuMs": 0.43,
+            "maxLoopGapMs": 0.7455820000000131,
+            "rssBytes": 175771648,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 8348,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              9.42,
+              11.57,
+              8.79
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 2,
+            "utc": "2026-10-18T19:12:34.855Z",
+            "wallMs": 685.9752059999998,
+            "cpuMs": 813.015,
+            "maxLoopGapMs": 699.0134860000001,
+            "rssBytes": 664797184,
+            "heapDeltaBytes": 178234789,
+            "rssDeltaBytes": 562315264,
+            "rchar": 133303684,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines_archive:218.4MiB"
+            },
+            "load": [
+              9.42,
+              11.57,
+              8.79
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 3,
+            "utc": "2026-10-18T19:12:35.497Z",
+            "wallMs": 234.6338609999998,
+            "cpuMs": 240.441,
+            "maxLoopGapMs": 251.3501879999999,
+            "rssBytes": 587534336,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 139960320,
+            "rchar": 23733,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines_archive:218.4MiB"
+            },
+            "load": [
+              9.42,
+              11.57,
+              8.79
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 4,
+            "utc": "2026-10-18T19:12:36.020Z",
+            "wallMs": 114.82285299999967,
+            "cpuMs": 158.478,
+            "maxLoopGapMs": 135.29331699999966,
+            "rssBytes": 575397888,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 87216128,
+            "rchar": 36128396,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              9.42,
+              11.57,
+              8.79
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 5,
+            "utc": "2026-10-18T19:12:37.208Z",
+            "wallMs": 771.4183930000004,
+            "cpuMs": 863.528,
+            "maxLoopGapMs": 807.1058859999998,
+            "rssBytes": 616701952,
+            "heapDeltaBytes": -96651796,
+            "rssDeltaBytes": 412729344,
+            "rchar": 133296450,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines_archive:218.4MiB"
+            },
+            "load": [
+              9.22,
+              11.49,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 6,
+            "utc": "2026-10-18T19:12:37.737Z",
+            "wallMs": 106.69047499999942,
+            "cpuMs": 120.528,
+            "maxLoopGapMs": 139.2310779999998,
+            "rssBytes": 659304448,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 94961664,
+            "rchar": 36136549,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              9.22,
+              11.49,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 7,
+            "utc": "2026-10-18T19:12:39.047Z",
+            "wallMs": 885.5878140000004,
+            "cpuMs": 953.085,
+            "maxLoopGapMs": 926.1230179999993,
+            "rssBytes": 726675456,
+            "heapDeltaBytes": -91089541,
+            "rssDeltaBytes": 372441088,
+            "rchar": 133306584,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines_archive:218.4MiB"
+            },
+            "load": [
+              9.22,
+              11.49,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 8,
+            "utc": "2026-10-18T19:12:39.581Z",
+            "wallMs": 119.59645399999954,
+            "cpuMs": 127.878,
+            "maxLoopGapMs": 143.16226800000004,
+            "rssBytes": 623378432,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 112353280,
+            "rchar": 36136600,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              9.22,
+              11.49,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 9,
+            "utc": "2026-10-18T19:12:40.683Z",
+            "wallMs": 673.0011280000008,
+            "cpuMs": 744.387,
+            "maxLoopGapMs": 716.0491630000006,
+            "rssBytes": 914145280,
+            "heapDeltaBytes": -42545637,
+            "rssDeltaBytes": 320647168,
+            "rchar": 133303861,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines_archive:218.4MiB"
+            },
+            "load": [
+              9.22,
+              11.49,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 10,
+            "utc": "2026-10-18T19:12:41.213Z",
+            "wallMs": 116.50820999999996,
+            "cpuMs": 134.135,
+            "maxLoopGapMs": 139.45897299999888,
+            "rssBytes": 620310528,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 65101824,
+            "rchar": 36136756,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              9.37,
+              11.49,
+              8.79
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 11,
+            "utc": "2026-10-18T19:12:42.398Z",
+            "wallMs": 768.5347849999998,
+            "cpuMs": 829.261,
+            "maxLoopGapMs": 797.1748060000009,
+            "rssBytes": 737456128,
+            "heapDeltaBytes": -47155616,
+            "rssDeltaBytes": 317001728,
+            "rchar": 133305109,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines_archive:218.4MiB"
+            },
+            "load": [
+              9.37,
+              11.49,
+              8.79
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:12:42.398Z"
+          }
+        ],
+        [
+          {
+            "event": "start",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:13:03.828Z",
+            "readiness": null,
+            "load": [
+              8.47,
+              11.15,
+              8.74
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-evict",
+            "index": 0,
+            "utc": "2026-10-18T19:13:04.419Z",
+            "wallMs": 204.80841199999998,
+            "cpuMs": 251.598,
+            "maxLoopGapMs": 200.48274400000003,
+            "rssBytes": 195559424,
+            "heapDeltaBytes": 52732207,
+            "rssDeltaBytes": 146395136,
+            "rchar": 36614187,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              8.47,
+              11.15,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 1,
+            "utc": "2026-10-18T19:13:04.806Z",
+            "wallMs": 0.20995200000004388,
+            "cpuMs": 0.242,
+            "maxLoopGapMs": 0.5039590000000089,
+            "rssBytes": 175927296,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 8351,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              8.47,
+              11.15,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 2,
+            "utc": "2026-10-18T19:13:05.873Z",
+            "wallMs": 667.560794,
+            "cpuMs": 777.774,
+            "maxLoopGapMs": 677.4704899999997,
+            "rssBytes": 667561984,
+            "heapDeltaBytes": 176419217,
+            "rssDeltaBytes": 564412416,
+            "rchar": 133303663,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines_archive:218.4MiB"
+            },
+            "load": [
+              8.47,
+              11.15,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 3,
+            "utc": "2026-10-18T19:13:06.496Z",
+            "wallMs": 216.8113229999999,
+            "cpuMs": 220.992,
+            "maxLoopGapMs": 232.3142109999999,
+            "rssBytes": 590749696,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 139214848,
+            "rchar": 23528,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines_archive:218.4MiB"
+            },
+            "load": [
+              8.12,
+              11.03,
+              8.71
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 4,
+            "utc": "2026-10-18T19:13:07.003Z",
+            "wallMs": 93.15285900000026,
+            "cpuMs": 134.542,
+            "maxLoopGapMs": 117.97733700000026,
+            "rssBytes": 576188416,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 87379968,
+            "rchar": 36128194,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              8.12,
+              11.03,
+              8.71
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 5,
+            "utc": "2026-10-18T19:13:08.075Z",
+            "wallMs": 664.8971750000001,
+            "cpuMs": 778.692,
+            "maxLoopGapMs": 683.5083050000003,
+            "rssBytes": 634503168,
+            "heapDeltaBytes": 208486690,
+            "rssDeltaBytes": 216850432,
+            "rchar": 133295724,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines_archive:218.4MiB"
+            },
+            "load": [
+              8.12,
+              11.03,
+              8.71
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 6,
+            "utc": "2026-10-18T19:13:08.576Z",
+            "wallMs": 99.47193599999991,
+            "cpuMs": 106.216,
+            "maxLoopGapMs": 110.28200599999946,
+            "rssBytes": 576696320,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 121110528,
+            "rchar": 36136505,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              8.12,
+              11.03,
+              8.71
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 7,
+            "utc": "2026-10-18T19:13:09.655Z",
+            "wallMs": 665.005083,
+            "cpuMs": 738.823,
+            "maxLoopGapMs": 694.527889,
+            "rssBytes": 926846976,
+            "heapDeltaBytes": -17700174,
+            "rssDeltaBytes": 373760000,
+            "rchar": 133303820,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines_archive:218.4MiB"
+            },
+            "load": [
+              8.12,
+              11.03,
+              8.71
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 8,
+            "utc": "2026-10-18T19:13:10.163Z",
+            "wallMs": 101.81584999999995,
+            "cpuMs": 110.278,
+            "maxLoopGapMs": 117.3335189999998,
+            "rssBytes": 610861056,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 85508096,
+            "rchar": 36136477,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              8.12,
+              11.03,
+              8.71
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 9,
+            "utc": "2026-10-18T19:13:11.207Z",
+            "wallMs": 634.7811579999998,
+            "cpuMs": 712.021,
+            "maxLoopGapMs": 663.2817640000003,
+            "rssBytes": 670175232,
+            "heapDeltaBytes": -22855186,
+            "rssDeltaBytes": 345501696,
+            "rchar": 133303858,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines_archive:218.4MiB"
+            },
+            "load": [
+              7.95,
+              10.94,
+              8.7
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 10,
+            "utc": "2026-10-18T19:13:11.741Z",
+            "wallMs": 120.69024799999988,
+            "cpuMs": 133.204,
+            "maxLoopGapMs": 144.0897500000001,
+            "rssBytes": 616722432,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 92102656,
+            "rchar": 36136873,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              7.95,
+              10.94,
+              8.7
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 11,
+            "utc": "2026-10-18T19:13:13.059Z",
+            "wallMs": 890.9753380000002,
+            "cpuMs": 961.671,
+            "maxLoopGapMs": 931.8213990000004,
+            "rssBytes": 929484800,
+            "heapDeltaBytes": -26679386,
+            "rssDeltaBytes": 335540224,
+            "rchar": 133306858,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines_archive:218.4MiB"
+            },
+            "load": [
+              7.95,
+              10.94,
+              8.7
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:13:13.059Z"
+          }
+        ]
+      ],
+      "T6-pass": [
+        [
+          {
+            "event": "start",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:12:43.156Z",
+            "readiness": {
+              "condition": "before each run the done world's 60 s archive copy is cleared and the hot list read once, as between production passes; frame copies, recovery and media removal left out"
+            },
+            "load": [
+              9.37,
+              11.49,
+              8.79
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-pass",
+            "index": 0,
+            "utc": "2026-10-18T19:12:46.635Z",
+            "wallMs": 2691.674875,
+            "cpuMs": 3150.224,
+            "maxLoopGapMs": 2740.099495,
+            "rssBytes": 1165836288,
+            "heapDeltaBytes": 490625185,
+            "rssDeltaBytes": 1177886720,
+            "rchar": 1220553889,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              9.02,
+              11.38,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 1,
+            "utc": "2026-10-18T19:12:47.996Z",
+            "wallMs": 785.3850419999999,
+            "cpuMs": 905.383,
+            "maxLoopGapMs": 874.5700069999998,
+            "rssBytes": 1482162176,
+            "heapDeltaBytes": 258723849,
+            "rssDeltaBytes": 521945088,
+            "rchar": 155317327,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              9.02,
+              11.38,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 2,
+            "utc": "2026-10-18T19:12:49.368Z",
+            "wallMs": 806.8672930000002,
+            "cpuMs": 905.418,
+            "maxLoopGapMs": 899.1039149999997,
+            "rssBytes": 1482772480,
+            "heapDeltaBytes": 270217141,
+            "rssDeltaBytes": 447766528,
+            "rchar": 155293242,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              9.02,
+              11.38,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 3,
+            "utc": "2026-10-18T19:12:50.779Z",
+            "wallMs": 806.2836639999996,
+            "cpuMs": 879.62,
+            "maxLoopGapMs": 930.3238970000002,
+            "rssBytes": 1488998400,
+            "heapDeltaBytes": 269999091,
+            "rssDeltaBytes": 464752640,
+            "rchar": 155293436,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              9.02,
+              11.38,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 4,
+            "utc": "2026-10-18T19:12:52.178Z",
+            "wallMs": 803.0661209999998,
+            "cpuMs": 884.842,
+            "maxLoopGapMs": 907.8069830000004,
+            "rssBytes": 1490788352,
+            "heapDeltaBytes": 270200456,
+            "rssDeltaBytes": 412286976,
+            "rchar": 155293359,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              9.1,
+              11.35,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 5,
+            "utc": "2026-10-18T19:12:53.693Z",
+            "wallMs": 915.6522459999996,
+            "cpuMs": 1029.155,
+            "maxLoopGapMs": 1029.8653679999989,
+            "rssBytes": 1489162240,
+            "heapDeltaBytes": 269102563,
+            "rssDeltaBytes": 417406976,
+            "rchar": 155294922,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              9.1,
+              11.35,
+              8.78
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:12:53.693Z"
+          }
+        ],
+        [
+          {
+            "event": "start",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:13:14.098Z",
+            "readiness": {
+              "condition": "before each run the done world's 60 s archive copy is cleared and the hot list read once, as between production passes; frame copies, recovery and media removal left out"
+            },
+            "load": [
+              7.95,
+              10.94,
+              8.7
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-pass",
+            "index": 0,
+            "utc": "2026-10-18T19:13:17.539Z",
+            "wallMs": 2753.3639590000002,
+            "cpuMs": 3190.482,
+            "maxLoopGapMs": 2797.323793,
+            "rssBytes": 1131421696,
+            "heapDeltaBytes": 484731470,
+            "rssDeltaBytes": 1170407424,
+            "rchar": 1220555006,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              7.87,
+              10.88,
+              8.69
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 1,
+            "utc": "2026-10-18T19:13:19.050Z",
+            "wallMs": 879.1001470000001,
+            "cpuMs": 1007.335,
+            "maxLoopGapMs": 995.4206450000001,
+            "rssBytes": 1460736000,
+            "heapDeltaBytes": 259533317,
+            "rssDeltaBytes": 578523136,
+            "rchar": 155318390,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              7.87,
+              10.88,
+              8.69
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 2,
+            "utc": "2026-10-18T19:13:20.543Z",
+            "wallMs": 899.2318720000003,
+            "cpuMs": 1000.786,
+            "maxLoopGapMs": 1006.5673649999999,
+            "rssBytes": 1471889408,
+            "heapDeltaBytes": 270647295,
+            "rssDeltaBytes": 486416384,
+            "rchar": 155294402,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              7.87,
+              10.88,
+              8.69
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 3,
+            "utc": "2026-10-18T19:13:22.120Z",
+            "wallMs": 956.3176279999998,
+            "cpuMs": 1044.63,
+            "maxLoopGapMs": 1075.3992010000002,
+            "rssBytes": 1479671808,
+            "heapDeltaBytes": 270513264,
+            "rssDeltaBytes": 454647808,
+            "rchar": 155295449,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              8.2,
+              10.9,
+              8.71
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 4,
+            "utc": "2026-10-18T19:13:23.847Z",
+            "wallMs": 1130.2147330000007,
+            "cpuMs": 1225.723,
+            "maxLoopGapMs": 1233.246709000001,
+            "rssBytes": 1477726208,
+            "heapDeltaBytes": 270333729,
+            "rssDeltaBytes": 424095744,
+            "rchar": 155297564,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              8.2,
+              10.9,
+              8.71
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 5,
+            "utc": "2026-10-18T19:13:25.329Z",
+            "wallMs": 856.1109660000002,
+            "cpuMs": 976.187,
+            "maxLoopGapMs": 966.9133069999989,
+            "rssBytes": 1498415104,
+            "heapDeltaBytes": 268907608,
+            "rssDeltaBytes": 429019136,
+            "rchar": 155294279,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              8.2,
+              10.9,
+              8.71
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:13:25.329Z"
+          }
+        ]
+      ],
+      "profile": [
+        [
+          {
+            "target": "done",
+            "load": [
+              8.69,
+              11.23,
+              8.75
+            ],
+            "archiveMutableSamples": 0,
+            "samples": 765,
+            "top": [
+              [
+                "src/lib/done/project.ts projectDoneItems",
+                763
+              ],
+              [
+                "src/lib/done/sweep.ts runDoneSweepOnce",
+                763
+              ],
+              [
+                "src/lib/done/world.ts archivedPipelines",
+                645
+              ],
+              [
+                "src/lib/done/world.ts laneList",
+                645
+              ],
+              [
+                "src/lib/readAttribution.ts sync",
+                561
+              ],
+              [
+                "src/lib/state/sqliteStateStore.ts loadReadonly",
+                431
+              ],
+              [
+                "src/lib/state/sqliteStateStore.ts loadFull",
+                429
+              ],
+              [
+                "src/lib/state/sqliteStateStore.ts snapshot",
+                398
+              ],
+              [
+                "src/lib/state/sqliteStateStore.ts decodeRow",
+                294
+              ],
+              [
+                "src/lib/performanceSpans.ts sync",
+                252
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "target": "done",
+            "load": [
+              9.15,
+              11.05,
+              8.77
+            ],
+            "archiveMutableSamples": 0,
+            "samples": 759,
+            "top": [
+              [
+                "src/lib/done/project.ts projectDoneItems",
+                757
+              ],
+              [
+                "src/lib/done/sweep.ts runDoneSweepOnce",
+                757
+              ],
+              [
+                "src/lib/done/world.ts archivedPipelines",
+                608
+              ],
+              [
+                "src/lib/done/world.ts laneList",
+                608
+              ],
+              [
+                "src/lib/readAttribution.ts sync",
+                563
+              ],
+              [
+                "src/lib/state/sqliteStateStore.ts loadReadonly",
+                396
+              ],
+              [
+                "src/lib/state/sqliteStateStore.ts loadFull",
+                394
+              ],
+              [
+                "src/lib/state/sqliteStateStore.ts snapshot",
+                356
+              ],
+              [
+                "src/lib/state/sqliteStateStore.ts decodeRow",
+                267
+              ],
+              [
+                "src/lib/performanceSpans.ts sync",
+                258
+              ]
+            ]
+          }
+        ]
+      ],
+      "T6-pass-albums": [
+        [
+          {
+            "event": "start",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:16:19.909Z",
+            "readiness": {
+              "condition": "before each run the done world's 60 s archive copy is cleared and the hot list read once, as between production passes; frame copies, recovery and media removal left out"
+            },
+            "load": [
+              6.36,
+              9.28,
+              8.49
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-pass",
+            "index": 0,
+            "utc": "2026-10-18T19:16:26.413Z",
+            "wallMs": 5706.175559,
+            "cpuMs": 6314.989,
+            "maxLoopGapMs": 5878.7130640000005,
+            "rssBytes": 2082025472,
+            "heapDeltaBytes": 578769127,
+            "rssDeltaBytes": 2069233664,
+            "rchar": 1221323593,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              6.51,
+              9.22,
+              8.48
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 1,
+            "utc": "2026-10-18T19:16:28.641Z",
+            "wallMs": 1569.4738669999997,
+            "cpuMs": 1718.883,
+            "maxLoopGapMs": 1847.2764040000002,
+            "rssBytes": 2460168192,
+            "heapDeltaBytes": 362552876,
+            "rssDeltaBytes": 591097856,
+            "rchar": 190458948,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              6.51,
+              9.22,
+              8.48
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 2,
+            "utc": "2026-10-18T19:16:30.641Z",
+            "wallMs": 1418.647137,
+            "cpuMs": 1647.079,
+            "maxLoopGapMs": 1618.4014450000013,
+            "rssBytes": 1805377536,
+            "heapDeltaBytes": 66529201,
+            "rssDeltaBytes": -191475712,
+            "rchar": 190219147,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              6.51,
+              9.22,
+              8.48
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 3,
+            "utc": "2026-10-18T19:16:32.301Z",
+            "wallMs": 1113.1607660000009,
+            "cpuMs": 1216.783,
+            "maxLoopGapMs": 1279.3645859999997,
+            "rssBytes": 2038362112,
+            "heapDeltaBytes": 223876493,
+            "rssDeltaBytes": 464576512,
+            "rchar": 190296992,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              6.39,
+              9.15,
+              8.46
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 4,
+            "utc": "2026-10-18T19:16:33.969Z",
+            "wallMs": 1136.776858000001,
+            "cpuMs": 1286.78,
+            "maxLoopGapMs": 1275.8166280000005,
+            "rssBytes": 1650466816,
+            "heapDeltaBytes": 65887621,
+            "rssDeltaBytes": 137392128,
+            "rchar": 190301983,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              6.39,
+              9.15,
+              8.46
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 5,
+            "utc": "2026-10-18T19:16:35.610Z",
+            "wallMs": 1145.3841949999987,
+            "cpuMs": 1209.543,
+            "maxLoopGapMs": 1252.6077210000003,
+            "rssBytes": 1829474304,
+            "heapDeltaBytes": 223979175,
+            "rssDeltaBytes": 485466112,
+            "rchar": 190255679,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              6.39,
+              9.15,
+              8.46
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:16:35.610Z"
+          }
+        ],
+        [
+          {
+            "event": "start",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:16:45.309Z",
+            "readiness": {
+              "condition": "before each run the done world's 60 s archive copy is cleared and the hot list read once, as between production passes; frame copies, recovery and media removal left out"
+            },
+            "load": [
+              6.86,
+              9.17,
+              8.47
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-pass",
+            "index": 0,
+            "utc": "2026-10-18T19:16:52.294Z",
+            "wallMs": 6108.405231,
+            "cpuMs": 6835.26,
+            "maxLoopGapMs": 6288.762931,
+            "rssBytes": 2047610880,
+            "heapDeltaBytes": 603483819,
+            "rssDeltaBytes": 2051354624,
+            "rchar": 1221328078,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              7.5,
+              9.23,
+              8.5
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 1,
+            "utc": "2026-10-18T19:16:54.447Z",
+            "wallMs": 1548.8542159999988,
+            "cpuMs": 1688.529,
+            "maxLoopGapMs": 1771.4810869999992,
+            "rssBytes": 2399559680,
+            "heapDeltaBytes": 375616197,
+            "rssDeltaBytes": 602279936,
+            "rchar": 190458574,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              7.5,
+              9.23,
+              8.5
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 2,
+            "utc": "2026-10-18T19:16:56.639Z",
+            "wallMs": 1608.9050850000003,
+            "cpuMs": 1842.932,
+            "maxLoopGapMs": 1807.9744190000001,
+            "rssBytes": 1853173760,
+            "heapDeltaBytes": 66412449,
+            "rssDeltaBytes": -37322752,
+            "rchar": 190221470,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              7.3,
+              9.16,
+              8.48
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 3,
+            "utc": "2026-10-18T19:16:58.278Z",
+            "wallMs": 1101.342548999999,
+            "cpuMs": 1177.688,
+            "maxLoopGapMs": 1258.0941199999997,
+            "rssBytes": 2050646016,
+            "heapDeltaBytes": 223374164,
+            "rssDeltaBytes": 441315328,
+            "rchar": 190296863,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              7.3,
+              9.16,
+              8.48
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 4,
+            "utc": "2026-10-18T19:16:59.940Z",
+            "wallMs": 1141.9520379999994,
+            "cpuMs": 1287.636,
+            "maxLoopGapMs": 1280.6267279999993,
+            "rssBytes": 1731481600,
+            "heapDeltaBytes": 65904649,
+            "rssDeltaBytes": 134959104,
+            "rchar": 190301943,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              7.3,
+              9.16,
+              8.48
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 5,
+            "utc": "2026-10-18T19:17:01.459Z",
+            "wallMs": 1033.013583,
+            "cpuMs": 1078.201,
+            "maxLoopGapMs": 1130.8805110000012,
+            "rssBytes": 1837330432,
+            "heapDeltaBytes": 223333933,
+            "rssDeltaBytes": 508661760,
+            "rchar": 190254349,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              6.95,
+              9.05,
+              8.45
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:17:01.460Z"
+          }
+        ]
+      ],
+      "profile-albums": [
+        [
+          {
+            "target": "done",
+            "load": [
+              6.86,
+              9.17,
+              8.47
+            ],
+            "archiveMutableSamples": 0,
+            "albumLookups": 4,
+            "samples": 1585,
+            "top": [
+              [
+                "src/lib/done/project.ts projectDoneItems",
+                1582
+              ],
+              [
+                "src/lib/done/sweep.ts runDoneSweepOnce",
+                939
+              ],
+              [
+                "src/lib/done/frames.ts lookupDoneFrame",
+                792
+              ],
+              [
+                "src/lib/readAttribution.ts sync",
+                705
+              ],
+              [
+                "src/lib/done/world.ts archivedPipelines",
+                651
+              ],
+              [
+                "src/lib/done/world.ts laneList",
+                651
+              ],
+              [
+                "src/lib/taskAlbum/sources.ts taskAlbumTranscripts",
+                649
+              ],
+              [
+                "src/lib/taskAlbum/album.ts collect",
+                649
+              ],
+              [
+                "src/lib/taskAlbum/album.ts readTaskAlbum",
+                649
+              ],
+              [
+                "src/lib/done/world.ts album",
+                649
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "target": "done",
+            "load": [
+              6.96,
+              9.02,
+              8.44
+            ],
+            "archiveMutableSamples": 0,
+            "albumLookups": 4,
+            "samples": 1295,
+            "top": [
+              [
+                "src/lib/done/project.ts projectDoneItems",
+                1293
+              ],
+              [
+                "src/lib/done/sweep.ts runDoneSweepOnce",
+                768
+              ],
+              [
+                "src/lib/done/frames.ts lookupDoneFrame",
+                643
+              ],
+              [
+                "src/lib/readAttribution.ts sync",
+                588
+              ],
+              [
+                "src/lib/done/world.ts archivedPipelines",
+                555
+              ],
+              [
+                "src/lib/done/world.ts laneList",
+                555
+              ],
+              [
+                "src/lib/done/world.ts album",
+                516
+              ],
+              [
+                "src/lib/done/project.ts album",
+                516
+              ],
+              [
+                "src/lib/taskAlbum/sources.ts taskAlbumTranscripts",
+                515
+              ],
+              [
+                "src/lib/taskAlbum/album.ts collect",
+                515
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "before512": {
+      "T6-evict": [
+        [
+          {
+            "event": "start",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:13:30.997Z",
+            "readiness": null,
+            "load": [
+              9.15,
+              11.05,
+              8.77
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-evict",
+            "index": 0,
+            "utc": "2026-10-18T19:13:31.602Z",
+            "wallMs": 207.46391899999998,
+            "cpuMs": 252.846,
+            "maxLoopGapMs": 202.72901300000007,
+            "rssBytes": 199766016,
+            "heapDeltaBytes": 53362440,
+            "rssDeltaBytes": 145276928,
+            "rchar": 36614177,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              9.14,
+              11.01,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 1,
+            "utc": "2026-10-18T19:13:31.990Z",
+            "wallMs": 0.24989499999992404,
+            "cpuMs": 0.301,
+            "maxLoopGapMs": 0.07874999999989996,
+            "rssBytes": 177242112,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 8316,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              9.14,
+              11.01,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 2,
+            "utc": "2026-10-18T19:13:33.201Z",
+            "wallMs": 797.2427339999999,
+            "cpuMs": 930.858,
+            "maxLoopGapMs": 821.4662299999998,
+            "rssBytes": 662007808,
+            "heapDeltaBytes": 181240343,
+            "rssDeltaBytes": 549044224,
+            "rchar": 133305277,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB,pipelines_archive:218.4MiB"
+            },
+            "load": [
+              9.14,
+              11.01,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 3,
+            "utc": "2026-10-18T19:13:33.858Z",
+            "wallMs": 249.74730999999974,
+            "cpuMs": 255.503,
+            "maxLoopGapMs": 267.2659279999998,
+            "rssBytes": 594157568,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 139882496,
+            "rchar": 24032,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB,pipelines_archive:218.4MiB"
+            },
+            "load": [
+              9.14,
+              11.01,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 4,
+            "utc": "2026-10-18T19:13:34.273Z",
+            "wallMs": 0.24666900000011083,
+            "cpuMs": 0.287,
+            "maxLoopGapMs": 24.335663000000295,
+            "rssBytes": 485732352,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 126,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines_archive:218.4MiB,pipelines:63.0MiB"
+            },
+            "load": [
+              9.14,
+              11.01,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 5,
+            "utc": "2026-10-18T19:13:34.919Z",
+            "wallMs": 238.7926120000002,
+            "cpuMs": 246.881,
+            "maxLoopGapMs": 256.04567399999996,
+            "rssBytes": 594345984,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 112660480,
+            "rchar": 15681,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB,pipelines_archive:218.4MiB"
+            },
+            "load": [
+              9.14,
+              11.01,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 6,
+            "utc": "2026-10-18T19:13:35.321Z",
+            "wallMs": 0.20495500000015454,
+            "cpuMs": 0.257,
+            "maxLoopGapMs": 11.376999000000069,
+            "rssBytes": 457474048,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 126,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines_archive:218.4MiB,pipelines:63.0MiB"
+            },
+            "load": [
+              9.14,
+              11.01,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 7,
+            "utc": "2026-10-18T19:13:35.992Z",
+            "wallMs": 263.08319200000005,
+            "cpuMs": 266.742,
+            "maxLoopGapMs": 281.33866300000045,
+            "rssBytes": 594571264,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 138227712,
+            "rchar": 15921,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB,pipelines_archive:218.4MiB"
+            },
+            "load": [
+              9.14,
+              11.01,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 8,
+            "utc": "2026-10-18T19:13:36.393Z",
+            "wallMs": 0.2570709999999963,
+            "cpuMs": 0.49,
+            "maxLoopGapMs": 10.445118999999977,
+            "rssBytes": 457928704,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 126,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines_archive:218.4MiB,pipelines:63.0MiB"
+            },
+            "load": [
+              9.04,
+              10.96,
+              8.76
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 9,
+            "utc": "2026-10-18T19:13:37.147Z",
+            "wallMs": 340.25846099999944,
+            "cpuMs": 355.99,
+            "maxLoopGapMs": 363.83771200000047,
+            "rssBytes": 595152896,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 137785344,
+            "rchar": 16881,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB,pipelines_archive:218.4MiB"
+            },
+            "load": [
+              9.04,
+              10.96,
+              8.76
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 10,
+            "utc": "2026-10-18T19:13:37.549Z",
+            "wallMs": 0.24793899999986024,
+            "cpuMs": 0.294,
+            "maxLoopGapMs": 11.943413999999393,
+            "rssBytes": 458567680,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 126,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines_archive:218.4MiB,pipelines:63.0MiB"
+            },
+            "load": [
+              9.04,
+              10.96,
+              8.76
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 11,
+            "utc": "2026-10-18T19:13:38.188Z",
+            "wallMs": 233.27275400000053,
+            "cpuMs": 237.107,
+            "maxLoopGapMs": 248.67235600000004,
+            "rssBytes": 595263488,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 137670656,
+            "rchar": 15561,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB,pipelines_archive:218.4MiB"
+            },
+            "load": [
+              9.04,
+              10.96,
+              8.76
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:13:38.188Z"
+          }
+        ],
+        [
+          {
+            "event": "start",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:13:38.892Z",
+            "readiness": null,
+            "load": [
+              9.04,
+              10.96,
+              8.76
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-evict",
+            "index": 0,
+            "utc": "2026-10-18T19:13:39.465Z",
+            "wallMs": 187.15644699999996,
+            "cpuMs": 238.749,
+            "maxLoopGapMs": 183.00180399999994,
+            "rssBytes": 195076096,
+            "heapDeltaBytes": 51996319,
+            "rssDeltaBytes": 142135296,
+            "rchar": 36613922,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              9.04,
+              10.96,
+              8.76
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 1,
+            "utc": "2026-10-18T19:13:39.852Z",
+            "wallMs": 0.2300950000000057,
+            "cpuMs": 0.271,
+            "maxLoopGapMs": 0.09667300000000978,
+            "rssBytes": 173490176,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 8310,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB"
+            },
+            "load": [
+              9.04,
+              10.96,
+              8.76
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 2,
+            "utc": "2026-10-18T19:13:40.935Z",
+            "wallMs": 682.701243,
+            "cpuMs": 780.589,
+            "maxLoopGapMs": 692.846571,
+            "rssBytes": 668401664,
+            "heapDeltaBytes": 175266944,
+            "rssDeltaBytes": 557748224,
+            "rchar": 133303569,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB,pipelines_archive:218.4MiB"
+            },
+            "load": [
+              9.04,
+              10.96,
+              8.76
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 3,
+            "utc": "2026-10-18T19:13:41.557Z",
+            "wallMs": 217.65893400000004,
+            "cpuMs": 221.872,
+            "maxLoopGapMs": 231.92499700000008,
+            "rssBytes": 587304960,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 139182080,
+            "rchar": 23578,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB,pipelines_archive:218.4MiB"
+            },
+            "load": [
+              8.64,
+              10.85,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 4,
+            "utc": "2026-10-18T19:13:41.968Z",
+            "wallMs": 0.23885900000004767,
+            "cpuMs": 0.336,
+            "maxLoopGapMs": 20.008434999999736,
+            "rssBytes": 587304960,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines_archive:218.4MiB,pipelines:63.0MiB"
+            },
+            "load": [
+              8.64,
+              10.85,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 5,
+            "utc": "2026-10-18T19:13:42.623Z",
+            "wallMs": 244.94608499999958,
+            "cpuMs": 252.835,
+            "maxLoopGapMs": 264.6669259999999,
+            "rssBytes": 587276288,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 138387456,
+            "rchar": 15618,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB,pipelines_archive:218.4MiB"
+            },
+            "load": [
+              8.64,
+              10.85,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 6,
+            "utc": "2026-10-18T19:13:43.044Z",
+            "wallMs": 0.4611000000004424,
+            "cpuMs": 0.577,
+            "maxLoopGapMs": 30.898167000000285,
+            "rssBytes": 450158592,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 120,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines_archive:218.4MiB,pipelines:63.0MiB"
+            },
+            "load": [
+              8.64,
+              10.85,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 7,
+            "utc": "2026-10-18T19:13:43.724Z",
+            "wallMs": 272.2463630000002,
+            "cpuMs": 276.043,
+            "maxLoopGapMs": 289.77176299999974,
+            "rssBytes": 587931648,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 138289152,
+            "rchar": 15811,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB,pipelines_archive:218.4MiB"
+            },
+            "load": [
+              8.64,
+              10.85,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 8,
+            "utc": "2026-10-18T19:13:44.128Z",
+            "wallMs": 0.2748570000003383,
+            "cpuMs": 0.484,
+            "maxLoopGapMs": 13.399677000000338,
+            "rssBytes": 446926848,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines_archive:218.4MiB,pipelines:63.0MiB"
+            },
+            "load": [
+              8.64,
+              10.85,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 9,
+            "utc": "2026-10-18T19:13:44.790Z",
+            "wallMs": 250.0840879999996,
+            "cpuMs": 263.05,
+            "maxLoopGapMs": 271.8787660000007,
+            "rssBytes": 583593984,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 137977856,
+            "rchar": 15695,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB,pipelines_archive:218.4MiB"
+            },
+            "load": [
+              8.64,
+              10.85,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 10,
+            "utc": "2026-10-18T19:13:45.204Z",
+            "wallMs": 0.34968600000047445,
+            "cpuMs": 0.409,
+            "maxLoopGapMs": 23.928170000000136,
+            "rssBytes": 447307776,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": -495616,
+            "rchar": 120,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines_archive:218.4MiB,pipelines:63.0MiB"
+            },
+            "load": [
+              8.64,
+              10.85,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 11,
+            "utc": "2026-10-18T19:13:45.845Z",
+            "wallMs": 230.13631799999985,
+            "cpuMs": 234.021,
+            "maxLoopGapMs": 250.48240400000032,
+            "rssBytes": 584196096,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 138125312,
+            "rchar": 15463,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB,pipelines_archive:218.4MiB"
+            },
+            "load": [
+              8.64,
+              10.85,
+              8.74
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:13:45.845Z"
+          }
+        ]
+      ]
+    },
+    "after": {
+      "D2": [
+        [
+          {
+            "event": "start",
+            "name": "D2",
+            "utc": "2026-10-18T19:13:46.558Z",
+            "readiness": null,
+            "load": [
+              8.51,
+              10.78,
+              8.73
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "D2",
+            "index": 0,
+            "utc": "2026-10-18T19:13:47.598Z",
+            "wallMs": 646.8702059999998,
+            "cpuMs": 797.582,
+            "maxLoopGapMs": 649.9913969999999,
+            "rssBytes": 518594560,
+            "heapDeltaBytes": 208276745,
+            "rssDeltaBytes": 462958592,
+            "rchar": 133743582,
+            "result": 966,
+            "load": [
+              8.51,
+              10.78,
+              8.73
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 1,
+            "utc": "2026-10-18T19:13:47.998Z",
+            "wallMs": 0.3745679999999538,
+            "cpuMs": 0.416,
+            "maxLoopGapMs": 9.697154000000182,
+            "rssBytes": 382455808,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 8350,
+            "result": 966,
+            "load": [
+              8.51,
+              10.78,
+              8.73
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 2,
+            "utc": "2026-10-18T19:13:48.401Z",
+            "wallMs": 0.2970700000000761,
+            "cpuMs": 0.533,
+            "maxLoopGapMs": 12.574513000000024,
+            "rssBytes": 382455808,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": 966,
+            "load": [
+              8.51,
+              10.78,
+              8.73
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 3,
+            "utc": "2026-10-18T19:13:48.801Z",
+            "wallMs": 0.35759200000029523,
+            "cpuMs": 0.468,
+            "maxLoopGapMs": 10.097574999999779,
+            "rssBytes": 382029824,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 236,
+            "result": 966,
+            "load": [
+              8.51,
+              10.78,
+              8.73
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 4,
+            "utc": "2026-10-18T19:13:49.200Z",
+            "wallMs": 0.3914629999999306,
+            "cpuMs": 0.509,
+            "maxLoopGapMs": 9.216507999999976,
+            "rssBytes": 381829120,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": 966,
+            "load": [
+              8.51,
+              10.78,
+              8.73
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 5,
+            "utc": "2026-10-18T19:13:49.612Z",
+            "wallMs": 0.5360070000001542,
+            "cpuMs": 0.577,
+            "maxLoopGapMs": 21.099800999999843,
+            "rssBytes": 381816832,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": 966,
+            "load": [
+              8.51,
+              10.78,
+              8.73
+            ]
+          },
+          {
+            "event": "end",
+            "name": "D2",
+            "utc": "2026-10-18T19:13:49.612Z"
+          }
+        ],
+        [
+          {
+            "event": "start",
+            "name": "D2",
+            "utc": "2026-10-18T19:14:07.040Z",
+            "readiness": null,
+            "load": [
+              9.37,
+              10.84,
+              8.79
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "D2",
+            "index": 0,
+            "utc": "2026-10-18T19:14:08.632Z",
+            "wallMs": 1198.5139960000001,
+            "cpuMs": 746.955,
+            "maxLoopGapMs": 1200.727349,
+            "rssBytes": 517935104,
+            "heapDeltaBytes": 208379515,
+            "rssDeltaBytes": 463941632,
+            "rchar": 133749608,
+            "result": 966,
+            "load": [
+              9.37,
+              10.84,
+              8.79
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 1,
+            "utc": "2026-10-18T19:14:09.030Z",
+            "wallMs": 0.42216400000006615,
+            "cpuMs": 0.464,
+            "maxLoopGapMs": 7.810653000000002,
+            "rssBytes": 388775936,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 8316,
+            "result": 966,
+            "load": [
+              9.37,
+              10.84,
+              8.79
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 2,
+            "utc": "2026-10-18T19:14:09.428Z",
+            "wallMs": 0.3034020000000055,
+            "cpuMs": 0.526,
+            "maxLoopGapMs": 8.128447000000051,
+            "rssBytes": 388775936,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 124,
+            "result": 966,
+            "load": [
+              9.37,
+              10.84,
+              8.79
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 3,
+            "utc": "2026-10-18T19:14:09.826Z",
+            "wallMs": 0.36044500000025437,
+            "cpuMs": 0.406,
+            "maxLoopGapMs": 7.533276999999998,
+            "rssBytes": 388579328,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 124,
+            "result": 966,
+            "load": [
+              9.37,
+              10.84,
+              8.79
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 4,
+            "utc": "2026-10-18T19:14:10.227Z",
+            "wallMs": 0.3279809999999088,
+            "cpuMs": 0.435,
+            "maxLoopGapMs": 10.752794999999878,
+            "rssBytes": 388775936,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 124,
+            "result": 966,
+            "load": [
+              9.37,
+              10.84,
+              8.79
+            ]
+          },
+          {
+            "name": "D2",
+            "index": 5,
+            "utc": "2026-10-18T19:14:10.626Z",
+            "wallMs": 0.4011249999998654,
+            "cpuMs": 0.436,
+            "maxLoopGapMs": 8.097243000000162,
+            "rssBytes": 388972544,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 124,
+            "result": 966,
+            "load": [
+              9.37,
+              10.84,
+              8.79
+            ]
+          },
+          {
+            "event": "end",
+            "name": "D2",
+            "utc": "2026-10-18T19:14:10.626Z"
+          }
+        ]
+      ],
+      "T6-evict": [
+        [
+          {
+            "event": "start",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:13:50.536Z",
+            "readiness": null,
+            "load": [
+              8.51,
+              10.78,
+              8.73
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-evict",
+            "index": 0,
+            "utc": "2026-10-18T19:13:51.244Z",
+            "wallMs": 320.72715500000004,
+            "cpuMs": 347.695,
+            "maxLoopGapMs": 318.015556,
+            "rssBytes": 198074368,
+            "heapDeltaBytes": 53312590,
+            "rssDeltaBytes": 145690624,
+            "rchar": 36615400,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 0
+            },
+            "load": [
+              9.27,
+              10.9,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 1,
+            "utc": "2026-10-18T19:13:51.632Z",
+            "wallMs": 0.23078499999996893,
+            "cpuMs": 0.279,
+            "maxLoopGapMs": 0.0927639999999883,
+            "rssBytes": 179945472,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 8310,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 0
+            },
+            "load": [
+              9.27,
+              10.9,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 2,
+            "utc": "2026-10-18T19:13:52.567Z",
+            "wallMs": 538.8263669999999,
+            "cpuMs": 655.853,
+            "maxLoopGapMs": 546.6798430000001,
+            "rssBytes": 539488256,
+            "heapDeltaBytes": 179972587,
+            "rssDeltaBytes": 424996864,
+            "rchar": 133290392,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.27,
+              10.9,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 3,
+            "utc": "2026-10-18T19:13:52.969Z",
+            "wallMs": 0.3551840000000084,
+            "cpuMs": 0.388,
+            "maxLoopGapMs": 11.182745999999952,
+            "rssBytes": 453103616,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 8312,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.27,
+              10.9,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 4,
+            "utc": "2026-10-18T19:13:53.370Z",
+            "wallMs": 0.2018700000003264,
+            "cpuMs": 0.233,
+            "maxLoopGapMs": 11.306860000000142,
+            "rssBytes": 453103616,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.27,
+              10.9,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 5,
+            "utc": "2026-10-18T19:13:53.773Z",
+            "wallMs": 0.35787200000004304,
+            "cpuMs": 0.404,
+            "maxLoopGapMs": 12.056521999999859,
+            "rssBytes": 453300224,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 120,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.27,
+              10.9,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 6,
+            "utc": "2026-10-18T19:13:54.174Z",
+            "wallMs": 0.17566100000021834,
+            "cpuMs": 0.206,
+            "maxLoopGapMs": 10.896025000000009,
+            "rssBytes": 453300224,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.27,
+              10.9,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 7,
+            "utc": "2026-10-18T19:13:54.575Z",
+            "wallMs": 0.32487700000001496,
+            "cpuMs": 0.353,
+            "maxLoopGapMs": 10.549164000000019,
+            "rssBytes": 453693440,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 120,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.27,
+              10.9,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 8,
+            "utc": "2026-10-18T19:13:54.978Z",
+            "wallMs": 0.22011600000041653,
+            "cpuMs": 0.376,
+            "maxLoopGapMs": 12.882676000000174,
+            "rssBytes": 453693440,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.27,
+              10.9,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 9,
+            "utc": "2026-10-18T19:13:55.387Z",
+            "wallMs": 0.3847959999993691,
+            "cpuMs": 0.736,
+            "maxLoopGapMs": 18.607897999999295,
+            "rssBytes": 453685248,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 120,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.27,
+              10.9,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 10,
+            "utc": "2026-10-18T19:13:55.792Z",
+            "wallMs": 0.21610400000008667,
+            "cpuMs": 0.26,
+            "maxLoopGapMs": 14.444112999999561,
+            "rssBytes": 453660672,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.27,
+              10.9,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 11,
+            "utc": "2026-10-18T19:13:56.209Z",
+            "wallMs": 0.5365499999998065,
+            "cpuMs": 0.647,
+            "maxLoopGapMs": 27.632955000000038,
+            "rssBytes": 453464064,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 236,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.17,
+              10.86,
+              8.77
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:13:56.210Z"
+          }
+        ],
+        [
+          {
+            "event": "start",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:14:11.931Z",
+            "readiness": null,
+            "load": [
+              9.42,
+              10.83,
+              8.8
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-evict",
+            "index": 0,
+            "utc": "2026-10-18T19:14:12.955Z",
+            "wallMs": 638.7172459999999,
+            "cpuMs": 222.385,
+            "maxLoopGapMs": 634.321494,
+            "rssBytes": 197246976,
+            "heapDeltaBytes": 52079828,
+            "rssDeltaBytes": 149549056,
+            "rchar": 36618619,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 0
+            },
+            "load": [
+              9.42,
+              10.83,
+              8.8
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 1,
+            "utc": "2026-10-18T19:14:13.344Z",
+            "wallMs": 0.33950000000004366,
+            "cpuMs": 0.388,
+            "maxLoopGapMs": 0.15052399999990485,
+            "rssBytes": 172679168,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 8348,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 0
+            },
+            "load": [
+              9.42,
+              10.83,
+              8.8
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 2,
+            "utc": "2026-10-18T19:14:14.253Z",
+            "wallMs": 510.46963000000005,
+            "cpuMs": 615.132,
+            "maxLoopGapMs": 519.837781,
+            "rssBytes": 543383552,
+            "heapDeltaBytes": 177168305,
+            "rssDeltaBytes": 439590912,
+            "rchar": 133290004,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.42,
+              10.83,
+              8.8
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 3,
+            "utc": "2026-10-18T19:14:14.654Z",
+            "wallMs": 0.355279999999766,
+            "cpuMs": 0.387,
+            "maxLoopGapMs": 10.297767999999905,
+            "rssBytes": 453414912,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 8312,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.42,
+              10.83,
+              8.8
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 4,
+            "utc": "2026-10-18T19:14:15.054Z",
+            "wallMs": 0.19352399999979752,
+            "cpuMs": 0.221,
+            "maxLoopGapMs": 10.466349999999693,
+            "rssBytes": 453414912,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.42,
+              10.83,
+              8.8
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 5,
+            "utc": "2026-10-18T19:14:15.459Z",
+            "wallMs": 0.36483300000008967,
+            "cpuMs": 0.401,
+            "maxLoopGapMs": 14.797897999999805,
+            "rssBytes": 453611520,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 120,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.42,
+              10.83,
+              8.8
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 6,
+            "utc": "2026-10-18T19:14:15.869Z",
+            "wallMs": 0.30986399999983405,
+            "cpuMs": 0.355,
+            "maxLoopGapMs": 19.87796900000012,
+            "rssBytes": 453808128,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              9.42,
+              10.83,
+              8.8
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 7,
+            "utc": "2026-10-18T19:14:16.287Z",
+            "wallMs": 0.500412000000324,
+            "cpuMs": 0.542,
+            "maxLoopGapMs": 27.394572999999582,
+            "rssBytes": 454000640,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 120,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.99,
+              10.72,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 8,
+            "utc": "2026-10-18T19:14:16.689Z",
+            "wallMs": 0.20521199999984674,
+            "cpuMs": 0.453,
+            "maxLoopGapMs": 11.633158999999978,
+            "rssBytes": 454197248,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.99,
+              10.72,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 9,
+            "utc": "2026-10-18T19:14:17.092Z",
+            "wallMs": 0.39389199999914126,
+            "cpuMs": 0.826,
+            "maxLoopGapMs": 12.802598999999645,
+            "rssBytes": 454168576,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 120,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.99,
+              10.72,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 10,
+            "utc": "2026-10-18T19:14:17.494Z",
+            "wallMs": 0.3587969999998677,
+            "cpuMs": 0.523,
+            "maxLoopGapMs": 12.139908000000105,
+            "rssBytes": 454168576,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.99,
+              10.72,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 11,
+            "utc": "2026-10-18T19:14:17.895Z",
+            "wallMs": 0.37283599999955186,
+            "cpuMs": 0.438,
+            "maxLoopGapMs": 10.737113000000136,
+            "rssBytes": 448000000,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 120,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.99,
+              10.72,
+              8.77
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:14:17.895Z"
+          }
+        ]
+      ],
+      "T6-pass": [
+        [
+          {
+            "event": "start",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:13:57.050Z",
+            "readiness": {
+              "condition": "before each run the done world's 60 s archive copy is cleared and the hot list read once, as between production passes; frame copies, recovery and media removal left out"
+            },
+            "load": [
+              9.17,
+              10.86,
+              8.77
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-pass",
+            "index": 0,
+            "utc": "2026-10-18T19:13:59.652Z",
+            "wallMs": 1569.7901010000003,
+            "cpuMs": 1679.076,
+            "maxLoopGapMs": 1601.6925930000002,
+            "rssBytes": 915431424,
+            "heapDeltaBytes": 328998155,
+            "rssDeltaBytes": 724979712,
+            "rchar": 1050493020,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              9.17,
+              10.86,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 1,
+            "utc": "2026-10-18T19:14:00.160Z",
+            "wallMs": 64.86767099999997,
+            "cpuMs": 92.592,
+            "maxLoopGapMs": 117.33242599999994,
+            "rssBytes": 681783296,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 11419648,
+            "rchar": 5338596,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              9.17,
+              10.86,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 2,
+            "utc": "2026-10-18T19:14:00.664Z",
+            "wallMs": 62.28491199999962,
+            "cpuMs": 77.099,
+            "maxLoopGapMs": 113.3322860000003,
+            "rssBytes": 699629568,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 25362432,
+            "rchar": 5313752,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              9.17,
+              10.86,
+              8.77
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 3,
+            "utc": "2026-10-18T19:14:01.173Z",
+            "wallMs": 68.80684199999996,
+            "cpuMs": 94.464,
+            "maxLoopGapMs": 117.93391299999985,
+            "rssBytes": 681992192,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 20598784,
+            "rchar": 5314110,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              9.32,
+              10.86,
+              8.79
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 4,
+            "utc": "2026-10-18T19:14:01.693Z",
+            "wallMs": 72.09032600000046,
+            "cpuMs": 78.283,
+            "maxLoopGapMs": 129.54310499999974,
+            "rssBytes": 680427520,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 20856832,
+            "rchar": 5314235,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              9.32,
+              10.86,
+              8.79
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 5,
+            "utc": "2026-10-18T19:14:02.196Z",
+            "wallMs": 63.020135000000664,
+            "cpuMs": 73,
+            "maxLoopGapMs": 112.04267000000073,
+            "rssBytes": 682864640,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 20602880,
+            "rchar": 5314025,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              9.32,
+              10.86,
+              8.79
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:14:02.196Z"
+          }
+        ],
+        [
+          {
+            "event": "start",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:14:19.150Z",
+            "readiness": {
+              "condition": "before each run the done world's 60 s archive copy is cleared and the hot list read once, as between production passes; frame copies, recovery and media removal left out"
+            },
+            "load": [
+              8.99,
+              10.72,
+              8.77
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-pass",
+            "index": 0,
+            "utc": "2026-10-18T19:14:22.244Z",
+            "wallMs": 1931.7456450000002,
+            "cpuMs": 1873.076,
+            "maxLoopGapMs": 1970.3947589999998,
+            "rssBytes": 729010176,
+            "heapDeltaBytes": 319202663,
+            "rssDeltaBytes": 729796608,
+            "rchar": 1050497989,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              8.99,
+              10.69,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 1,
+            "utc": "2026-10-18T19:14:22.753Z",
+            "wallMs": 63.99231299999974,
+            "cpuMs": 91.356,
+            "maxLoopGapMs": 117.39842199999975,
+            "rssBytes": 672481280,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 16302080,
+            "rchar": 5338623,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              8.99,
+              10.69,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 2,
+            "utc": "2026-10-18T19:14:23.251Z",
+            "wallMs": 59.13254400000005,
+            "cpuMs": 70.208,
+            "maxLoopGapMs": 107.60020700000041,
+            "rssBytes": 696438784,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 25165824,
+            "rchar": 5313779,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              8.99,
+              10.69,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 3,
+            "utc": "2026-10-18T19:14:23.754Z",
+            "wallMs": 64.80916199999956,
+            "cpuMs": 85.194,
+            "maxLoopGapMs": 112.35175100000015,
+            "rssBytes": 671879168,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 26345472,
+            "rchar": 5313974,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              8.99,
+              10.69,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 4,
+            "utc": "2026-10-18T19:14:24.254Z",
+            "wallMs": 64.69588599999952,
+            "cpuMs": 70.79,
+            "maxLoopGapMs": 110.30615900000066,
+            "rssBytes": 671862784,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 22413312,
+            "rchar": 5314142,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              8.99,
+              10.69,
+              8.78
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 5,
+            "utc": "2026-10-18T19:14:24.750Z",
+            "wallMs": 60.855225999999675,
+            "cpuMs": 71.941,
+            "maxLoopGapMs": 105.38546600000063,
+            "rssBytes": 674492416,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 22020096,
+            "rchar": 5314014,
+            "result": {
+              "ran": true
+            },
+            "load": [
+              8.99,
+              10.69,
+              8.78
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:14:24.750Z"
+          }
+        ]
+      ],
+      "profile": [
+        [
+          {
+            "target": "done",
+            "load": [
+              9.32,
+              10.86,
+              8.79
+            ],
+            "archiveMutableSamples": 0,
+            "samples": 61,
+            "top": [
+              [
+                "src/lib/done/project.ts projectDoneItems",
+                59
+              ],
+              [
+                "src/lib/done/sweep.ts ",
+                59
+              ],
+              [
+                "src/lib/done/candidates.ts doneCandidates",
+                31
+              ],
+              [
+                "src/lib/done/world.ts quietly",
+                19
+              ],
+              [
+                "src/lib/done/world.ts ",
+                14
+              ],
+              [
+                "src/lib/state/sqliteStateStore.ts ",
+                10
+              ],
+              [
+                "src/lib/state/sqliteStateStore.ts patchSync",
+                10
+              ],
+              [
+                "src/lib/done/store.ts writeDoneProjection",
+                10
+              ],
+              [
+                "src/lib/done/candidates.ts limitCandidates",
+                9
+              ],
+              [
+                "src/lib/done/candidates.ts ",
+                8
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "target": "done",
+            "load": [
+              8.67,
+              10.59,
+              8.75
+            ],
+            "archiveMutableSamples": 0,
+            "samples": 59,
+            "top": [
+              [
+                "src/lib/done/project.ts projectDoneItems",
+                57
+              ],
+              [
+                "src/lib/done/sweep.ts ",
+                57
+              ],
+              [
+                "src/lib/done/candidates.ts doneCandidates",
+                29
+              ],
+              [
+                "src/lib/done/world.ts quietly",
+                16
+              ],
+              [
+                "src/lib/done/world.ts ",
+                15
+              ],
+              [
+                "src/lib/state/sqliteStateStore.ts patchSync",
+                10
+              ],
+              [
+                "src/lib/done/store.ts writeDoneProjection",
+                10
+              ],
+              [
+                "src/lib/done/candidates.ts limitCandidates",
+                9
+              ],
+              [
+                "src/lib/state/sqliteStateStore.ts ",
+                9
+              ],
+              [
+                "src/lib/readAttribution.ts sync",
+                8
+              ]
+            ]
+          }
+        ]
+      ],
+      "T6-pass-albums": [
+        [
+          {
+            "event": "start",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:17:10.382Z",
+            "readiness": {
+              "condition": "before each run the done world's 60 s archive copy is cleared and the hot list read once, as between production passes; frame copies, recovery and media removal left out"
+            },
+            "load": [
+              6.96,
+              9.02,
+              8.44
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-pass",
+            "index": 0,
+            "utc": "2026-10-18T19:17:12.306Z",
+            "wallMs": 1272.547356,
+            "cpuMs": 1529.946,
+            "maxLoopGapMs": 1195.44403,
+            "rssBytes": 775110656,
+            "heapDeltaBytes": 322363555,
+            "rssDeltaBytes": 718462976,
+            "rchar": 998987716,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              6.88,
+              8.97,
+              8.43
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 1,
+            "utc": "2026-10-18T19:17:12.833Z",
+            "wallMs": 88.72188199999982,
+            "cpuMs": 122.609,
+            "maxLoopGapMs": 63.18038200000001,
+            "rssBytes": 780333056,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 5644288,
+            "rchar": 4288432,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              6.88,
+              8.97,
+              8.43
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 2,
+            "utc": "2026-10-18T19:17:13.366Z",
+            "wallMs": 94.78881899999988,
+            "cpuMs": 121.353,
+            "maxLoopGapMs": 68.74612000000025,
+            "rssBytes": 692195328,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 8515584,
+            "rchar": 4055050,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              6.88,
+              8.97,
+              8.43
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 3,
+            "utc": "2026-10-18T19:17:13.901Z",
+            "wallMs": 91.0002629999999,
+            "cpuMs": 106.632,
+            "maxLoopGapMs": 70.65771499999983,
+            "rssBytes": 713428992,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 24576000,
+            "rchar": 4140431,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              6.88,
+              8.97,
+              8.43
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 4,
+            "utc": "2026-10-18T19:17:14.429Z",
+            "wallMs": 86.30972699999938,
+            "cpuMs": 97.674,
+            "maxLoopGapMs": 69.03767599999992,
+            "rssBytes": 694505472,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 2904064,
+            "rchar": 4144760,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              6.88,
+              8.97,
+              8.43
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 5,
+            "utc": "2026-10-18T19:17:14.945Z",
+            "wallMs": 80.32350899999983,
+            "cpuMs": 89.596,
+            "maxLoopGapMs": 59.67919499999971,
+            "rssBytes": 693391360,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 18087936,
+            "rchar": 4099458,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              6.88,
+              8.97,
+              8.43
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:17:14.945Z"
+          }
+        ],
+        [
+          {
+            "event": "start",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:17:18.185Z",
+            "readiness": {
+              "condition": "before each run the done world's 60 s archive copy is cleared and the hot list read once, as between production passes; frame copies, recovery and media removal left out"
+            },
+            "load": [
+              7.69,
+              9.1,
+              8.48
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-pass",
+            "index": 0,
+            "utc": "2026-10-18T19:17:20.286Z",
+            "wallMs": 1358.759708,
+            "cpuMs": 1588.02,
+            "maxLoopGapMs": 1282.4167439999999,
+            "rssBytes": 903172096,
+            "heapDeltaBytes": 321652959,
+            "rssDeltaBytes": 718655488,
+            "rchar": 998988986,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              7.69,
+              9.1,
+              8.48
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 1,
+            "utc": "2026-10-18T19:17:20.833Z",
+            "wallMs": 101.15248599999995,
+            "cpuMs": 129.45,
+            "maxLoopGapMs": 71.84677999999985,
+            "rssBytes": 704626688,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 15405056,
+            "rchar": 4288561,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              7.69,
+              9.1,
+              8.48
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 2,
+            "utc": "2026-10-18T19:17:21.375Z",
+            "wallMs": 100.26874799999996,
+            "cpuMs": 128.954,
+            "maxLoopGapMs": 80.80644500000017,
+            "rssBytes": 686682112,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": -3809280,
+            "rchar": 4055128,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              8.12,
+              9.17,
+              8.5
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 3,
+            "utc": "2026-10-18T19:17:21.899Z",
+            "wallMs": 87.41124200000013,
+            "cpuMs": 101.521,
+            "maxLoopGapMs": 65.848931,
+            "rssBytes": 678711296,
+            "heapDeltaBytes": 1749779,
+            "rssDeltaBytes": 16908288,
+            "rchar": 4140625,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              8.12,
+              9.17,
+              8.5
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 4,
+            "utc": "2026-10-18T19:17:22.427Z",
+            "wallMs": 92.30249099999946,
+            "cpuMs": 104.065,
+            "maxLoopGapMs": 70.21759699999984,
+            "rssBytes": 684507136,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 12410880,
+            "rchar": 4144760,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              8.12,
+              9.17,
+              8.5
+            ]
+          },
+          {
+            "name": "T6-pass",
+            "index": 5,
+            "utc": "2026-10-18T19:17:22.949Z",
+            "wallMs": 82.81917700000031,
+            "cpuMs": 92.482,
+            "maxLoopGapMs": 60.717405999999755,
+            "rssBytes": 699977728,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 24772608,
+            "rchar": 4099353,
+            "result": {
+              "ran": true,
+              "albumLookups": 4
+            },
+            "load": [
+              8.12,
+              9.17,
+              8.5
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-pass",
+            "utc": "2026-10-18T19:17:22.950Z"
+          }
+        ]
+      ],
+      "profile-albums": [
+        [
+          {
+            "target": "done",
+            "load": [
+              7.69,
+              9.1,
+              8.48
+            ],
+            "archiveMutableSamples": 0,
+            "albumLookups": 4,
+            "samples": 86,
+            "top": [
+              [
+                "src/lib/done/project.ts projectDoneItems",
+                83
+              ],
+              [
+                "src/lib/done/sweep.ts ",
+                37
+              ],
+              [
+                "src/lib/done/frames.ts lookupDoneFrame",
+                37
+              ],
+              [
+                "src/lib/done/world.ts quietly",
+                27
+              ],
+              [
+                "src/lib/done/world.ts ",
+                23
+              ],
+              [
+                "src/lib/taskAlbum/album.ts readTaskAlbum",
+                23
+              ],
+              [
+                "src/lib/taskAlbum/sources.ts taskAlbumTranscripts",
+                22
+              ],
+              [
+                "src/lib/taskAlbum/album.ts collect",
+                22
+              ],
+              [
+                "src/lib/done/world.ts album",
+                22
+              ],
+              [
+                "src/lib/done/project.ts album",
+                22
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "target": "done",
+            "load": [
+              8.12,
+              9.17,
+              8.5
+            ],
+            "archiveMutableSamples": 0,
+            "albumLookups": 4,
+            "samples": 81,
+            "top": [
+              [
+                "src/lib/done/project.ts projectDoneItems",
+                80
+              ],
+              [
+                "src/lib/done/sweep.ts ",
+                37
+              ],
+              [
+                "src/lib/done/frames.ts lookupDoneFrame",
+                35
+              ],
+              [
+                "src/lib/done/world.ts quietly",
+                25
+              ],
+              [
+                "src/lib/done/world.ts ",
+                21
+              ],
+              [
+                "src/lib/taskAlbum/sources.ts taskAlbumTranscripts",
+                21
+              ],
+              [
+                "src/lib/taskAlbum/album.ts collect",
+                21
+              ],
+              [
+                "src/lib/taskAlbum/album.ts readTaskAlbum",
+                21
+              ],
+              [
+                "src/lib/done/world.ts album",
+                21
+              ],
+              [
+                "src/lib/done/project.ts album",
+                21
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "after512": {
+      "T6-evict": [
+        [
+          {
+            "event": "start",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:14:28.302Z",
+            "readiness": null,
+            "load": [
+              8.67,
+              10.59,
+              8.75
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-evict",
+            "index": 0,
+            "utc": "2026-10-18T19:14:28.931Z",
+            "wallMs": 243.22720900000002,
+            "cpuMs": 251.68,
+            "maxLoopGapMs": 239.23433899999992,
+            "rssBytes": 197025792,
+            "heapDeltaBytes": 52073977,
+            "rssDeltaBytes": 144838656,
+            "rchar": 36614587,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 0
+            },
+            "load": [
+              8.67,
+              10.59,
+              8.75
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 1,
+            "utc": "2026-10-18T19:14:29.322Z",
+            "wallMs": 0.3517749999998614,
+            "cpuMs": 0.408,
+            "maxLoopGapMs": 0.6425930000000335,
+            "rssBytes": 175403008,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 8313,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 0
+            },
+            "load": [
+              8.67,
+              10.59,
+              8.75
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 2,
+            "utc": "2026-10-18T19:14:30.227Z",
+            "wallMs": 506.6388360000001,
+            "cpuMs": 608.016,
+            "maxLoopGapMs": 515.403552,
+            "rssBytes": 538337280,
+            "heapDeltaBytes": 178242062,
+            "rssDeltaBytes": 428920832,
+            "rchar": 133290105,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.67,
+              10.59,
+              8.75
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 3,
+            "utc": "2026-10-18T19:14:30.640Z",
+            "wallMs": 0.6221580000001268,
+            "cpuMs": 0.731,
+            "maxLoopGapMs": 22.796719999999823,
+            "rssBytes": 460648448,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 8434,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.67,
+              10.59,
+              8.75
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 4,
+            "utc": "2026-10-18T19:14:31.041Z",
+            "wallMs": 0.1995999999999185,
+            "cpuMs": 0.226,
+            "maxLoopGapMs": 10.48305100000016,
+            "rssBytes": 460431360,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 123,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.67,
+              10.59,
+              8.75
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 5,
+            "utc": "2026-10-18T19:14:31.442Z",
+            "wallMs": 0.39939600000025166,
+            "cpuMs": 0.437,
+            "maxLoopGapMs": 11.181265000000167,
+            "rssBytes": 460627968,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 123,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.38,
+              10.5,
+              8.73
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 6,
+            "utc": "2026-10-18T19:14:31.843Z",
+            "wallMs": 0.17807899999979782,
+            "cpuMs": 0.208,
+            "maxLoopGapMs": 10.607318999999734,
+            "rssBytes": 460824576,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 123,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.38,
+              10.5,
+              8.73
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 7,
+            "utc": "2026-10-18T19:14:32.244Z",
+            "wallMs": 0.30299799999966126,
+            "cpuMs": 0.331,
+            "maxLoopGapMs": 11.00179500000013,
+            "rssBytes": 461021184,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 123,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.38,
+              10.5,
+              8.73
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 8,
+            "utc": "2026-10-18T19:14:32.651Z",
+            "wallMs": 0.3191180000003442,
+            "cpuMs": 0.626,
+            "maxLoopGapMs": 16.160657999999785,
+            "rssBytes": 461414400,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 123,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.38,
+              10.5,
+              8.73
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 9,
+            "utc": "2026-10-18T19:14:33.053Z",
+            "wallMs": 0.3933729999998832,
+            "cpuMs": 0.762,
+            "maxLoopGapMs": 11.542661000000408,
+            "rssBytes": 461611008,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 123,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.38,
+              10.5,
+              8.73
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 10,
+            "utc": "2026-10-18T19:14:33.455Z",
+            "wallMs": 0.24640799999997398,
+            "cpuMs": 0.293,
+            "maxLoopGapMs": 11.917187000000013,
+            "rssBytes": 461807616,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 123,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.38,
+              10.5,
+              8.73
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 11,
+            "utc": "2026-10-18T19:14:33.863Z",
+            "wallMs": 0.4108860000005734,
+            "cpuMs": 0.477,
+            "maxLoopGapMs": 18.18685800000003,
+            "rssBytes": 461807616,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 123,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.38,
+              10.5,
+              8.73
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:14:33.863Z"
+          }
+        ],
+        [
+          {
+            "event": "start",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:14:34.718Z",
+            "readiness": null,
+            "load": [
+              8.38,
+              10.5,
+              8.73
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "T6-evict",
+            "index": 0,
+            "utc": "2026-10-18T19:14:35.374Z",
+            "wallMs": 265.39058099999994,
+            "cpuMs": 284.316,
+            "maxLoopGapMs": 265.412674,
+            "rssBytes": 200577024,
+            "heapDeltaBytes": 53050468,
+            "rssDeltaBytes": 145485824,
+            "rchar": 36614684,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 0
+            },
+            "load": [
+              8.38,
+              10.5,
+              8.73
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 1,
+            "utc": "2026-10-18T19:14:35.760Z",
+            "wallMs": 0.20265900000003967,
+            "cpuMs": 0.244,
+            "maxLoopGapMs": 0.07319800000004761,
+            "rssBytes": 179478528,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 8313,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 0
+            },
+            "load": [
+              8.38,
+              10.5,
+              8.73
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 2,
+            "utc": "2026-10-18T19:14:36.623Z",
+            "wallMs": 465.771516,
+            "cpuMs": 553.766,
+            "maxLoopGapMs": 473.2821550000001,
+            "rssBytes": 544395264,
+            "heapDeltaBytes": 178020241,
+            "rssDeltaBytes": 431280128,
+            "rchar": 133289600,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.43,
+              10.48,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 3,
+            "utc": "2026-10-18T19:14:37.027Z",
+            "wallMs": 0.3892280000000028,
+            "cpuMs": 0.42,
+            "maxLoopGapMs": 13.610074000000168,
+            "rssBytes": 458592256,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 8315,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.43,
+              10.48,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 4,
+            "utc": "2026-10-18T19:14:37.437Z",
+            "wallMs": 0.20177000000012413,
+            "cpuMs": 0.277,
+            "maxLoopGapMs": 19.326178999999684,
+            "rssBytes": 458592256,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 123,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.43,
+              10.48,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 5,
+            "utc": "2026-10-18T19:14:37.843Z",
+            "wallMs": 0.38040900000032707,
+            "cpuMs": 0.433,
+            "maxLoopGapMs": 15.744730000000345,
+            "rssBytes": 458395648,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 123,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.43,
+              10.48,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 6,
+            "utc": "2026-10-18T19:14:38.245Z",
+            "wallMs": 0.16553699999985838,
+            "cpuMs": 0.198,
+            "maxLoopGapMs": 11.721811999999773,
+            "rssBytes": 458788864,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 123,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.43,
+              10.48,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 7,
+            "utc": "2026-10-18T19:14:38.649Z",
+            "wallMs": 0.38952100000005885,
+            "cpuMs": 0.435,
+            "maxLoopGapMs": 13.967368999999962,
+            "rssBytes": 458788864,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 123,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.43,
+              10.48,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 8,
+            "utc": "2026-10-18T19:14:39.050Z",
+            "wallMs": 0.21928200000002107,
+            "cpuMs": 0.385,
+            "maxLoopGapMs": 10.780004999999619,
+            "rssBytes": 458768384,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 123,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.43,
+              10.48,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 9,
+            "utc": "2026-10-18T19:14:39.451Z",
+            "wallMs": 0.40883299999950395,
+            "cpuMs": 0.761,
+            "maxLoopGapMs": 10.942263000000821,
+            "rssBytes": 458764288,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 123,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.43,
+              10.48,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 10,
+            "utc": "2026-10-18T19:14:39.852Z",
+            "wallMs": 0.2051209999999628,
+            "cpuMs": 0.45,
+            "maxLoopGapMs": 11.083991000000424,
+            "rssBytes": 459157504,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 123,
+            "result": {
+              "read": "L",
+              "rows": 251,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.43,
+              10.48,
+              8.74
+            ]
+          },
+          {
+            "name": "T6-evict",
+            "index": 11,
+            "utc": "2026-10-18T19:14:40.260Z",
+            "wallMs": 0.3710369999998875,
+            "cpuMs": 0.421,
+            "maxLoopGapMs": 17.230768999999782,
+            "rssBytes": 449830912,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 123,
+            "result": {
+              "read": "A",
+              "rows": 966,
+              "slots": "pipelines:63.0MiB",
+              "archiveBytes": 228965766
+            },
+            "load": [
+              8.43,
+              10.48,
+              8.74
+            ]
+          },
+          {
+            "event": "end",
+            "name": "T6-evict",
+            "utc": "2026-10-18T19:14:40.260Z"
+          }
+        ]
+      ]
+    }
+  }
+}

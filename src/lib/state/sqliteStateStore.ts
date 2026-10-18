@@ -1,3 +1,4 @@
+import { blockingWaitRole } from "@/lib/blockingWaits";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
 import crypto from "node:crypto";
@@ -536,7 +537,7 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
     throw classifyStateError(error, "state transaction");
   } finally {
     const heldMs = performance.now() - holdStart;
-    if (heldMs >= 50) console.warn("[state transaction-hold]", { collection, heldMs: Math.round(heldMs) });
+    if (heldMs >= 50) console.warn(`[state transaction-hold] ${JSON.stringify({ collection, heldMs: Math.round(heldMs), pid: process.pid, role: blockingWaitRole() })}`);
   }
 }
 
@@ -1182,7 +1183,7 @@ export class SqliteStateCollection<T> {
     }
     const key = this.options.readCacheKey ? JSON.stringify([path.resolve(this.filename), identity,
       this.options.collection, this.options.schemaVersion, this.options.readCacheKey, authority]) : undefined;
-    if (key) this.cacheSlot = collectionReadCache(key);
+    if (key) this.cacheSlot = collectionReadCache(key, this.options.collection === "pipelines_archive");
     return { identity, authority, key };
   }
 
@@ -1197,7 +1198,7 @@ export class SqliteStateCollection<T> {
   private publishCache(value: CollectionCache<T>, context: CollectionReadContext): readonly T[] {
     this.assertReadContext(context);
     if (context.key) {
-      this.cacheSlot = collectionReadCache(context.key);
+      this.cacheSlot = collectionReadCache(context.key, this.options.collection === "pipelines_archive");
       let bytes = 0;
       for (const row of value.records.values()) bytes += row.sourceBytes;
       rememberCollectionReadCache(this.cacheSlot, value, bytes);

@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { NeedsYouBody } from "./needsYouRead";
 import type { SystemAttentionClear } from "./dismissals";
 import { attentionSystemClears, retiredSeatConversations, type ReconcileFacts } from "./reconcile";
@@ -105,7 +106,7 @@ export function startAttentionReconcile(ports: {
   });
   const arm = (delayMs: number) => {
     const timer = schedule(() => {
-      void pass()
+      void withViewerOperation("attention.reconcile", pass)
         .catch((error) => console.error("[attention reconcile] pass failed", error instanceof Error ? error.name : "unknown"))
         .finally(() => {
           if (host[TIMER] === timer) arm(ATTENTION_RECONCILE_INTERVAL_MS);

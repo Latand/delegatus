@@ -24,6 +24,20 @@ export async function loopProfilerEnabled(directory: string) {
   catch { return true; }
 }
 
+/** Read the duration once per deploy; later file reads only check the kill switch. */
+export async function loopProfilerSettings(directory: string, report = (message: string) => console.warn(message)) {
+  let settings;
+  try { settings = await readSmall(path.join(directory, "loop-profiler.json")); }
+  catch { return { enabled: true, armMs: LOOP_PROFILE_ARM_MS }; }
+  const minutes = settings?.armMinutes;
+  let armMs = LOOP_PROFILE_ARM_MS;
+  if (minutes !== undefined) {
+    if (typeof minutes === "number" && Number.isFinite(minutes) && minutes >= 30 && minutes <= 120) armMs = minutes * 60_000;
+    else report("[loop-profiler] invalid armMinutes; expected a number from 30 to 120; using 30 minutes");
+  }
+  return { enabled: settings?.enabled !== false, armMs };
+}
+
 /** Native compiled fixture target; kept beside the serving recorder so the
  * verification can sample a callable emitted into the production bundle. */
 export function syntheticThreeSecondBlockForProfilerFixture() {
@@ -35,7 +49,7 @@ export function syntheticThreeSecondBlockForProfilerFixture() {
 
 /** First start of a deployed revision consumes its opportunity even if the
  * kill switch is set.
- * Same-revision restarts cannot renew the in-memory thirty-minute budget. */
+ * Same-revision restarts cannot renew the in-memory arm budget. */
 export async function claimLoopProfilerDeploy(directory: string, revision: string, at: number) {
   if (!/^[a-f0-9]{7,40}$/.test(revision)) return false;
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -55,12 +69,15 @@ export async function startServingLoopProfiler(monitor: ReturnType<typeof create
   if (env.LLV_STATE_OWNER !== "viewer" || env.NODE_ENV !== "production" || !process.versions.bun || env.NEXT_PHASE?.includes("build")) return;
   const revision = [env.LLV_DIAGNOSTIC_REVISION, env.LLV_HOT_STATE_RELEASE_REVISION].find(value => value && /^[a-f0-9]{7,40}$/.test(value)) ?? "";
   if (!/^[a-f0-9]{7,40}$/.test(revision)) return;
-  const expires = performance.now() + LOOP_PROFILE_ARM_MS;
+  const startedAt = performance.now();
   const directory = path.dirname(statePath("loop-profiler.json"));
   // Diagnostic refusal must never stop serving. No raw errors or paths log.
   try {
     const claimed = await monitor.run("loop-profiler.settings", () => claimLoopProfilerDeploy(directory, revision, Date.now()));
-    if (!claimed || !await monitor.run("loop-profiler.settings", () => loopProfilerEnabled(directory))) return;
+    if (!claimed) return;
+    const settings = await monitor.run("loop-profiler.settings", () => loopProfilerSettings(directory));
+    if (!settings.enabled) return;
+    const expires = startedAt + settings.armMs;
     // Next leaves the Bun builtin to the serving interpreter. No other process
     // imports the profiler, and a disabled startup never loads it.
     const { profile } = await monitor.run("loop-profiler.settings", () => import(/* webpackIgnore: true */ "bun:jsc"));

@@ -315,7 +315,7 @@ const legacyTimer = legacyScheduler ? setInterval(() => {
    ticks while the sweep itself never blocks the socket loop noticeably. The
    reporter keeps the ten-second cadence out of the log stream (#1216). */
 const receiptSweepReporter = new ReceiptSweepReporter({ debug: receiptSweepDebugEnabled() });
-const receiptSweepTimer = journal.isWritable() ? setInterval(() => {
+const receiptSweepTimer = journal.isWritable() ? setInterval(() => viewerLoopMonitor.run("runtime-journal.receipt-sweep", () => {
   if (!journal.isWritable()) return;
   try {
     const line = receiptSweepReporter.record(journal.maintainProducerReceipts(), Date.now());
@@ -323,7 +323,7 @@ const receiptSweepTimer = journal.isWritable() ? setInterval(() => {
   } catch (error) {
     console.error(`[runtime journal] receipt sweep failed; next tick will retry: ${error instanceof Error ? error.message : String(error)}`);
   }
-}, 10_000) : null;
+}), 10_000) : null;
 
 const JOURNAL_MAINTENANCE_INTERVAL_MS = 60_000;
 const JOURNAL_VACUUM_RETRY_MS = 60 * 60 * 1_000;
