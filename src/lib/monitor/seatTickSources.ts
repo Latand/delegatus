@@ -2378,7 +2378,7 @@ export async function gatherSeatTickInput(
   const seat = await seatInput(canonical, policy, sources);
 
   if (!state.unreachableSince && seat?.activity?.lifecycle === "gone") {
-    state = { ...state, unreachableSince: new Date(now).toISOString() };
+    state = { ...state, unreachableSince: state.lastWakeAt ?? new Date(now).toISOString() };
   }
   const catchUp = !!seatTickCatchUp({ state, now, settings, seat });
   const hotLanes = sources.pipelines();

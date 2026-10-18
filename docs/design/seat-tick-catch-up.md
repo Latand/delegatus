@@ -8,8 +8,9 @@ identity checks and seat-epoch fences remain in the tick controller.
 
 The controller records the first observed unreachable time. The gather also
 records a gone seat observed by liveness. Failed delivery preserves this time.
-The observation bounds the known outage; it does not claim the host died at
-that instant. A landed wake clears it. Once it exceeds the configured wake
+For a legacy row without this field, the last confirmed wake bounds the
+undelivered window. The wake says host loss may have occurred later; the bound
+does not claim the host died at that instant. A landed wake clears it. Once it exceeds the configured wake
 interval, a wake becomes a catch-up.
 
 The catch-up gathers all retained, actionable held outcomes through its snapshot:

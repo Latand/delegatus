@@ -164,3 +164,15 @@ test("one catch-up crosses the ready-child page and projection limits", async ()
   await runSeatTickCheck(f.project, rig.deps);
   expect(rig.sent).toHaveLength(1);
 }, 60_000);
+
+test("a legacy dead-seat row catches up its entire pre-upgrade delivery gap", async () => {
+  const rig = recoveryRig({ state: { ...OVERDUE, lastWakeAt: FROM },
+    seatActivity: { conversationId: CONVERSATION, lifecycle: "gone", reason: "host_gone_turn_settled", host: { state: "gone", kind: "structured", pid: null } } });
+  rig.deps.mcpHealth = () => ({ status: "dead", detail: "predecessor MCP unavailable" });
+  expect(rig.deps.readState!(PROJECT).unreachableSince ?? null).toBeNull();
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  for (const lane of lanes) expect(rig.sent[0]!.text).toContain(lane.id);
+  expect(rig.sent[0]!.text).toContain("host loss may have occurred later");
+  expect(rig.deps.readState!(PROJECT).announcedLanes).toHaveLength(35);
+});

@@ -1646,7 +1646,9 @@ async function check(
   sources.memoryProblems?.(canonical, openingRow.itemsShown ?? [], openingSeat?.conversationId ? { conversationId: openingSeat.conversationId, seatEpoch: openingSeat.seatEpoch } : null);
   let opened = seatTickStateForEpoch(openingRow, openingSeat?.seatEpoch ?? null);
   if (openingSeat && mcpHealthFor(openingSeat, opening).status === "dead" && !opened.unreachableSince) {
-    opened = { ...opened, unreachableSince: new Date(opening).toISOString() };
+    // Legacy rows have no outage marker. Their last confirmed wake bounds
+    // the undelivered window, so recovery does not replay that backlog in batches.
+    opened = { ...opened, unreachableSince: opened.lastWakeAt ?? new Date(opening).toISOString() };
     writeState(canonical, opened);
     opened = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
   }
