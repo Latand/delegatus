@@ -58,7 +58,7 @@ export function isEvidenceImage(pathname: string): boolean {
    that handed them out would let any caller around that fence, so no path
    under one is admitted, as written or after its links resolve. */
 export function fencedStores(): string[] {
-  return [statePath("prototype-reviews")];
+  return [statePath("prototype-reviews"), statePath("done-media")];
 }
 
 /** Whether a path, as written or resolved, lies in a fenced store. */

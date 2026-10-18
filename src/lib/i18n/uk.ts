@@ -3594,6 +3594,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "done.group.expand": "Розгорнути «{group}»",
   "done.group.collapse": "Згорнути «{group}»",
   "done.thumbOpen": "Відкрити зображення: {title}",
+  "done.framesMissing": "Кадри не збереглися",
   "done.meta.merged": "злито {time}",
   "done.meta.laneDone": "лінію завершено {time}",
   "done.meta.taskDone": "задачу закрито {time}",

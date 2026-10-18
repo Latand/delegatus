@@ -6,7 +6,7 @@ import { NextRequest } from "next/server";
 
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { resetDoneProjectionThrottleForTests, type DoneWorld } from "@/lib/done/project";
-import { readDoneRows, resetDoneCollectionsForTests } from "@/lib/done/store";
+import { readDoneRows, resetDoneCollectionsForTests, writeDoneProjection } from "@/lib/done/store";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { doneAcknowledgeHandler, doneReadHandler } from "./handler";
@@ -59,6 +59,21 @@ const post = (body: unknown, headers: Record<string, string> = {}) => new NextRe
   method: "POST", headers: { Host: "localhost", "Content-Type": "application/json", ...headers }, body: typeof body === "string" ? body : JSON.stringify(body),
 });
 const done = (id: string, at: number) => ({ id, project: "repo-a", status: "done", doneAt: new Date(at).toISOString(), text: `Задача ${id}`, assignments: [], createdAt: new Date(T0 - 3_600_000).toISOString(), updatedAt: new Date(at).toISOString() }) as unknown as BoardTask;
+
+test("the production read answers its persisted bootstrap while a frame copy is held",async () => {
+  await read(); now+=60_000; tasks=[done("old",T0+10_000)];await read();
+  const item=readDoneRows()[0]!;
+  writeDoneProjection({upserts:[{...item,look:"visible",frame:{src:"/api/artifact?path=old.png",caption:"Old frame"}}]},now);
+  resetDoneProjectionThrottleForTests();
+  let release!:()=>void, started!:()=>void;
+  const held=new Promise<void>(resolve=>{release=resolve;});const ready=new Promise<void>(resolve=>{started=resolve;});
+  const current=world(); current.preserveFrame=async(_key,frame)=>{started();await held;return {frame:{...frame,src:"/api/image?done=task%3Aold&media=saved"},settled:true};};
+  const fast=doneReadHandler({world:()=>current,now:()=>now,deferProjection:true});
+  const response=await fast();await ready;
+  expect((await response.json()).items[0].frame.src).toBe("/api/artifact?path=old.png");
+  release();await new Promise<void>(resolve=>setImmediate(resolve));
+  expect((await (await fast()).json()).items[0].frame.src).toBe("/api/image?done=task%3Aold&media=saved");
+});
 
 test("GET projects the sources and answers the items still waiting, newest first", async () => {
   expect(await (await read()).json()).toMatchObject({ ok: true, items: [] });

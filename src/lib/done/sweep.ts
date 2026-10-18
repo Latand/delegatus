@@ -22,7 +22,7 @@ async function releaseOwnsTraffic(): Promise<boolean> {
 
 async function productionWorld(): Promise<DoneWorld> {
   const { productionDoneWorld } = await import("./world");
-  return productionDoneWorld();
+  return productionDoneWorld({ recover: true });
 }
 
 /** One projection, unless another release owns traffic. Answers whether it ran. */
@@ -31,7 +31,9 @@ export async function runDoneSweepOnce(ports: {
   ownsTraffic?: () => Promise<boolean>;
 } = {}): Promise<boolean> {
   if (!(await (ports.ownsTraffic ?? releaseOwnsTraffic)())) return false;
-  await projectDoneItems(await (ports.world ?? productionWorld)());
+  // A browser polling just ahead of every tick must not starve background
+  // recovery, which alone may consult retained PR and git images.
+  await projectDoneItems(await (ports.world ?? productionWorld)(), { force: true });
   return true;
 }
 

@@ -7,7 +7,7 @@ import { doneAcknowledgeHandler, doneReadHandler } from "./handler";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const read = doneReadHandler({ world: productionDoneWorld, now: Date.now });
+const read = doneReadHandler({ world: productionDoneWorld, now: Date.now, deferProjection: true });
 const acknowledge = doneAcknowledgeHandler({ now: Date.now });
 
 export function GET(): Promise<Response> {
