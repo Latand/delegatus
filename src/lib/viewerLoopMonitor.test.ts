@@ -3,6 +3,22 @@ import { createViewerLoopMonitor } from "./viewerLoopMonitor";
 import { performanceProcess, createPerformanceSpans } from "./performanceSpans";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 
+test("long gaps without a recorder always explain their profiling status", () => {
+  let at = 0;
+  const lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, createPerformanceSpans(() => at));
+  try {
+    at = 2009; monitor.tick();
+    at += 2009.6; monitor.tick();
+    at += 2010; monitor.tick();
+    at += 3010; monitor.tick();
+    const gaps = lines.map(line => JSON.parse(line.slice("[viewer loop-gap] ".length)));
+    expect(gaps.map(gap => gap.gapMs)).toEqual([1999, 2000, 2000, 3000]);
+    expect(gaps[0]).not.toHaveProperty("jsProfile");
+    for (const gap of gaps.slice(1)) expect(gap.jsProfile).toEqual({ status: "not-armed", reason: "profiler-not-started" });
+  } finally { monitor.stop(); }
+});
+
 test("every loop-gap carries memory signals; ordinary ticks advance the heap baseline", () => {
   let at = 0, heap = 1000;
   const lines: string[] = [];

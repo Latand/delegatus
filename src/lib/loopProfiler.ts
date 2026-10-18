@@ -4,7 +4,6 @@ import { readFileSync, statSync } from "node:fs";
 
 export const LOOP_PROFILE_WINDOW_MS = 5000;
 export const LOOP_PROFILE_ARM_MS = 30 * 60_000;
-export const LOOP_PROFILE_COOLDOWN_MS = 60_000;
 export const LOOP_PROFILE_BYTES = 8192;
 const intervalUs = 10_000, sampleCap = 4096, depthCap = 32, frameCap = 128, topN = 16;
 const sourceFileCap = 8, sourceBytesCap = 2 * 1024 * 1024, sourceFileBytesCap = 1024 * 1024;
@@ -12,7 +11,8 @@ type Frame = { name: string; sourceURL?: string; line: number };
 type SourceMetadata = { bytes: number; nearestNames: string[]; staticNames: Set<string> };
 export type LoopProfile = { traces: { frames: Frame[] }[] };
 type Summary = ReturnType<typeof trimLoopProfile>;
-export type LoopGapProfile = { status: "captured"; from: number; to: number; intervalUs: number; frames: Summary } | { status: "unavailable" };
+export type LoopGapProfile = { status: "captured"; from: number; to: number; intervalUs: number; frames: Summary }
+  | { status: "unavailable" | "not-armed" | "skipped"; reason: string };
 type Emit = (profile: LoopGapProfile) => void;
 
 /** Runtime names can come from computed property keys. Require cached source
@@ -150,19 +150,23 @@ export interface LoopProfilerPorts {
 export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
   let stopped = false, started = false;
   let window: { from: number; pending: Emit[] } | undefined;
-  const enabled = async () => !stopped && ports.now() < expires && await ports.phase("settings", ports.enabled)
-    && !stopped && ports.now() < expires;
+  let inactive: LoopGapProfile = { status: "skipped", reason: "no-active-window" };
+  const enabled = async () => {
+    if (stopped || ports.now() >= expires) return false;
+    const on = await ports.phase("settings", ports.enabled);
+    if (stopped || ports.now() >= expires) return false;
+    if (!on) inactive = { status: "not-armed", reason: "kill-switch" };
+    return on;
+  };
   const capture = async () => {
-    if (!await enabled()) return null;
+    if (!await enabled()) return false;
     const current = window = { from: ports.now(), pending: [] as Emit[] };
-    let long = false;
     try {
       const raw = await ports.phase("collect", () => ports.collect(() => ports.sleep(Math.min(LOOP_PROFILE_WINDOW_MS, expires - ports.now())), intervalUs));
       // A profile timer can recover before the monitor's timer. Observe that
       // recovery while this window still owns its pending gap records.
       ports.flushTick();
       const to = ports.now();
-      long = to - current.from > LOOP_PROFILE_WINDOW_MS + 250 || current.pending.length > 0;
       // No qualifying gap: do not access, walk or retain stackTraces.
       if (current.pending.length) {
         const frames = ports.phase("trim", () => trimLoopProfile(raw.stackTraces as LoopProfile, ports.root));
@@ -170,13 +174,28 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
       }
     } catch {
       stopped = true;
-      for (const emit of current.pending) emit({ status: "unavailable" });
+      inactive = { status: "unavailable", reason: "capture-failed" };
+      for (const emit of current.pending) emit(inactive);
     } finally { window = undefined; }
-    return long;
+    return true;
   };
   return {
     correlate(from: number, to: number, gapMs: number, emit: Emit) {
-      if (!window || gapMs < 2000 || to < window.from || from > ports.now() || window.pending.length >= 4) return false;
+      if (gapMs < 2000) return false;
+      // Every qualifying gap gets either this window's result or an immediate
+      // explanation. Reasons are fixed labels, never native error text.
+      if (!window) {
+        emit(!stopped && ports.now() >= expires ? { status: "not-armed", reason: "arm-expired" } : inactive);
+        return true;
+      }
+      if (to < window.from || from > ports.now()) {
+        emit({ status: "skipped", reason: "outside-window" });
+        return true;
+      }
+      if (window.pending.length >= 4) {
+        emit({ status: "skipped", reason: "pending-limit" });
+        return true;
+      }
       window.pending.push(emit);
       return true;
     },
@@ -184,15 +203,10 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
       if (started) return;
       started = true;
       while (!stopped && ports.now() < expires) {
-        const long = await capture();
-        if (long === null || stopped) break;
-        // The kill switch is read again after this wait, before any collection.
-        if (long) {
-          if (!await enabled()) break;
-          await ports.sleep(Math.min(LOOP_PROFILE_COOLDOWN_MS, Math.max(0, expires - ports.now())));
-        }
+        // Recheck the kill switch at each boundary and keep sampling bursts.
+        if (!await capture()) break;
       }
     },
-    stop() { stopped = true; },
+    stop() { stopped = true; inactive = { status: "not-armed", reason: "stopped" }; },
   };
 }
