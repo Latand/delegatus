@@ -45,7 +45,50 @@ test("warm cached allocations preserve shared-inode, nested-root and namespace-a
     const nested=path.join(tree,"nested");
     expect(await size(cache,tree,new Set(),[nested])).toBe(await allocatedBytes(tree,[nested]));
   }
+
+  // Hard-linked inventories are deliberately fresh; a plain inventory still
+  // demonstrates warm reuse in the same cache.
+  const plain = path.join(root,"plain");fs.mkdirSync(plain);fs.writeFileSync(path.join(plain,"file"),"plain");
+  await size(cache,plain);await size(cache,plain);
   expect(cache.stats.allocationHits).toBeGreaterThan(0);
+});
+
+test("native external hard-link writes bypass cached allocation inventories",async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"sweep-hardlink-"));roots.push(root);
+  const tree=path.join(root,"tree");fs.mkdirSync(tree);
+  const file=path.join(tree,"payload"),peer=path.join(root,"peer"),alias=path.join(peer,"payload");
+  fs.mkdirSync(peer);fs.writeFileSync(file,"seed");fs.linkSync(file,alias);
+  const cache=new WorktreeSweepCache(path.join(root,"cache.json"));caches.push(cache);
+  const observer=fs.watch(peer,{persistent:false});
+  try {
+    const before=await size(cache,tree);
+    expect(before).toBe(await allocatedBytes(tree));
+    await size(cache,tree);
+    expect(cache.stats.allocationHits).toBe(0);
+
+    const changed=new Promise<void>((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error("native peer watch event timed out")),3_000);
+      observer.once("change",()=>{clearTimeout(timer);resolve();});
+      observer.once("error",error=>{clearTimeout(timer);reject(error);});
+    });
+    fs.writeFileSync(alias,"x".repeat(1024*1024));
+    await changed;
+    await new Promise<void>(resolve=>setTimeout(resolve,0));
+
+    const after=await size(cache,tree);
+    expect(after).toBe(await allocatedBytes(tree));
+    expect(after).toBeGreaterThan(before);
+    expect(cache.stats.allocationHits).toBe(0);
+    expect(cache.stats.allocationMisses).toBe(3);
+
+    const secondTree=path.join(root,"second-tree");fs.mkdirSync(secondTree);
+    fs.linkSync(file,path.join(secondTree,"payload"));
+    const seen=new Set<string>();
+    const expectedSeen=new Set<string>();
+    const combined=(await size(cache,tree,seen))+(await size(cache,secondTree,seen));
+    const expected=(await allocatedBytes(tree,[],expectedSeen))+(await allocatedBytes(secondTree,[],expectedSeen));
+    expect(combined).toBe(expected);
+  } finally { observer.close(); }
 });
 
 test("deep invalidation, retention-clock changes, expiry and backward clocks require fresh observations",async()=>{

@@ -121,10 +121,10 @@ export class WorktreeSweepCache {
       const before = this.key(directory);
       const captured = await captureAllocation(directory, excluded);
       if (!captured) return fallback();
-      allocation = captured;
+      allocation = captured.entries;
       // Let pending observer notifications run before publishing a snapshot.
       await new Promise<void>(resolve => setTimeout(resolve, 0));
-      if (row && before === this.key(directory) && allocation.length <= this.bounds.entries) {
+      if (captured.cacheable && row && before === this.key(directory) && allocation.length <= this.bounds.entries) {
         while (this.entries - (row.allocation?.length ?? 0) + allocation.length > this.bounds.entries && this.rows.size > 1)
           this.forget(this.rows.keys().next().value!);
         if (this.rows.get(directory) === row) {
@@ -164,19 +164,20 @@ export class WorktreeSweepCache {
  * aliases and nested roots in the report's current order. A capped walk uses
  * the original measurement rather than caching an order-dependent bound.
  */
-async function captureAllocation(directory: string, excluded: readonly string[]): Promise<Allocation[] | null> {
+async function captureAllocation(directory: string, excluded: readonly string[]): Promise<{ entries: Allocation[]; cacheable: boolean } | null> {
   const exclusions = new Set<string>();
   const identity = (stat: fs.Stats) => `${stat.dev}:${stat.ino}`;
   for (const entry of excluded) {
     try { exclusions.add(identity(await fs.promises.stat(entry))); } catch { /* absent */ }
   }
   let root: fs.Stats;
-  try { root = await fs.promises.stat(directory); } catch { return []; }
-  if (exclusions.has(identity(root))) return [];
+  try { root = await fs.promises.stat(directory); } catch { return { entries: [], cacheable: false }; }
+  if (exclusions.has(identity(root))) return { entries: [], cacheable: true };
   const result: Allocation[] = [[identity(root), 0, -1]];
   const visitedDirectories = new Set([identity(root)]);
   const pending = [{ directory, parent: 0 }];
   let visited = 0;
+  let cacheable = true;
   while (pending.length) {
     const current = pending.pop()!;
     let entries: fs.Dirent[];
@@ -188,6 +189,10 @@ async function captureAllocation(directory: string, excluded: readonly string[])
       let stat: fs.Stats;
       try { stat = await fs.promises.lstat(child); } catch { return null; }
       const id = identity(stat);
+      // A write through an external hard link changes this inode without
+      // notifying any directory observer below the worktree. Keep the fresh
+      // accounting result, but never reuse this inventory on a later sweep.
+      if (entry.isFile() && stat.nlink > 1) cacheable = false;
       if (entry.isDirectory() && (exclusions.has(id) || visitedDirectories.has(id))) continue;
       const index = result.length;
       result.push([id, stat.blocks * 512, current.parent]);
@@ -197,7 +202,7 @@ async function captureAllocation(directory: string, excluded: readonly string[])
       }
     }
   }
-  return result;
+  return { entries: result, cacheable };
 }
 
 
