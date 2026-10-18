@@ -1,0 +1,3388 @@
+{
+  "baseRevision": "f69ba98f92fcd84743c9570ca7a2ba011b474742",
+  "recordedUtc": "2026-10-18T09:46:31.475318+00:00",
+  "sourceSha256": {
+    "scripts/probe-loop-profiler.ts": "e832d268eaba4dc0b1f94678b1af1c21a38eba074bb713bdfa54c4c4ab1a2c89",
+    "scripts/probe-loop-profiler.test.ts": "341ad715e7cfb3b820458ed463ecf28d5bc39c94133865c98551107f851ea2d5"
+  },
+  "commands": [
+    "bun scripts/probe-loop-profiler.ts",
+    "bun scripts/probe-loop-profiler.ts --jsc",
+    "bun scripts/probe-loop-profiler.ts --cost"
+  ],
+  "isolation": {
+    "private": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "LLV_STATE_DIR",
+      "TMPDIR"
+    ],
+    "stateOwner": "unset",
+    "viewerControlUrl": "http://127.0.0.1:1",
+    "admission": "installed scripts/gate-slot.sh"
+  },
+  "resources": {
+    "platform": "linux",
+    "logicalCpus": 24,
+    "affinity": "0-23",
+    "gateCpuQuotaPercent": 300,
+    "gateMemoryMaxBytes": 8589934592,
+    "workSliceCpuQuotaPercent": 1800,
+    "agentsSliceMemoryMaxBytes": 114462744576,
+    "observation": "systemctl --user show owned gate service and ancestor slices; tighter kernel ancestor limits not independently observed",
+    "backgroundWork": "uncontrolled; load averages recorded per child"
+  },
+  "capabilities": {
+    "jsc": {
+      "runtime": "1.4.0",
+      "revision": "34cbb9a40b4bd1bd767d134a7065e66c2432a676",
+      "api": "bun:jsc.profile",
+      "sampleIntervalUs": 10000,
+      "target": {
+        "function": "syntheticThreeSecondBlock",
+        "file": "scripts/probe-loop-profiler.ts",
+        "line": 105,
+        "selfSamples": 299,
+        "totalSamples": 299,
+        "selfWeight": 0.9966666666666667,
+        "totalWeight": 0.9966666666666667
+      },
+      "samples": 300,
+      "requestedStopAfterMs": 100,
+      "actualStopAfterMs": 3000.437485,
+      "exceptionPropagated": true,
+      "cleared": true,
+      "profilerExports": [
+        "profile",
+        "samplingProfilerStackTraces",
+        "startSamplingProfiler"
+      ]
+    },
+    "inspector": {
+      "runtime": "1.4.0",
+      "local": {
+        "js": true,
+        "native": true,
+        "samples": 54,
+        "stoppedAndCleared": true
+      },
+      "independent": {
+        "requestedBeforeRecovery": true,
+        "completedBeforeRecovery": true,
+        "sampledMainControl": false
+      },
+      "gc": {
+        "automaticCoverage": "unknown",
+        "forcedControlSamples": 3,
+        "gcFrames": 0
+      },
+      "producerCap": {
+        "requested": 1,
+        "observed": 54
+      }
+    }
+  },
+  "cost": {
+    "utc": "2026-10-18T09:45:45.769Z",
+    "measurements": [
+      {
+        "repetition": 0,
+        "runtime": "1.4.0",
+        "revision": "34cbb9a40b4bd1bd767d134a7065e66c2432a676",
+        "api": "jsc",
+        "sampleIntervalUs": 10000,
+        "batches": 10,
+        "rows": 10000,
+        "roundsPerBatch": 20,
+        "checksum": 84400000,
+        "loadBefore": [
+          6.42,
+          5.95,
+          5.62
+        ],
+        "loadAfter": [
+          6.23,
+          5.94,
+          5.63
+        ],
+        "measurements": [
+          {
+            "load": "idle",
+            "pair": 0,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.26678600000002,
+              "cpuMs": 0.496
+            },
+            "sampled": {
+              "wallMs": 200.39946199999997,
+              "cpuMs": 0.601
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 1,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.2280189999999,
+              "cpuMs": 0.561
+            },
+            "sampled": {
+              "wallMs": 200.37182400000006,
+              "cpuMs": 0.894
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 2,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.23990700000013,
+              "cpuMs": 0.476
+            },
+            "sampled": {
+              "wallMs": 200.3655879999999,
+              "cpuMs": 0.556
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 3,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.33300900000017,
+              "cpuMs": 0.785
+            },
+            "sampled": {
+              "wallMs": 200.3826449999999,
+              "cpuMs": 0.724
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 4,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.05539799999997,
+              "cpuMs": 0.491
+            },
+            "sampled": {
+              "wallMs": 200.37574099999983,
+              "cpuMs": 0.72
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 5,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.24557400000003,
+              "cpuMs": 0.467
+            },
+            "sampled": {
+              "wallMs": 200.3856920000003,
+              "cpuMs": 0.684
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 6,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.29742199999964,
+              "cpuMs": 0.894
+            },
+            "sampled": {
+              "wallMs": 200.30898200000001,
+              "cpuMs": 0.614
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 7,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.26972400000022,
+              "cpuMs": 0.573
+            },
+            "sampled": {
+              "wallMs": 200.19786599999998,
+              "cpuMs": 0.64
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 8,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.17048099999965,
+              "cpuMs": 0.583
+            },
+            "sampled": {
+              "wallMs": 200.43343800000002,
+              "cpuMs": 0.976
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 9,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.24915099999998,
+              "cpuMs": 0.521
+            },
+            "sampled": {
+              "wallMs": 200.30158100000017,
+              "cpuMs": 0.67
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 10,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.23094799999944,
+              "cpuMs": 0.452
+            },
+            "sampled": {
+              "wallMs": 200.16929999999957,
+              "cpuMs": 0.606
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 11,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.1927999999998,
+              "cpuMs": 0.454
+            },
+            "sampled": {
+              "wallMs": 200.34858499999973,
+              "cpuMs": 0.872
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 12,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.21401100000003,
+              "cpuMs": 0.772
+            },
+            "sampled": {
+              "wallMs": 200.18240700000024,
+              "cpuMs": 0.644
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 13,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.1232310000005,
+              "cpuMs": 3.039
+            },
+            "sampled": {
+              "wallMs": 200.37012700000014,
+              "cpuMs": 0.634
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 14,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.19418199999927,
+              "cpuMs": 2.082
+            },
+            "sampled": {
+              "wallMs": 200.39198400000078,
+              "cpuMs": 0.761
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 15,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.15103799999997,
+              "cpuMs": 0.732
+            },
+            "sampled": {
+              "wallMs": 200.39463699999942,
+              "cpuMs": 0.661
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 16,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.32169599999997,
+              "cpuMs": 0.99
+            },
+            "sampled": {
+              "wallMs": 200.35421700000006,
+              "cpuMs": 0.74
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 17,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.25377599999956,
+              "cpuMs": 0.583
+            },
+            "sampled": {
+              "wallMs": 200.424266,
+              "cpuMs": 0.733
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 18,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.23234200000024,
+              "cpuMs": 0.46
+            },
+            "sampled": {
+              "wallMs": 200.51053599999977,
+              "cpuMs": 1.236
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 19,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.24245999999948,
+              "cpuMs": 0.517
+            },
+            "sampled": {
+              "wallMs": 200.32848599999943,
+              "cpuMs": 0.617
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 0,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 219.14705700000013,
+              "cpuMs": 236.876
+            },
+            "sampled": {
+              "wallMs": 220.73378599999887,
+              "cpuMs": 238.837
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 1,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 222.52540899999985,
+              "cpuMs": 240.405
+            },
+            "sampled": {
+              "wallMs": 218.50224700000035,
+              "cpuMs": 237.651
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 2,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 243.65732299999945,
+              "cpuMs": 261.762
+            },
+            "sampled": {
+              "wallMs": 236.62896600000022,
+              "cpuMs": 254.546
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 3,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 215.31489200000033,
+              "cpuMs": 231.315
+            },
+            "sampled": {
+              "wallMs": 259.87799300000006,
+              "cpuMs": 278.939
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 4,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 216.3192369999997,
+              "cpuMs": 234.679
+            },
+            "sampled": {
+              "wallMs": 213.5041880000008,
+              "cpuMs": 231.899
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 5,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 209.5617889999994,
+              "cpuMs": 226.969
+            },
+            "sampled": {
+              "wallMs": 211.49935800000094,
+              "cpuMs": 231.349
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 6,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 210.1909999999989,
+              "cpuMs": 228.087
+            },
+            "sampled": {
+              "wallMs": 209.40963399999964,
+              "cpuMs": 227.314
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 7,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 205.69550399999935,
+              "cpuMs": 221.267
+            },
+            "sampled": {
+              "wallMs": 240.22289900000033,
+              "cpuMs": 258.787
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 8,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 207.32830699999977,
+              "cpuMs": 222.511
+            },
+            "sampled": {
+              "wallMs": 208.69243900000038,
+              "cpuMs": 225.915
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 9,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 207.40041700000074,
+              "cpuMs": 223.402
+            },
+            "sampled": {
+              "wallMs": 206.53395699999965,
+              "cpuMs": 224.12
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 10,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 209.89480100000037,
+              "cpuMs": 226.108
+            },
+            "sampled": {
+              "wallMs": 207.30310199999985,
+              "cpuMs": 223.519
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 11,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 207.69243800000004,
+              "cpuMs": 225.008
+            },
+            "sampled": {
+              "wallMs": 206.9388689999996,
+              "cpuMs": 224.697
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 12,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 208.12656699999934,
+              "cpuMs": 226.112
+            },
+            "sampled": {
+              "wallMs": 238.34958600000027,
+              "cpuMs": 256.268
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 13,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 255.22674299999926,
+              "cpuMs": 273.103
+            },
+            "sampled": {
+              "wallMs": 247.13553200000024,
+              "cpuMs": 266.92
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 14,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 324.484183999999,
+              "cpuMs": 344.451
+            },
+            "sampled": {
+              "wallMs": 220.65243100000043,
+              "cpuMs": 238.347
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 15,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 256.772191,
+              "cpuMs": 273.98
+            },
+            "sampled": {
+              "wallMs": 254.0114510000003,
+              "cpuMs": 272.169
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 16,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 247.39985399999932,
+              "cpuMs": 266.643
+            },
+            "sampled": {
+              "wallMs": 335.8768490000002,
+              "cpuMs": 355.539
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 17,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 318.0806620000003,
+              "cpuMs": 335.588
+            },
+            "sampled": {
+              "wallMs": 294.4293780000007,
+              "cpuMs": 313.441
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 18,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 221.16375300000072,
+              "cpuMs": 238.58
+            },
+            "sampled": {
+              "wallMs": 218.61954500000138,
+              "cpuMs": 236.252
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 19,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 254.57491500000106,
+              "cpuMs": 272.515
+            },
+            "sampled": {
+              "wallMs": 239.54319399999804,
+              "cpuMs": 257.513
+            }
+          }
+        ]
+      },
+      {
+        "repetition": 0,
+        "runtime": "1.4.0",
+        "revision": "34cbb9a40b4bd1bd767d134a7065e66c2432a676",
+        "api": "inspector",
+        "sampleIntervalUs": 10000,
+        "batches": 10,
+        "rows": 10000,
+        "roundsPerBatch": 20,
+        "checksum": 84400000,
+        "loadBefore": [
+          6.23,
+          5.94,
+          5.63
+        ],
+        "loadAfter": [
+          6.52,
+          6.02,
+          5.66
+        ],
+        "measurements": [
+          {
+            "load": "idle",
+            "pair": 0,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.236062,
+              "cpuMs": 0.462
+            },
+            "sampled": {
+              "wallMs": 200.32747799999993,
+              "cpuMs": 0.614
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 1,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.14181800000006,
+              "cpuMs": 0.684
+            },
+            "sampled": {
+              "wallMs": 200.425116,
+              "cpuMs": 1.074
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 2,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.27168599999982,
+              "cpuMs": 0.579
+            },
+            "sampled": {
+              "wallMs": 200.35648700000002,
+              "cpuMs": 0.6
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 3,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.33396700000003,
+              "cpuMs": 0.883
+            },
+            "sampled": {
+              "wallMs": 200.340326,
+              "cpuMs": 0.622
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 4,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.23245399999996,
+              "cpuMs": 0.674
+            },
+            "sampled": {
+              "wallMs": 200.3720269999999,
+              "cpuMs": 0.771
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 5,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.26254800000015,
+              "cpuMs": 0.518
+            },
+            "sampled": {
+              "wallMs": 200.3349979999998,
+              "cpuMs": 0.587
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 6,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.26256599999988,
+              "cpuMs": 0.87
+            },
+            "sampled": {
+              "wallMs": 200.31590600000027,
+              "cpuMs": 0.622
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 7,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.30887399999983,
+              "cpuMs": 0.428
+            },
+            "sampled": {
+              "wallMs": 200.33395500000006,
+              "cpuMs": 0.72
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 8,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.272066,
+              "cpuMs": 0.555
+            },
+            "sampled": {
+              "wallMs": 200.50732000000016,
+              "cpuMs": 1.225
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 9,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.26736400000027,
+              "cpuMs": 0.472
+            },
+            "sampled": {
+              "wallMs": 200.2067019999995,
+              "cpuMs": 0.598
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 10,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.23392599999988,
+              "cpuMs": 0.421
+            },
+            "sampled": {
+              "wallMs": 200.37730199999987,
+              "cpuMs": 0.658
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 11,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.23061400000006,
+              "cpuMs": 0.682
+            },
+            "sampled": {
+              "wallMs": 200.43992399999934,
+              "cpuMs": 1.016
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 12,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.233655,
+              "cpuMs": 0.732
+            },
+            "sampled": {
+              "wallMs": 200.33277799999996,
+              "cpuMs": 0.685
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 13,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.10080600000038,
+              "cpuMs": 2.984
+            },
+            "sampled": {
+              "wallMs": 200.34690299999966,
+              "cpuMs": 0.678
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 14,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.21450900000036,
+              "cpuMs": 2.159
+            },
+            "sampled": {
+              "wallMs": 200.57349299999987,
+              "cpuMs": 0.989
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 15,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.23687999999947,
+              "cpuMs": 0.592
+            },
+            "sampled": {
+              "wallMs": 200.3787059999995,
+              "cpuMs": 0.891
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 16,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.380048,
+              "cpuMs": 0.996
+            },
+            "sampled": {
+              "wallMs": 200.23631300000034,
+              "cpuMs": 0.75
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 17,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.2445659999994,
+              "cpuMs": 0.434
+            },
+            "sampled": {
+              "wallMs": 200.32336899999973,
+              "cpuMs": 0.593
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 18,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.24124400000073,
+              "cpuMs": 0.493
+            },
+            "sampled": {
+              "wallMs": 200.45828600000004,
+              "cpuMs": 1.119
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 19,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.2386289999995,
+              "cpuMs": 0.575
+            },
+            "sampled": {
+              "wallMs": 200.31892399999924,
+              "cpuMs": 0.691
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 0,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 230.6896629999992,
+              "cpuMs": 243.075
+            },
+            "sampled": {
+              "wallMs": 209.15306899999996,
+              "cpuMs": 224.855
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 1,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 214.5038289999993,
+              "cpuMs": 232.179
+            },
+            "sampled": {
+              "wallMs": 208.107469999999,
+              "cpuMs": 224.775
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 2,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 255.40549199999987,
+              "cpuMs": 272.753
+            },
+            "sampled": {
+              "wallMs": 218.25460199999907,
+              "cpuMs": 235.573
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 3,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 246.39879500000097,
+              "cpuMs": 259.275
+            },
+            "sampled": {
+              "wallMs": 215.6240340000004,
+              "cpuMs": 233.88
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 4,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 238.69757200000095,
+              "cpuMs": 253.135
+            },
+            "sampled": {
+              "wallMs": 249.3357049999995,
+              "cpuMs": 266.153
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 5,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 214.4665959999984,
+              "cpuMs": 231.7
+            },
+            "sampled": {
+              "wallMs": 209.67763299999933,
+              "cpuMs": 228.086
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 6,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 216.78569700000116,
+              "cpuMs": 233.66
+            },
+            "sampled": {
+              "wallMs": 208.36941399999887,
+              "cpuMs": 224.886
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 7,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 213.09688000000097,
+              "cpuMs": 228.829
+            },
+            "sampled": {
+              "wallMs": 207.29530999999952,
+              "cpuMs": 223.326
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 8,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 214.60537999999906,
+              "cpuMs": 227.757
+            },
+            "sampled": {
+              "wallMs": 205.5011680000007,
+              "cpuMs": 221.806
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 9,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 208.26395299999967,
+              "cpuMs": 224.871
+            },
+            "sampled": {
+              "wallMs": 204.87699299999986,
+              "cpuMs": 222.934
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 10,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 207.75831500000095,
+              "cpuMs": 224.856
+            },
+            "sampled": {
+              "wallMs": 205.376205999999,
+              "cpuMs": 222.65
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 11,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 209.8301219999994,
+              "cpuMs": 226.324
+            },
+            "sampled": {
+              "wallMs": 207.47287200000028,
+              "cpuMs": 225.06
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 12,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 211.54469699999936,
+              "cpuMs": 229.229
+            },
+            "sampled": {
+              "wallMs": 207.77905199999987,
+              "cpuMs": 223.92
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 13,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 219.5637000000006,
+              "cpuMs": 236.771
+            },
+            "sampled": {
+              "wallMs": 214.66236800000115,
+              "cpuMs": 232.289
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 14,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 222.40742800000044,
+              "cpuMs": 239.134
+            },
+            "sampled": {
+              "wallMs": 210.52220899999884,
+              "cpuMs": 223.208
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 15,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 217.85796000000119,
+              "cpuMs": 231.916
+            },
+            "sampled": {
+              "wallMs": 219.62813900000037,
+              "cpuMs": 239.268
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 16,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 242.4704359999996,
+              "cpuMs": 258.004
+            },
+            "sampled": {
+              "wallMs": 226.24319200000173,
+              "cpuMs": 244.861
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 17,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 216.62753200000225,
+              "cpuMs": 229.913
+            },
+            "sampled": {
+              "wallMs": 221.3601179999987,
+              "cpuMs": 235.305
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 18,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 232.58654300000126,
+              "cpuMs": 251.182
+            },
+            "sampled": {
+              "wallMs": 215.64474500000142,
+              "cpuMs": 232.729
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 19,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 244.1471730000012,
+              "cpuMs": 261.653
+            },
+            "sampled": {
+              "wallMs": 214.0615480000015,
+              "cpuMs": 232.161
+            }
+          }
+        ]
+      },
+      {
+        "repetition": 1,
+        "runtime": "1.4.0",
+        "revision": "34cbb9a40b4bd1bd767d134a7065e66c2432a676",
+        "api": "inspector",
+        "sampleIntervalUs": 10000,
+        "batches": 6,
+        "rows": 10000,
+        "roundsPerBatch": 20,
+        "checksum": 50800000,
+        "loadBefore": [
+          6.52,
+          6.02,
+          5.66
+        ],
+        "loadAfter": [
+          6.06,
+          5.94,
+          5.64
+        ],
+        "measurements": [
+          {
+            "load": "idle",
+            "pair": 0,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.26966199999998,
+              "cpuMs": 0.574
+            },
+            "sampled": {
+              "wallMs": 200.37007699999992,
+              "cpuMs": 0.658
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 1,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.23685899999987,
+              "cpuMs": 0.671
+            },
+            "sampled": {
+              "wallMs": 200.40322600000013,
+              "cpuMs": 1.148
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 2,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.25921399999993,
+              "cpuMs": 0.567
+            },
+            "sampled": {
+              "wallMs": 200.41389800000002,
+              "cpuMs": 0.623
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 3,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.335777,
+              "cpuMs": 0.802
+            },
+            "sampled": {
+              "wallMs": 200.32358499999987,
+              "cpuMs": 0.616
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 4,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.15011900000036,
+              "cpuMs": 0.517
+            },
+            "sampled": {
+              "wallMs": 200.3813009999999,
+              "cpuMs": 0.666
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 5,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.24038700000028,
+              "cpuMs": 0.572
+            },
+            "sampled": {
+              "wallMs": 200.35304799999994,
+              "cpuMs": 0.618
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 6,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.33860900000036,
+              "cpuMs": 0.798
+            },
+            "sampled": {
+              "wallMs": 200.33634399999983,
+              "cpuMs": 0.676
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 7,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.26776199999995,
+              "cpuMs": 0.517
+            },
+            "sampled": {
+              "wallMs": 200.29860499999995,
+              "cpuMs": 0.504
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 8,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.26884599999994,
+              "cpuMs": 0.55
+            },
+            "sampled": {
+              "wallMs": 200.5273870000001,
+              "cpuMs": 1.17
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 9,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.26348400000006,
+              "cpuMs": 0.579
+            },
+            "sampled": {
+              "wallMs": 200.34699799999999,
+              "cpuMs": 0.832
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 10,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.26349500000015,
+              "cpuMs": 0.505
+            },
+            "sampled": {
+              "wallMs": 200.35437100000036,
+              "cpuMs": 0.653
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 11,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.219247,
+              "cpuMs": 0.62
+            },
+            "sampled": {
+              "wallMs": 200.49747500000012,
+              "cpuMs": 1.122
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 12,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.26611199999934,
+              "cpuMs": 0.63
+            },
+            "sampled": {
+              "wallMs": 200.338162,
+              "cpuMs": 0.602
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 13,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.16884700000082,
+              "cpuMs": 2.693
+            },
+            "sampled": {
+              "wallMs": 200.29043699999966,
+              "cpuMs": 0.57
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 14,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.24325399999998,
+              "cpuMs": 1.846
+            },
+            "sampled": {
+              "wallMs": 200.5659310000001,
+              "cpuMs": 1.125
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 15,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.22467900000083,
+              "cpuMs": 0.608
+            },
+            "sampled": {
+              "wallMs": 200.35158800000045,
+              "cpuMs": 0.996
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 16,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.3411729999998,
+              "cpuMs": 0.843
+            },
+            "sampled": {
+              "wallMs": 200.35975099999996,
+              "cpuMs": 0.91
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 17,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.2243640000006,
+              "cpuMs": 0.542
+            },
+            "sampled": {
+              "wallMs": 200.30719899999986,
+              "cpuMs": 0.676
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 18,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.25284199999987,
+              "cpuMs": 0.503
+            },
+            "sampled": {
+              "wallMs": 200.40353400000004,
+              "cpuMs": 1.065
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 19,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.22845199999938,
+              "cpuMs": 0.36
+            },
+            "sampled": {
+              "wallMs": 200.15367100000003,
+              "cpuMs": 0.771
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 0,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 132.65977399999974,
+              "cpuMs": 144.286
+            },
+            "sampled": {
+              "wallMs": 127.78819900000053,
+              "cpuMs": 140.865
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 1,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 126.81881899999826,
+              "cpuMs": 136.555
+            },
+            "sampled": {
+              "wallMs": 128.68163800000002,
+              "cpuMs": 139.907
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 2,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 123.96020099999987,
+              "cpuMs": 132.881
+            },
+            "sampled": {
+              "wallMs": 123.78290899999956,
+              "cpuMs": 132.872
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 3,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 124.7307869999986,
+              "cpuMs": 134.368
+            },
+            "sampled": {
+              "wallMs": 124.75395200000094,
+              "cpuMs": 133.716
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 4,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 125.84320499999922,
+              "cpuMs": 135.036
+            },
+            "sampled": {
+              "wallMs": 124.24972600000001,
+              "cpuMs": 134.06
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 5,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 126.81856999999945,
+              "cpuMs": 136.308
+            },
+            "sampled": {
+              "wallMs": 122.97627699999975,
+              "cpuMs": 132.701
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 6,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 129.0200019999993,
+              "cpuMs": 139.838
+            },
+            "sampled": {
+              "wallMs": 128.54955700000028,
+              "cpuMs": 139.205
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 7,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 139.16921899999943,
+              "cpuMs": 148.641
+            },
+            "sampled": {
+              "wallMs": 123.10454199999913,
+              "cpuMs": 131.935
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 8,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 126.29185700000016,
+              "cpuMs": 137.158
+            },
+            "sampled": {
+              "wallMs": 122.45248199999878,
+              "cpuMs": 132.38
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 9,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 158.40134999999827,
+              "cpuMs": 169.317
+            },
+            "sampled": {
+              "wallMs": 126.64177000000018,
+              "cpuMs": 136.523
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 10,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 128.09228900000016,
+              "cpuMs": 138.267
+            },
+            "sampled": {
+              "wallMs": 126.01301600000079,
+              "cpuMs": 136.716
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 11,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 130.26527499999975,
+              "cpuMs": 137.334
+            },
+            "sampled": {
+              "wallMs": 131.26113100000111,
+              "cpuMs": 140.661
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 12,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 125.69931999999972,
+              "cpuMs": 134.909
+            },
+            "sampled": {
+              "wallMs": 123.79474599999958,
+              "cpuMs": 133.758
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 13,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 125.0748679999997,
+              "cpuMs": 133.982
+            },
+            "sampled": {
+              "wallMs": 125.05015800000001,
+              "cpuMs": 134.894
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 14,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 125.74683299999924,
+              "cpuMs": 135.431
+            },
+            "sampled": {
+              "wallMs": 124.03567400000065,
+              "cpuMs": 133.513
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 15,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 128.8960530000004,
+              "cpuMs": 140.957
+            },
+            "sampled": {
+              "wallMs": 122.74398500000098,
+              "cpuMs": 132.942
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 16,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 127.1229430000003,
+              "cpuMs": 138.759
+            },
+            "sampled": {
+              "wallMs": 125.63669999999911,
+              "cpuMs": 134.759
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 17,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 126.52235899999869,
+              "cpuMs": 138.429
+            },
+            "sampled": {
+              "wallMs": 122.82492899999852,
+              "cpuMs": 129.95
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 18,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 121.63365999999951,
+              "cpuMs": 126.052
+            },
+            "sampled": {
+              "wallMs": 132.05206499999986,
+              "cpuMs": 143.438
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 19,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 128.8726889999998,
+              "cpuMs": 140.691
+            },
+            "sampled": {
+              "wallMs": 123.83389399999942,
+              "cpuMs": 134.5
+            }
+          }
+        ]
+      },
+      {
+        "repetition": 1,
+        "runtime": "1.4.0",
+        "revision": "34cbb9a40b4bd1bd767d134a7065e66c2432a676",
+        "api": "jsc",
+        "sampleIntervalUs": 10000,
+        "batches": 10,
+        "rows": 10000,
+        "roundsPerBatch": 20,
+        "checksum": 84400000,
+        "loadBefore": [
+          6.06,
+          5.94,
+          5.64
+        ],
+        "loadAfter": [
+          5.36,
+          5.78,
+          5.59
+        ],
+        "measurements": [
+          {
+            "load": "idle",
+            "pair": 0,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.25870399999997,
+              "cpuMs": 0.502
+            },
+            "sampled": {
+              "wallMs": 200.36100699999997,
+              "cpuMs": 0.596
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 1,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.244187,
+              "cpuMs": 0.604
+            },
+            "sampled": {
+              "wallMs": 200.41744100000005,
+              "cpuMs": 1.165
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 2,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.256662,
+              "cpuMs": 0.633
+            },
+            "sampled": {
+              "wallMs": 200.40074000000004,
+              "cpuMs": 0.623
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 3,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.31103100000018,
+              "cpuMs": 0.879
+            },
+            "sampled": {
+              "wallMs": 200.34572200000002,
+              "cpuMs": 0.772
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 4,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.18688599999996,
+              "cpuMs": 0.539
+            },
+            "sampled": {
+              "wallMs": 200.3323059999998,
+              "cpuMs": 0.495
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 5,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.2665310000002,
+              "cpuMs": 0.6
+            },
+            "sampled": {
+              "wallMs": 200.2115060000001,
+              "cpuMs": 0.54
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 6,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.39396100000022,
+              "cpuMs": 1
+            },
+            "sampled": {
+              "wallMs": 200.3313760000001,
+              "cpuMs": 0.909
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 7,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.28424799999993,
+              "cpuMs": 0.649
+            },
+            "sampled": {
+              "wallMs": 200.3920549999998,
+              "cpuMs": 0.713
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 8,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.25151200000028,
+              "cpuMs": 0.453
+            },
+            "sampled": {
+              "wallMs": 200.41232300000001,
+              "cpuMs": 1.079
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 9,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.26353699999981,
+              "cpuMs": 0.598
+            },
+            "sampled": {
+              "wallMs": 200.34564899999987,
+              "cpuMs": 0.706
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 10,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.2598309999994,
+              "cpuMs": 0.533
+            },
+            "sampled": {
+              "wallMs": 200.39320899999984,
+              "cpuMs": 0.535
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 11,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.1841370000002,
+              "cpuMs": 0.631
+            },
+            "sampled": {
+              "wallMs": 200.37479299999995,
+              "cpuMs": 1.013
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 12,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.133871,
+              "cpuMs": 0.834
+            },
+            "sampled": {
+              "wallMs": 200.32811500000025,
+              "cpuMs": 0.527
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 13,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.08773199999996,
+              "cpuMs": 2.927
+            },
+            "sampled": {
+              "wallMs": 200.3558379999995,
+              "cpuMs": 0.651
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 14,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.23000899999988,
+              "cpuMs": 1.946
+            },
+            "sampled": {
+              "wallMs": 200.43352900000082,
+              "cpuMs": 0.76
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 15,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.2510659999998,
+              "cpuMs": 0.673
+            },
+            "sampled": {
+              "wallMs": 200.3662460000005,
+              "cpuMs": 0.639
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 16,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 201.2729989999998,
+              "cpuMs": 0.887
+            },
+            "sampled": {
+              "wallMs": 200.298092,
+              "cpuMs": 0.781
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 17,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.23649700000078,
+              "cpuMs": 0.618
+            },
+            "sampled": {
+              "wallMs": 200.35352800000055,
+              "cpuMs": 0.728
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 18,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.24632099999963,
+              "cpuMs": 0.526
+            },
+            "sampled": {
+              "wallMs": 200.3305309999996,
+              "cpuMs": 0.883
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 19,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.24687900000026,
+              "cpuMs": 0.638
+            },
+            "sampled": {
+              "wallMs": 200.17707800000062,
+              "cpuMs": 0.846
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 0,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 203.16428900000028,
+              "cpuMs": 218.217
+            },
+            "sampled": {
+              "wallMs": 205.672955,
+              "cpuMs": 221.19
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 1,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 203.59749600000032,
+              "cpuMs": 218.115
+            },
+            "sampled": {
+              "wallMs": 205.85709300000053,
+              "cpuMs": 221.88
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 2,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 204.26547599999867,
+              "cpuMs": 219.138
+            },
+            "sampled": {
+              "wallMs": 203.63879000000088,
+              "cpuMs": 218.61
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 3,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 204.35275600000023,
+              "cpuMs": 219.474
+            },
+            "sampled": {
+              "wallMs": 206.852621,
+              "cpuMs": 222.854
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 4,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 219.77325699999892,
+              "cpuMs": 237.321
+            },
+            "sampled": {
+              "wallMs": 206.59825699999965,
+              "cpuMs": 222.659
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 5,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 202.85635600000023,
+              "cpuMs": 218.596
+            },
+            "sampled": {
+              "wallMs": 204.1955510000007,
+              "cpuMs": 219.894
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 6,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 204.787855999999,
+              "cpuMs": 221.16
+            },
+            "sampled": {
+              "wallMs": 208.10350199999993,
+              "cpuMs": 225.625
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 7,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 205.38612400000056,
+              "cpuMs": 221.895
+            },
+            "sampled": {
+              "wallMs": 210.4686810000003,
+              "cpuMs": 228.415
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 8,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 205.50648300000103,
+              "cpuMs": 222.989
+            },
+            "sampled": {
+              "wallMs": 207.7583510000004,
+              "cpuMs": 225.558
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 9,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 205.7267350000002,
+              "cpuMs": 223.145
+            },
+            "sampled": {
+              "wallMs": 209.1355050000002,
+              "cpuMs": 225.88
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 10,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 204.15353200000027,
+              "cpuMs": 221.264
+            },
+            "sampled": {
+              "wallMs": 204.29161600000043,
+              "cpuMs": 219.735
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 11,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.66622800000005,
+              "cpuMs": 214.968
+            },
+            "sampled": {
+              "wallMs": 204.8465129999986,
+              "cpuMs": 222.709
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 12,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 201.4039730000004,
+              "cpuMs": 215.703
+            },
+            "sampled": {
+              "wallMs": 206.78640599999926,
+              "cpuMs": 221.014
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 13,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 208.62964000000102,
+              "cpuMs": 224.971
+            },
+            "sampled": {
+              "wallMs": 210.85116800000105,
+              "cpuMs": 226.534
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 14,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 212.2659079999994,
+              "cpuMs": 228.542
+            },
+            "sampled": {
+              "wallMs": 214.83490999999958,
+              "cpuMs": 232.113
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 15,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 205.47497099999964,
+              "cpuMs": 222.828
+            },
+            "sampled": {
+              "wallMs": 218.34468500000003,
+              "cpuMs": 233.946
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 16,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 204.584476,
+              "cpuMs": 221.572
+            },
+            "sampled": {
+              "wallMs": 206.8264100000015,
+              "cpuMs": 224.844
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 17,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 205.15868299999966,
+              "cpuMs": 220.617
+            },
+            "sampled": {
+              "wallMs": 210.79828999999881,
+              "cpuMs": 225.927
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 18,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 205.12223599999925,
+              "cpuMs": 221.013
+            },
+            "sampled": {
+              "wallMs": 207.234966,
+              "cpuMs": 222.962
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 19,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 212.4410429999989,
+              "cpuMs": 228.873
+            },
+            "sampled": {
+              "wallMs": 207.88950000000114,
+              "cpuMs": 224.606
+            }
+          }
+        ]
+      },
+      {
+        "repetition": 2,
+        "runtime": "1.4.0",
+        "revision": "34cbb9a40b4bd1bd767d134a7065e66c2432a676",
+        "api": "jsc",
+        "sampleIntervalUs": 10000,
+        "batches": 10,
+        "rows": 10000,
+        "roundsPerBatch": 20,
+        "checksum": 84400000,
+        "loadBefore": [
+          5.36,
+          5.78,
+          5.59
+        ],
+        "loadAfter": [
+          5.27,
+          5.75,
+          5.58
+        ],
+        "measurements": [
+          {
+            "load": "idle",
+            "pair": 0,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.27596899999998,
+              "cpuMs": 0.567
+            },
+            "sampled": {
+              "wallMs": 200.363018,
+              "cpuMs": 0.704
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 1,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.20853799999986,
+              "cpuMs": 0.546
+            },
+            "sampled": {
+              "wallMs": 200.39162900000008,
+              "cpuMs": 1.01
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 2,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.229781,
+              "cpuMs": 0.42
+            },
+            "sampled": {
+              "wallMs": 200.34482700000012,
+              "cpuMs": 0.699
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 3,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.31843600000002,
+              "cpuMs": 0.944
+            },
+            "sampled": {
+              "wallMs": 200.3486049999999,
+              "cpuMs": 0.591
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 4,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.21791299999995,
+              "cpuMs": 0.659
+            },
+            "sampled": {
+              "wallMs": 200.30872999999974,
+              "cpuMs": 0.542
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 5,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.25588900000002,
+              "cpuMs": 0.425
+            },
+            "sampled": {
+              "wallMs": 200.2056230000003,
+              "cpuMs": 0.706
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 6,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.33783700000004,
+              "cpuMs": 0.91
+            },
+            "sampled": {
+              "wallMs": 200.27802200000042,
+              "cpuMs": 0.523
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 7,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.27462100000002,
+              "cpuMs": 0.52
+            },
+            "sampled": {
+              "wallMs": 200.36701500000026,
+              "cpuMs": 0.677
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 8,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.2718759999998,
+              "cpuMs": 0.402
+            },
+            "sampled": {
+              "wallMs": 200.30792699999984,
+              "cpuMs": 0.792
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 9,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.2235099999998,
+              "cpuMs": 0.381
+            },
+            "sampled": {
+              "wallMs": 200.31427500000018,
+              "cpuMs": 0.771
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 10,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.24993799999993,
+              "cpuMs": 0.54
+            },
+            "sampled": {
+              "wallMs": 200.34534299999996,
+              "cpuMs": 0.714
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 11,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.11624800000027,
+              "cpuMs": 0.603
+            },
+            "sampled": {
+              "wallMs": 200.35032000000047,
+              "cpuMs": 1.032
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 12,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.23049300000002,
+              "cpuMs": 0.754
+            },
+            "sampled": {
+              "wallMs": 200.35837999999967,
+              "cpuMs": 0.59
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 13,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.07919200000015,
+              "cpuMs": 2.66
+            },
+            "sampled": {
+              "wallMs": 200.3560609999995,
+              "cpuMs": 0.59
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 14,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.203579,
+              "cpuMs": 1.771
+            },
+            "sampled": {
+              "wallMs": 200.36604700000044,
+              "cpuMs": 0.618
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 15,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.25914699999976,
+              "cpuMs": 0.673
+            },
+            "sampled": {
+              "wallMs": 200.33351399999992,
+              "cpuMs": 0.704
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 16,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.31306700000005,
+              "cpuMs": 0.912
+            },
+            "sampled": {
+              "wallMs": 200.289307,
+              "cpuMs": 0.611
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 17,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.25557899999967,
+              "cpuMs": 0.379
+            },
+            "sampled": {
+              "wallMs": 200.31490200000007,
+              "cpuMs": 0.594
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 18,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.24244400000043,
+              "cpuMs": 0.417
+            },
+            "sampled": {
+              "wallMs": 200.41591700000026,
+              "cpuMs": 1.004
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 19,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 200.2897240000002,
+              "cpuMs": 0.557
+            },
+            "sampled": {
+              "wallMs": 200.3959160000004,
+              "cpuMs": 0.784
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 0,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 223.33428300000014,
+              "cpuMs": 241.292
+            },
+            "sampled": {
+              "wallMs": 218.25058399999944,
+              "cpuMs": 235.471
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 1,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 220.88432400000056,
+              "cpuMs": 239.715
+            },
+            "sampled": {
+              "wallMs": 220.6017240000001,
+              "cpuMs": 237.306
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 2,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 241.49641399999928,
+              "cpuMs": 257.535
+            },
+            "sampled": {
+              "wallMs": 238.93112999999903,
+              "cpuMs": 258.578
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 3,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 210.90469699999994,
+              "cpuMs": 228.913
+            },
+            "sampled": {
+              "wallMs": 217.462993000001,
+              "cpuMs": 234.593
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 4,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 216.16177699999935,
+              "cpuMs": 233.975
+            },
+            "sampled": {
+              "wallMs": 215.1918910000004,
+              "cpuMs": 230.337
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 5,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 204.7718679999998,
+              "cpuMs": 220.262
+            },
+            "sampled": {
+              "wallMs": 213.34376899999916,
+              "cpuMs": 229.815
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 6,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 214.86451599999964,
+              "cpuMs": 230.503
+            },
+            "sampled": {
+              "wallMs": 216.8587179999995,
+              "cpuMs": 233.89
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 7,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 202.54246000000057,
+              "cpuMs": 219.344
+            },
+            "sampled": {
+              "wallMs": 201.91696500000035,
+              "cpuMs": 217.214
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 8,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 209.2840269999997,
+              "cpuMs": 224.316
+            },
+            "sampled": {
+              "wallMs": 204.81240799999978,
+              "cpuMs": 220.749
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 9,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 219.13966600000094,
+              "cpuMs": 236.282
+            },
+            "sampled": {
+              "wallMs": 208.78906300000017,
+              "cpuMs": 223.991
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 10,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 208.29027999999926,
+              "cpuMs": 222.389
+            },
+            "sampled": {
+              "wallMs": 208.06096799999978,
+              "cpuMs": 225.524
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 11,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 208.81166400000075,
+              "cpuMs": 226.402
+            },
+            "sampled": {
+              "wallMs": 204.2777640000004,
+              "cpuMs": 220.373
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 12,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 263.1336740000006,
+              "cpuMs": 280.94
+            },
+            "sampled": {
+              "wallMs": 203.68684399999984,
+              "cpuMs": 219.985
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 13,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 206.60139399999935,
+              "cpuMs": 222.377
+            },
+            "sampled": {
+              "wallMs": 215.87846499999978,
+              "cpuMs": 232.183
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 14,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 204.8476439999995,
+              "cpuMs": 219.488
+            },
+            "sampled": {
+              "wallMs": 213.7244269999992,
+              "cpuMs": 230.712
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 15,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 212.24954499999876,
+              "cpuMs": 228.973
+            },
+            "sampled": {
+              "wallMs": 208.5419579999998,
+              "cpuMs": 226.134
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 16,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 209.51353800000106,
+              "cpuMs": 225.12
+            },
+            "sampled": {
+              "wallMs": 207.6839369999998,
+              "cpuMs": 226.148
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 17,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 205.68015899999955,
+              "cpuMs": 222.94
+            },
+            "sampled": {
+              "wallMs": 214.52489699999933,
+              "cpuMs": 233.022
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 18,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 218.9861490000003,
+              "cpuMs": 236.898
+            },
+            "sampled": {
+              "wallMs": 213.2320780000009,
+              "cpuMs": 229.971
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 19,
+            "first": "jsc",
+            "baseline": {
+              "wallMs": 209.36555600000065,
+              "cpuMs": 226.659
+            },
+            "sampled": {
+              "wallMs": 209.1082060000008,
+              "cpuMs": 225.189
+            }
+          }
+        ]
+      },
+      {
+        "repetition": 2,
+        "runtime": "1.4.0",
+        "revision": "34cbb9a40b4bd1bd767d134a7065e66c2432a676",
+        "api": "inspector",
+        "sampleIntervalUs": 10000,
+        "batches": 10,
+        "rows": 10000,
+        "roundsPerBatch": 20,
+        "checksum": 84400000,
+        "loadBefore": [
+          5.27,
+          5.75,
+          5.58
+        ],
+        "loadAfter": [
+          5.16,
+          5.68,
+          5.56
+        ],
+        "measurements": [
+          {
+            "load": "idle",
+            "pair": 0,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.28218599999997,
+              "cpuMs": 0.463
+            },
+            "sampled": {
+              "wallMs": 200.331092,
+              "cpuMs": 0.615
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 1,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.230012,
+              "cpuMs": 0.451
+            },
+            "sampled": {
+              "wallMs": 200.375267,
+              "cpuMs": 0.976
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 2,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.22797600000013,
+              "cpuMs": 0.437
+            },
+            "sampled": {
+              "wallMs": 200.32003799999984,
+              "cpuMs": 0.54
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 3,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.26460299999985,
+              "cpuMs": 0.85
+            },
+            "sampled": {
+              "wallMs": 200.30778699999996,
+              "cpuMs": 0.483
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 4,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.2143500000002,
+              "cpuMs": 0.576
+            },
+            "sampled": {
+              "wallMs": 200.34397900000022,
+              "cpuMs": 0.761
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 5,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.229691,
+              "cpuMs": 0.469
+            },
+            "sampled": {
+              "wallMs": 200.25993299999982,
+              "cpuMs": 0.578
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 6,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.27212800000007,
+              "cpuMs": 0.82
+            },
+            "sampled": {
+              "wallMs": 200.2945450000002,
+              "cpuMs": 0.593
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 7,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.25551099999984,
+              "cpuMs": 0.546
+            },
+            "sampled": {
+              "wallMs": 200.14841799999977,
+              "cpuMs": 0.594
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 8,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.240816,
+              "cpuMs": 0.41
+            },
+            "sampled": {
+              "wallMs": 200.4284819999998,
+              "cpuMs": 0.982
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 9,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.248963,
+              "cpuMs": 0.368
+            },
+            "sampled": {
+              "wallMs": 200.262205,
+              "cpuMs": 0.589
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 10,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.2280410000003,
+              "cpuMs": 0.495
+            },
+            "sampled": {
+              "wallMs": 200.24957799999993,
+              "cpuMs": 0.51
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 11,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.21662199999992,
+              "cpuMs": 0.556
+            },
+            "sampled": {
+              "wallMs": 200.40632199999982,
+              "cpuMs": 0.981
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 12,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.25318100000004,
+              "cpuMs": 0.804
+            },
+            "sampled": {
+              "wallMs": 200.3014290000001,
+              "cpuMs": 0.566
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 13,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.08405299999959,
+              "cpuMs": 2.599
+            },
+            "sampled": {
+              "wallMs": 200.31084499999997,
+              "cpuMs": 0.585
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 14,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.18215000000055,
+              "cpuMs": 2.46
+            },
+            "sampled": {
+              "wallMs": 200.57416700000067,
+              "cpuMs": 0.932
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 15,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.23664399999961,
+              "cpuMs": 0.616
+            },
+            "sampled": {
+              "wallMs": 200.401887,
+              "cpuMs": 0.987
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 16,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.34897900000033,
+              "cpuMs": 0.928
+            },
+            "sampled": {
+              "wallMs": 200.40162799999962,
+              "cpuMs": 0.669
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 17,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.23367300000064,
+              "cpuMs": 0.395
+            },
+            "sampled": {
+              "wallMs": 200.32068999999956,
+              "cpuMs": 0.648
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 18,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 200.24087500000041,
+              "cpuMs": 0.398
+            },
+            "sampled": {
+              "wallMs": 200.46392699999979,
+              "cpuMs": 1.11
+            }
+          },
+          {
+            "load": "idle",
+            "pair": 19,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 200.27077499999905,
+              "cpuMs": 0.546
+            },
+            "sampled": {
+              "wallMs": 200.32601500000055,
+              "cpuMs": 0.627
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 0,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 214.41428800000176,
+              "cpuMs": 230.637
+            },
+            "sampled": {
+              "wallMs": 208.89508600000045,
+              "cpuMs": 226.655
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 1,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 212.396659,
+              "cpuMs": 229.185
+            },
+            "sampled": {
+              "wallMs": 220.48937899999873,
+              "cpuMs": 238.492
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 2,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 211.45793799999956,
+              "cpuMs": 227.973
+            },
+            "sampled": {
+              "wallMs": 208.45228599999973,
+              "cpuMs": 226.044
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 3,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 214.1338960000012,
+              "cpuMs": 232.068
+            },
+            "sampled": {
+              "wallMs": 208.02023499999996,
+              "cpuMs": 225.246
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 4,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 214.41313300000002,
+              "cpuMs": 232.06
+            },
+            "sampled": {
+              "wallMs": 213.82893400000103,
+              "cpuMs": 232.402
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 5,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 210.70099599999958,
+              "cpuMs": 226.256
+            },
+            "sampled": {
+              "wallMs": 210.39600900000005,
+              "cpuMs": 227.927
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 6,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 210.43707399999948,
+              "cpuMs": 227.624
+            },
+            "sampled": {
+              "wallMs": 207.06962899999962,
+              "cpuMs": 223.544
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 7,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 213.218624000001,
+              "cpuMs": 230.193
+            },
+            "sampled": {
+              "wallMs": 207.1986739999993,
+              "cpuMs": 222.952
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 8,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 214.41553399999975,
+              "cpuMs": 230.992
+            },
+            "sampled": {
+              "wallMs": 206.56075500000043,
+              "cpuMs": 222.131
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 9,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 213.32031900000038,
+              "cpuMs": 230.113
+            },
+            "sampled": {
+              "wallMs": 215.44950900000003,
+              "cpuMs": 233.38
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 10,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 211.86627699999917,
+              "cpuMs": 227.538
+            },
+            "sampled": {
+              "wallMs": 209.57063800000105,
+              "cpuMs": 226.288
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 11,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 226.69625900000028,
+              "cpuMs": 242.541
+            },
+            "sampled": {
+              "wallMs": 208.40052300000025,
+              "cpuMs": 225.303
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 12,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 221.95334899999943,
+              "cpuMs": 237.233
+            },
+            "sampled": {
+              "wallMs": 216.93827999999849,
+              "cpuMs": 233.228
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 13,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 215.38908300000003,
+              "cpuMs": 232.909
+            },
+            "sampled": {
+              "wallMs": 218.7129840000016,
+              "cpuMs": 234.399
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 14,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 212.99172699999872,
+              "cpuMs": 229.24
+            },
+            "sampled": {
+              "wallMs": 210.61688299999878,
+              "cpuMs": 226.41
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 15,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 214.23313299999973,
+              "cpuMs": 231.449
+            },
+            "sampled": {
+              "wallMs": 208.4679270000015,
+              "cpuMs": 225.634
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 16,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 211.70977800000037,
+              "cpuMs": 226.564
+            },
+            "sampled": {
+              "wallMs": 210.84753999999884,
+              "cpuMs": 229.227
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 17,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 212.7123989999982,
+              "cpuMs": 229.294
+            },
+            "sampled": {
+              "wallMs": 208.00931199999832,
+              "cpuMs": 225.504
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 18,
+            "first": "baseline",
+            "baseline": {
+              "wallMs": 211.9736759999978,
+              "cpuMs": 229.086
+            },
+            "sampled": {
+              "wallMs": 209.14398599999913,
+              "cpuMs": 226.366
+            }
+          },
+          {
+            "load": "busy",
+            "pair": 19,
+            "first": "inspector",
+            "baseline": {
+              "wallMs": 226.6149860000005,
+              "cpuMs": 243.743
+            },
+            "sampled": {
+              "wallMs": 216.98354400000244,
+              "cpuMs": 232.747
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "summary": [
+    {
+      "api": "jsc",
+      "load": "idle",
+      "pairs": 60,
+      "meanAddedCpuMs": -0.06396666666666667,
+      "sdAddedCpuMs": 0.6360312583371363,
+      "meanAddedWallMs": 0.09135815000006554
+    },
+    {
+      "api": "jsc",
+      "load": "busy",
+      "pairs": 60,
+      "meanAddedCpuMs": 0.6346166666666619,
+      "sdAddedCpuMs": 22.44168126733829,
+      "meanAddedWallMs": 0.22652945000014976
+    },
+    {
+      "api": "inspector",
+      "load": "idle",
+      "pairs": 60,
+      "meanAddedCpuMs": -0.014116666666666677,
+      "sdAddedCpuMs": 0.6290258298613567,
+      "meanAddedWallMs": 0.11237399999992116
+    },
+    {
+      "api": "inspector",
+      "load": "busy",
+      "pairs": 60,
+      "meanAddedCpuMs": -5.186899999999999,
+      "sdAddedCpuMs": 9.7883689517505,
+      "meanAddedWallMs": -5.6861942333332385
+    }
+  ],
+  "assessment": {
+    "producerBound": "unavailable through tested APIs",
+    "negligibleOverhead": "not established by noisy synthetic measurements",
+    "servingCapture": "not implemented; specification spike stop condition",
+    "runtimeHost": "untouched; no runtime-host generation exercised"
+  }
+}

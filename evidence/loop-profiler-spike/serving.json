@@ -1,0 +1,105 @@
+{
+  "checkedAt": "2026-10-18T10:12:11.616035+00:00",
+  "runtime": "bun 1.4.0",
+  "process": "disposable Bun main thread loading the actual Next-compiled serving recorder",
+  "command": "bash \"$GATE\" bun src/lib/loopProfiler.fixture.ts native-compiled",
+  "sourceParent": "2ef8fcbd7385a14e94583cc8fdd1af8aa2f60fdc",
+  "sourceSha256": {
+    "src/lib/loopProfiler.ts": "c362e524b2cc91921cd1be7134ec0429b200107e994c5f1192527b3857d29bee",
+    "src/lib/loopProfilerServing.ts": "1d83799dc2963b79c2d2ad9c0b0e03e39abd844580353a1de9dc67ae936bc659",
+    "src/lib/loopProfiler.fixture.ts": "2357c19331778a327968153efa158ed0a034c5c04d77615900a9c9ffce20e4e0",
+    "src/lib/loopProfiler.test.ts": "846cef7a10ae2b9241d43fbbb1aa1a46c5b7b344f9d0254a0f21b49cda4f493f",
+    "src/lib/viewerLoopMonitor.ts": "ecb7eb27ebac4ae72161c34d7980a7389a298c919189774cb4d13a71d52b4e49",
+    "src/lib/viewerInstrumentation.ts": "4840392b045006e0c9bed7bb3891260173fe5936fc12931e5e41d142970cad82"
+  },
+  "gap": {
+    "sequence": 1,
+    "gapMs": 3000,
+    "jsProfile": {
+      "status": "captured",
+      "from": 502.447715,
+      "to": 5503.949928,
+      "intervalUs": 10000,
+      "frames": {
+        "samples": 297,
+        "inspectedSamples": 297,
+        "sampleCap": 4096,
+        "depthCap": 32,
+        "frameCap": 128,
+        "topN": 16,
+        "rows": [
+          {
+            "function": "syntheticThreeSecondBlock",
+            "file": "src/lib/loopProfiler.fixture.ts",
+            "line": 10,
+            "self": 295,
+            "total": 295,
+            "selfWeight": 0.9932659932659933,
+            "totalWeight": 0.9932659932659933
+          },
+          {
+            "function": "tick",
+            "file": "src/lib/viewerLoopMonitor.ts",
+            "line": 70,
+            "self": 1,
+            "total": 1,
+            "selfWeight": 0.003367003367003367,
+            "totalWeight": 0.003367003367003367
+          },
+          {
+            "function": "sync",
+            "file": "src/lib/readAttribution.ts",
+            "line": 192,
+            "self": 0,
+            "total": 1,
+            "selfWeight": 0,
+            "totalWeight": 0.003367003367003367
+          }
+        ]
+      }
+    }
+  },
+  "retainedProfileBytes": 660,
+  "killSwitch": "fixture set enabled=false at first correlated record; recorder returned without another collection",
+  "runtimeHost": {
+    "runtime": "bun 1.4.0",
+    "checkedAt": "2026-10-18T10:11:17.231Z",
+    "command": "bash \"$GATE\" bun scripts/verify-runtime-host.ts --runtime \"$BUN\"",
+    "successionMs": 506,
+    "listenerAnswered": 27,
+    "listenerPolls": 27,
+    "socketAnswered": 27,
+    "socketPolls": 27,
+    "holdWindowMs": 15000,
+    "ok": true
+  },
+  "checks": {
+    "typecheck": {
+      "command": "bash \"$GATE\" ./node_modules/.bin/tsc --noEmit",
+      "ok": true
+    },
+    "eslint": {
+      "command": "bash \"$GATE\" ./node_modules/.bin/eslint src/lib/loopProfiler.ts src/lib/loopProfilerServing.ts src/lib/loopProfiler.fixture.ts src/lib/loopProfiler.test.ts src/lib/viewerLoopMonitor.ts src/lib/viewerInstrumentation.ts",
+      "ok": true
+    },
+    "touchedTests": {
+      "command": "bash \"$GATE\" bun scripts/local-gate-tests.ts --base f69ba98f92fcd84743c9570ca7a2ba011b474742 ./scripts/probe-loop-profiler.test.ts ./src/lib/loopProfiler.test.ts ./src/lib/viewerInstrumentation.test.ts ./src/lib/viewerLoopMonitor.test.ts",
+      "files": 4,
+      "greenHead": true,
+      "newFailures": 0,
+      "baselineNeeded": false
+    },
+    "build": {
+      "command": "bash \"$GATE\" bun run build",
+      "ok": true
+    },
+    "viewer": {
+      "command": "bash \"$GATE\" bun scripts/verify-viewer-runtime.ts",
+      "runtime": "bun 1.4.0",
+      "modulesLoaded": 28,
+      "modulesProbed": 28,
+      "httpStatus": 200,
+      "ok": true
+    }
+  }
+}
