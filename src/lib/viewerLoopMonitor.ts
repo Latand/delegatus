@@ -25,7 +25,7 @@ export type ViewerOperation = "worktrees.sweep" | "history.prepare" | "history.r
   | "attention.reconcile" | "temp.sweep" | "forge.auto-merge" | "forge.sweep" | "asks.sweep"
   | "hosts.retirement" | "self-update.retention" | "spawn-notice.prune" | "delivery-progress.prune"
   | "resources.read" | "seat.panel" | "attention.read" | "pipelines.revalidate" | "runtime-journal.receipt-sweep"
-  | "done.media" | "done.frame-source"
+  | "done.sweep" | "done.media" | "done.frame-source"
   | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
   | "codex.protocol-admission"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"

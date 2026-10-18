@@ -299,7 +299,7 @@ export async function readBoardReportGithub(options: {
 async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number): Promise<BoardReportFacts> {
   const [
     fs,
-    { loadArchivedPipelines, loadPipelinesForList },
+    { loadArchivedPipelinesForList, loadPipelinesForList },
     { loadTasks },
     { projectTaskPipelineIds },
     { canonicalOrchestratorProject, orchestratorRevocations },
@@ -341,7 +341,7 @@ async function gatherBoardReportFacts(seat: BoardReportSeat, deadlineMs: number)
   const ours = (key: string) => canonicalOrchestratorProject(key) === project;
 
   const hot = read("lanes", () => loadPipelinesForList(), [] as Pipeline[]);
-  const archived = read("archived lanes", () => loadArchivedPipelines(), [] as Pipeline[]);
+  const archived = read("archived lanes", () => loadArchivedPipelinesForList(), [] as Pipeline[]);
   const projectLanes = hot.filter((pipeline) => ours(pipeline.project) && !pipeline.hiddenAt);
   const tasks = read("tasks", () => loadTasks(), [] as BoardTask[])
     .filter((task) => ours(task.project) && task.status !== "done");

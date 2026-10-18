@@ -1183,7 +1183,7 @@ export class SqliteStateCollection<T> {
     }
     const key = this.options.readCacheKey ? JSON.stringify([path.resolve(this.filename), identity,
       this.options.collection, this.options.schemaVersion, this.options.readCacheKey, authority]) : undefined;
-    if (key) this.cacheSlot = collectionReadCache(key);
+    if (key) this.cacheSlot = collectionReadCache(key, this.options.collection === "pipelines_archive");
     return { identity, authority, key };
   }
 
@@ -1198,7 +1198,7 @@ export class SqliteStateCollection<T> {
   private publishCache(value: CollectionCache<T>, context: CollectionReadContext): readonly T[] {
     this.assertReadContext(context);
     if (context.key) {
-      this.cacheSlot = collectionReadCache(context.key);
+      this.cacheSlot = collectionReadCache(context.key, this.options.collection === "pipelines_archive");
       let bytes = 0;
       for (const row of value.records.values()) bytes += row.sourceBytes;
       rememberCollectionReadCache(this.cacheSlot, value, bytes);

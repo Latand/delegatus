@@ -1953,6 +1953,20 @@ export function savePipelines(pipelines: Pipeline[]): void {
     the full record for the closed list and by-id reads. */
 const SETTLED_PIPELINE_ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 
+/** Shared archive rows, validated by revision, database identity and decoder
+ * authority. Projection consumers must never mutate this frozen graph. */
+export function loadArchivedPipelinesForList(): readonly Pipeline[] {
+  const rows = archiveStore().loadReadonly();
+  freezeArchive(rows);
+  return rows;
+}
+
+function freezeArchive(value: unknown): void {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return;
+  for (const child of Object.values(value)) freezeArchive(child);
+  Object.freeze(value);
+}
+
 /** Cold records use the same per-record isolation and strict JSON parsing as
     the active collection. */
 export function loadArchivedPipelines(): Pipeline[] {

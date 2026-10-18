@@ -741,3 +741,22 @@ test("completion repository lookup uses the designated project among retained du
   completeOrchestratorSeatIntent({ project: "orion-parent", clientRequestId: "done-seat", conversationId: "conversation_orion_done", path: null });
   expect(productionDoneWorld().repositoryProject("ACME/ORION")).toBe("orion-parent");
 });
+
+
+test("thumbnail tiers yield to native peers before the next lane's checks", async () => {
+  await activate();
+  let reads = 0, peers = 0;
+  const ids = Array.from({ length: 12 }, (_, n) => `yield-${n}`);
+  const current = ports(world({ pipelines: ids.map(id => lane(id, { taskIds: [id] })),
+    tasks: ids.map(id => task(id, "Finished work")) }));
+  await projectDoneItems({ ...current,
+    rounds: () => {
+      expect(peers).toBe(reads);
+      reads++;
+      setImmediate(() => { peers++; });
+      return [];
+    },
+  }, { force: true });
+  expect(reads).toBe(12);
+  expect(peers).toBe(12);
+});

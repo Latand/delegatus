@@ -117,9 +117,15 @@ function realpathSafe(p: string): string | null {
  * the whitelisted roots. Mirrors `path_allowed` in the Python prototype.
  */
 export function pathAllowed(candidate: string): boolean {
+  return pathAllowedWithRoots(candidate);
+}
+
+/** One synchronous album collection can reuse its enumerated root list.
+ * Candidate and root realpaths, including relay exclusions, remain live. */
+export function pathAllowedWithRoots(candidate: string, roots?: readonly [RootKey, string][]): boolean {
   const real = realpathSafe(candidate);
   if (!real || candidate.split(path.sep).some(isRelayConversationDir) || real.split(path.sep).some(isRelayConversationDir)) return false;
-  return scanRootEntries().some(([, root]) => {
+  return (roots ?? scanRootEntries()).some(([, root]) => {
     const rootReal = realpathSafe(root);
     return rootReal !== null && real.startsWith(rootReal + path.sep);
   });
