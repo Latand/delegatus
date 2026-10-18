@@ -138,7 +138,9 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         },
       };
       const emit = (jsProfile?: LoopGapProfile) => writeLog(`[viewer loop-gap] ${JSON.stringify({ ...report, ...(jsProfile ? { jsProfile } : {}) })}`);
-      if (!profiler?.correlate(last, at, gapMs, emit)) emit();
+      if (!profiler?.correlate(last, at, report.gapMs, emit)) {
+        emit(report.gapMs >= 2000 ? { status: "not-armed", reason: "profiler-not-started" } : undefined);
+      }
     }
     completed = [];
     if (at - lastSummary >= 60_000) {
