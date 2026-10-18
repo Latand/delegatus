@@ -16,6 +16,7 @@ if (process.argv[2] === "native" || process.argv[2] === "native-computed" || pro
   const settings = path.join(process.env.LLV_STATE_DIR!, "loop-profiler.json");
   fs.writeFileSync(settings, JSON.stringify({ enabled: true }));
   let start = startServingLoopProfiler;
+  let compiledBlock: (() => number) | undefined;
   if (process.argv[2] === "native-compiled") {
     // Exercise Next's actual emitted native-import path, including its
     // dependency graph. Registering chunk definitions executes no modules.
@@ -28,11 +29,16 @@ if (process.argv[2] === "native" || process.argv[2] === "native-computed" || pro
       if (!chunk.modules) continue;
       runtime.C(chunk);
       for (const [id, body] of Object.entries(chunk.modules)) {
-        if (String(body).includes("startServingLoopProfiler:")) moduleId = id;
+        const code = String(body);
+        if (/\bexports\.startServingLoopProfiler\s*=/.test(code)
+          || /\bstartServingLoopProfiler\s*:\s*\(\)\s*=>/.test(code)) moduleId = id;
       }
     }
     if (!moduleId) throw new Error("compiled profiler export absent");
-    start = runtime(moduleId).startServingLoopProfiler;
+    const compiled = runtime(moduleId);
+    start = compiled.startServingLoopProfiler;
+    compiledBlock = compiled.syntheticThreeSecondBlockForProfilerFixture;
+    if (typeof start !== "function" || typeof compiledBlock !== "function") throw new Error("compiled profiler exports are incomplete");
   }
   const monitor = createViewerLoopMonitor(line => {
     lines.push(line);
@@ -50,7 +56,7 @@ if (process.argv[2] === "native" || process.argv[2] === "native-computed" || pro
       } };
       computed[marker]();
     }, 100)
-    : setTimeout(syntheticThreeSecondBlock, 100);
+    : setTimeout(compiledBlock ?? syntheticThreeSecondBlock, 100);
   try { await start(monitor, { ...process.env, LLV_STATE_OWNER: "viewer", NODE_ENV: "production", LLV_DIAGNOSTIC_REVISION: "a".repeat(40) }); console.log(JSON.stringify(lines)); }
   finally { clearTimeout(block); clearInterval(ticker); monitor.stop(); }
 } else if (process.argv[2] === "claim") {

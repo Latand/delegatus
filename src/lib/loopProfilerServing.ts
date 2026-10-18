@@ -21,6 +21,15 @@ export async function loopProfilerEnabled(directory: string) {
   catch { return false; }
 }
 
+/** Native compiled fixture target; kept beside the serving recorder so the
+ * verification can sample a callable emitted into the production bundle. */
+export function syntheticThreeSecondBlockForProfilerFixture() {
+  const until = performance.now() + 3000;
+  let value = 0;
+  while (performance.now() < until) value += Math.sqrt(value + 1) % 123;
+  return value;
+}
+
 /** First start of a deployed revision consumes its opportunity even if off.
  * Same-revision restarts cannot renew the in-memory thirty-minute budget. */
 export async function claimLoopProfilerDeploy(directory: string, revision: string, at: number) {

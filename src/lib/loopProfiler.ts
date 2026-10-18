@@ -7,16 +7,17 @@ export const LOOP_PROFILE_ARM_MS = 30 * 60_000;
 export const LOOP_PROFILE_COOLDOWN_MS = 60_000;
 export const LOOP_PROFILE_BYTES = 8192;
 const intervalUs = 10_000, sampleCap = 4096, depthCap = 32, frameCap = 128, topN = 16;
-const sourceFileCap = 8, sourceBytesCap = 2 * 1024 * 1024, sourceFileBytesCap = 256 * 1024;
+const sourceFileCap = 8, sourceBytesCap = 2 * 1024 * 1024, sourceFileBytesCap = 1024 * 1024;
 type Frame = { name: string; sourceURL?: string; line: number };
+type SourceMetadata = { bytes: number; nearestNames: string[]; staticNames: Set<string> };
 export type LoopProfile = { traces: { frames: Frame[] }[] };
 type Summary = ReturnType<typeof trimLoopProfile>;
 export type LoopGapProfile = { status: "captured"; from: number; to: number; intervalUs: number; frames: Summary } | { status: "unavailable" };
 type Emit = (profile: LoopGapProfile) => void;
 
-/** Runtime names can come from computed property keys. Require nearby source
- * syntax that declares the same name before it crosses the logging boundary. */
-function location(frame: Frame, root: string, sources: Map<string, string[] | null>) {
+/** Runtime names can come from computed property keys. Require cached source
+ * metadata to declare the name before it crosses the logging boundary. */
+function location(frame: Frame, root: string, sources: Map<string, SourceMetadata | null>) {
   const line = frame.line;
   if (!frame.sourceURL || frame.sourceURL.length > 1024 || !/^[A-Za-z_$][\w$]{0,95}$/.test(frame.name)
     || !Number.isSafeInteger(line) || line < 1) return null;
@@ -27,43 +28,65 @@ function location(frame: Frame, root: string, sources: Map<string, string[] | nu
   }
   if (!path.isAbsolute(source)) return null;
   const file = path.relative(root, source).split(path.sep).join("/");
-  if (!/^(?:src|scripts)\/[\w./-]+\.[cm]?[jt]sx?$/.test(file)
+  const sourceFile = /^(?:src|scripts)\/[\w./-]+\.[cm]?[jt]sx?$/.test(file);
+  const emittedViewerFile = /^\.next\/server\/[\w./-]+\.[cm]?js$/.test(file);
+  if ((!sourceFile && !emittedViewerFile)
     || file.split("/").some(part => part === ".." || part === "node_modules")) return null;
   const sourcePath = path.resolve(root, file);
-  let sourceLines = sources.get(file);
-  if (sourceLines === undefined) {
+  let metadata = sources.get(file);
+  if (metadata === undefined) {
     if (sources.size >= sourceFileCap) return null;
     try {
       const size = statSync(sourcePath).size;
-      const used = [...sources.values()].reduce((total, value) => total + (value?.reduce((bytes, line) => bytes + line.length, 0) ?? 0), 0);
-      if (size > sourceFileBytesCap || used + size > sourceBytesCap) sourceLines = null;
-      else sourceLines = readFileSync(sourcePath, "utf8").split("\n");
-    } catch { sourceLines = null; }
-    sources.set(file, sourceLines);
+      const used = [...sources.values()].reduce((total, value) => total + (value?.bytes ?? 0), 0);
+      if (size > sourceFileBytesCap || used + size > sourceBytesCap) metadata = null;
+      else metadata = buildSourceMetadata(readFileSync(sourcePath, "utf8"), emittedViewerFile);
+    } catch { metadata = null; }
+    sources.set(file, metadata);
   }
-  if (!sourceLines || !hasStaticNameAtLine(sourceLines, frame.name, line)) return null;
+  if (!metadata || !(emittedViewerFile
+    ? metadata.staticNames.has(frame.name)
+    : metadata.nearestNames[line - 1] === frame.name)) return null;
   return { function: frame.name, file, line };
 }
 
-function hasStaticNameAtLine(lines: string[], name: string, line: number) {
-  const first = Math.max(0, line - 33), last = Math.min(lines.length, line);
-  for (let index = last - 1; index >= first; index--) {
-    const text = lines[index]!;
-    const declaration = text.match(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/);
-    if (declaration) return declaration[1] === name;
-    const method = text.match(/(?:^|[,{;]\s*)(?:\[([^\]]+)\]|([A-Za-z_$][\w$]*))\s*\([^)]*\)\s*\{/);
-    if (method) return method[2] === name;
-    const arrow = text.match(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/);
-    if (arrow) return arrow[1] === name;
+function buildSourceMetadata(text: string, emitted: boolean): SourceMetadata {
+  const lines = text.split("\n");
+  const nearestNames = new Array<string>(lines.length);
+  const declarations: { line: number; name: string }[] = [];
+  for (let index = 0; index < lines.length; index++) {
+    const current = lines[index]!;
+    const declaration = current.match(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/);
+    const method = current.match(/(?:^|[,{;]\s*)(?:\[([^\]]+)\]|([A-Za-z_$][\w$]*))\s*\([^)]*\)\s*\{/);
+    const arrow = current.match(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/);
+    const name = declaration?.[1] ?? method?.[2] ?? arrow?.[1];
+    if (name) declarations.push({ line: index + 1, name });
   }
-  return false;
+  let currentName: string | undefined, declarationIndex = 0;
+  for (let index = 0; index < lines.length; index++) {
+    while (declarationIndex < declarations.length && declarations[declarationIndex]!.line <= index + 1) {
+      currentName = declarations[declarationIndex++]!.name;
+    }
+    if (currentName) nearestNames[index] = currentName;
+  }
+  const staticNames = new Set<string>();
+  if (emitted) {
+    for (const pattern of [
+      /\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g,
+      /\b([A-Za-z_$][\w$]*)\s*:\s*(?:async\s*)?function\b/g,
+      /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/g,
+    ]) {
+      for (const match of text.matchAll(pattern)) staticNames.add(match[1]!);
+    }
+  }
+  return { bytes: Buffer.byteLength(text), nearestNames, staticNames };
 }
 
 /** Conversion has a fixed visit/allocation budget even when native collection
  * was unbounded. Even spacing covers the whole window; weights use visited
  * samples, including samples whose frames privacy filtering omitted. */
 export function trimLoopProfile(raw: LoopProfile, root: string) {
-  const sources = new Map<string, string[] | null>();
+  const sources = new Map<string, SourceMetadata | null>();
   const frames = new Map<string, { function: string; file: string; line: number; self: number; total: number }>();
   const count = Math.min(sampleCap, raw.traces.length);
   // Misra-Gries candidates let a hot function arriving late displace earlier

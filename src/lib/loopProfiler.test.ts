@@ -136,6 +136,41 @@ test("a correctly attributed low-sample profile keeps its frame without a count 
   expect(result.rows[0]).toMatchObject({ function: "syntheticThreeSecondBlock", file: "src/lib/loopProfiler.fixture.ts", self: 119, total: 119 });
 });
 
+test("static names remain attributable beyond the old declaration lookback", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "loop-profile-long-function-"));
+  const sourceDirectory = path.join(directory, "src");
+  await mkdir(sourceDirectory, { recursive: true });
+  const sourceURL = path.join(sourceDirectory, "long.ts");
+  const lines = ["function ordinaryLongFunction() {"];
+  for (let index = 0; index < 48; index++) lines.push(`  const value${index} = ${index};`);
+  lines.push("  return value47;", "}");
+  await writeFile(sourceURL, lines.join("\n"));
+  try {
+    const result = trimLoopProfile({ traces: Array.from({ length: 20 }, () => ({ frames: [
+      { name: "ordinaryLongFunction", sourceURL, line: 49 },
+    ] })) }, directory);
+    expect(result.rows[0]).toMatchObject({ function: "ordinaryLongFunction", file: "src/long.ts", line: 49, self: 20, total: 20 });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("static callables from emitted Viewer chunks are retained with repository-relative paths", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "loop-profile-emitted-bundle-"));
+  const chunkDirectory = path.join(directory, ".next/server/chunks");
+  await mkdir(chunkDirectory, { recursive: true });
+  const sourceURL = path.join(chunkDirectory, "viewer.js");
+  await writeFile(sourceURL, "function emittedViewerLoopOwner(){for(;;){}};const computed={['privateSyntheticMarker'](){}};");
+  try {
+    const good = trimLoopProfile({ traces: Array.from({ length: 20 }, () => ({ frames: [
+      { name: "emittedViewerLoopOwner", sourceURL, line: 1 },
+    ] })) }, directory);
+    expect(good.rows[0]).toMatchObject({ function: "emittedViewerLoopOwner", file: ".next/server/chunks/viewer.js", line: 1, self: 20, total: 20 });
+    const computed = trimLoopProfile({ traces: [{ frames: [
+      { name: "privateSyntheticMarker", sourceURL, line: 1 },
+    ] }] }, directory);
+    expect(computed.rows).toEqual([]);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("large profiles visit at most 4096 samples and 32 frames with at most 16 retained rows", async () => {
   const source = await namedSource("function", 100);
   try {
@@ -224,6 +259,23 @@ test("Bun main-thread three-second block is named on its actual loop-gap record"
     expect(Number.isSafeInteger(target.total) && target.total >= target.self).toBe(true);
     expect(target.total).toBeLessThanOrEqual(gap.jsProfile.frames.inspectedSamples);
     expect(Buffer.byteLength(JSON.stringify(gap.jsProfile))).toBeLessThanOrEqual(LOOP_PROFILE_BYTES);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+}, 25_000);
+
+test("production bundle block is named on its correlated loop-gap record", async () => {
+  if (process.env.LLV_LOOP_PROFILER_COMPILED_TEST !== "1") return;
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-compiled-"));
+  try {
+    const lines: string[] = await child(["native-compiled"], dir);
+    const gaps = lines.filter(line => line.startsWith("[viewer loop-gap] ")).map(line => JSON.parse(line.slice("[viewer loop-gap] ".length)));
+    const gap = gaps.find(row => row.gapMs >= 2000);
+    expect(gap?.jsProfile?.status).toBe("captured");
+    const target = gap.jsProfile.frames.rows.find((row: { file: string }) => row.file.startsWith(".next/server/"));
+    expect(target).toBeDefined();
+    expect(target.function).toMatch(/^[A-Za-z_$][\w$]{0,95}$/);
+    expect(target.line).toBeGreaterThan(0);
+    expect(target.self).toBeGreaterThan(100);
+    expect(target.total).toBeGreaterThanOrEqual(target.self);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }, 25_000);
 
