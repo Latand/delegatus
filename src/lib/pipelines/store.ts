@@ -882,6 +882,12 @@ function isPipeline(value: unknown): value is Pipeline {
   catch { return false; }
 }
 
+/** Shared total validator for persisted projections that must match the
+ * authoritative pipeline reader's admission contract. */
+export function isStoredPipeline(value: unknown): value is Pipeline {
+  return isPipeline(value);
+}
+
 function isPipelineShape(value: unknown): value is Pipeline {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
