@@ -362,7 +362,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
 const cooperativeOpen = Symbol("cooperative journal open");
 
 export interface RuntimeJournalStartupProgress {
-  subphase: "schema" | "receipt-backfill" | "integrity-check" | "hash-chain";
+  subphase: "schema" | "checkpoint-reconciliation" | "receipt-backfill" | "integrity-check" | "hash-chain";
   done: number;
   total: number;
   committedBatches: number;
@@ -533,6 +533,7 @@ export class RuntimeJournal {
   private *initialize(): Generator<void> {
     this.startupProgress("schema", 1, 1);
     yield;
+    yield* this.reconcileCheckpointOrphans();
     yield* this.backfillProducerReceipts();
     yield* this.verify();
     if (!this.fault) {
@@ -543,6 +544,52 @@ export class RuntimeJournal {
 
   private startupProgress(subphase: RuntimeJournalStartupProgress["subphase"], done: number, total: number, committedBatches = 0): void {
     this.startupOptions.onStartupProgress?.({ subphase, done, total, committedBatches });
+  }
+
+  private *reconcileCheckpointOrphans(): Generator<void> {
+    // Older releases could checkpoint a completion after its event retired.
+    // Walk the checkpoint primary key in bounded slices so a large clean
+    // journal never pays for a synchronous whole-table anti-join during open.
+    const batchSize = this.startupOptions.startupBatchRows ?? 512;
+    const firstRows = this.db.query<{ event_id: string; consumer: string }, [string, string, number]>(
+      `SELECT event_id, consumer FROM consumer_checkpoints
+       WHERE (event_id, consumer) >= (?, ?) ORDER BY event_id, consumer LIMIT ?`,
+    );
+    const laterRows = this.db.query<{ event_id: string; consumer: string }, [string, string, number]>(
+      `SELECT event_id, consumer FROM consumer_checkpoints
+       WHERE (event_id, consumer) > (?, ?) ORDER BY event_id, consumer LIMIT ?`,
+    );
+    const eventExists = this.db.query<{ present: number }, [string]>(
+      "SELECT 1 AS present FROM events WHERE event_id = ?",
+    );
+    const remove = this.db.query("DELETE FROM consumer_checkpoints WHERE event_id = ? AND consumer = ?");
+    let cursor: [string, string] = ["", ""];
+    let firstBatch = true;
+    let done = 0;
+    let batches = 0;
+    this.startupProgress("checkpoint-reconciliation", 0, 0);
+    for (;;) {
+      this.db.exec("BEGIN IMMEDIATE");
+      let batch: Array<{ event_id: string; consumer: string }>;
+      try {
+        batch = (firstBatch ? firstRows : laterRows).all(...cursor, batchSize);
+        for (const checkpoint of batch) {
+          if (!eventExists.get(checkpoint.event_id)) remove.run(checkpoint.event_id, checkpoint.consumer);
+        }
+        this.db.exec("COMMIT");
+      } catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+        throw error;
+      }
+      if (!batch.length) break;
+      const last = batch[batch.length - 1]!;
+      cursor = [last.event_id, last.consumer];
+      firstBatch = false;
+      done += batch.length;
+      batches++;
+      this.startupProgress("checkpoint-reconciliation", done, 0, batches);
+      yield;
+    }
   }
 
   private *backfillProducerReceipts(): Generator<void> {
@@ -1719,7 +1766,9 @@ export class RuntimeJournal {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.registerConsumer(consumer);
-      this.db.query("INSERT INTO consumer_checkpoints(event_id, consumer, completed_at) VALUES (?, ?, ?) ON CONFLICT(event_id, consumer) DO NOTHING").run(eventId, consumer, this.now());
+      this.db.query(`INSERT INTO consumer_checkpoints(event_id, consumer, completed_at)
+        SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM events WHERE event_id = ?)
+        ON CONFLICT(event_id, consumer) DO NOTHING`).run(eventId, consumer, this.now(), eventId);
       // Recursive projections may finish before their parent. Only advance over
       // a contiguous completed prefix, preserving every hole for ordered replay.
       const pending = this.db.query<{ seq: number }, [number, string]>(`
@@ -2047,8 +2096,13 @@ export class RuntimeJournal {
       ).get(Math.min(target.seq, consumed ?? target.seq));
       if (!anchor) { this.db.exec("COMMIT"); return; }
       this.retainLegacyStopAdmissions();
+      // Select the retiring prefix while its event ids still exist. The
+      // checkpoint primary key starts with event_id, so a small append retires
+      // only its checkpoints instead of scanning the entire retained tail.
+      this.db.query(`DELETE FROM consumer_checkpoints
+        WHERE event_id IN (SELECT event_id FROM events WHERE seq <= ?)`)
+        .run(anchor.seq);
       this.db.query("DELETE FROM events WHERE seq <= ?").run(anchor.seq);
-      this.db.exec("DELETE FROM consumer_checkpoints WHERE NOT EXISTS (SELECT 1 FROM events WHERE events.event_id = consumer_checkpoints.event_id)");
       this.db.query("DELETE FROM outbox WHERE state = 'completed' AND event_seq <= ?").run(anchor.seq);
       // Upgrade retained legacy boundaries before their receipts disappear.
       // Kill authorship comes from the admitted fence, never from prose or ids.

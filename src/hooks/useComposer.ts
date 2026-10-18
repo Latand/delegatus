@@ -1,10 +1,9 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useImageAttachments } from "@/components/imageAttachments";
 import { performVoiceSend } from "@/hooks/composerVoiceSend";
-import { useAutosizePinned } from "@/hooks/useAutosizePinned";
 import { useDictation } from "@/hooks/useDictation";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { cardComposerCeiling, keyboardInset, mobileComposerCeiling, visibleViewportHeight } from "@/lib/composerScroll";
@@ -120,17 +119,38 @@ export function useComposer({ initialText, persistText, submit, disabled = false
   /* A remount mid-typing (column reshuffles, draft handovers) restores the
      draft from storage; the ref always holds the latest text so async
      dictation callbacks append to what the user typed meanwhile instead of
-     overwriting it. */
-  const [text, setTextState] = useState(initialText);
-  const textRef = useRef(text);
+     overwriting it.
+
+     The draft is NOT React state of whoever called this hook. A keystroke
+     re-rendered the owner of that state, which for the pane composer is the
+     6,000-line `TmuxComposerCore` subtree, once per character. The text lives in
+     the ref and tells its readers through `subscribeText`: the textarea
+     (`ComposerBar`) subscribes to the text itself, and the owner subscribes only
+     to the one derived fact it renders from, whether there is anything to send. */
+  const [initialDraft] = useState(initialText);
+  const textRef = useRef(initialDraft);
+  const draft = textRef;
   const draftRevision = useRef(0);
-  const setText = (value: string | ((prev: string) => string)) => {
-    const next = typeof value === "function" ? value(textRef.current) : value;
+  const textListeners = useRef(new Set<() => void>());
+  const subscribeText = useCallback((onChange: () => void) => {
+    textListeners.current.add(onChange);
+    return () => { textListeners.current.delete(onChange); };
+  }, []);
+  const getText = useCallback(() => draft.current, [draft]);
+  const publishText = useCallback((next: string) => {
     draftRevision.current += 1;
-    textRef.current = next;
-    setTextState(next);
+    draft.current = next;
+    for (const listener of [...textListeners.current]) listener();
+  }, [draft]);
+  const setText = (value: string | ((prev: string) => string)) => {
+    const next = typeof value === "function" ? value(draft.current) : value;
+    publishText(next);
     persistText(next);
   };
+  /* The draft as a render input for the owner: only whether there is any text,
+     because that is all the owner's render reads of it. */
+  const readHasText = () => draft.current.trim() !== "";
+  const hasText = useSyncExternalStore(subscribeText, readHasText, readHasText);
 
   const [busy, setBusy] = useState(false);
   const [voiceSending, setVoiceSending] = useState(false);
@@ -256,19 +276,18 @@ export function useComposer({ initialText, persistText, submit, disabled = false
   });
 
   /* Realtime dictation overlays the in-flight transcript on the draft; the
-     draft state itself stays clean until stop() resolves and insertSpoken
-     appends the final text, so the two never double up. */
-  const displayText = dictation.liveText ? (text ? text.trimEnd() + " " : "") + dictation.liveText : text;
+     draft itself stays clean until stop() resolves and insertSpoken appends
+     the final text, so the two never double up. The textarea composes the
+     overlay with the live draft (`ComposerBar`).
 
-  /* Grow-to-max plus pin-to-newest: while a live dictation overlays the draft
-     the field pins to the bottom on every update so the latest spoken words
-     stay visible; while typing it pins only when the caret is at the end. */
-  useAutosizePinned(inputRef, displayText, {
-    active: viewActive,
-    field,
-    maxPx,
-    pinned: Boolean(dictation.liveText),
-  });
+     Grow-to-max plus pin-to-newest also runs there, beside the text it
+     measures (`autosize`): while a live dictation overlays the draft the field
+     pins to the bottom on every update so the latest spoken words stay visible;
+     while typing it pins only when the caret is at the end. */
+  const autosize = useMemo(
+    () => ({ active: viewActive, field, maxPx, pinned: Boolean(dictation.liveText) }),
+    [viewActive, field, maxPx, dictation.liveText],
+  );
 
   /* One-tap voice send: stop the recording in flight, wait for the transcript,
      append it to whatever is already typed, then hand off to submit — no
@@ -298,17 +317,21 @@ export function useComposer({ initialText, persistText, submit, disabled = false
   const attachmentsBlocked = attachments.hasReading || attachments.hasError;
   const canSend =
     !fieldsDisabled && !dictationBusy && !attachmentsBlocked
-    && (dictationRecording || Boolean(text.trim()) || attachments.images.length > 0 || attachments.files.length > 0);
+    && (dictationRecording || hasText || attachments.images.length > 0 || attachments.files.length > 0);
 
   return {
-    text,
+    /* Whether the draft holds anything but whitespace — the only fact about the
+       text the owner renders from. The text itself is `textRef.current`. */
+    hasText,
     textRef,
     draftRevision,
+    subscribeText,
+    getText,
     setText,
-    /* The raw setter, for restoring an already-persisted draft from outside
-       (a link-arrow drop) without re-persisting it through setText. */
-    setTextState,
-    displayText,
+    /* Restores an already-persisted draft from outside (a link-arrow drop)
+       without re-persisting it through setText. */
+    setTextState: publishText,
+    autosize,
     inputRef,
     /* The textarea's ref: keeps `inputRef` current AND (re)wires the IME mirror,
        so the field keeps working after a move between documents. */

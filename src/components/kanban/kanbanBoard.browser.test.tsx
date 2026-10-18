@@ -28,7 +28,7 @@ import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceC
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
-import { browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
+import { browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -33360,6 +33360,37 @@ describe("independent panel scroll", () => {
   }, 600_000);
 });
 
+
+describe("attention cues stay off the main thread beside the composer", () => {
+  /*
+   * Typing in a conversation that waits for the operator lagged: its ring
+   * repainted every frame on the main thread, the thread that answers the key
+   * (input-to-paint 56 ms with the ring, 16 ms without). The ring now turns by
+   * transform on the compositor. Over the fixture's waiting conversation, at
+   * 1440 and 900 px in both themes: the animation is `transform` alone on the
+   * 3.4s lap and the comets turn; the ring matches the previous drawing at five
+   * angles; reduced motion stills it; the ring, the shadow-growing halos, a running
+   * agent's glyph and the pulsing dots hold while the composer has the focus.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "attention cues stay off the main thread"
+   *
+   * Readings go to `evidence/attention-ring/desktop.json`; frames to
+   * `.artifacts/attention-ring/desktop/`.
+   */
+  browserTest("the ring turns on the compositor and matches the previous drawing", async () => {
+    const out = path.resolve(".artifacts/attention-ring/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      const result = await captureAttentionRing(browser, server.base, out, false);
+      fs.mkdirSync("evidence/attention-ring", { recursive: true });
+      fs.writeFileSync("evidence/attention-ring/desktop.json", JSON.stringify(result, null, 2) + "\n");
+      expect(result.failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
 
 describe("cold board summary", () => {
   browserTest("saved and refined boards match through an empty store and document reload", async () => {
