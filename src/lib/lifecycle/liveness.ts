@@ -1,3 +1,4 @@
+import { performanceSpans } from "@/lib/performanceSpans";
 import { hostTurnRecordIdentity, readHostTurnRecord } from "@/lib/runtime/eventStore";
 import { engineRecordSince, processLaunchedAt } from "@/lib/runtime/liveness";
 import { withoutExitBookkeeping } from "@/lib/pipelines/durableEvidence";
@@ -1113,9 +1114,9 @@ async function livenessSnapshotWithin(
 
   const projectionStartedAt = phaseClock();
   const targeted = Boolean(request.transcriptPath || request.conversationId);
-  const registry = request.conversationId && sources.registrySnapshotForConversation
+  const registry = performanceSpans.sync("liveness.snapshot", () => request.conversationId && sources.registrySnapshotForConversation
     ? sources.registrySnapshotForConversation(request.conversationId)
-    : sources.registrySnapshot();
+    : sources.registrySnapshot());
   // Archive rows are getters that check the database on every access. A
   // fallback through every entry must not enumerate every conversation for
   // each candidate. These indexes belong only to this captured snapshot.
@@ -1123,7 +1124,7 @@ async function livenessSnapshotWithin(
   const conversationForPath = (path: string) => (paths ??= conversationPathIndex(registry)).get(path) ?? null;
   let entriesInRegistry: AgentRegistryEntry[] | undefined;
   const registryEntries = () => entriesInRegistry ??= Object.values(registry.entries);
-  const pipelines = pipelineIndex(targeted ? [] : sources.pipelines.forLiveness ? [] : sources.pipelines());
+  const pipelines = performanceSpans.sync("liveness.snapshot", () => pipelineIndex(targeted ? [] : sources.pipelines.forLiveness ? [] : sources.pipelines()));
   const projectionOptions = { ...(request.signal ? { signal: request.signal } : {}), deadlineMs: answer.deadlineMs };
   const flows = targeted
     ? request.conversationId && sources.flows?.forTarget
@@ -1132,10 +1133,10 @@ async function livenessSnapshotWithin(
       [...(canonicalConversation(registry, request.conversationId)?.generations.map(g => g.path) ?? []), ...(canonicalConversation(registry, request.conversationId)?.continuityPaths ?? [])], projectionOptions)
       : sources.flows?.() ?? []
     : await (sources.flows?.forLiveness ? sources.flows.forLiveness(projectionOptions) : sources.flows?.() ?? []);
-  const hostedPaths = targeted ? new Set<string>() : new Set([
+  const hostedPaths = performanceSpans.sync("liveness.snapshot", () => targeted ? new Set<string>() : new Set([
     ...hostedTranscriptPaths(registry, sources.probe),
     ...activeHeadlessTranscriptPaths(flows, registry, sources.probe, Boolean(sources.flows?.forLiveness && canPruneHistoryHeadlessRounds(flows))),
-  ]);
+  ]));
   const indexProjectionMs = phaseClock() - projectionStartedAt;
 
   const identityOf = sources.transcriptIdentity ?? transcriptFileIdentity;
@@ -1417,7 +1418,7 @@ async function livenessSnapshotWithin(
   /* Rows whose tail answered. A read the answer budget left behind is not one. */
   let answered = 0;
   const processes = sources.workProcesses ?? activityProcessReader(now);
-  const projected = hydratable.map((entry, index) => {
+  const projected = performanceSpans.sync("liveness.snapshot", () => hydratable.map((entry, index) => {
     /* Three outcomes, kept apart: a read that produced evidence, a read that
        produced none, and a row the budget never reached. The counters below are
        derived from the same distinction, so the report and the per-row labels
@@ -1480,11 +1481,11 @@ async function livenessSnapshotWithin(
         ?? null,
       evidenceSource: (!attempted ? "projection" : evidence !== null ? "transcript" : "unreadable") as AgentLivenessRecord["evidenceSource"],
     };
-  });
+  }));
   const journalProjectionMs = indexProjectionMs + (phaseClock() - rowProjectionStartedAt);
 
   const serializationStartedAt = phaseClock();
-  const conversations: AgentLivenessRecord[] = projected.map((row) => ({
+  const conversations: AgentLivenessRecord[] = performanceSpans.sync("liveness.snapshot", () => projected.map((row) => ({
     ...(row.activity ? { activity: row.activity } : {}),
     verified: row.verified,
     conversationId: row.conversationId,
@@ -1505,7 +1506,7 @@ async function livenessSnapshotWithin(
     stalledForMs: row.lifecycle === "stalled" || row.lifecycle === "gone" ? row.silentForMs : null,
     pipeline: row.pipeline,
     evidenceSource: row.evidenceSource,
-  }));
+  })));
   const serializationMs = phaseClock() - serializationStartedAt;
 
   return {

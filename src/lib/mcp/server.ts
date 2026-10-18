@@ -1,3 +1,4 @@
+import { blockingWaitRole } from "@/lib/blockingWaits";
 import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
 import { normalizeShortIdArgs } from "./shortIdArgs";
 import { relayAnswerSchema } from "@/lib/externalRelay/protocol";
@@ -3377,10 +3378,11 @@ export function createMcpToolService(
       } finally {
         const totalMs = performance.now() - callStartedAt;
         if (totalMs >= 2_000) {
-          // Fixed vocabulary only: no keys, arguments, identities or error text.
+          // Process identity and fixed vocabulary only: no request keys,
+          // arguments, account identities or error text.
           // http is a subphase of binding; these wall times are not additive.
           phaseDurations.serviceTotal = totalMs;
-          console.error(`[mcp slow] tool=${typedTool} ${MCP_TIMING_PHASES
+          console.error(`[mcp slow] pid=${process.pid} role=${blockingWaitRole()} tool=${typedTool} ${MCP_TIMING_PHASES
             .map(phase => `${phase}Ms=${Math.round(phaseDurations[phase] ?? 0)}`).join(" ")}`);
         }
       }

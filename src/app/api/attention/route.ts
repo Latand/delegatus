@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { NextRequest, NextResponse } from "next/server";
 
 import { attentionForDevice, attentionRecordsForSurface, raiseAttentionRequest } from "@/lib/attention/service";
@@ -15,6 +16,7 @@ const headers = { "Cache-Control": "no-store" };
 /** What this device should render right now, plus anything the clock just
     expired so the caller can say so once. */
 export async function GET(request: NextRequest): Promise<NextResponse> {
+  return withViewerOperation("attention.read", async () => {
   const deviceId = request.nextUrl.searchParams.get("deviceId");
   /* A surface that draws the board and answers no request — the phone — asks
      for the rows alone (#1836). It names no device, so it can be offered
@@ -37,6 +39,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   } catch (error) {
     return attentionFailure(error);
   }
+  });
 }
 
 /** Raise a request. The root identity is resolved server-side (D4). */

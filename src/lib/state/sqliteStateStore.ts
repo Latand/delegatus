@@ -1,3 +1,4 @@
+import { blockingWaitRole } from "@/lib/blockingWaits";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
 import crypto from "node:crypto";
@@ -536,7 +537,7 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
     throw classifyStateError(error, "state transaction");
   } finally {
     const heldMs = performance.now() - holdStart;
-    if (heldMs >= 50) console.warn("[state transaction-hold]", { collection, heldMs: Math.round(heldMs) });
+    if (heldMs >= 50) console.warn(`[state transaction-hold] ${JSON.stringify({ collection, heldMs: Math.round(heldMs), pid: process.pid, role: blockingWaitRole() })}`);
   }
 }
 

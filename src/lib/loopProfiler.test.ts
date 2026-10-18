@@ -6,10 +6,10 @@ import { createLoopProfiler, LOOP_PROFILE_ARM_MS, LOOP_PROFILE_BYTES, trimLoopPr
   type LoopProfile, type LoopGapProfile, type LoopProfilerPorts } from "./loopProfiler";
 import { createViewerLoopMonitor } from "./viewerLoopMonitor";
 import { createPerformanceSpans } from "./performanceSpans";
-import { loopProfilerEnabled } from "./loopProfilerServing";
+import { loopProfilerEnabled, loopProfilerSettings } from "./loopProfilerServing";
 
 const root = path.resolve(".");
-const frame = { name: "syntheticThreeSecondBlock", sourceURL: path.join(root, "src/lib/loopProfiler.fixture.ts"), line: 7 };
+const frame = { name: "syntheticThreeSecondBlock", sourceURL: path.join(root, "src/lib/loopProfiler.fixture.ts"), line: 7, column: 1 };
 const sample: LoopProfile = { traces: [{ frames: [frame] }] };
 function harness(expires = LOOP_PROFILE_ARM_MS) {
   let at = 0, enabled = true, reads = 0, calls = 0;
@@ -50,7 +50,7 @@ test("only overlapping gaps at the exact threshold correlate and retention is bo
   h.finish(); await done;
   expect(h.emitted).toHaveLength(4);
   expect(h.emitted[0]).toMatchObject({ status: "captured", from: 0, to: 5000, intervalUs: 10000,
-    frames: { rows: [{ function: "syntheticThreeSecondBlock", file: "src/lib/loopProfiler.fixture.ts", selfWeight: 1, totalWeight: 1 }] } });
+    frames: { rows: [{ function: "syntheticThreeSecondBlock", file: "src/lib/loopProfiler.fixture.ts", column: 1, selfWeight: 1, totalWeight: 1 }] } });
   expect(Buffer.byteLength(JSON.stringify(h.emitted[0]))).toBeLessThanOrEqual(LOOP_PROFILE_BYTES);
 });
 
@@ -196,6 +196,36 @@ test("privacy filter rejects outside paths, URL payloads, dynamic names and nati
   expect(recursive.rows[0]).toMatchObject({ self: 1, total: 1 });
 });
 
+test("columns keep same-line locations distinct and sort ties numerically", () => {
+  const result = trimLoopProfile({ traces: [12, 2].map(column => ({ frames: [
+    { ...frame, column }, { ...frame, column },
+  ] })) }, root);
+  expect(result.rows.map(row => ({ column: row.column, self: row.self, total: row.total }))).toEqual([
+    { column: 2, self: 1, total: 1 }, { column: 12, self: 1, total: 1 },
+  ]);
+});
+
+test.each([undefined, null, "2", NaN, Infinity, -1, 0, 1.5, Number.MAX_SAFE_INTEGER + 1, 4294967295])(
+  "invalid columns are dropped: %s", column => {
+    expect(trimLoopProfile({ traces: [{ frames: [{ ...frame, column: column as number }] }] }, root).rows).toEqual([]);
+  });
+
+test("sentinel lines are dropped for source files and emitted Viewer chunks", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "loop-profile-sentinel-"));
+  const chunkDirectory = path.join(directory, ".next/server/chunks");
+  await mkdir(chunkDirectory, { recursive: true });
+  const sourceURL = path.join(chunkDirectory, "viewer.js");
+  await writeFile(sourceURL, "function emittedViewerLoopOwner(){}");
+  try {
+    const result = trimLoopProfile({ traces: [{ frames: [
+      { ...frame, line: 4294967295 },
+      { name: "emittedViewerLoopOwner", sourceURL, line: 4294967295, column: 1 },
+    ] }] }, directory);
+    expect(result.rows).toEqual([]);
+    expect(trimLoopProfile({ traces: [{ frames: [{ ...frame, line: 4294967295 }] }] }, root).rows).toEqual([]);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("a correctly attributed low-sample profile keeps its frame without a count threshold", () => {
   const result = trimLoopProfile({ traces: Array.from({ length: 119 }, () => ({ frames: [frame] })) }, root);
   expect(result.rows[0]).toMatchObject({ function: "syntheticThreeSecondBlock", file: "src/lib/loopProfiler.fixture.ts", self: 119, total: 119 });
@@ -212,7 +242,7 @@ test("static names remain attributable beyond the old declaration lookback", asy
   await writeFile(sourceURL, lines.join("\n"));
   try {
     const result = trimLoopProfile({ traces: Array.from({ length: 20 }, () => ({ frames: [
-      { name: "ordinaryLongFunction", sourceURL, line: 49 },
+      { name: "ordinaryLongFunction", sourceURL, line: 49, column: 3 },
     ] })) }, directory);
     expect(result.rows[0]).toMatchObject({ function: "ordinaryLongFunction", file: "src/long.ts", line: 49, self: 20, total: 20 });
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -226,11 +256,11 @@ test("static callables from emitted Viewer chunks are retained with repository-r
   await writeFile(sourceURL, "function emittedViewerLoopOwner(){for(;;){}};const computed={['privateSyntheticMarker'](){}};");
   try {
     const good = trimLoopProfile({ traces: Array.from({ length: 20 }, () => ({ frames: [
-      { name: "emittedViewerLoopOwner", sourceURL, line: 1 },
+      { name: "emittedViewerLoopOwner", sourceURL, line: 1, column: 1 },
     ] })) }, directory);
     expect(good.rows[0]).toMatchObject({ function: "emittedViewerLoopOwner", file: ".next/server/chunks/viewer.js", line: 1, self: 20, total: 20 });
     const computed = trimLoopProfile({ traces: [{ frames: [
-      { name: "privateSyntheticMarker", sourceURL, line: 1 },
+      { name: "privateSyntheticMarker", sourceURL, line: 1, column: 1 },
     ] }] }, directory);
     expect(computed.rows).toEqual([]);
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -283,9 +313,73 @@ async function namedSource(prefix: string, count: number) {
   const sourceURL = path.join(sourceDirectory, "names.ts");
   const names = Array.from({ length: count }, (_, index) => `${prefix}${index}`);
   await writeFile(sourceURL, names.map(name => `function ${name}() {}`).join("\n"));
-  const frames = names.map((name, index) => ({ name, sourceURL, line: index + 1 }));
+  const frames = names.map((name, index) => ({ name, sourceURL, line: index + 1, column: 1 }));
   return { directory, frames, cleanup: () => rm(directory, { recursive: true, force: true }) };
 }
+
+test("settings default to thirty minutes and accept the bounded arm duration", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-settings-"));
+  try {
+    expect(await loopProfilerSettings(dir)).toEqual({ enabled: true, armMs: LOOP_PROFILE_ARM_MS });
+    for (const value of ["not json", " ".repeat(513), "null", JSON.stringify({ enabled: true })]) {
+      await writeFile(path.join(dir, "loop-profiler.json"), value);
+      expect(await loopProfilerSettings(dir)).toEqual({ enabled: true, armMs: LOOP_PROFILE_ARM_MS });
+    }
+    for (const minutes of [30, 90, 120]) {
+      await writeFile(path.join(dir, "loop-profiler.json"), JSON.stringify({ armMinutes: minutes, enabled: false }));
+      expect(await loopProfilerSettings(dir)).toEqual({ enabled: false, armMs: minutes * 60_000 });
+      expect(await loopProfilerEnabled(dir)).toBe(false);
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test.each([29, 121, -1, 0, "90", "privateSyntheticMarker", null, true, {}, []].map(value => [value]))(
+  "invalid arm duration logs a fixed refusal and falls back to thirty minutes: %j", async armMinutes => {
+    const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-invalid-settings-"));
+    try {
+      await writeFile(path.join(dir, "loop-profiler.json"), JSON.stringify({ armMinutes }));
+      expect(await child(["settings"], dir)).toEqual({ enabled: true, armMs: LOOP_PROFILE_ARM_MS,
+        messages: ["[loop-profiler] invalid armMinutes; expected a number from 30 to 120; using 30 minutes"] });
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+test.each([90, 120])("serving uses the configured %s-minute deadline in a fresh process", async minutes => {
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-arm-window-"));
+  try {
+    expect(await child(["arm-window", String(minutes)], dir)).toEqual([
+      { status: "skipped", reason: "no-active-window" },
+      { status: "skipped", reason: "no-active-window" },
+      { status: "not-armed", reason: "arm-expired" },
+    ]);
+    const ledger = await readFile(path.join(dir, "loop-profiler-deploy.json"), "utf8");
+    expect(await child(["arm-window", "120"], dir)).toEqual([]);
+    expect(await readFile(path.join(dir, "loop-profiler-deploy.json"), "utf8")).toBe(ledger);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("a ninety-minute window still rechecks the kill switch and cannot extend its deadline", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-kill-switch-"));
+  try {
+    const settingsFile = path.join(dir, "loop-profiler.json");
+    await writeFile(settingsFile, JSON.stringify({ armMinutes: 90 }));
+    const { armMs } = await loopProfilerSettings(dir);
+    const h = harness(armMs);
+    h.ports.enabled = () => loopProfilerEnabled(dir);
+    // Use an explicit handshake because settings are read through the filesystem.
+    let collected!: () => void;
+    const ready = new Promise<void>(resolve => { collected = resolve; });
+    const collect = h.ports.collect;
+    h.ports.collect = (work, interval) => { collected(); return collect(work, interval); };
+    const run = h.recorder.start(); await ready;
+    await writeFile(settingsFile, JSON.stringify({ armMinutes: 120, enabled: false }));
+    h.time(31 * 60_000); h.finish(); await run;
+    expect(h.calls).toBe(1);
+    expect(h.gap()).toBe(true);
+    expect(h.emitted).toEqual([{ status: "not-armed", reason: "kill-switch" }]);
+    h.time(armMs); h.gap();
+    expect(h.emitted[1]).toEqual({ status: "not-armed", reason: "arm-expired" });
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
 
 test("fresh processes cannot renew a consumed deploy budget; runtime host never claims it", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-restart-"));
@@ -331,6 +425,7 @@ test("with no settings file, Bun main-thread three-second block is named on its 
     const target = gap.jsProfile.frames.rows.find((row: { function: string }) => row.function === "syntheticThreeSecondBlock");
     expect(target).toMatchObject({ file: "src/lib/loopProfiler.fixture.ts" });
     expect(target.line).toBeGreaterThan(0);
+    expect(Number.isSafeInteger(target.column) && target.column > 0).toBe(true);
     expect(Number.isSafeInteger(target.self) && target.self >= 0).toBe(true);
     expect(Number.isSafeInteger(target.total) && target.total >= target.self).toBe(true);
     expect(target.total).toBeLessThanOrEqual(gap.jsProfile.frames.inspectedSamples);
@@ -350,6 +445,7 @@ test("production bundle block is named on its correlated loop-gap record", async
     expect(target).toBeDefined();
     expect(target.function).toMatch(/^[A-Za-z_$][\w$]{0,95}$/);
     expect(target.line).toBeGreaterThan(0);
+    expect(Number.isSafeInteger(target.column) && target.column > 0).toBe(true);
     expect(target.self).toBeGreaterThan(100);
     expect(target.total).toBeGreaterThanOrEqual(target.self);
   } finally { await rm(dir, { recursive: true, force: true }); }

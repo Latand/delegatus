@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import os from "node:os";
 import { refreshAdmission, refreshRequest, refreshReservation, type RefreshLineage, type RefreshOptions } from "./autoRefresh";
 import { realExec } from "@/lib/workflows/provision";
@@ -695,6 +696,7 @@ export function mergeAdmission(pipeline: Pipeline, now: number, ports: MergeAdmi
  * on the head of each repository's queue whose next read is due.
  */
 export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
+  return withViewerOperation("forge.auto-merge", async () => {
   const now = ports.now();
   for (const pipeline of ports.loadPipelines()) {
     if (pipeline.state !== "completed") continue;
@@ -801,6 +803,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       ports.log?.(`[auto merge] ${head.id}: step failed`, error);
     }
   }
+  });
 }
 
 /** Closed PRs stay CLOSED in the forge cache after a batch lands. Recheck
@@ -915,6 +918,7 @@ const sameList = (left: readonly string[], right: readonly string[]) => left.len
  * only records.
  */
 export async function sweepTaskFinishes(ports: AutoMergePorts): Promise<void> {
+  return withViewerOperation("forge.auto-merge", async () => {
   if (!ports.finishTask) return;
   const pipelines = ports.loadPipelines();
   const now = ports.now();
@@ -963,6 +967,7 @@ export async function sweepTaskFinishes(ports: AutoMergePorts): Promise<void> {
       });
     }
   }
+  });
 }
 
 /** The production move: the task's own store, under its own lock. */

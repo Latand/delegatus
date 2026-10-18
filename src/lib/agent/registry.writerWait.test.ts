@@ -240,6 +240,8 @@ test("measured: the synchronous acquisition holds the caller's loop for the whol
     expect(gapMs).toBeGreaterThanOrEqual(250);
     const sample = blockingWaitDiagnostics().longest.find((candidate) => candidate.site === "registry-lock");
     expect(sample).toMatchObject({ synchronous: true, subject: "recordDeliveryOutcome", label: "delivery.outcome", operationId: "operation-sync" });
+    expect(sample?.callSite).toContain("src/lib/agent/registry.writerWait.test.ts:");
+    expect(sample?.callSite).not.toContain(process.env.HOME!);
   } finally {
     await child.exited;
     registry.close();
