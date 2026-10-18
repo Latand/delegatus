@@ -297,6 +297,8 @@ export interface SeatTickItem {
   finalMessageFrom?: { path: string; engine: string | null };
   /** That final message, bounded and redacted, once the controller read it. */
   finalMessage?: string;
+  /** Compact catch-up row used by its payload renderer and delivery receipt. */
+  manifestLine?: string;
   /** Only on a `deploy` line (#2063): the settled deployment as the ledger
       records it. `id` is its deployment id. */
   maintenance?: { runId: string };
@@ -1369,6 +1371,9 @@ export interface SeatTickCheckInput {
       owed the check ends `error` rather than quiet. The token names which
       condition stands (#1465); when several do, the most severe is carried. */
   childrenUnavailable: SeatTickChildrenGap | null;
+  /** Catch-up polling still has snapshot tickets to visit, independent of the
+      single highest-priority child source gap shown to the seat. */
+  childrenCatchUpPending?: boolean;
   /**
    * Digest of everything a wake could change, in two parts separated by a dot:
    * the evidence every check reads, then the pull-request evidence.

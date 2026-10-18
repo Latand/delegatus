@@ -113,11 +113,11 @@ test("catch-up crosses the event page boundary and leaves later events for later
   expect(next.sent[0]!.text).not.toContain("unreachable window");
 });
 
-test("oversized multilingual catch-up reaches the real structured transport and credits all events", async () => {
+test("450 multilingual UUID outcomes fit the real structured transport and credit only on delivery", async () => {
   const f = childFixture("catch-up-real-transport");
   const from = new Date(f.now - 13 * 60 * MINUTE).toISOString();
-  const events = Array.from({ length: 225 }, (_, i) => ({ ...terminalEvent(i + 1), project: PROJECT, type: "pipeline_merged" as const,
-    pipelineId: `merged-${String(i + 1).padStart(3, "0")}`, at: new Date(f.now - 12 * 60 * MINUTE + i * 1000).toISOString(), summary: `merged outcome ${i + 1} — ${"я界🙂".repeat(45)}` }));
+  const events = Array.from({ length: 450 }, (_, i) => ({ ...terminalEvent(i + 1), project: PROJECT, type: "pipeline_merged" as const,
+    pipelineId: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`, at: new Date(f.now - 12 * 60 * MINUTE + i * 1000).toISOString(), summary: `merged outcome ${i + 1} — ${"я界🙂".repeat(45)}` }));
   writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastCheckAt: from, lastWakeAt: from,
     lastProposalAt: AT, unreachableSince: from, eventsThrough: 0, accounting: undefined }, f.stateFile);
   setAgentRegistryForTests(f.registry);
@@ -133,6 +133,7 @@ test("oversized multilingual catch-up reaches the real structured transport and 
   const text = rig.sent[0]!.text;
   expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
   expect(text).toContain(`unreachable window ${from} through ${new Date(f.now).toISOString()}`);
+  expect(text).toContain(`manifest catch-up:7:${from}`);
   expect(text).toContain(`key catch-up:7:${from}`);
   for (const event of events) { expect(text).toContain(event.pipelineId); expect(text).toContain(event.at); }
   expect(rig.deps.readState!(PROJECT).eventsThrough).toBe(0);
@@ -141,8 +142,8 @@ test("oversized multilingual catch-up reaches the real structured transport and 
   hosted.journal.transitionOperation(queued.operationId!, "delivered");
   await runSeatTickCheck(PROJECT, rig.deps);
   const row = rig.deps.readState!(PROJECT);
-  expect(row.eventsThrough).toBe(225);
-  expect(row.itemsShown).toHaveLength(225);
+  expect(row.eventsThrough).toBe(450);
+  expect(row.itemsShown).toHaveLength(450);
   expect(row.reportsOwed?.map(report => report.key)).toEqual([`catch-up:7:${from}`]);
 });
 
@@ -196,11 +197,12 @@ test("one catch-up crosses the ready-child page and projection limits", async ()
   expect(rig.sent).toHaveLength(1);
   for (const child of children) expect(rig.sent[0]!.text).toContain(child.id);
   expect(f.acknowledged()).toHaveLength(70);
-  await runSeatTickCheck(f.project, rig.deps);
-  expect(rig.sent).toHaveLength(1);
+  const later = childRig(f, { now: NOW + 61 * MINUTE });
+  await runSeatTickCheck(f.project, later.deps);
+  expect(later.sent).toHaveLength(0);
 }, 60_000);
 
-test("cold child ledgers are collected across bounded passes before the catch-up lands", async () => {
+test("one child ledger gap cannot release a partial catch-up while other snapshot tickets remain", async () => {
   const Clock = Date;
   globalThis.Date = new Proxy(Clock, {
     construct(target, args) { return Reflect.construct(target, args.length ? args : [NOW]); },
@@ -211,10 +213,11 @@ test("cold child ledgers are collected across bounded passes before the catch-up
     const child = f.spawn({ title: `cold held worker ${String(i).padStart(2, "0")}`, turn: "busy" });
     const generation = f.registry.conversation(child.id as never)!.generations[0]!.id;
     const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
-    ledger.append(generation, { kind: "turn-started", turnId: `first-${i}`, seq: 1 });
-    ledger.append(generation, { kind: "turn-ended", turnId: `first-${i}`, status: "completed", seq: 2 });
-    ledger.append(generation, { kind: "turn-started", turnId: `second-${i}`, seq: 3 });
-    ledger.append(generation, { kind: "turn-ended", turnId: `second-${i}`, status: "completed", seq: 4 });
+    const offset = i === 0 ? 1 : 0;
+    ledger.append(generation, { kind: "turn-started", turnId: `first-${i}`, seq: 1 + offset });
+    ledger.append(generation, { kind: "turn-ended", turnId: `first-${i}`, status: "completed", seq: 2 + offset });
+    ledger.append(generation, { kind: "turn-started", turnId: `second-${i}`, seq: 3 + offset });
+    ledger.append(generation, { kind: "turn-ended", turnId: `second-${i}`, status: "completed", seq: 4 + offset });
     f.registry.reconcileConversations([{
       engine: "claude", path: child.path, accountId: null,
       launchProfile: emptyLaunchProfile({ title: `cold held worker ${String(i).padStart(2, "0")}`, cwd: f.cwd }),
@@ -235,15 +238,20 @@ test("cold child ledgers are collected across bounded passes before the catch-up
   expect(persistedPollCutoff).not.toBeNull();
   expect(rig.sent).toHaveLength(1);
   const text = rig.sent[0]!.text;
-  expect(text).toContain(`Catch-up after unreachable window ${FROM}`);
+  expect(text).toContain(`Catch-up manifest catch-up:7:${FROM}`);
   for (const child of children) expect(text).toContain(child.id);
   const accounting = new SeatTickAccounting(f.row().accounting!.filename, f.project);
   const acknowledged = accounting.collection.snapshot().flatMap(row => row.kind === "outcome" && row.status === "acknowledged" ? [row] : []);
   expect(acknowledged).toHaveLength(140);
   expect(acknowledged.filter(row => row.tuple.some(value => value.startsWith("second-")))).toHaveLength(70);
+  expect(deliveredAt).toBeGreaterThan(5);
   expect(f.row().unreachableSince).toBeNull();
-  await runSeatTickCheck(f.project, rig.deps);
-  expect(rig.sent).toHaveLength(1);
+  const later = childRig(f, { now: NOW + 61 * MINUTE });
+  await runSeatTickCheck(f.project, later.deps);
+  expect(later.sent).toHaveLength(1);
+  expect(later.sent[0]!.text).not.toContain("first-");
+  expect(later.sent[0]!.text).not.toContain("second-");
+  expect(later.sent[0]!.text).not.toContain(`Catch-up manifest catch-up:7:${FROM}`);
 }, 60_000);
 
 test("a legacy dead-seat row catches up its entire pre-upgrade delivery gap", async () => {

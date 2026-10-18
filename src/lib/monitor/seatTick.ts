@@ -1547,7 +1547,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      passed both, and a gap adds none. */
   if (reasons.length > 0) {
     const catchUp = seatTickCatchUp(input);
-    if (catchUp && ["discovery-incomplete", "ledger-pending", "migration-pending"].includes(input.childrenUnavailable ?? "")) {
+    if (catchUp && (input.childrenCatchUpPending || ["discovery-incomplete", "ledger-pending", "migration-pending"].includes(input.childrenUnavailable ?? ""))) {
       return { verdict: { kind: "error", detail: "catch-up is collecting the remaining held child outcomes; the next check continues" },
         state, cards, reportedSourceGap, reportedChildrenGap };
     }
@@ -2058,7 +2058,7 @@ export function seatTickWakeCommitPlan(
   const framed = context.frozenText === undefined ? null : `\n${context.frozenText}\n`;
   const carriedLines = context.frozenText === undefined ? null : new Set(context.frozenText.split("\n"));
   const carries = (line: string) => carriedLines === null || (!line.includes("\n") ? carriedLines.has(line) : framed!.includes(`\n${line}\n`));
-  const items = verdict.items.filter(item => carries(redactMonitorText(seatTickBullet(item))));
+  const items = verdict.items.filter(item => carries(redactMonitorText(item.manifestLine ?? seatTickBullet(item))));
   // Delivery advances past only the merges its complete bullets carried.
   // A merge held back by the item or text bound keeps the cursor in front of it.
   const deliveredMerges = new Set(items.flatMap(item => item.mergeEventSeq === undefined ? [] : [item.mergeEventSeq]));
@@ -2129,7 +2129,7 @@ export function seatTickWakeCommitPlan(
     ...(verdict.activeStallTokens ? { activeStallTokens: verdict.activeStallTokens } : {}),
     ...(disk ? { diskPressure: { episode: disk.diskPressureEpisode!, version: disk.itemVersion! } } : {}),
     itemsShown: items.flatMap(item => item.itemVersion ? [item.itemVersion] : []),
-    itemLines: items.flatMap(item => item.itemVersion ? [{ version: item.itemVersion, line: redactMonitorText(seatTickBullet(item)) }] : []),
+    itemLines: items.flatMap(item => item.itemVersion ? [{ version: item.itemVersion, line: redactMonitorText(item.manifestLine ?? seatTickBullet(item)) }] : []),
     acknowledgmentLines,
     ...(reportsOwed.length > 0 ? { reportsOwed } : {}),
     ...(reportedStalls.length > 0 ? { reportedStalls } : {}),

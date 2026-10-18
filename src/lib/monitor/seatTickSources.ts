@@ -1979,6 +1979,7 @@ function projectChild(
 interface ChildEvidence {
   children: SeatTickChildInput[];
   unavailable: SeatTickChildrenGap | null;
+  catchUpPending: boolean;
 }
 
 /** The one token a check carries when several conditions stand: the first in
@@ -2033,8 +2034,8 @@ async function childWork(
   policy: SeatTickPolicy,
   sources: SeatTickSources,
 ): Promise<ChildEvidence> {
-  if (!seat) return { children: [], unavailable: null };
-  if (!state.accounting) return { children: [], unavailable: "registry-unreadable" };
+  if (!seat) return { children: [], unavailable: null, catchUpPending: false };
+  if (!state.accounting) return { children: [], unavailable: "registry-unreadable", catchUpPending: false };
   const accounting = new SeatTickAccounting(state.accounting.filename, project);
   const registry = sources.registry();
   const now = sources.now();
@@ -2143,6 +2144,7 @@ async function childWork(
     if (cut && projected.turn !== "busy") gaps.add("ledger-pending");
   };
 
+  let catchUpPending = false;
   try {
     const active = accounting.owner(seat.conversationId, seat.seatEpoch);
     if (accounting.discoverRevokedOwners(statePath("orchestrator-seats.json"), (ownerProject) => canonicalOrchestratorProject(ownerProject) === project)) {
@@ -2230,6 +2232,7 @@ async function childWork(
       const next = accounting.page("poll", 1)[0];
       const pending = next?.kind === "poll" && (next.key.startsWith(`poll/${encodeURIComponent(project)}/!`)
         || Number(next.key.slice(next.key.lastIndexOf("/") + 1)) <= catchUpPollThrough);
+      catchUpPending = !!pending;
       if (pending) gaps.add("ledger-pending");
       else accounting.endCatchUpPoll();
     }
@@ -2293,7 +2296,7 @@ async function childWork(
       });
     }
   } catch { gaps.add("registry-unreadable"); }
-  return { children, unavailable: worstChildrenGap(gaps) };
+  return { children, unavailable: worstChildrenGap(gaps), catchUpPending };
 }
 
 function stageAttempt(lane: Pipeline) {
@@ -2467,7 +2470,7 @@ export async function gatherSeatTickInput(
     console.error("[seat tick] lifecycle projection failed", error instanceof Error ? error.name : "unknown");
   }
   const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, hotLanes, sources, catchUp);
-  const { children, unavailable: childrenUnavailable } = await childWork(canonical, seat, state, policy, sources);
+  const { children, unavailable: childrenUnavailable, catchUpPending: childrenCatchUpPending } = await childWork(canonical, seat, state, policy, sources);
   /* An unreadable board costs this check its routed asks, never the check:
      the waits stay routed and the next check reads them again. */
   let workerAsks: readonly SeatTickWorkerAskInput[] = [];
@@ -2522,6 +2525,7 @@ export async function gatherSeatTickInput(
     releaseAlerts,
     children,
     childrenUnavailable,
+    childrenCatchUpPending,
     changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys, settledMaintenance),
     /* The sealed cursor travels on the state the decision carries forward, so a
        check of any verdict — a skip included, which remembers nothing else —
