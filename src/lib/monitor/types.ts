@@ -252,6 +252,7 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
+  occurredAt?: string | null;
   /** Journal identity of a merge this visible line announces on delivery. */
   mergeEventSeq?: number;
   diskPressureEpisode?: string;
@@ -349,6 +350,7 @@ export type SeatTickVerdict =
   | { kind: "quiet"; detail: string }
   | {
     kind: "wake";
+    catchUp?: { key: string; from: string; through: string; covers: string[] };
     reasons: SeatTickWakeReason[];
     items: SeatTickItem[];
     /** Current stall episodes let a landed wake retire stale episode history
@@ -873,6 +875,7 @@ export interface SeatTickPolicy {
  * from anything else would credit the seat with a different message.
  */
 export interface SeatTickWakeCommit {
+  catchUp?: { key: string; from: string; through: string; covers: string[] };
   diskPressure?: { episode: string; version: string };
   /** Versions of agenda items carried by this frozen delivery plan. */
   itemsShown?: string[];
@@ -1093,6 +1096,8 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  /** First observed failed reachability; cleared only by a landed wake. */
+  unreachableSince?: string | null;
   hostRecovery?: import("./seatHostRecovery").SeatHostRecovery;
   autoRotation?: import("./seatAutoRotation").SeatAutoRotationState;
   authIncident?: SeatAuthIncident;

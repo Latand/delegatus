@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -262,10 +263,39 @@ export function sanitizeSeatTickRecord(value: unknown): SeatTickRunRecord | null
 }
 
 export function appendSeatTickRecord(record: SeatTickRunRecord, filePath = seatTickJournalPath()): void {
-  appendJournalRecord(record, { filePath, retention: SEAT_TICK_RUN_HISTORY, busyMessage: "the seat tick journal is busy" });
+  const projectFile = seatTickProjectJournalPath(record.project, filePath);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  // The global ring remains small. Each project's own ring is independent,
+  // so unrelated checks cannot consume its diagnostic window.
+  withViewerOperation("seat-tick.audit", () => withFileTransactionSync(filePath, "the seat tick journal is busy", () => {
+    if (!fs.existsSync(projectFile)) {
+      fs.mkdirSync(path.dirname(projectFile), { recursive: true, mode: 0o700 });
+      const files = fs.readdirSync(path.dirname(projectFile)).filter(name => /^[a-f0-9]{64}\.ndjson$/.test(name))
+        .map(name => ({ file: path.join(path.dirname(projectFile), name), at: fs.statSync(path.join(path.dirname(projectFile), name)).mtimeMs }))
+        .sort((a, b) => a.at - b.at || a.file.localeCompare(b.file));
+      for (const entry of files.slice(0, Math.max(0, files.length - SEAT_TICK_PROJECT_HISTORY + 1))) fs.unlinkSync(entry.file);
+    }
+    for (const target of [projectFile, filePath]) {
+      fs.appendFileSync(target, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
+      trim(target, SEAT_TICK_RUN_HISTORY);
+    }
+  }));
 }
 
 /** The newest `limit` checks, oldest first. */
-export function readSeatTickRecords(limit: number, filePath = seatTickJournalPath()): SeatTickRunRecord[] {
+export const SEAT_TICK_PROJECT_HISTORY = 128;
+
+function seatTickProjectJournalPath(project: string, filePath: string): string {
+  return path.join(`${filePath}.projects`, `${crypto.createHash("sha256").update(project).digest("hex")}.ndjson`);
+}
+
+export function readSeatTickRecords(limit: number, filePath = seatTickJournalPath(), project?: string): SeatTickRunRecord[] {
+  if (project !== undefined) {
+    const scoped = seatTickProjectJournalPath(project, filePath);
+    if (fs.existsSync(scoped)) return readJournalRecords(limit, { filePath: scoped, sanitize: sanitizeSeatTickRecord });
+    // Existing installations keep their old journal until their first new check.
+    return readJournalRecords(Number.MAX_SAFE_INTEGER, { filePath, sanitize: sanitizeSeatTickRecord })
+      .filter(row => row.project === project).slice(-Math.max(0, limit));
+  }
   return readJournalRecords(limit, { filePath, sanitize: sanitizeSeatTickRecord });
 }

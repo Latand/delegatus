@@ -1482,7 +1482,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       reasons.push({ ...reason, detail: `pull request #${first.number}${pending.length > 1 ? ` and ${pending.length - 1} more` : ""} left open by a lane that finished${first.lastFixUnreviewed ? "; last fix not re-reviewed" : ""}${first.mergeBlocked ? `; merge stopped: ${first.mergeBlocked}` : ""}` });
     } else if (reason.kind === "own-lane-settled" || reason.kind === "unstarted-task" || reason.kind === "stalled") {
       const named = pending.slice(0, input.policy.itemsPerWake).map(item => `${item.kind === "pull-request" ? `${item.id}: ` : ""}${item.label.replace(/\s+/g, " ").slice(0, 200)}`).join("; ");
-      const more = pending.length > input.policy.itemsPerWake ? `; ${pending.length - input.policy.itemsPerWake} more await a later wake` : "";
+      const more = pending.length > input.policy.itemsPerWake ? `; ${pending.length - input.policy.itemsPerWake} more ${seatTickCatchUp(input) ? "included in this catch-up" : "await a later wake"}` : "";
       reasons.push({ ...reason, detail: `${named}${more}${reason.kind === "unstarted-task" && backlog > 0 ? `; ${backlog} older than the backlog bound` : ""}` });
     } else reasons.push(reason);
   }
@@ -1546,16 +1546,25 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      The guard and the interval are untouched by any of it: the reasons here
      passed both, and a gap adds none. */
   if (reasons.length > 0) {
-    const items = offered.slice(0, input.policy.itemsPerWake);
-    const lines = seatTickReportLines(input, state, items, reasons);
+    const catchUp = seatTickCatchUp(input);
+    if (catchUp && ["discovery-incomplete", "ledger-pending", "migration-pending"].includes(input.childrenUnavailable ?? "")) {
+      return { verdict: { kind: "error", detail: "catch-up is collecting the remaining held child outcomes; the next check continues" },
+        state, cards, reportedSourceGap, reportedChildrenGap };
+    }
+    const items = catchUp ? offered.map(item => ({ ...item, finalMessageFrom: undefined,
+      label: `${item.occurredAt ?? "time unavailable"}: ${item.label.replace(/\s+/g, " ")}` })) : offered.slice(0, input.policy.itemsPerWake);
+    const lines = catchUp && input.reports?.bridgeReports
+      ? [`Report owed${input.reports.operatorLocale ? `, in ${LANGUAGE_NAME[input.reports.operatorLocale]}` : ""}: file one catch-up report with key ${catchUp.key} and coversOwed: true. Cover the entire outage window, its outcomes and unresolved actions.`]
+      : seatTickReportLines(input, state, items, reasons);
     return {
       verdict: {
         kind: "wake",
+        ...(catchUp ? { catchUp } : {}),
         reasons,
         items,
         activeStallTokens: [...stalled.map(entry => laneStallToken(entry.pipeline)), ...stalledKids.map(entry => childStallToken(entry.child))],
         pendingMergeSeqs: laneEvents.filter(event => event.type === "pipeline_merged").map(event => event.seq),
-        deferred: Math.max(0, offered.length - input.policy.itemsPerWake),
+        deferred: catchUp ? 0 : Math.max(0, offered.length - input.policy.itemsPerWake),
         skippedChildren,
         unreadableChildren: unreadable.named,
         gaps,
@@ -1625,6 +1634,14 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
 /** The board half of a change fingerprint: what the digest compares. */
 function boardFingerprint(fingerprint: string): string {
   return fingerprint.split(".")[0] ?? fingerprint;
+}
+
+export function seatTickCatchUp(input: Pick<SeatTickCheckInput, "state" | "now" | "settings" | "seat">) {
+  const from = input.state.unreachableSince;
+  if (!from || input.now - Date.parse(from) <= input.settings.wakeIntervalMs) return null;
+  const through = new Date(input.now).toISOString();
+  return { key: `catch-up:${input.seat?.seatEpoch ?? 0}:${from}`, from, through,
+    covers: (input.state.reportsOwed ?? []).map(entry => entry.key) };
 }
 
 function instant(value: string | null | undefined): number {
@@ -1859,13 +1876,14 @@ function wakeItems(context: {
     items.push({
       kind: "deploy",
       id: deploy.deploymentId,
+      occurredAt: deploy.settledAt,
       label: deployLabel(deploy),
       deploy: { deploymentId: deploy.deploymentId, phase: deploy.phase, sha: deploy.sha, error: deploy.error },
     });
   }
   for (const alert of input.releaseAlerts ?? []) items.push({ kind: "signal", id: alert.id, label: alert.label });
   for (const run of seatSettledMaintenance(input)) {
-    items.push({ kind: "maintenance", id: run.taskId ?? run.runId, label: maintenanceItemLabel(run), maintenance: { runId: run.runId } });
+    items.push({ kind: "maintenance", id: run.taskId ?? run.runId, occurredAt: run.endedAt, label: maintenanceItemLabel(run), maintenance: { runId: run.runId } });
   }
   for (const pipeline of seatPausedLanes(input)) {
     items.push({ kind: "pipeline", id: pipeline.id, label: `${pipeline.title} — paused by you; resume it with pipeline_action resume once what you paused it for is done` });
@@ -1883,6 +1901,7 @@ function wakeItems(context: {
     const lane = context.ownLanes.find((entry) => entry.id === pullRequest.pipelineId);
     items.push({
       kind: "pull-request",
+      occurredAt: lane?.updatedAt ?? pullRequest.updatedAt,
       id: `#${pullRequest.number}`,
       label: `${pullRequest.title} — open pull request from ${pullRequest.pipelineTitle}, unmerged since that lane finished${pullRequest.lastFixUnreviewed ? "; last fix not re-reviewed" : ""}${pullRequest.mergeBlocked ? `; merge stopped: ${pullRequest.mergeBlocked}` : ""}${taskWaitNote(pullRequest.taskWaits)}`,
       ...(lane ? { laneAnnouncement: `${lane.id}:${lane.settled}` } : {}),
@@ -1900,10 +1919,10 @@ function wakeItems(context: {
        special: it rides the same reason, the same agenda order and the same
        per-wake bound as every other own-lane line, and the bound cutting it is
        what leaves it unannounced and offerable next time. */
-    items.push({ kind: lane.settled === "provisioned" ? "provisioning" : "pipeline", id: lane.id, label: ownLaneLabel(lane), laneAnnouncement: `${lane.id}:${lane.settled}` });
+    items.push({ kind: lane.settled === "provisioned" ? "provisioning" : "pipeline", id: lane.id, occurredAt: lane.updatedAt, label: ownLaneLabel(lane), laneAnnouncement: `${lane.id}:${lane.settled}` });
   }
   for (const event of context.laneEvents) {
-    items.push({ kind: "event", id: event.pipelineId ?? event.type, label: `${event.type}: ${event.summary}`,
+    items.push({ kind: "event", id: event.pipelineId ?? event.type, occurredAt: event.at, label: `${event.type}: ${event.summary}`,
       ...(event.type === "pipeline_merged" ? { mergeEventSeq: event.seq } : {}) });
   }
   /* Oldest outcome first (#1465), so the per-wake bound holds back the newest
@@ -1919,6 +1938,7 @@ function wakeItems(context: {
     items.push({
       kind: "child",
       id: child.conversationId,
+      occurredAt: child.terminalAt ?? child.lastRecordAt,
       outcomeId: child.outcomeId,
       outcomeIds: entry.outcomeIds,
       /* A line that said why the transcript is unreadable has named that too,
@@ -2035,8 +2055,9 @@ export function seatTickWakeCommitPlan(
   if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], announcedMaintenance: [], shownChildren: [], ...note };
   if (verdict.kind !== "wake") return null;
   const framed = context.frozenText === undefined ? null : `\n${context.frozenText}\n`;
-  const items = framed === null ? verdict.items : verdict.items.filter(item =>
-    framed.includes(`\n${redactMonitorText(seatTickBullet(item))}\n`));
+  const carriedLines = context.frozenText === undefined ? null : new Set(context.frozenText.split("\n"));
+  const carries = (line: string) => carriedLines === null || (!line.includes("\n") ? carriedLines.has(line) : framed!.includes(`\n${line}\n`));
+  const items = verdict.items.filter(item => carries(redactMonitorText(seatTickBullet(item))));
   // Delivery advances past only the merges its complete bullets carried.
   // A merge held back by the item or text bound keeps the cursor in front of it.
   const deliveredMerges = new Set(items.flatMap(item => item.mergeEventSeq === undefined ? [] : [item.mergeEventSeq]));
@@ -2070,7 +2091,10 @@ export function seatTickWakeCommitPlan(
   const announcedMaintenance = items.filter(item => item.kind === "maintenance").flatMap(item => item.maintenance ? [item.maintenance.runId] : []);
   const announcedDeploys = items.filter((item) => item.kind === "deploy").map((item) => item.id);
   /* The outcomes the report log is owed once this wake lands (§5.1). */
-  const reportsOwed = context.bridgeReports ? seatTickOwedOutcomes(items) : [];
+  const catchUp = verdict.catchUp && items.length === verdict.items.length ? verdict.catchUp : undefined;
+  const reportsOwed = context.bridgeReports ? catchUp
+    ? [{ key: catchUp.key, label: `catch-up ${catchUp.from} through ${catchUp.through}` }]
+    : seatTickOwedOutcomes(items) : [];
   /* The stalls the wake actually names, never the check's whole stall list:
      one the per-wake bound cut was not reported. */
   const reportedStalls = items.flatMap((item) => item.stallToken ? [item.stallToken] : []);
@@ -2089,11 +2113,16 @@ export function seatTickWakeCommitPlan(
     ];
     return keys.map(key => ({ key, line: redactMonitorText(seatTickBullet(item)) }));
   });
+  if (catchUp && context.bridgeReports) {
+    const line = context.frozenText?.split("\n").find(line => line.includes(`key ${catchUp.key} and coversOwed: true`));
+    if (line) acknowledgmentLines.push({ key: `report:${catchUp.key}`, line });
+  }
   for (const child of verdict.unreadableChildren ?? []) {
     const line = redactMonitorText(`- ${child.conversationId} — ${child.title}: ${child.reason}`);
     if (framed === null || framed.includes(`\n${line}\n`)) acknowledgmentLines.push({ key: `shown:${child.stateToken}`, line });
   }
   return {
+    ...(catchUp ? { catchUp } : {}),
     proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough: deliveredThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
     ...(verdict.activeStallTokens ? { activeStallTokens: verdict.activeStallTokens } : {}),
     ...(disk ? { diskPressure: { episode: disk.diskPressureEpisode!, version: disk.itemVersion! } } : {}),
@@ -2134,7 +2163,8 @@ export function seatTickWakeCommit(
   const at = new Date(now).toISOString();
   const received = reachedAt && Number.isFinite(Date.parse(reachedAt)) && Date.parse(reachedAt) <= now ? reachedAt : at;
   const owed = commit.reportsOwed?.length
-    ? recordOwed(state.reportsOwed ?? [], state.reportsOwedDropped ?? 0, commit.reportsOwed, received)
+    ? recordOwed(commit.catchUp ? (state.reportsOwed ?? []).filter(entry => !commit.catchUp!.covers.includes(entry.key)) : state.reportsOwed ?? [],
+      state.reportsOwedDropped ?? 0, commit.reportsOwed, received)
     : null;
   const eventsThrough = Math.max(state.eventsThrough ?? 0, commit.eventsThrough);
   /* What the seat now holds of its own note (#2030); a plan that predates the
@@ -2171,6 +2201,7 @@ export function seatTickWakeCommit(
   return {
     ...state,
     ...note,
+    unreachableSince: null,
     lastWakeAt: received,
     lastWakeReasons: carried,
     lastWakeFingerprint: commit.fingerprint,
@@ -2289,7 +2320,8 @@ function visibleAgendaVersions(state: SeatTickProjectState, commit: SeatTickWake
   const text = state.outstandingWake?.text;
   if (text === undefined || commit.itemLines === undefined) return commit.itemsShown ?? [];
   const framed = `\n${text}\n`;
-  const visible = commit.itemLines.filter(item => framed.includes(`\n${item.line}\n`));
+  const lines = new Set(text.split("\n"));
+  const visible = commit.itemLines.filter(item => !item.line.includes("\n") ? lines.has(item.line) : framed.includes(`\n${item.line}\n`));
   const wake = state.outstandingWake;
   if (!wake) return visible.map(item => item.version);
   /* Before recipient-bound signal versions shipped, saved prototype answers
@@ -2315,8 +2347,10 @@ function visibleWakeAcknowledgments(state: SeatTickProjectState, commit: SeatTic
   if (!state.outstandingWake || commit.proposal) return commit;
   const text = state.outstandingWake.text ?? "";
   const framed = `\n${text}\n`;
+  const lines = new Set(text.split("\n"));
+  const carries = (line: string) => !line.includes("\n") ? lines.has(line) : framed.includes(`\n${line}\n`);
   const proofs = commit.acknowledgmentLines;
-  const visible = new Set(proofs?.filter(proof => framed.includes(`\n${proof.line}\n`)).map(proof => proof.key));
+  const visible = new Set(proofs?.filter(proof => carries(proof.line)).map(proof => proof.key));
   const agenda = text.split("\nItems:\n")[1]?.split(/\n\n(?:Why you were woken:|Signals:|Bridge reports:|Snapshot at |Operator instructions for every wake:|Standing monitor note|Contract:|Spawned children whose transcript)/)[0] ?? "";
   const bullets = [...agenda.matchAll(/^- \[([^\]]+)\] (\S+) — ([\s\S]*?)(?=\n- \[|$)/gm)]
     .filter(match => !match[0].trimEnd().endsWith("…")
@@ -2354,7 +2388,10 @@ function visibleWakeAcknowledgments(state: SeatTickProjectState, commit: SeatTic
     }
   };
   const filter = (kind: string, ids: readonly string[] | undefined) => (ids ?? []).filter(id => allows(kind, id));
+  const completeCatchUp = commit.catchUp && (commit.itemLines ?? []).every(item => carries(item.line))
+    && (commit.acknowledgmentLines ?? []).every(proof => carries(proof.line));
   return { ...commit,
+    catchUp: completeCatchUp ? commit.catchUp : undefined,
     children: filter("child", commit.children),
     shownChildren: filter("shown", commit.shownChildren),
     announcedLanes: filter("lane", commit.announcedLanes),

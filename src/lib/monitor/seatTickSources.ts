@@ -1,3 +1,4 @@
+import { seatTickCatchUp } from "./seatTick";
 import { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 import { defaultSeatTickAdmissionSources } from "./seatTickAdmissionSources";
 import { readReleaseProject } from "@/lib/release/store";
@@ -943,6 +944,7 @@ function ownSettledLanes(
   seat: SeatTickSeatInput | null,
   announced: readonly string[],
   pipelines: readonly Pipeline[],
+  catchUp = false,
 ): SeatTickOwnLaneInput[] {
   if (!seat) return [];
   /* The HOT store only, and deliberately: a settled lane lives there for three
@@ -976,7 +978,7 @@ function ownSettledLanes(
   const at = (lane: SeatTickOwnLaneInput) => (lane.updatedAt ? Date.parse(lane.updatedAt) : Number.NaN);
   return lanes
     .sort((left, right) => (at(right) || 0) - (at(left) || 0) || left.id.localeCompare(right.id))
-    .slice(0, OWN_LANE_LIMIT);
+    .slice(0, catchUp ? undefined : OWN_LANE_LIMIT);
 }
 
 /** A delivered lane announcement survives every check that could still offer
@@ -1017,7 +1019,7 @@ const SEAT_DEPLOY_LIMIT = 5;
 async function settledSeatDeploys(
   seat: SeatTickSeatInput | null,
   announced: readonly string[],
-  context: { now: number; backlogAfterMs: number },
+  context: { now: number; backlogAfterMs: number; catchUp?: boolean },
   sources: SeatTickSources,
 ): Promise<SeatTickDeployInput[]> {
   if (!seat || !sources.seatDeployments || !sources.deployment) return [];
@@ -1049,7 +1051,7 @@ async function settledSeatDeploys(
       settledAt: status.updatedAt ?? null,
     });
   }
-  return settled.slice(-SEAT_DEPLOY_LIMIT);
+  return context.catchUp ? settled : settled.slice(-SEAT_DEPLOY_LIMIT);
 }
 
 /**
@@ -1545,6 +1547,7 @@ function eventsSince(
   openPipelineIds: ReadonlySet<string>,
   pipelines: readonly Pipeline[],
   sources: SeatTickSources,
+  catchUp = false,
 ): { events: SeatTickEventInput[]; cursor: number } {
   const journal = sources.lifecycleJournal();
   /* `lastSeq` is the head the journal maintains; the newest event's seq is the
@@ -1562,7 +1565,7 @@ function eventsSince(
   const page = pageFromEvents(journal, { project, afterSeq: cursor, limit: EVENT_PAGE });
   const merged = new Map(pipelines.filter(lane => lane.merge?.state === "merged").map(lane => [lane.id, lane]));
   return {
-    events: page.events.map((event) => {
+    events: (catchUp ? journal.events.filter(event => event.seq > cursor && event.project !== null && canonicalOrchestratorProject(event.project) === project) : page.events).map((event) => {
       const lane = event.pipelineId ? merged.get(event.pipelineId) : undefined;
       return {
         seq: event.seq,
@@ -2035,6 +2038,7 @@ async function childWork(
   const accounting = new SeatTickAccounting(state.accounting.filename, project);
   const registry = sources.registry();
   const now = sources.now();
+  const catchingUp = !!seatTickCatchUp({ state, now, settings: effectiveSeatTickSettings(sources.settings(project), now, SEAT_TICK_WAKE_INTERVAL_MS), seat });
   const gaps = new Set<SeatTickChildrenGap>();
   const migration = accountingGap(state.accounting.gap);
   if (migration) gaps.add(migration);
@@ -2207,7 +2211,34 @@ async function childWork(
       }
     }
     accounting.rotateCold(coldVisits);
-    for (const outcome of accounting.ready(20)) {
+    // Page the persisted ready queue, yielding between pages. The cutoff is
+    // the snapshot gathered by this check; deliveries acknowledge its exact ids.
+    const ready = async function* () {
+      if (!catchingUp) {
+        yield* accounting.ready(20); return;
+      }
+      let after: string | undefined;
+      const cutoff = accounting.row()!.sequence;
+      for (;;) {
+        const page = accounting.page("ready", 64, after);
+        for (const ticket of page) {
+          if (Number(ticket.key.slice(ticket.key.lastIndexOf("/") + 1)) > cutoff) return;
+          if (ticket.kind !== "ready") throw new Error("invalid ready ticket");
+          const outcome = accounting.get(ticket.target);
+          if (!outcome || outcome.kind !== "outcome") throw new Error("missing ready outcome");
+          if (outcome.status === "owed" && !outcome.gap) yield outcome;
+        }
+        if (page.length < 64) return;
+        after = page.at(-1)!.key;
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+      }
+    };
+    for await (const outcome of ready()) {
+      if (catchingUp && projectedRows >= 40) {
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        pages.clear();
+        projectedRows = 0;
+      }
       const child = accounting.get(outcome.child);
       if (!child || child.kind !== "child") throw new Error("missing ready child");
       const page = seatChildren(child.owner, null, 1, [child.rowKey]);
@@ -2281,7 +2312,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
     updatedAt: task.updatedAt ?? null,
     ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
   }));
-  const ownLanes = ownSettledLanes(input.project, input.seat, input.state.announcedLanes ?? [], hotLanes);
+  const ownLanes = ownSettledLanes(input.project, input.seat, input.state.announcedLanes ?? [], hotLanes, !!seatTickCatchUp(input));
   const openIds = new Set(hotLanes.filter(isOpen).map((lane) => lane.id));
   return {
     ...input, now, pipelines, tasks, ownLanes,
@@ -2346,6 +2377,10 @@ export async function gatherSeatTickInput(
   const settings = effectiveSeatTickSettings(sources.settings(canonical), now, SEAT_TICK_WAKE_INTERVAL_MS);
   const seat = await seatInput(canonical, policy, sources);
 
+  if (!state.unreachableSince && seat?.activity?.lifecycle === "gone") {
+    state = { ...state, unreachableSince: new Date(now).toISOString() };
+  }
+  const catchUp = !!seatTickCatchUp({ state, now, settings, seat });
   const hotLanes = sources.pipelines();
   const openLanes = hotLanes.filter((pipeline) => isOpen(pipeline) && canonicalOrchestratorProject(pipeline.project) === canonical);
   const evidence = evidenceFromPipelines(openLanes.map(pipelineSummary));
@@ -2383,12 +2418,12 @@ export async function gatherSeatTickInput(
   }));
 
   const announcedLanes = retainedLaneAnnouncements(state.announcedLanes ?? [], hotLanes, canonical, seat, now, policy.backlogAfterMs);
-  const ownLanes = ownSettledLanes(canonical, seat, announcedLanes, hotLanes);
-  const settledDeploys = await settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs }, sources);
+  const ownLanes = ownSettledLanes(canonical, seat, announcedLanes, hotLanes, catchUp);
+  const settledDeploys = await settledSeatDeploys(seat, state.announcedDeploys ?? [], { now, backlogAfterMs: policy.backlogAfterMs, catchUp }, sources);
   let endedMaintenance: readonly MaintenanceRun[] = [];
   try { endedMaintenance = sources.maintenanceRuns?.(canonical) ?? []; }
   catch { /* The maintenance controller journals its own store failure; unrelated seat work still wakes. */ }
-  const settledMaintenance = endedMaintenance.filter(run => !maintenanceRunIsLive(run) && run.endedAt && now - Date.parse(run.endedAt) <= policy.backlogAfterMs && !(state.announcedMaintenance ?? []).includes(run.runId)).slice(-3);
+  const settledMaintenance = endedMaintenance.filter(run => !maintenanceRunIsLive(run) && run.endedAt && now - Date.parse(run.endedAt) <= policy.backlogAfterMs && !(state.announcedMaintenance ?? []).includes(run.runId)).slice(catchUp ? 0 : -3);
   const releaseAlerts: NonNullable<SeatTickCheckInput["releaseAlerts"]> = [];
   try {
     const release = readReleaseProject(canonical);
@@ -2409,7 +2444,7 @@ export async function gatherSeatTickInput(
   } catch (error) {
     console.error("[seat tick] lifecycle projection failed", error instanceof Error ? error.name : "unknown");
   }
-  const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, hotLanes, sources);
+  const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, hotLanes, sources, catchUp);
   const { children, unavailable: childrenUnavailable } = await childWork(canonical, seat, state, policy, sources);
   /* An unreadable board costs this check its routed asks, never the check:
      the waits stay routed and the next check reads them again. */

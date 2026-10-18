@@ -248,9 +248,9 @@ export class SeatTickAccounting {
     if (row && row.kind !== "project") throw new Error("invalid project accounting row");
     return row;
   }
-  page(kind: AccountingRow["kind"], limit: number): AccountingRow[] {
+  page(kind: AccountingRow["kind"], limit: number, after?: string): AccountingRow[] {
     const prefix = key(kind, this.project);
-    return this.collection.keyRange(prefix, `${prefix}~`, limit);
+    return this.collection.keyRange(after ? `${after}\0` : prefix, `${prefix}~`, limit);
   }
   /** Reserve cold visits even while priority ledgers keep arriving. */
   pollPage(limit: number): AccountingRow[] {

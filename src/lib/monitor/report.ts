@@ -232,6 +232,7 @@ function snapshotSection(snapshotAt: string | undefined, compact: boolean): stri
 }
 
 export function seatTickWakeMessage(input: {
+  catchUp?: { key: string; from: string; through: string };
   autonomy?: AutonomySetting | null;
   autonomyUnchanged?: boolean;
   issues?: readonly ProposalIssue[];
@@ -274,6 +275,8 @@ export function seatTickWakeMessage(input: {
     "",
     `Wake reasons: ${input.reasons.map(reason => reason.kind).join(", ")}.`,
   ];
+  if (input.catchUp) lines.push("", `Catch-up after unreachable window ${input.catchUp.from} through ${input.catchUp.through}.`,
+    `Held backlog: ${input.items.length} items. Times below are original event times in UTC. Re-read unresolved actions before acting.`);
   /* Directly under the reasons, above the agenda, because it qualifies the
      whole message and because the agenda is the half the length bound eats
      into. A wake that dropped its own blind spot to fit one more item would be
@@ -335,6 +338,10 @@ export function seatTickWakeMessage(input: {
     reserved.splice(reserved.length - seatTickContractLines(input.mandateCarriesContract === true).length - (input.workers ? 2 : 0) - note.length, note.length,
       ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, 100, !!input.workers));
   }
+  // A recovery snapshot carries every compact outcome once. Cutting this
+  // agenda would recreate a series of wakes and fresh report debts. Its size
+  // scales with changed work; child transcript bodies are omitted by the caller.
+  if (input.catchUp) return redactMonitorText([...lines, ...reserved].join("\n")).trim();
   return boundedSeatTickMessage(lines, reserved);
 }
 
