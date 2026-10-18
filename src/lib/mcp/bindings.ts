@@ -1,5 +1,9 @@
 import { curationAnswer } from "@/lib/memory/curation/answer";
+import { relayAnswerOp } from "@/lib/externalRelay/ownerAnswer";
+import { ExternalRelayError as RelayAnswerError } from "@/lib/externalRelay/client";
+import { DocumentRefusal as RelayDocumentRefusal } from "@/lib/telegram/bot/documents";
 import { relayServiceToolsOp } from "@/lib/externalRelay/ownerServiceTools";
+import { readHistoryProjection, historyFleetLimitWaits } from "@/lib/state/historyProjection";
 import { registryReceiptsForConversation } from "@/lib/agent/registry";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
@@ -817,7 +821,8 @@ export interface ViewerMcpDomainDependencies {
   lastCompletedCatalog?(): { projectCatalog: FileScanSnapshot["projectCatalog"]; files: readonly FileScanSnapshot["files"][number][] } | null;
   registrySnapshot(): RegistrySnapshot;
   /** Fresh seat and delivered-wake admission for curator reads and writes. */
-  curatorAdmission?(conversationId: string | null): Promise<void>;
+  curatorSnapshot?(conversationId: string): RegistrySnapshot;
+  curatorAdmission?(conversationId: string | null): Promise<void | (() => void)>;
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
   getFlowsWithPresets(): ReturnType<typeof getFlowsWithPresets>;
@@ -831,6 +836,7 @@ export interface ViewerMcpDomainDependencies {
       scalars and keeps nothing. Optional so partial test harnesses that stub
       only `getPipelines` still project from it. */
   listPipelineRecords?(): readonly Pipeline[];
+  fleetLimitWaits?(ids: string[]): Promise<ReturnType<typeof fleetLimitWaits>>;
   pipelineSelectionSource?: typeof pipelineSelectionSource;
   patchPipeline: typeof patchPipeline;
   readPipelineRecord?: typeof getPipelineRecord;
@@ -1347,9 +1353,10 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     return projectCatalog && files ? { projectCatalog, files } : null;
   },
   registrySnapshot: () => agentRegistry().readOnlySnapshot(),
+  curatorSnapshot: conversationId => agentRegistry().curatorConversationSnapshot(conversationId),
   curatorAdmission: async conversationId => {
     const { curatorRecoveryGuard } = await import("@/lib/memory/curation/admission");
-    await curatorRecoveryGuard(conversationId ?? "");
+    return curatorRecoveryGuard(conversationId ?? "");
   },
   readSpawnAdmissionFence,
   validateSpawnAdmission: (body, context) => productionViewerControlDependencies().post(
@@ -1369,6 +1376,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   closeFlow,
   getPipelines,
   listPipelineRecords: loadPipelinesForList,
+  fleetLimitWaits: ids => readHistoryProjection(db => historyFleetLimitWaits(db, ids), { collections: ["pipelines"] }),
   pipelineSelectionSource,
   taskSelectionSource,
   listTaskRecords: loadTasksForList,
@@ -6569,7 +6577,7 @@ async function agentFleet(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
       && (scope === "all" || canonicalOrchestratorProject(row.project) === scope.project));
     const sessions = detail ? (dependencies.readFleetSessions ?? readCachedResourceSessions)() : { sessions: [], stale: false };
     const agents = fleetDetailRows(fleetAgents(rows, fleetRuntimeFor(rows, registry),
-      new Set(seats.map(seat => seat.conversationId)), fleetLimitWaits(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines),
+      new Set(seats.map(seat => seat.conversationId)), dependencies.fleetLimitWaits ? await dependencies.fleetLimitWaits(rows.flatMap(row => row.conversationId ? [row.conversationId] : [])) : fleetLimitWaits(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines),
       sessions.sessions, sessions.stale), filters);
     const unverifiedCount = rows.filter(row => row.evidenceSource !== "transcript").length;
     const unselectedCount = Math.max(0, snapshot.selection.matched - snapshot.selection.selected);
@@ -7875,9 +7883,14 @@ export function viewerMcpBindings(
     curate_rules: Object.assign(async (args: McpToolArgs) => {
       try {
         const conversationId = attributionOf(domainDependencies).conversationId;
-        await domainDependencies.curatorAdmission?.(conversationId);
-        const pass = curatorCallerOf(conversationId, domainDependencies.registrySnapshot());
-        return args.action === "read" ? readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined) : applyCuration(pass, args as unknown as CurationApply);
+        const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
+        if (typeof assertAdmission === "function") assertAdmission();
+        const pass = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+        if (args.action !== "read") return applyCuration(pass, args as unknown as CurationApply);
+        const result = await readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined);
+        if (typeof assertAdmission === "function") assertAdmission();
+        curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+        return result;
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
         if (error instanceof DeliveryAdmissionRefusedError) throw new McpToolRefusal(error.message, { code: "CURATE_CALLER", status: 409 });
@@ -7886,8 +7899,9 @@ export function viewerMcpBindings(
     }, { authorizeReceipt: async () => {
       try {
         const conversationId = attributionOf(domainDependencies).conversationId;
-        await domainDependencies.curatorAdmission?.(conversationId);
-        curatorCallerOf(conversationId, domainDependencies.registrySnapshot());
+        const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
+        if (typeof assertAdmission === "function") assertAdmission();
+        curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
         if (error instanceof DeliveryAdmissionRefusedError) throw new McpToolRefusal(error.message, { code: "CURATE_CALLER", status: 409 });
@@ -7960,6 +7974,19 @@ export function viewerMcpBindings(
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
+    relay_answer: async (args) => {
+      const caller = attributionOf(domainDependencies);
+      try {
+        const result = caller.kind === "agent" && !caller.via && caller.conversationId
+          ? await relayAnswerOp(caller.conversationId, args) : null;
+        if (result === null) throw new McpToolRefusal("Answer parts exist only during your live owner relay turn.", { code: "relay_answer_unavailable", retryable: false });
+        return result;
+      } catch (error) {
+        if (error instanceof RelayAnswerError || error instanceof RelayDocumentRefusal)
+          throw new McpToolRefusal("Relay answer parts refused: " + error.code, { code: error.code, retryable: false });
+        throw error;
+      }
+    },
     relay_service_tools: async (args) => {
       const caller = attributionOf(domainDependencies);
       const result = caller.kind === "agent" && !caller.via && caller.conversationId

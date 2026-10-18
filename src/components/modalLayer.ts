@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type RefObject } from "react";
 
 /*
  * A process-wide stack of open modal layers so nested modals coordinate
@@ -75,15 +75,18 @@ export interface ModalLayerOptions {
  * Registers an open dialog as a modal layer: pushes it on the ownership stack,
  * traps Tab/Shift+Tab within its container and answers Escape — but ONLY while
  * it is the topmost layer, so a lower sheet yields to a stage editor above it
- * and reclaims ownership when the editor closes. Optionally locks body scroll
+ * and reclaims ownership when the editor closes. Returns a stable check that
+ * answers whether this layer is the topmost right now. Optionally locks body scroll
  * and moves focus in on open / back to the opener on close.
  *
  * Mount-only for the push/scroll/focus lifecycle so a parent poll re-render
  * never re-runs it and yanks focus; the key listener rebinds on `onClose`
  * identity but no-ops unless this layer is on top.
  */
-export function useModalLayer({ containerRef, onClose, lockScroll = true, manageFocus = true }: ModalLayerOptions): void {
+export function useModalLayer({ containerRef, onClose, lockScroll = true, manageFocus = true }: ModalLayerOptions): () => boolean {
   const idRef = useRef<symbol | null>(null);
+  /* Stable, so a caller can hand it to another key owner without rebinding. */
+  const isTop = useCallback(() => idRef.current !== null && isTopModalLayer(idRef.current), []);
 
   useEffect(() => {
     const id = pushLayer();
@@ -138,4 +141,6 @@ export function useModalLayer({ containerRef, onClose, lockScroll = true, manage
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, containerRef]);
+
+  return isTop;
 }

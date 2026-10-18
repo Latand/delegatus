@@ -133,6 +133,9 @@ const EDITING = SCENARIO === "editing";
 const CODENAME_TIERS = SCENARIO === "tier-codename";
 const TIER_LIMITS = SCENARIO === "tier-limits" || CODENAME_TIERS;
 const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS;
+/* `&overlay-links`: the running verifier's last answer links one file of each preview kind, so a driver opens
+   the document preview from the feed the way an operator does. */
+const OVERLAY_LINKS = new URLSearchParams(location.search).has("overlay-links");
 /* The orchestrator's long report (#2179): a status answer with a heading,
    lists, a code block and a table, the shape of reply the seat wrapped into a
    narrow ribbon, so its measure can be read beside the operator's bubble. It
@@ -2545,6 +2548,7 @@ function transcriptOf(pathname: string): string {
   if (file === searchVer2) {
     const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
     for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
+    if (OVERLAY_LINKS) long.push(said(2 * MIN, "Files from this run: [plan](/repo/notes/plan.md), [page](/repo/notes/page.html), [log](/repo/notes/run.txt), [shot](/repo/notes/shot.png), [report](/repo/notes/report.pdf), [gone](/repo/notes/gone.md)."));
     return `${long.join("\n")}\n`;
   }
   if (FIRST_MESSAGE && file === orchestrator) {
@@ -3886,6 +3890,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if ((TICK_CARDS || SEAT_TICK_DRIVER) && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
+  if (OVERLAY_LINKS && url.pathname.startsWith("/api/artifact")) return serverFetch(url.pathname + url.search, init);
   if (PROTO && url.pathname === "/api/transcribe" && method === "POST") {
     /* A transcription the driver holds back, to close the review while it is awaited. */
     const held = (window as unknown as { protoTranscribeDelay?: number }).protoTranscribeDelay;

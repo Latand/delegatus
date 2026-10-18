@@ -952,7 +952,9 @@
 .kb .aw-steps .chev.flip { transform: scaleX(-1); }
 .kb .aw-list .or-list { flex: 1 1 auto; }
 .kb .aw-reader { position: relative; min-width: 0; min-height: 0; }
-.kb .aw-reader > .reader-slot { position: absolute; inset: 0; display: flex; }
+.kb .aw-reader > .reader-slot { position: absolute; inset: 0 var(--aw-sheet-inset, 0px) 0 0; width: auto; display: flex; }
+/* The document preview stands over the right of the column: the conversation
+   wraps at its edge (AgentWindow.tsx). */
 /* The agent coming in reads on screen, under the one shown, and is not drawn
    until it is ready; a first open keeps the whole window so. */
 .kb .aw-reader > .reader-slot[data-incoming], .kb .agent-window-layer[data-agent-window-pending] { visibility: hidden; }

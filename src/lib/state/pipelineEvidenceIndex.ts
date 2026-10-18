@@ -1,3 +1,4 @@
+import { historyProjectionReady, installHistoryProjection } from "./historyProjection";
 import type { Database } from "bun:sqlite";
 import { mayRunStateStartupMutation } from "@/lib/stateOwnership";
 
@@ -23,6 +24,7 @@ const triggers = [
  * that leaves the collection revision and change journal unchanged. */
 export function installPipelineEvidenceIndex(db: Database, directory: string): void {
   if (pipelineEvidenceIndexReady(db) || !mayRunStateStartupMutation(directory)) return;
+  installHistoryProjection(db, directory);
   for (const sql of tables) db.exec(sql);
   for (const sql of triggers) {
     const name = sql.split(" ")[2]!;
@@ -38,6 +40,6 @@ export function pipelineEvidenceIndexReady(db: Database): boolean {
   const rows = db.query<{ name: string; sql: string }, []>(
     "SELECT name,sql FROM sqlite_master WHERE name IN ('pipeline_evidence_clock','pipeline_evidence_rows','pipeline_evidence_insert','pipeline_evidence_update','pipeline_evidence_delete')",
   ).all();
-  return rows.length === 5 && triggers.every(sql => rows.some(row => row.sql === sql))
+  return historyProjectionReady(db) && rows.length === 5 && triggers.every(sql => rows.some(row => row.sql === sql))
     && Boolean(db.query("SELECT 1 FROM pipeline_evidence_clock WHERE id=1").get());
 }

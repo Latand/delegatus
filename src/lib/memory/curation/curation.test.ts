@@ -1,3 +1,4 @@
+import * as pipelineStore from "@/lib/pipelines/store";
 import { chooseSource } from "../fixtures/source";
 import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -360,7 +361,7 @@ test.each(["succeeded", "failed"] as const)("a %s pass counts later lessons and 
   expect(pass(NOW + CURATION_INTERVAL_MS + 1000)).not.toBeNull();
   expect(curationStatus(PROJECT, NOW + CURATION_INTERVAL_MS + 1000).newLessons).toBe(0);
 });
-test("curator reads and the window distinguish rewrites across the same clock instant", () => {
+test("curator reads and the window distinguish rewrites across the same clock instant", async () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
   const shown = () => projectView(PROJECT).scopes.find(item => item.scope === scope)!.active.find(item => item.id === one)!;
   expect(shown().awaitingCuration).toBe(true);
@@ -370,13 +371,13 @@ test("curator reads and the window distinguish rewrites across the same clock in
   recordLessonRequest({ ...source, at: at() });
   leaveLessons({ request: source, source, lessons: [], rewrite: { id: one, rule: "Inspect the current readers before changing stored guidance.", why }, none: null, now: at() });
   expect(shown().awaitingCuration).toBe(true);
-  const page = readCuration(p, scope);
+  const page = await readCuration(p, scope);
   expect("rules" in page && page.rules.find(item => item.id === one)?.newSincePass).toBe(true);
   ended(p);
   const next = pass(NOW + CURATION_INTERVAL_MS + 1000);
   applyCuration(next, input({ [scope]: [one] }), at());
   expect(shown().awaitingCuration).toBe(false);
-  const reread = readCuration(next, scope);
+  const reread = await readCuration(next, scope);
   expect("rules" in reread && reread.rules.find(item => item.id === one)?.newSincePass).toBe(false);
 });
 test.each([roleScope(PROJECT, "builder"), "role:*:builder"])("pass undo preserves a later agent rewrite at the same clock instant in %s", to => {
@@ -403,26 +404,26 @@ test("pass undo preserves another curator's ranking at the same clock instant", 
   expect(revertCuratorPass(p.id, at(CURATION_INTERVAL_MS + 3000)).skipped.sort()).toEqual([one, two, three].sort());
   expect(projectView(PROJECT).scopes.find(item => item.scope === scope)!.active.map(item => item.id)).toEqual([three, one, two]);
 });
-test("scope rereads retain departures from every call of the current pass", () => {
+test("scope rereads retain departures from every call of the current pass", async () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), two = fixture(scope), p = pass();
   applyCuration(p, input({ [scope]: [two] }, { archive: [{ id: one, reason: "stale", note: "The first old command was replaced." }] }), at(100));
   applyCuration(p, input({ [scope]: [] }, { archive: [{ id: two, reason: "task-specific", note: "The second row records one completed task." }] }), at(200));
-  const page = readCuration(p, scope);
+  const page = await readCuration(p, scope);
   expect("rules" in page && page.rules.map(r => r.id).sort()).toEqual([one, two].sort());
 });
-test("read pages are revision bound and include scaffold, budget archives and prior text", () => {
+test("read pages are revision bound and include scaffold, budget archives and prior text", async () => {
   const scope = roleScope(PROJECT, "builder");
   for (let n = 0; n < 80; n++) fixture(scope, { rule: `${text} ${"Read the stored record. ".repeat(8)} ${n}` });
   const archive = fixture(scope, { state: "archived", reason: "budget" });
-  const p = pass(); const first = readCuration(p, scope);
+  const p = pass(); const first = await readCuration(p, scope);
   if (!("cursor" in first)) throw Error("expected a scope page");
   expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(24_000);
   expect(first).toHaveProperty("scaffold"); expect(first.cursor).toBeTruthy();
   let cursor = first.cursor; const ids = first.rules.map(r => r.id);
-  while (cursor) { const next = readCuration(p, scope, cursor); if (!("rules" in next)) throw Error("expected a scope page"); ids.push(...next.rules.map(r => r.id)); cursor = next.cursor; }
+  while (cursor) { const next = await readCuration(p, scope, cursor); if (!("rules" in next)) throw Error("expected a scope page"); ids.push(...next.rules.map(r => r.id)); cursor = next.cursor; }
   expect(ids).toContain(archive); expect(new Set(ids).size).toBe(ids.length);
   fixture(scope);
-  expect(() => readCuration(p, scope, first.cursor!)).toThrow(/changed/);
+  await expect(readCuration(p, scope, first.cursor!)).rejects.toThrow(/changed/);
 });
 test("stale revisions and total-partition failures refuse atomically", () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), two = fixture(scope), p = pass();
@@ -698,22 +699,22 @@ test("post-succession same-time curator rankings remain a later undo guard", () 
   expect(revertCuratorPass(targetPass.id, at(CURATION_INTERVAL_MS + 7000))).toEqual({ skipped: [targetRule] });
   expect(row(targetRule).rule).toBe(rewritten);
 });
-test("a live pass reads and applies canonical scopes after project succession", () => {
+test("a live pass reads and applies canonical scopes after project succession", async () => {
   const originalScope = roleScope(PROJECT, "builder"), one = fixture(originalScope), p = pass();
   const staleCursor = Buffer.from(JSON.stringify({ scope: originalScope, revision: 1, offset: 0 })).toString("base64url");
   expect(persistProjectAliases([{ source: PROJECT, target: "curation-renamed", displayName: "curation-renamed" }])).toBe(true);
 
   const renamedScope = roleScope("curation-renamed", "builder");
-  const overview = readCuration(p);
+  const overview = await readCuration(p);
   if (!("scopes" in overview) || !overview.scopes) throw Error("expected the pass scope list");
   const listed = overview.scopes.find(item => item.scope === renamedScope);
   if (!listed) throw Error("successor scope is missing from the live pass");
   const current = roleMemoryCollection()?.get(`s:${renamedScope}`);
   expect(listed.revision).toBe(current?.kind === "scope" ? current.revision : -1);
-  const read = readCuration(p, renamedScope);
+  const read = await readCuration(p, renamedScope);
   if (!("rules" in read)) throw Error("expected the successor scope rules");
   expect(read.rules.some(rule => rule.kind === "active" && rule.id === one)).toBe(true);
-  try { readCuration(p, originalScope, staleCursor); throw Error("accepted a cursor from before succession"); }
+  try { await readCuration(p, originalScope, staleCursor); throw Error("accepted a cursor from before succession"); }
   catch (error) { expect((error as { code?: string }).code).toBe("CURATE_STALE"); }
 
   const edit = input({ [renamedScope]: [one] }, { rewrite: [{ id: one, rule: text + " Follow the current scope revision.", note: "This remains useful to builders in every task." }] });
@@ -1056,4 +1057,35 @@ test("an unreadable curation store keeps its timer controls and reports an error
     expect(curationAnswer(PROJECT, effectiveSeatTickSettings(defaultSeatTickSettings(PROJECT), NOW, 3600000), NOW)).toMatchObject({
       enabled: true, intervalHours: 6, nextRunAt: null, runsError: "fixture curation store unavailable" });
   } finally { broken.mockRestore(); }
+});
+
+test.each(["off","sqlite"] as const)("curator authority is equivalent through the keyed %s registry view", mode => {
+  fixture(); const p = pass();
+  const registry = new AgentRegistry(path.join(dir,"keyed-registry.json"),undefined,undefined,{sqliteMode:mode});
+  const conversation = registry.ensureConversation("codex",path.join(dir,"curator.jsonl"),null);
+  const begun = registry.beginSpawnRequest({engine:"codex",cwd:dir,accountId:null,role:"curator" as never,
+    clientAttemptId:p.id,explicitProject:PROJECT,transport:"structured",conversationId:conversation.id,
+    launchProfile:{cwd:dir,project:PROJECT,role:"curator" as never,title:"Role memory curation"}});
+  if (begun.kind!=="created") throw new Error("fixture admission failed");
+  const old = curatorCallerOf(conversation.id,registry.readOnlySnapshot());
+  const full = spyOn(registry,"readOnlySnapshot");
+  try {
+    const narrowed = registry.curatorConversationSnapshot(conversation.id);
+    expect(curatorCallerOf(conversation.id,narrowed).id).toBe(old.id);
+    expect(Object.keys(narrowed.receipts)).toEqual([begun.receipt.launchId]);
+    if (mode==="sqlite") expect(full).not.toHaveBeenCalled();
+    narrowed.conversations[conversation.id].agentRole="builder";
+    expect(()=>curatorCallerOf(conversation.id,narrowed)).toThrow(/not a curator/);
+    expect(curatorCallerOf(conversation.id,registry.curatorConversationSnapshot(conversation.id)).id).toBe(old.id);
+  } finally {full.mockRestore();}
+});
+
+
+test("a foreign read scope refuses before requesting pipeline history",async () => {
+  fixture();const p=pass();
+  const history=spyOn(pipelineStore,"pipelineSelectionSource").mockImplementation(()=>{throw new Error("history is unavailable");});
+  try {
+    await expect(readCuration(p,roleScope("foreign-project","builder"))).rejects.toMatchObject({code:"CURATE_SCOPE"});
+    expect(history).not.toHaveBeenCalled();
+  } finally {history.mockRestore();}
 });

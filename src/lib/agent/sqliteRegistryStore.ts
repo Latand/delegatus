@@ -2456,10 +2456,12 @@ export class SqliteAgentRegistryStore {
         : indexedReceiptKeys());
       if (entryKeys.length) {
         const placeholders = entryKeys.map(() => "?").join(",");
+        // Bind the indexed expression directly: the join's TEXT affinity alone
+        // makes SQLite scan the receipt index instead of seeking these keys.
         for (const row of this.db.query<{ row_key: string }, string[]>(`SELECT r.row_key FROM registry_rows r INDEXED BY registry_liveness_receipt_session
-          JOIN registry_liveness_entries e ON e.row_key IN (${placeholders})
+          JOIN registry_liveness_entries e ON e.row_key=(json_extract(r.value_json,'$.key.engine')||':'||json_extract(r.value_json,'$.key.sessionId'))
           WHERE r.collection='receipts'
-            AND (json_extract(r.value_json,'$.key.engine')||':'||json_extract(r.value_json,'$.key.sessionId'))=e.row_key
+            AND (json_extract(r.value_json,'$.key.engine')||':'||json_extract(r.value_json,'$.key.sessionId')) IN (${placeholders})
             AND (json_extract(r.value_json,'$.verifiedHost.agent') IS NOT NULL OR json_extract(r.value_json,'$.pane.panePid') IS NOT NULL)
             AND NOT EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection='receipts' AND c.row_key=r.row_key)`)
           .all(...entryKeys)) receiptKeys.add(row.row_key);

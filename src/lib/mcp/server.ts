@@ -1,3 +1,4 @@
+import { relayAnswerSchema } from "@/lib/externalRelay/protocol";
 import { relayServiceToolsSchema } from "@/lib/externalRelay/ownerServiceTools";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { runWithNativeCallProof } from "@/lib/attention/nativeCallProof";
@@ -118,6 +119,7 @@ export const MCP_TOOL_NAMES = [
   "telegram_bot_send_document",
   "telegram_bot_messages",
   "relay_owner_history",
+  "relay_answer",
   "relay_service_tools",
   "issue_report",
 ] as const;
@@ -208,11 +210,12 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
 ]);
 
 /** Private request data is never receipted. Service actions use the relay call id for idempotency. */
-export const RECEIPT_FREE_READ_TOOLS = new Set<McpToolName>(["relay_owner_history", "relay_service_tools"]);
+export const RECEIPT_FREE_READ_TOOLS = new Set<McpToolName>(["relay_owner_history", "relay_answer", "relay_service_tools"]);
 
 /** Explicit allowlist: read-like tools with durable effects still need keys. */
 export const OPTIONAL_READ_KEY_TOOLS = new Set<McpToolName>([
   "relay_owner_history",
+  "relay_answer",
   "relay_service_tools",
   "read_prototype_review",
   "message_receipt", "list_conversations", "search_transcripts", "get_conversation",
@@ -3583,6 +3586,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Types: .md .markdown .txt .log .json .csv .pdf .png .jpg .jpeg .html, non-empty, at most 20 MB; text files are scanned, as UTF-8 and UTF-16, for private keys, tokens and credentials (including `password: word` assignments) and refused with document_secret naming the class (`details.secretClass`). Other refusals: document_invalid, document_outside_roots, document_forbidden_path, document_type, document_too_large.",
     "`document.filename` is the shown name (default the file's own name) and must keep the file's type class (text, PDF or image: a .md may be shown as .txt, never as .pdf); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. The post appears in telegram_bot_messages with kind document and its filename.",
   ].join(" "),
+  relay_answer: "Only while you answer a relay message as its owner: choose how your last message is delivered. format rich_markdown renders the Markdown subset and length in your prompt; buttons are https links; attachments are files under your document roots, sent after your message. Each call replaces the previous one. Refused in every other conversation and after the answer.",
   relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Refused in any other conversation and once answered.",
   relay_owner_history: [
     "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. Received edits keep first text; Telegram-side deletions may remain stored. Author ids and file ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
@@ -4563,6 +4567,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     topicId: z.number().int().positive().optional().describe("Forum topic (message_thread_id) to post into."),
     silent: z.boolean().optional().describe("Send without a notification sound."),
   }).passthrough(),
+  relay_answer: relayAnswerSchema,
   relay_service_tools: relayServiceToolsSchema,
   relay_owner_history: z.object({
     action: z.enum(["groups", "messages"]), chat: z.string().optional(), from: z.string().optional(), to: z.string().optional(),

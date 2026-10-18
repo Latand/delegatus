@@ -150,7 +150,12 @@ export async function readLivenessTranscriptEvidence(
   if (read.integrity !== "complete" || identity === null || identity !== await transcriptFileIdentity(transcriptPath)) return null;
   const turn = turnStateFromRecords(read.records, engine);
   const activityFacts = activityFactsFromRecords(read.records);
-  activityFacts.turnBoundaryVerified = !read.prefixTruncated || activityFacts.turnBoundaryFound === true;
+  // A native terminal record proves completion without its opening prompt only
+  // when the retained blocks also show no outstanding tool call. Claude can
+  // split one API message into several records that share `message.id`; a text
+  // block may carry end_turn while an earlier block's tool_use is unanswered.
+  activityFacts.turnBoundaryVerified = activityFacts.openCall === null
+    && (turn.state === "terminal" || !read.prefixTruncated || activityFacts.turnBoundaryFound === true);
   if (engine === "claude") {
     const ledger = await readBackgroundTaskLedger(transcriptPath, { maxBytes: 768 * 1024 });
     activityFacts.backgroundVerified = ledger !== null;

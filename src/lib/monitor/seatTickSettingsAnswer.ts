@@ -247,7 +247,7 @@ export function seatTickSettingsAnswer(
   let lastDelivery: { at: string; outcome: string } | null = null;
   let journalError: string | null = null;
   try {
-    const own = (ports.records ?? readSeatTickRecords)(SEAT_TICK_RUN_HISTORY).filter((entry) => entry.project === project);
+    const own = (ports.records ? ports.records(SEAT_TICK_RUN_HISTORY) : readSeatTickRecords(SEAT_TICK_RUN_HISTORY, undefined, project)).filter((entry) => entry.project === project);
     const record = own.at(-1) ?? null;
     lastRun = record
       ? {

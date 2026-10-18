@@ -297,3 +297,19 @@ test("persistent flags keep the closed profile on start and resume", () => {
     }
   }
 });
+
+test("negotiated native images have a per-run home and a read-confined profile", () => {
+  const request = fixture("codex");
+  const readableRoot = path.join(request.runDir, "cwd");
+  const built = buildEphemeralCommand({ ...request, imageGeneration: { readableRoot } });
+  expect(built.args.join(" ")).not.toContain("--disable image_generation");
+  expect(built.args).toContain('default_permissions="relay"');
+  expect(built.args).toContain(`permissions.relay.filesystem={${JSON.stringify(readableRoot)}="read"}`);
+  expect(built.args).not.toContain("read-only");
+  expect(built.env.CODEX_HOME).toBe(path.join(request.runDir, "codex-home"));
+  const resumed = buildEphemeralCommand({ ...request, imageGeneration: { readableRoot }, session: { mode: "resume", id: "thread_1", cwd: readableRoot, codexHome: path.join(request.runDir, "session-home") } });
+  expect(resumed.args.join(" ")).not.toContain("sandbox_mode");
+  expect(resumed.env.CODEX_HOME).toBe(path.join(request.runDir, "session-home"));
+  const claude = fixture("claude");
+  expect(buildEphemeralCommand({ ...claude, imageGeneration: { readableRoot } })).toEqual(buildEphemeralCommand(claude));
+});

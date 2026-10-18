@@ -54,3 +54,82 @@ function subscribe(listener: () => void): () => void {
 export function useLeftShellInset(): number {
   return useSyncExternalStore(subscribe, leftShellInset, () => 0);
 }
+
+/*
+ * Where a full-screen agent window stands, in viewport pixels; 0 while no such
+ * window is open.
+ *
+ * The preview sheet keeps a floor of conversation visible beside it. Over the
+ * agent window the conversation is the window's right column — it starts after
+ * the window's margin and its own agent list, which the left shell inset knows
+ * nothing about — so the window publishes that edge here and the sheet measures
+ * its floor from it. The window covers the sidebar and the dock beside it, so
+ * while it is open this edge replaces the shell inset instead of adding to it.
+ * The window's own left edge is published with it: where the sheet takes the
+ * column whole, the list beside it gives way too.
+ *
+ * The sheet publishes its own left edge back, and the window wraps its
+ * conversation at that edge, so lines are laid out in the part left visible
+ * instead of running on under the sheet and being cut.
+ */
+let hostedColumnLeft = 0;
+let hostedWindowLeft = 0;
+let hostedSheetLeft = 0;
+const hostedListeners = new Set<() => void>();
+
+const edge = (next: number): number => (Number.isFinite(next) && next > 0 ? Math.round(next) : 0);
+const notifyHosted = () => {
+  for (const listener of [...hostedListeners]) listener();
+};
+
+/** Published by the agent window while it is mounted; 0 when it closes. */
+export function setHostedColumnLeft(next: number, windowLeft = next): void {
+  const column = edge(next);
+  const frame = column === 0 ? 0 : edge(windowLeft);
+  if (column === hostedColumnLeft && frame === hostedWindowLeft) return;
+  hostedColumnLeft = column;
+  hostedWindowLeft = frame;
+  notifyHosted();
+}
+
+/** Published by the preview sheet while it stands over the agent window; 0 otherwise. */
+export function setHostedSheetLeft(next: number): void {
+  const value = edge(next);
+  if (value === hostedSheetLeft) return;
+  hostedSheetLeft = value;
+  notifyHosted();
+}
+
+export function hostedColumnInset(): number {
+  return hostedColumnLeft;
+}
+
+export function hostedWindowInset(): number {
+  return hostedWindowLeft;
+}
+
+export function hostedSheetEdge(): number {
+  return hostedSheetLeft;
+}
+
+function subscribeHosted(listener: () => void): () => void {
+  hostedListeners.add(listener);
+  return () => {
+    hostedListeners.delete(listener);
+  };
+}
+
+/** The live hosted column edge, for the preview sheet; 0 when no window hosts it. */
+export function useHostedColumnLeft(): number {
+  return useSyncExternalStore(subscribeHosted, hostedColumnInset, () => 0);
+}
+
+/** The agent window's own left edge, for the sheet that takes the column whole. */
+export function useHostedWindowLeft(): number {
+  return useSyncExternalStore(subscribeHosted, hostedWindowInset, () => 0);
+}
+
+/** The left edge of the sheet standing over the agent window, for the window; 0 with none. */
+export function useHostedSheetEdge(): number {
+  return useSyncExternalStore(subscribeHosted, hostedSheetEdge, () => 0);
+}
