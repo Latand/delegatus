@@ -18,6 +18,7 @@ export type ViewerOperation = "pipelines.repository-initialization" | "tasks.not
   | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
   | "external-relay.owner-history" | "relay.owner-continuation.send" | "relay.owner-turn.observe" | "external-relay.chains" | "relay.service-tools" | "relay.tool-index"
   | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
+  | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
   | "codex.protocol-admission"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"
   | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel";

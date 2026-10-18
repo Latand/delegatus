@@ -951,6 +951,11 @@ test("a wake the record says was delivered lands, on the plan the raising check 
   const fixture = childFixture("receipt-delivered");
   setAgentRegistryForTests(fixture.registry);
   const child = fixture.spawn({ title: "finished worker", turn: "terminal", terminalAt: ago(fixture, 20) });
+  const Clock = Date;
+  globalThis.Date = new Proxy(Clock, {
+    construct(target, args) { return Reflect.construct(target, args.length ? args : [fixture.now]); },
+    get(target, key, receiver) { return key === "now" ? () => fixture.now : Reflect.get(target, key, receiver); },
+  });
   const wake = recordedWake(fixture, { state: "delivered", children: [child.id] });
   fixture.seed({ outstandingWake: wake, eventsThrough: 1 });
   const rig = childRig(fixture, { realWakeState: true });
