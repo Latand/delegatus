@@ -223,6 +223,31 @@ test("issue 1268: a staged real runtime host proves hand-over readiness from iso
 import * as startupModule from "./runtimeHostStartup";
 import { checkRuntimeHost } from "../../scripts/runtime-host-healthcheck";
 
+test("quiet journal progress persists evidence and debug output resumes when requested", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "startup-quiet-progress-"));
+  const filename = path.join(directory, "record.json");
+  const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+  const log = spyOn(console, "info").mockImplementation(() => {});
+  const store = new RuntimeHostStartupStore(filename, { generation, pid: 4242, startIdentity: "4242:start", now: () => "2026-01-01T00:00:00.000Z" });
+  try {
+    store.begin();
+    process.env.LLV_QUIET_DIAGNOSTICS = "1";
+    store.progress({ subphase: "schema", done: 0, total: 1, committedBatches: 0 });
+    expect(log).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(filename, "utf8")).journal.subphase).toBe("schema");
+    delete process.env.LLV_QUIET_DIAGNOSTICS;
+    store.progress({ subphase: "integrity-check", done: 0, total: 13, committedBatches: 0 });
+    expect(log).toHaveBeenCalledWith("[runtime host] journal integrity-check: 0/13, committed batches 0");
+    fs.writeFileSync(filename, "invalid");
+    expect(() => store.progress({ subphase: "schema", done: 0, total: 1, committedBatches: 0 })).toThrow("startup evidence is unreadable");
+  } finally {
+    log.mockRestore();
+    if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
+    else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("journal progress replaces bounded evidence without changing ready wire phases", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "startup-progress-"));
   const filename = path.join(directory, "record.json");

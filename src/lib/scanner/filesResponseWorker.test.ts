@@ -270,6 +270,33 @@ test("normal RSS and idle cache hits keep one warm worker and retirement logs it
   }
 });
 
+for (const quiet of [true, false]) {
+  test(`normal viewer exit keeps its retirement reason with quiet=${quiet}`, async () => {
+    const stateDir = scratchState();
+    const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+    const log = spyOn(console, "info").mockImplementation(() => {});
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await buildFilesResponseInWorker(request, runtimeFor(stateDir));
+      const child = (globalThis as typeof globalThis & { __llvFilesResponseWorker?: { child: ChildProcess } | null }).__llvFilesResponseWorker?.child;
+      if (!child) throw new Error("fixture worker did not start");
+      if (quiet) process.env.LLV_QUIET_DIAGNOSTICS = "1";
+      else delete process.env.LLV_QUIET_DIAGNOSTICS;
+      shutdownFilesResponseWorker("viewer exit");
+      await stopFixtureProcess(child);
+      expect(log).toHaveBeenCalledTimes(quiet ? 0 : 1);
+      expect(warn).not.toHaveBeenCalled();
+      expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe("viewer exit");
+    } finally {
+      if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
+      else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+      log.mockRestore(); warn.mockRestore();
+      await stopTestWorker();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+}
+
 test("a worker that dies mid-build fails its build and the next one starts a fresh worker", async () => {
   const stateDir = scratchState();
   try {

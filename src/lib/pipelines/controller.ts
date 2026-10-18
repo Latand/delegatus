@@ -1,3 +1,4 @@
+import { startupDiagnostic } from "@/lib/startupDiagnostics";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
@@ -257,7 +258,7 @@ export class FlowPipelineController {
         entries = scanOutcome.value.files;
         scanComplete = true;
       } else if (scanOutcome?.state === "completed") {
-        this.ports.log(`[flow pipeline controller] scan-dependent flow phase skipped: still scanning, retry in ${FILE_SCAN_RETRY_SECONDS} s`);
+        startupDiagnostic("info", `[flow pipeline controller] scan-dependent flow phase skipped: still scanning, retry in ${FILE_SCAN_RETRY_SECONDS} s`);
       }
       const flowOutcome = scanComplete
         ? await this.runPhase("flows", cycle, pass, trigger, () => this.ports.tickFlows(entries))

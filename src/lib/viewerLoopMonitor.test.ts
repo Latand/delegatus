@@ -1,7 +1,32 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createViewerLoopMonitor } from "./viewerLoopMonitor";
 import { performanceProcess, createPerformanceSpans } from "./performanceSpans";
 import { createLoopHeapSignals } from "./loopHeapSignals";
+
+test("the default loop sink keeps gap and summary diagnostics behind the CLI debug choice", async () => {
+  const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+  const lines: string[] = [];
+  const write = spyOn(process.stderr, "write").mockImplementation(((line: string, done: () => void) => {
+    lines.push(String(line)); done(); return true;
+  }) as typeof process.stderr.write);
+  let at = 0;
+  const monitor = createViewerLoopMonitor(undefined, () => at, createPerformanceSpans(() => at));
+  const drain = async () => { for (let i = 0; i < 4; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
+  try {
+    process.env.LLV_QUIET_DIAGNOSTICS = "1";
+    at = 61_000; monitor.tick(); await drain();
+    expect(lines).toEqual([]);
+    delete process.env.LLV_QUIET_DIAGNOSTICS;
+    at = 122_000; monitor.tick(); await drain();
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toStartWith("[viewer loop-gap] ");
+    expect(lines[1]).toStartWith("[performance summary] ");
+  } finally {
+    monitor.stop(); write.mockRestore();
+    if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
+    else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+  }
+});
 
 test("long gaps without a recorder always explain their profiling status", () => {
   let at = 0;
