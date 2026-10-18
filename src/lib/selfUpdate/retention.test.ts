@@ -165,7 +165,10 @@ test("a real process started during the final Git check protects its release", a
     const result = await run(args, cwd);
     if (args[0] === "for-each-ref" && args[2] === h.shas[1] && ++refChecks === 2) {
       const child = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
-        cwd: target, env: { PATH: process.env.PATH, NODE_ENV: "test" }, stdio: ["ignore", "pipe", "ignore"],
+        cwd: target, env: { PATH: process.env.PATH, NODE_ENV: "test", HOME: process.env.HOME,
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR,
+          LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL },
+        stdio: ["ignore", "pipe", "ignore"],
       });
       children.push(child);
       await new Promise<void>((resolve, reject) => {
@@ -183,6 +186,43 @@ test("a real process started during the final Git check protects its release", a
   expect(exists(target)).toBeTrue();
   expect(report.removed.some(row => row.dir === target)).toBeFalse();
   expect(report.kept).toContainEqual(expect.objectContaining({ dir: target, reason: "changed" }));
+}, 30_000);
+
+test("a process acquired after an earlier removal still protects a later release in the same pass", async () => {
+  const h = fixture(5);
+  h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  h.ports.scan = scanProcesses;
+  const run = h.ports.git!;
+  const first = h.dirs[1]!;
+  const target = h.dirs[2]!;
+  let started = false;
+  h.ports.git = async (args, cwd) => {
+    const result = await run(args, cwd);
+    if (args[0] === "worktree" && args[1] === "remove" && args.at(-1) === first) {
+      const child = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
+        cwd: target, env: { PATH: process.env.PATH, NODE_ENV: "test", HOME: process.env.HOME,
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR,
+          LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL },
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      children.push(child);
+      await new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        child.stdout!.once("data", () => resolve());
+        child.once("exit", () => reject(new Error("holder exited before retention finished")));
+      });
+      started = true;
+    }
+    return result;
+  };
+  const report = await h.run();
+  expect(started).toBeTrue();
+  expect(report.errors).toEqual([]);
+  expect(report.removed.some(row => row.dir === first)).toBeTrue();
+  expect(exists(target)).toBeTrue();
+  expect(report.removed.some(row => row.dir === target)).toBeFalse();
+  expect(children.at(-1)!.exitCode).toBeNull();
+  expect(children.at(-1)!.signalCode).toBeNull();
 }, 30_000);
 
 test("recent and newest-K releases are kept; K follows LLV_SELF_UPDATE_KEEP_RELEASES", async () => {
