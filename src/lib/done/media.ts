@@ -71,13 +71,13 @@ async function owned<T>(work: () => Promise<T>): Promise<T> {
   await fs.mkdir(doneMediaRoot(), { recursive: true, mode: 0o700 });
   return withViewerOperation("done.media", () => withFileTransaction(path.join(doneMediaRoot(), "owner.lock"), "done media is busy", work));
 }
-export async function preserveDoneFrame(owner: string, frame: DoneFrame, copy: DoneFrameCopy, now: number, replaceProvisional = false): Promise<DoneFrame> {
+export async function preserveDoneFrame(owner: string, frame: DoneFrame, copy: DoneFrameCopy, now: number, replaceProvisional = false, expectedPreviousSrc?: string): Promise<DoneFrame> {
   if (storedDoneFrame(frame)) return frame;
   return owned(async () => {
     const rows = await index();
     await clean(rows);
     const held = rows.find(row => row.owner === owner);
-    if (held && (!replaceProvisional || now <= held.at)) return held.frame;
+    if (held && (!replaceProvisional || now <= held.at || (expectedPreviousSrc !== undefined && held.frame.src !== expectedPreviousSrc))) return held.frame;
     const staging = await fs.mkdtemp(path.join(doneMediaRoot(), ".copy-"));
     try {
       const after = await copy(frame.src, staging);

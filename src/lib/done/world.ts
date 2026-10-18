@@ -14,6 +14,7 @@ import { namedProjectDirectory, resolveNamedProject, type NamedProjectDirectory 
 import { readPrototypeReviews } from "@/lib/prototypeReview/read";
 import { ledgerDeployments } from "@/lib/runtime/deploymentLedger";
 import { ALBUM_PAGE_MAX, readTaskAlbum } from "@/lib/taskAlbum/album";
+import type { AlbumItem } from "@/lib/taskAlbum/album";
 import { productionAlbumDeps } from "@/lib/taskAlbum/world";
 import { loadTasksForList } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -63,6 +64,18 @@ function evidenceFile(src: string): string | null {
   return file && evidenceRoots().some((root) => underRoot(file, root)) ? file : null;
 }
 
+/** Recovery requires both the pipeline context and the exact recorded name.
+ * Multiple exact copies remain ambiguous, so callers continue to PR/git. */
+export function matchingDoneAlbumFrame(items: readonly AlbumItem[], pipelineId: string, frame: { src: string; caption: string }): AlbumItem | null {
+  const requested = frameName(frame);
+  if (!requested) return null;
+  const matches = items.filter(item => item.source.stage?.pipelineId === pipelineId
+    && item.src !== frame.src
+    && frameName({src:item.src,caption:item.name ?? ""}) === requested);
+  const unique = [...new Map(matches.map(item => [item.src,item])).values()];
+  return unique.length === 1 ? unique[0]! : null;
+}
+
 export function productionDoneWorld(options: { recover?: boolean } = {}): DoneWorld {
   let tasks: Map<string, BoardTask> | null = null;
   const taskList = () => {
@@ -74,7 +87,7 @@ export function productionDoneWorld(options: { recover?: boolean } = {}): DoneWo
   let repositories: NamedProjectDirectory | null = null;
   const labels = new Map<string, Map<string, string>>();
   return {
-    async preserveFrame(key, frame, refs, replaceProvisional = false, observedAt = Date.now()) {
+    async preserveFrame(key, frame, refs, replaceProvisional = false, observedAt = Date.now(), expectedPreviousSrc) {
       return withViewerOperation("done.frame-source", async () => {
         if (!await prepareDoneFrameSource(frame.src)) return { frame, settled: false };
         let deferred = false;
@@ -86,21 +99,20 @@ export function productionDoneWorld(options: { recover?: boolean } = {}): DoneWo
           if (!options.recover) { deferred = true; return null; }
           const lane = laneList().find(lane => lane.id === refs.pipelineId);
           if (!lane) return null;
+          const matching: AlbumItem[] = [];
           for (const taskId of refs.taskIds ?? []) {
             const page = await readTaskAlbum(taskId,{limit:ALBUM_PAGE_MAX},productionAlbumDeps());
-            const alternative = page.items.find(item => item.source.stage?.pipelineId === lane.id && item.src !== src);
-            if (alternative) {
-              const found = await copyDoneFrameSource(alternative.src,staging);
-              if (found) return found;
-            }
+            matching.push(...page.items);
           }
-          let name = frame.caption;
-          try {
-            const sourcePath = new URL(frame.src, "http://localhost").searchParams.get("path");
-            if (sourcePath) name = path.basename(sourcePath);
-          } catch { /* no filename context; recovery requires an exact caption match */ }
+          const alternative = matchingDoneAlbumFrame(matching,lane.id,frame);
+          if (alternative) {
+            const found = await copyDoneFrameSource(alternative.src,staging);
+            if (found) return found;
+          }
+          const requestedName = frameName(frame);
+          const name = requestedName || frame.caption;
           return refs.pr ? recoverDoneFrame({repository:refs.pr.repository,number:refs.pr.number,repoDir:lane.repoDir,branch:lane.branch,name},staging) : null;
-        }, observedAt, replaceProvisional);
+        }, observedAt, replaceProvisional, expectedPreviousSrc);
         return deferred ? { frame, settled:false } : { frame:saved, settled:true };
       });
     },
@@ -153,4 +165,13 @@ export function productionDoneWorld(options: { recover?: boolean } = {}): DoneWo
       return { frame: hit ? { src: hit.src, caption: hit.name ?? "" } : null, settled: !page.indexing };
     },
   };
+}
+
+function frameName(frame: { src: string; caption: string }): string {
+  let name = frame.caption;
+  try {
+    const sourcePath = new URL(frame.src, "http://localhost").searchParams.get("path");
+    if (sourcePath) name = path.basename(sourcePath);
+  } catch { /* use the recorded caption */ }
+  return path.basename(name.trim()).toLocaleLowerCase("en-US");
 }
