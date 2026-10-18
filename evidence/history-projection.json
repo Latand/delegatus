@@ -14,13 +14,13 @@
     "src/lib/memory/curation/evalServer.fixture.ts": "45c1087520ce820aefa710c45a6fc22831abad214ebe111caa3b41eafbe65082",
     "src/lib/memory/curation/read.ts": "ccd355c588504843c23a59d32f600e4fdb371f7e464bd2841853f2ea2f8526af",
     "src/lib/memory/curation/reviewLessons.test.ts": "40a1b315e5d7ea1cbaa8f683b847f76ade70305d234a7ad6f476fcae9ddb7320",
-    "src/lib/state/historyProjection.test.ts": "34f8c1d21f175b76e4b928b0f3b1472136749a19e417b24c0351993384ed3a72",
+    "src/lib/state/historyProjection.test.ts": "be15d2d8c2a9760527c855853b03fdd68b6203362697d025dce3761753f889bf",
     "src/lib/state/historyProjection.ts": "da72efab0a5d2560422ae92537bc24888d7a4ce513d6d3f4823b3326d2b33bf0",
     "src/lib/state/hotStateStores.sqlite.test.ts": "7fc03817862035c24d6efe986291ef97ed1cb786491e98a58c20fe7545c5a215",
     "src/lib/state/pipelineEvidenceIndex.ts": "adfecb6309684ad3e235aef6549e78d7ce4e857867c46ea0913648d8a9eaec2c",
     "src/lib/viewerInstrumentation.ts": "a6380b54e9645ab5a1943829e4b8200561196f0755d021ad978342e8e0edca6d",
     "src/lib/viewerLoopMonitor.ts": "3b2de4b962261816de70dbbf0ff6f23a14aff48fc62c6aa2738ee8648230523d",
-    "scripts/measure-history-deltas.ts": "66d03ac33c6ca1dfe7e5361f5b853f8053bc676ecd04123cfae72f3ba1a540f6"
+    "scripts/measure-history-deltas.ts": "089e4189098cc78f2ad23a668bbd980996f45580504a86eb265af9a69f9d5aaf"
   },
   "runtime": {
     "bun": "1.4.0",

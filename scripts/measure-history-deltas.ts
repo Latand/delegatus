@@ -4,6 +4,7 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { statePath } from "@/lib/configDir";
 import { decodeFlow } from "@/lib/reviewHistory/decode";
+import type { Flow } from "@/lib/reviewHistory/types";
 import { isStoredPipeline } from "@/lib/pipelines/store";
 import { readAttribution } from "@/lib/readAttribution";
 import { installHistoryProjection, readHistoryProjection, historyAttemptCounts, historyHeadlessFlows } from "@/lib/state/historyProjection";
@@ -119,7 +120,7 @@ const summaries:Record<string,unknown>={};
 
 if(operation==="liveness") {
   const before=await measure(()=>{
-    const flows=readLegacyRows(["flows"],decodeFlow).filter(flow=>flow.reviewerMode==="headless");
+    const flows=readLegacyRows(["flows"],(value): value is Flow => decodeFlow(value)!==null).filter(flow=>flow.reviewerMode==="headless");
     const roundRows=flows.reduce((sum,flow)=>sum+flow.rounds.length,0);
     const paths=activeHeadlessTranscriptPaths(flows,registry,probe,true);
     return {roundRows,paths:paths.size};

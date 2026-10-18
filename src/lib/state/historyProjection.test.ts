@@ -149,7 +149,7 @@ test("run role changes and insertions update warm count summaries without a hist
     f.put(first);
     expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:1,reviewer:0});
     first.stages[0]!.role.roleId="reviewer";
-    first.stages[0]!.effectiveRole.roleId="reviewer";
+    first.stages[0]!.effectiveRole!.roleId="reviewer";
     f.put(first);
     const inserted=pipeline("role_inserted");
     f.put(inserted);
