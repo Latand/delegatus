@@ -50,11 +50,12 @@
       "takesColumn": false
     },
     {
-      "width": 560,
+      "width": 1440,
       "height": 900,
       "lang": "uk",
       "scheme": "light",
       "host": "board",
+      "sheetWidth": 560,
       "inset": 0,
       "viewport": 1440
     },
@@ -107,11 +108,12 @@
       "takesColumn": false
     },
     {
-      "width": 560,
+      "width": 1440,
       "height": 900,
       "lang": "en",
       "scheme": "dark",
       "host": "board",
+      "sheetWidth": 560,
       "inset": 0,
       "viewport": 1440
     },
@@ -164,11 +166,12 @@
       "takesColumn": false
     },
     {
-      "width": 560,
+      "width": 1200,
       "height": 800,
       "lang": "uk",
       "scheme": "light",
       "host": "board",
+      "sheetWidth": 560,
       "inset": 0,
       "viewport": 1200
     },
@@ -221,11 +224,12 @@
       "takesColumn": false
     },
     {
-      "width": 560,
+      "width": 1200,
       "height": 800,
       "lang": "en",
       "scheme": "dark",
       "host": "board",
+      "sheetWidth": 560,
       "inset": 0,
       "viewport": 1200
     },
@@ -278,11 +282,12 @@
       "takesColumn": false
     },
     {
-      "width": 560,
+      "width": 1000,
       "height": 700,
       "lang": "uk",
       "scheme": "light",
       "host": "board",
+      "sheetWidth": 560,
       "inset": 0,
       "viewport": 1000
     },
@@ -335,11 +340,12 @@
       "takesColumn": false
     },
     {
-      "width": 560,
+      "width": 1000,
       "height": 700,
       "lang": "en",
       "scheme": "dark",
       "host": "board",
+      "sheetWidth": 560,
       "inset": 0,
       "viewport": 1000
     },
@@ -392,11 +398,12 @@
       "takesColumn": true
     },
     {
-      "width": 380,
+      "width": 700,
       "height": 900,
       "lang": "uk",
       "scheme": "light",
       "host": "board",
+      "sheetWidth": 380,
       "inset": 0,
       "viewport": 700
     },
@@ -449,11 +456,12 @@
       "takesColumn": true
     },
     {
-      "width": 380,
+      "width": 700,
       "height": 900,
       "lang": "en",
       "scheme": "dark",
       "host": "board",
+      "sheetWidth": 380,
       "inset": 0,
       "viewport": 700
     }

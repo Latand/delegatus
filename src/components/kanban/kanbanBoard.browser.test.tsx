@@ -33951,9 +33951,9 @@ describe("overlays opened from a conversation draw above the full-screen view th
           await page.waitForFunction(() => !document.querySelector("[data-agent-window]"), undefined, { timeout: 5_000 });
           const board = await page.evaluate(() => {
             const sheet = document.querySelector<HTMLElement>("[data-artifact-preview]")!;
-            return { width: sheet.getBoundingClientRect().width, inset: Number(sheet.getAttribute("data-artifact-preview-inset")), viewport: innerWidth };
+            return { sheetWidth: sheet.getBoundingClientRect().width, inset: Number(sheet.getAttribute("data-artifact-preview-inset")), viewport: innerWidth };
           });
-          expect(board.width, `${tag} board preview width`).toBeCloseTo(Math.max(380, Math.min(560, board.viewport - 320 - board.inset)), 0);
+          expect(board.sheetWidth, `${tag} board preview width`).toBeCloseTo(Math.max(380, Math.min(560, board.viewport - 320 - board.inset)), 0);
           await page.screenshot({ path: path.join(out, `${tag}-preview-on-board.png`) });
           readings.push({ width, height, lang, scheme, host: "board", ...board });
           expect(pageErrors).toEqual([]);
