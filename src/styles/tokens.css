@@ -179,7 +179,7 @@
   --mark-track: #f1ede6;
   --mark-hatch: var(--border-strong);
   --mark-stripe: rgb(255 253 250 / 0.78);
-  /* Token usage prototype (docs/design/activity-token-usage.md §9.1): the
+  /* Token usage (docs/design/activity-token-usage.md §9.1): the
      dataviz reference categorical order, validated on the card surface in
      both themes (adjacent CVD ΔE ≥ 8.4, normal-vision ΔE ≥ 19.3). Three light
      steps sit under 3:1, so every value they carry is also printed. Slots

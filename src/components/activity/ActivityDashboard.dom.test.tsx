@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -8,12 +11,18 @@ import type { HostReport, HostSourceRead, HumanInputRead } from "@/lib/activity/
 import type { HumanInput } from "@/lib/activity/humanInput";
 import type { AgentConversation, HostCoverage, Interval } from "@/lib/activity/method";
 import { ACTIVITY_MEMBER_FORBIDDEN, ActivityMemberForbidden, activityResponse, type ActivityRequestViewer, type ActivityResponseDependencies } from "@/lib/activity/report";
+import { ActivityStore } from "@/lib/activity/store";
+import { activityTokensResponse } from "@/lib/activity/tokenReport";
+import { commitUsage } from "@/lib/activity/tokenStore";
+import type { TokenCounts } from "@/lib/activity/tokenUsage";
 import { setLocale, translate } from "@/lib/i18n";
 import { installActEnv } from "@/test-helpers/actEnv";
 
 import { ActivityDashboard } from "./ActivityDashboard";
 import { memberFromSearch } from "./ActivityMembers";
 import { hoursText, projectFromSearch } from "./format";
+import { byFromSearch, rangeFromSearch, viewFromSearch } from "./pageParams";
+import { compact, datesLabel, percent } from "./tokenParts";
 
 /* The desktop /activity page scoped to one project, driven the way the
    operator drives it, over the real API function with invented hosts,
@@ -106,8 +115,66 @@ let current = READ;
 /* Who asks: nobody in particular (a member-blind read) unless a case signs in. */
 let viewer: ActivityRequestViewer | undefined;
 const requests: URLSearchParams[] = [];
+
+/* The Tokens tab reads the real token report over a store seeded through the
+   ingest's own write: three responses a day before NOW, in two projects. */
+const tokenRoot = fs.mkdtempSync(path.join(os.tmpdir(), "activity-tokens-dom-"));
+const tokenFile = path.join(tokenRoot, "records.sqlite");
+afterAll(() => fs.rmSync(tokenRoot, { recursive: true, force: true }));
+const TOKEN_OWNER = "m_owner0000000000000000000000000";
+const counts = (partial: Partial<TokenCounts>): TokenCounts => ({ input: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0, reasoning: 0, requests: 1, ...partial });
+function seedTokens(id: string, project: string, role: string, engine: "claude" | "codex", model: string, tier: string, usage: TokenCounts) {
+  const store = ActivityStore.open(tokenFile);
+  try {
+    store.transaction(() => commitUsage(store.db, {
+      owner: { conversation: id, project, engine, role, pipelineId: null, stageId: null },
+      /* A Codex response carries its thread's running total, as a rollout's record does. */
+      records: [{ engine, id, at: NOW - 86_400_000, model, tier, counts: usage, ...(engine === "codex" ? { cumulative: {
+        total: usage.input + usage.cacheRead + usage.cacheWrite + usage.output, input: usage.input + usage.cacheRead + usage.cacheWrite,
+        cached: usage.cacheRead, cacheWrite: usage.cacheWrite, output: usage.output, reasoning: usage.reasoning,
+      } } : {}) }],
+      attribution: () => ({ member: TOKEN_OWNER, account: "account-a", model: null, tier: null }),
+      malformed: 0,
+      now: NOW,
+    }));
+  } finally {
+    store.close();
+  }
+}
+function markTokensRead() {
+  const store = ActivityStore.open(tokenFile);
+  try { store.db.exec("UPDATE usage_meta SET complete=1, pending_bytes=0"); } finally { store.close(); }
+}
+seedTokens("opus", HARBOR, "builder", "claude", "claude-opus-5-5", "standard", counts({ input: 1e6, cacheRead: 40e6, cacheWrite: 2e6, cacheWrite1h: 1e6, output: 5e5, reasoning: 2e5 }));
+seedTokens("sol", CLIENT, "reviewer", "codex", "gpt-6.1-sol", "default", counts({ input: 2e6, cacheRead: 20e6, output: 1e6, reasoning: 5e5 }));
+seedTokens("mystery", HARBOR, "builder", "claude", "fixture-model", "standard", counts({ input: 1e5 }));
+markTokensRead();
+const TOKEN_TOTAL = 43.5e6 + 23e6 + 1e5;
+const tokenRequests: URLSearchParams[] = [];
+const lastTokens = () => tokenRequests.at(-1)!;
+const SOLO: ActivityRequestViewer = { mode: "solo", memberId: null, canChoose: true };
+const tokenDeps = {
+  now: () => NOW,
+  file: () => tokenFile,
+  tz: () => "UTC",
+  aliases: () => ({}),
+  canonical: (project: string) => project,
+  projectNames: async () => new Map([[HARBOR, "harbor"], [CLIENT, "client-portal"]]),
+  roster: () => [{ id: TOKEN_OWNER, name: "Ada Quill", color: "teal", initials: "AQ", self: false }],
+  accounts: () => new Map([["account-a", "Claude · A"]]),
+};
+
 globalThis.fetch = (async (resource: string | URL | Request) => {
   const url = new URL(String(resource), "http://localhost");
+  if (url.pathname === "/api/activity/tokens") {
+    tokenRequests.push(url.searchParams);
+    try {
+      return new Response(JSON.stringify(await activityTokensResponse(url.searchParams, viewer ?? SOLO, tokenDeps)), { status: 200 });
+    } catch (error) {
+      if (error instanceof ActivityMemberForbidden) return new Response(JSON.stringify({ error: error.message, code: ACTIVITY_MEMBER_FORBIDDEN }), { status: 403 });
+      throw error;
+    }
+  }
   if (url.pathname !== "/api/activity") throw new Error(`unexpected request ${url.pathname}`);
   requests.push(url.searchParams);
   try {
@@ -134,7 +201,8 @@ async function open(address: string) {
   host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   root = createRoot(host as unknown as Element);
-  await act(async () => root!.render(<ActivityDashboard initialRange="7d" initialView="days" initialProject={projectFromSearch(dom.location.search)} initialMember={memberFromSearch(dom.location.search)} />));
+  const search = new URLSearchParams(dom.location.search);
+  await act(async () => root!.render(<ActivityDashboard initialRange={rangeFromSearch(search)} initialView={viewFromSearch(search)} initialBy={byFromSearch(search)} initialProject={projectFromSearch(dom.location.search)} initialMember={memberFromSearch(dom.location.search)} />));
   await settle();
 }
 async function unmount() {
@@ -161,6 +229,7 @@ beforeEach(() => {
   viewer = undefined;
   wide = true;
   requests.length = 0;
+  tokenRequests.length = 0;
 });
 afterEach(unmount);
 
@@ -462,4 +531,147 @@ describe("the owner's member filter", () => {
       expect($("[data-activity-members-trigger]")).toBeNull();
     });
   }
+});
+
+/* happy-dom does not feed React's value tracker, so a date field is typed
+   through its own change handler, as the project's other dialogs are. */
+async function typeDate(side: "from" | "to", value: string) {
+  const input = $(`[data-activity-range-input="${side}"]`) as unknown as HTMLInputElement;
+  expect(input).not.toBeNull();
+  const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"))!;
+  const props = (input as unknown as Record<string, { onChange(event: unknown): void }>)[propsKey]!;
+  await act(async () => props.onChange({ target: { value } }));
+  await settle();
+}
+
+describe("the Tokens tab", () => {
+  test("reads tokens alone and prints the figure, the kinds and the three optional extras", async () => {
+    await open("/activity?view=tokens&range=7d");
+    expect(requests).toHaveLength(0);
+    expect(lastTokens().get("range")).toBe("7d");
+    expect(lastTokens().get("stack")).toBe("model");
+    expect(lastTokens().get("list")).toBe("model");
+    expect(lastTokens().has("member")).toBe(false);
+    expect($("[data-activity-tab]")!.getAttribute("data-activity-tab")).toBe("tokens");
+    expect($("[data-token-hero]")!.textContent).toBe(compact(TOKEN_TOTAL, "en"));
+    for (const kind of ["cacheRead", "input", "cacheWrite", "output"]) expect($(`[data-token-meter] [data-token-kind="${kind}"]`)!.textContent).toMatch(/\d/);
+    const optional = t("activity.tokens.optional");
+    const input = 3.1e6 + 60e6 + 2e6;
+    expect($('[data-token-extra="cache"]')!.textContent).toBe(`${optional}${t("activity.tokens.extra.cache", { share: percent(60e6 / input, "en") })}`);
+    expect($('[data-token-extra="reasoning"]')!.textContent).toBe(`${optional}${t("activity.tokens.extra.reasoning", { share: percent(0.7e6 / 1.5e6, "en") })}`);
+    /* Opus 5.5: 4 + 8 + 5 + 8 + 10; GPT-6.1 Sol at its default tier: 4 + 2 + 10. The fixture model has no price. */
+    expect($('[data-token-extra="cost"]')!.textContent).toBe(`${optional}${t("activity.tokens.extra.cost", { value: "≈ $51" })}`);
+    expect($('[data-token-extra="cost"]')!.getAttribute("title")).toContain("fixture-model");
+    expect($('[data-token-row="claude-opus-5-5"] [data-token-row-cost]')!.textContent).toBe("≈ $35");
+    expect($('[data-token-row="gpt-6.1-sol"] [data-token-row-cost]')!.textContent).toBe("≈ $16");
+    expect($('[data-token-row="fixture-model"] [data-token-row-cost]')!.textContent).toBe("—");
+    expect($('[data-token-row="gpt-6.1-sol"]')!.textContent).toContain("GPT-6.1 Sol");
+    expect(address().get("view")).toBe("tokens");
+    expect(address().get("stack")).toBe("model");
+  });
+
+  test("«Break down by» stacks and lists the choice; a row filters the page and its chip clears it", async () => {
+    await open("/activity?view=tokens&range=7d");
+    await click($('[data-token-by] [data-activity-option="role"]'));
+    expect(lastTokens().get("stack")).toBe("role");
+    expect(lastTokens().get("list")).toBe("role");
+    expect(address().get("stack")).toBe("role");
+    await click($('[data-token-row="reviewer"] button'));
+    expect(lastTokens().get("role")).toBe("reviewer");
+    expect($("[data-activity-scope-chip]")!.textContent).toBe(`${t("activity.tokens.by.role")}: reviewer`);
+    expect($("[data-token-hero]")!.textContent).toBe(compact(23e6, "en"));
+    await click($("[data-activity-scope-clear]"));
+    expect(lastTokens().has("role")).toBe(false);
+    expect($("[data-activity-scope-chip]")).toBeNull();
+    /* A project row scopes the whole page, the Time tab included. */
+    await click($('[data-token-by] [data-activity-option="project"]'));
+    await click($(`[data-token-row="${HARBOR}"] button`));
+    expect(lastTokens().get("project")).toBe(HARBOR);
+    expect(address().get("project")).toBe(HARBOR);
+    expect($("[data-activity-scope-chip]")!.textContent).toBe("harbor");
+    await click($('[data-activity-tabs] [data-activity-option="time"]'));
+    expect(lastRequest().get("project")).toBe(HARBOR);
+    expect(address().get("view")).toBe("days");
+    expect(address().has("stack")).toBe(false);
+  });
+
+  test("one free range serves both tabs, applies once both dates are valid and keeps at most a year", async () => {
+    await open("/activity?view=tokens&range=7d");
+    await click($('[data-activity-option="custom"]'));
+    expect($("[data-activity-range-popover]")).not.toBeNull();
+    const before = tokenRequests.length;
+    await typeDate("from", "");
+    await typeDate("from", "2026-09-10");
+    expect((($('[data-activity-range-input="to"]') as unknown) as HTMLInputElement).value).toBe("2026-09-24");
+    expect(tokenRequests.length).toBeGreaterThan(before);
+    await typeDate("to", "2026-09-20");
+    expect(lastTokens().get("from")).toBe("2026-09-10");
+    expect(lastTokens().get("to")).toBe("2026-09-20");
+    expect(lastTokens().has("range")).toBe(false);
+    expect(address().get("from")).toBe("2026-09-10");
+    expect(address().has("range")).toBe(false);
+    expect($('[data-activity-option="custom"]')!.getAttribute("aria-pressed")).toBe("true");
+    expect($('[data-activity-option="custom"]')!.textContent).toBe(datesLabel("2026-09-10", "2026-09-20", "en"));
+    /* The fields close with Escape and hand focus back to their segment. */
+    await act(async () => { $("[data-activity-range-popover]")!.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event); });
+    expect($("[data-activity-range-popover]")).toBeNull();
+    expect(dom.document.activeElement?.getAttribute("data-activity-option")).toBe("custom");
+    await click($('[data-activity-tabs] [data-activity-option="time"]'));
+    expect(lastRequest().get("from")).toBe("2026-09-10");
+    expect(lastRequest().get("to")).toBe("2026-09-20");
+    expect($("[data-activity-range-label]")!.textContent).toBe(datesLabel("2026-09-10", "2026-09-20", "en"));
+    await click($('[data-activity-option="custom"]'));
+    expect((($('[data-activity-range-input="to"]') as unknown) as HTMLInputElement).value).toBe("2026-09-20");
+    await typeDate("from", "2024-01-01");
+    expect(lastRequest().get("from")).toBe("2025-09-20");
+    expect((($('[data-activity-range-input="from"]') as unknown) as HTMLInputElement).value).toBe("2025-09-20");
+    await click($('[data-activity-option="90d"]'));
+    expect(lastRequest().get("range")).toBe("90d");
+    expect(lastRequest().has("from")).toBe(false);
+    expect($("[data-activity-range-popover]")).toBeNull();
+  });
+
+  test("a member who is not the owner gets no member or account breakdown, and a shared owner link drops to models", async () => {
+    viewer = { mode: "team", memberId: "m_bo000000000000000000000000000000", canChoose: false };
+    await open("/activity?view=tokens&range=7d&member=all&stack=member&list=member");
+    expect(tokenRequests[0]!.get("member")).toBe("all");
+    expect(lastTokens().has("member")).toBe(false);
+    expect(lastTokens().get("stack")).toBe("model");
+    expect(address().has("member")).toBe(false);
+    expect($('[data-token-by] [data-activity-option="member"]')).toBeNull();
+    expect($('[data-token-by] [data-activity-option="account"]')).toBeNull();
+    expect($("[data-token-members]")).toBeNull();
+    expect($("[data-token-hero]")!.textContent).toBe(compact(TOKEN_TOTAL, "en"));
+  });
+
+  test("the owner chooses members and accounts as separate breakdowns", async () => {
+    await open("/activity?view=tokens&range=7d&stack=member&list=member");
+    expect($('[data-token-row="m_owner0000000000000000000000000"]')!.textContent).toContain("Ada Quill");
+    await click($('[data-token-by] [data-activity-option="account"]'));
+    expect(lastTokens().get("list")).toBe("account");
+    expect($('[data-token-row="account-a"]')!.textContent).toContain("Claude · A");
+    await click($("[data-token-members]"));
+    await click($('[data-token-member-menu] button:last-child'));
+    expect(lastTokens().get("member")).toBe("m_owner0000000000000000000000000");
+    expect($("[data-token-members]")!.textContent).toContain("Ada Quill");
+  });
+
+  test("the drawer explains the count and the dated price table", async () => {
+    await open("/activity?view=tokens&range=7d");
+    await click($("[data-activity-how]"));
+    expect($("[data-token-drawer-trust]")).not.toBeNull();
+    expect($("[data-token-drawer-lines]")!.textContent).toContain(t("activity.tokens.coverage.members"));
+    expect($("[data-token-drawer-cost]")!.textContent).toContain(t("activity.tokens.drawer.cost", { date: "2026-10-18" }));
+  });
+
+  test("the phone adds «Tokens» to its view switch and draws the tab full width", async () => {
+    wide = false;
+    await open("/activity?view=tokens&range=7d");
+    const views = [...dom.document.querySelectorAll('[aria-label="View"] [data-activity-option]')].map((button) => button.getAttribute("data-activity-option"));
+    expect(views).toEqual(["days", "projects", "tokens"]);
+    expect($('[aria-label="View"] [data-activity-option="tokens"]')!.getAttribute("aria-selected")).toBe("true");
+    expect($('[data-token-tab="phone"]')).not.toBeNull();
+    expect(address().get("view")).toBe("tokens");
+    expect($("[data-token-hero]")!.textContent).toBe(compact(TOKEN_TOTAL, "en"));
+  });
 });

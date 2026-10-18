@@ -3,18 +3,24 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { DayActivity, HourActivity } from "@/lib/activity/method";
+import { weekOfDay } from "@/lib/activity/range";
 
-import { agentParts, approxAtLeast, approxText, clockText, dayMonth, dayShort, hostName, hoursNumber, hoursText, minutesText, scopeHosts } from "./format";
-import { MARK_FILL, Tooltip, type TipAnchor } from "./marks";
+import { agentParts, approxAtLeast, approxText, clockText, datesText, dayMonth, dayShort, hostName, hoursNumber, hoursText, minutesText, scopeHosts } from "./format";
+import { MARK_FILL, TipRow, Tooltip, type TipAnchor } from "./marks";
 import { DayTip, HourTip, type TipContext } from "./tips";
 
 /*
  * The one strong chart (docs/design/activity-dashboard-v2.md, "By-day
  * chart"): your reported hours beside agent wall-clock, one pair per day on
  * one hour axis, never stacked together. Agent columns stack supervised,
- * unattended and unclear from the baseline. On Today the same chart is
- * hourly, with one hatched band behind each stretch a host did not read.
+ * unattended and unclear from the baseline. On one day (Today, or a free
+ * range of one date) the same chart is hourly, with one hatched band behind
+ * each stretch a host did not read. Past 92 days a column is a Monday week,
+ * since a day would be narrower than its two bars.
  */
+
+/** Longer ranges than this draw one pair per week. */
+const DAILY_LIMIT = 92;
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -36,7 +42,10 @@ export function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, n
 
 interface Column {
   key: string;
+  /** The day, or a week's first day. */
   day: DayActivity;
+  /** Every day the column holds: one, or a week's. */
+  days: DayActivity[];
   hour: HourActivity | null;
   /** Your value on the chart's unit: reported hours, or minutes on Today. */
   you: number;
@@ -48,11 +57,12 @@ interface Column {
 
 function columns(context: TipContext): Column[] {
   const { data } = context;
-  if (data.range.key === "today") {
+  if (data.days.length === 1) {
     const day = data.days[0]!;
     return day.hours.map((hour) => ({
       key: String(hour.start),
       day,
+      days: [day],
       hour,
       you: hour.humanMs / MINUTE,
       supervised: hour.supervisedMs / MINUTE,
@@ -61,10 +71,35 @@ function columns(context: TipContext): Column[] {
       future: hour.start >= data.range.now,
     }));
   }
-  return data.days.map((day) => {
+  const daily = data.days.map((day) => {
     const [supervised, unattended, unclear] = agentParts(day);
-    return { key: day.date, day, hour: null, you: day.humanHours, supervised: supervised / HOUR, unattended: unattended / HOUR, unclear: unclear / HOUR, future: false };
+    return { key: day.date, day, days: [day], hour: null, you: day.humanHours, supervised: supervised / HOUR, unattended: unattended / HOUR, unclear: unclear / HOUR, future: false };
   });
+  if (daily.length <= DAILY_LIMIT) return daily;
+  const weeks: Column[] = [];
+  for (const col of daily) {
+    const key = weekOfDay(col.day.date);
+    const last = weeks.at(-1);
+    if (last && last.key === key) {
+      last.days.push(col.day);
+      last.you += col.you;
+      last.supervised += col.supervised;
+      last.unattended += col.unattended;
+      last.unclear += col.unclear;
+    } else weeks.push({ ...col, key, days: [col.day] });
+  }
+  return weeks;
+}
+
+/** What a column's cap and tooltip go by, over every day it holds. */
+function facts(col: Column) {
+  return {
+    flagged: col.days.some((day) => day.missingSource !== null),
+    complete: col.days.every((day) => day.coverage.complete),
+    agentsComplete: col.days.every((day) => day.agentCoverage.complete),
+    humanHours: col.days.reduce((sum, day) => sum + day.humanHours, 0),
+    wallMs: col.days.reduce((sum, day) => sum + day.wallMs, 0),
+  };
 }
 
 /** Clean ticks: every 2 h up to 10 h, every 4 h up to 20 h, every 8 h above. */
@@ -80,8 +115,9 @@ export function ActivityDayChart({ context, bounds }: { context: TipContext; bou
   const [active, setActive] = useState<number | null>(null);
   /* The frame marks the pair a keyboard reached; a pointer needs none. */
   const [focused, setFocused] = useState<number | null>(null);
-  const today = data.range.key === "today";
-  const month = data.range.key === "30d";
+  const today = data.days.length === 1;
+  const weekly = data.days.length > DAILY_LIMIT;
+  const month = !today && data.days.length > 7;
   const tz = data.params.tz;
   const cols = columns(context);
 
@@ -130,17 +166,16 @@ export function ActivityDayChart({ context, bounds }: { context: TipContext; bou
   const hourX = (at: number) => axisW + slot * ((at - (day0?.start ?? 0)) / HOUR);
 
   const capLabel = (col: Column): { text: string; tone: string; strong: boolean } | null => {
-    const day = col.day;
-    const flagged = day.missingSource !== null;
-    const unknown = unread || flagged || (!day.coverage.complete && day.humanHours === 0);
+    const { flagged, complete, humanHours } = facts(col);
+    const unknown = unread || flagged || (!complete && humanHours === 0);
     if (!month) {
       if (unknown) return { text: "?", tone: flagged && !unread ? "var(--color-warning)" : "var(--color-muted)", strong: flagged && !unread };
-      if (day.humanHours > 0) return { text: `${day.coverage.complete ? "" : "≥ "}${hoursNumber(day.humanHours, locale)}`, tone: "var(--color-primary)", strong: true };
+      if (humanHours > 0) return { text: `${complete ? "" : "≥ "}${hoursNumber(humanHours, locale)}`, tone: "var(--color-primary)", strong: true };
       return { text: "0", tone: "var(--color-muted)", strong: false };
     }
     if (unread) return null;
     if (flagged) return { text: "?", tone: "var(--color-warning)", strong: true };
-    if (!day.coverage.complete) return { text: unknown ? "?" : "≥", tone: "var(--color-muted)", strong: true };
+    if (!complete) return { text: unknown ? "?" : "≥", tone: "var(--color-muted)", strong: true };
     return null;
   };
 
@@ -148,6 +183,10 @@ export function ActivityDayChart({ context, bounds }: { context: TipContext; bou
     const isToday = col.day.start <= data.range.now && data.range.now < col.day.end;
     const { center } = pairX(index);
     if (!month) return { text: isToday ? t("activity.range.today") : dayShort(col.day, locale, tz), anchor: "middle", x: center };
+    if (weekly) {
+      const every = Math.max(1, Math.ceil(52 / Math.max(1, slot)));
+      return index % every === 0 && cols.length - 1 - index >= every ? { text: dayMonth(col.day, locale, tz), anchor: "start", x: center - bw } : null;
+    }
     if (isToday) return { text: t("activity.range.today"), anchor: "end", x: center + bw + gap };
     const monday = new Date(`${col.day.date}T12:00:00Z`).getUTCDay() === 1;
     return monday && cols.length - 1 - index > 3 ? { text: dayMonth(col.day, locale, tz), anchor: "start", x: center - bw } : null;
@@ -165,7 +204,12 @@ export function ActivityDayChart({ context, bounds }: { context: TipContext; bou
   const anchor = active === null ? null : tipAnchor(active);
   const activeCol = active === null ? null : cols[active] ?? null;
 
+  const weekName = (col: Column) => datesText(col.days.map((day) => day.date), data.days, locale, tz);
   const pairLabel = (col: Column): string => {
+    if (col.days.length > 1) {
+      const fact = facts(col);
+      return t("activity.chart.pair", { day: weekName(col), you: capLabel(col)?.text === "?" ? "?" : `${fact.complete ? "" : "≥ "}${hoursText(fact.humanHours, locale, t)}`, agents: approxAtLeast(fact.wallMs, !fact.agentsComplete, t) });
+    }
     if (col.hour) return t("activity.chart.pair", { day: clockText(col.hour.start, locale, tz), you: minutesText(col.hour.humanMs, t), agents: approxText(col.hour.supervisedMs + col.hour.unattendedMs, t) });
     const cap = capLabel(col);
     return t("activity.chart.pair", { day: dayShort(col.day, locale, tz), you: cap?.text === "?" ? "?" : `${col.day.coverage.complete ? "" : "≥ "}${hoursText(col.day.humanHours, locale, t)}`, agents: approxAtLeast(col.day.wallMs, !col.day.agentCoverage.complete, t) });
@@ -276,7 +320,7 @@ export function ActivityDayChart({ context, bounds }: { context: TipContext; bou
               </g>
             );
           })}
-          {today && day0 ? (
+          {today && day0 && data.range.now >= day0.start && data.range.now < day0.end ? (
             <g aria-hidden>
               <line x1={hourX(data.range.now)} x2={hourX(data.range.now)} y1={top - 4} y2={top + H} stroke="var(--color-muted)" strokeWidth={1} opacity={0.6} />
               <text x={axisW + slot * cols.length} y={top + H + 17} textAnchor="end" fontSize={11} fill="var(--color-muted)" className="tabular-nums">24</text>
@@ -286,10 +330,32 @@ export function ActivityDayChart({ context, bounds }: { context: TipContext; bou
       ) : <div style={{ height: top + H + bottom }} />}
       {anchor && activeCol ? (
         <Tooltip anchor={anchor} side="right" bounds={bounds()}>
-          {activeCol.hour ? <HourTip day={activeCol.day} hour={activeCol.hour} context={context} /> : <DayTip day={activeCol.day} context={context} />}
+          {activeCol.hour ? <HourTip day={activeCol.day} hour={activeCol.hour} context={context} />
+            : activeCol.days.length > 1 ? <WeekTip col={activeCol} name={weekName(activeCol)} context={context} />
+            : <DayTip day={activeCol.day} context={context} />}
         </Tooltip>
       ) : null}
       <DayTable context={context} />
+    </div>
+  );
+}
+
+/** A week's column: its reported hours and its agents' time, each split
+    as the day tooltip splits it. */
+function WeekTip({ col, name, context }: { col: Column; name: string; context: TipContext }) {
+  const { unread, locale, t } = context;
+  const fact = facts(col);
+  const unknown = unread || fact.flagged || (!fact.complete && fact.humanHours === 0);
+  const ms = (hours: number) => hours * HOUR;
+  return (
+    <div data-activity-week-tip="">
+      <div className="mb-1 font-semibold text-primary">{name}</div>
+      <div className="grid grid-cols-[10px_max-content_1fr] items-center gap-x-2 gap-y-px">
+        <TipRow kind="you" value={unknown ? "?" : `${fact.complete ? "" : "≥ "}${hoursText(fact.humanHours, locale, t)}`} label={t("activity.fig.reported")} />
+        <TipRow kind="supervised" value={approxAtLeast(ms(col.supervised), !fact.agentsComplete, t)} label={t("activity.tip.supervised")} />
+        <TipRow kind="unattended" value={approxText(ms(col.unattended), t)} label={t("activity.tip.unattended")} />
+        <TipRow kind="unclear" value={approxText(ms(col.unclear), t)} label={t("activity.tip.unclear")} />
+      </div>
     </div>
   );
 }
@@ -300,7 +366,7 @@ function DayTable({ context }: { context: TipContext }) {
   const tz = data.params.tz;
   return (
     <table className="sr-only" data-activity-table="">
-      <caption>{t(data.range.key === "today" ? "activity.chart.ariaToday" : "activity.chart.aria")}</caption>
+      <caption>{t(data.days.length === 1 ? "activity.chart.ariaToday" : "activity.chart.aria")}</caption>
       <thead>
         <tr>
           <th scope="col">{t("activity.table.day")}</th>

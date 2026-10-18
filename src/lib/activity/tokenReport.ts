@@ -31,6 +31,7 @@ export interface ActivityTokensResponse {
   /** Per model AND tier AND kind, so clients can apply dated API prices without guessing. */
   costBasis: TokenCostBasis[];
   series: Array<{ start: number; end: number; counted: boolean; parts: Array<{ key: string; counts: TokenCounts }> }>;
+  /** Top 12 by total (500 with `top=all`), then one row keyed "other". */
   list: TokenListRow[];
   previous?: { from: string; to: string; totals: TokenCounts; costBasis: TokenCostBasis[] };
 }
@@ -56,6 +57,8 @@ type CacheEntry = { key: string; body: ActivityTokensResponse; at: number };
 const shared = globalThis as typeof globalThis & { __delegatusActivityTokensCache?: Map<string, CacheEntry> };
 const cache = shared.__delegatusActivityTokensCache ??= new Map();
 const CACHE_LIMIT = 16;
+const LIST_LIMIT = 12;
+const LIST_ALL_LIMIT = 500;
 // Decoration and coverage age also refresh without a token write.
 const CACHE_TTL_MS = 60_000;
 const safeValue = (v: string | null) => v && v.length <= 300 && !/[\p{Cc}]/u.test(v) ? v : null;
@@ -72,6 +75,8 @@ export async function activityTokensResponse(search: URLSearchParams, viewer: Ac
   const stack: TokenDimension = TOKEN_DIMENSIONS.includes(stackRaw as TokenDimension) ? stackRaw as TokenDimension : "kind";
   const list: GroupDimension = listRaw !== "kind" && TOKEN_DIMENSIONS.includes(listRaw as TokenDimension) ? listRaw as GroupDimension : "model";
   const member = safeValue(search.get("member"));
+  /* `top=all` names every listed entry (the project picker's rows), up to a bound. */
+  const listLimit = search.get("top") === "all" ? LIST_ALL_LIMIT : LIST_LIMIT;
   const canChoose = viewer.canChoose === true;
   // Authority is checked before opening the store or consulting the shared cache.
   if (!canChoose && (search.has("member") || search.has("account") || stack === "member" || stack === "account" || list === "member" || list === "account")) throw new ActivityMemberForbidden();
@@ -95,7 +100,7 @@ export async function activityTokensResponse(search: URLSearchParams, viewer: Ac
     const meta = store ? usageMeta(store.db) : null;
     const storeId = store?.db.query<{ store_id: string }, []>("SELECT store_id FROM activity_meta WHERE singleton=1").get()?.store_id ?? null;
     const key = JSON.stringify([file, storeId, meta, range.from, range.to, range.tz, range.preset, bucket, stack, list, filters, scoped, member,
-      search.get("compare") === "previous", aliases, canChoose, viewer.memberId]);
+      search.get("compare") === "previous", listLimit, aliases, canChoose, viewer.memberId]);
     const cached = cache.get(key);
     if (cached && now - cached.at >= 0 && now - cached.at < CACHE_TTL_MS) {
       cache.delete(key); cache.set(key, cached);
@@ -197,8 +202,8 @@ export async function activityTokensResponse(search: URLSearchParams, viewer: Ac
         const into = parts.get(key) ?? emptyTokens(); addTokens(into, countsFromRow(row)); parts.set(key, into);
       }
     }
-    const selected = listRows.slice(0, 12);
-    if (listRows.length > 12) { const counts=emptyTokens(); for(const row of listRows.slice(12)) addTokens(counts,row.counts); selected.push({ key: "other", name: null, counts }); }
+    const selected = listRows.slice(0, listLimit);
+    if (listRows.length > listLimit) { const counts=emptyTokens(); for(const row of listRows.slice(listLimit)) addTokens(counts,row.counts); selected.push({ key: "other", name: null, counts }); }
     const series: ActivityTokensResponse["series"] = [];
     const ranges = new Map<string | number, { start: number; end: number }>();
     if (bucket === "hour") {

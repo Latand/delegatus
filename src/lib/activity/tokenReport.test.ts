@@ -86,6 +86,15 @@ test("bucket edges include DST; weeks are Mondays, and top lists and chart parts
   expect(weeks.series).toHaveLength(54);
   expect(weeks.params.from).toBe("2025-10-12"); expect(weeks.params.to).toBe("2026-10-12");
 });
+test("top=all names every listed entry for the project picker, and caches apart from the top-12 answer", async () => {
+  for (let i=0;i<15;i++) seed(`picker-${i}`, { project: `project-${String(i).padStart(2,"0")}` });
+  const capped = await read("list=project");
+  expect(capped.list).toHaveLength(13); expect(capped.list.at(-1)!.key).toBe("other");
+  const all = await read("list=project&top=all");
+  expect(all.list).toHaveLength(15); expect(all.list.some(r => r.key === "other")).toBe(false);
+  expect(all.list.reduce((s,r)=>s+r.counts.requests,0)).toBe(all.totals.requests);
+  expect((await read("list=project&top=bogus")).list).toHaveLength(13);
+});
 test("zone rebuild is persisted, preserves old-zone days and accepts new writes", async () => {
   seed("a");
   const s = ActivityStore.open(file);
