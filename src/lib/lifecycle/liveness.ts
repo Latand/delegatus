@@ -5,13 +5,14 @@ import { isTaskNotificationRecord } from "@/lib/pipelines/backgroundTasks";
 import { recordValue, recordsValue } from "@/lib/scanner/json";
 import { livenessProbe, receiptIsLive, receiptProcessEvidence, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
-import { agentRegistry, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
+import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
 import { registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
-import { getPipelines } from "@/lib/pipelines/engine";
+import { pipelineSelectionSource, loadPipelines } from "@/lib/pipelines/store";
+import { flowSelectionSource, loadFlows } from "@/lib/flows/store";
+import { readHistoryProjection, historyPipelineRef, historyHeadlessFlows, pruneHistoryHeadlessRounds, canPruneHistoryHeadlessRounds, historyHeadlessDeadRounds } from "@/lib/state/historyProjection";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
-import { loadFlows } from "@/lib/flows/store";
 import type { Flow } from "@/lib/flows/types";
 import { completedFileScan } from "@/lib/scanner/scanCache";
 import type { PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
@@ -284,6 +285,13 @@ export function defaultEvidenceByteBudget(limit: number): number {
 export type LivenessRegistrySnapshot = Pick<RegistryFile, "entries" | "conversations">
   & Partial<Pick<RegistryFile, "conversationAliases" | "receipts">>;
 
+/** Only recorded headless ownership is read by the liveness projection. */
+export type LivenessFlow = Pick<Flow, "reviewerMode"> & {
+  rounds: Pick<Flow["rounds"][number], "reviewerPid" | "reviewerIdentity" | "reviewerPath" | "reviewerConversationId">[];
+};
+
+export interface LivenessProjectionOptions { signal?: AbortSignal; deadlineMs?: number }
+
 export interface AgentLivenessSources {
   now(): number;
   /** The clock the phase timings are read on. Production omits it and times on
@@ -310,10 +318,13 @@ export interface AgentLivenessSources {
       as null like a path that names no file. */
   describeTranscript(transcriptPath: string, options?: { strict?: boolean }): Promise<LivenessTranscript | null>;
   registrySnapshot(): LivenessRegistrySnapshot;
-  pipelines(): Pipeline[];
+  pipelines: {
+    (): Pipeline[];
+    forLiveness?: (targets: { conversationId: string | null; path: string }[], options?: LivenessProjectionOptions) => Promise<(AgentLivenessPipelineRef | null)[]>;
+  };
   /** Active review-loop ownership, read only to resolve detached reviewers that
       intentionally have no structured-host registry entry. */
-  flows?(): Flow[];
+  flows?: { (): Flow[]; forLiveness?: (options?: LivenessProjectionOptions) => Promise<LivenessFlow[]> };
   /** Turn state and newest-record freshness from ONE tail read. `strict`
       throws an I/O failure other than a missing file, which otherwise reads
       as null like a torn tail. */
@@ -346,8 +357,12 @@ export function productionLivenessSources(
     }),
     describeTranscript: describeTranscriptPath,
     registrySnapshot: () => agentRegistry().readOnlySnapshot(),
-    pipelines: () => getPipelines().pipelines,
-    flows: () => loadFlows(),
+    pipelines: Object.assign(() => loadPipelines(), { forLiveness: (targets: { conversationId: string | null; path: string }[], options: LivenessProjectionOptions = {}) =>
+      readHistoryProjection(db => targets.map(target => historyPipelineRef(db, target.conversationId, target.path)), { ...options, collections: ["pipelines"] }) }),
+    flows: Object.assign(() => loadFlows(), { forLiveness: (options: LivenessProjectionOptions = {}) => {
+      pipelineSelectionSource(); flowSelectionSource();
+      return readHistoryProjection(historyHeadlessFlows, { ...options, collections: ["flows"] });
+    } }),
     transcriptEvidence: readLivenessTranscriptEvidence,
     probe: livenessProbe(),
   };
@@ -500,7 +515,7 @@ function hostEvidence(
 
 /** Process ownership survives control phases and later review rounds. */
 function headlessHostEvidence(
-  flows: readonly Flow[],
+  flows: readonly LivenessFlow[],
   transcriptPath: string | null,
   conversationId: string | null,
   probe: LivenessProbe,
@@ -508,9 +523,18 @@ function headlessHostEvidence(
 ): { state: AgentHostState; kind: "headless"; pid: number } | null {
   const canonicalId = conversationId ? canonicalConversationId(registry, conversationId) : null;
   let fallback: { state: AgentHostState; kind: "headless"; pid: number } | null = null;
-  for (const flow of flows) {
-    if (flow.reviewerMode !== "headless") continue;
-    for (const round of flow.rounds) {
+  const deadConversationIds=conversationId&&canonicalId
+    ? conversationIdsResolvingTo(registry as RegistryFile,canonicalId as `conversation_${string}`)
+    : [conversationId,canonicalId].filter((value):value is string=>value!==null);
+  const deadRounds=historyHeadlessDeadRounds(flows,transcriptPath,deadConversationIds);
+  const candidates=[...flows.flatMap(flow=>flow.reviewerMode==="headless"?flow.rounds:[]),...deadRounds];
+  candidates.sort((left,right)=>{
+    const a=left as typeof left & {row_order?:number;row_key?:string;round?:number};
+    const b=right as typeof right & {row_order?:number;row_key?:string;round?:number};
+    if(a.row_order===undefined||b.row_order===undefined||a.row_key===undefined||b.row_key===undefined)return 0;
+    return a.row_order-b.row_order||a.row_key.localeCompare(b.row_key)||(a.round??0)-(b.round??0);
+  });
+  for (const round of candidates) {
       if (!Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0
         || (!transcriptPath || round.reviewerPath !== transcriptPath)
         && (!canonicalId || !round.reviewerConversationId || canonicalConversationId(registry, round.reviewerConversationId) !== canonicalId)) continue;
@@ -518,7 +542,6 @@ function headlessHostEvidence(
       const host = { state: verdict === "unproven" ? "unknown" as const : verdict, kind: "headless" as const, pid: round.reviewerPid! };
       if (verdict === "alive") return host;
       if (!fallback || verdict === "unproven") fallback = host;
-    }
   }
   return fallback;
 }
@@ -536,7 +559,22 @@ export function headlessRoundProcess(
   round: { reviewerPid?: number | null; reviewerIdentity?: string | null },
   probe: LivenessProbe,
 ): "alive" | "gone" | "unproven" {
-  return headlessRoundVerdict(round, probe);
+  const pid=round.reviewerPid;
+  if (!Number.isInteger(pid) || (pid ?? 0)<=0) return "unproven";
+  const key=`${pid}:${round.reviewerIdentity ?? "?"}`;
+  const shared=globalThis as typeof globalThis & {__delegatusHeadlessVerdictsV1?:WeakMap<object,Map<string,{verdict:"alive"|"gone"|"unproven";until:number}>>};
+  const caches=shared.__delegatusHeadlessVerdictsV1 ??= new WeakMap();
+  const cacheKey=probe.cacheKey ?? probe;
+  let cache=caches.get(cacheKey);
+  if(!cache){cache=new Map();caches.set(cacheKey,cache);}
+  const now=probe.now();
+  const prior=cache.get(key);
+  if (prior && ((prior.verdict==="gone" && round.reviewerIdentity) || now<prior.until)) { cache.delete(key);cache.set(key,prior);return prior.verdict; }
+  const verdict=headlessRoundVerdict(round,probe);
+  const until=verdict==="gone" && round.reviewerIdentity ? Infinity : now+1000;
+  cache.delete(key);cache.set(key,{verdict,until});
+  while(cache.size>8192)cache.delete(cache.keys().next().value!);
+  return verdict;
 }
 
 function turnStateFromEvidence(evidence: LivenessTranscriptEvidence | null, entry: LivenessTranscript): LifecycleTurnState {
@@ -812,23 +850,32 @@ function hostedTranscriptPaths(snapshot: LivenessRegistrySnapshot, probe: Livene
   return hosted;
 }
 
-function activeHeadlessTranscriptPaths(
-  flows: readonly Flow[],
+export function activeHeadlessTranscriptPaths(
+  flows: LivenessFlow[],
   registry: LivenessRegistrySnapshot,
   probe: LivenessProbe,
+  pruneConfirmedGone = false,
 ): Set<string> {
   const paths = new Set<string>();
-  for (const flow of flows) {
+  const prunedRounds:object[]=[];
+  for (let flowIndex=0;flowIndex<flows.length;flowIndex++) {
+    const flow=flows[flowIndex]!;
     if (flow.reviewerMode !== "headless") continue;
-    for (const round of flow.rounds) {
-      if (!Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0) continue;
+    for (let roundIndex=0;roundIndex<flow.rounds.length;) {
+      const round=flow.rounds[roundIndex]!;
+      if (!Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0) { roundIndex++; continue; }
+      const verdict=headlessRoundProcess(round,probe);
+      if (pruneConfirmedGone && verdict==="gone" && round.reviewerIdentity) { prunedRounds.push(round); flow.rounds.splice(roundIndex,1); continue; }
       const path = round.reviewerPath
         ?? (round.reviewerConversationId ? canonicalConversation(registry, round.reviewerConversationId)?.generations.at(-1)?.path : null);
       // Selection must retain every owner the final liveOnly predicate protects.
       // An unreadable identity cannot drop a recorded PID before it is judged.
-      if (path && headlessRoundProcess(round, probe) !== "gone") paths.add(path);
+      if (path && verdict !== "gone") paths.add(path);
+      roundIndex++;
     }
+    if(pruneConfirmedGone&&flow.rounds.length===0)flows.splice(flowIndex--,1);
   }
+  if(prunedRounds.length)pruneHistoryHeadlessRounds(flows,prunedRounds);
   return paths;
 }
 
@@ -903,6 +950,7 @@ const ANSWER_SPENT = Symbol("liveness-answer-budget-spent");
 
 /** The one clock a bounded answer shares between its phases. */
 interface AnswerBudget {
+  deadlineMs?: number;
   /** The work, or `ANSWER_SPENT` once the budget has ended. Rejects when the
       caller cancels, without waiting for the work to notice. */
   within<T>(work: Promise<T>): Promise<T | typeof ANSWER_SPENT>;
@@ -926,6 +974,7 @@ function answerBudget(budgetMs: number | null, signal: AbortSignal | null): Answ
   });
   void interrupted?.catch(() => undefined);
   return {
+    deadlineMs: budgetMs === null ? undefined : performance.now() + budgetMs,
     within: <T>(work: Promise<T>) => {
       if (!ended && !interrupted) return work;
       /* The loser keeps running; its rejection has nobody left to read it. */
@@ -1061,11 +1110,12 @@ async function livenessSnapshotWithin(
   const conversationForPath = (path: string) => (paths ??= conversationPathIndex(registry)).get(path) ?? null;
   let entriesInRegistry: AgentRegistryEntry[] | undefined;
   const registryEntries = () => entriesInRegistry ??= Object.values(registry.entries);
-  const pipelines = pipelineIndex(sources.pipelines());
-  const flows = sources.flows?.() ?? [];
+  const pipelines = pipelineIndex(sources.pipelines.forLiveness ? [] : sources.pipelines());
+  const projectionOptions = { ...(request.signal ? { signal: request.signal } : {}), deadlineMs: answer.deadlineMs };
+  const flows = await (sources.flows?.forLiveness ? sources.flows.forLiveness(projectionOptions) : sources.flows?.() ?? []);
   const hostedPaths = new Set([
     ...hostedTranscriptPaths(registry, sources.probe),
-    ...activeHeadlessTranscriptPaths(flows, registry, sources.probe),
+    ...activeHeadlessTranscriptPaths(flows, registry, sources.probe, Boolean(sources.flows?.forLiveness && canPruneHistoryHeadlessRounds(flows))),
   ]);
   const indexProjectionMs = phaseClock() - projectionStartedAt;
 
@@ -1326,6 +1376,7 @@ async function livenessSnapshotWithin(
      timing measures the phase it is named after instead of splitting the
      per-row registry and lineage lookups across both. */
   const rowProjectionStartedAt = phaseClock();
+  const narrowRefs = await sources.pipelines.forLiveness?.(hydratable.map(entry => ({ conversationId: conversationForPath(entry.path) ?? entry.conversationId, path: entry.path })), projectionOptions);
   let unreadable = 0;
   /* Rows whose tail answered. A read the answer budget left behind is not one. */
   let answered = 0;
@@ -1388,7 +1439,7 @@ async function livenessSnapshotWithin(
       lastRecordMs,
       silentForMs: verdict.verified ? silentForMs : null,
       host,
-      pipeline: (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
+      pipeline: narrowRefs ? narrowRefs[index] : (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
         ?? pipelines.byPath.get(entry.path)
         ?? null,
       evidenceSource: (!attempted ? "projection" : evidence !== null ? "transcript" : "unreadable") as AgentLivenessRecord["evidenceSource"],

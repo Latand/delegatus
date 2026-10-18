@@ -10,6 +10,7 @@ import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { roleMemoryEnabled } from "../settings";
 import { machinePass, patchPass, readPass, passIsLive, type CuratorPass } from "./store";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { curatorCallerOf } from "./guard";
 
 /** Shared launch and recovery admission, also loaded by the scanner worker. */
@@ -64,7 +65,7 @@ export async function hostAdmission(project: string, ports: CurationAdmissionPor
 
 /** Admission shared by ordinary message/resume recovery for curator conversations. */
 export async function curatorRecoveryGuard(conversationId: string, sources = defaultSeatTickAdmissionSources()): Promise<() => void> {
-  const snapshot = sources.registry().readOnlySnapshot();
+  const snapshot = withViewerOperation("memory.curation-admission", () => sources.registry().curatorConversationSnapshot(conversationId));
   const pass = curatorCallerOf(conversationId, snapshot);
   const ports: CurationAdmissionPorts = { sources };
   const host = await hostAdmission(pass.project, ports);
@@ -84,7 +85,7 @@ export async function curatorRecoveryGuard(conversationId: string, sources = def
     }
     const held = admissionHeld(pass.project, ports);
     if (held) throw new DeliveryAdmissionRefusedError(held);
-    curatorCallerOf(conversationId, sources.registry().readOnlySnapshot());
+    curatorCallerOf(conversationId, withViewerOperation("memory.curation-admission", () => sources.registry().curatorConversationSnapshot(conversationId)));
   };
   assert();
   return assert;
@@ -92,7 +93,7 @@ export async function curatorRecoveryGuard(conversationId: string, sources = def
 
 function archive(pass: CuratorPass, sources: SeatTickAdmissionSources) {
   if (!pass.conversationId && !pass.transcriptPath) return;
-  const snapshot = sources.registry().readOnlySnapshot();
+  const snapshot = pass.conversationId ? sources.registry().curatorConversationSnapshot(pass.conversationId) : sources.registry().conversationDeliverySnapshot({ path: pass.transcriptPath ?? "" });
   const conversation = pass.conversationId ? snapshot.conversations[pass.conversationId as `conversation_${string}`] : null;
   const paths = [...new Set([...(conversation?.generations.map(g => g.path) ?? []), ...(pass.transcriptPath ? [pass.transcriptPath] : []), ...(pass.launchId ? [`spawn:${pass.launchId}`] : [])])];
   if (paths.length) archiveConversationPaths(pass.project, "archive", paths, snapshot, { boardFor, applyBoardCommand: (input, record) => applyBoardCommand(input, { registrySnapshot: () => record }) });
