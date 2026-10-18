@@ -10,7 +10,7 @@ import { ActivityMemberForbidden, catalogProjectNames, type ActivityRequestViewe
 import { readActivitySettings } from "./settings";
 import { parseActivityDates, shiftDay, dateRangeDays, weekOfDay, type TokenPreset } from "./range";
 import { addTokens, emptyTokens, tokenTotal, type TokenCounts } from "./tokenUsage";
-import { countsFromRow, HOUR, SUM_TOKENS, usageMeta, usageZones, type UsageMeta } from "./tokenStore";
+import { countsFromRow, DAY, HOUR, SUM_TOKENS, usageMeta, usageZones, type UsageMeta } from "./tokenStore";
 
 export const TOKEN_DIMENSIONS = ["kind", "model", "role", "project", "member", "account", "engine"] as const;
 export type TokenDimension = typeof TOKEN_DIMENSIONS[number];
@@ -77,7 +77,9 @@ export async function activityTokensResponse(search: URLSearchParams, viewer: Ac
   if (!canChoose && (search.has("member") || search.has("account") || stack === "member" || stack === "account" || list === "member" || list === "account")) throw new ActivityMemberForbidden();
   const now = deps.now();
   const range = parseActivityDates(search, now, deps.tz());
-  const bucket = range.days.length <= 2 ? "hour" : range.days.length <= 92 ? "day" : "week";
+  const hoursRetainedFrom = Math.floor((now - 92 * DAY) / HOUR) * HOUR;
+  const hourlyAvailable = range.days.length <= 2 && range.days[0]!.start >= hoursRetainedFrom;
+  const bucket = hourlyAvailable ? "hour" : range.days.length <= 92 ? "day" : "week";
   const aliases = deps.aliases();
   const project = safeValue(search.get("project"));
   const scoped = project ? deps.canonical(project) : null;

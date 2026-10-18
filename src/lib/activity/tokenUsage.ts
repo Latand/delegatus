@@ -57,7 +57,9 @@ export class UsageLineReader {
     const modern = engine === "codex" && line.type === "token_usage_record";
     const claude = engine === "claude" && line.type === "assistant" && object(message?.usage) && message?.model !== "<synthetic>";
     if (!legacy && !modern && !claude) return;
-    if (modern) this.state.recordsSeen = true;
+    // Some Codex builds emit bookkeeping token_count events with no usage at
+    // all. They are not responses and must not affect coverage or mode state.
+    if (legacy && !object(payload?.info)) return;
     const at = typeof line.timestamp === "string" ? Date.parse(line.timestamp) : NaN;
     const id = engine === "claude" ? text(message?.id) : text(payload?.thread_id) ?? this.state.thread;
     if (!Number.isFinite(at) || !id || (modern && !text(payload?.response_id))) { this.malformed++; return; }
@@ -102,6 +104,8 @@ export class UsageLineReader {
       counts.output = usage.output; counts.reasoning = Math.min(usage.output, usage.reasoning);
       const baseline = { ...cumulative };
       for (const key of Object.keys(baseline) as Array<keyof CodexCounters>) baseline[key] = Math.max(0, baseline[key] - usage[key]);
+      if (bad) { this.malformed++; return; }
+      if (modern) this.state.recordsSeen = true;
       this.records.push({ engine, id, at, model: this.state.model ?? null, tier: null, counts, cumulative, ...(legacy ? { legacy: true, baseline } : {}) });
     }
     if (bad) this.malformed++;

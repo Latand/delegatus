@@ -204,9 +204,12 @@ export async function ingestTranscripts(sources: readonly IngestSource[], option
       continue;
     }
     try {
-      /* A transcript shorter than its cursor was rewritten: read it again from
-         the start. Its rows are keyed by their ids, so nothing doubles. */
-      const resume = cursor && source.size >= cursor.offset ? cursor : null;
+      /* A mixed-version writer can advance the old cursor past a newer token
+         cursor, or leave the token cursor beyond a rewritten file. Replay both
+         readers from zero; durable response dedupe makes the token replay safe. */
+      const storedUsageOffset = cursor?.usageOffset ?? 0;
+      const tokenCursorAhead = cursor !== null && (storedUsageOffset > cursor.offset || storedUsageOffset > source.size);
+      const resume = cursor && source.size >= cursor.offset && !tokenCursorAhead ? cursor : null;
       let offset = resume?.offset ?? 0;
       let facts = resume?.facts;
       let usageOffset = resume?.usageOffset ?? 0;

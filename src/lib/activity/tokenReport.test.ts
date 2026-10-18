@@ -96,6 +96,28 @@ test("zone rebuild is persisted, preserves old-zone days and accepts new writes"
   seed("b", { at: USAGE_NOW - DAY });
   expect((await read("tz=America/New_York")).totals.requests).toBe(2);
 });
+test("historical one and two day ranges use retained daily aggregates and agree with totals", async () => {
+  const oldAt = USAGE_NOW - DAY;
+  seed("old", { at: oldAt });
+  seed("before-hour-cutoff", { at: USAGE_NOW - 3_600_000 });
+  seed("after-hour-cutoff", { at: USAGE_NOW + 7_200_000 });
+  const futureNow = USAGE_NOW + 92 * DAY + 3_600_000;
+  const store = ActivityStore.open(file);
+  try { store.transaction(() => maintainUsage(store.db, futureNow, "Europe/Kyiv")); }
+  finally { store.close(); }
+  const readAtFuture = (query: string) => read(query, { now: () => futureNow });
+  for (const from of [new Date(oldAt).toISOString().slice(0, 10), new Date(USAGE_NOW).toISOString().slice(0, 10)]) {
+    const single = await readAtFuture(`from=${from}&to=${from}`);
+    expect(single.params.bucket).toBe("day");
+    expect(single.totals.requests).toBeGreaterThan(0);
+    expect(single.series.flatMap(row => row.parts).reduce((n, part) => n + part.counts.requests, 0)).toBe(single.totals.requests);
+    expect(single.list.reduce((n, row) => n + row.counts.requests, 0)).toBe(single.totals.requests);
+    const next = new Date(Date.parse(`${from}T00:00:00Z`) + DAY).toISOString().slice(0, 10);
+    const twoDays = await readAtFuture(`from=${from}&to=${next}`);
+    expect(twoDays.params.bucket).toBe("day");
+    expect(twoDays.series.flatMap(row => row.parts).reduce((n, part) => n + part.counts.requests, 0)).toBe(twoDays.totals.requests);
+  }
+});
 test("persisted dimension summaries agree with the filtered day path for every grouping", async () => {
   seed("a");seed("b",{model:"other-model",tier:"fast",project:"project-new"});
   for(const dimension of ["kind","model","role","project","member","account","engine"]) {

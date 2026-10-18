@@ -52,6 +52,30 @@ test("Codex whole copies, inherited fork totals, legacy repeats, and a transitio
     expect(total()).toMatchObject({ requests: 6, input: 60, cacheRead: 480, output: 120 });
   }
 });
+test("Codex null-info events do not create requests or watermarks across process restarts", async () => {
+  const target = path.join(root, "codex-null.jsonl");
+  const nullInfo = { timestamp: USAGE_AT, type: "event_msg", payload: { type: "token_count", info: null } };
+  fs.writeFileSync(target, [codexMeta("thread-null"), nullInfo].map(row => JSON.stringify(row)).join("\n") + "\n");
+  const source: IngestSource = { path: target, engine: "codex", size: fs.statSync(target).size, mtimeMs: USAGE_NOW - DAY };
+  const inventory = path.join(root, "codex-null-inventory.json");
+  const pass = async () => {
+    fs.writeFileSync(inventory, JSON.stringify([source]));
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "tokenIngest.child.ts"), database, inventory, String(1 << 20)], { stdout: "pipe", stderr: "pipe" });
+    const output = await new Response(child.stdout).text(), errors = await new Response(child.stderr).text();
+    expect(await child.exited, errors).toBe(0);
+    expect(JSON.parse(output).failures).toEqual([]);
+  };
+  await pass();
+  expect(read(s => s.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM usage_days").get()!.n)).toBe(0);
+  expect(read(s => s.db.query("SELECT * FROM usage_codex_threads").all())).toEqual([]);
+  expect(read(s => usageMeta(s.db)!.malformed)).toBe(0);
+  fs.appendFileSync(target, JSON.stringify(codexUsage("thread-null", 120, USAGE_AT, true)) + "\n");
+  source.size = fs.statSync(target).size;
+  source.mtimeMs += 1;
+  await pass();
+  expect(total().requests).toBe(1);
+  expect(read(s => s.db.query("SELECT total FROM usage_codex_threads").get())).toEqual({ total: 120 });
+});
 test("a subagent keeps the parent's attribution and has its own conversation key", async () => {
   const parent = file("parent.jsonl", [codexMeta("parent"), codexUsage("parent")], "codex");
   const child = file("child.jsonl", [codexMeta("child", { source: { subagent: { thread_spawn: { parent_thread_id: "parent" } } } }), codexUsage("child")], "codex");
@@ -85,6 +109,25 @@ test("old writer cursors backfill within the shared budget across real process r
   expect(deferred).toBeGreaterThan(0); expect(total().requests).toBe(1500);
   expect((await ingest(sources)).filesSkipped).toBe(3);
   expect(read(s => s.db.query<{ user_version: number }, []>("PRAGMA user_version").get()!.user_version)).toBe(3);
+});
+test("a mixed-release shorter-file cursor replays tokens from zero and dedupes old responses after restart", async () => {
+  const source = file("mixed-release.jsonl", [claudeUsage("response-a"), claudeUsage("response-b"), claudeUsage("response-c")]);
+  expect((await ingest([source])).failures).toEqual([]);
+  expect(total().requests).toBe(3);
+  fs.writeFileSync(source.path, JSON.stringify(claudeUsage("response-d")) + "\n");
+  source.size = fs.statSync(source.path).size;
+  // An old release updates only the columns it knows and leaves usage_offset ahead.
+  read(s => s.db.query("UPDATE activity_files SET offset=?, size=?, mtime_ms=? WHERE path=?")
+    .run(source.size, source.size, source.mtimeMs, source.path));
+  expect(read(s => s.fileCursor(source.path))).toMatchObject({ offset: source.size, usageOffset: expect.any(Number) });
+  expect(read(s => s.fileCursor(source.path)!.usageOffset)).toBeGreaterThan(source.size);
+  const inventory = path.join(root, "mixed-release-inventory.json"); fs.writeFileSync(inventory, JSON.stringify([source]));
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "tokenIngest.child.ts"), database, inventory, String(1 << 20)], { stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(child.stdout).text(), errors = await new Response(child.stderr).text();
+  expect(await child.exited, errors).toBe(0);
+  expect(JSON.parse(output).failures).toEqual([]);
+  expect(total().requests).toBe(4);
+  expect(read(s => s.fileCursor(source.path))).toMatchObject({ offset: source.size, usageOffset: source.size });
 });
 test("a line larger than the remaining budget waits without reading past the cap", async () => {
   const row=claudeUsage("large-line"); row.message.content[0]!.text="fixture ".repeat(10_000);
