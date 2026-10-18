@@ -134,7 +134,7 @@ import { resolveStageTestGuidance } from "./testGuidance";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
-import { withoutStoredLessons } from "@/lib/memory/roleStore";
+import { withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
@@ -678,7 +678,7 @@ async function spawnPipelineAgent(
 ): Promise<PipelineStageSpawn> {
   /* The message carries the stage prompt, with any quoted private rule
      withheld. The engine renders its selector into its instruction channel. */
-  const message = withoutStoredLessons(input.prompt);
+  const message = await withoutStoredLessonsAsync(input.prompt);
   /* #1279's seam. An unbound project takes the same branch it always took —
      the active account — so nothing changes for a project nobody configured.
      A bound one draws from its allowed set only: a stage naming an account

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import path from "node:path";
 import { CpuAdmissionQueue, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS } from "../runtime/cpuAdmission";
 import { DEFAULT_CPU_PRESSURE_POLICY } from "../runtime/cpuPressure";
@@ -8,6 +8,7 @@ import { parseCpuQueueDetail } from "../runtime/cpuQueueText";
 import { registerPipelineTick } from "./controllerSignal";
 
 registerPipelineTick(async () => {});
+afterAll(async () => { await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker(); });
 
 test("stage activation uses stable FIFO tickets, persists the card reason and launches one expired head", async () => {
   savePipelines([]);

@@ -220,7 +220,7 @@ describe("global merge admission", () => {
     const lane = completedLane("retry-running");
     lane.state = "running";
     lane.closedAt = null;
-    lane.cursor = { stageId: "build", state: "running" };
+    lane.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
     savePipelines([lane]);
     const result = await patchPipeline(lane.id, { action: "retry-merge" }, { now: () => iso(T0) } as never);
     expect(result.status).toBe(409);
