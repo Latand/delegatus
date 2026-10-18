@@ -278,8 +278,8 @@ export function seatTickWakeMessage(input: {
     "",
     `Wake reasons: ${input.reasons.map(reason => reason.kind).join(", ")}.`,
   ];
-  if (input.catchUp) lines.push("", `Catch-up manifest ${input.catchUp.key}: unreachable window ${input.catchUp.from} through ${input.catchUp.through}.`,
-    `This bounds the delivery gap; host loss may have occurred later. Held backlog: ${input.items.length} items. Times below are original event times in UTC${input.compactCatchUpTimeBase ? ` milliseconds relative to ${input.compactCatchUpTimeBase}` : ""}. Re-read unresolved actions before acting.`);
+  if (input.catchUp) lines.push("", `Catch-up manifest ${input.catchUp.key}: backlog window ${input.catchUp.from} through ${input.catchUp.through}.`,
+    `Held backlog: ${input.items.length} items. Times below are original event times in UTC${input.compactCatchUpTimeBase ? ` milliseconds relative to ${input.compactCatchUpTimeBase}` : ""}. Re-read unresolved actions before acting.`);
   /* Directly under the reasons, above the agenda, because it qualifies the
      whole message and because the agenda is the half the length bound eats
      into. A wake that dropped its own blind spot to fit one more item would be

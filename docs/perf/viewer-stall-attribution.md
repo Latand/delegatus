@@ -501,8 +501,8 @@ The recorder arms by default. The small `loop-profiler.json` file in the
 installation's state directory is only a kill switch: `{"enabled":false}`
 disables collection, and a missing, unreadable, invalid or oversized file leaves
 it armed. Each deployed revision's first Viewer start arms it for thirty minutes.
-Settings are reread asynchronously at every window boundary and before collection
-following cooldown, so writing the kill switch stops the next window. The read
+Settings are reread asynchronously before collection at every window boundary,
+so writing the kill switch stops the next window. The read
 itself is limited to 513 bytes; over 512 is unreadable and counts as absent.
 No UI, MCP mutation or runtime-host setting was added.
 
@@ -540,7 +540,14 @@ profile, so a profile timer that runs first still correlates the gap. Up to four
 pending gap records share one sanitized window summary. Their original sequence,
 timestamps, operations and scheduler evidence remain on the same
 `[viewer loop-gap]` line, with an added `jsProfile` field. Capture/conversion
-failure releases pending records with status `unavailable` and stops collection.
+failure releases pending records with status `unavailable` and reason
+`capture-failed`, then stops collection. Every gap of at least two seconds has
+`jsProfile.status`: `captured` includes the sanitized frames; `unavailable`,
+`not-armed` and `skipped` include a short reason. Without an active collection,
+the record explains the missing window, expired arm, kill switch or stopped
+recorder. A Viewer without a recorder reports `not-armed` / `profiler-not-started`.
+Non-overlapping gaps and records exceeding the four-pending-record cap report
+`skipped` with `outside-window` or `pending-limit`.
 The existing bounded nonblocking log sink still owns delivery and drop counts.
 
 Native collection continues throughout the blocked interval: at 10 ms this is
@@ -563,9 +570,9 @@ CPU or stop-time bound. The following limits apply **after** collection:
   external paths, dependency paths, URL parameters, native/eval frames and
   dynamic text names. Compiled production frames can name a generated chunk
   and its generated line; keep the serving revision to resolve that location.
-- A qualifying gap or a window longer than 5.25 seconds imposes a one-minute
-  cooldown before the next collection, bounded by expiry. Collection, conversion
-  and setting/ledger work use the monitor phases `loop-profiler.collect`,
+- Consecutive windows continue after qualifying gaps and slow windows, with no
+  cooldown. The kill switch and arm expiry are checked before each collection.
+  Collection, conversion and setting/ledger work use the monitor phases `loop-profiler.collect`,
   `loop-profiler.trim` and `loop-profiler.settings`.
 
 The bounded conversion limits JavaScript work and retained output; it cannot
@@ -589,7 +596,8 @@ function, repository file, line and self/total samples. It disables the real
 setting at the first captured record. Fresh-process tests share only their own
 isolated ledger to prove a restart cannot renew admission and a runtime-host
 caller cannot claim it. Deterministic clock/collector controls cover healthy
-discard, overlapping gaps, timer ordering, expiry, boundary disable, cooldown,
+discard, overlapping gaps, timer ordering, expiry, boundary disable, three-window
+bursts and explicit status/reasons for gaps without a pending capture,
 privacy filtering, output limits and capture/conversion failures.
 
 The final Next production build and its served Viewer rehearsal passed under

@@ -1100,8 +1100,10 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
-  /** First observed failed reachability; cleared only by a landed wake. */
+  /** First identity-checked gone-host observation; cleared by a landed wake. */
   unreachableSince?: string | null;
+  /** Last confirmed wake bounding the backlog held for that host loss. */
+  unreachableBacklogSince?: string | null;
   hostRecovery?: import("./seatHostRecovery").SeatHostRecovery;
   autoRotation?: import("./seatAutoRotation").SeatAutoRotationState;
   authIncident?: SeatAuthIncident;
