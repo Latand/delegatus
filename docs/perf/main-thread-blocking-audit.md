@@ -23,6 +23,26 @@ at 16:38:04Z (`72866c7d`, #3056) writes no loop-gap record on this
 installation; [the observation](#loop-records-silenced-from-163657z-72866c7d)
 and slice [L0c](#l0c-loop-records-reach-the-service-journal-again) carry it.
 
+A second revision (from 17:10Z) answers six more verification findings. The
+profiler-trim case now feeds frames the profiler accepts and asserts the rows
+it keeps. The done sweep (T6) is priced from a replay of one whole pass, so the
+60 s re-arm chains, which the attention reconcile shares, stay unattributed.
+MCP caller enumeration (H1) is counted only from lines the Viewer itself wrote,
+times the resolutions the code makes on every path; no bound rests on receipt
+counts alone. The same check found that receipts come from every MCP server
+process, including the agents' own stdio servers, so the curator lower bound now
+counts only passes proven to run on the Viewer. The route and tool screen roots
+all 61 tools of the catalog, and every whole-collection site it reports is
+checked against this installation's dependency wiring. The first-run column
+now states what each case does before its timer starts. Every case was rerun
+from the corrected procedure on export `6a1ea0d9`, the revision serving since
+17:02:45Z, and the ranking was recomputed from that run. Inventory row H13 is
+new. Before hand-off, `origin/main` gained #3057, which answers slice L0c, and
+draft #3058 changes the gate guard RG2 extends; both are recorded where they
+apply. The release carrying #3057 (`8f79707c`) was applied at 18:27:31Z, and
+both processes write loop records again
+([observation](#loop-records-silenced-from-163657z-72866c7d)).
+
 ## Requirement
 
 On 2026-10-18 at about 13:10 UTC the operator asked, through the board brief
@@ -60,12 +80,23 @@ nothing complete until it is verified.
   [below](#loop-records-silenced-from-163657z-72866c7d); one comparison in
   `src/lib/agent/registry.ts`; one import in `src/lib/pipelines/controller.ts`,
   which moves that file's lines by one on main) and `6a1ea0d9` (#3048, merged
-  16:29:58Z, the `41be75ea` activity token lane).
+  16:29:58Z, the `41be75ea` activity token lane). From `c91603e0` to
+  `6a1ea0d9` nothing changed under `src/lib/done`, `src/lib/taskAlbum`,
+  `src/lib/attention`, `src/lib/mcp`, `src/lib/memory`, `src/lib/tasks` or
+  `src/lib/pipelines/store.ts`, and under `src/lib/state` only
+  `historyProjection.ts` (`git diff --stat c91603e06 6a1ea0d93 -- …`), so the
+  lines this revision cites there hold on the serving revision. At 18:23Z `origin/main`
+  had moved once more, to `8f79707c` (#3057, merged 17:41:33Z: `bin/cli.mjs`,
+  `src/lib/startupDiagnostics.ts`, `src/lib/viewerLoopMonitor.ts` and their
+  tests and verification note), which answers
+  [L0c](#l0c-loop-records-reach-the-service-journal-again).
 - **Serving revisions.** `$HOME/.config/delegatus/state/self-update/history.jsonl`
   records `kind: apply` for `c91603e0` at 2026-10-18T12:14:58.377Z, for
-  `9c889c07` at 13:19:58.559Z, for `a25592be` at 15:04:33.370Z and for
+  `9c889c07` at 13:19:58.559Z, for `a25592be` at 15:04:33.370Z, for
   `72866c7d` at 16:38:04.273Z (its Viewer and runtime-host processes started
-  at 16:36:57-59Z by `/proc`).
+  at 16:36:57-59Z by `/proc`), for `6a1ea0d9` at 17:02:45.219Z and for
+  `8f79707c` at 18:27:31.411Z (its runtime host and Viewer started at
+  18:26:24Z and 18:26:25Z by `/proc`).
 - **Earlier answers read first (rule 3).** `docs/perf/viewer-stall-attribution.md`,
   `docs/perf/viewer-stalls-attribution.md`, the board task for the residual
   long server pauses with its notes, and the stage results of audits
@@ -107,9 +138,19 @@ nothing complete until it is verified.
   16:31:44-16:35:59Z, and a third time, with the journal checks, the receipt
   checks, the route and tool screen and `profile-view.ts`, from the final text
   at 16:44:10-16:52:02Z on export `72866c7d`, the revision then serving (see
-  [Unit costs](#unit-costs-on-copied-state)). Receipt and curator-pass counts
-  come from the 16:09Z copies. The route and tool screen ran over an export of
-  `c91603e0`. Production was only read.
+  [Unit costs](#unit-costs-on-copied-state)). The route and tool screen ran
+  over an export of `c91603e0`. Production was only read.
+- **Second revision, final run 2026-10-18 17:52-18:00Z.** Copies made through
+  `VACUUM INTO` at 17:52:46-17:52:50Z, export `6a1ea0d9` (serving), Bun 1.4.0,
+  the supplied gate; the journal read from 2026-10-16 14:00Z to the copy time
+  (39,516 lines) and the receipt checks on those copies; every case of the
+  corrected [M4](#m4-replays-on-scratch-copies) procedure from 17:53:06 to
+  17:57:36Z at load 2.5-3.8; `bounds.py`; `profile-view.ts` at 17:59:27Z. Fleet
+  9 live / 2 running at 17:36:50Z and 7 / 1 at 18:00:39Z. The ranking, the
+  receipt and curator-pass counts and every unit cost below come from this run
+  unless a sentence names an earlier one. A development run of the same
+  `probe.ts` at 17:37:28-17:41:53Z (load 1.7-3.0) gave the same shape. The
+  screen ran again over the `c91603e0` export at 17:28Z.
 
 ### Installation scale used throughout
 
@@ -179,11 +220,11 @@ Each row names one candidate. Columns:
 | T3 | `src/lib/pipelines/controller.ts:325` `sweepSettledArchive` → `src/lib/pipelines/store.ts:1981` `archiveSettledPipelines` | at most hourly (`controller.ts:91`), from the controller cycle | `pipelines.controller-read` (`store.ts:1985`); `[flow pipeline controller] archived N …` | 266 hot / 935 archived pipelines | open | M1, M2, M3 |
 | T4 | `src/lib/pipelines/controller.ts:285` → `src/lib/forge/autoMerge.ts:1012` `scheduleAutoMerge` → `:697` `sweepAutoMerge` (`loadPipelines()` at `:699`, more per lane at `:486`-`:786`), `:917` `sweepTaskFinishes` (`loadPipelines()` at `:919`); one log line per completed lane per pass (`:702`-`:734`) | every controller cycle, debounced to 15 s (`:47`); the journal shows a median of 28 s between passes | none; `pipeline.copy` site during the clones; `[auto merge]` lines | each `loadPipelines()` clones 266 records / 33.5 MB; up to 84 log lines per pass | open | M1, M2, M3, M4 (D3) |
 | T5 | `src/lib/pipelines/controller.ts:278` → `src/lib/forge/sweep.ts:294` `scheduleForgeSweep` (`loadPipelines()` at `:101`, `loadTasks()` at `:107`, then `gh`) | every controller cycle, debounced to 30 s (`:21`); live/idle forge intervals 3/30 min | none; `pipeline.copy` during the clone | as T4 plus 2,436 tasks | open | M2, M3, M4 (D1, D3) |
-| T6 | `src/lib/done/sweep.ts:42` start → `src/lib/done/world.ts:41-49` `archivedPipelines()` (`loadArchivedPipelines()` at `:46`, cached 60 s at `:39`), `:82` task list | 15 s after start, then every 60 s (`sweep.ts:11`) | `done.frame-source`/`done.media` only around frame copies; `pipeline.copy` during the clone | each archive read clones 935 records / 110.9 MB | open | M2, M3, M4 (D2) |
+| T6 | `src/lib/done/sweep.ts:42` start → `src/lib/done/world.ts:41-49` `archivedPipelines()` (`loadArchivedPipelines()` at `:46`, cached 60 s at `:39`), `:82` task list | 15 s after start, then 60 s after each pass ends (`sweep.ts:11`, `:49-55`) | `done.frame-source`/`done.media` only around frame copies; `pipeline.copy` during the clone | each archive read clones 935 records / 110.9 MB; up to 4 album lookups per pass (`src/lib/done/project.ts:24`) | open | M2, M3, M4 (`T6-pass`, `T6-evict`, D2) |
 | T7 | `src/lib/attention/reconcileController.ts:97` start → `:27-56` ports → `src/app/api/files/operatorProjection.ts:819-826` `operatorBoardRepresentation` (`JSON.parse` of the summary body at `:825`), registry snapshot, seat file, reply suggestions | 30 s after start, then every 60 s (`:15`) | none | 35.2 MB summary body per pass | open | M2, M3, M4 (T7 case) |
 | T8 | `src/lib/asks/controller.ts:133` start → `:89` `runAsksSweepOnce` (scan nudge, registry snapshot at `:107`, `src/lib/asks/store.ts:129` `loadOperatorAsks` parse) | 60 s after start, then every 15 s (`:19`); enabled here; the registry and file reads run only when a conversation wrote recently | none | 0.8 MB asks file | open | M2, M3 |
 | T9 | `src/lib/monitor/seatTickController.ts:2285` start → `:2209` `reconcileSeatTick` loops over every seat project (`:2243`) → `:1332` → `:1450` `check`; sources at `src/lib/monitor/seatTickSources.ts:639-760`: tasks (`:681`), archived pipelines (`:680`, read at `:1695`), lifecycle journal (`:682`, `src/lib/lifecycle/journal.ts:208` reads and parses the whole file on every call), retirement journal window (`:691`), disk pressure (`:686`, see H3), worker asks (`:693-697`, the 35.2 MB summary parse of T7), open pull requests through `gh` (`:699`), liveness (`src/lib/lifecycle/liveness.ts:1089`) | every 5 min (`src/lib/monitor/seatTick.ts:142`), one check per seat project | `seat-tick.check`, `seat-tick.payload`, `seat-tick.audit` | 10 seat records; per check up to the T6 and T7 inputs | open; `44e9fd13` changes reachability accounting only (see below) | M1, M2, M3, M4 |
-| T10 | seat-tick-driven role-memory curator and board maintenance (`src/lib/monitor/seatTickSettings.ts:386`, `:402`; `src/lib/boardMaintenance/run.ts:120` loads all tasks) | a curator pass per project when it has never run, when a scope holds uncurated rules at 90 % of its bound, after 10 new lessons (`CURATION_NEW_LESSONS`), or 6 h after the last (`src/lib/memory/curation/store.ts:175`); board maintenance every 3 h when enabled, off by default; 38 curator passes were claimed in 48 h (26 succeeded, 12 failed), 24 of them for one project | `memory.curation-*`; the curator agent's calls appear as `[mcp slow] tool=curate_rules` (see H1) | 3,911 role-memory rows; 3-49 retained curator passes per project; 2,347 tasks | curator calls measured by part 3 (ranked list, rank 2) | M1, M1b, M2 |
+| T10 | seat-tick-driven role-memory curator and board maintenance (`src/lib/monitor/seatTickSettings.ts:386`, `:402`; `src/lib/boardMaintenance/run.ts:120` loads all tasks) | a curator pass per project when it has never run, when a scope holds uncurated rules at 90 % of its bound, after 10 new lessons (`CURATION_NEW_LESSONS`), or 6 h after the last (`src/lib/memory/curation/store.ts:175`); board maintenance every 3 h when enabled, off by default; 38 curator passes were claimed in 48 h (26 succeeded, 12 failed), 24 of them for one project | `memory.curation-*`; the curator agent's calls appear as `[mcp slow] tool=curate_rules` (see H1) | 3,911 role-memory rows; 3-49 retained curator passes per project; 2,347 tasks | curator calls measured by part 3 (ranked list, rank 3) | M1, M1b, M2 |
 | T11 | `src/lib/runtime/structuredHostRetirement.ts:1354` start → `:1320` sweep (registry snapshot at `:1124`, per-host checks, journal append) | every 5 min (`:97`) | none; `[host retirement] …` lines | 2.1 MB retirement journal; 12 live structured agents | open | M1, M2 |
 | T12 | `src/lib/orchestrator/deputySweep.ts:318` | every 4 s (`:39`) while deputies are live; stops itself otherwise | `orchestrator.deputy` | per live deputy | open, conditional | M2 |
 | T13 | `src/lib/links/schedule.ts:123` linked-board sync | 10 s tick (`:17`); a failing peer backs off to 300 s | `links.task-export` (the export runs in the `task-export` helper since #3014) | 4 board links; 213 `[linked boards] sync failed: malformed` lines in 48 h | prior fix #3014 | M2 |
@@ -223,7 +264,7 @@ Each row names one candidate. Columns:
 
 | ID | Call site | Trigger, frequency | Journal label | Scale here | Status | Measure |
 | --- | --- | --- | --- | --- | --- | --- |
-| D1 | tasks: `src/lib/tasks/store.ts:267` `loadTasks` → `:538` `collection.snapshot()` (`sqliteStateStore.ts:1245` clones every row with `structuredClone`, `tasks/store.ts:366`), then `stateFromBody`; 50 call sites, among them T5, T9, T10, `src/app/api/orchestrator/seat/route.ts:124` (H5), `src/lib/forge/autoMerge.ts:879`, `src/lib/pipelines/engine.ts:3384`, `:9271`, `:9398`, `:11903`, `:11936`, `:13218`-`:13595`, `src/lib/mcp/bindings.ts:2192`-`:7234`. Writes: `:751` `mutateTasks` → `:763` `mutateLinkedTasks` read all tasks, snapshot them and diff inside `BEGIN IMMEDIATE` (`sqliteStateStore.ts:520-541`) | every caller above; writes from the Viewer, the `mcp-tasks` helper and embedded workers (`stateWait.processKind: embedded`) | none for the clone; `[state transaction-hold] { collection: "tasks", heldMs }` for writes (no process field); `state-write-lock` waits of every other writer | 2,436 tasks / 9.8 MB | open | M1, M2, M4 (D1 cases) |
+| D1 | tasks: `src/lib/tasks/store.ts:267` `loadTasks` → `:538` `collection.snapshot()` (`sqliteStateStore.ts:1245` clones every row with `structuredClone`, `tasks/store.ts:366`), then `stateFromBody`; 50 call sites, among them T5, T9, T10, `src/app/api/orchestrator/seat/route.ts:124` (H5), `src/lib/forge/autoMerge.ts:879`, `src/lib/pipelines/engine.ts:3384`, `:9271`, `:9398`, `:11903`, `:11936`, `:13218`-`:13595`, `src/lib/attention/service.ts:82` (H13), `src/lib/mcp/bindings.ts:6868`, `:7144`, `:7234` (`:2192` runs in the task tools' process; at `:3905`, `:5712` and `:5776` the production ports read the frozen list or keyed rows instead, see the [screen](#whole-collection-sites-under-this-installations-wiring)). Writes: `:751` `mutateTasks` → `:763` `mutateLinkedTasks` read all tasks, snapshot them and diff inside `BEGIN IMMEDIATE` (`sqliteStateStore.ts:520-541`) | every caller above; writes from the Viewer, the `mcp-tasks` helper and embedded workers (`stateWait.processKind: embedded`) | none for the clone; `[state transaction-hold] { collection: "tasks", heldMs }` for writes (no process field); `state-write-lock` waits of every other writer | 2,436 tasks / 9.8 MB | open | M1, M2, M4 (D1 cases) |
 | D2 | archived pipelines: `src/lib/pipelines/store.ts:1958` `loadArchivedPipelines` = `archiveStore().snapshot()`, a `structuredClone` plus revive per record (`:1474`); callers T6 (`src/lib/done/world.ts:46`), T9 (`src/lib/monitor/seatTickSources.ts:680`), `src/lib/taskAlbum/world.ts:20`, `src/lib/orchestrator/boardReportRun.ts:344`, T1 (`worktreeSweep.ts:1549`), startup (`src/lib/viewerInstrumentation.ts:345`) | about once a minute from T6 alone, plus every seat check that reaches pull requests | `pipeline.copy` site | 935 records / 110.9 MB | open | M2, M3, M4 (D2) |
 | D3 | hot pipelines: `src/lib/pipelines/store.ts:1103` `loadPipelines` (same clone path) | T4 twice or more per pass, T5 per pass, P6 | `pipeline.copy` site | 266 / 33.5 MB | open | M2, M3, M4 (D3) |
 | D4 | registry read view: `src/lib/agent/registry.ts:5621` → `src/lib/agent/sqliteRegistryStore.ts:1397`-`:1399` → `:1508-1517` (cached by revision and store stamp, incremental refresh, otherwise `loadSnapshot(true)`, a full decode); 345 `readOnlySnapshot(` call sites, including T7, T8, T11, the structured delivery controller (A3) and the runtime host (R2) | after any registry write by any process | site `registry.snapshot` (the 2026-10-15 audit's largest attributed slice, 325 ms), `registry.keyed` | 54,543 hot rows, about 189 MB of JSON | prior fixes #2958, #3013, #3032, #3043; open residual | M2, M4 (D4) |
@@ -240,18 +281,19 @@ its presence in a gap proves no CPU use by itself.
 
 | ID | Call site | Trigger, frequency | Journal label | Scale here | Status | Measure |
 | --- | --- | --- | --- | --- | --- | --- |
-| H1 | shared MCP endpoint: `src/app/api/mcp/route.ts:10` → `src/lib/mcp/http.ts` → bindings in `src/lib/mcp/bindings.ts` (for example `curate_rules` at `:7919`). The HTTP transport is the default for structured launches that carry a spawn capability (`src/lib/agent/spawnPolicy.ts:168-191`). On it, every tool runs inside the Viewer, on a server object and transport built per request (`src/lib/mcp/http.ts:254-256`), except `list_tasks`, `get_task`, `create_task` and `update_task`, which go to the `mcp-tasks` helper (`http.ts:240-244`, `src/lib/mcp/taskChannel.ts:7`). Stdio MCP servers run their tools in their own process. `[mcp slow]` is written at `src/lib/mcp/server.ts:3383` | every tool call of every structured agent | `mcp.receipts`, `mcp.tasks.executor`, `mcp.project-prefix`; no per-tool operation label; `[mcp slow] tool=… bindingMs=…` for calls of at least 2 s (the line has no process field; the launcher writes both children's output) | 12 live structured agents; 83,112 receipts | open | M1, M2, M3, M4 |
+| H1 | shared MCP endpoint: `src/app/api/mcp/route.ts:10` → `src/lib/mcp/http.ts` → bindings in `src/lib/mcp/bindings.ts` (for example `curate_rules` at `:7919`). The HTTP transport is the default for structured launches that carry a spawn capability (`src/lib/agent/spawnPolicy.ts:168-191`). On it, every tool runs inside the Viewer, on a server object and transport built per request (`src/lib/mcp/http.ts:254-256`), except `list_tasks`, `get_task`, `create_task` and `update_task`, which go to the `mcp-tasks` helper (`http.ts:240-244`, `src/lib/mcp/taskChannel.ts:7`). Stdio MCP servers run the same service (`src/lib/mcp/server.ts:4898` → `:4791`) in their own process, write the same receipt store (`:4848`) and send their stderr to their agent. A launch gets the HTTP transport only with a spawn capability and, while the Viewer has an access token, a gateway file that trusts the local entry (`src/lib/agent/spawnPolicy.ts:181-213`); at 17:2xZ every one of the 13 agents under the Viewer, this stage's own among them, had a stdio server child. The tool policy resolves the caller three times for every mutating tool (`src/lib/mcp/bindings.ts:7344`, `:7348`, `:7352`), each resolution starting with `hostedConversationsFromSnapshot` (`src/lib/attention/callerAuthority.ts:75`). `[mcp slow]` is written at `src/lib/mcp/server.ts:3383` | every tool call of every structured agent on the HTTP transport | `mcp.receipts`, `mcp.tasks.executor`, `mcp.project-prefix`; no per-tool operation label; `[mcp slow] tool=… bindingMs=…` for calls of at least 2 s (the line has no process field; on the service journal it comes from the Viewer, or from the `mcp-tasks` helper for the four task tools: at 17:2xZ the processes whose stderr was the Viewer's were its account-migration, worktree-sweep and task-tool helpers, by `/proc/<pid>/fd/2`) | 12 live structured agents; 83,112 receipts from every MCP server process | open | M1, M2, M3, M4 |
 | H2 | board poll: `src/app/api/files/operatorProjection.ts:595-608` `GET` (`files.get`), storage health at `:697` (`files.health`); projection in the `files-response-worker`; main-thread delta, clone and encode | every 10 s per visible tab, 30 s hidden (`src/hooks/useFiles.ts:31`, `:44`) | `files.get`, `files.health`; sites `files.scan`, `files.delta`, `files.clone`, `files.encode`, `files.worker` | 35.2 MB summary body | prior fixes (`board-poll-payload.md`, `cold-board-start.md`); open residual | M2, M4 |
 | H3 | resources: `src/app/api/resources/route.ts` → `src/lib/resources.ts:2661-2671`: `src/lib/resourceViewerTree.ts:217-224` walks the Viewer's process tree through sync `/proc` reads, then `src/lib/state/diskPressure.ts:250` `readDiskPressure` (30 s cache, `:36`): `scanProcesses()` at `:285`, `loadPipelinesForList`, the sweep report, then `statSync` plus `statfsSync` per root (`:60-62`) for every worktree root (`diskVolumes`, `:110`) and a SHA-256 per temp view | every 30 s per open tab (`src/components/ResourcesFooter.tsx:17`), the MCP `resources` tool, and T9 | none | 932 worktree roots; the T2 `/proc` scale | open | M2, M3, M4 |
 | H4 | needs-you read: `src/lib/attention/needsYouRead.ts:262-267` (the 35.2 MB summary parse of T7, then tasks, pipelines, dismissals, bridge log, registry snapshot) | the needs-you API and tool, the board report run (`src/lib/orchestrator/boardReportRun.ts:387`), seat checks | none | as T7 | open | M2, M4 (T7 case) |
 | H5 | seat panel: `src/app/api/orchestrator/seat/route.ts:124` loads all tasks whenever the project has a seat | every 6 s per tab showing a seat (`src/components/orchestrator/useOrchestratorSeat.ts:14`) | none | 2,436 tasks | open | M4 (D1) |
 | H6 | other UI polls, server cost per request unmeasured: decisions every 3 s (`/api/projects/decisions`), delivery progress 3 s (`/api/runtime/delivery-progress`), log bus 1.2 s (`/api/logs`), self-update feed 1 s while shown, host targets 5 s, timeline 7 s, board state 10 s, runtime snapshot fallback 10 s, report log 10 s, telegram reports 20 s, done items 30 s, bot 30 s, task album 45 s, limits 60 s, seat-tick settings 60 s | cadences from the constants under `src/components` and `src/hooks` | `http.render` only | one view session recorded in `view-presence.json` at read time | open | M4, M7 |
 | H7 | streams: `src/app/api/logs/stream/route.ts` with `src/lib/logTailStream.ts:124`, `:127` (heartbeat and restat timers per stream), `src/app/api/runtime/stream/route.ts`, `src/app/api/streams/route.ts` | per open stream | `http.render` (pending) | per tab | open, low | M2 |
-| H8 | role-memory view (added by part 3): `useProjectRules` (`src/components/roleMemory/LearnedRules.tsx:146-171`, used by the rules window `:349` and by the menu row `:454`) polls `GET /api/role-memory` → `src/app/api/role-memory/route.ts:16` → `src/lib/memory/roleStore.ts:499` `projectView`, which reads every role-memory row (`rows()`), filters all rules once per scope, and ends in `curationView` (`src/lib/memory/curation/store.ts:227-235`), which reads every scope row of the project once per retained curator pass (`readPass` → `curationScopes`, `:50-61`, `:95-112`); the same view runs in every `curate_rules` read (`src/lib/memory/curation/read.ts:20`, D6) | at once and every 15 s while the rules window, the project's ⋯ menu or the phone menu sheet is open; lessons every 20 s (`LearnedRules.tsx:27`, `:55`); each `curate_rules` read | `http.render` only; `[mcp slow] tool=curate_rules` for the tool | 3,911 rows / 16.0 MB, of which 102 scope rows hold 12.6 MB of history; 3-49 retained passes per project | measured by part 3 (curator calls rank 2; the poll in the duty table) | M3, M4 (`H8`, `D6-*`, `role-projects`) |
-| H9 | task and pipeline request routes that clone whole collections (found by the [route screen](#route-and-tool-screen)): `POST /api/tasks` (`src/app/api/tasks/route.ts:105`: `loadTasks()`, then `sweepAttachments`, `src/lib/tasks/attachments.ts:96-106`, one `readdirSync` and a `statSync` per unreferenced file), `/api/tasks/[id]` (`route.ts:93`, `loadPipelines()`), `/api/tasks/[id]/assignment` (`:85`), `/api/tasks/[id]/send` (`:86`), `/api/tasks/[id]/spawn` (`:217`), `/api/pipelines/[id]` (`:140`, tasks and pipelines), `/api/pipelines` (`src/lib/pipelines/engine.ts:11903`), `/api/attention/dismissals` (`src/lib/attention/dismissals.ts:730`, a whole task list per task lookup), `POST /api/attention/[id]` (the attention service's `tasks` port, `src/lib/attention/service.ts:82`, found by hand), `/api/orchestrator/ghost` (`src/lib/orchestrator/deputyCommandPorts.ts:99`), launch membership (`src/lib/tasks/launchMembership.ts:327`) | each operator or tool action on those routes | `http.render` only | 2,347 tasks, 253 hot pipelines; no attachment directory exists here, so the sweep is one failing `readdirSync` | screened by part 3; unit costs D1, D3 | M4 (D1, D3) |
-| H10 | `/api/transcribe` (`src/app/api/transcribe/route.ts:94`): `writeFileSync` of the uploaded audio to the temp directory before transcription, capped at 16 MiB (`:21`) | each dictation | `http.render` only | at most 16 MiB per request | screened by part 3; 6.3-13.8 ms at the cap | M4 (H10-write) |
-| H11 | terminal launch routes (`/api/spawn`, `/api/tasks/[id]/spawn`, `/api/workflows`, `/api/workflows/[id]`): Codex transcript discovery walks the selected sessions directory and `stat`s every rollout on each poll (`src/lib/agent/spawnedTranscript.ts:44-70`, depth 6); `codex mcp list` through `spawnSync` (`src/lib/agent/cli.ts:295`, X4); external relay pairings walk Codex sessions until a match (`src/lib/externalRelay/conversations.ts:424`) | each terminal Codex spawn until its transcript appears; each relay pairing | `http.render` only | largest account sessions directory 1,671 rollouts; another sessions root holds 2,890 | screened by part 3; 4.2-7.0 ms per walk with a warm page cache | M4 (X5-codex-walk) |
-| H12 | MCP tool bindings with whole-collection or liveness reads on the Viewer: `bridge_report` (`src/lib/mcp/bindings.ts:3905`), `pipeline_action` (`:7144`), `request_attention` (`:6868`), `dismiss_attention` (`:7234`), `create_pipeline` (`src/lib/pipelines/engine.ts:11903`, plus `systemctl` through `src/lib/runtime/agentMemory.ts:15`); `agent_activity` (`:6630`) runs the T9 liveness snapshot with a 1 s answer budget and refreshes the lifecycle journal (D8) on every call. The task tools run in the `mcp-tasks` helper on the HTTP transport (H1) | each tool call | `mcp.receipts`, `mcp.tasks.executor`; `[mcp slow]` for calls of at least 2 s | 48 h receipts: `agent_activity` 5,229, `pipeline_action` 208, `bridge_report` 207; `agent_activity` logged 240 calls of at least 2 s (811.7 s of binding wall time, largest 16.8 s) | screened by part 3; `agent_activity` per-call loop cost unmeasured | M4 (D1, T9-liveness) |
+| H8 | role-memory view (added by part 3): `useProjectRules` (`src/components/roleMemory/LearnedRules.tsx:146-171`, used by the rules window `:349` and by the menu row `:454`) polls `GET /api/role-memory` → `src/app/api/role-memory/route.ts:16` → `src/lib/memory/roleStore.ts:499` `projectView`, which reads every role-memory row (`rows()`), filters all rules once per scope, and ends in `curationView` (`src/lib/memory/curation/store.ts:227-235`), which reads every scope row of the project once per retained curator pass (`readPass` → `curationScopes`, `:50-61`, `:95-112`); the same view runs in every `curate_rules` read (`src/lib/memory/curation/read.ts:20`, D6) | at once and every 15 s while the rules window, the project's ⋯ menu or the phone menu sheet is open; lessons every 20 s (`LearnedRules.tsx:27`, `:55`); each `curate_rules` read | `http.render` only; `[mcp slow] tool=curate_rules` for the tool | 3,911 rows / 16.0 MB, of which 102 scope rows hold 12.6 MB of history; 3-49 retained passes per project | measured by part 3 (curator calls rank 3; the poll in the duty table) | M3, M4 (`H8`, `D6-*`, `role-projects`) |
+| H9 | task and pipeline request routes that clone whole collections (found by the [route screen](#route-and-tool-screen)): `POST /api/tasks` (`src/app/api/tasks/route.ts:105`: `loadTasks()`, then `sweepAttachments`, `src/lib/tasks/attachments.ts:96-106`, one `readdirSync` and a `statSync` per unreferenced file), `/api/tasks/[id]` (`route.ts:93`, `loadPipelines()`), `/api/tasks/[id]/assignment` (`:85`), `/api/tasks/[id]/send` (`:86`), `/api/tasks/[id]/spawn` (`:217`), `/api/pipelines/[id]` (`:140`, tasks and pipelines), `/api/pipelines` (`src/lib/pipelines/engine.ts:11903`), `/api/attention/dismissals` (`src/lib/attention/dismissals.ts:730`, a whole task list per task lookup), `/api/orchestrator/ghost` (`src/lib/orchestrator/deputyCommandPorts.ts:99`), launch membership on a failed launch (`src/lib/tasks/launchMembership.ts:327`, `:371`) | each operator or tool action on those routes; several only on the branch named in the [screen](#whole-collection-sites-under-this-installations-wiring) | `http.render` only | 2,358 tasks, 249 hot pipelines; no attachment directory exists here, so the sweep is one failing `readdirSync` | screened by part 3; unit costs D1, D3 | M4 (D1, D3) |
+| H10 | `/api/transcribe` (`src/app/api/transcribe/route.ts:94`): `writeFileSync` of the uploaded audio to the temp directory before transcription, capped at 16 MiB (`:21`) | each dictation | `http.render` only | at most 16 MiB per request | screened by part 3; 6.0-18.2 ms at the cap | M4 (H10-write) |
+| H11 | terminal launch routes (`/api/spawn`, `/api/tasks/[id]/spawn`, `/api/workflows`, `/api/workflows/[id]`): Codex transcript discovery walks the selected sessions directory and `stat`s every rollout on each poll (`src/lib/agent/spawnedTranscript.ts:44-70`, depth 6); `codex mcp list` through `spawnSync` (`src/lib/agent/cli.ts:295`, X4); external relay pairings walk Codex sessions until a match (`src/lib/externalRelay/conversations.ts:424`) | each terminal Codex spawn until its transcript appears; each relay pairing | `http.render` only | largest account sessions directory 1,675 rollouts; another sessions root holds 2,890 | screened by part 3; 3.7-12.7 ms per walk with a warm page cache | M4 (X5-codex-walk) |
+| H12 | MCP tool bindings with whole-collection or liveness reads on the Viewer: `pipeline_action` (`src/lib/mcp/bindings.ts:7144` for a prototype target, `:6868` for a task target, `src/lib/attention/dismissals.ts:730`), `request_attention` (`:6868`, task target), `dismiss_attention` (`:7234` with a round, `:7144`, `:6868`, `dismissals.ts:730`), `create_pipeline` (`src/lib/pipelines/engine.ts:11903`, `:11936`, plus `systemctl` through `src/lib/runtime/agentMemory.ts:15`); `agent_activity` (`:6630`) runs the T9 liveness snapshot with a 1 s answer budget and refreshes the lifecycle journal (D8) on every call, and the tool policy resolves its caller three times (H1). `bridge_report`, `list_tasks` and `get_task` reach `loadTasks` only as a fallback the production ports never take (`:3905`, `:5712`, `:5776`). The task tools run in the `mcp-tasks` helper on the HTTP transport (H1) | each tool call on the HTTP transport | `mcp.receipts`, `mcp.tasks.executor`; `[mcp slow]` for calls of at least 2 s | 48 h receipts (every MCP server process): `agent_activity` 5,229, `pipeline_action` 208, `bridge_report` 207; on the Viewer `agent_activity` logged 240 calls of at least 2 s (811.7 s of binding wall time, largest 16.8 s) | screened by part 3; `agent_activity` per-call loop cost unmeasured | M4 (D1, T9-liveness) |
+| H13 | attention poll (added by the second revision): `GET /api/attention` (`src/app/api/attention/route.ts:35-36`) → `attentionForDevice` or `attentionRecordsForSurface` (`src/lib/attention/service.ts:85`, `:151`) → `attentionTargetRecords` (`src/lib/attention/targetRecords.ts:133`), which clones every task through the production `tasks` port (`service.ts:82`, `loadTasks()`) whenever the rows it returns name a task (`targetRecords.ts:170`): a target task, or a task of a target lane or of a recently admitted lane (`:140-156`) | every 4 s per open Viewer tab (`src/components/overlay/useAttentionOffers.ts:235`, mounted by `AttentionHost` in `src/components/Viewer.tsx`) | `http.render` only | 2,358 tasks | found by hand (the screen does not follow ports); unit cost D1 | M4 (D1) |
 
 ### Route and tool screen
 
@@ -262,17 +304,23 @@ assumption.
 **Method.** `route-reach.ts` (below) builds a TypeScript program over an export
 of `c91603e0` with the repository's `tsconfig.json`, takes each exported
 `GET`/`POST`/`PUT`/`PATCH`/`DELETE` handler of the 220 `src/app/api/**/route.ts`
-files (with the argument `mcp`: each of the 60 tool entries of the bindings table
-in `src/lib/mcp/bindings.ts`), and follows every call the type checker resolves
-to a function in `src/`, breadth first, up to six calls deep, recording the
-first path to each sink. A handler may be a function, a function value, an
+files (with the argument `mcp`: each of the 61 tools of the catalog
+`MCP_TOOL_NAMES` in `src/lib/mcp/server.ts`, resolved to its entry in the table
+`viewerMcpBindings` returns in `src/lib/mcp/bindings.ts`; the run refuses to
+continue unless every catalog tool resolves exactly once and the table holds
+nothing else), and follows every call the type checker resolves to a function
+in `src/`, breadth first, up to six calls deep, recording the first path to
+each sink, and for the whole-collection readers the first path to each call
+site. The first version picked tool entries by an underscore in the name, which
+left out `resources` (60 roots). A handler may be a function, a function value, an
 alias of an imported function (`export const GET = conversationHostGET`), a
 factory call (`createConversationMigrationPOST()`) or a re-export
 (`export { postInstallAction as POST } from …`); a binding initialized by a
 factory call (`const read = doneReadHandler({ … })`) is followed into the
 factory, closures included. The first version of the screen followed none of
 the last four forms and reported 35 routes clean; the revision extended it and
-reran it at 16:51:56Z. Sinks: synchronous child processes (`spawnSync`,
+reran it at 16:51:56Z, and the second revision at 17:28:02Z with the catalog
+roots. Sinks: synchronous child processes (`spawnSync`,
 `execFileSync`, `execSync`), directory listings (`readdirSync`, `opendirSync`),
 synchronous file writes (`writeFileSync`), the whole-collection readers
 `loadTasks`, `loadPipelines` and `loadArchivedPipelines`, the registry read view
@@ -290,13 +338,18 @@ enumerates or clones on this installation.
 mkdir -p "$P/screen-export" && git archive c91603e0 | tar -x -C "$P/screen-export"     # from this worktree; $P, $GATE, $REV, $INSTALL as in M4
 ln -s "$HOME/.cache/delegatus/self-update/$INSTALL/releases/${REV:0:12}/node_modules" "$P/screen-export/node_modules"
 cp <dir>/route-reach.ts "$P/screen-export/" && cd "$P/screen-export"
-bash "$GATE" bun ./route-reach.ts 6 > reach.json && bash "$GATE" bun ./route-reach.ts 6 mcp > tools.json   # about 10 s each
-python3 -I - reach.json tools.json <<'PY'   # the totals below
+bash "$GATE" bun ./route-reach.ts 6 > reach.json && bash "$GATE" bun ./route-reach.ts 6 mcp > tools.json   # about 10 s each; the mcp run prints its root check
+python3 -I - reach.json tools.json <<'PY'   # the totals below, then every whole-collection call site with the routes and tools reaching it
 import json, sys, collections
+sites = collections.defaultdict(set)
 for f in sys.argv[1:]:
     d = json.load(open(f)); kinds = {k: {x.split(":")[0] for x in v} for k, v in d.items()}
     print(f, len(d), "reach", sum(1 for v in kinds.values() if v), "only write/registry", sum(1 for v in kinds.values() if v and v <= {"sync-write", "registry-snapshot"}),
           dict(collections.Counter(c for v in kinds.values() for c in v)), sorted(k for k, v in kinds.items() if not v) if f.startswith("reach") else "")
+    for root, found in d.items():
+        for k in found:
+            if k.startswith("whole-store:"): sites[k.split(":", 1)[1]].add(root)
+for site, roots in sorted(sites.items()): print(site, len(roots), sorted(roots))
 PY
 ```
 
@@ -369,9 +422,28 @@ for (const file of routes) {
   roots.push(["/" + path.relative(path.join(root, "src/app"), file).replace(/\/route\.tsx?$/, ""), handlers]);
 }
 if (process.argv.includes("mcp")) {
-  const bindings = program.getSourceFile(path.join(root, "src/lib/mcp/bindings.ts"))!; roots.length = 0;
-  const visit = (n: ts.Node) => { if (ts.isPropertyAssignment(n) && ts.isIdentifier(n.name) && /^[a-z]+(_[a-z]+)+$/.test(n.name.text) && (ts.isFunctionLike(n.initializer) || ts.isCallExpression(n.initializer)) && !roots.some(r => r[0] === `mcp:${(n.name as ts.Identifier).text}`)) roots.push([`mcp:${n.name.text}`, [n.initializer]]); ts.forEachChild(n, visit); };
-  visit(bindings);
+  // Roots: the tool catalog (MCP_TOOL_NAMES in src/lib/mcp/server.ts), each resolved to its entry in the table viewerMcpBindings returns;
+  // an entry `reads.<tool>` resolves to the object viewerReadTools returns. Every catalog tool must resolve exactly once.
+  roots.length = 0;
+  const server = program.getSourceFile(path.join(root, "src/lib/mcp/server.ts"))!, bindings = program.getSourceFile(path.join(root, "src/lib/mcp/bindings.ts"))!;
+  let catalog: string[] = [];
+  server.forEachChild(n => { if (ts.isVariableStatement(n)) for (const d of n.declarationList.declarations) if (ts.isIdentifier(d.name) && d.name.text === "MCP_TOOL_NAMES" && d.initializer) {
+    let e: ts.Expression = d.initializer; while (ts.isAsExpression(e) || ts.isSatisfiesExpression(e)) e = e.expression;
+    if (ts.isArrayLiteralExpression(e)) catalog = e.elements.filter(ts.isStringLiteral).map(x => x.text); } });
+  const returned = (name: string) => { let out: ts.ObjectLiteralExpression | undefined; bindings.forEachChild(n => { if (ts.isFunctionDeclaration(n) && n.name?.text === name && n.body)
+    for (const s of n.body.statements) if (ts.isReturnStatement(s) && s.expression && ts.isObjectLiteralExpression(s.expression)) out = s.expression; }); return out!; };
+  const table = returned("viewerMcpBindings"), reads = returned("viewerReadTools");
+  const entry = (o: ts.ObjectLiteralExpression, name: string) => o.properties.filter((x): x is ts.PropertyAssignment => ts.isPropertyAssignment(x) && ts.isIdentifier(x.name) && x.name.text === name);
+  const names = table.properties.map(x => x.name && ts.isIdentifier(x.name) ? x.name.text : "?");
+  for (const name of catalog) {
+    const found = entry(table, name); if (found.length !== 1) continue;
+    let init = found[0]!.initializer;
+    if (ts.isPropertyAccessExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === "reads") init = entry(reads, init.name.text)[0]!.initializer;
+    roots.push([`mcp:${name}`, ts.isIdentifier(init) ? declarationsOf(init).map(fnOf).filter((x): x is ts.Node => !!x) : [init]]);
+  }
+  const check = { catalog: catalog.length, table: names.length, roots: roots.length, missing: catalog.filter(n => !names.includes(n)), extra: names.filter(n => !catalog.includes(n)) };
+  console.error(JSON.stringify(check));
+  if (check.missing.length || check.extra.length || roots.length !== catalog.length || new Set(names).size !== names.length) process.exit(1);
 }
 const result: Record<string, Record<string, string[]>> = {};
 for (const [route, handlers] of roots) {
@@ -383,7 +455,7 @@ for (const [route, handlers] of roots) {
       const sink = call.name && Object.hasOwn(SINKS, call.name) ? SINKS[call.name] : undefined;
       // A port typed `typeof loadTasks` resolves to its property signature (no body): keep it; a same-named function elsewhere is not the sink.
       const kind = sink && (sink.length > 1 ? sink.slice(1).some(f => call.declared.includes(f)) || !call.targets.length : !call.declared.some(f => f.startsWith("src/"))) ? sink[0] : undefined;
-      if (kind) { const key = `${kind}:${call.name}`; if (!found[key]) found[key] = [...trail, rel(call.site)]; continue; }
+      if (kind) { const key = kind === "whole-store" ? `${kind}:${call.name}@${rel(call.site)}` : `${kind}:${call.name}`; if (!found[key]) found[key] = [...trail, rel(call.site)]; continue; }
       for (const t of call.targets) if (!seen.has(t)) { seen.add(t); next.push({ fn: t, trail: [...trail, rel(call.site)] }); }
     }
     frontier = next;
@@ -399,42 +471,50 @@ accounts, agent, inbox, keys, projects, task-icons, transcribe and view; each
 is read by hand below). 96 routes reach only single-file writes or the cached
 registry view. Routes reaching each sink class: whole collection 34, child
 process 15, measured heavy helper 6, directory listing 93, registry view 118,
-single-file write 179. Of 60 tool bindings, 52 reach a sink: whole collection
-9, child process 2, heavy helper 7, directory listing 47, registry view 23,
-single-file write 51.
+single-file write 179. Of 61 tools, 53 reach a sink: whole collection 9, child
+process 2, heavy helper 8, directory listing 48, registry view 23, single-file
+write 52; 3 reach only single-file writes or the registry view. `resources`,
+the tool the first version left out, reaches `readResourcesWithDiagnostic`
+(H3), a directory listing and a single-file write. These are reachability
+counts: the screen treats every branch as taken, and a whole-collection call it
+reaches may sit behind a port this installation wires to another reader. The
+[next table](#whole-collection-sites-under-this-installations-wiring) checks
+each whole-collection site against the production wiring; the rows below say
+for each sink what it does here.
 
 | Sink site (first path) | Routes or tools reaching it | Class on this installation | Row |
 | --- | --- | --- | --- |
-| `loadTasks` at route lines `src/app/api/tasks/route.ts:105`, `tasks/[id]/assignment/route.ts:85`, `tasks/[id]/send/route.ts:86`, `tasks/[id]/spawn/route.ts:217`, `pipelines/[id]/route.ts:140`; `src/lib/pipelines/engine.ts:11903`; `src/lib/attention/dismissals.ts:730`; `src/lib/orchestrator/deputyCommandPorts.ts:99`; `src/lib/tasks/launchMembership.ts:327` | 11 routes, and `POST /api/attention/[id]` through a port (read by hand); tools `bridge_report`, `pipeline_action`, `request_attention`, `dismiss_attention` and `create_pipeline` on the Viewer, `list_tasks`, `get_task` and `update_task` in the `mcp-tasks` helper | whole task clone per action, 48.4-106.3 ms (D1); the seat panel route is H5 | H9, H12 |
-| `loadPipelines` at `src/app/api/tasks/[id]/route.ts:93`, `pipelines/[id]/route.ts:140` | 2 routes | whole hot clone per action, 52.3-88.1 ms (D3) | H9, P6 |
-| `loadTasks` at `src/lib/tasks/store.ts:831` (`loadPrototypeTask`) | 11 routes (prototype reviews, image, external relay) | legacy fallback taken only when the keyed task collection is absent; inactive here | — |
+| `loadTasks` and `loadPipelines` at the sites the [next table](#whole-collection-sites-under-this-installations-wiring) classes as taken | 17 routes; tools `pipeline_action`, `request_attention`, `dismiss_attention` and `create_pipeline` on the Viewer, each on a named branch; `update_task` only in its maintenance branch, in the task tools' process | whole task clone per action, 47.2-55.9 ms (D1); whole hot clone, 48.9-66.7 ms (D3); the seat panel route is H5 | H9, H12, P6 |
+| `loadTasks` fallbacks at `src/lib/mcp/bindings.ts:3905`, `:5712`, `:5776` | tools `bridge_report`, `list_tasks`, `get_task` | not taken: `productionDomainDependencies` installs `listTaskRecords: loadTasksForList` and `taskSelectionSource` (`bindings.ts:1390-1391`), the frozen list and keyed rows | — |
+| `loadTasks` at `src/lib/tasks/store.ts:831` (`loadPrototypeTask`) | 11 routes (prototype reviews, image, external relay); tools `dismiss_attention`, `seat_tick_settings` | legacy fallback taken only when the keyed task collection is absent; inactive here | — |
 | `loadTasks` at `src/app/api/files/response.ts:708` | `/api/files` | inline projection, taken when the response worker is not used (`operatorProjection.ts:432`); no `files.clone` span was retained in any Viewer gap of the 48 hours | H2 |
-| `loadArchivedPipelines` at `src/lib/taskAlbum/world.ts:20` | 3 routes (task album) | archive clone, 204-282 ms (D2) | D2, L2 |
-| `loadPipelines` at `src/lib/forge/autoMerge.ts:699`, `loadTasks` at `src/lib/forge/sweep.ts:107`, `archiveSettledPipelines` | `/api/pipelines/tick`, deployment, self-update action and launcher-admission routes (they run a controller pass) | T3, T4, T5 | T3-T5 |
-| `hostedConversationsFromSnapshot` at `src/lib/mcp/bindings.ts:1251` | tools `account_project_binding`, `auto_updates`, `bridge_directive`, `bridge_report`, `deploy_exact_sha`, `seat_tick_settings` directly; every caller-resolving tool through its attribution port | 31.8-106.1 ms per enumeration (H1) | H1 |
-| `projectView`, `stageLessons` | `/api/role-memory`, `/api/role-memory/lessons`; tool `curate_rules` | measured: 0.31-3.73 s per view by project | H8, D6 |
+| `loadArchivedPipelines` at `src/lib/taskAlbum/world.ts:20` | 3 routes (task album) | archive clone, 203.3-217.6 ms (D2), at most once per 60 s | D2, L2 |
+| `loadPipelines` at `src/lib/forge/autoMerge.ts:486`-`:919`, `loadPipelines` and `loadTasks` at `src/lib/forge/sweep.ts:101`, `:107`, `archiveSettledPipelines` | `/api/pipelines/tick`, which runs a controller cycle (`src/app/api/pipelines/tick/route.ts:25`) whose sweeps the controller wires to the cloning readers (`src/lib/pipelines/controller.ts:124-125`); the two deployment and three self-update routes reach the same sites only through the ports object the controller's constructor builds (`controller.ts:455` → `:125`), which they never call: those routes take no clone | T3, T4, T5 | T3-T5 |
+| `hostedConversationsFromSnapshot` at `src/lib/mcp/bindings.ts:1251` | tools `account_project_binding`, `auto_updates`, `bridge_directive`, `bridge_report`, `deploy_exact_sha`, `seat_tick_settings` directly; every caller-resolving tool through its attribution port | 30.2-38.0 ms per enumeration (99.8-133.9 ms with the collection it leaves; H1) | H1 |
+| `projectView`, `stageLessons` | `/api/role-memory`, `/api/role-memory/lessons`; tool `curate_rules` | measured: 0.29-3.58 s per view by project | H8, D6 |
 | `readResourcesWithDiagnostic` | `/api/resources` | H3 | H3 |
-| `readLifecycleJournal` at `src/lib/projects/worktreeBackfill.ts:260` | `/api/board/maintenance/worktrees` (also the backfill tool) | whole 1.3 MB journal, 4.1-8.5 ms (D8), per operator action | D8 |
+| `readLifecycleJournal` at `src/lib/projects/worktreeBackfill.ts:260` | `/api/board/maintenance/worktrees` (also the backfill tool) | whole 1.3 MB journal, 3.4-6.5 ms (D8), per operator action | D8 |
 | `sweepAttachments` | `POST /api/tasks` | attachment directory absent here: one failing `readdirSync`; with attachments, a `statSync` per unreferenced file | H9 |
 | `spawnSync` at `src/lib/agent/cli.ts:295` (`codex mcp list`) | 6 routes (spawn, task spawn, pipelines, workflows) | terminal launches only | X4, H11 |
-| `execFileSync` at `src/lib/runtime/agentMemory.ts:15` (`systemctl --user show`) | `/api/pipelines`, `/api/pipelines/[id]`; tool `create_pipeline` | 3.7-5.4 ms per launch admission (X2) | P3 |
+| `execFileSync` at `src/lib/runtime/agentMemory.ts:15` (`systemctl --user show`) | `/api/pipelines`, `/api/pipelines/[id]`; tool `create_pipeline` | 3.3-3.9 ms per launch admission (X2) | P3 |
 | `spawnSync` at `src/lib/selfUpdate/actions.ts:217` | 5 deployment and self-update routes | operator deploy actions | X4 |
 | `spawnSync` at `src/lib/runtime/cpuAdmission.ts:62` (`machineHome`) | `/api/flows`, `/api/pipelines/preflight` | one child per process, cached on `globalThis` | P4 |
 | `spawnSync` at `src/lib/processIdentity.ts:42` | 2 routes; tool `seat_tick_settings` | macOS branch; inactive on Linux | — |
-| `readdirSync` at `src/lib/agent/spawnedTranscript.ts:50`, `src/lib/externalRelay/conversations.ts:424` | 6 routes | Codex session walks; grow with history: 1,671 rollouts in the largest account directory, 4.2-7.0 ms per walk warm (X5) | H11 |
+| `readdirSync` at `src/lib/agent/spawnedTranscript.ts:50`, `src/lib/externalRelay/conversations.ts:424` | 6 routes | Codex session walks; grow with history: 1,675 rollouts in the largest account directory, 3.7-12.7 ms per walk warm (X5) | H11 |
 | `readdirSync` at `src/lib/telegram/sessionStore.ts:173`, `src/lib/externalRelay/answers.ts:82`, `src/lib/memory/index.ts:761`, `:818`, `src/lib/scanner/describe.ts:349` | 1-6 routes each; tools `create_pipeline`, `spawn_agent`, `role_presets` and `create_task` (`describe.ts:349`) | grow with history (2,629 files under the Telegram state, 1,760 under the external relay state); `describe.ts:349` walks only prefixes a slug can still match (depth 32, 16 matches); unmeasured | coverage gap 8 |
 | `readdirSync` at `src/lib/state/fileTransaction.ts:128`, `src/lib/accounts/accountMutation.ts:247`, `src/lib/selfUpdate/mode.ts:96`, `src/lib/accounts/providerSecretRedaction.ts:250`, `src/lib/activity/requestLedger.ts:138`, `src/lib/state/legacyImport.ts:234`, `src/lib/scanner/links.ts:347`, `src/lib/voiceCompanion/transcriptRecord.ts:128`, `src/lib/issueReports/store.ts:142`, `src/lib/onboarding/healthCheck.ts:959`, `src/lib/runtime/runtimeImageStore.ts:690`, `src/lib/selfUpdate/actions.ts:142`, account, asks, bridge, CPU-budget and runtime-startup listings | 1-10 routes each; most tools reach `providerSecretRedaction.ts:250` | bounded: lock-ticket queues (one file per waiter), launcher records, account homes, ledger day files within retention, about 90 state entries, at most 58 transcripts per Claude project, 25 voice sessions, 48 issue reports, onboarding health-run folders; the releases directory (85 entries, a `git` read awaited per entry) only on an operator's self-update action | — |
 | `readdirSync` at `src/lib/scanner/roots.ts:58`, `src/lib/limits/copilotTranscriptLimits.ts:19`, `src/lib/agent/copilotModels.ts:71` | 19, 2 and 1 routes | inactive here: no OpenClaw directory; Copilot listings run only for Copilot accounts | — |
 | `writeFileSync` (55 sites) | 179 routes, 51 tools | one small file per request: the legacy-migration sentinel (`src/lib/configDir.ts:152`, once per directory per process, 63 routes), file-transaction tickets, project aliases, durable JSON, account and relay state; the largest capped payload is H10 | H10 |
-| `readOnlySnapshot` | 118 routes, 23 tools | cached per registry revision: 0.4-0.5 ms cached, 3.6-4.6 ms after one write, 570 ms cold (D4) | D4 |
+| `readOnlySnapshot` | 118 routes, 23 tools | cached per registry revision: 0.4 ms cached, 3.2-4.1 ms after one write, 553 ms on the first call of a process (D4) | D4 |
 
-**The 21 routes the screen reports clean, read by hand.** Two reach a whole
+**The 21 routes the screen reports clean, read by hand.** One reaches a whole
 collection through a production port the screen cannot follow:
-`POST /api/attention/[id]` clones every task through the service's `tasks`
-port (`src/lib/attention/service.ts:82`, the D1 cost per answer; H9), and
 `GET /api/attention/done` reads the archive through the done world
 (`src/lib/done/world.ts:41-49`, the D2 clone, at most once per 60 s and shared
-with T6). The three review-history routes read keyed rows of a read-only
+with T6). `POST /api/attention/[id]` answers through
+`transitionAttentionRequest` (`src/lib/attention/store.ts:397`) and reads no
+task; the previous revision gave it the attention service's `tasks` port
+(`src/lib/attention/service.ts:82`), which only the attention reads use (H13). The three review-history routes read keyed rows of a read-only
 connection in pages of at most 100 with a per-row byte cap
 (`src/lib/reviewHistory/reader.ts:36-90`): bounded. The three runtime routes
 are RPC calls to the runtime host (A4) and an in-memory wait ring. The others
@@ -442,7 +522,35 @@ read one small file or nothing: the CLI binary `stat` (accounts), the key
 store, team member files, the dictation and speech backend settings, request
 bodies (typing latency, attention events) and asynchronous inbox reads. The
 same port limit hides the summary parse of `/api/attention/needs-you` (H4),
-which the screen reaches only up to its registry and slug-walk sinks.
+which the screen reaches only up to its registry and slug-walk sinks, and the
+task clone of the 4-second attention poll (`GET /api/attention`, H13), which
+it reports only for that route's other sinks.
+
+#### Whole-collection sites under this installation's wiring
+
+The screen reached 42 call sites of `loadTasks`, `loadPipelines` and
+`loadArchivedPipelines` (the totals command above lists them with the routes
+and tools reaching each). Each was read at its line and classed by what this
+installation's code takes: the readers the production dependency objects
+install (`productionDomainDependencies`, `src/lib/mcp/bindings.ts:1350`; the
+controller's ports, `src/lib/pipelines/controller.ts:124-125`; each route's
+own dependency object), and the branch the call sits on.
+
+| Class | Sites | Routes and tools |
+| --- | --- | --- |
+| Taken on every request | `src/app/api/tasks/route.ts:105`; `tasks/[id]/assignment/route.ts:85`, `tasks/[id]/send/route.ts:86`, `tasks/[id]/spawn/route.ts:217` (each route's dependency object installs `loadTasks` itself, for example `assignment/route.ts:50`); `src/lib/orchestrator/deputyCommandPorts.ts:99`; `src/lib/taskAlbum/world.ts:20` (archive, at most once per 60 s) | `POST /api/tasks`, `/api/tasks/[id]/assignment`, `/send`, `/spawn`, `/api/orchestrator/ghost`, the three task-album routes |
+| Taken on a named branch | `src/app/api/orchestrator/seat/route.ts:124` (when the project has a seat, H5); `pipelines/[id]/route.ts:140` (an action answering with task work links); `src/app/api/tasks/[id]/route.ts:93` (link changes) and `src/lib/forge/resolve.ts:161` (work links of a patch, bound to `loadPipelines` at `tasks/[id]/route.ts:62`); `src/lib/pipelines/engine.ts:11903`, `:11936` (a create without `ensureTask` and its link check), `:13218`-`:13595` (the `link-task`, `start`, `update-draft` and `retry-stage` actions); `src/lib/attention/dismissals.ts:730` (a dismissal whose target is a task, called at `:447`, `:548`); `src/lib/tasks/launchMembership.ts:327`, `:371` (settling a failed launch); `src/lib/forge/autoMerge.ts:486`-`:919` and `src/lib/forge/sweep.ts:101`, `:107` (a controller cycle); `src/lib/mcp/bindings.ts:6868` (a task target), `:7144` (a prototype target), `:7234` (a dismissal naming a round) | `/api/orchestrator/seat`, `/api/pipelines/[id]`, `/api/tasks/[id]`, `/api/pipelines`, `/api/attention/dismissals`, `/api/spawn`, `/api/workflows`, `/api/workflows/[id]`, `/api/pipelines/tick`; tools `create_pipeline`, `pipeline_action`, `request_attention`, `dismiss_attention` |
+| Taken off the Viewer | `src/lib/mcp/bindings.ts:2192` (a maintenance run closing or hiding a task) | tool `update_task`, which runs in the `mcp-tasks` helper on the HTTP transport (H1) |
+| Not taken: the production port reads something else | `src/lib/mcp/bindings.ts:3905`, `:5776` (`listTaskRecords?.() ?? loadTasks()`, with `listTaskRecords: loadTasksForList` installed at `:1391`); `:5712` (`taskSelectionSource` installed at `:1390`, keyed reference rows); `src/lib/forge/resolve.ts:161` for `update_task` (bound to `listPipelineRecords`, the frozen list, at `bindings.ts:2222`); `src/app/api/files/response.ts:708` (the inline projection, used only without the response worker); `src/lib/tasks/store.ts:831` (legacy fallback without the keyed collection) | `bridge_report`, `list_tasks`, `get_task`, `seat_tick_settings`; `/api/files`; the 11 prototype, image and external-relay routes |
+| Not taken: reached only through stored closures | `src/lib/forge/autoMerge.ts:699`-`:919` | `/api/runtime/deployments`, `/api/runtime/deployments/[deploymentId]`, `/api/self-update/action`, `/auto`, `/launcher-admission`: they build the controller (`src/lib/selfUpdate/instance.ts:662`, `flowPipelineController().idle()`), and the screen follows the sweep closures its ports object stores (`controller.ts:125`) as if they were called |
+
+So 17 of the 34 routes and 4 of the 9 tools that reach a whole-collection
+site take a clone on the Viewer, every one of them only on its own request or
+action; `update_task` takes one in its own process. Before this check, part 3
+assigned `bridge_report`, `list_tasks` and `get_task` the D1 clone and cited
+`bindings.ts:3905` for `bridge_report`; those fallbacks are never taken here.
+The other sink classes keep their reachability counts; their rows above say
+what each first path does on this installation.
 
 **Limits.** The screen follows calls the type checker resolves. It does not
 follow calls through ports whose implementation is assigned elsewhere (the
@@ -450,9 +558,10 @@ production dependency objects, such as the needs-you `read` port and the
 attention service's `tasks` port above), calls made by name at run time (the MCP
 server's `bindings[tool](…)`, which is why tools are screened separately),
 worker messages, dynamic imports, or paths deeper than six calls, and it treats
-every branch as taken. A path it reports may be conditional; a handler it
-reports clean may still reach work through a port. Both kinds of miss are
-listed under [Coverage gaps](#coverage-gaps).
+every branch as taken and every closure a factory builds as called. A path it
+reports may be conditional or never called; a handler it reports clean may
+still reach work through a port. Both kinds of miss are listed under
+[Coverage gaps](#coverage-gaps).
 
 ### A. Structured agent hosts and delivery inside the Viewer
 
@@ -564,6 +673,13 @@ Viewer loop (S1, H2, H1).
 9. `[mcp slow] bindingMs` is wall time across awaits
    (`src/lib/mcp/server.ts:3268-3332`); it is no measure of loop occupancy
    (added by part 3's revision).
+10. MCP receipts do not count Viewer work. Every MCP server process writes the
+    one receipt store (`src/lib/mcp/server.ts:4848`, for stdio servers through
+    `:4898`), an agent on stdio runs its tools in its own server process, and
+    receipt-free reads, calls refused before a claim, replays and pruned
+    bounded receipts leave no row. Only `[mcp slow]` lines on the service
+    journal are known to be Viewer executions, and only for calls of at least
+    2 s (added by the second revision).
 
 ## Measurement catalogue
 
@@ -623,14 +739,16 @@ Report both roles separately, over the full 48 hours, and per hour.
 
 Part 3's revision dates sources by the timing of the gaps themselves, so no
 binding wall time and no profile window stands in for a gap. Read the journal
-once:
+once, right after `prepare.sh` made the copies (M4), up to the copy time:
 
 ```sh
+UNTIL=$(date -u '+%F %T')   # the copy time
 journalctl --user -u delegatus.service --utc --all --no-pager -o short-iso-precise \
-  --since "2026-10-16 14:00:00 UTC" --until "2026-10-18 16:00:00 UTC" \
-  --grep '\[viewer loop-gap\]|\[mcp slow\]' > "$TMPDIR/journal.txt"
-python3 -I journal-checks.py "$TMPDIR/journal.txt"
-python3 -I receipt-checks.py "$P/state/state.sqlite" "$P/state/mcp-receipts.sqlite"
+  --since "2026-10-16 14:00:00 UTC" --until "$UNTIL UTC" \
+  --grep '\[viewer loop-gap\]|\[mcp slow\]|\[flow pipeline controller\] archived' > "$P/journal.txt"
+python3 -I journal-checks.py "$P/journal.txt" "$P/export" "$P/journal-checks.json"
+python3 -I receipt-checks.py "$P/state/state.sqlite" "$P/state/mcp-receipts.sqlite" "$P/state/agent-registry.sqlite" \
+  "$P/journal-checks.json" "$P/receipt-checks.json"
 ```
 
 - **Fixed-phase chains** (runtime host): a gap belongs to a chain when the next
@@ -640,34 +758,53 @@ python3 -I receipt-checks.py "$P/state/state.sqlite" "$P/state/mcp-receipts.sqli
   barely depends on the tolerance: 2,868 gaps at ±0.25 s, 2,880 at ±1.0 s
   (equal to the window's minutes by coincidence), 2,903 at ±2.0 s.
 - **Re-arm chains** (Viewer): the next gap starts 60 s after the previous gap
-  ended, within 0.25 s or, stricter, 0.15 s (learned from the done-sweep chain):
-  the signature of a timer re-armed 60 s after its pass ends whose pass is the
-  gap. The done sweep (T6) and the attention reconcile (T7) both re-arm this
-  way; the chain does not tell them apart, the first delay and the profiles
-  below do. A link displaced by an await longer than the tolerance breaks the
-  chain, so the count is a lower bound of the chain's presence.
+  ended, within 0.25 s or, stricter, 0.15 s: the signature of a timer re-armed
+  60 s after its pass ends whose pass is the gap. The done sweep (T6,
+  `src/lib/done/sweep.ts:49-55`) and the attention reconcile (T7,
+  `src/lib/attention/reconcileController.ts:106-117`) both re-arm this way, and
+  the check filters only by role, process and timing, so a chain names neither
+  of them: ten synthetic gaps of 1 s that start 60 s after the previous one
+  ended, as an attention pass alone would leave them, form a chain as done
+  passes do (checked with the script's own `chained` and `rearm`). The chain totals are unattributed correlations and price no
+  source; T6 is priced from its replayed pass (M4 `T6-pass`). A link displaced
+  by an await longer than the tolerance breaks the chain, so the count is a
+  lower bound of the chain's presence.
 - **Curator passes**: the Viewer's share of wall time inside logged gaps from
   the first call's start (`serviceTotalMs` before its line) to the last call's
   line, against the same length before and after; and how long after the
   preceding gap's end each completion line was written.
+- **Viewer-run MCP calls**: `[mcp slow]` lines with `bindingMs` of at least 1,
+  except the four task tools, by tool, times the caller resolutions every such
+  call certainly made (coverage of the [H1 count](#mcp-caller-enumeration-h1)).
+- **Archive growth**: the records the hourly archive pass reports since the
+  window start, so the archive at the window start is the copy's count minus
+  them.
 - **Receipts** classify `curate_rules` calls by the shape of their stored
   result (scope read, overview, apply, error) without printing it, and assign
-  each to the curator pass whose claim-to-end interval contains it.
+  each to the curator pass whose claim-to-end interval contains it. A pass
+  counts as run on the Viewer when a Viewer-written `[mcp slow]
+  tool=curate_rules` line falls inside it and inside no other pass: an agent
+  keeps the transport it was launched with, and a stdio server's lines go to
+  its agent. The receipt checks also count the registry's conversations created
+  before the window start, which the R2 and H1 bounds scale by.
 
 `journal-checks.py`:
 
 ```py
-# python3 -I journal-checks.py <journal.txt>  (journalctl -o short-iso-precise --grep '\[viewer loop-gap\]|\[mcp slow\]')
+# python3 -I journal-checks.py <journal.txt> <export dir> <out.json>
+# journal: journalctl -o short-iso-precise --grep '\[viewer loop-gap\]|\[mcp slow\]|\[flow pipeline controller\] archived', read up to the copy time
 import json, re, sys, collections
 from datetime import datetime
 def ts(s): return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
-gaps, slow = [], []
+gaps, slow, archived = [], [], []
 for line in open(sys.argv[1], errors="replace"):
     at = ts(line.split(" ", 1)[0]); i = line.find("[viewer loop-gap] {")
     if i >= 0:
         r = json.loads(line[i + 18:]); end = ts(r["utc"]); gaps.append((r.get("role"), r.get("pid"), end - r["gapMs"] / 1000, end, r["gapMs"], r))
     elif "[mcp slow]" in line:
         m = dict(re.findall(r"(\w+)Ms=(\d+)", line)); slow.append((at, re.search(r"tool=(\w+)", line).group(1), {k: int(v) for k, v in m.items()}))
+    elif (a := re.search(r"\[flow pipeline controller\] archived (\d+) ", line)):
+        archived.append((at, int(a.group(1))))
 W0, W1 = ts("2026-10-16T14:00:00Z"), ts("2026-10-18T14:00:00Z")
 # 1. A profile window is not a gap: the 13:29:01.855Z record
 for *_, r in gaps:
@@ -685,7 +822,8 @@ for lo, hi in (("2026-10-18T15:18:55Z", "2026-10-18T15:22:40Z"), ("2026-10-18T15
     lag = sorted(round(c[0] - max(e for e in ends if e <= c[0]), 2) for c in calls if any(e <= c[0] for e in ends))
     print(f"curator pass {lo[11:19]}: calls>=2s {len(calls)}, binding ms {min(c[2]['binding'] for c in calls)}-{max(c[2]['binding'] for c in calls)},"
           f" gap share/≥2s inside {share(a, b)}, before {share(a - n, a)}, after {share(b, b + n)}; completion minus previous gap end s {lag[0]}-{lag[-1]}")
-# 3. Timer chains over the 48 hours: host gaps on a fixed 60 s phase, Viewer gaps on a 60 s re-arm (next start = previous end + 60 s)
+# 3. Timer chains over the 48 hours: host gaps on a fixed 60 s phase, Viewer gaps on a 60 s re-arm (next start = previous end + 60 s).
+#    Two Viewer timers re-arm 60 s after their pass ends (the done sweep and the attention reconcile), so a re-arm chain names neither.
 def chained(rows, link, minimum=5):
     rows.sort(key=lambda g: g[2]); nxt = {}
     for i, g in enumerate(rows):
@@ -717,39 +855,77 @@ for at, tool, m in slow:
     if W0 <= at < W1: t[tool].append(m)
 for tool, v in sorted(t.items(), key=lambda x: -sum(m["binding"] for m in x[1]))[:8]:
     print(f"mcp {tool}: {len(v)} calls, binding {sum(m['binding'] for m in v) / 1000:.1f} s, http {sum(m.get('http', 0) for m in v) / 1000:.1f} s, largest {max(m['binding'] for m in v)} ms")
+# 5. Caller enumerations the Viewer certainly ran in the 48 hours. A `[mcp slow]` line on the service journal comes from the Viewer, except
+#    for the four task tools (the mcp-tasks helper); a stdio MCP server writes to its agent. bindingMs >= 1 means the binding started, so the
+#    tool policy allowed the call: for a mutating tool that took three resolutions (bindings.ts:7344, :7348, :7352). Each resolution runs
+#    hostedConversationsFromSnapshot first (callerAuthority.ts:75). Binding-level resolutions on every path: curate_rules +2 (:7937, :7921),
+#    stage_report +1 (:2559), leave_lesson +1 (:2601), search_memory +1 (:7953). Calls under 2 s leave no line, so this is a lower count.
+src = open(f"{sys.argv[2]}/src/lib/mcp/server.ts").read(); i = src.index("MUTATING_MCP_TOOL_NAMES = "); body = re.sub(r"/\*.*?\*/", "", src[i:src.index("]);", i)], flags=re.S)
+mutating = set(re.findall(r'"([a-z_]+)"', body)); task_tools = {"list_tasks", "get_task", "create_task", "update_task"}
+extra = {"curate_rules": 2, "stage_report": 1, "leave_lesson": 1, "search_memory": 1}
+viewer = collections.Counter(tool for at, tool, m in slow if W0 <= at < W1 and m.get("binding", 0) >= 1 and tool not in task_tools)
+minimum = {tool: 3 * (tool in mutating) + extra.get(tool, 0) for tool in viewer}
+resolutions = sum(n * minimum[tool] for tool, n in viewer.items())
+print(f"viewer-run calls >= 2 s with the binding started: {sum(viewer.values())} ({len(mutating)} mutating tools); certain caller enumerations {resolutions};",
+      sorted(((tool, n, minimum[tool]) for tool, n in viewer.items() if minimum[tool]), key=lambda x: -x[1] * x[2])[:6])
+# 6. Archive growth: records the hourly archive pass moved in since the window start (to the end of this read)
+since = sum(n for at, n in archived if at >= W0)
+print(f"archive records added since 2026-10-16T14:00Z: {since} in {sum(1 for at, n in archived if at >= W0)} passes")
+json.dump({"viewerSlowCalls": dict(viewer), "minimumResolutions": minimum, "certainResolutions": resolutions,
+           "curatorSlowLines": [at for at, tool, m in slow if tool == "curate_rules"], "archivedSinceW0": since,
+           "journalEnd": max([g[3] for g in gaps] + [s[0] for s in slow] + [a[0] for a in archived])}, open(sys.argv[3], "w"))
 ```
 
 `receipt-checks.py`:
 
 ```py
-# python3 -I receipt-checks.py <state.sqlite copy> <mcp-receipts.sqlite copy>: counts only, no row content is printed
+# python3 -I receipt-checks.py <state.sqlite copy> <mcp-receipts.sqlite copy> <agent-registry.sqlite copy> <journal-checks out.json> <out.json>: counts only, no row content is printed
 import sqlite3, sys, json, collections
 from datetime import datetime
 ro = lambda f: sqlite3.connect(f"file:{f}?mode=ro", uri=True)
-st, mr = ro(sys.argv[1]), ro(sys.argv[2])
+st, mr, rg = ro(sys.argv[1]), ro(sys.argv[2]), ro(sys.argv[3]); journal = json.load(open(sys.argv[4]))
 ms = lambda s: datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() * 1000
 W0, W1 = ms("2026-10-16T14:00:00Z"), ms("2026-10-18T14:00:00Z")
 rows = lambda kind: [json.loads(v) for (v,) in st.execute("SELECT value_json FROM state_rows WHERE collection = 'role_memory_curation' AND row_key LIKE ?", (kind + ":%",))]
 retained = {r["project"]: len(r["passes"]) for r in rows("p")}
-rank = {p: i for i, p in enumerate(sorted(retained, key=lambda p: -retained[p]))}
+order = sorted(retained, key=lambda p: -retained[p]); rank = {p: i for i, p in enumerate(order)}
 passes = [(ms(r["claimedAt"]), ms(r["endedAt"]) if r.get("endedAt") else ms(r["claimedAt"]) + 3_600_000, r["project"], r["state"]) for r in rows("r") if r.get("claimedAt")]
 window = [p for p in passes if W0 <= p[0] < W1]
-print("retained passes per project, by rank:", [retained[p] for p in sorted(retained, key=rank.get)])
-print("passes claimed in 48 h:", len(window), dict(collections.Counter(p[3] for p in window)), "per project rank:", dict(sorted(collections.Counter(rank.get(p[2]) for p in window).items())))
+since = collections.Counter(p[2] for p in passes if p[0] >= W0)
+print("retained passes per project, by rank:", [retained[p] for p in order])
+print("passes claimed in 48 h:", len(window), dict(collections.Counter(p[3] for p in window)), "per project rank:", dict(sorted(collections.Counter(rank.get(p[2]) for p in window).items())),
+      "claimed since 2026-10-16T14:00Z per rank:", [since[p] for p in order])
+# A pass ran its curator on the Viewer when a Viewer-written `[mcp slow] tool=curate_rules` line falls inside it and inside no other pass:
+# an agent keeps the MCP transport it was launched with, and a stdio MCP server writes its lines to its agent, not to the service journal.
+inside = lambda at, p: p[0] - 5_000 <= at <= p[1] + 60_000
+viewer = set()
+for at in (t * 1000 for t in journal["curatorSlowLines"]):
+    owners = [i for i, p in enumerate(passes) if inside(at, p)]
+    if len(owners) == 1: viewer.add(owners[0])
+print("passes claimed in 48 h with a Viewer-written curator line:", sum(1 for i, p in enumerate(passes) if i in viewer and W0 <= p[0] < W1), "of", len(window))
 def kind(text):
     try: r = json.loads(text)
     except ValueError: return "unparsed"
     return "error" if not isinstance(r, dict) or r.get("ok") is False else "scope-read" if "rules" in r else "overview" if "scopes" in r else "apply"
-calls = collections.Counter()
+calls, reads, proven = collections.Counter(), collections.Counter(), collections.Counter()
 for text, at in mr.execute("SELECT result_json, claimed_at FROM mcp_receipts WHERE receipt_key LIKE 'curate_rules:%' AND claimed_at >= ? AND claimed_at < ?", (W0, W1)):
-    owner = [p for p in passes if p[0] - 5_000 <= at <= p[1] + 60_000]
-    calls[(kind(text), rank.get(owner[-1][2]) if owner else "none")] += 1
+    owner = [i for i, p in enumerate(passes) if inside(at, p)]; k = kind(text); r = rank.get(passes[owner[-1]][2]) if owner else "none"
+    calls[(k, r)] += 1
+    if k in ("scope-read", "overview") and owner: reads[r] += 1; proven[r] += len(owner) == 1 and owner[0] in viewer
 print("curate_rules receipts in 48 h by kind and pass project rank:", dict(sorted(calls.items(), key=str)))
+print("reads (scope reads and overviews) per rank:", [reads[i] for i in range(len(order))], "of them in Viewer passes:", [proven[i] for i in range(len(order))])
 tools = collections.Counter(k.split(":", 1)[0] for (k,) in mr.execute("SELECT receipt_key FROM mcp_receipts WHERE claimed_at >= ? AND claimed_at < ?", (W0, W1)))
-print("receipts in 48 h:", sum(tools.values()), tools.most_common(8))
+print("receipts in 48 h (every MCP server process writes this store):", sum(tools.values()), tools.most_common(8))
+archive = st.execute("SELECT count(*) FROM state_rows WHERE collection = 'pipelines_archive'").fetchone()[0]
+print(f"archive rows at the copy {archive}; at 2026-10-16T14:00Z about {archive - journal['archivedSinceW0']} (journal read to the copy)")
+created = [json.loads(v).get("createdAt") for (v,) in rg.execute("SELECT value_json FROM registry_rows WHERE collection = 'conversations'")]
+before = sum(1 for c in created if isinstance(c, str) and ms(c) < W0)
+print(f"registry conversations at the copy {len(created)}; created before 2026-10-16T14:00Z {before}")
+json.dump({"conversationsAtCopy": len(created), "conversationsBeforeW0": before, "retained": [retained[p] for p in order], "claimedSinceW0": [since[p] for p in order], "reads": [reads[i] for i in range(len(order))],
+           "viewerReads": [proven[i] for i in range(len(order))], "archiveAtCopy": archive, "archiveAtW0": archive - journal["archivedSinceW0"]}, open(sys.argv[5], "w"))
 ```
 
-Output of both at 16:20Z on the copies of 16:09Z:
+Output of both on the copies of 17:52:50Z (final run):
 
 ```text
 13:29:01Z gapMs 2639 profile window ms 5677 samples 553 attribution cF 223
@@ -761,18 +937,86 @@ viewer 60 s re-arm ±0.15 s: 626 of 33216 gaps, 533.6 of 48230.6 s, 11.1 s/h
 mcp curate_rules: 589 calls, binding 2872.7 s, http 0.0 s, largest 18214 ms
 mcp search_transcripts: 185 calls, binding 1206.9 s, http 1206.6 s, largest 47476 ms
 mcp agent_activity: 240 calls, binding 811.7 s, http 0.0 s, largest 16808 ms
-retained passes per project, by rank: [49, 23, 16, 12, 7, 3, 1]
-passes claimed in 48 h: 38 {'succeeded': 26, 'failed': 12} per project rank: {0: 24, 1: 7, 2: 4, 3: 1, 4: 1, 5: 1}
+mcp bridge_report: 69 calls, binding 608.7 s, http 148.1 s, largest 27013 ms
+mcp list_tasks: 47 calls, binding 171.3 s, http 0.0 s, largest 8006 ms
+mcp send_message_to_orchestrator: 53 calls, binding 152.6 s, http 132.9 s, largest 8737 ms
+mcp stage_report: 58 calls, binding 145.0 s, http 0.0 s, largest 10758 ms
+mcp search_memory: 18 calls, binding 102.6 s, http 99.0 s, largest 15728 ms
+viewer-run calls >= 2 s with the binding started: 1299 (35 mutating tools); certain caller enumerations 4410; [('curate_rules', 565, 5), ('agent_activity', 240, 3), ('stage_report', 58, 4), ('bridge_report', 69, 3), ('create_pipeline', 36, 3), ('send_message_to_orchestrator', 35, 3)]
+archive records added since 2026-10-16T14:00Z: 166 in 47 passes
+retained passes per project, by rank: [50, 23, 17, 12, 8, 3, 1]
+passes claimed in 48 h: 38 {'succeeded': 26, 'failed': 12} per project rank: {0: 24, 1: 7, 2: 4, 3: 1, 4: 1, 5: 1} claimed since 2026-10-16T14:00Z per rank: [25, 8, 5, 2, 2, 2, 0]
+passes claimed in 48 h with a Viewer-written curator line: 19 of 38
 curate_rules receipts in 48 h by kind and pass project rank: scope reads 624 / 73 / 74 / 23 / 16 / 23, overviews 44 / 7 / 7 / 2 / 2 / 2, applies 44 / 9 / 5 / 1 / 1 / 1, errors 19 / 4 / 0 / 0 / 0 / 0 (ranks 0-5)
-receipts in 48 h: 8920; agent_activity 5229, curate_rules 981, stage_report 523, update_task 421, leave_lesson 333, search_memory 273, pipeline_action 208, bridge_report 207
+reads (scope reads and overviews) per rank: [668, 80, 81, 25, 18, 25, 0] of them in Viewer passes: [339, 53, 52, 20, 14, 19, 0]
+receipts in 48 h (every MCP server process writes this store): 8839 [('agent_activity', 5229), ('curate_rules', 981), ('stage_report', 523), ('update_task', 421), ('leave_lesson', 333), ('search_memory', 209), ('pipeline_action', 208), ('bridge_report', 207)]
+archive rows at the copy 962; at 2026-10-16T14:00Z about 796 (journal read to the copy)
+registry conversations at the copy 8310; created before 2026-10-16T14:00Z 7467
 ```
 
 The second pass's `binding ms 0-5392` includes its first call (15:34:23Z),
 whose line reads `bindingMs=0` with `serviceTotalMs=5755`: the phases the line
-lists do not account for that call's time. Receipt retention prunes as it
-goes: the same 48-hour window held 8,980 receipts in part 3's copy of 15:02Z,
-8,920 at 16:09Z and 8,892 at 16:31Z, the difference all in `search_memory`
-(325, 273, 252), so receipt-based counts are lower bounds. The receipt lines are condensed from the script's dictionaries.
+lists do not account for that call's time. Receipt retention prunes bounded
+receipts as it goes: the same 48-hour window held 8,980 receipts in part 3's
+copy of 15:02Z, 8,920 at 16:09Z, 8,892 at 16:31Z and 8,839 at 17:52Z, the
+difference all in `search_memory` (325, 273, 252, 209). `curate_rules` is a
+mutating tool, so its receipts are durable and the same 981 stand in every
+copy. The receipt line by kind is condensed from the script's dictionary.
+
+Half the curator passes left no Viewer line: 19 of the 38 passes claimed in the
+48 hours hold a Viewer-written `curate_rules` line of their own. In the
+project with the most retained passes a read takes 1.3-3.6 s of `projectView`
+alone on the copy, so a pass of that project running on the Viewer would
+rarely keep every call under 2 s; the passes without a line are more likely to
+have run on a stdio server than on the Viewer, but no record says which. Only
+the 497 reads of proven passes enter the curator lower bound. The registry
+held 8,310 conversations at the copy, 7,467 of them created before the window
+start; the archive held 962 rows, about 796 at the window start.
+
+`bounds.py` prices the replay-based measured causes of the [ranked list](#ranked-list), after the cases (M4):
+
+```py
+# python3 -I bounds.py <probe out dir> <journal-checks out.json> <receipt-checks out.json>: bounds of the replay-priced measured causes, seconds per hour over the 48 hours
+import json, pathlib, sys
+out = pathlib.Path(sys.argv[1]); journal, receipts = json.load(open(sys.argv[2])), json.load(open(sys.argv[3]))
+runs = lambda case: [r for r in map(json.loads, (out / f"{case}.ndjson").read_text().splitlines()) if "wallMs" in r]
+warm = lambda case: runs(case)[1:]
+# Curator reads: one projectView per read, priced by the project's retained curator passes (role-projects: both runs of each measured project)
+measured = {}
+for r in runs("role-projects"): measured.setdefault(r["result"]["retainedPasses"], []).append(r["wallMs"])
+fewest = [n - c for n, c in zip(receipts["retained"], receipts["claimedSinceW0"])]
+below = lambda n: min(measured[max(k for k in measured if k <= n)]) if any(k <= n for k in measured) else 0.0   # below every measured count: zero
+above = lambda n: max(measured[min(k for k in measured if k >= n)]) if any(k >= n for k in measured) else None
+lower = sum(reads * below(n) for reads, n in zip(receipts["viewerReads"], fewest)) / 1000 / 48
+upper = sum(reads * above(n) for reads, n in zip(receipts["reads"], receipts["retained"]) if reads) / 1000 / 48
+print(f"curator: measured pass counts {sorted(measured)}; fewest during the window {fewest}; lower {lower:.1f} (Viewer passes, fewest passes, smallest wall), upper {upper:.1f} (every read, passes at the copy, largest wall)")
+# T6 done sweep: re-armed 60 s after each pass ends, so 3600 / (60 + pass seconds) passes an hour. Every pass reads the hot list and then the
+# archive (done/world.ts:86), and at the 256 MiB budget the two slots never fit together, so every archive read misses and refills: the lower
+# bound prices each pass at the smallest archive read after a hot read (T6-evict at 256 MiB), scaled to the archive at the window start.
+# The upper bound prices 60 passes an hour at the largest whole pass (T6-pass) plus the largest hot re-read the archive fill forces.
+t6 = warm("T6-pass"); longest = max(r["wallMs"] for r in t6); passes = 3600 / (60 + longest / 1000)
+ev = list(zip(runs("T6-evict-256"), runs("T6-evict-256")[1:]))
+archive = [min(b["wallMs"], b["maxLoopGapMs"]) for a, b in ev if a["result"]["read"] == "L" and b["result"]["read"] == "A"]
+hot = [max(b["wallMs"], b["maxLoopGapMs"]) for a, b in ev if a["result"]["read"] == "A" and b["result"]["read"] == "L"]
+scale = receipts["archiveAtW0"] / receipts["archiveAtCopy"]
+print(f"T6: warm pass {min(r['wallMs'] for r in t6):.0f}-{longest:.0f} ms wall; archive read after a hot read {min(archive):.0f}-{max(archive):.0f} ms; archive {receipts['archiveAtW0']}/{receipts['archiveAtCopy']} rows;"
+      f" lower {min(archive) * passes * scale / 1000:.1f} ({passes:.1f} passes an hour), upper {(max(max(r['wallMs'], r['maxLoopGapMs']) for r in t6) + max(hot)) * 60 / 1000:.1f}")
+# R2 runtime-host maintenance: one tick a minute at the smallest warm wall; H1 caller enumeration: the certain Viewer enumerations of journal-checks
+# at the smallest warm wall. Both walk the registry's conversations, so both are scaled to the conversations that existed at the window start.
+reg = receipts["conversationsBeforeW0"] / receipts["conversationsAtCopy"]
+r2 = min(r["wallMs"] for r in warm("R2-maintenance")); h1 = min(r["wallMs"] for r in warm("H1-attrib"))
+print(f"R2: {r2:.1f} ms x 60 x {reg:.3f} = lower {r2 * 60 * reg / 1000:.1f}; upper: the phase-chained host gaps of journal-checks")
+print(f"H1: {journal['certainResolutions']} certain enumerations x {h1:.1f} ms x {reg:.3f} = lower {journal['certainResolutions'] * h1 * reg / 1000 / 48:.2f}; upper unknown")
+```
+
+Its output on the final run:
+
+```text
+curator: measured pass counts [3, 12, 17, 23, 50]; fewest during the window [25, 15, 12, 10, 6, 1, 1]; lower 10.7 (Viewer passes, fewest passes, smallest wall), upper 54.8 (every read, passes at the copy, largest wall)
+T6: warm pass 936-1601 ms wall; archive read after a hot read 536-727 ms; archive 796/962 rows; lower 25.9 (58.4 passes an hour), upper 111.1
+R2: 684.4 ms x 60 x 0.899 = lower 36.9; upper: the phase-chained host gaps of journal-checks
+H1: 4410 certain enumerations x 30.2 ms x 0.899 = lower 2.49; upper unknown
+```
 
 ### M2. Label and site shares
 
@@ -803,15 +1047,19 @@ window inside the 48 hours.
 ### M4. Replays on scratch copies
 
 Never against the operator's state, registry or worktrees. Every timed case in
-this document runs from the four files below; save them in one directory
-outside the worktree (the stage scratch), then run, from this worktree:
+this document runs from the four files below; save them, the three check
+scripts of [M1b](#m1b-timer-chains-curator-passes-and-profile-windows) and
+`profile-view.ts` (below) in one directory outside the worktree (the stage
+scratch), then run, from this worktree:
 
 ```sh
 P="$TMPDIR/probe"; REV=<serving revision, full sha>; INSTALL=<install id>; PORT=<a closed port>
 GATE="$HOME/.cache/delegatus/self-update/$INSTALL/releases/${REV:0:12}/scripts/gate-slot.sh"
 P=$P REV=$REV INSTALL=$INSTALL bash "$GATE" bash <dir>/prepare.sh
+# here the M1b journal read and the journal and receipt checks, before any case writes to the copies
 P=$P REV=$REV INSTALL=$INSTALL PORT=$PORT bash "$GATE" bash <dir>/run-probes.sh
 python3 -I <dir>/summarize.py "$P/out"
+python3 -I <dir>/bounds.py "$P/out" "$P/journal-checks.json" "$P/receipt-checks.json"
 ```
 
 The serving revision is the `target` of the newest `kind: apply` row of
@@ -951,6 +1199,13 @@ const cases: Record<string, () => Promise<Case>> = {
     const slots = () => { const m = (globalThis as any).__llvCollectionReadCachesV1 as Map<string, { bytes: number }> | undefined; return m ? [...m.entries()].map(([k, v]) => `${JSON.parse(k)[2]}:${(v.bytes / 1048576).toFixed(1)}MiB`).join(",") : "none"; };
     return { run: index => ({ read: sequence[index % sequence.length], rows: (sequence[index % sequence.length] === "L" ? p.loadPipelinesForList() : p.loadArchivedPipelines()).length, slots: slots() }) };
   },
+  "T6-pass": async () => {   // one done sweep pass; writes the done rows of the copy
+    const p = await import("@/lib/pipelines/store"); const w = await import("@/lib/done/world"); const s = await import("@/lib/done/sweep");
+    const world = () => ({ ...w.productionDoneWorld({ recover: true }), preserveFrame: undefined, removeFrames: undefined });
+    return { readiness: { condition: "before each run the done world's 60 s archive copy is cleared and the hot list read once, as between production passes; frame copies, recovery and media removal left out" },
+      reset: () => { (globalThis as any).__llvDoneArchive = null; return p.loadPipelinesForList().length; },
+      run: async () => ({ ran: await s.runDoneSweepOnce({ world, ownsTraffic: async () => true }) }) };
+  },
   T7: async () => { const body = summaryBody(); return { readiness: { bodyBytes: body.length }, run: () => Object.keys(JSON.parse(body)).length }; },
   "H2-encode": async () => { const body = JSON.parse(summaryBody()); return { run: () => JSON.stringify(body).length }; },
   S6: async () => { const text = fs.readFileSync(path.join(state, "project-catalog.json"), "utf8"); return { readiness: { bytes: text.length }, run: () => Object.keys(JSON.parse(text).files).length }; },
@@ -974,11 +1229,21 @@ const cases: Record<string, () => Promise<Case>> = {
         if (s.isDirectory()) pending.push(...fs.readdirSync(file).map(n => path.join(file, n))); if (s.isDirectory() || s.nlink === 1) bytes += s.blocks * 512; }
       return { bytes, entries: count }; } };
   },
-  "T22-trim": async () => {
-    const p = await import("@/lib/loopProfiler"); const line = fs.readFileSync(import.meta.path, "utf8").split("\n").findIndex(l => l.startsWith("function rawCost")) + 1;
-    const frame = { name: "rawCost", sourceURL: import.meta.path, line }; const raw = { traces: Array.from({ length: 4096 }, () => ({ frames: Array(32).fill(frame) })) };
-    return { readiness: { traces: 4096, depth: 32 }, run: () => p.trimLoopProfile(raw as any, path.dirname(import.meta.path)).rows.length };
-  },
+  // T22. trimLoopProfile at its caps, 4,096 traces of 32 frames. It keeps a frame only under src/ or scripts/ (or an emitted .next/server file)
+  // whose line declares the frame's function, so the fixtures go under scripts/ of this export; "-rejected" puts them where it refuses them.
+  ...Object.fromEntries((["T22-trim", "T22-trim-varied", "T22-trim-rejected"] as const).map(id => [id, async (): Promise<Case> => {
+    const p = await import("@/lib/loopProfiler"); const varied = id === "T22-trim-varied", files = varied ? 8 : 1, functions = varied ? 64 : 32;
+    const frames = Array.from({ length: files }, (_, f) => {
+      const file = path.join(process.cwd(), id === "T22-trim-rejected" ? "" : "scripts", `loop-profile-fixture-${f}.ts`);
+      fs.writeFileSync(file, Array.from({ length: functions }, (_, n) => `function f${n}() {}`).join("\n") + "\n");
+      return Array.from({ length: functions }, (_, n) => ({ name: `f${n}`, sourceURL: file, line: n + 1 }));
+    }).flat();
+    // every trace holds the same 32 distinct frames; "-varied" shifts each trace's 32 frames through 512 functions in 8 files (the source-file cap)
+    const traces = Array.from({ length: 4096 }, (_, t) => ({ frames: Array.from({ length: 32 }, (_, d) => frames[varied ? (t * 7 + d) % frames.length : d]!) }));
+    const expected = id === "T22-trim-rejected" ? 0 : 16;
+    return { readiness: { traces: traces.length, depth: 32, distinctFrames: frames.length, expectedRows: expected },
+      run: () => { const rows = p.trimLoopProfile({ traces } as any, process.cwd()).rows.length; if (rows !== expected) throw Error(`retained ${rows} rows, expected ${expected}`); return { rows }; } };
+  }])),
   // D6, H8. role memory (curation overview, one scope read, the rules window view)
   "D6-overview": async () => { const c = await import("@/lib/memory/curation/read"); const t = await roleTarget(); return { readiness: { rules: t.rules, scopes: t.scopes.length }, run: async () => (await c.readCuration({ id: "audit-local", project: t.project, scopes: t.scopes } as any)).scopes.length }; },
   "D6-scope-read": async () => { const c = await import("@/lib/memory/curation/read"); const t = await roleTarget(); return { readiness: { rules: t.rules, scopeRules: t.scopeRules }, run: async () => ((await c.readCuration({ id: "audit-local", project: t.project, scopes: t.scopes } as any, t.scope)) as any).rules.length }; },
@@ -1092,7 +1357,7 @@ run() { # run <export dir> <NODE_ENV> <case> <runs>
       bun ./probe.ts "$3" "$4" ) > "$P/out/$3${5:-}.ndjson" 2> "$P/out/$3${5:-}.stderr" || echo "case failed: $3${5:-}"
 }
 # Read-only cases first, each in a fresh process; the cases that write to the copy come last.
-for c in D1 D2 D3 T4-pair P2 D4 D8 T2 H3 T7 H2-encode S6 T9-liveness T19 T22-trim D6-overview D6-scope-read H8 H10-write X5-codex-walk \
+for c in D1 D2 D3 T4-pair P2 D4 D8 T2 H3 T7 H2-encode S6 T9-liveness T19 T22-trim T22-trim-varied T22-trim-rejected D6-overview D6-scope-read H8 H10-write X5-codex-walk \
          A1 A2 X1-version X1-features X2 R1-full R1-summary R1-cache R2-maintenance R2-map R2-settle R4; do
   run "$P/export" production "$c" 6
 done
@@ -1100,7 +1365,7 @@ run "$P/export" test H1-attrib 6
 run "$P/export" production role-projects 10
 run "$P/export" production T6-evict 12 -256
 run "$P/export512" production T6-evict 12 -512
-for c in D1-write S2 D4-incremental T3 R3; do run "$P/export" production "$c" 6; done
+for c in D1-write S2 D4-incremental T6-pass T3 R3; do run "$P/export" production "$c" 6; done
 ```
 
 `summarize.py`:
@@ -1121,46 +1386,53 @@ for f in sorted(pathlib.Path(sys.argv[1]).glob("*.ndjson")):
 
 Each run prints wall time, CPU time, the largest lateness of a 10 ms timer
 around the call ("loop"), heap and RSS deltas, bytes read and `/proc/loadavg`.
-Run 0 of a fresh process is the cold call (it includes module loading, cache
-fills and, for the registry, the full decode); runs 1-5 are warm. A call shorter
-than the 10 ms tick can show a loop value below its wall time; one that leaves
-garbage collection behind it can show a loop value above it. The whole run takes
-about four minutes. Five cases change the copy, so they run last and the
-procedure is repeated only from a fresh `prepare.sh`.
+The timer encloses `probe.run(index)` alone: the case's factory runs before
+run 0, with the module imports and the setup the table lists, and its `reset`
+runs before each run, both outside the timer. Run 0 is therefore the first
+call of the measured function in a fresh process after that setup. It includes
+the cache fills that happen inside that call (the full registry decode in `D4`
+and `R2-maintenance`, the read-cache fill in `D2` and `D3`) and no module
+loading, process start or factory work, so no number here is a process
+cold-start time. Runs 1-5 are warm. A call shorter than the 10 ms tick can show
+a loop value below its wall time; one that leaves garbage collection behind it
+can show a loop value above it. The whole run takes about four and a half
+minutes. Six cases change the copy, so they run last and the procedure is
+repeated only from a fresh `prepare.sh`.
 
-| Case | Inventory | One run executes | Input or target | Before each run | Writes to the copy |
-| --- | --- | --- | --- | --- | --- |
-| `D1` | D1, H5, H9 | `loadTasks()` | every task | — | no |
-| `D1-write` | D1 | a no-op `mutateTasks` (`BEGIN IMMEDIATE`, snapshot, diff) | tasks | — | an empty transaction |
-| `D2` | D2, T6 | `loadArchivedPipelines()` | the archive | — | no |
-| `D3` | D3, P6 | `loadPipelines()` | hot pipelines | — | no |
-| `T4-pair` | T4 | two `loadPipelines()` | hot pipelines | — | no |
-| `P2` | P2 | `findPipelineRecord` and `JSON.stringify` | the largest hot row (SQL in the case) | — | no |
-| `D4` | D4, R2 | `readOnlySnapshot()` | the registry | — (run 0 is the cold full load) | no |
-| `D4-incremental` | D4 | `readOnlySnapshot()` | the registry | a child process upserts one unchanged entry | the registry copy |
-| `D8` | D8 | `readLifecycleJournal()` | the lifecycle journal | — | no |
-| `T2` | T2, H3, T19 | `scanProcesses()` | the machine's `/proc`, read only | — | no |
-| `H3` | H3 | `scanProcesses()` and `diskVolumes` | the worktree roots of the sweep report (`stat`, `statfs` only) | — | no |
-| `T3` | T3 | `archiveSettledPipelines()` | state | — | run 0 archives what is due |
-| `T6-evict` | T6, D2 | hot list and archive reads in the order L, L, A, A, L, A, L, A, L, A, L, A; prints the cache slots | state; `export512` differs only in `MAX_BYTES` | — | no |
-| `T7` / `H2-encode` | T7, H4 / H2 | `JSON.parse` of the board summary body / `JSON.stringify` of it | the bootstrap copy | — | no |
-| `S6` | S6 | `JSON.parse` of the project catalog | the catalog copy | — | no |
-| `T9-liveness` | T9 | `agentLivenessSnapshot` for one conversation | the first active seat; transcript evidence and host turn reads stubbed | — | no |
-| `T19` | T19 | a verbatim copy of `bytesOf` | the serving release directory, read only | — | no |
-| `T22-trim` | T22 | `trimLoopProfile` at the caps, 4,096 traces × 32 frames | synthetic frames | — | no |
-| `D6-overview` / `D6-scope-read` / `H8` | D6, H8, curator calls | `readCuration` without a scope / of the largest scope / `projectView` | the hot-pipeline project with the most active rules (`roleTarget`) | — | no |
-| `role-projects` | H8, D6 | `projectView` of each hot-pipeline project in turn | 5 projects, twice | — | no |
-| `H1-attrib` | H1 | `hostedConversationsFromSnapshot` with the production process probe | the registry copy and the real `/proc`; `NODE_ENV=test` | — | no |
-| `H10-write` | H10 | write and remove a 16 MiB file | the stage temp directory | — | a temporary file |
-| `X5-codex-walk` | H11 | a verbatim copy of the Codex session walk | the account sessions directory with the most rollouts, read only | — | no |
-| `A1`, `A2` | A1, A2 | `JSON.parse` of every line | the transcripts `prepare.sh` copied | — | no |
-| `S2` | S2 | `indexTranscriptSources` | the same transcripts, modification time bumped per run | — | the transcript index |
-| `X1-version`, `X1-features`, `X2` | P3, X1, X2 | `codex --version`, `codex features list`, `systemctl --user show` | the installed binary, isolated HOME; the user manager, read only | — | no |
-| `R1-full`, `R1-summary`, `R1-cache` | R1 | `snapshotJson()` full, summary, cached | the runtime journal copy | snapshot cache cleared (full, summary) | no |
-| `R2-maintenance` | R2 | the minute tick body of `src/runtime-host/main.ts:332-343` | registry and journal copies | — (run 0 includes the cold registry load) | settles stale effects (none here) |
-| `R2-map`, `R2-settle` | R2 | the retention map alone; settlement with a built map | as above | — | as above |
-| `R3` | R3 | `maintainProducerReceipts()` | the journal copy | — | removes the page it finds |
-| `R4` | R4 | the freelist pragmas | the journal copy | — | no |
+| Case | Inventory | One run executes | Input or target | Untimed before run 0, besides the imports | Before each run, untimed | Writes to the copy |
+| --- | --- | --- | --- | --- | --- | --- |
+| `D1` | D1, H5, H9, H13 | `loadTasks()` | every task | — | — | no |
+| `D1-write` | D1 | a no-op `mutateTasks` (`BEGIN IMMEDIATE`, snapshot, diff) | tasks | — | — | an empty transaction |
+| `D2` | D2, T6 | `loadArchivedPipelines()` | the archive | — | — | no |
+| `D3` | D3, P6 | `loadPipelines()` | hot pipelines | — | — | no |
+| `T4-pair` | T4 | two `loadPipelines()` | hot pipelines | — | — | no |
+| `P2` | P2 | `findPipelineRecord` and `JSON.stringify` | the largest hot row | its key, by read-only SQL | — | no |
+| `D4` | D4, R2 | `readOnlySnapshot()` | the registry | — (run 0 is the full decode) | — | no |
+| `D4-incremental` | D4 | `readOnlySnapshot()` | the registry | one `readOnlySnapshot()`, the full decode | a child process upserts one unchanged entry | the registry copy |
+| `D8` | D8 | `readLifecycleJournal()` | the lifecycle journal | — | — | no |
+| `T2` | T2, H3, T19 | `scanProcesses()` | the machine's `/proc`, read only | — | — | no |
+| `H3` | H3 | `scanProcesses()` and `diskVolumes` | the worktree roots of the sweep report (`stat`, `statfs` only) | the sweep report parsed | — | no |
+| `T3` | T3 | `archiveSettledPipelines()` | state | — | — | run 0 archives what is due |
+| `T6-pass` | T6 | `runDoneSweepOnce` with the production done world, frame preservation and media removal left out (they copy files and may run `git` and `gh`) | state, and the transcripts its album lookups name (read only) | — | the done world's 60 s archive copy cleared and the hot list read once, as between production passes | the done rows |
+| `T6-evict` | T6, D2 | hot list and archive reads in the order L, L, A, A, L, A, L, A, L, A, L, A; prints the cache slots | state; `export512` differs only in `MAX_BYTES` | — | — | no |
+| `T7` / `H2-encode` | T7, H4 / H2 | `JSON.parse` of the board summary body / `JSON.stringify` of it | the bootstrap copy | the body read / read and parsed | — | no |
+| `S6` | S6 | `JSON.parse` of the project catalog | the catalog copy | the file read | — | no |
+| `T9-liveness` | T9 | `agentLivenessSnapshot` for one conversation | the first active seat; transcript evidence and host turn reads stubbed | catalog and seat files parsed, production liveness sources built | — | no |
+| `T19` | T19 | a verbatim copy of `bytesOf` | the serving release directory, read only | — | — | no |
+| `T22-trim`, `T22-trim-varied`, `T22-trim-rejected` | T22 | `trimLoopProfile` at the caps, 4,096 traces × 32 frames; throws unless it keeps 16, 16 and 0 rows | one stack of 32 frames under `scripts/` of the export; 512 frames over 8 files there (the source-file cap); the 32 frames at the export root, which the profiler refuses | fixture files written, traces built | — | no (the fixtures go to the export) |
+| `D6-overview` / `D6-scope-read` / `H8` | D6, H8, curator calls | `readCuration` without a scope / of the largest scope / `projectView` | the hot-pipeline project with the most active rules (`roleTarget`) | `roleTarget()`, which runs `projectView` for every hot-pipeline project | — | no |
+| `role-projects` | H8, D6 | `projectView` of each hot-pipeline project in turn | 5 projects, twice | pass counts read, hot list read | — | no |
+| `H1-attrib` | H1 | `hostedConversationsFromSnapshot` with the production process probe | the registry copy and the real `/proc`; `NODE_ENV=test` | the registry snapshot filled | — | no |
+| `H10-write` | H10 | write and remove a 16 MiB file | the stage temp directory | the buffer allocated | — | a temporary file |
+| `X5-codex-walk` | H11 | a verbatim copy of the Codex session walk | the account sessions directory with the most rollouts, read only | — | — | no |
+| `A1`, `A2` | A1, A2 | `JSON.parse` of every line | the transcripts `prepare.sh` copied | the lines read and split | — | no |
+| `S2` | S2 | `indexTranscriptSources` | the same transcripts, modification time bumped per run | the source list read | — | the transcript index |
+| `X1-version`, `X1-features`, `X2` | P3, X1, X2 | `codex --version`, `codex features list`, `systemctl --user show` | the installed binary, isolated HOME; the user manager, read only | — | — | no |
+| `R1-full`, `R1-summary`, `R1-cache` | R1 | `snapshotJson()` full, summary, cached | the runtime journal copy | the journal opened and its session metadata loaded | snapshot cache cleared (full, summary) | no |
+| `R2-maintenance` | R2 | the minute tick body of `src/runtime-host/main.ts:332-343` | registry and journal copies | the journal opened (run 0 includes the cold registry load) | — | settles stale effects (none here) |
+| `R2-map`, `R2-settle` | R2 | the retention map alone; settlement with a built map | as above | the registry snapshot built; for `R2-settle` the journal opened and the map built | — | as above |
+| `R3` | R3 | `maintainProducerReceipts()` | the journal copy | the journal opened | — | removes the page it finds |
+| `R4` | R4 | the freelist pragmas | the journal copy | a read-only connection | — | no |
 
 T1 keeps its own retained driver: `SWEEP_FIXTURE=<scratch dir> bun
 scripts/measure-worktree-sweep.ts` at `a25592be` (three runs over a synthetic
@@ -1233,7 +1505,7 @@ startup work, T19 retention) apart from the steady hourly profile.
 | T3 | M1 against `archived` lines; M3 | gap time per archive pass |
 | T4 | M1 against `[auto merge]` bursts; M2 `pipeline.copy`; M4 `D3` times the clones per pass | block per pass and per hour |
 | T5 | M3 frames in `forge/sweep.ts`; M4 `D1` plus `D3` | block per pass |
-| T6 | M1b re-arm chains; M3 frames in `done/`; M2 `pipeline.copy`; M4 `T6-evict`, `D2` | block per minute |
+| T6 | M4 `T6-pass`, `T6-evict`, `D2`; M3 frames in `done/`; M2 `pipeline.copy`; M1b re-arm chains as unattributed context | block per pass |
 | T7 | M3 frames in `reconcileController.ts`, `operatorProjection.ts:825`; M4 `T7` | parse time and heap per pass |
 | T8 | M3 frames in `asks/` | block per sweep |
 | T9 | M1 and M2 on `seat-tick.check`; M3 frames in `seatTick*`, `liveness.ts`; M4 `D1`, `D2`, `T7` | block per check and per 5-minute sweep |
@@ -1319,8 +1591,8 @@ several candidates counts toward each.
 | --- | --- | --- | --- |
 | Hourly sweep burst | Viewer | 13:31:43-13:34:31Z on `9c889c07`: eleven gaps of 2.1-10.0 s, 53.0 s summed (10.028, 7.528, 6.917, 4.872, 4.594, 4.156, 3.523, 3.341, 3.334, 2.639, 2.109 s), whose profiles hold `sweepMergedWorktreesWithRoots` (`11265:1 ab`, up to 1,152 of 1,242 samples) and the shared `/proc` helpers `scanProcesses` and `resolvePhysicalPath` (`37659:1 A`/`C`, up to 457 and 290). The 12:24-12:26Z cluster on `c91603e0` (9.6, 9.5, 7.4, 6.3, 6.2 s) fell inside that revision's T1 pass but carried no profile (cooldown) | T1, with T2/H3 helpers |
 | Minute maintenance | runtime host | On `9c889c07`, all 41 host gaps after boot (13:19:54-13:59:54Z) end at second 54.06-54.89 of their minute, 771-1,578 ms. On `a25592be`, 15 of 15 minutes from 15:04:25 to 15:18:25Z end at second 25.5-26.2, 915-1,514 ms; every one carries a `registry.snapshot` sync span (108-456 ms) and 14 of them a `registry.headers` span (60-112 ms). Over 48 hours the host logged 3,076 gaps above 500 ms in 2,880 minutes, median spacing 59.985 s (p10/p90 58.731/60.316 s); 2,880 of those gaps (2,995.4 of 3,128.2 s) sit on fixed 60 s phase chains of at least five ([M1b](#m1b-timer-chains-curator-passes-and-profile-windows)) | R2 (rank 1) |
-| Done-sweep minute chain | Viewer | On `a25592be` (Viewer process started 15:03:24.230Z by `/proc`), 17 gaps from 15:03:50.090 to 15:20:09.513Z, 791-1,368 ms each (median 943 ms) except 2,540 ms (15:15:01.538) and 3,541 ms (15:19:08.115, whose profile window also holds role-memory frames). Each gap ends 60 s plus its own duration after the previous one, within 0.14 s for 14 of 16 links (0.38 s and 0.32 s for two): a timer re-armed 60 s after its pass ends, whose pass is the gap. The first pass started about 25 s after the process, which fits the done sweep's 15 s first delay if the controllers started about 10 s after the process (the attention reconcile, the other 60 s re-armed timer, waits 30 s). The largest retained sync slices are `pipeline.copy`, `state.write-wait` and `state.checkpoint`, each at most 25 ms, consistent with per-record clones of a whole-collection snapshot. On `9c889c07` the same chain ran from 13:19:16 to at least 13:29:36Z: seven passes of 1.98-2.49 s, each with an RSS step of +0.6 to +1.3 GiB, then 0.73-0.98 s per pass; its links fit 60 s plus the gap within 0.01-0.85 s, the pass spending part of its time in awaits outside the gap. 2 of the 6 captured profiles in it hold the done and album frames (`projectDoneItems` `done/project.ts:56`, `runDoneSweepOnce` `done/sweep.ts:29`, `lookupDoneFrame`, `readTaskAlbum` `taskAlbum/album.ts:143`; 203-227 samples). Over the 48 hours, re-arm chains of at least five (M1b) hold 626 gaps / 533.6 s at ±0.15 s and 1,086 gaps / 1,038.6 s at ±0.25 s, 1.1-2.2 % of the Viewer's logged gap time: the chain is not present every hour | T6 with the archive cache (rank 3) |
-| Curator passes | Viewer | Two passes on `a25592be` (M1b): 15:19:02-15:22:36Z, 26 `curate_rules` calls of at least 2 s with `bindingMs` 3,032-4,098, and 15:34-15:38Z, 27 calls. The Viewer spent 73.0 % and 53.6 % of each pass's wall time in logged gaps (24 gaps of at least 2 s in each), against 7.7 % and 20.3 % in the same length before and 11.8 % and 10.3 % after. Completion lines follow the end of the preceding logged gap by 1.0-3.6 s, so they mark no gap's end, and `bindingMs` is wall time across awaits (`src/lib/mcp/server.ts:3268-3332`; the binding awaits curator admission at `src/lib/mcp/bindings.ts:7922` and, for a scope read, the history projection at `src/lib/memory/curation/read.ts:18`), so neither measures loop occupancy. Of the first pass's 25 captured profile windows, 9 hold the role-memory and curation chunk (`36787.js`) above 20 % of samples and 6 the attribution frames (`25514.js:34 cF`/`cE`) above 5 %; the windows are 1.4-2.6 times as long as their gaps, so those samples are not placed inside the gaps. Production occupancy is unmeasured; the replay estimates it: each read runs `projectView` once, 0.31-3.73 s on the copy by the project's retained curator passes (`role-projects`); the first pass curated the project with 23 retained passes (1.30-2.04 s per view), the second the one with 12 (0.75-0.79 s). Over 48 hours `curate_rules` logged 589 calls of at least 2 s and 2,872.7 s of binding wall time, largest 18.2 s | curator calls through D6, H8 (rank 2) |
+| Minute re-arm chain (done sweep, or attention reconcile) | Viewer | On `a25592be` (Viewer process started 15:03:24.230Z by `/proc`), 17 gaps from 15:03:50.090 to 15:20:09.513Z, 791-1,368 ms each (median 943 ms) except 2,540 ms (15:15:01.538) and 3,541 ms (15:19:08.115, whose profile window also holds role-memory frames). Each gap ends 60 s plus its own duration after the previous one, within 0.14 s for 14 of 16 links (0.38 s and 0.32 s for two): a timer re-armed 60 s after its pass ends, whose pass is the gap. The first pass started about 25 s after the process, which fits the done sweep's 15 s first delay if the controllers started about 10 s after the process (the attention reconcile, the other 60 s re-armed timer, waits 30 s). The largest retained sync slices are `pipeline.copy`, `state.write-wait` and `state.checkpoint`, each at most 25 ms, consistent with per-record clones of a whole-collection snapshot. On `9c889c07` the same chain ran from 13:19:16 to at least 13:29:36Z: seven passes of 1.98-2.49 s, each with an RSS step of +0.6 to +1.3 GiB, then 0.73-0.98 s per pass; its links fit 60 s plus the gap within 0.01-0.85 s, the pass spending part of its time in awaits outside the gap. 2 of the 6 captured profiles in it hold the done and album frames (`projectDoneItems` `done/project.ts:56`, `runDoneSweepOnce` `done/sweep.ts:29`, `lookupDoneFrame`, `readTaskAlbum` `taskAlbum/album.ts:143`; 203-227 samples). Over the 48 hours, re-arm chains of at least five (M1b) hold 626 gaps / 533.6 s at ±0.15 s and 1,086 gaps / 1,038.6 s at ±0.25 s, 1.1-2.2 % of the Viewer's logged gap time: the chain is not present every hour, and since the attention reconcile re-arms the same way the 48-hour chains are unattributed | T6 for the two short windows, by first delay and frames; unattributed over 48 hours; T6 is priced by its replayed pass (rank 2) |
+| Curator passes | Viewer | Two passes on `a25592be` (M1b): 15:19:02-15:22:36Z, 26 `curate_rules` calls of at least 2 s with `bindingMs` 3,032-4,098, and 15:34-15:38Z, 27 calls. The Viewer spent 73.0 % and 53.6 % of each pass's wall time in logged gaps (24 gaps of at least 2 s in each), against 7.7 % and 20.3 % in the same length before and 11.8 % and 10.3 % after. Completion lines follow the end of the preceding logged gap by 1.0-3.6 s, so they mark no gap's end, and `bindingMs` is wall time across awaits (`src/lib/mcp/server.ts:3268-3332`; the binding awaits curator admission at `src/lib/mcp/bindings.ts:7922` and, for a scope read, the history projection at `src/lib/memory/curation/read.ts:18`), so neither measures loop occupancy. Of the first pass's 25 captured profile windows, 9 hold the role-memory and curation chunk (`36787.js`) above 20 % of samples and 6 the attribution frames (`25514.js:34 cF`/`cE`) above 5 %; the windows are 1.4-2.6 times as long as their gaps, so those samples are not placed inside the gaps. Production occupancy is unmeasured; the replay estimates it: each read runs `projectView` once, 0.29-3.58 s on the copy by the project's retained curator passes (`role-projects`, final run); the first pass curated the project with 23 retained passes (1.27-1.31 s per view), the second the one with 12 (0.73-0.78 s). Both passes left Viewer lines; of the 38 passes claimed in the 48 hours, 19 did (M1b). Over 48 hours `curate_rules` logged 589 calls of at least 2 s and 2,872.7 s of binding wall time, largest 18.2 s | curator calls through D6, H8 (rank 3) |
 | Post-start | Viewer | Exposure-normalized gap share by process age in five-minute bins: 34.28, 27.36, 54.91, 38.01, 31.04, 32.47, 30.11, 33.74, 32.72, 34.29, 30.71 and 28.53 % for 0-55 min, 23.62 % beyond 60 min; the +10 min bin holds the first T1 pass. Early profiles also hold `pipelineStartupEvidence` (`runtime/startup.ts:1770`, 188-199 samples) | T1, startup evidence (P5), done/album frame migration |
 | Host and Viewer together | both | Host gaps overlapped the T1 and T2 envelopes 303 and 330 times (448 s and 481 s): concurrent activity across processes; no causal link established | none |
 
@@ -1403,43 +1675,45 @@ unknown): `curate_rules` 589 / 2,872.7 s / 18,214 ms, `search_transcripts`
 
 ### Unit costs on copied state
 
-Part 3's revision reran every case from the procedure in
-[M4](#m4-replays-on-scratch-copies) on fresh copies (16:09:06-16:09:10Z,
-export `a25592be`, Bun 1.4.0, the supplied gate, 16:09:10-16:13:26Z, load
-4.7-6.9, fleet 9 live / 4 running). "First" is run 0 of a fresh process (cold);
-"warm" is the median and range of runs 1-5; "loop" is the largest lateness of a
-10 ms timer around the call. The part 2 column is the warm value part 2 reported
-from its scratch probes on `9c889c07` copies of 14:00Z.
+The second revision reran every case from the corrected procedure in
+[M4](#m4-replays-on-scratch-copies) on fresh copies (the final run of
+[Sources](#sources-base-and-method): copies 17:52:46-17:52:50Z, export
+`6a1ea0d9`, Bun 1.4.0, the supplied gate, cases 17:53:06-17:57:36Z, load
+2.5-3.8). "First" is run 0, the first call after the case's untimed setup
+(M4); "warm" is the median and range of runs 1-5; "loop" is the largest
+lateness of a 10 ms timer around the call. The "16:09Z warm" column is the warm
+wall of part 3's revision on `a25592be` copies (load 4.7-6.9).
 
-| Case (inventory IDs) | First wall / loop, ms | Warm wall, ms | Warm loop, ms | Part 2 warm, ms | Notes |
+| Case (inventory IDs) | First wall / loop, ms | Warm wall, ms | Warm loop, ms | 16:09Z warm, ms | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `R2-maintenance` (R2) | 1,252 / 1,285 | 715.7 [672.8-732.7] | 784.7 [760.0-809.7] | 763.9 [726.3-869.6] | registry 7,137 entries; 3 pending effects, none settled |
-| `R2-map` (R2) | 691.6 / 726.5 | 686.6 [664.2-734.4] | 764.0 [739.2-809.6] | 846.1 [788.4-893.7] | the retention map is the tick's cost; 8,355 states, +111 MB heap |
-| `R2-settle` (R2) | 1.2 / 59.2 | 0.9 [0.7-1.2] | 55.8 [47.3-88.7] | 0.40 [0.37-0.44] | settling with a built map; the loop value is collection after the map build |
-| `D6-scope-read` (D6, curator calls) | 3,691 / 3,691 | 3,744 [3,628-3,882] | 3,796 [3,680-3,928] | — | the largest scope (42 rules) of the project with the most active rules, 49 retained curator passes |
-| `D6-overview` (D6) | 3,783 / 3,831 | 4,035 [3,672-4,209] | 4,080 [3,727-4,271] | 228.1 [219.1-238.3] | same project; part 2 timed a project key with no retained pass (see below) |
-| `H8` (H8) | 3,423 / 3,470 | 3,604 [3,456-3,750] | 3,651 [3,492-3,813] | — | `projectView` alone, same project |
-| `role-projects` (H8, D6) | — | 310-438 (3 passes), 745-793 (12), 1,003-1,071 (16), 1,304-2,043 (23), 3,480-3,726 (49) | +30 to +50 above wall | — | two runs per hot-pipeline project; cost grows with retained curator passes |
-| `T6-evict` at 256 MiB (T6, D2) | 125.7 / 120.7 | archive after a hot read 541.5-617.0; hot after an archive read 89.9-100.6 | 568-631; 99-120 | 591-937; 96-215 | each fill evicts the other slot: hot 64.4 MiB, archive 214.9 MiB |
-| `T6-evict` at 512 MiB | 140.2 / 137.6 | archive 201.0-244.2 (first fill 783.3); hot 0.2-0.3 | 217-266; 11-19 | 244-311; 0.27-0.73 | both slots stay resident; the archive read still clones per record |
-| `D2` (D2) | 893.9 / 902.2 | 229.7 [204.2-281.8] | 244.4 [221.3-300.6] | 197.8 [192.3-234.0] | 954 records, 112.8 MB of JSON |
-| `D3` (D3, P6) / `T4-pair` (T4) | 313.5 / 316.9; 346.4 / 345.3 | 75.5 [52.3-88.1]; 113.6 [96.5-116.6] | 80.3 [54.4-89.5]; 112.2 [101.4-115.7] | 55.0 [53.0-56.8]; 98.7 [96.5-112.4] | 253 records, 33.6 MB |
-| `D1` (D1, H5, H9) / `D1-write` (D1) | 142.6 / 140.4; 119.5 / 117.1 | 52.7 [48.4-106.3]; 20.4 [17.2-36.1] | 60.9 [53.1-128.4]; 19.8 [16.0-40.3] | 49.0 [45.4-50.6]; 18.4 [18.3-21.0] | 2,347 tasks; the no-op write logged a 104 ms transaction hold in run 0 |
-| `P2` (P2) | 16.5 / 11.4 | 4.0 [3.7-6.2] | 0.1 [0.1-1.1] | 11.4 [3.5-13.3] | largest hot record, 514,685 characters; shorter than the 10 ms tick, so wall is the measure |
-| `D4` (D4, R2) / `D4-incremental` | 570.0 / 573.8; 195.9 / 225.4 | 0.4 [0.4-0.5]; 3.8 [3.6-4.6] | 13.9 [12.1-17.8]; 23.6 [20.1-26.8] | cold 565-1,098; 0.41; 1.60-1.90 | cold full decode, cache hit, refresh after one write |
-| `H1-attrib` (H1) | 542.7 / 634.9 | 51.9 [31.8-106.1] | 142.8 [102.8-280.2] | 39.4-100.9 | 8,281 conversations; the loop value includes the collection the enumeration leaves |
-| `T7` (T7, H4) / `H2-encode` (H2) | 57.7 / 51.5; 110.1 / 108.1 | 46.7 [42.1-51.5]; 110.7 [107.7-118.1] | 43.2 [38.8-53.5]; 110.9 [106.4-117.7] | 56.6 [44.6-66.3]; 136.0 [103.1-148.7] | summary body 33.8 MB |
-| `T2` (T2, H3, T19) / `H3` (H3) | 71.7 / 68.1; 88.2 / 85.0 | 71.3 [66.5-98.3]; 75.7 [70.7-97.4] | 70.5 [65.3-102.9]; 75.5 [65.7-95.5] | 65.8 [63.6-68.5]; 63.9 [59.6-77.8] | 336 processes, 44,037 path references; 929 worktree roots |
-| `T19` (T19) | 123.8 / 118.1 | 122.1 [107.6-149.3] | 116.2 [101.5-146.4] | 92.2 [88.5-101.7] | one release, 48,809 entries |
-| `R1-full` / `R1-summary` / `R1-cache` (R1) | 233.1 / 243.7; 344.8 / 354.7; 219.7 / 228.9 | 225.5 [208.1-236.6]; 304.8 [291.7-314.5]; 0.0 | 259.9 [233.2-278.0]; 349.7 [342.4-369.5]; 27.1 [22.0-34.2] | 211.9 [182.6-219.7]; 303.3 [268.3-314.7]; 0.02 | forced rebuilds log `snapshot-collect` waits of 262-315 ms |
-| `T3` (T3) | 274.9 / 56.6 | 261.3 [218.3-380.5] | 30.5 [26.7-70.9] | 220.9 [217.9-245.5] | yields inside: loop lateness stays at 27-71 ms |
-| `T9-liveness` (T9) | 60.8 / 62.5 | 14.0 [11.2-24.4] | 19.4 [14.1-31.3] | 11.6 [9.3-15.0] on `eb1535f0` | one conversation, transcript reads stubbed |
-| `T22-trim` (T22) | 104.2 / 99.9 | 107.0 [97.5-117.1] | 101.7 [91.5-114.6] | 231.7 [228.7-237.6] on `9c889c07` | at the caps; real captures hold 246-1,504 samples |
-| `R3` (R3) / `R4` (R4) | 39.1 / 34.5; 0.3 / 0.1 | 13.1 [4.0-17.9]; 0.0 | 6.1 [0.1-13.4]; 0.1 | 18.8 [4.1-26.3]; 0.009-0.045 | 3,687 receipts scanned per page, none due |
-| `X1-version` / `X1-features` / `X2` (P3, X1, X2) | 34.7; 42.1; 4.4 | 34.3 [34.0-35.7]; 41.7 [39.0-42.7]; 4.0 [3.7-5.4] | 31.0; 33.1; 0.1 | 35.2; 41.6; — | per Codex host open; per launch admission |
-| `A1` / `A2` (A1, A2) | 73.9; 9.0 | 65.8 [59.5-72.5]; 8.2 [7.4-9.5] | 62.6; 0.2 | 53.2; 9.3 | 83.6 MB of Claude and 7.8 MB of Codex transcript lines: 0.71-0.87 and 0.95-1.22 ms per MB |
-| `S2` (S2) / `S6` (S6) / `D8` (D8) | 203.0; 20.2; 12.5 | 151.4 [134.0-187.5]; 17.8 [14.6-27.3]; 4.8 [4.1-8.5] | 2.7; 14.6; 1.5 | 130.7; —; — | five transcripts, 91.4 MB, the reindex yields; 9.5 MB catalog; 1.3 MB journal |
-| `H10-write` (H10) / `X5-codex-walk` (H11) | 6.0; 5.0 | 6.8 [6.3-13.8]; 6.5 [4.2-7.0] | 0.1; 0.1 | — | 16 MiB to the stage temp directory; 1,671 rollouts |
+| `R2-maintenance` (R2) | 1,748 / 1,784 | 722.3 [684.4-741.1] | 794.7 [767.1-827.9] | 715.7 [672.8-732.7] | registry 7,166 entries, 8,310 conversations; 4 pending effects, none settled |
+| `R2-map` (R2) | 650.1 / 689.9 | 686.2 [656.9-725.6] | 755.2 [731.0-798.5] | 686.6 [664.2-734.4] | the retention map is the tick's cost; 8,385 states, +107 to +110 MB heap |
+| `R2-settle` (R2) | 0.9 / 47.1 | 0.4 [0.4-0.6] | 49.2 [47.6-51.5] | 0.9 [0.7-1.2] | settling with a built map; the loop value is collection after the map build |
+| `D6-scope-read` (D6, curator calls) | 3,597 / 3,669 | 3,567.9 [3,490.0-3,673.1] | 3,621.8 [3,545.2-3,700.3] | 3,744 [3,628-3,882] | the largest scope (42 rules) of the project with the most active rules (199), 50 retained curator passes |
+| `D6-overview` (D6) | 3,569 / 3,613 | 3,558.3 [3,472.1-3,725.9] | 3,598.4 [3,544.0-3,787.3] | 4,035 [3,672-4,209] | same project; part 2 timed a project key with no retained pass (see below) |
+| `H8` (H8) | 3,601 / 3,641 | 3,590.2 [3,539.3-3,808.7] | 3,628.6 [3,584.7-3,860.1] | 3,604 [3,456-3,750] | `projectView` alone, same project |
+| `role-projects` (H8, D6) | — | 294-336 (3 passes), 727-779 (12), 995-1,134 (17), 1,267-1,311 (23), 3,454-3,582 (50) | 339-377, 763-813, 1,062-1,151, 1,293-1,368, 3,517-3,629 | 310-438 (3), 745-793 (12), 1,003-1,071 (16), 1,304-2,043 (23), 3,480-3,726 (49) | both runs of each hot-pipeline project (run 0 is the first of project 0); cost grows with retained curator passes |
+| `T6-pass` (T6) | 5,179 / 5,334 | 1,050.8 [936.3-1,600.8] | 1,198.0 [1,022.7-1,742.0] | — | one done pass with frame copies left out; about 189 MB read and CPU time close to wall per warm pass; what it spends, [below](#the-done-sweep-pass-t6) |
+| `T6-evict` at 256 MiB (T6, D2) | 126.5 / 126.8 | archive after a hot read 535.6-727.3 (727.3 is the process's first archive fill); hot after an archive read 86.7-93.6 | 557.4-741.0; 98.2-109.8 | 541.5-617.0; 89.9-100.6 | each fill evicts the other slot: hot 63.6 MiB, archive 217.1 MiB |
+| `T6-evict` at 512 MiB | 119.8 / 114.3 | archive 192.0-197.0 (first fill 552.5); hot 0.2 | 220.2-224.3 (first 565.5); 7.8-36.8 | 201.0-244.2; 0.2-0.3 | both slots stay resident; the archive read still clones per record |
+| `D2` (D2) | 629.0 / 635.2 | 213.9 [203.3-217.6] | 231.5 [216.0-238.5] | 229.7 [204.2-281.8] | 962 records, 113.8 MB of JSON |
+| `D3` (D3, P6) / `T4-pair` (T4) | 191.8 / 187.6; 327.3 / 326.1 | 55.8 [52.1-66.7]; 99.2 [93.1-120.5] | 55.1 [48.9-65.6]; 101.6 [96.3-122.8] | 75.5 [52.3-88.1]; 113.6 [96.5-116.6] | 249 records, 33.1 MB |
+| `D1` (D1, H5, H9, H13) / `D1-write` (D1) | 114.8 / 112.7; 127.2 / 127.0 | 48.6 [47.2-49.8]; 20.4 [18.0-25.7] | 52.7 [50.1-55.9]; 24.3 [22.7-36.3] | 52.7 [48.4-106.3]; 20.4 [17.2-36.1] | 2,358 tasks; the no-op write logged a 112 ms transaction hold in run 0 |
+| `P2` (P2) | 21.0 / 15.2 | 3.8 [3.7-6.6] | 0.2 [0.1-2.0] | 4.0 [3.7-6.2] | largest hot record, 514,685 characters; shorter than the 10 ms tick, so wall is the measure |
+| `D4` (D4, R2) / `D4-incremental` | 552.8 / 555.8; 95.3 / 108.8 | 0.4 [0.4-0.4]; 3.6 [3.2-4.1] | 14.6 [11.6-23.1]; 33.4 [19.6-41.9] | 0.4 [0.4-0.5]; 3.8 [3.6-4.6] | full decode in run 0, cache hit, refresh after one write |
+| `H1-attrib` (H1) | 333.9 / 386.1 | 33.8 [30.2-38.0] | 105.9 [99.8-133.9] | 51.9 [31.8-106.1] | 8,310 conversations; the loop value includes the collection the enumeration leaves |
+| `T7` (T7, H4) / `H2-encode` (H2) | 58.3 / 53.4; 105.7 / 103.3 | 44.3 [39.8-46.9]; 106.2 [104.8-115.9] | 39.6 [36.0-46.2]; 104.3 [102.4-117.0] | 46.7 [42.1-51.5]; 110.7 [107.7-118.1] | summary body 33.6 MB |
+| `T2` (T2, H3, T19) / `H3` (H3) | 56.6 / 51.1; 60.4 / 55.5 | 53.4 [52.9-57.7]; 59.5 [57.2-80.7] | 50.3 [49.2-52.1]; 55.9 [51.6-76.4] | 71.3 [66.5-98.3]; 75.7 [70.7-97.4] | 288 processes, 40,014 path references; 921 worktree roots |
+| `T19` (T19) | 86.9 / 80.8 | 89.3 [84.3-93.6] | 83.4 [77.4-91.4] | 122.1 [107.6-149.3] | one release, 48,843 entries |
+| `R1-full` / `R1-summary` / `R1-cache` (R1) | 210.7 / 218.6; 316.9 / 324.4; 219.2 / 227.7 | 197.1 [192.9-207.1]; 286.0 [260.0-308.8]; 0.0 | 232.0 [209.0-240.9]; 315.5 [285.9-344.8]; 1.9 [0.1-25.6] | 225.5 [208.1-236.6]; 304.8 [291.7-314.5]; 0.0 | forced rebuilds log `snapshot-collect` waits of 264-289 ms |
+| `T3` (T3) | 236.0 / 52.2 | 193.9 [189.5-224.2] | 26.1 [23.2-54.0] | 261.3 [218.3-380.5] | yields inside: loop lateness stays at 23-54 ms |
+| `T9-liveness` (T9) | 87.0 / 78.3 | 10.7 [9.5-11.2] | 9.4 [8.0-12.0] | 14.0 [11.2-24.4] | one conversation, transcript reads stubbed |
+| `T22-trim` / `-varied` / `-rejected` (T22) | 245.2 / 239.3; 254.0 / 249.3; 101.5 / 94.9 | 232.4 [232.1-239.6]; 248.9 [242.6-252.0]; 102.7 [99.1-105.5] | 226.8 [225.6-233.6]; 243.9 [236.2-248.7]; 96.5 [92.0-102.4] | rejected frames only: 107.0 [97.5-117.1] | kept 16, 16 and 0 rows, as each case asserts; real captures hold 246-1,504 samples |
+| `R3` (R3) / `R4` (R4) | 16.7 / 10.2; 0.3 / 0.1 | 12.7 [1.0-16.7]; 0.0 | 5.9 [0.1-10.1]; 0.1 | 13.1 [4.0-17.9]; 0.0 | 4,096 receipts scanned per page, none due |
+| `X1-version` / `X1-features` / `X2` (P3, X1, X2) | 33.1; 46.6; 4.4 | 35.4 [32.1-39.1]; 38.8 [37.0-49.5]; 3.7 [3.3-3.9] | 30.7; 31.2; 0.1 | 34.3; 41.7; 4.0 | per Codex host open; per launch admission |
+| `A1` / `A2` (A1, A2) | 66.2; 10.3 | 58.4 [55.3-64.6]; 9.9 [7.5-13.1] | 55.4; 1.0 | 65.8; 8.2 | 60.0 MB of Claude and 12.1 MB of Codex transcript lines: 0.92-1.08 and 0.62-1.09 ms per MB |
+| `S2` (S2) / `S6` (S6) / `D8` (D8) | 184.2; 14.9; 9.3 | 133.2 [118.7-183.8]; 13.4 [12.1-16.6]; 3.7 [3.4-6.5] | 2.6; 11.0; 0.3 | 151.4; 17.8; 4.8 | five transcripts, 72.1 MB, 728 messages, the reindex yields; 9.6 MB catalog; 1.3 MB journal |
+| `H10-write` (H10) / `X5-codex-walk` (H11) | 6.0; 12.3 | 10.8 [6.0-18.2]; 5.3 [3.7-12.7] | 2.7; 0.1 | 6.8; 6.5 | 16 MiB to the stage temp directory; 1,675 rollouts |
 | T1 sweep, 930 trees × 101 files, before → `98a23e4f` worker | — | largest loop interval 5,329.5-5,586.8 → 3.36-9.06 | — | same | part 2, `scripts/measure-worktree-sweep.ts`, three runs each |
 
 A second run checked that the document alone suffices: the seven procedure
@@ -1466,65 +1740,134 @@ and receipt checks of [M1b](#m1b-timer-chains-curator-passes-and-profile-windows
 printed the same lines as above (the journal read returned 39,062 lines), except
 the 48-hour receipt total, 8,884 after retention pruned `search_memory` to 245,
 and the first version of the [route and tool screen](#route-and-tool-screen)
-printed its totals unchanged before the revision extended it. The ranking
-keeps the 16:09Z values.
+printed its totals unchanged before the revision extended it. Part 3's
+ranking used the 16:09Z values; the second revision's ranking uses its final
+run.
 
 Every warm range has the shape part 2 reported except two. The archive and hot
 reads moved by up to a third (larger archive, other load). The role-memory
 views did not reproduce part 2's 219-238 ms: part 2's probe passed a fixed
 project key that holds no retained curator pass. The same key on these copies
 answers in 163-173 ms with or without `project-aliases.json` (132 rules, 15
-scopes, 0 passes), while the hot-pipeline projects hold 3-49 retained passes.
-`profile-view.ts` (below, run like a case from the export at 16:23Z) samples
-`projectView` for the 49-pass project every millisecond: of 3,865 samples, 3,693
-sit under `curationView` (`src/lib/memory/curation/store.ts:227-235`), which
-calls `readPass` for every retained pass (`:50-61`, 3,675 samples); each
-`readPass` reads every scope row of the project through `curationScopes`
-(`:95-112`, 2,975 samples in `keyRange`). The 102 scope rows hold 12.6 MB
-because each carries its history. The view costs roughly 70 ms per retained
-pass on top of about 165 ms, the cost of the key with no pass.
+scopes, 0 passes; an ad hoc call on the 16:09Z copies), while the hot-pipeline
+projects hold 3-50 retained passes. `profile-view.ts view` (below, run like a
+case from the export, final run at 17:59:27Z) samples `projectView` for the
+50-pass project every millisecond: of 3,405 samples, 3,404 sit under
+`projectView`, 3,246 under `curationView`
+(`src/lib/memory/curation/store.ts:227-235`), which calls `readPass` for every
+retained pass (`:50-61`, 3,238 samples); each `readPass` reads every scope row
+of the project through `curationScopes` (`:95-112`, 3,231 samples, 2,624 of
+them in `keyRange`). The 102 scope rows hold 12.6 MB because each carries its
+history. The view costs roughly 50-80 ms per retained pass on top of the
+passless cost (`role-projects`: 294-336 ms at 3 passes, 1,267-1,311 ms at 23,
+3,454-3,582 ms at 50).
 
 ```ts
-// bun ./profile-view.ts: 1 ms samples of projectView for the hot-pipeline project with the most retained curator passes
+// bun ./profile-view.ts [view|done]: 1 ms samples of projectView for the hot-pipeline project with the most retained curator passes ("view"),
+// or of one done sweep pass after the reset of the T6-pass case ("done"); prints the ten source functions under the most samples
 import path from "node:path";
 import { profile } from "bun:jsc";
 import { Database } from "bun:sqlite";
-const r = await import("@/lib/memory/roleStore"); const { loadPipelinesForList } = await import("@/lib/pipelines/store"); const { canonicalProject } = await import("@/lib/projects/aliases");
-const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
-const passes = new Map(db.query<{ value_json: string }, []>("SELECT value_json FROM state_rows WHERE collection = 'role_memory_curation' AND row_key LIKE 'p:%'").all().map(row => { const v = JSON.parse(row.value_json); return [v.project, v.passes.length] as const; }));
-const project = [...new Set(loadPipelinesForList().map(p => canonicalProject(p.project)))].sort((a, b) => (passes.get(b) ?? 0) - (passes.get(a) ?? 0))[0]!;
-r.projectView(project);
-const traces = (profile(() => r.projectView(project), 1000) as any).stackTraces.traces;
+const target = process.argv[2] ?? "view";
+const { loadPipelinesForList } = await import("@/lib/pipelines/store");
+let run: () => unknown, label: Record<string, unknown>;
+if (target === "done") {
+  const w = await import("@/lib/done/world"); const s = await import("@/lib/done/sweep");
+  const world = () => ({ ...w.productionDoneWorld({ recover: true }), preserveFrame: undefined, removeFrames: undefined });
+  const reset = () => { (globalThis as any).__llvDoneArchive = null; loadPipelinesForList(); };
+  await s.runDoneSweepOnce({ world, ownsTraffic: async () => true }); reset();
+  run = () => s.runDoneSweepOnce({ world, ownsTraffic: async () => true }); label = { target };
+} else {
+  const r = await import("@/lib/memory/roleStore"); const { canonicalProject } = await import("@/lib/projects/aliases");
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
+  const passes = new Map(db.query<{ value_json: string }, []>("SELECT value_json FROM state_rows WHERE collection = 'role_memory_curation' AND row_key LIKE 'p:%'").all().map(row => { const v = JSON.parse(row.value_json); return [v.project, v.passes.length] as const; }));
+  const project = [...new Set(loadPipelinesForList().map(p => canonicalProject(p.project)))].sort((a, b) => (passes.get(b) ?? 0) - (passes.get(a) ?? 0))[0]!;
+  r.projectView(project); run = () => r.projectView(project); label = { target, retainedPasses: passes.get(project) };
+}
+const traces = ((await profile(run, 1000)) as any).stackTraces.traces;
 const totals = new Map<string, number>();
-for (const t of traces) for (const key of new Set<string>(t.frames.filter((f: any) => f.sourceURL?.includes("/src/")).map((f: any) => `${path.relative(process.cwd(), f.sourceURL)}:${f.line} ${f.name}`))) totals.set(key, (totals.get(key) ?? 0) + 1);
-console.log(JSON.stringify({ retainedPasses: passes.get(project), samples: traces.length, top: [...totals].sort((a, b) => b[1] - a[1]).slice(0, 8) }));
+for (const t of traces) for (const key of new Set<string>(t.frames.filter((f: any) => f.sourceURL?.includes("/src/")).map((f: any) => `${path.relative(process.cwd(), f.sourceURL)} ${f.name}`))) totals.set(key, (totals.get(key) ?? 0) + 1);
+console.log(JSON.stringify({ ...label, samples: traces.length, top: [...totals].sort((a, b) => b[1] - a[1]).slice(0, 10) }));
 ```
+
+#### The done sweep pass (T6)
+
+`T6-pass` runs `runDoneSweepOnce` (`src/lib/done/sweep.ts:29`) with the
+production done world (`src/lib/done/world.ts:79`) on the copies, after the
+two things that happen between production passes: the world's private archive
+copy goes stale (its 60 s lifetime, `world.ts:39-49`, is shorter than the 60 s
+re-arm plus the pass), and the hot list is read. It leaves out frame
+preservation, frame recovery and media removal, which copy files and may run
+`git` and `gh`, and with them the cap a pass's frame copies put on its album
+lookups, so a production pass can do more or less frame work than the replay.
+A warm pass took 936-1,601 ms of wall and held the loop for 1,023-1,742 ms in
+one piece (CPU time close to wall); the first pass of the process took
+5,179 ms. Two profiles of one pass each (`profile-view.ts done`) show the two
+shapes a pass takes. In one, 564 of 948 samples sit under `archivedPipelines`
+(`world.ts:46`), 457 of them in the read-cache fill (`loadReadonly`) and 356 in
+the per-record clone (`snapshot`, nested), and 291 in frame lookups. In the
+other, 1,703 of 2,407 samples sit in frame lookups (`lookupDoneFrame`), 1,640
+of them in `readTaskAlbum`, 1,536 under `pathAllowed` (`src/lib/scanner/roots.ts`)
+as the album filters transcript paths; at most four album lookups run per pass
+(`src/lib/done/project.ts:24`). Every pass reads the hot list and then the
+archive (`world.ts:86`); at the 256 MiB budget the two slots never fit
+together, so every pass refills the archive (or the done read route did, if
+it refreshed the world's copy within the minute before): that refill,
+535.6-727.3 ms in `T6-evict`, prices T6's lower bound.
 
 Cache eviction (`T6-evict`): one Bun process per budget reads the hot list
 (`loadPipelinesForList()`) and the archive (`loadArchivedPipelines()`) twelve
 times in the order L, L, A, A, then alternating, and prints the shared cache
 slots (`globalThis.__llvCollectionReadCachesV1`) after each read; the 512 MiB
 export changes only `MAX_BYTES` in `src/lib/state/collectionReadCache.ts:11`. At
-256 MiB the slots hold only the collection read last: the hot slot is 64.4 MiB
-and the archive 214.9 MiB in the cache's UTF-16 units, together above the
+256 MiB the slots hold only the collection read last: the hot slot is 63.6 MiB
+and the archive 217.1 MiB in the cache's UTF-16 units, together above the
 budget, so every archive fill evicts the hot rows and every hot fill evicts the
-archive. The budget was sized when the archive was 147.5 MiB
-(`docs/perf/viewer-heap-gc-fixes.md`).
+archive; each evicting archive read raised RSS by 216-561 MB. The budget was
+sized when the archive was 147.5 MiB (`docs/perf/viewer-heap-gc-fixes.md`).
 
-MCP caller enumeration (`H1-attrib`): on the registry copy,
-`hostedConversationsFromSnapshot` with the production process probe (`pidAlive`,
-`processIdentity`, boot epoch) after the snapshot is filled. Production runs it
-as the first statement of `attentionCallerAuthority`
-(`src/lib/attention/callerAuthority.ts:75`, reached through
-`attentionCallerSources` at `src/lib/mcp/bindings.ts:1241`) on every call that
-resolves its caller. `attributionOf` has 40 call sites in `bindings.ts`:
-`curate_rules` resolves twice per call (`:7921` in the binding, `:7937` in
-`authorizeReceipt`), `stage_report` (`:2585`), `leave_lesson` (`:2601`) and
-`search_memory` (`:7953`) once; `agent_activity` does not resolve its caller.
-The MCP receipt copy of 16:09Z holds 8,920 receipts in the 48 hours:
-`agent_activity` 5,229, `curate_rules` 981, `stage_report` 523, `update_task`
-421, `leave_lesson` 333, `search_memory` 273, `pipeline_action` 208,
-`bridge_report` 207.
+#### MCP caller enumeration (H1)
+
+`H1-attrib` runs `hostedConversationsFromSnapshot` on the registry copy with
+the production process probe (`pidAlive`, `processIdentity`, boot epoch) after
+the snapshot is filled: 30.2-38.0 ms of wall, 99.8-133.9 ms of loop with the
+collection it leaves, over 8,310 conversations. Production runs it as the first
+statement of `attentionCallerAuthority`
+(`src/lib/attention/callerAuthority.ts:75`, through `attentionCallerSources`
+at `src/lib/mcp/bindings.ts:1241`) every time a caller is resolved: the
+production `callerAttribution` (`bindings.ts:1407-1415`) builds a new authority
+on each call and nothing memoizes it within a tool call.
+
+How often a call resolves its caller, on every path on which its binding
+starts (`bindingMs` above zero; the policy must have allowed the call first):
+
+| Where | Resolutions | Tools |
+| --- | --- | --- |
+| tool policy, `viewerMcpToolPolicy` (`bindings.ts:7344` and `:7348` through `pipelineCallerRoles`, `:2284`; `:7352` through `maintenanceCaller`, `:1856`) | 3 | all 35 mutating tools, `agent_activity` among them |
+| tool policy, `policy.permit` (`:7357` → `:7337`) | 1 | only archive actions of `conversation_action` and a non-dry `backfill_worktree_projects` (`src/lib/mcp/toolAllowlist.ts:82-85`) |
+| `authorizeReceipt` (`bindings.ts:7937`) and the binding's first statement (`:7921`) | 2 | `curate_rules` |
+| the binding (`:2559` through `pauseResumeActorOf`, `:1109`), and on an accepted report `stageLessonRequest` (`:2585`) | 1, 2 when accepted | `stage_report` |
+| the binding (`:2601`) | 1 | `leave_lesson` |
+| the binding's argument (`:7953`) | 1 | `search_memory` |
+
+So a `curate_rules` call enumerates the registry's conversations at least five
+times and an accepted `stage_report` five; part 3's text, which gave
+`stage_report` one resolution and `agent_activity` none, was wrong. Other
+bindings resolve on some paths (40 `attributionOf` sites in `bindings.ts`);
+the count below credits them nothing.
+
+Which calls ran on the Viewer is known only from the service journal:
+receipts come from every MCP server process, stdio servers included
+([attribution gap 10](#attribution-gaps-the-measurement-must-work-around)), and
+leave out receipt-free reads, calls refused before a claim and replays. In the
+48 hours the Viewer wrote 1,299 `[mcp slow]` lines with `bindingMs` of at least
+1 outside the task tools; at the minimum resolutions above they certainly
+enumerated 4,410 times (`curate_rules` 565 × 5, `agent_activity` 240 × 3,
+`stage_report` 58 × 4, `bridge_report` 69 × 3, `create_pipeline` 36 × 3,
+`send_message_to_orchestrator` 35 × 3, and smaller counts, M1b). That count is
+a floor: calls under 2 s leave no line. No record counts the Viewer's calls
+under 2 s, so the enumerations have no finite upper bound here; L0b's span
+supplies one.
 
 ### First look at the deployed fixes (`a25592be`)
 
@@ -1576,7 +1919,11 @@ Read at 16:45Z, after the apply of `72866c7d` (#3056) at 16:38:04.273Z:
   and none after. `[blocking-wait]`, `[mcp slow]`, `[auto merge]` and
   `[self-update]` lines continue (36, 2, 1,008 and 1 from 16:38:04Z to
   16:45Z). A second read at 16:55:19Z found still none among the 3,024 journal
-  lines written since the apply.
+  lines written since the apply. A third, at 17:12Z, after `6a1ea0d9` was
+  applied at 17:02:45Z: of the 9,832 lines since 16:30Z, 45 loop-gap and 14
+  performance-summary lines, the last at 16:36:57Z and 16:36:39Z, against 55
+  `[mcp slow]`, 214 `[blocking-wait]` and 6,488 `[auto merge]` lines up to
+  17:12Z. `6a1ea0d9` carries #3056, so the silence continues on it.
 - **Cause, from the code and `/proc`.** #3056 made the default loop sink drop
   every line while `LLV_QUIET_DIAGNOSTICS=1` (`src/lib/viewerLoopMonitor.ts:35-38`
   at `72866c7d`); the runtime host runs the same monitor
@@ -1598,30 +1945,42 @@ Read at 16:45Z, after the apply of `72866c7d` (#3056) at 16:38:04.273Z:
   production measure of the [follow-up window](#follow-up-measured-window)
   reads these lines, so [L0c](#l0c-loop-records-reach-the-service-journal-again)
   must serve before that window starts.
+- **Restored on `8f79707c`.** Read at 18:30Z: the first loop-gap records of
+  the new processes end at 18:26:33Z, and from 18:27:24Z the runtime host and
+  the Viewer each wrote a `[performance summary]` line every minute (three
+  each by 18:29:27Z), all naming revision `8f79707c`. The host's minute gap
+  continues on it: 1,124, 1,014 and 764 ms ending at second 27 of 18:27, 18:28
+  and 18:29Z. The journal holds no loop record from 16:36:57Z to 18:26:33Z.
 
 ## Ranked list
 
 ### Ordering rule
 
 1. **Two lists.** A *measured cause* has a production observation that names
-   it: profile frames inside the gap's window, gaps recurring on its exact
-   schedule (the fixed phase or re-arm chains of [M1b](#m1b-timer-chains-curator-passes-and-profile-windows)),
-   co-occurrence with its own calls, or a synchronous span or wait record at its
-   site. A *suspect* has none. A fixed source awaiting production verification
+   it: profile frames inside the gap's window, gaps recurring on a schedule
+   only it keeps (the fixed-phase chains of
+   [M1b](#m1b-timer-chains-curator-passes-and-profile-windows); the 60 s re-arm
+   chains are shared by two timers and name neither), co-occurrence with its
+   own calls, or a synchronous span or wait record at its site. A *suspect* has
+   none. A fixed source awaiting production verification
    (T1) is listed apart.
 2. **One unit.** Cost is main-loop occupancy in seconds per hour, averaged over
    the 48-hour window (2026-10-16 14:00Z to 2026-10-18 14:00Z). It comes, in
    order of preference, from production durations measured at the source (sync
-   span or wait sums; gaps whose start matches the source's timer phase or
-   re-arm signature), or from a replayed unit cost (M4, warm runs) times the
-   production count of executions (journal lines, receipts, state rows), or
-   times the schedule in code when nothing counts executions. A gap's duration
+   span or wait sums; gaps whose start matches a timer phase only that source
+   keeps), or from a replayed unit cost (M4, warm runs) times the production
+   count of executions (lines the serving process wrote, state rows), or times
+   the schedule in code when nothing counts executions. An MCP receipt counts no
+   Viewer execution ([attribution gap 10](#attribution-gaps-the-measurement-must-work-around)). A gap's duration
    and a profile window's duration are never exchanged, and MCP binding wall
    time is never counted as occupancy, because it spans awaits.
 3. **Two bounds.** Each entry prints a lower and an upper bound and says what
-   each assumes. The lower bound uses the smallest warm wall time and the
-   smallest defensible count; the upper uses the largest warm wall or loop
-   value and the largest count.
+   each assumes. The lower bound uses the smallest warm wall time, the
+   smallest defensible count and, where the replayed cost grows with history,
+   the input as it stood at the window start (archive rows, registry
+   conversations, retained curator passes); the upper uses the largest warm
+   wall or loop value and the largest count. Where no record bounds the count,
+   the upper bound is printed as unknown.
 4. **Order.** Within a list, by lower bound, descending; ties by upper bound,
    descending. Evidence decides the list, cost the order, so any two adjacent
    rows can be checked from the printed numbers.
@@ -1643,30 +2002,44 @@ Read at 16:45Z, after the apply of `72866c7d` (#3056) at 16:38:04.273Z:
 
 | Rank | ID | Process | Naming evidence | Duration evidence and count | Cost per hour, lower-upper (48 h average) | Peak stall | Slice |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | R2 runtime-host stale-effect maintenance | host | 2,880 of 3,076 host gaps above 500 ms sit on fixed 60 s phase chains (95.8 %, M1b); every minute gap on `a25592be` holds a `registry.snapshot` sync span of 108-456 ms | replay of the tick body 672.8-732.7 ms warm (`R2-maintenance`), 60 ticks per hour; production phase-chained gaps 2,995.4 s in 48 h | 40.4 (replay × 60) - 62.4 (production chained gaps, which also hold anything queued at the same instant, such as the 10 s receipt sweep's every sixth tick) | chained gaps p50 885 ms, p90 1,664 ms | [L1](#l1-runtime-host-maintenance-reads-only-the-pending-effects) |
-| 2 | Curator calls: `curate_rules` reads through `projectView` (D6, H8, H1) | Viewer | profile frames in 9 of 25 captured windows of the 15:19Z pass (role-memory and curation chunk above 20 % of samples; windows 1.4-2.6 times their gaps, so the samples are not placed inside gaps); co-occurrence: 73.0 % and 53.6 % of two passes' wall time in logged gaps, against 7.7-20.3 % in the same length before and 10.3-11.8 % after | replay: one read runs `projectView` once, 0.31-3.73 s by the project's retained curator passes (`role-projects`); 897 reads in 48 h (833 scope reads, 64 overviews), each assigned to its pass's project (M1b) | 21.4 (each read at the smallest retained-pass count its project held during the window, smallest warm wall) - 58.0 (today's counts, largest warm wall); the rest of each call (admission, history read, snapshots, attribution) is unmeasured | 3.73 s per view, 3.88 s per scope read (49-pass project); production gaps in the passes up to 3.56 s | [L4](#l4-curator-calls-and-the-role-memory-view-stop-holding-the-loop) |
-| 3 | T6 done sweep reading the archive, with hot/archive cache eviction (D2) | Viewer | re-arm chains: 17 consecutive passes on `a25592be` and seven plus on `9c889c07`; over 48 h 626-1,086 chained gaps (±0.15-0.25 s, M1b); done and album frames in 2 of 6 profiles on `9c889c07`; `pipeline.copy` spans | production chained gaps 533.6-1,038.6 s in 48 h; replay: archive read under eviction 541.5-617.0 ms plus the evicted hot read 89.9-100.6 ms | 11.1 (chained gaps at ±0.15 s) - 80.7 (59 passes per hour at the largest steady-state chained pass, 1,368 ms) | 2.49 s (first passes after a start); steady 0.79-1.37 s | [L2](#l2-the-pipeline-archive-leaves-the-minute-timers-and-stops-evicting-the-hot-rows) |
-| 4 | R1 runtime snapshot rebuild | host | sync `snapshot-collect` waits (335 in 48 h, largest 762.8 ms); `runtime.collect` spans | production logged waits 143.0 s in 48 h; replay forced rebuild 208.1-314.5 ms | 3.0 - unbounded above (rebuilds under the 250 ms logging threshold are not logged, and the RPC count is not recorded) | 762.8 ms | deferred |
-| 5 | D5 synchronous registry write waits | Viewer | sync `registry-lock` and `registry-revision-retry` wait records | production waits 208, 101.8 s in 48 h | 2.1 - unbounded above (waits under the logging threshold) | 1,252.7 ms | [L7](#l7-registry-write-admission-without-synchronous-waits) |
-| 6 | H1 MCP caller enumeration | Viewer | attribution frames in 3 of 19 captured windows on `9c889c07`; at 13:29:01.855Z the record's gap is 2,639 ms and its profile window 5,677 ms (`jsProfile.from`-`to`), and the 223 attribution samples of 553 cannot be placed in the gap: between 0 and 2.2 s of them may fall inside it | replay 31.8-106.1 ms wall, 102.8-280.2 ms loop (`H1-attrib`); 3,091 enumerations in 48 h at least (`curate_rules` twice, `stage_report`, `leave_lesson`, `search_memory` once), 4,672 at most (every receipt but `agent_activity`, `curate_rules` twice) | 2.05 (3,091 × 31.8 ms) - 27.3 (4,672 × 280.2 ms) | 106 ms wall per enumeration (280 ms with the collection it leaves) | [L3](#l3-mcp-caller-attribution-reads-only-the-caller) |
-| 7 | T9 seat check (*partial*) | Viewer | seat and liveness frames (91 of 507 samples at 13:24:29Z; 106 of 1,504 in the window of the 11.554 s gap) | replay of targeted liveness only, 11.2-24.4 ms warm; 120 checks per hour (10 seat projects every 5 minutes) | 1.3 (liveness part only) - unknown | unknown | [L8](#l8-seat-check-measured-end-to-end-then-bounded) |
+| 1 | R2 runtime-host stale-effect maintenance | host | 2,880 of 3,076 host gaps above 500 ms (95.8 % of their seconds) sit on fixed 60 s phase chains (M1b), a phase only this host timer keeps; every minute gap on `a25592be` holds a `registry.snapshot` sync span of 108-456 ms | replay of the tick body 684.4-741.1 ms warm (`R2-maintenance`), 60 ticks per hour; production phase-chained gaps 2,995.4 s in 48 h | 36.9 (replay × 60, scaled to the 7,467 of 8,310 registry conversations that existed at the window start) - 62.4 (production chained gaps, which also hold anything queued at the same instant, such as the 10 s receipt sweep's every sixth tick) | chained gaps p50 885 ms, p90 1,664 ms | [L1](#l1-runtime-host-maintenance-reads-only-the-pending-effects) |
+| 2 | T6 done sweep: the archive read, with hot/archive cache eviction (D2), and album lookups | Viewer | done and album frames in 2 of the 6 captured profiles of the `9c889c07` minute chain, whose first pass fits the sweep's 15 s first delay; `pipeline.copy` spans. The 48-hour re-arm chains are shared with the attention reconcile and price nothing (M1b) | replay of one pass 936.3-1,600.8 ms warm, of which every pass pays the archive refill, 535.6-727.3 ms (`T6-pass`, `T6-evict`, [the pass](#the-done-sweep-pass-t6)); passes from the schedule: re-armed 60 s after each pass ends, 58.4-60 per hour | 25.9 (the archive refill alone at 535.6 ms, 58.4 passes, scaled to the 796 of 962 archive rows that existed at the window start) - 111.1 (60 passes at the largest replayed pass, 1,742 ms of loop, plus the 109.8 ms hot re-read the refill forces); production passes with more frame work can run longer | replayed pass 1.0-1.7 s warm, 5.2 s for the first in a process; production gaps of the `a25592be` minute chain 0.79-3.54 s | [L2](#l2-the-pipeline-archive-leaves-the-minute-timers-and-stops-evicting-the-hot-rows) |
+| 3 | Curator calls: `curate_rules` reads through `projectView` (D6, H8, H1) | Viewer | profile frames in 9 of 25 captured windows of the 15:19Z pass (role-memory and curation chunk above 20 % of samples; windows 1.4-2.6 times their gaps, so the samples are not placed inside gaps); co-occurrence: 73.0 % and 53.6 % of two passes' wall time in logged gaps, against 7.7-20.3 % in the same length before and 10.3-11.8 % after | replay: one read runs `projectView` once, 0.29-3.58 s by the project's retained curator passes (`role-projects`); 497 reads in 48 h in the 19 passes proven to run on the Viewer, 897 in all 38 passes (M1b) | 10.7 (proven reads, each at the fewest retained passes its project held during the window, smallest wall) - 54.8 (every read, passes at the copy, largest wall); the rest of each call (admission, history read, snapshots, five caller enumerations) is unmeasured | 3.45-3.81 s per view, 3.49-3.67 s per scope read (50-pass project); production gaps in the passes up to 3.56 s | [L4](#l4-curator-calls-and-the-role-memory-view-stop-holding-the-loop) |
+| 4 | R1 runtime snapshot rebuild | host | sync `snapshot-collect` waits (335 in 48 h, largest 762.8 ms); `runtime.collect` spans | production logged waits 143.0 s in 48 h; replay forced rebuild 192.9-308.8 ms | 3.0 - unbounded above (rebuilds under the 250 ms logging threshold are not logged, and the RPC count is not recorded) | 762.8 ms | deferred |
+| 5 | H1 MCP caller enumeration | Viewer | attribution frames in 3 of 19 captured windows on `9c889c07`; at 13:29:01.855Z the record's gap is 2,639 ms and its profile window 5,677 ms (`jsProfile.from`-`to`), and the 223 attribution samples of 553 cannot be placed in the gap: between 0 and 2.2 s of them may fall inside it | replay 30.2-38.0 ms wall, 99.8-133.9 ms loop (`H1-attrib`); 4,410 enumerations certain in 48 h: Viewer-written `[mcp slow]` lines whose binding started, times the resolutions every such call makes ([H1](#mcp-caller-enumeration-h1)) | 2.49 (4,410 × 30.2 ms, scaled to the window-start registry) - unknown (no record counts the Viewer's calls under 2 s) | 38 ms of wall per enumeration (134 ms with the collection it leaves), at least five per `curate_rules` call | [L3](#l3-mcp-caller-attribution-reads-only-the-caller) |
+| 6 | D5 synchronous registry write waits | Viewer | sync `registry-lock` and `registry-revision-retry` wait records | production waits 208, 101.8 s in 48 h | 2.1 - unbounded above (waits under the logging threshold) | 1,252.7 ms | [L7](#l7-registry-write-admission-without-synchronous-waits) |
+| 7 | T9 seat check (*partial*) | Viewer | seat and liveness frames (91 of 507 samples at 13:24:29Z; 106 of 1,504 in the window of the 11.554 s gap) | replay of targeted liveness only, 9.5-11.2 ms warm; 120 checks per hour (10 seat projects every 5 minutes) | 1.1 (liveness part only) - unknown | unknown | [L8](#l8-seat-check-measured-end-to-end-then-bounded) |
 | 8 | S3 memory refresh | Viewer | `memory.refresh` sync spans (largest 1,563 ms) | retained spans 41.0 s in 48 h (retained slices are capped) | 0.85 - unknown | 1,563 ms | deferred |
-| 9 | T2 temp sweep `/proc` scan | Viewer | `scanProcesses` and `resolvePhysicalPath` frames inside the T1 windows | replay `scanProcesses` 66.5-98.3 ms; at least one per hourly pass | 0.07 (one scan per hour) - unknown (the pass is untimed) | unknown | [L6](#l6-temp-sweep-and-disk-pressure-scans-leave-the-loop) |
+| 9 | T2 temp sweep `/proc` scan | Viewer | `scanProcesses` and `resolvePhysicalPath` frames inside the T1 windows | replay `scanProcesses` 52.9-57.7 ms; at least one per hourly pass | 0.05 (one scan per hour) - unknown (the pass is untimed) | unknown | [L6](#l6-temp-sweep-and-disk-pressure-scans-leave-the-loop) |
 
-**Curator bounds, computed.** Reads per project, by the project's rank in
-retained curator passes ([M1b](#m1b-timer-chains-curator-passes-and-profile-windows)
-receipts): 668, 80, 81, 25, 18 and 25 (scope reads plus overviews). Retained
-passes at the copy: 49, 23, 16, 12, 7 and 3; claimed in the 48 hours: 24, 7, 4,
-1, 1 and 1; so the fewest each project held during the window were 25, 16, 12,
-11, 6 and 2. The lower bound prices each read at the smallest warm
-`role-projects` wall of the largest measured pass count at or below that fewest
-count (23 passes 1,304 ms; 16, 1,003 ms; 12, 745 ms; 3, 310 ms for 11 and 6; the
-passless key, 163 ms, for 2): 1,029.1 s in 48 h, 21.4 s per hour. The upper bound
-prices each read at the largest warm wall of the smallest measured count at or
-above the count at the copy (49, 3,726 ms; 23, 2,043 ms; 16, 1,071 ms; 12, 793 ms
-for 12 and 7; 3, 438 ms): 2,784.2 s, 58.0 s per hour. Both assume a production
-`projectView` costs what the replay measured; production occupancy of these
-reads is unmeasured ([coverage gap 2](#coverage-gaps)).
+R2 leads T6 by 11 s per hour on the lower bounds, while T6's upper bound is
+the higher; the two slices run in the same first group (below), so the order
+between them changes no plan. Part 3 ranked T6 by the length of the 48-hour
+re-arm chains (11.1 s per hour); the chains cannot tell T6 from the attention
+reconcile, and they miss passes whose link an await displaced, so the replayed
+pass replaces them.
+
+**Curator bounds, computed** (`bounds.py`). Reads per project, by the
+project's rank in retained curator passes
+([M1b](#m1b-timer-chains-curator-passes-and-profile-windows) receipts): 668,
+80, 81, 25, 18 and 25 in all passes, of them 339, 53, 52, 20, 14 and 19 in the
+passes proven to run on the Viewer. Retained passes at the copy: 50, 23, 17,
+12, 8 and 3; claimed since the window start: 25, 8, 5, 2, 2 and 2; so the
+fewest each project held during the window were 25, 15, 12, 10, 6 and 1. The
+lower bound prices each proven read at the smallest `role-projects` wall (of
+both runs of a project) of the largest measured pass count at or below that
+fewest count (23 passes,
+1,267.4 ms, for 25; 12 passes, 727.0 ms, for 15 and 12; 3 passes, 293.6 ms,
+for 10 and 6; zero for 1, below every measured count): 516.0 s in 48 h, 10.7 s
+per hour. The upper bound prices every read, proven or not, at the largest
+`role-projects` wall of the smallest measured count at or above the count at
+the copy
+(50, 3,581.5 ms; 23, 1,311.0 ms; 17, 1,134.3 ms; 12, 779.5 ms for 12 and 8; 3,
+335.5 ms): 2,631.1 s, 54.8 s per hour. Both assume a production `projectView`
+costs what the replay measured; production occupancy of these reads is
+unmeasured ([coverage gap 2](#coverage-gaps)). Part 3 counted all 897 reads in
+its lower bound (21.4 s per hour); the 400 reads of passes without a Viewer
+line may have run on a stdio server.
 
 **Fixed, verification pending.** T1 merged-worktree sweep: profiled (11 gaps,
 53.0 s of gaps of at least 2 s in the 13:31:43-13:34:31Z pass, up to 1,152 of
@@ -1681,61 +2054,64 @@ gaps were its own.
 
 | ID | Process | Unit cost (M4) | Rate per unit of duty | Cost per duty-hour | What is unknown |
 | --- | --- | --- | --- | --- | --- |
-| H8 rules-window poll (`src/components/roleMemory/LearnedRules.tsx:170`) | Viewer | `projectView` 0.31-3.73 s by project | every 15 s per open window | 74-894 s per open window | how often a rules window is open (no route log) |
-| P2 50 ms revalidation timers | Viewer | 3.7-6.2 ms per tick (largest hot row) | 20 per second per active timer | 266-446 s per active timer | activation and job duty (unlabelled until L0b) |
-| H5 seat panel `loadTasks()` | Viewer | 48.4-106.3 ms | every 6 s per tab showing a seat | 29-64 s per tab | open tabs |
-| H3 resources footer | Viewer | 70.7-97.4 ms (scan and volume probes) | every 30 s per open footer (30 s disk-pressure cache) | 8.5-11.7 s per footer | open footers |
-| P3, X1, X2 launch probes | Viewer | 73.0-78.4 ms per Codex host open; 3.7-5.4 ms per launch admission | per launch | — | launches per hour |
-| H9 task and pipeline routes | Viewer | 48.4-106.3 ms (tasks), 52.3-88.1 ms (hot pipelines) per action | per action | — | the request mix |
-| H11 Codex session walk | Viewer | 4.2-7.0 ms per poll; `codex mcp list` unmeasured | per terminal Codex spawn poll | — | terminal spawns per hour |
-| H10 dictation write | Viewer | 6.3-13.8 ms at the 16 MiB cap | per dictation | — | dictations per hour |
-| T22 profiler trim | Viewer | 97.5-117.1 ms at the caps | per captured window, only while armed | — | captures per arm window |
+| H8 rules-window poll (`src/components/roleMemory/LearnedRules.tsx:170`) | Viewer | `projectView` 294-3,582 ms by project (loop to 3,629) | every 15 s per open window | 70.5-871.0 s per open window | how often a rules window is open (no route log) |
+| P2 50 ms revalidation timers | Viewer | 3.7-6.6 ms per tick (largest hot row) | 20 per second per active timer | 266-475 s per active timer | activation and job duty (unlabelled until L0b) |
+| H13 attention poll (`src/components/overlay/useAttentionOffers.ts:235`) | Viewer | `loadTasks()` 47.2-55.9 ms | every 4 s per open tab while the rows it returns name a task | 42.5-50.3 s per open tab | open tabs, and how often the rows name a task (they do whenever a target or a recently admitted lane carries one) |
+| H5 seat panel `loadTasks()` | Viewer | 47.2-55.9 ms | every 6 s per tab showing a seat | 28.3-33.5 s per tab | open tabs |
+| H3 resources footer | Viewer | 57.2-80.7 ms (scan and volume probes) | every 30 s per open footer (30 s disk-pressure cache) | 6.9-9.7 s per footer | open footers |
+| P3, X1, X2 launch probes | Viewer | 69.1-88.6 ms per Codex host open; 3.3-3.9 ms per launch admission | per launch | — | launches per hour |
+| H9 task and pipeline routes | Viewer | 47.2-55.9 ms (tasks), 48.9-66.7 ms (hot pipelines) per action, on the branches the [screen](#whole-collection-sites-under-this-installations-wiring) names | per action | — | the request mix |
+| H11 Codex session walk | Viewer | 3.7-12.7 ms per poll; `codex mcp list` unmeasured | per terminal Codex spawn poll | — | terminal spawns per hour |
+| H10 dictation write | Viewer | 6.0-18.2 ms at the 16 MiB cap | per dictation | — | dictations per hour |
+| T22 profiler trim | Viewer | 225.6-239.6 ms at the caps with accepted frames (236.2-252.0 ms with frames over 8 files); 92.0-105.5 ms when every frame is refused | per captured window, only while armed; it inspects at most 4,096 samples and real captures hold 246-1,504 | — | captures per arm window |
 
 ### Unquantified
 
 | ID | Process | Evidence | Why no cost |
 | --- | --- | --- | --- |
-| D1 task transaction holds | unknown | 19,386 holds of at least 50 ms, 5,627.1 s, largest 6,003 ms in 48 h; the no-op write replays at 17.2-36.1 ms | the line carries no process identity: 0 to 117 s per hour on the Viewer depending on who held them (L0b adds `pid` and `role`) |
-| H12 `agent_activity` | Viewer | 5,229 calls in 48 h; 240 calls of at least 2 s with 811.7 s of binding wall time, largest 16.8 s | runs the liveness snapshot for a project and refreshes the lifecycle journal per call; only the single-conversation liveness part is replayed (11.2-24.4 ms) |
+| D1 task transaction holds | unknown | 19,386 holds of at least 50 ms, 5,627.1 s, largest 6,003 ms in 48 h; the no-op write replays at 18.0-25.7 ms | the line carries no process identity: 0 to 117 s per hour on the Viewer depending on who held them (L0b adds `pid` and `role`) |
+| H12 `agent_activity` | Viewer | 5,229 receipts in 48 h from every MCP server process; 240 Viewer calls of at least 2 s with 811.7 s of binding wall time, largest 16.8 s | runs the liveness snapshot for a project and refreshes the lifecycle journal per call; its three policy enumerations count under H1; only the single-conversation liveness part is replayed (9.5-11.2 ms) |
 | Other in-process tool bindings | Viewer | slow calls in 48 h: `stage_report` 58 / 145.0 s, `create_pipeline` 36 / 101.9 s, `agent_fleet` 16 / 66.8 s | binding wall time only |
+| Curator passes without a Viewer line | Viewer or a stdio server | 19 of 38 passes, 400 reads | no record says where they ran; their reads enter only the curator upper bound |
 
 ### Suspects
 
 | Rank | ID | Process | Evidence | Count | Cost per hour, lower-upper | Peak | Next step |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | T19 release retention | Viewer | replay of its parts; code: one `scanProcesses()` per candidate (`src/lib/selfUpdate/retention.ts:160`) and `bytesOf` per kept release (`:164`) | 17 passes in 48 h, 85 kept releases at the last pass | 5.2 (17 × 85 × (66.5 + 107.6) ms) - 7.5 (17 × 85 × (98.3 + 149.3) ms) | about 0.25 s per candidate, between Git awaits | [L10](#l10-release-retention-scans-once-and-counts-bytes-off-the-loop) |
-| 2 | T7 attention reconcile summary parse | Viewer | replay | 60 passes per hour from the timer | 2.5 - 3.1 (needs-you reads and seat checks add calls) | 51.5 ms | deferred |
-| 3 | R3 producer-receipt sweep | host | replay | 360 ticks per hour | 1.4 - 6.4 | 17.9 ms | deferred |
-| 4 | T4 auto-merge clones | Viewer | replay of two hot clones | 10.4 passes per hour at least (500 distinct seconds with `[auto merge]` lines in 48 h) to 240 (15 s debounce) | 1.0 - 28.0 | 116.6 ms | [L9](#l9-read-only-collection-readers-stop-cloning) |
-| 5 | A1, A2 agent stdout parsing | Viewer | replay; `/proc` write rates of the agents (310,873 B/s, part 2) | 1,119 MB per hour | 0.79 - 1.36 | per chunk | deferred |
-| 6 | D8 lifecycle journal parse | Viewer | replay | 120 seat checks per hour (`agent_activity` refreshes add more) | 0.49 - 1.0 | 8.5 ms | deferred |
-| 7 | T3 archive maintenance | Viewer | replay (the pass yields: loop lateness 27-71 ms) | hourly | 0.22 - 0.38 | 71 ms loop | deferred |
+| 1 | T19 release retention | Viewer | replay of its parts; code: one `scanProcesses()` per candidate (`src/lib/selfUpdate/retention.ts:160`) and `bytesOf` per kept release (`:164`) | 17 passes in 48 h; every pass removed nothing, so the kept releases grew from about 65 at the window start to 84 at its end (22 builds since the window start, 87 kept at the 17:02Z pass) | 3.2 (17 × 65 × (52.9 + 84.3) ms) - 4.5 (17 × 84 × (57.7 + 93.6) ms) | about 0.15 s per candidate, between Git awaits | [L10](#l10-release-retention-scans-once-and-counts-bytes-off-the-loop) |
+| 2 | T7 attention reconcile summary parse | Viewer | replay | 60 passes per hour from the timer | 2.4 - 2.8 (needs-you reads and seat checks add calls) | 46.9 ms | deferred |
+| 3 | T4 auto-merge clones | Viewer | replay of two hot clones | 10.4 passes per hour at least (500 distinct seconds with `[auto merge]` lines in 48 h) to 240 (15 s debounce) | 1.0 - 29.5 | 122.8 ms | [L9](#l9-read-only-collection-readers-stop-cloning) |
+| 4 | A1, A2 agent stdout parsing | Viewer | replay; `/proc` write rates of the agents (310,873 B/s, part 2) | 1,119 MB per hour | 0.70 - 1.21 (0.62-1.09 ms per MB) | per chunk | deferred |
+| 5 | D8 lifecycle journal parse | Viewer | replay | 120 seat checks per hour (`agent_activity` refreshes add more) | 0.41 - 0.78 | 6.5 ms | deferred |
+| 6 | R3 producer-receipt sweep | host | replay | 360 ticks per hour | 0.36 - 6.0 | 16.7 ms | deferred |
+| 7 | T3 archive maintenance | Viewer | replay (the pass yields: loop lateness 23-54 ms) | hourly | 0.19 - 0.22 | 54 ms loop | deferred |
 | — | Overlap or code only: T8, T10-T18, T20, T21, S1, S2, S4-S6, P1, P4, P5, D7, H2, H6, H7, A3, A4, R4-R6, X3-X5, G1-G3 | — | part 2 records each one's overlap or its stated limit; none has a production observation naming it as a blocker | — | — | — | the follow-up window re-reads them with L0b labels |
 
 ### Estimated and unexplained time
 
 The Viewer logged 1,004.8 s of gaps above 500 ms per hour on average over the
 48 hours (700.9 s in gaps of at least 1 s). The lower bounds of the measured
-Viewer causes sum to 38.9 s per hour (ranks 2, 3, 5, 6, 7, 8 and 9), 43.4 s
-with T1's pass before #3052, about 4 % of the logged gap time. That sum is a
-conditional estimate that no production measurement confirms. Its curator,
-caller-enumeration, seat-check and temp-sweep terms are replayed unit costs
-times production counts, whose production occupancy is unmeasured
-([coverage gap 2](#coverage-gaps)); its done-sweep term is the length of
-chained production gaps, which can hold other work in the same gap (the
-3,541 ms gap at 15:19:08Z is a link of the done chain and its profile window
-holds curation frames), so terms can overlap. The upper bounds (curator 58.0,
-done sweep 80.7, caller enumeration 27.3, T1 44.5 s per hour) are conditional
-on their stated assumptions, can overlap each other in the same gaps, and do
-not add up to an explained share. One duty-dependent source is large enough
-to explain a busy hour alone: a rules window left open on the project with 49 retained passes
-would hold the loop up to 894 s per hour, but no record says whether one was
-open ([coverage gap 6](#coverage-gaps)). The busy hours (1,000-2,500 s per hour)
-remain unexplained: their gaps hold `controller.pipelines`,
-`pipelines.controller-job`, `runtime.rpc` and `files.get` as pending operations
-and 89 % unnamed watchdog samples. The runtime host logged 65.2 s per hour, of
-which R2 accounts for an estimated 40.4 s (its replayed tick, 62 %) to 62.4 s
-(its phase-chained gaps, which also hold whatever ran in the same gap, 96 %).
+Viewer causes sum to 43.2 s per hour (ranks 2, 3, 5, 6, 7, 8 and 9), 47.7 s
+with T1's pass before #3052, about 4-5 % of the logged gap time. That sum is a
+conditional estimate that no production measurement confirms: its terms are
+replayed unit costs times counts from production records or from the code's
+schedule, whose production occupancy is unmeasured
+([coverage gap 2](#coverage-gaps)), and terms can overlap in the same gap (the
+3,541 ms gap at 15:19:08Z sits on the minute chain and its profile window
+holds curation frames). The upper bounds (done sweep 111.1, curator 54.8, T1
+44.5 s per hour; the caller enumeration has none) are conditional on their
+stated assumptions, can overlap each other in the same gaps, and do not add up
+to an explained share. Two duty-dependent sources are large enough to matter
+alone: a rules window left open on the project with 50 retained passes would
+hold the loop up to 871 s per hour, and each open tab's attention poll up to
+50 s per hour while its rows name a task; no record says how often either is
+open ([coverage gap 6](#coverage-gaps)). The busy hours (1,000-2,500 s per
+hour) remain unexplained: their gaps hold `controller.pipelines`,
+`pipelines.controller-job`, `runtime.rpc` and `files.get` as pending
+operations and 89 % unnamed watchdog samples. The runtime host logged 65.2 s
+per hour, of which R2 accounts for an estimated 36.9 s (its replayed tick at
+the window-start registry, 57 %) to 62.4 s (its phase-chained gaps, which also
+hold whatever ran in the same gap, 96 %).
 
 ### Covered-by-lane, rechecked
 
@@ -1743,7 +2119,7 @@ which R2 accounts for an estimated 40.4 s (its replayed tick, 62 %) to 62.4 s
 | --- | --- | --- |
 | `1eb0ab07` (#3052) | merged 14:42Z; measured tip `98a23e4f` equals the merged files (same blob ids for `worktreeSweep.ts`, `worktreeSweepWorker.ts`, `worktreeSweepCache.ts`); serving since 15:03:24Z | On the fixture, yes: largest loop interval 5,329.5-5,586.8 ms before, 3.36-9.06 ms after (same 930 trees, load 4.5-5.4); the cold helper pass takes longer in wall time (6.2-10.9 s against 7.0-7.3 s). In production, no captured long gap during the first helper pass (about 15:13:34 to 15:21:53Z) holds a worktree-sweep frame. The shared `/proc` helpers still run on the Viewer for T2 and H3 (measured rank 9 for the temp sweep; H3 in the duty table) |
 | `e9a56ff7` (#3051) | merged and serving since 13:19:58Z | Instrumentation: 19 of 19 Viewer gaps of at least 2 s in its arm window said `captured` (17 distinct profiles). Profiles still last 30 minutes after a deploy and drop the column, leaving `G`/`S` frames ambiguous ([L0a](#l0a-profiler-exact-frames-and-a-window-that-spans-the-hourly-cycle)) |
-| `41be75ea` (#3048) | merged 16:29:58Z as `6a1ea0d9`; not serving at 16:46Z (the newest apply is `72866c7d`) | Feature work that adds a usage backfill to S4 (`activity.usage-backfill` label, store opens through `waitForStateLock`); no production measurement possible yet. The follow-up window measures `activity.ingest` and its backfill passes after it deploys |
+| `41be75ea` (#3048) | merged 16:29:58Z as `6a1ea0d9`, serving since the apply at 17:02:45Z | Feature work that adds a usage backfill to S4 (`activity.usage-backfill` label, store opens through `waitForStateLock`); no production measurement was possible while the releases serving from 16:38:04Z wrote no loop record; they return with `8f79707c` from 18:26:33Z ([L0c](#l0c-loop-records-reach-the-service-journal-again)). The follow-up window measures `activity.ingest` and its backfill passes |
 | `44e9fd13` (#3050) | merged 14:11Z, serving since 15:03:24Z | Better than part 1 assessed: it adds `livenessConversationSnapshot` with indexed reads, and a paired replay measured targeted liveness at 47.00 → 11.61 ms warm (first call 634.8 → 822.2 ms). The M4 case `T9-liveness` reproduces the pair: run from an export of `c91603e0` linked to that release's `node_modules`, on the 16:44Z copies, it took 47.5 [41.6-50.3] ms warm (load 4.1-4.2, 16:54:56Z) against 12.8 [10.3-27.2] ms on `72866c7d` (load 7.5, 16:44:50Z); the loads differ, so this repeats the shape and makes no speed claim. The complete seat check keeps its task, archive and summary reads (measured rank 7, partial) |
 
 ## Remediation slices
@@ -1758,15 +2134,22 @@ are M4 cases. Each slice also carries its history-flat test
 `bun scripts/verify-runtime-host.ts --runtime <the pinned bun>`.
 
 Order, by the [ranking rule](#ordering-rule) with its stated peak-stall
-priority: L0c, L0a and L0b first, since the follow-up window needs the loop
-records, their labels and spans; then L4, L1 and L2 in parallel (ranks 2, 1 and 3; L4 also removes the
-largest per-call stall, 0.3-3.9 s, so it leads where lanes are short); then L3
-(rank 6; L3 and L4 both touch `src/lib/mcp/bindings.ts` in different functions,
-land L3 first if they collide); then L5 (the largest duty-dependent unit); then
-L6 and L9; then L7, L8 and L10. Open work touching the same files, checked
-at 16:46Z: only draft #2926, which changes how the registry store opens
+priority: L0c (#3057, serving since 18:27:31Z), L0a and L0b first,
+since the follow-up window needs the loop records, their labels and spans; then L1, L2 and L4 in parallel (ranks 1, 2
+and 3: R2 stalls the host every minute, 885 ms at the median of its chained
+gaps, and T6 the Viewer about once a minute, 0.9-1.7 s per replayed pass; L4
+also removes the largest per-call stall,
+0.3-3.8 s, so it leads where lanes are short); then L3 (rank 5; R1, rank 4, is
+deferred; L3 and L4 both touch `src/lib/mcp/bindings.ts` in different
+functions, land L3 first if they collide); then L5 (the largest duty unit
+outside the rules-window poll L4 removes) and L9 (with the attention poll,
+H13); then L6; then L7, L8 and L10. Open work touching the same files, checked
+at 17:11Z, 18:25Z and 18:31Z: draft #2926, which changes how the registry store opens
 (`src/lib/agent/sqliteRegistryStore.ts:879`), away from the wait sites L7
-changes; `41be75ea` merged as #3048, and #3050, #3052 and #3056 have merged.
+changes; draft #3058 (opened 18:07:44Z), which changes the candidate
+performance gate that [RG2](#rg2-the-candidate-performance-gate-covers-state-history-the-minute-timers-and-the-host-loop)
+extends; and this lane's own pull request; `41be75ea` merged as #3048, and
+#3050, #3052, #3056 and #3057 have merged.
 
 ### L0. Verify T1 in the follow-up window
 
@@ -1776,18 +2159,23 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
 ### L0c. Loop records reach the service journal again
 
 - **Evidence.** [Loop records silenced](#loop-records-silenced-from-163657z-72866c7d):
-  no gap record or performance summary from either process since 16:36:57Z.
-- **Change.** Recommended: `bin/cli.mjs` leaves `LLV_QUIET_DIAGNOSTICS` unset
-  when its stderr is the journal (`JOURNAL_STREAM` set, as systemd sets it for
-  this service), which is what `docs/verification/fresh-install-startup.md`
-  at `72866c7d` promises service launches; a newcomer's terminal stays quiet. The
-  alternative, a loop sink that ignores the quiet flag, would print gap JSON on
-  a newcomer's terminal again.
-- **Acceptance.** `bin/cli.exposure.integration.test.ts` starts the CLI with
-  `JOURNAL_STREAM` set and no debug switch and finds `[viewer loop-gap]` and
-  `[performance summary]` lines on the children's stderr; the existing quiet
-  test without `JOURNAL_STREAM` still passes. Production: after the deploy, each
-  process writes a `[performance summary]` line every minute.
+  no gap record or performance summary from either process from 16:36:57Z
+  until the processes of `8f79707c` started.
+- **Status.** Merged as #3057 (`8f79707c`, 2026-10-18T17:41:33Z) and applied
+  at 18:27:31.411Z. It does both things this slice
+  weighed: `bin/cli.mjs` sets `LLV_QUIET_DIAGNOSTICS` only for a terminal
+  launch without journal metadata (stdout a TTY and `JOURNAL_STREAM` unset)
+  and clears an inherited value otherwise, and the loop sink
+  (`src/lib/viewerLoopMonitor.ts` at `8f79707c`) no longer drops lines in
+  quiet mode, so a terminal launch keeps its stall records too.
+  `bin/cli.exposure.integration.test.ts` covers both child roles through the
+  real CLI.
+- **Acceptance.** Production: after that deploy, each process writes a
+  `[performance summary]` line every minute and the Viewer writes
+  `[viewer loop-gap]` records, read from the service journal. Met in the first
+  read at 18:30Z: records from 18:26:33Z and a summary from each process every
+  minute from 18:27:24Z (the [observation](#loop-records-silenced-from-163657z-72866c7d)).
+  The follow-up window's precondition checks it again.
 - **Measurement.** Instrumentation; no speed claim.
 
 ### L0a. Profiler: exact frames and a window that spans the hourly cycle
@@ -1814,6 +2202,7 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
   `forge.auto-merge` and `forge.sweep` (T4, T5), `asks.sweep` (T8),
   `hosts.retirement` (T11), `self-update.retention` (T19), the notice prunes
   (T20), `resources.read` (H3), `seat.panel` (H5), `role-memory.view` (H8),
+  `attention.read` (H13),
   `pipelines.revalidate` (P2), and in the runtime host
   `runtime-journal.maintenance` (R2) and `runtime-journal.receipt-sweep` (R3).
   (2) Synchronous spans (`performanceSpans.sync`) around the measured heavy
@@ -1858,7 +2247,7 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
   `registryConversationRetentionStates(...).get(id)` for every pending id.
   (2) History-flat: registry rows decoded per tick are the same with ten times
   the unrelated conversations, and zero with nothing pending. (3) Copy: the
-  tick takes at most 10 ms warm (before 672.8-732.7 ms). (4) The runtime-host
+  tick takes at most 10 ms warm (before 684.4-741.1 ms). (4) The runtime-host
   rehearsal passes under the pinned Bun.
 - **Before/after.** `R2-maintenance`, `R2-map`, `R2-settle` on one copy;
   production: host gaps on fixed 60 s phase chains (M1b; before: 2,880 of 3,076
@@ -1866,7 +2255,9 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
 
 ### L2. The pipeline archive leaves the minute timers and stops evicting the hot rows
 
-- **Evidence.** Measured rank 3.
+- **Evidence.** Measured rank 2: every done pass refills the archive
+  (535.6-727.3 ms) because the hot read just before it evicts the slot, and
+  a pass with album lookups costs more ([the pass](#the-done-sweep-pass-t6)).
 - **Change.** (a) A read-only archive accessor returns the shared frozen rows,
   as `loadPipelinesForList()` does for the hot collection, and replaces
   `loadArchivedPipelines()` at `src/lib/done/world.ts:46`,
@@ -1881,28 +2272,39 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
   of 0.2-0.3 ms and archive reads of 201.0-244.2 ms (the per-record clone that
   (a) removes). A dedicated archive slot with its own bound gives the same
   result and keeps the hot collections safe as the archive grows (147.5 MiB at
-  the heap-fix audit, 214.9 MiB now; the hot collection stays near 65 MiB).
+  the heap-fix audit, 217.1 MiB now; the hot collection stays near 64 MiB).
   Recommendation: the dedicated slot, bounded at 512 MiB (2.4 times today's
   archive), with the eviction line firing before the archive outgrows it. The
   archive's decoded rows already occupy the heap for most of each minute today;
-  keeping them resident removes the per-read churn (+331 to +555 MB of RSS per
+  keeping them resident removes the per-read churn (+216 to +561 MB of RSS per
   evicting archive read in `T6-evict`).
+- **Then the album lookups.** With the archive read gone, the lane runs
+  `profile-view.ts done` on its copy. If a pass with album lookups still holds
+  the loop above the acceptance, the lane bounds them; in one replayed pass
+  1,536 of 2,407 samples sat under `pathAllowed`
+  (`src/lib/scanner/roots.ts`) while the album filtered transcript paths, a
+  part whose production cost the isolated home of the replay may not
+  represent, so the lane measures it before choosing the fix.
 - **Acceptance.** (1) A test fills hot and archive slots in the measured size
   ratio and finds the hot slot intact after an archive fill and the reverse.
   (2) Done, album and seat paths run on frozen fixtures without writing to
   them. (3) Copy: warm archive and hot reads at most 1 ms each when alternated
-  (before 541.5-617.0 and 89.9-100.6 ms); a `runDoneSweepOnce` replay with the
-  production world on copied state keeps the loop within 100 ms.
+  (before 535.6-727.3 and 86.7-93.6 ms); `T6-pass` keeps the loop within
+  250 ms warm (before 1,022.7-1,742.0 ms), and `profile-view.ts done` shows no
+  sample under `loadArchivedPipelines`.
   (4) [RG3](#rg3-native-eslint-restrictions-on-server-code) allows
   `loadArchivedPipelines` only in the archive maintenance and the sweep
   helper.
-- **Before/after.** `T6-evict` at both budgets, `D2`, and a new
-  `runDoneSweepOnce` case added to `probe.ts`; production: re-arm-chained Viewer
-  gaps (M1b; before 626-1,086 in 48 h) and the `done.sweep` pass durations.
+- **Before/after.** `T6-pass`, `T6-evict` at both budgets, `D2` and
+  `profile-view.ts done` on one copy; production: the `done.sweep` pass
+  durations (L0b). The re-arm chains (M1b) are reported beside them as context
+  only, since the attention reconcile shares their signature.
 
 ### L3. MCP caller attribution reads only the caller
 
-- **Evidence.** Measured rank 6.
+- **Evidence.** Measured rank 5: at least five enumerations of every
+  registry conversation per `curate_rules` call and three per call of every
+  mutating tool ([H1](#mcp-caller-enumeration-h1)).
 - **Change.** In `attentionCallerSources` (`src/lib/mcp/bindings.ts:1241`),
   a caller that presents a capability (every HTTP caller) is resolved through
   the indexed digest lookup (`conversationIdForSpawnCapabilityDigest`), and the
@@ -1911,20 +2313,23 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
   (`src/lib/attention/callerAuthority.ts:75`) stops enumerating first. The full
   enumeration (`hostedConversationsFromSnapshot`, `bindings.ts:1187`) stays for
   capability-less stdio callers, memoized per registry revision and boot epoch.
-  Attribution is computed once per tool call and passed to the 40
-  `attributionOf` sites, `curate_rules`' `authorizeReceipt` included.
+  Attribution is computed once per tool call and passed to the tool policy's
+  three checks (`bindings.ts:7344`, `:7348`, `:7352`), to `authorizeReceipt`
+  and to the 40 `attributionOf` sites.
 - **Acceptance.** The existing caller-authority and bindings tests decide the
   same (pid conflict, capability conflict, unresolved capability, native
   caller, deputy seat). History-flat: registry rows decoded per HTTP
-  attribution stay constant with ten times the unrelated conversations. Copy:
-  at most 2 ms warm (before 31.8-106.1 ms wall).
+  attribution stay constant with ten times the unrelated conversations; a
+  counting test finds one caller resolution per `curate_rules` call (five
+  today) and per call of any mutating tool (three today). Copy: at most 2 ms
+  warm (before 30.2-38.0 ms of wall per enumeration).
 - **Before/after.** `H1-attrib` on one copy; production: the
   `mcp.caller-enumeration` span (L0b) and attribution frames in captured
   windows.
 
 ### L4. Curator calls and the role-memory view stop holding the loop
 
-- **Evidence.** Measured rank 2, root cause found by the replay. Every
+- **Evidence.** Measured rank 3, root cause found by the replay. Every
   `curate_rules` read (`src/lib/mcp/bindings.ts:7919`) runs `readCuration`
   (`src/lib/memory/curation/read.ts:14`), which calls `projectView`
   (`src/lib/memory/roleStore.ts:499`) once. `projectView` ends in
@@ -1933,9 +2338,9 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
   `readPass` decodes every scope row of the project through `curationScopes`
   (`:95-112`), only to sum the history counts that belong to that one pass. The
   102 scope rows hold 12.6 MB because each carries its history, so the view
-  costs about 70 ms per retained pass plus about 165 ms: 0.31 s at 3 passes,
-  3.73 s at 49 (`role-projects`), 95.5 % of samples under `curationView`
-  (`profile-view.ts`). Retained passes grow by one per pass (38 passes in 48 h,
+  costs roughly 50-80 ms per retained pass on top of the passless cost:
+  0.29-0.34 s at 3 passes, 3.45-3.58 s at 50 (`role-projects`), 3,246 of 3,405
+  samples under `curationView` (`profile-view.ts view`). Retained passes grow by one per pass (38 passes in 48 h,
   24 for one project), so each pass makes the next one slower. The same view
   answers the rules window and the project menu row every 15 s
   (`src/components/roleMemory/LearnedRules.tsx:146-171`, H8).
@@ -1954,18 +2359,18 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
   fixtures against the current implementation; history-flat: rows decoded by
   one `projectView` stay the same when the project's retained passes grow
   tenfold and when another project's rules grow tenfold; copy: `H8` at most
-  50 ms and `D6-scope-read` at most 100 ms of loop for the 49-pass project
-  (before 3,456-3,750 and 3,680-3,928 ms); an unchanged-revision view at most
-  1 ms.
+  50 ms and `D6-scope-read` at most 100 ms of loop for the 50-pass project
+  (before 3,584.7-3,860.1 and 3,545.2-3,700.3 ms); an unchanged-revision view
+  at most 1 ms.
 - **Before/after.** `H8`, `D6-overview`, `D6-scope-read`, `role-projects` and
-  `profile-view.ts` on one copy; production: the `memory.project-view` span
+  `profile-view.ts view` on one copy; production: the `memory.project-view` span
   (L0b), and the Viewer's gap share during curator passes (M1b; before 73.0 %
   and 53.6 %).
 
 ### L5. Pipeline revalidation timers read the row revision
 
-- **Evidence.** Duty-dependent, the largest unit per duty-hour (266-446 s per
-  active timer).
+- **Evidence.** Duty-dependent, the largest unit per duty-hour outside the
+  rules-window poll L4 removes (266-475 s per active timer).
 - **Change.** The six 50 ms timers in `src/lib/pipelines/engine.ts` (`:5067`,
   `:6346-6349`, `:8303`, `:10128`, `:10259`, `:10384`) read the row's
   `row_revision`, one indexed integer as `pipelineControllerVersion` reads it
@@ -1976,7 +2381,7 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
   admission, remote actions, review repair, provisioning and review ingress
   decide the same; an unchanged row decodes no record per tick (counted
   through the store's decode hook); copy: an unchanged tick on the largest
-  hot row takes at most 0.1 ms (before 3.7-6.2 ms).
+  hot row takes at most 0.1 ms (before 3.7-6.6 ms).
 - **Before/after.** `P2` on one copy; production: `pipelines.revalidate`
   (L0b) totals and gap seconds with `pipelines.controller-job` pending.
 
@@ -1992,13 +2397,13 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
   a fixture pass over the measured shape (about 340 processes, 44,000 path
   references) keeps the Viewer loop within 50 ms; a resources request spends
   at most 10 ms on the main thread with a fresh helper result (before
-  70.7-97.4 ms).
+  57.2-80.7 ms).
 - **Before/after.** `T2` and `H3`; production: the `temp.sweep` label and
   `proc.scan` spans (L0b), and `resources.read` totals.
 
 ### L7. Registry write admission without synchronous waits
 
-- **Evidence.** Measured rank 5.
+- **Evidence.** Measured rank 6.
 - **Change.** The synchronous waits at `src/lib/agent/sqliteRegistryStore.ts:3124`
   (`registry-revision-retry`) and `:3177` (`registry-lock`) take the
   asynchronous admission #2953 introduced, for Viewer callers; the lane maps
@@ -2027,7 +2432,7 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
 
 ### L9. Read-only collection readers stop cloning
 
-- **Evidence.** Suspect 4 (T4); H5 and H9 in the duty table.
+- **Evidence.** Suspect 3 (T4); H5, H9 and H13 in the duty table.
 - **Change.** `sweepAutoMerge` and `sweepTaskFinishes`
   (`src/lib/forge/autoMerge.ts:699`, `:919`), the forge sweep
   (`src/lib/forge/sweep.ts:101`, `:107`), the seat panel
@@ -2036,15 +2441,17 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
   one row or a keep-set (`src/app/api/tasks/route.ts:105`,
   `src/app/api/tasks/[id]/assignment/route.ts:85`,
   `src/app/api/tasks/[id]/send/route.ts:86`,
-  `src/lib/attention/dismissals.ts:730`) read
-  `loadPipelinesForList()`/`loadTasksForList()` or a keyed row; writes stay
-  keyed. `[auto merge] <id>: not admitted: …` is written when a lane's reason
+  `src/lib/attention/dismissals.ts:730`), and the attention records' `tasks`
+  port (`src/lib/attention/service.ts:82`, H13), which needs only the tasks the
+  rows name, read `loadPipelinesForList()`/`loadTasksForList()` or keyed rows;
+  writes stay keyed. `[auto merge] <id>: not admitted: …` is written when a lane's reason
   changes, through a map bounded by the hot lanes.
 - **Acceptance.** Frozen-fixture tests show these paths write nothing to rows;
   two passes with unchanged reasons write one line per lane; copy: an
-  auto-merge pass takes at most 5 ms without `gh` (before 96.5-116.6 ms) and
-  the seat panel's and the routes' task reads at most 1 ms warm (before
-  48.4-106.3 ms).
+  auto-merge pass takes at most 5 ms without `gh` (before 93.1-120.5 ms) and
+  the seat panel's, the routes' and the attention poll's task reads at most
+  1 ms warm (before 47.2-55.9 ms); an attention read whose rows name two tasks
+  decodes two task rows.
 - **Before/after.** `D1`, `D3` and `T4-pair`; production: `[auto merge]`
   lines per hour (before 39,111 in 48 h).
 
@@ -2052,9 +2459,9 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
 
 - **Evidence.** Suspect 1.
 - **Change.** `retainReleases` (`src/lib/selfUpdate/retention.ts:63`) scans
-  `/proc` once per pass (it now calls `scan()` per candidate at `:160`, 85
+  `/proc` once per pass (it now calls `scan()` per candidate at `:160`, 87
   kept releases here) and runs `bytesOf` (`:32`, called at `:164`) in a helper.
-- **Acceptance.** A fixture of 85 release directories triggers one scan per
+- **Acceptance.** A fixture of 87 release directories triggers one scan per
   pass and keeps the Viewer loop within 50 ms during the pass.
 - **Before/after.** `T19` extended to a full pass over copies of retained
   releases (read-only); production: the `self-update.retention` label and
@@ -2071,8 +2478,8 @@ role-memory collections, its serving phases last 8-12 s (`WARM_MS`,
 shorter than the minute timers, and it sets no bound on the runtime host's own
 loop. The code already offers asynchronous state-lock admission
 (`waitForStateLock`), loop-monitor operation labels and the frozen list readers
-this audit names. The guards below close the measured holes; L0c's
-integration test keeps the loop records on for service launches.
+this audit names. The guards below close the measured holes; #3057's
+integration test (L0c) keeps the loop records on for service launches.
 
 ### RG1. History-flat work tests
 
@@ -2094,17 +2501,27 @@ whole-collection read returns to that path.
 - Keep the serving window open at least 75 s after warm-up, so the done sweep
   (15 s, then every 60 s), the attention reconcile (30 s, then 60 s) and the
   runtime host's minute maintenance fire inside it.
-- Read the runtime host's own loop-gap records and refuse a release whose host
-  loop exceeds 250 ms outside boot. The gate's host already runs the
+- Read the runtime host's own loop-gap records and hold its loop to 250 ms
+  outside boot; a run that did not read them is refused as missing evidence.
+  The gate's host already runs the
   candidate's `src/runtime-host/main.ts` unchanged
   (`src/runtime-host/candidateRuntimeHost.ts`) over the synthetic registry,
   so its minute maintenance fires once the window passes 60 s; today the gate
   bounds only the Viewer's loop (`src/runtime-host/candidatePerformance.ts:254-269`).
 - Exercise one curator read and one rules-window view inside the serving
   window, so `projectView` runs at the measured history size.
-- Adoption check: run the extended gate on `a25592be` first; it must refuse for
-  R2, the archive read and the curator view (red before), then pass after L1,
-  L2 and L4.
+- Adoption check: run the extended gate on `a25592be` first; it must report
+  R2, the archive read and the curator view as bound overruns (red before),
+  then report none after L1, L2 and L4.
+- Refusal or warning. Draft #3058 (opened 18:07:44Z, in review, read at
+  18:25Z) makes the gate's duration overruns `timingWarnings` that no longer
+  refuse a promotion, after fixed duration thresholds refused completed
+  rehearsals; missing or malformed evidence, failed operations and induced
+  failures still refuse. RG2 follows whichever policy the gate holds when it
+  lands: under #3058 its new bounds are warnings, and only a missing host-loop
+  reading or a serving window too short for the minute timers refuses. The
+  guards that then block the measured regressions are RG1 and RG3, which do not
+  depend on timing; RG2 keeps the measured signal on every candidate.
 
 ### RG3. Native ESLint restrictions on server code
 
@@ -2140,7 +2557,7 @@ the next one, up to the 120 minutes.
 **Precondition.** In the first 10 minutes, each process writes a
 `[performance summary]` line every minute and the Viewer writes
 `[viewer loop-gap]` records; otherwise the window is void and is rescheduled
-(on `72866c7d` neither happens, see
+(on `72866c7d` and `6a1ea0d9` neither happened; on `8f79707c` both do, see
 [Loop records silenced](#loop-records-silenced-from-163657z-72866c7d)).
 
 **Load.** At least 8 live structured agents and 3 running lanes at the start
@@ -2159,10 +2576,11 @@ database for per-hour counts. Production stays read-only.
 | --- | --- | --- | --- |
 | T1 (#3052) | Viewer gaps of at least 2 s whose profile holds worktree-sweep frames, while `worktrees.sweep` is pending | 11 gaps, 53.0 s in one pass | none |
 | R2 (L1) | host gaps above 500 ms on fixed 60 s phase chains (M1b) | 2,880 of 3,076 gaps in 48 h; 15 of 15 minutes on `a25592be` | chained gaps in at most 2 % of the window's minutes |
-| T6 (L2) | re-arm-chained Viewer gaps (M1b, ±0.25 s); `done.sweep` pass durations | 626-1,086 chained gaps in 48 h; median 943 ms per pass (791-1,368 ms), 1.98-2.49 s for the first seven after a start | no chain of five after the third pass; `done.sweep` 95th percentile at most 100 ms |
-| H1 (L3) | `mcp.caller-enumeration` sync spans (L0b) | replay 31.8-106.1 ms per enumeration | 95th percentile at most 2 ms |
-| Curator, H8 (L4) | `memory.project-view` sync spans (L0b); the Viewer's gap share during a curator pass against the same length around it (M1b) | replay 0.31-3.73 s per view; gap share 73.0 % and 53.6 % against 7.7-20.3 % around | span 95th percentile at most 50 ms; gap share during the pass within 5 points of the share around it |
+| T6 (L2) | `done.sweep` pass durations and the `pipeline.copy` spans inside them (L0b); the re-arm chains (M1b) as context only, since the attention reconcile shares them | replay 936-1,601 ms per pass, of which the archive refill 536-727 ms every pass; production minute-chain gaps on `a25592be` 791-1,368 ms (median 943 ms), 1.98-2.49 s for the first seven after a start on `9c889c07`; the first window measures the labelled baseline | `done.sweep` 95th percentile at most 250 ms and no `pipeline.copy` span above 10 ms inside it |
+| H1 (L3) | `mcp.caller-enumeration` sync spans (L0b), per tool call | replay 30.2-38.0 ms per enumeration; at least five per `curate_rules` call and three per mutating call | 95th percentile at most 2 ms; at most one span per tool call |
+| Curator, H8 (L4) | `memory.project-view` sync spans (L0b); the Viewer's gap share during a curator pass against the same length around it (M1b) | replay 0.29-3.58 s per view; gap share 73.0 % and 53.6 % against 7.7-20.3 % around | span 95th percentile at most 50 ms; gap share during the pass within 5 points of the share around it |
 | P2 (L5) | `pipelines.revalidate` seconds per running activation-hour | not labelled yet | measured in the first window; after L5, at most 1 % of the first window's value |
+| H13 (L9) | `attention.read` seconds per open tab-hour (L0b) | replay 42.5-50.3 s per tab-hour while the rows name a task; not labelled yet | measured in the first window; after L9, at most 5 % of the first window's value |
 | Attribution | share of Viewer gap seconds (at least 1 s) with a non-umbrella label or a sync span; share of window samples under a mapped source | 89 % unknown watchdog samples | reported; any unlabelled source above 10 % of gap seconds gets an attribution task |
 
 Aggregate seconds per hour are reported beside the 48-hour table for context
@@ -2174,19 +2592,21 @@ any effect these slices can show in one window.
 1. **Most stall time has no named cause.** 89.28 % (Viewer) and 84.75 % (host)
    of watchdog samples in gaps of at least 1 s are
    `unknown-runtime-or-native`. The lower bounds of the measured Viewer causes
-   sum to 38.9 s per hour, 43.4 s with T1 before #3052, of the 1,004.8 s of
-   logged gaps per hour (about 4 %): a conditional estimate whose terms can
+   sum to 43.2 s per hour, 47.7 s with T1 before #3052, of the 1,004.8 s of
+   logged gaps per hour (about 4-5 %): a conditional estimate whose terms can
    overlap, as are the upper bounds; busy hours of 1,000-2,500 s are
    unexplained (see
    [Estimated and unexplained time](#estimated-and-unexplained-time)).
-2. **Production occupancy of the curator calls, the caller enumeration and the
-   seat check is measured only by replay.** Binding wall time spans awaits,
-   completion lines do not mark gap ends, and profile windows are 1.4-2.6 times
-   their gaps (M1b), so production gives correlation and frame presence only.
-   The replay times the `projectView` part of a curator read (lower bound
-   21.4 s per hour); the rest of a call (admission, history projection, curator
-   snapshots, attribution, the apply transaction) is untimed. L0b's synchronous
-   spans make all three measurable in production.
+2. **Production occupancy of the done sweep, the curator calls, the caller
+   enumeration and the seat check is measured only by replay.** Binding wall
+   time spans awaits, completion lines do not mark gap ends, profile windows
+   are 1.4-2.6 times their gaps (M1b), and the minute re-arm chains do not tell
+   the done sweep from the attention reconcile, so production gives
+   correlation and frame presence only. The replay times the done pass, the
+   `projectView` part of a curator read and one enumeration; the rest of a
+   curator call (admission, history projection, curator snapshots, the apply
+   transaction) is untimed. L0b's labels and synchronous spans make all four
+   measurable in production.
 3. **The largest stall in the arm window is unresolved.** 11.554 s at
    13:30:59.458Z: 118 of 118 watchdog samples unknown, 3.25 ms of retained
    `registry.keyed`, seat frames in 106 and liveness in 27 of 1,504 window
@@ -2197,75 +2617,116 @@ any effect these slices can show in one window.
    RSS steps of up to 4.2 GB inside a single gap (2026-10-17 13:57:00Z; 3.2 GB
    in the 11.554 s gap), a 30-minute peak of 6.89 GB and `VmHWM` 11.4 GB are
    context; no allocation is tied to a gap except through the replays' heap and
-   RSS deltas (evicting archive read +331 to +555 MB of RSS, R2 +138 MB of heap,
-   `projectView` +113 to +322 MB of RSS).
+   RSS deltas (evicting archive read +216 to +561 MB of RSS, a done pass up to
+   +595 MB of heap, R2 +100 to +144 MB of heap, `projectView` +54 to +353 MB of
+   RSS).
 5. **The runtime host has no JS profiler** (R6), and all its gaps report
    `operations: []`. R2's attribution rests on the phase chains, the
    `registry.snapshot` spans inside each minute gap and the copy replay.
 6. **Duty is unknown.** Requests carry no route, so the request mix (H6) and the
    duty of every per-view cost are unknown: how often the rules window, the
-   project's ⋯ menu or the phone menu sheet is open (H8, up to 894 s per hour
-   per open view on the 49-pass project), how many tabs show the seat panel
-   (H5) or the resources footer (H3), P2's activation and job duty, and launches
-   per hour (P3, H11). One view session was recorded at the inventory read.
+   project's ⋯ menu or the phone menu sheet is open (H8, up to 871 s per hour
+   per open view on the 50-pass project), how many tabs are open (H13, up to
+   50 s per hour per tab while the attention rows name a task) and show the
+   seat panel (H5) or the resources footer (H3), P2's activation and job duty,
+   and launches per hour (P3, H11). One view session was recorded at the
+   inventory read.
 7. **No process identity** on `[mcp slow]` and `[state transaction-hold]`
    (so D1's 117 s per hour of holds is unattributed), registry
    `[blocking-wait]` records name their caller only by a minified `subject`,
    and MCP calls under 2 s leave no line (L0b).
 8. **What the route and tool screen cannot see, and what it found but did not
-   time.** It follows no port whose implementation is assigned elsewhere, no
-   call dispatched by name (tool bindings were screened as their own roots), no
-   worker message or dynamic import, and nothing deeper than six calls, and it
-   counts every branch as taken. Found and untimed: the Telegram session-store
-   listing (2,629 files under its state), the external-relay answers listing
-   (1,760 files), the memory index source listings, the slug-decoding walk
-   (`src/lib/scanner/describe.ts:349`), `codex mcp list` on terminal launches
-   (X4), the role-memory lessons poll every 20 s (`stageLessons`), the inline
-   board projection's frequency, `agent_activity` per call (H12), and the other
-   in-process tool bindings with slow calls.
+   time.** It follows no port whose implementation is assigned elsewhere (the
+   attention poll's task clone, H13, was found by hand), no call dispatched by
+   name (tool bindings were screened as their own roots), no worker message or
+   dynamic import, and nothing deeper than six calls; it counts every branch
+   as taken and every closure a factory builds as called. Only its
+   whole-collection sites were checked against this installation's wiring
+   ([table](#whole-collection-sites-under-this-installations-wiring)); the other
+   sink classes are reachability counts with their first paths read. Found and
+   untimed: the Telegram session-store listing (2,629 files under its state),
+   the external-relay answers listing (1,760 files), the memory index source
+   listings, the slug-decoding walk (`src/lib/scanner/describe.ts:349`),
+   `codex mcp list` on terminal launches (X4), the role-memory lessons poll
+   every 20 s (`stageLessons`), the inline board projection's frequency,
+   `agent_activity` per call (H12), and the other in-process tool bindings with
+   slow calls.
 9. **Unmeasured units.** The complete seat check (T9), a whole temp pass (T2),
    T8, T11 and T20 passes, delivery drains (A3: 1,885 drain-failure and 1,908
    timeout lines, with no replay), and the activity usage backfill (`41be75ea`,
-   unserved).
+   serving since 17:02:45Z, with no loop record to measure it by until
+   18:26:33Z).
 10. **Profiles cover 30 minutes after a deploy**, so the second hourly pass is
     never profiled, and dropped columns leave `11265:1 G`/`S`, `72293:80 h`/`s`,
     `92134:1 p`/`s`, `89508:1 q`/`u` and `36787:1 C`/`v`/`I` ambiguous (L0a).
 11. **Several counts are lower bounds.** Chains break where an await displaces a
     link beyond the tolerance; waits and holds under their logging thresholds
     are not logged; retained sync slices are capped; `[auto merge]` lines appear
-    only when a lane is blocked.
+    only when a lane is blocked; Viewer MCP calls under 2 s leave no line.
 12. **Replays are single-process.** Unit costs come from one Bun process on
-    copied production-sized state under a 300 % CPU cap (load 4.7-6.9 in the
+    copied production-sized state under a 300 % CPU cap (load 2.5-3.8 in the
     final run); the serving process runs them beside other work, so they are
     lower bounds for contended runs.
 13. **The deployed fixes have a first look only**: one worktree-sweep pass
     (completed 15:21:53Z) and 27 minutes of `a25592be`, inside its arm window.
-14. **No loop records since 16:36:57Z.** The release applied at 16:38:04Z
-    (`72866c7d`) drops every `[viewer loop-gap]` and `[performance summary]`
-    line on this installation
-    ([observation](#loop-records-silenced-from-163657z-72866c7d)), so nothing
-    after that time can be measured from the journal until
-    [L0c](#l0c-loop-records-reach-the-service-journal-again) serves.
+14. **No loop records from 16:36:57Z to 18:26:33Z.** The releases applied at
+    16:38:04Z (`72866c7d`) and 17:02:45Z (`6a1ea0d9`) dropped every
+    `[viewer loop-gap]` and `[performance summary]` line on this installation
+    ([observation](#loop-records-silenced-from-163657z-72866c7d)), so those
+    110 minutes, the first serving time of the activity usage backfill among
+    them, cannot be measured from the journal. The release carrying
+    [L0c](#l0c-loop-records-reach-the-service-journal-again) (`8f79707c`,
+    applied 18:27:31Z) writes them again.
+15. **Where MCP calls ran is known only for slow calls.** Receipts come from
+    every MCP server process, and every one of the 13 agents under the Viewer at
+    17:2xZ ran a stdio server, so receipts give no count of Viewer executions.
+    The caller enumeration has a floor of 4,410 in 48 hours from Viewer-written
+    lines and no upper bound; 19 of the 38 curator passes left no Viewer line,
+    and their 400 reads enter only the curator upper bound. How the transport
+    mix changed over the 48 hours is not recorded.
+16. **The done pass replay leaves out frame work.** It skips frame copies,
+    frame recovery and media removal, and with them the cap their copies put on
+    album lookups, so a production pass may do more or less frame work; and its
+    album lookups filter transcript paths against the isolated home of the
+    replay, where `pathAllowed` took 1,536 of 2,407 samples in one pass, a share
+    production may not have. T6's lower bound uses only the archive refill
+    every pass pays for that reason.
+17. **The profiler-trim cost is synthetic.** `T22-trim` feeds 4,096 traces of
+    accepted frames from fixture files; real captures carry 246-1,504 samples
+    over up to 8 source files, and their trim cost was never timed in
+    production (the `loop-profiler.trim` label appears only inside gaps).
+18. **Registry and archive growth are estimated from today's copy.** The
+    window-start archive (about 796 rows) subtracts the archive pass's own
+    counts from the copy, and the window-start registry (7,467 conversations)
+    counts today's hot conversations created before it. The archive estimate
+    assumes every archive pass wrote its line; the registry one leaves out
+    conversations archived since, which can only make the R2 and H1 lower
+    bounds smaller.
 
 ## Validation against the requirement
 
 The requirement asks what else blocks the two main loops, again and again. By
 the [ranking rule](#ordering-rule): the runtime host's whole-registry read
-every minute (40.4-62.4 s per hour); the curator's role-memory reads, each
-running a view whose cost grows with every retained curator pass (0.31-3.73 s
-per call, 21.4-58.0 s per hour), the same view the rules window and the project
-menu poll every 15 s while open; the Viewer's archive read with cache eviction
-every minute (11.1-80.7 s per hour); then the runtime snapshot rebuilds, the
-synchronous registry waits, the per-call MCP caller enumeration, the seat check,
-memory refresh and the `/proc` scans. The hourly worktree sweep is fixed,
+every minute (36.9-62.4 s per hour); the Viewer's done sweep about once a
+minute, whose archive read misses the cache on every pass (25.9-111.1 s per
+hour); the curator's role-memory reads, each running a view whose cost grows
+with every retained curator pass (0.29-3.58 s per call, 10.7-54.8 s per hour),
+the same view the rules window and the project menu poll every 15 s while
+open; then the runtime snapshot rebuilds, the MCP caller enumeration (at least
+five per curator call), the synchronous registry waits, the seat check, memory
+refresh and the `/proc` scans. The hourly worktree sweep is fixed,
 verification pending. Suspects with measured unit costs follow, led by release
-retention. Every API route and tool binding was screened; what the screen found
-and did not time is listed as a coverage gap. The busy-hour share stays
-unexplained until L0a and L0b let the follow-up window name it, and since
-16:36:57Z the release serving here leaves no loop record at all, so L0c comes
-before any further production measurement. No operator
-decision is open: L2's choice between a larger shared budget and a dedicated
-archive slot is made above with its reason.
+retention; the 4-second attention poll clones every task per open tab while
+its rows name one. Every API route and every tool of the catalog was screened,
+and every whole-collection site the screen reached was checked against this
+installation's wiring; what the screen found and did not time is listed as a
+coverage gap. The busy-hour share stays unexplained until L0a and L0b let the
+follow-up window name it. From 16:36:57Z to 18:26:33Z the releases serving
+here left no loop record; the release carrying #3057 (L0c), applied at
+18:27:31Z, writes them again, so the follow-up window can read them once L0a
+and L0b serve.
+No operator decision is open: L2's choice between a larger shared budget and a
+dedicated archive slot is made above with its reason.
 
 ## Deferred — not currently justified
 
@@ -2284,9 +2745,10 @@ archive slot is made above with its reason.
   version of part 3. Verification found that deferral contrary to the scope
   (API and MCP handlers and synchronous filesystem work are named in it), so
   the revision screened every route and tool binding
-  ([Route and tool screen](#route-and-tool-screen)); timing the families the
-  screen found but did not time stays open as a
-  [coverage gap](#coverage-gaps).
+  ([Route and tool screen](#route-and-tool-screen)), and the second revision
+  rooted the tools in the catalog and checked the whole-collection sites
+  against the production wiring; timing the families the screen found but did
+  not time stays open as a [coverage gap](#coverage-gaps).
 - A repository-wide ban on synchronous filesystem calls. Part 3 scoped the
   guards from the measured list: RG3 restricts synchronous child processes,
   `Atomics.wait` and the two measured whole-store helpers, and RG2 refuses
@@ -2295,20 +2757,20 @@ archive slot is made above with its reason.
   and runtime-host server loops.
 - Archive retention, or slim per-revision projections of the archive. L2
   removes the per-minute clone and the eviction; the archive's resident size
-  still grows with history (147.5 MiB at the heap-fix audit, 212.5 MiB now).
+  still grows with history (147.5 MiB at the heap-fix audit, 217.1 MiB now).
   Revisit when the archive slot passes twice the hot collections' size again
   or the follow-up window shows archive reads above 100 ms.
-- Caching the board summary parse (T7, H4): 42.1-51.5 ms per read, 2.5-3.1 s
+- Caching the board summary parse (T7, H4): 39.8-46.9 ms per read, 2.4-2.8 s
   per hour from the reconcile timer. L8 removes it from the seat check if it
   dominates there.
 - Rebuilding the runtime snapshot by changed scope (R1, deferred by `cbaaf29a`
   item 5): 3.0 s per hour of synchronous waits, largest 762.8 ms.
-- The receipt sweep (R3, at most 17.9 ms per 10 s, 1.4-6.4 s per hour),
-  archive maintenance (T3, 0.22-0.38 s per hour), agent stdout parsing (A1/A2,
-  0.79-1.36 s per hour), the lifecycle journal parse (D8, 0.49-1.0 s per hour),
-  the Codex launch probes (P3, 73.0-78.4 ms per Codex host open), the dictation
-  write (H10, 6.3-13.8 ms at its cap) and the Codex session walk (H11,
-  4.2-7.0 ms per poll). Each is bounded per call or below 7 s per hour.
+- The receipt sweep (R3, at most 16.7 ms per 10 s, 0.36-6.0 s per hour),
+  archive maintenance (T3, 0.19-0.22 s per hour), agent stdout parsing (A1/A2,
+  0.70-1.21 s per hour), the lifecycle journal parse (D8, 0.41-0.78 s per hour),
+  the Codex launch probes (P3, 69.1-88.6 ms per Codex host open), the dictation
+  write (H10, 6.0-18.2 ms at its cap) and the Codex session walk (H11,
+  3.7-12.7 ms per poll). Each is bounded per call or below 7 s per hour.
 - Memory refresh (S3): 41.0 s of retained spans in 48 hours, single spans up to
   1,563 ms. Revisit if the follow-up window shows spans above 1 s more than
   once per hour.
