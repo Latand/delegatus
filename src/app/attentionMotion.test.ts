@@ -47,5 +47,7 @@ test("the ring and the shadow-growing cues hold their frame while a composer fie
   expect(start).toBeGreaterThanOrEqual(0);
   const block = css.slice(start, css.indexOf("}", start));
   for (const selector of [".pane-attention-comets", ".card-status-attention", ".deck-tab-live", "[data-attention-pulse][data-attention-pulse]"]) expect(block).toContain(`:root[data-composer-focused] ${selector}`);
+  /* The standing liveness motion of a board holds too: a running agent's glyph (halo and SVG groups) and the pulsing dots. */
+  for (const selector of ['.mglyph[data-live="1"]::before', '.mglyph[data-live="1"] *', ".animate-pulse"]) expect(block).toContain(`:root[data-composer-focused] ${selector}`);
   expect(block).toContain("animation-play-state: paused");
 });

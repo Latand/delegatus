@@ -69,12 +69,18 @@
       "halo": {
         "running": "running",
         "ring": "running",
+        "glyph": "running",
+        "dot": "running",
         "field": true,
         "focused": "paused",
         "ringFocused": "paused",
+        "glyphFocused": "paused",
+        "dotFocused": "paused",
         "rootMarked": true,
         "blurred": "running",
-        "ringBlurred": "running"
+        "ringBlurred": "running",
+        "glyphBlurred": "running",
+        "dotBlurred": "running"
       },
       "reduced": {
         "animations": 0,
@@ -149,12 +155,18 @@
       "halo": {
         "running": "running",
         "ring": "running",
+        "glyph": "running",
+        "dot": "running",
         "field": true,
         "focused": "paused",
         "ringFocused": "paused",
+        "glyphFocused": "paused",
+        "dotFocused": "paused",
         "rootMarked": true,
         "blurred": "running",
-        "ringBlurred": "running"
+        "ringBlurred": "running",
+        "glyphBlurred": "running",
+        "dotBlurred": "running"
       },
       "reduced": {
         "animations": 0,
@@ -229,12 +241,18 @@
       "halo": {
         "running": "running",
         "ring": "running",
+        "glyph": "running",
+        "dot": "running",
         "field": true,
         "focused": "paused",
         "ringFocused": "paused",
+        "glyphFocused": "paused",
+        "dotFocused": "paused",
         "rootMarked": true,
         "blurred": "running",
-        "ringBlurred": "running"
+        "ringBlurred": "running",
+        "glyphBlurred": "running",
+        "dotBlurred": "running"
       },
       "reduced": {
         "animations": 0,
@@ -309,12 +327,18 @@
       "halo": {
         "running": "running",
         "ring": "running",
+        "glyph": "running",
+        "dot": "running",
         "field": true,
         "focused": "paused",
         "ringFocused": "paused",
+        "glyphFocused": "paused",
+        "dotFocused": "paused",
         "rootMarked": true,
         "blurred": "running",
-        "ringBlurred": "running"
+        "ringBlurred": "running",
+        "glyphBlurred": "running",
+        "dotBlurred": "running"
       },
       "reduced": {
         "animations": 0,

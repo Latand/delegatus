@@ -34,39 +34,53 @@
           "angle": 0,
           "ringPixels": 4744,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 3
         },
         {
           "angle": 45,
           "ringPixels": 3723,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 2
         },
         {
           "angle": 135,
           "ringPixels": 4349,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 4
         },
         {
           "angle": 225,
           "ringPixels": 3723,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 2
         },
         {
           "angle": 300,
           "ringPixels": 3798,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 4
         }
       ],
       "halo": {
         "running": "running",
+        "ring": "running",
+        "glyph": "running",
+        "dot": "running",
         "field": true,
         "focused": "paused",
+        "ringFocused": "paused",
+        "glyphFocused": "paused",
+        "dotFocused": "paused",
         "rootMarked": true,
-        "blurred": "running"
+        "blurred": "running",
+        "ringBlurred": "running",
+        "glyphBlurred": "running",
+        "dotBlurred": "running"
       },
       "reduced": {
         "animations": 0,
@@ -106,39 +120,53 @@
           "angle": 0,
           "ringPixels": 4724,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 3
         },
         {
           "angle": 45,
           "ringPixels": 3692,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 2
         },
         {
           "angle": 135,
           "ringPixels": 4311,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 3
         },
         {
           "angle": 225,
           "ringPixels": 3693,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 2
         },
         {
           "angle": 300,
           "ringPixels": 3771,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 3
         }
       ],
       "halo": {
         "running": "running",
+        "ring": "running",
+        "glyph": "running",
+        "dot": "running",
         "field": true,
         "focused": "paused",
+        "ringFocused": "paused",
+        "glyphFocused": "paused",
+        "dotFocused": "paused",
         "rootMarked": true,
-        "blurred": "running"
+        "blurred": "running",
+        "ringBlurred": "running",
+        "glyphBlurred": "running",
+        "dotBlurred": "running"
       },
       "reduced": {
         "animations": 0,
@@ -178,39 +206,53 @@
           "angle": 0,
           "ringPixels": 3688,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 5
         },
         {
           "angle": 45,
           "ringPixels": 3070,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 3
         },
         {
           "angle": 135,
           "ringPixels": 3274,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 11
         },
         {
           "angle": 225,
           "ringPixels": 3069,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 3
         },
         {
           "angle": 300,
           "ringPixels": 3094,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 9
         }
       ],
       "halo": {
         "running": "running",
+        "ring": "running",
+        "glyph": "running",
+        "dot": "running",
         "field": true,
         "focused": "paused",
+        "ringFocused": "paused",
+        "glyphFocused": "paused",
+        "dotFocused": "paused",
         "rootMarked": true,
-        "blurred": "running"
+        "blurred": "running",
+        "ringBlurred": "running",
+        "glyphBlurred": "running",
+        "dotBlurred": "running"
       },
       "reduced": {
         "animations": 0,
@@ -250,39 +292,53 @@
           "angle": 0,
           "ringPixels": 3669,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 3
         },
         {
           "angle": 45,
           "ringPixels": 3043,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 2
         },
         {
           "angle": 135,
           "ringPixels": 3235,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 8
         },
         {
           "angle": 225,
           "ringPixels": 3044,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 2
         },
         {
           "angle": 300,
           "ringPixels": 3072,
           "differing": 0,
-          "share": 0
+          "share": 0,
+          "maxChannelDifference": 7
         }
       ],
       "halo": {
         "running": "running",
+        "ring": "running",
+        "glyph": "running",
+        "dot": "running",
         "field": true,
         "focused": "paused",
+        "ringFocused": "paused",
+        "glyphFocused": "paused",
+        "dotFocused": "paused",
         "rootMarked": true,
-        "blurred": "running"
+        "blurred": "running",
+        "ringBlurred": "running",
+        "glyphBlurred": "running",
+        "dotBlurred": "running"
       },
       "reduced": {
         "animations": 0,

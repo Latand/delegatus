@@ -372,11 +372,21 @@ body {
    frame per vsync: a software compositor spends tens of milliseconds on one, and
    the key that arrives waits behind it. All of them hold their frame while a
    composer field has the focus (`src/lib/composerFocus.ts`) and carry on when it
-   loses it. Reduced-motion users never had them moving. */
+   loses it. Reduced-motion users never had them moving.
+
+   The standing liveness motion on a board holds too: the turning and breathing
+   model glyph of a running agent (SVG groups, which Chromium animates on the
+   main thread) and the pulsing status dots. Any one of them left running keeps
+   the page producing a frame every vsync, and a key then waits for the next one
+   (measured on the seat over the board with the ring on: input-to-paint p50 24
+   ms with them running, 16 ms with them held, in six of six paired runs). */
 :root[data-composer-focused] .pane-attention-comets,
 :root[data-composer-focused] .card-status-attention,
 :root[data-composer-focused] .deck-tab-live,
-:root[data-composer-focused] [data-attention-pulse][data-attention-pulse] {
+:root[data-composer-focused] [data-attention-pulse][data-attention-pulse],
+:root[data-composer-focused] .mglyph[data-live="1"]::before,
+:root[data-composer-focused] .mglyph[data-live="1"] *,
+:root[data-composer-focused] .animate-pulse {
   animation-play-state: paused;
 }
 

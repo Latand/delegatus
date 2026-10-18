@@ -33098,8 +33098,8 @@ describe("attention cues stay off the main thread beside the composer", () => {
    * transform on the compositor. Over the fixture's waiting conversation, at
    * 1440 and 900 px in both themes: the animation is `transform` alone on the
    * 3.4s lap and the comets turn; the ring matches the previous drawing at five
-   * angles; reduced motion stills it; the ring and the shadow-growing halos hold
-   * while the composer has the focus.
+   * angles; reduced motion stills it; the ring, the shadow-growing halos, a running
+   * agent's glyph and the pulsing dots hold while the composer has the focus.
    *
    *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
    *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "attention cues stay off the main thread"
