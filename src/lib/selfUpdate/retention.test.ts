@@ -4,9 +4,10 @@ import path from "node:path";
 import os from "node:os";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { retainReleases, type RetentionInputs, type RetentionPorts } from "./retention";
-import { removeTreeViaTrash, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
+import { finishTreeTrash, removeTreeViaTrash, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 import type { LauncherRecord } from "./launcher";
 import { runGit } from "./git";
+import { RetentionWorker } from "./retentionWorker";
 
 const DAY = 86_400_000;
 const roots: string[] = [];
@@ -23,7 +24,7 @@ function fixture(count = 8) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "llv-retention-test-"))); roots.push(root);
   const releases = path.join(root, "releases"); fs.mkdirSync(releases);
   const dirs: string[] = []; const shas: string[] = [];
-  const now = Date.now() + 5 * DAY;
+  const now = Date.UTC(2030, 0, 1);
   for (let i = 0; i < count; i++) {
     const sha = (i + 1).toString(16).padStart(12, "0") + "a".repeat(28); shas.push(sha);
     const dir = path.join(releases, sha.slice(0, 12)); dirs.push(dir);
@@ -57,7 +58,7 @@ function fixture(count = 8) {
 }
 const exists = fs.existsSync;
 
-test("a pass over 87 retained releases inventories processes once", async () => {
+test("keep decisions over 87 releases use one inventory; destructive steps use fresh helper scans", async () => {
   const h = fixture(87);
   h.inputs.inFlight = [...h.dirs];
   let scans = 0;
@@ -101,6 +102,7 @@ test("the loop stays within 50 ms while counting 87 retained release trees", asy
     await sample();
     expect(report.errors).toEqual([]);
     expect(report.kept).toHaveLength(87);
+    console.info("[retention fixture]", JSON.stringify({ releases: 87, maxGapMs, timerSamplesDuringPass: during }));
     expect(maxGapMs).toBeLessThanOrEqual(50);
     expect(during).toBeGreaterThan(0);
   } finally { clearInterval(timer); }
@@ -659,3 +661,161 @@ test("a mount appearing above webpack during the HEAD read keeps the cache", asy
   h.ports.mountPoints = dir => mounted && dir === h.dirs[0] ? [path.join(dir, ".next")] : [];
   await h.run(); expect(exists(path.join(h.dirs[0]!, ".next/cache/webpack/cache"))).toBeTrue();
 });
+
+// Fail before any mutation: an uncertain inspection must stop the whole pass.
+test.each(["scan-error", "scan-partial", "bytes-error", "helper-timeout"])("retention fails closed on %s", async failure => {
+  const h = fixture();
+  h.ports.scan = undefined;
+  Object.assign(h.ports, { inspection: {
+    scan: async () => {
+      if (failure === "scan-error") throw new Error("scan unavailable");
+      if (failure === "scan-partial") return { ...EMPTY, complete: false };
+      return { ...EMPTY, complete: true };
+    },
+    bytes: async () => { throw new Error(failure === "helper-timeout" ? "helper deadline" : "bytes unavailable"); },
+    close: async () => {},
+  } });
+  const report = await h.run();
+  expect(report.errors.length).toBeGreaterThan(0);
+  expect(report.removed).toEqual([]);
+  expect(report.reclaimedCacheBytes).toBe(0);
+  for (const dir of h.dirs) expect(exists(dir)).toBeTrue();
+});
+
+test("a failed fresh safety scan aborts remaining candidates", async () => {
+  const h = fixture(); let scans = 0;
+  h.ports.scan = () => { if (++scans > 1) throw new Error("safety scan failed"); return EMPTY; };
+  const report = await h.run();
+  expect(report.errors.length).toBeGreaterThan(0);
+  expect(scans).toBe(2);
+  expect(report.removed).toEqual([]);
+  for (const dir of h.dirs) expect(exists(dir)).toBeTrue();
+});
+
+test.each(["exit", "hang", "malformed", "truncated", "oversize", "partial", "wrong-kind"])("a real %s helper removes nothing and leaves no helper behind", async failure => {
+  const h = fixture(); h.ports.scan = undefined;
+  const worker = new RetentionWorker({ executable: process.execPath, entry: path.join(import.meta.dir, "retention.fixture.ts"), args: [h.root, failure] }, 2_000);
+  h.ports.inspection = worker;
+  try {
+    await worker.bytes(h.root); // ready, then fail the inventory request
+    const pid = Number(fs.readFileSync(path.join(h.root, "helper-pid"), "utf8"));
+    const report = await h.run();
+    expect(report.errors.length).toBeGreaterThan(0); expect(report.removed).toEqual([]);
+    expect(report.reclaimedCacheBytes).toBe(0);
+    for (const dir of h.dirs) expect(exists(dir)).toBeTrue();
+    expect(() => process.kill(pid, 0)).toThrow();
+  } finally { await worker.close(); }
+}, 15_000);
+
+test.each(["hold", "throw", "write", "allow"])("trash removal awaits its safety observation and revalidates: %s", async outcome => {
+  const h = fixture(); const target = path.join(h.root, "disposable"); fs.mkdirSync(target); fs.writeFileSync(path.join(target, "file"), "original");
+  const journal = path.join(h.root, "trash.json"); let resume!: () => void; let entered!: (trash: string) => void;
+  const ready = new Promise<string>(resolve => { entered = resolve; });
+  const proceed = new Promise<void>(resolve => { resume = resolve; });
+  const removal = removeTreeViaTrash(target, { journal, held: async trash => {
+    entered(trash); await proceed;
+    if (outcome === "throw") throw new Error("inspection unavailable");
+    return outcome === "hold";
+  } });
+  const trash = await ready;
+  if (outcome === "write") fs.writeFileSync(path.join(trash, "late"), "preserve");
+  resume();
+  if (outcome === "throw") await expect(removal).rejects.toThrow("inspection unavailable");
+  else expect(await removal).toBe(outcome === "allow");
+  expect(exists(target)).toBe(outcome !== "allow");
+  if (outcome === "write") expect(fs.readFileSync(path.join(target, "late"), "utf8")).toBe("preserve");
+});
+
+test.each(["hold", "throw", "write", "allow"])("trash replay awaits its safety observation and revalidates: %s", async outcome => {
+  const h = fixture(); const target = path.join(h.root, "disposable"); fs.mkdirSync(target); fs.writeFileSync(path.join(target, "file"), "original");
+  const journal = path.join(h.root, "trash.json");
+  await expect(removeTreeViaTrash(target, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
+  let resume!: () => void; let entered!: (trash: string) => void;
+  const ready = new Promise<string>(resolve => { entered = resolve; }); const proceed = new Promise<void>(resolve => { resume = resolve; });
+  const replay = finishTreeTrash(journal, async trash => {
+    entered(trash); await proceed;
+    if (outcome === "throw") throw new Error("inspection unavailable");
+    return outcome === "hold";
+  });
+  const trash = await ready;
+  if (outcome === "write") fs.writeFileSync(path.join(trash, "late"), "preserve");
+  resume();
+  if (outcome === "throw") await expect(replay).rejects.toThrow("inspection unavailable");
+  else expect(await replay).toBe(outcome === "allow");
+  expect(exists(trash)).toBe(outcome !== "allow");
+  if (outcome === "write") expect(fs.readFileSync(path.join(trash, "late"), "utf8")).toBe("preserve");
+});
+
+test.each(["throw", "partial"])("a %s safety scan after package rename restores the release and aborts the pass", async failure => {
+  const h = fixture(0); h.record.checkout = null; h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  const dirs = Array.from({ length: 4 }, (_, i) => path.join(h.record.releasesDir, `npm-3.0.${i}`));
+  for (const dir of dirs) { fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, "package.json"), "{}"); fs.utimesSync(dir, 1, 1); fs.utimesSync(path.join(dir, "package.json"), 1, 1); }
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: dirs[0] }));
+  let failed = false;
+  h.ports.scan = () => {
+    if (fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))) {
+      failed = true;
+      if (failure === "throw") throw new Error("safety scan unavailable after rename");
+      return { ...EMPTY, complete: false };
+    }
+    return EMPTY;
+  };
+  const report = await h.run();
+  expect(failed).toBeTrue(); expect(report.errors.length).toBeGreaterThan(0); expect(report.removed).toEqual([]);
+  for (const dir of dirs) expect(fs.readFileSync(path.join(dir, "package.json"), "utf8")).toBe("{}");
+  expect(fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+});
+
+test.each(["active", "rollback", "serving", "in-flight"])("fresh %s authority is read after awaiting the helper safety scan", async protection => {
+  const h = fixture(4); const target = h.dirs[1]!;
+  h.inputs.inFlight = [h.dirs[0]!]; h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" }; h.ports.scan = undefined;
+  h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs });
+  let scans = 0; let acquired = false;
+  h.ports.inspection = {
+    scan: async () => {
+      await Promise.resolve();
+      if (++scans === 2) {
+        acquired = true;
+        if (protection === "active") fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: target }));
+        if (protection === "rollback") h.inputs.rollbackPointers = [JSON.stringify({ dir: target })];
+        if (protection === "serving") h.record.web.revision = h.shas[1]!;
+        if (protection === "in-flight") h.inputs.inFlight = [h.dirs[0]!, target];
+      }
+      return { ...EMPTY, complete: true };
+    }, bytes: async () => 0, close: async () => {},
+  };
+  const report = await h.run();
+  expect(acquired).toBeTrue(); expect(report.errors).toEqual([]); expect(exists(target)).toBeTrue();
+  expect(report.removed.some(row => row.dir === target)).toBeFalse();
+});
+
+test.skipIf(process.platform !== "linux")("the leased helper rescans before later removals after an earlier release disappears", async () => {
+  const h = fixture(5); const target = h.dirs[2]!; h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  h.ports.scan = undefined; h.inputs.inFlight = [h.dirs[0]!];
+  const proc = path.join(h.root, "proc"); fs.mkdirSync(path.join(proc, "self/ns"), { recursive: true });
+  fs.symlinkSync("mnt:[fixture]", path.join(proc, "self/ns/mnt"));
+  const worker = new RetentionWorker({ executable: process.execPath, entry: path.join(import.meta.dir, "retention.fixture.ts"), args: [h.root, "inspect"] });
+  h.ports.inspection = worker;
+  const run = h.ports.git!; let acquired = false;
+  h.ports.git = async (args, cwd) => {
+    const result = await run(args, cwd);
+    if (args[0] === "worktree" && args[1] === "remove" && args.at(-1) === h.dirs[1]) {
+      acquired = true;
+      const base = path.join(proc, "123"); fs.mkdirSync(path.join(base, "ns"), { recursive: true }); fs.mkdirSync(path.join(base, "fd"));
+      fs.symlinkSync("mnt:[fixture]", path.join(base, "ns/mnt"));
+      fs.writeFileSync(path.join(base, "stat"), "123 (fixture) S " + "0 ".repeat(20));
+      for (const link of ["cwd", "root", "exe"]) fs.symlinkSync(target, path.join(base, link));
+      for (const file of ["cmdline", "environ", "maps"]) fs.writeFileSync(path.join(base, file), "");
+    }
+    return result;
+  };
+  try {
+    await worker.bytes(h.root);
+    const report = await h.run();
+    expect(acquired).toBeTrue(); expect(report.errors).toEqual([]);
+    expect(report.removed.some(row => row.dir === h.dirs[1])).toBeTrue();
+    expect(report.removed.some(row => row.dir === target)).toBeFalse(); expect(exists(target)).toBeTrue();
+    expect(fs.readFileSync(path.join(h.root, "requests"), "utf8").split("\n").filter(kind => kind === "scan").length).toBeGreaterThan(2);
+    const pid = Number(fs.readFileSync(path.join(h.root, "helper-pid"), "utf8")); expect(() => process.kill(pid, 0)).toThrow();
+  } finally { await worker.close(); }
+}, 30_000);
