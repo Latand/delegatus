@@ -280,21 +280,19 @@ body {
 }
 
 /* Attention border: two soft comets orbiting the card edge in the state's
-   color (--pane-glow) — visibly "waiting for you" without stealing focus. */
-@property --pane-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
+   color (--pane-glow) — visibly "waiting for you" without stealing focus.
 
-@keyframes pane-orbit {
-  to {
-    --pane-angle: 360deg;
-  }
-}
-
-.pane-attention::before {
-  content: "";
+   The comets are a conic gradient turned by `transform: rotate()`, which the
+   compositor runs on its own thread. They used to be the gradient's `from`
+   angle, a registered custom property animated every frame: the browser
+   repainted the ring at 60 fps on the main thread, the same thread that handles
+   a keystroke, and a composer beside it paid up to 40 ms of input-to-paint for
+   it. While a composer has the focus the ring holds still (`data-composer-focused`,
+   below). The ring itself (`.pane-attention-ring`) is the static 2px frame cut out
+   by a mask, painted once; the gradient square inside it (`-comets`) is wide
+   enough to cover the frame at every angle and only turns. Same colours, same
+   stops, same 3.4s lap, same clockwise direction as the conic it replaces. */
+.pane-attention-ring {
   pointer-events: none;
   position: absolute;
   /* The comets hug the card frame from outside: the ring's inner edge sits
@@ -303,23 +301,44 @@ body {
   z-index: 1;
   border-radius: 12px;
   padding: 2px;
+  overflow: hidden;
+  container-type: size;
+  -webkit-mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
+  mask-composite: exclude;
+}
+
+.pane-attention-comets {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  /* A square no smaller than the ring's diagonal (at most 1.42 × its longer
+     side), centred on it: turned about its centre it covers the frame at every
+     angle, and its angles are the ring's own. */
+  width: max(142cqw, 142cqh);
+  aspect-ratio: 1;
+  margin: calc(max(142cqw, 142cqh) / -2) 0 0 calc(max(142cqw, 142cqh) / -2);
   background: conic-gradient(
-    from var(--pane-angle),
+    from 0deg,
     transparent 0deg 30deg,
     var(--pane-glow) 100deg,
     transparent 170deg 210deg,
     var(--pane-glow) 280deg,
     transparent 350deg 360deg
   );
-  -webkit-mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
-  mask-composite: exclude;
+  will-change: transform;
   animation: pane-orbit 3.4s linear infinite;
 }
 
+@keyframes pane-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .pane-attention::before {
+  .pane-attention-comets {
     animation: none;
   }
 }
@@ -344,6 +363,21 @@ body {
   .card-status-attention {
     animation: none;
   }
+}
+
+/* A composer field that has the focus gets the main thread and the compositor to
+   itself. The attention halos that grow a box-shadow (the needs-you breath, the
+   deck's live round, the arrival pulse) repaint on the main thread every frame,
+   and the pane ring, though it turns on the compositor, still costs a composited
+   frame per vsync: a software compositor spends tens of milliseconds on one, and
+   the key that arrives waits behind it. All of them hold their frame while a
+   composer field has the focus (`src/lib/composerFocus.ts`) and carry on when it
+   loses it. Reduced-motion users never had them moving. */
+:root[data-composer-focused] .pane-attention-comets,
+:root[data-composer-focused] .card-status-attention,
+:root[data-composer-focused] .deck-tab-live,
+:root[data-composer-focused] [data-attention-pulse][data-attention-pulse] {
+  animation-play-state: paused;
 }
 
 /* Syntax highlighting palette (issue #9 §7): highlight.js emits .hljs-* class

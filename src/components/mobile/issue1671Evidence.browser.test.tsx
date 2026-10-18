@@ -18,7 +18,7 @@ import { heldDeliveryOccurrences, orchestratorMandateDeliveries } from "@/lib/ru
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
-import { captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureAttentionRing, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
@@ -8197,6 +8197,20 @@ browserTest("stage agent row: conversations, parked questions and earlier attemp
     fs.writeFileSync("evidence/stage-open-agent/geometry.json", JSON.stringify(readings, null, 2) + "\n");
   } finally { await browser.close(); stop(); }
 }, 180_000);
+
+describe("attention cues stay off the main thread beside the composer", () => {
+  browserTest("the ring turns on the compositor and matches the previous drawing at 390 and 430", async () => {
+    const out = path.resolve(".artifacts/attention-ring/phone"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    try {
+      const result = await captureAttentionRing(browser, server.base, out, true);
+      fs.mkdirSync("evidence/attention-ring", { recursive: true });
+      fs.writeFileSync("evidence/attention-ring/phone.json", JSON.stringify(result, null, 2) + "\n");
+      expect(result.failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
 
 describe("seat hand-over with evidence answered last", () => {
   browserTest("Claude and Codex keep the opened card at 390 in en and uk", async () => {
