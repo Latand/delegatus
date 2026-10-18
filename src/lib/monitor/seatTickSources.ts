@@ -2191,7 +2191,19 @@ async function childWork(
       observedRunning.add(child.key);
     }
     accounting.rotateRunning(running.slice(0, RUNNING_ROTATE));
-    for (const ticket of accounting.pollPage(POLL_VISITS)) {
+    const catchUpPollThrough = catchingUp && !gaps.has("discovery-incomplete")
+      ? accounting.beginCatchUpPoll()
+      : null;
+    const pollTickets = accounting.pollPage(POLL_VISITS).filter(ticket => {
+      if (!catchingUp || catchUpPollThrough === null) return true;
+      if (ticket.kind !== "poll") return false;
+      // Priority tickets represent a ledger read cut during this same outage.
+      // Keep following them even though their replacement ticket has a newer
+      // sequence than the frozen snapshot.
+      if (ticket.key.startsWith(`poll/${encodeURIComponent(project)}/!`)) return true;
+      return Number(ticket.key.slice(ticket.key.lastIndexOf("/") + 1)) <= catchUpPollThrough;
+    });
+    for (const ticket of pollTickets) {
       if (bytesLeft <= 0) break;
       if (ticket.kind !== "poll") throw new Error("invalid poll ticket");
       let child = accounting.get(ticket.target);
@@ -2209,6 +2221,13 @@ async function childWork(
         children.push(child.input);
         observedRunning.add(child.key);
       }
+    }
+    if (catchUpPollThrough !== null) {
+      const next = accounting.page("poll", 1)[0];
+      const pending = next?.kind === "poll" && (next.key.startsWith(`poll/${encodeURIComponent(project)}/!`)
+        || Number(next.key.slice(next.key.lastIndexOf("/") + 1)) <= catchUpPollThrough);
+      if (pending) gaps.add("ledger-pending");
+      else accounting.endCatchUpPoll();
     }
     accounting.rotateCold(coldVisits);
     // Page the persisted ready queue, yielding between pages. The cutoff is

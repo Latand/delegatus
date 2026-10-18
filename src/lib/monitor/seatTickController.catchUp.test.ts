@@ -1,9 +1,10 @@
 import { seatTickWakeCommit } from "./seatTick";
 import { recordSeatDeployment, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
-import { expect, test, fs, path, SANDBOX, harness, childFixture, childRig, runSeatTickCheck, NOW, MINUTE, PROJECT, CONVERSATION, OVERDUE, outstandingWake, terminalEvent, spawn, SeatTickAccounting, defaultSeatTickSettings, writeSeatTickState, emptySeatTickState } from "./seatTickController.fixture";
+import { expect, test, fs, path, SANDBOX, harness, childFixture, childRig, runSeatTickCheck, NOW, MINUTE, PROJECT, CONVERSATION, OVERDUE, outstandingWake, terminalEvent, spawn, SeatTickAccounting, FileRuntimeEventStore, statePath, defaultSeatTickSettings, writeSeatTickState, emptySeatTickState, hostedSeat, realTransport, reportPort, setAgentRegistryForTests, emptyLaunchProfile } from "./seatTickController.fixture";
 import { readLivenessTranscriptEvidence } from "@/lib/lifecycle/transcript";
 import { agentLivenessSnapshot } from "@/lib/lifecycle/liveness";
 import type { AgentLivenessSources } from "@/lib/lifecycle/liveness";
+import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 const FROM = new Date(NOW - 13 * 60 * MINUTE).toISOString();
 const AT = new Date(NOW - 8 * 60 * MINUTE).toISOString();
@@ -112,6 +113,39 @@ test("catch-up crosses the event page boundary and leaves later events for later
   expect(next.sent[0]!.text).not.toContain("unreachable window");
 });
 
+test("oversized multilingual catch-up reaches the real structured transport and credits all events", async () => {
+  const f = childFixture("catch-up-real-transport");
+  const from = new Date(f.now - 13 * 60 * MINUTE).toISOString();
+  const events = Array.from({ length: 225 }, (_, i) => ({ ...terminalEvent(i + 1), project: PROJECT, type: "pipeline_merged" as const,
+    pipelineId: `merged-${String(i + 1).padStart(3, "0")}`, at: new Date(f.now - 12 * 60 * MINUTE + i * 1000).toISOString(), summary: `merged outcome ${i + 1} — ${"я界🙂".repeat(45)}` }));
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastCheckAt: from, lastWakeAt: from,
+    lastProposalAt: AT, unreachableSince: from, eventsThrough: 0, accounting: undefined }, f.stateFile);
+  setAgentRegistryForTests(f.registry);
+  const hosted = hostedSeat(f);
+  const rig = harness({ seat: f.seat, registry: f.registry, stateFile: f.stateFile, now: f.now, events,
+    realWakeState: true, journal: { client: hosted.client },
+    deliverWith: realTransport(f, hosted.client) });
+  rig.deps.sources!.reports = reportPort(() => []);
+  expect(rig.deps.readState!(PROJECT).unreachableSince).toBe(from);
+  const record = await runSeatTickCheck(PROJECT, rig.deps);
+  expect(record?.delivery?.outcome).toBe("queued");
+  expect(rig.sent).toHaveLength(1);
+  const text = rig.sent[0]!.text;
+  expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
+  expect(text).toContain(`unreachable window ${from} through ${new Date(f.now).toISOString()}`);
+  expect(text).toContain(`key catch-up:7:${from}`);
+  for (const event of events) { expect(text).toContain(event.pipelineId); expect(text).toContain(event.at); }
+  expect(rig.deps.readState!(PROJECT).eventsThrough).toBe(0);
+  const queued = rig.deps.readState!(PROJECT).outstandingWake!;
+  expect(queued.operationId).toBeTruthy();
+  hosted.journal.transitionOperation(queued.operationId!, "delivered");
+  await runSeatTickCheck(PROJECT, rig.deps);
+  const row = rig.deps.readState!(PROJECT);
+  expect(row.eventsThrough).toBe(225);
+  expect(row.itemsShown).toHaveLength(225);
+  expect(row.reportsOwed?.map(report => report.key)).toEqual([`catch-up:7:${from}`]);
+});
+
 test("a landed catch-up stays acknowledged after a real process restart", async () => {
   const directory = fs.mkdtempSync(path.join(SANDBOX, "catch-up-process-"));
   const stateFile = path.join(directory, "tick.json");
@@ -158,10 +192,56 @@ test("one catch-up crosses the ready-child page and projection limits", async ()
   expect(accounting.ready(100)).toHaveLength(70);
   writeSeatTickState(f.project, { ...f.row(), unreachableSince: FROM }, f.stateFile);
   const rig = childRig(f);
-  await runSeatTickCheck(f.project, rig.deps);
+  for (let pass = 0; pass < 5 && rig.sent.length === 0; pass++) await runSeatTickCheck(f.project, rig.deps);
   expect(rig.sent).toHaveLength(1);
   for (const child of children) expect(rig.sent[0]!.text).toContain(child.id);
   expect(f.acknowledged()).toHaveLength(70);
+  await runSeatTickCheck(f.project, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+}, 60_000);
+
+test("cold child ledgers are collected across bounded passes before the catch-up lands", async () => {
+  const Clock = Date;
+  globalThis.Date = new Proxy(Clock, {
+    construct(target, args) { return Reflect.construct(target, args.length ? args : [NOW]); },
+    get(target, key, receiver) { return key === "now" ? () => NOW : Reflect.get(target, key, receiver); },
+  });
+  const f = childFixture("catch-up-cold-ledgers");
+  const children = Array.from({ length: 70 }, (_, i) => {
+    const child = f.spawn({ title: `cold held worker ${String(i).padStart(2, "0")}`, turn: "busy" });
+    const generation = f.registry.conversation(child.id as never)!.generations[0]!.id;
+    const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+    ledger.append(generation, { kind: "turn-started", turnId: `first-${i}`, seq: 1 });
+    ledger.append(generation, { kind: "turn-ended", turnId: `first-${i}`, status: "completed", seq: 2 });
+    ledger.append(generation, { kind: "turn-started", turnId: `second-${i}`, seq: 3 });
+    ledger.append(generation, { kind: "turn-ended", turnId: `second-${i}`, status: "completed", seq: 4 });
+    f.registry.reconcileConversations([{
+      engine: "claude", path: child.path, accountId: null,
+      launchProfile: emptyLaunchProfile({ title: `cold held worker ${String(i).padStart(2, "0")}`, cwd: f.cwd }),
+      turn: { state: "terminal", source: "assistant", terminalAt: AT }, observedAt: AT,
+    }]);
+    return child;
+  });
+  f.seed({ lastCheckAt: FROM, lastWakeAt: FROM, lastProposalAt: AT, unreachableSince: FROM });
+  const rig = childRig(f);
+  let deliveredAt = 0;
+  let persistedPollCutoff: number | null = null;
+  for (let pass = 0; pass < 20 && rig.sent.length === 0; pass++) {
+    const result = await runSeatTickCheck(f.project, rig.deps);
+    if (result?.delivery?.outcome === "delivered") deliveredAt = pass + 1;
+    persistedPollCutoff = new SeatTickAccounting(f.row().accounting!.filename, f.project).row()?.catchUpPollThrough ?? persistedPollCutoff;
+  }
+  expect(deliveredAt).toBeGreaterThan(1);
+  expect(persistedPollCutoff).not.toBeNull();
+  expect(rig.sent).toHaveLength(1);
+  const text = rig.sent[0]!.text;
+  expect(text).toContain(`Catch-up after unreachable window ${FROM}`);
+  for (const child of children) expect(text).toContain(child.id);
+  const accounting = new SeatTickAccounting(f.row().accounting!.filename, f.project);
+  const acknowledged = accounting.collection.snapshot().filter(row => row.kind === "outcome" && row.status === "acknowledged");
+  expect(acknowledged).toHaveLength(140);
+  expect(acknowledged.filter(row => row.tuple.some(value => value.startsWith("second-")))).toHaveLength(70);
+  expect(f.row().unreachableSince).toBeNull();
   await runSeatTickCheck(f.project, rig.deps);
   expect(rig.sent).toHaveLength(1);
 }, 60_000);
