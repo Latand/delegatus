@@ -1123,8 +1123,12 @@ async function main() {
   /* Everything started below inherits the choice (#2168). */
   const debug = process.env.LLV_DEBUG === "1";
   startupOutput.setDebug(debug);
-  if (debug) delete process.env[QUIET_DIAGNOSTICS_ENV];
-  else process.env[QUIET_DIAGNOSTICS_ENV] = "1";
+  // Pipes/files keep service diagnostics, and journal metadata takes precedence
+  // even when a service gives the launcher a terminal. Clear an inherited quiet
+  // choice too: a shell or a previous launcher must not silence the service.
+  const quiet = !debug && process.stdout.isTTY === true && process.env.JOURNAL_STREAM === undefined;
+  if (quiet) process.env[QUIET_DIAGNOSTICS_ENV] = "1";
+  else delete process.env[QUIET_DIAGNOSTICS_ENV];
 
   /* Before anything can fail on a port the old unit still holds. */
   const legacyNotice = legacySystemdNotice(findLegacySystemdUnits(), LANG);
