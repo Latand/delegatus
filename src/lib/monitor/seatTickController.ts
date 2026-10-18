@@ -1488,6 +1488,26 @@ async function check(
       return { identity, cleanups };
     } catch { return null; } // Unreadable ownership cannot license recovery.
   };
+  // Host loss, MCP health and delivery progress are separate observations.
+  // Bind the bounded host probe to the seat and registry identity across I/O.
+  const hostReachabilityFor = async (seat: { conversationId: string; seatEpoch: number }, observed = recoveryIdentity(seat.conversationId)) => {
+    let deadHost = false;
+    let detail = "host evidence absent";
+    try {
+      const rows = await sources.liveness({ conversationId: seat.conversationId, stallAfterMs: policy.stallAfterMs, limit: 1 });
+      const row = rows.find(row => row.conversationId === seat.conversationId);
+      deadHost = row?.host?.state === "gone"
+        && (row.reason === "host_gone_turn_settled" || row.reason === "host_gone_turn_open");
+      if (row) detail = `${row.host?.state ?? "unknown"}/${row.reason}`;
+    } catch { detail = "host evidence unreadable"; }
+    const current = () => {
+      const active = sources.seatFor(canonical).active;
+      return !!active && active.conversationId === seat.conversationId && active.seatEpoch === seat.seatEpoch
+        && observed !== null && recoveryIdentity(seat.conversationId)?.identity === observed.identity;
+    };
+    return { deadHost, detail, current };
+  };
+  let openingReachability: { conversationId: string; seatEpoch: number; observation: Awaited<ReturnType<typeof hostReachabilityFor>> } | null = null;
   let admissionDetail: string | null = null;
   const admissionFor = async (seat: { conversationId: string; seatEpoch: number; designatedAt?: string | null }, requireDeadHost = false) => {
     const observed = recoveryIdentity(seat.conversationId);
@@ -1495,12 +1515,11 @@ async function check(
     let deadHost = false;
     let hostVerdict = "MCP available";
     if (requireDeadHost || mcpHealthFor(seat, sources.now()).status === "dead") {
-      try {
-        const rows = await sources.liveness({ conversationId: seat.conversationId, stallAfterMs: policy.stallAfterMs, limit: 1 });
-        deadHost = rows.some(row => row.conversationId === seat.conversationId && row.host?.state === "gone"
-          && (row.reason === "host_gone_turn_settled" || row.reason === "host_gone_turn_open"));
-        hostVerdict = rows.map(row => `${row.host?.state ?? "unknown"}/${row.reason}`).join(", ") || "host evidence absent";
-      } catch { hostVerdict = "host evidence unreadable"; }
+      // A failed revival needs new evidence about the host it just attempted.
+      const reachability = !requireDeadHost && openingReachability?.conversationId === seat.conversationId && openingReachability.seatEpoch === seat.seatEpoch
+        ? openingReachability.observation : await hostReachabilityFor(seat, observed);
+      deadHost = reachability.deadHost && reachability.current();
+      hostVerdict = reachability.detail;
     }
     const currentSeat = () => {
       const current = sources.seatFor(canonical).active;
@@ -1646,12 +1665,17 @@ async function check(
   // Credit delivered problem rows before a successor resets the generic agenda history.
   sources.memoryProblems?.(canonical, openingRow.itemsShown ?? [], openingSeat?.conversationId ? { conversationId: openingSeat.conversationId, seatEpoch: openingSeat.seatEpoch } : null);
   let opened = seatTickStateForEpoch(openingRow, openingSeat?.seatEpoch ?? null);
-  if (openingSeat && mcpHealthFor(openingSeat, opening).status === "dead" && !opened.unreachableSince) {
-    // Legacy rows have no outage marker. Their last confirmed wake bounds
-    // the undelivered window, so recovery does not replay that backlog in batches.
-    opened = { ...opened, unreachableSince: opened.lastWakeAt ?? new Date(opening).toISOString() };
-    writeState(canonical, opened);
-    opened = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
+  if (openingSeat?.conversationId) {
+    const reachability = await hostReachabilityFor({ ...openingSeat, conversationId: openingSeat.conversationId });
+    openingReachability = { conversationId: openingSeat.conversationId, seatEpoch: openingSeat.seatEpoch, observation: reachability };
+    if (!opened.unreachableSince && reachability.deadHost && reachability.current()) {
+      const observedAt = new Date(sources.now()).toISOString();
+      const fresh = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
+      opened = fresh.unreachableSince ? fresh : { ...fresh,
+        unreachableSince: observedAt, unreachableBacklogSince: fresh.lastWakeAt ?? observedAt };
+      writeState(canonical, opened);
+      opened = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
+    }
   }
   /* Whether the project came into this check with anything its card could be
      describing — so a check that finds it all gone closes the card, and a
@@ -1981,7 +2005,6 @@ async function check(
               state = accounting.readState();
             } else state = landed;
           } else {
-            if (!state.unreachableSince) state = { ...state, unreachableSince: at };
             if (outcome?.operationId && state.outstandingWake) {
               state = { ...state, outstandingWake: { ...state.outstandingWake, operationId: outcome.operationId } };
               if (accounting) { accounting.writeState(state); state = accounting.readState(); }

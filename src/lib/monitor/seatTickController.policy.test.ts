@@ -304,7 +304,7 @@ test.each([
             startHost: async () => {
               starts++;
               if (scenario === "terminal exit after claim") throw new Error("No conversation found with session ID");
-              return { identity: { sessionId: key.sessionId }, release: async () => {} } as never;
+              return { identity: { sessionId: key.sessionId }, viewerMcpTransport: "stdio", release: async () => {} } as never;
             },
             bindHost: async (registry, claimedKey, _host, owner, epoch) => {
               registry.setStructuredHostClaimed(claimedKey, {
@@ -604,6 +604,7 @@ test.each(["live", "unknown"] as const)("a %s host with broken MCP refuses even 
   await runSeatTickCheck(PROJECT, rig.deps);
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.sent).toEqual([]);
+  expect(rig.written.every(row => !row.unreachableSince)).toBe(true);
 });
 
 test("a composer replacement during dead-host evidence refuses recovery into its broken MCP", async () => {
@@ -620,6 +621,7 @@ test("a composer replacement during dead-host evidence refuses recovery into its
   };
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.sent).toEqual([]);
+  expect(rig.written.every(row => !row.unreachableSince)).toBe(true);
 });
 
 test("a rotation during dead-host evidence starts no predecessor recovery", async () => {
@@ -631,6 +633,7 @@ test("a rotation during dead-host evidence starts no predecessor recovery", asyn
   };
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.sent).toEqual([]);
+  expect(rig.written.every(row => !row.unreachableSince)).toBe(true);
 });
 
 test("persisted MCP cards survive repeated outages and equal-epoch projects", async () => {
