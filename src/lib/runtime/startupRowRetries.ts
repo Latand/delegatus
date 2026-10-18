@@ -139,15 +139,19 @@ export function startupRowRetries(registry: AgentRegistry): StartupRowRetries {
  * restarts and is available to the project's seat through list_tasks. */
 export async function startupRowNotice(entry: AgentRegistryEntry, row: StartupRowRetry | null, assertActive = () => {}): Promise<void> {
   const key = `${entry.key.engine}:${entry.key.sessionId}`;
-  const taskId = `startup-quarantine-${id(key).slice(0, 32)}`;
+  const hash = id(key);
+  // A deterministic UUIDv8 keeps retries idempotent and passes older peers'
+  // task schemas. Keep finding legacy notices so they can still be resolved.
+  const taskId = [hash.slice(0, 8), hash.slice(8, 12), `8${hash.slice(13, 16)}`, `8${hash.slice(17, 20)}`, hash.slice(20, 32)].join("-");
+  const legacyId = `startup-quarantine-${hash.slice(0, 32)}`;
   const project = projectInfoFromCwd(entry.cwd)?.project;
   if (!project) throw new Error("structured startup quarantine project is unavailable");
   await mutateTasksAsync(tasks => {
     assertActive();
-    const existing = tasks.find(task => task.id === taskId);
+    const existing = tasks.find(task => task.id === taskId) ?? tasks.find(task => task.id === legacyId);
     if (!row) {
       if (!existing || existing.status === "done") return { tasks: undefined, result: undefined };
-      const closed = patchTask(tasks, taskId, { status: "done" });
+      const closed = patchTask(tasks, existing.id, { status: "done" });
       if (!closed.ok) throw new Error(closed.error);
       return { tasks: closed.tasks, result: undefined };
     }
@@ -156,7 +160,7 @@ export async function startupRowNotice(entry: AgentRegistryEntry, row: StartupRo
       : `Карантин запуску structured-хоста\n\n${key}\nПричина: ${row.reason}. Повторюється лише цей рядок із обмеженою затримкою.`;
     if (existing) {
       if (existing.text === text && existing.status !== "done") return { tasks: undefined, result: undefined };
-      const updated = patchTask(tasks, taskId, { text, status: "inbox" });
+      const updated = patchTask(tasks, existing.id, { text, status: "inbox" });
       if (!updated.ok) throw new Error(updated.error);
       return { tasks: updated.tasks, result: undefined };
     }

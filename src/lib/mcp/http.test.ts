@@ -203,14 +203,31 @@ beforeEach(() => {
   loseNextDeliveryAnswer = false;
 });
 
-async function httpClient(headers: Record<string, string>): Promise<Client> {
-  const client = new Client({ name: "llv-http-mcp-regression", version: "1.0.0" });
+async function httpClient(headers: Record<string, string>, name = "llv-http-mcp-regression"): Promise<Client> {
+  const client = new Client({ name, version: "1.0.0" });
   await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", origin), { requestInit: { headers } }));
   /* As an agent does at startup; it also primes the client's tool cache, so a
      later call is exactly one request. */
   await client.listTools();
   return client;
 }
+
+for (const engine of ["codex-mcp-client", "claude-code"]) test(`${engine} receives one JSON result across HTTP executor calls`, async () => {
+  const client = await httpClient({ "x-llv-spawn-capability": alice.capability, "user-agent": `${engine}/fixture` }, engine);
+  try {
+    const success = await client.callTool({ name: "list_tasks", arguments: { ids: ["task-fixture-absent"] } });
+    expect(success.structuredContent).toBeUndefined();
+    expect(success.content).toHaveLength(1);
+    expect(JSON.parse((success.content as Array<{ text: string }>)[0].text)).toMatchObject({ ok: true, toolName: "list_tasks" });
+    const invalid = await client.callTool({ name: "create_task", arguments: {
+      clientRequestId: `format-invalid-${engine}`, project: "fixture-project", text: "Inspect the transport", details: 42,
+    } });
+    expect(invalid.isError).toBe(true);
+    expect(invalid.structuredContent).toBeUndefined();
+    expect(invalid.content).toHaveLength(1);
+    expect(JSON.parse((invalid.content as Array<{ text: string }>)[0].text)).toMatchObject({ ok: false, code: "TASK_INVALID_FIELD" });
+  } finally { await client.close(); }
+});
 
 function agentClient(agent: Agent): Promise<Client> {
   return httpClient({ "x-llv-spawn-capability": agent.capability });
@@ -497,6 +514,11 @@ test("a missing, malformed, unknown or rotated capability is refused before any 
   expect(missing.body).toMatchObject({ jsonrpc: "2.0", id: null, error: { code: -32001 } });
   expect((await rawPost({ "x-llv-spawn-capability": "not-a-capability" })).status).toBe(403);
   expect((await rawPost({ "x-llv-spawn-capability": crypto.randomBytes(32).toString("base64url") })).status).toBe(403);
+
+  for (const name of ["codex-mcp-client", "claude-code"]) {
+    expect((await rawPost({ "user-agent": `${name}/fixture` })).status).toBe(403);
+    expect((await rawPost({ "user-agent": `${name}/fixture`, "x-llv-spawn-capability": "not-a-capability" })).status).toBe(403);
+  }
 
   /* A relaunch rotates the capability; the one it replaced names nobody. */
   const carol = launchAgent("HTTP MCP rotated caller");

@@ -123,7 +123,8 @@ import {
 } from "./limits";
 import * as legacyReview from "./legacyReviewDefinition";
 import { laneMovedSince } from "./laneMovement";
-import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipelineRepo } from "./preflight";
+import { pipelineRepoPreflightError, pipelineRepoPreflightStatus } from "./preflight";
+import { preparePipelineRepository, readRepositoryInitialization } from "./initializeRepository";
 import { classifyProviderCondition, type ProviderCondition } from "./providerConditions";
 import { pipelineDeliveryGuidance, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
 import { composeStageInput } from "./stageInput";
@@ -133,7 +134,7 @@ import { resolveStageTestGuidance } from "./testGuidance";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
-import { withoutStoredLessons } from "@/lib/memory/roleStore";
+import { withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
@@ -677,7 +678,7 @@ async function spawnPipelineAgent(
 ): Promise<PipelineStageSpawn> {
   /* The message carries the stage prompt, with any quoted private rule
      withheld. The engine renders its selector into its instruction channel. */
-  const message = withoutStoredLessons(input.prompt);
+  const message = await withoutStoredLessonsAsync(input.prompt);
   /* #1279's seam. An unbound project takes the same branch it always took —
      the active account — so nothing changes for a project nobody configured.
      A bound one draws from its allowed set only: a stage naming an account
@@ -1526,7 +1527,7 @@ export function defaultPipelinePorts(
   };
   return {
     exec: realExec,
-    preflightRepo: preflightPipelineRepo,
+    preflightRepo: preparePipelineRepository,
     roleLookup: pipelineRoleLookup,
     allowedAccountIds: (project, engine) => allowedAccountIdsForProject(project, engine),
     engineReadiness: (engine, project) => engineReadiness(engine, project),
@@ -11398,6 +11399,7 @@ function pipelineTasksRunElsewhere(taskIds: readonly string[], tasks: readonly B
 }
 
 export type PipelineMutationResult = {
+  repositoryInitialization?: import("./types").RepositoryInitialization;
   pipeline?: Pipeline;
   error?: string;
   status?: number;
@@ -11557,8 +11559,11 @@ export async function createPipelineFromRequest(
 ): Promise<PipelineMutationResult> {
   if (options.creationRequest) {
     const replay = pipelineDeliveryLookup({ requestKey: options.creationRequest.key });
-    if (replay) return replay.creationRequest?.digest === options.creationRequest.digest
-      ? { pipeline: replay } : { error: "idempotency_conflict: creation arguments changed", status: 409 };
+    if (replay) {
+      if (replay.creationRequest?.digest !== options.creationRequest.digest) return { error: "idempotency_conflict: creation arguments changed", status: 409 };
+      const repositoryInitialization = await readRepositoryInitialization(replay.repoDir);
+      return { pipeline: replay, ...(repositoryInitialization ? { repositoryInitialization } : {}) };
+    }
   }
   /* #1026: every request-shape constraint is evaluated before the request is
      answered, and the response carries all of them. The checks and their
@@ -11611,7 +11616,7 @@ export async function createPipelineFromRequest(
   if (!creator.lineage) violations.push({ field: "src", message: creator.error ?? "pipeline creator lineage is required; pass src", expected: PIPELINE_SRC_ROOT_GUIDANCE });
   const taskIds = [...new Set((req.taskIds ?? []).map((taskId) => taskId.trim()))];
   const requestedRepoDir = typeof req.repoDir === "string" ? req.repoDir.trim() : "";
-  if (!requestedRepoDir) violations.push({ field: "repoDir", message: "repoDir is required", expected: "absolute path of an existing git repository" });
+  if (!requestedRepoDir) violations.push({ field: "repoDir", message: "repoDir is required", expected: "absolute path of a project folder" });
   /* A draft (autoStart:false) may be created empty and assembled on the canvas
      (#136); an immediately-started pipeline needs at least its one implement
      conversation (#353). */
@@ -11642,6 +11647,7 @@ export async function createPipelineFromRequest(
   const admission = (await ports.preflightRepo(requestedRepoDir));
   if (!admission.ok) return preflightFailure(admission);
   const repoDir = admission.repoDir;
+  const initializationAnswer = admission.repositoryInitialization ? { repositoryInitialization: admission.repositoryInitialization } : {};
   /* The project is resolved here rather than at buildPipeline so #1279's rule
      can be read before anything is stored: a stage naming an account the
      project does not allow is refused at create, not discovered at launch. */
@@ -11744,9 +11750,9 @@ export async function createPipelineFromRequest(
       if (options.refreshOf && error instanceof Error && error.message.startsWith("target already owned")) return { error: error.message, status: 409 };
       if (!options.queueWhenBusy || !(error instanceof StoreBusyBeforeAdmissionError)) throw error;
       const entry = queuePipelineCreation(pipeline, target, targetInput?.comparison === true, error.message);
-      return { pipeline, queued: { reason: entry.reason, queuedAt: entry.queuedAt }, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer };
+      return { pipeline, queued: { reason: entry.reason, queuedAt: entry.queuedAt }, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
     }
-    return { pipeline: created, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer };
+    return { pipeline: created, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
   }
   return withPipelineMutation(async (pipelines, persist) => {
     if (options.ensureTask && options.spawnParams) {
@@ -11773,7 +11779,7 @@ export async function createPipelineFromRequest(
     assignPipelineDelivery(pipeline, target, targetInput?.comparison);
     pipelines.push(pipeline);
     await persist();
-    return { pipeline, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer };
+    return { pipeline, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
   });
 }
 

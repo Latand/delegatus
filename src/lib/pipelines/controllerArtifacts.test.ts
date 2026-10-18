@@ -465,6 +465,56 @@ test("inherited namespace discovery refuses a symlinked ancestor before repairin
   expect(fs.readdirSync(directory)).toEqual([".gitignore"]);
 });
 
+test("the refusal names the launch directory, the resolved work tree and core.worktree", async () => {
+  const { repo, git } = repository("core-worktree-refusal");
+  const elsewhere = path.join(root, "core-worktree-elsewhere");
+  fs.mkdirSync(elsewhere);
+  git("config", "core.worktree", elsewhere);
+  const toplevel = fs.realpathSync(elsewhere);
+  const failure = await prepareControllerArtifactDirectory(repo).then(() => null, (error: Error) => error);
+  expect(failure).not.toBeNull();
+  expect(failure!.message).toBe(
+    `controller artifacts must stay inside the Git worktree: ${fs.realpathSync(repo)} resolves to Git work tree ${toplevel}; ` +
+    `core.worktree is set to ${elsewhere} in this repository's config`);
+  expect(fs.existsSync(path.join(repo, ".artifacts"))).toBe(false);
+});
+
+test("the refusal without core.worktree still names the launch directory and the resolved work tree", async () => {
+  const { repo } = repository("outside-toplevel-refusal");
+  const elsewhere = path.join(root, "outside-toplevel-elsewhere");
+  fs.mkdirSync(elsewhere);
+  const exec: typeof realExec = async (command, args, cwd, env, options) => {
+    if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
+      return { code: 0, stdout: `${elsewhere}\n`, stderr: "" };
+    }
+    return realExec(command, args, cwd, env, options);
+  };
+  const failure = await prepareControllerArtifactDirectory(repo, exec).then(() => null, (error: Error) => error);
+  expect(failure).not.toBeNull();
+  expect(failure!.message).toBe(
+    `controller artifacts must stay inside the Git worktree: ${fs.realpathSync(repo)} resolves to Git work tree ${fs.realpathSync(elsewhere)}`);
+});
+
+test("the refusal names GIT_WORK_TREE when the environment sets it", async () => {
+  const { repo } = repository("environment-work-tree-refusal");
+  const elsewhere = path.join(root, "environment-work-tree-elsewhere");
+  fs.mkdirSync(elsewhere);
+  const exec: typeof realExec = async (command, args, cwd, env, options) => {
+    if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return { code: 0, stdout: `${elsewhere}\n`, stderr: "" };
+    return realExec(command, args, cwd, env, options);
+  };
+  const prior = process.env.GIT_WORK_TREE;
+  process.env.GIT_WORK_TREE = elsewhere;
+  try {
+    const failure = await prepareControllerArtifactDirectory(repo, exec).then(() => null, (error: Error) => error);
+    expect(failure!.message).toBe(
+      `controller artifacts must stay inside the Git worktree: ${fs.realpathSync(repo)} resolves to Git work tree ${fs.realpathSync(elsewhere)}; ` +
+      `GIT_WORK_TREE is set to ${elsewhere}`);
+  } finally {
+    if (prior === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = prior;
+  }
+});
+
 test.each([
   { kind: "structured", small: true }, { kind: "pipeline", small: true },
   { kind: "structured", small: false }, { kind: "pipeline", small: false },

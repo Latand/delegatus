@@ -339,6 +339,7 @@ test("after a reload, a run the history row cannot name is still linked from the
     reportRunConversation: async (id) =>
       new AgentRegistry(registryFile).spawnReceiptForClientAttempt(reportAttemptId(id))?.conversationId ?? null,
     conversationLive: async () => true,
+    finishReportTask: async () => {},
     log: () => {},
   });
   await runner.tick();

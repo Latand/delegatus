@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fireTasksChanged } from "@/components/tasks/taskApi";
 import { layerPrototypeDismissal, sendDismissal } from "@/components/attention/dismissalOverlay";
+import { reconcileTaskDrafts } from "@/components/prototypeReview/decisionDrafts";
 import { prototypeReviewNotices, prototypeReviewSummary } from "@/lib/prototypeReview/model";
 import type { DecidePrototypeInput, PrototypeAnswer, PrototypeReviewNotice, PrototypeReviewRead, PrototypeRoundRead } from "@/lib/prototypeReview/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -74,7 +75,11 @@ export function usePrototypeReview(taskId: string | null,enabled = true) {
       const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/prototypes`,{ signal });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? "Prototype review could not be read");
-      if (active.current === taskId && sequence.current === seq && !signal?.aborted) setSnapshot({ taskId,data: body,error: null,saving: false });
+      if (active.current === taskId && sequence.current === seq && !signal?.aborted) {
+        setSnapshot({ taskId,data: body,error: null,saving: false });
+        /* Only a complete, current read of this installation says a round is decided or gone; a failed one never does. */
+        if (Array.isArray(body.rounds) && !body.historyTruncated && !body.unavailable) reconcileTaskDrafts(taskId,body.rounds);
+      }
     } catch (error) {
       if (active.current === taskId && sequence.current === seq && !signal?.aborted) setSnapshot(previous => ({ taskId,data: previous.taskId === taskId ? previous.data : null,saving: false,error: error instanceof Error ? error.message : "Prototype review could not be read" }));
     }

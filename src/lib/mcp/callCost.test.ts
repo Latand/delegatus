@@ -82,8 +82,8 @@ test("only allowlisted pure reads may omit keys; explicit keys still replay afte
     const service = createMcpToolService(bindings, receipts);
     for (const name of OPTIONAL_READ_KEY_TOOLS) {
       expect(MUTATING_MCP_TOOL_NAMES.has(name)).toBe(false);
-      const first = await service.callTool(name, name === "relay_owner_history" ? { action: "groups" } : {});
-      const second = await service.callTool(name, name === "relay_owner_history" ? { action: "groups" } : {});
+      const first = await service.callTool(name, name === "relay_owner_history" ? { action: "groups" } : name === "relay_service_tools" ? { op: "list" } : {});
+      const second = await service.callTool(name, name === "relay_owner_history" ? { action: "groups" } : name === "relay_service_tools" ? { op: "list" } : {});
       expect(first).toMatchObject({ ok: true, clientRequestId: null, replayed: false });
       if (!first.ok || !second.ok) throw new Error("read refused");
       expect(second.version).not.toBe(first.version);
