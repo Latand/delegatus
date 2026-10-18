@@ -7,7 +7,7 @@ export type EphemeralAgentEvent =
 export function mapAgentLine(
   engine: "claude" | "codex",
   line: string,
-  profile: { webSearch: boolean; session?: boolean } = { webSearch: false },
+  profile: { webSearch: boolean; session?: boolean; imageGeneration?: boolean } = { webSearch: false },
 ): EphemeralAgentEvent[] {
   let event: Record<string, unknown>;
   try {
@@ -20,13 +20,13 @@ export function mapAgentLine(
       const item = event.item as Record<string, unknown> | undefined;
       if (
         !item ||
-        !["agent_message", "reasoning", "error", ...(profile.webSearch ? ["web_search"] : []), ...(profile.session ? ["context_compaction"] : [])].includes(String(item.type))
+        !["agent_message", "reasoning", "error", ...(profile.webSearch ? ["web_search"] : []), ...(profile.session ? ["context_compaction"] : []), ...(profile.imageGeneration ? ["image_generation", "image_generation_call"] : [])].includes(String(item.type))
       )
         return [{ type: "violation", detail: "unexpected Codex item" }];
-      // The native web search is the one tool the profile may offer (§B.6.5).
-      if (item.type === "web_search")
+      // Native tool progress is admitted only by the negotiated run profile.
+      if (item.type === "web_search" || item.type === "image_generation" || item.type === "image_generation_call")
         return event.type === "item.started" || event.type === "item.completed"
-          ? [{ type: "tool", phase: event.type === "item.started" ? "start" : "done", tool: "web_search", ok: null }]
+          ? [{ type: "tool", phase: event.type === "item.started" ? "start" : "done", tool: item.type === "web_search" ? "web_search" : "image_generation", ok: null }]
           : [];
       if (
         event.type === "item.completed" &&

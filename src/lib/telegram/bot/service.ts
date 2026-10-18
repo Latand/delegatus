@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import sharp from "sharp";
 import { decodeHTML } from "entities";
 import type { TelegramPublishReceipt } from "@/lib/externalRelay/publish";
 import { ownerReviewDestination, publishDurableTelegramMessage, telegramPublicationTarget } from "@/lib/externalRelay/telegramPublication";
@@ -38,7 +37,7 @@ import {
   type TelegramBotSendAnswer,
   type TelegramBotStatusPayload,
 } from "./contracts";
-import { defaultDocumentRoots, DocumentRefusal, loadDocument, normalizeDocumentRoots, readUnderRoots, type DocumentEnvironment } from "./documents";
+import { checkPhotoBytes, defaultDocumentRoots, DocumentRefusal, loadDocument, normalizeDocumentRoots, readUnderRoots, type DocumentEnvironment } from "./documents";
 import { TelegramBotStore, type BotRow, type ChatRow, type TgChat, type TgUpdate, type TgUser } from "./store";
 import { admitReportReplies, drainReportReplies, productionReportReplyPorts, type ReportReplyPorts } from "./reportReplies";
 import { outboundPostingAllowed, recordOutbound, releaseUnsentClaim, type OutboundMessage, type PublicationTarget } from "./outbound";
@@ -134,18 +133,10 @@ async function photoBlob(filename: string, index: number, roots: readonly string
     throw new TelegramBotError("photo_invalid", `photo ${index + 1} must be a readable file of at most 10 MB`);
   }
   try {
-    const metadata = await sharp(bytes, { failOn: "warning" }).metadata();
-    const jpeg = metadata.format === "jpeg";
-    const png = metadata.format === "png";
-    const width = metadata.width ?? 0;
-    const height = metadata.height ?? 0;
-    if ((!jpeg && !png) || width < 1 || height < 1 || width + height > 10_000 || Math.max(width, height) / Math.min(width, height) > 20) {
-      throw new Error("unsupported photo format or dimensions");
-    }
-    // Metadata parsing alone accepts some truncated images. Force a full decode
-    // before this file can be handed to Telegram.
-    await sharp(bytes, { failOn: "warning" }).raw().toBuffer();
-    return new Blob([Uint8Array.from(bytes)], { type: jpeg ? "image/jpeg" : "image/png" });
+    // The existing dimension rule admits at most 25M pixels (5000²).
+    // Relay uploads apply their narrower 20M cap at their own call site.
+    const type = await checkPhotoBytes(bytes, 25_000_000);
+    return new Blob([Uint8Array.from(bytes)], { type });
   } catch {
     throw new TelegramBotError("photo_invalid", `photo ${index + 1} must be a decodable JPEG or PNG within Telegram's photo dimensions`);
   }

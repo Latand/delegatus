@@ -3185,9 +3185,204 @@ for (const retry of [false, true]) test(`owner completion rechecks cutoff after 
 });
 
 
-test("owner reply chains reuse one conversation, learn bot answers and bind only the current authority", async () => {
+test("negotiated rich completion preserves the guide, schema, table and URL button", async () => {
+  const { richRequest } = await import("./rich.fixture");
+  const request = richRequest(); request.request_id = "rq_rich_roundtrip";
+  const text = "# Report\n\n| A | B |\n|---|---|\n| x | y |\n\n" + "x".repeat(5000);
+  const buttons = [[{ text: "Open", url: "https://example.com/report" }]];
+  const captures: unknown[] = [];
+  const server = await startTestRelay((req, body) => { if (req.url?.endsWith("/complete")) captures.push(body); return { body: { status: "ok" } }; });
+  const paired = relay(`${server.origin}/v1`);
+  const fake = stub(`const a=process.argv.slice(2); const prompt=await Bun.stdin.text();
+    const schema=JSON.parse(await Bun.file(a[a.indexOf('--output-schema')+1]).text());
+    if (!prompt.includes('<format>') || !prompt.includes(${JSON.stringify(JSON.stringify(request.input.format))}) || !schema.properties.format || !schema.properties.buttons) process.exit(2);
+    await Bun.write(a[a.indexOf('--output-last-message')+1], JSON.stringify(${JSON.stringify({action:"reply",text,reply_to:"m1",format:"rich_markdown",buttons})}));`);
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: fake });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text, format: "rich_markdown", buttons } });
+    expect(captures).toEqual([result]);
+  } finally { await server.close(); }
+});
+
+test("v2 invalid_format downgrades once while legacy completion retries stay unchanged", async () => {
+  const bodies: unknown[] = [];
+  const server = await startTestRelay((_req, body) => {
+    bodies.push(body);
+    return bodies.length === 1 ? { status: 422, body: { error: { code: "invalid_format" } } } : { body: {} };
+  });
+  try {
+    const result = await completeRelayRequest(relay(`${server.origin}/v1`), "rq_rich_downgrade", { lease_id: sampleRequest.lease_id, outcome: "answered", duration_ms: 1,
+      answer: { action: "reply", text: "# Short", reply_to: null, format: "rich_markdown", buttons: [] } }, () => Date.now() + 5000);
+    expect(result.delivery).toBe("accepted");
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toMatchObject({ answer: { format: "plain", text: "# Short" } });
+  } finally { await server.close(); }
+});
+test("invalid_format cannot downgrade an over-cap rich answer to plain",async()=>{
+  const bodies:{answer?:Record<string,unknown>;outcome?:string}[]=[];
+  const server=await startTestRelay((_req,body)=>{bodies.push(body as typeof bodies[number]);return bodies.length===1?{status:422,body:{error:{code:"invalid_format"}}}:{body:{}};});
+  try {
+    const result=await completeRelayRequest(relay(`${server.origin}/v1`),"rq_oversized_plain_fallback",{
+      lease_id:sampleRequest.lease_id,outcome:"answered",duration_ms:1,
+      answer:{action:"reply",text:"# Report\n\n"+"x".repeat(5000),reply_to:null,format:"rich_markdown",buttons:[]},
+    },()=>Date.now()+5000);
+    expect(result.body).toMatchObject({outcome:"failed",reason:"invalid_answer"});
+    expect(bodies[1]).toMatchObject({outcome:"failed",reason:"invalid_answer"});
+  }finally{await server.close();}
+});
+
+test("attachment readiness fallback preserves long rich text and URL buttons", async () => {
+  const bodies: { answer?: Record<string, unknown> }[] = [];
+  const server = await startTestRelay((_req, body) => {
+    bodies.push(body as typeof bodies[number]);
+    return bodies.length === 1 ? { status: 422, body: { error: { code: "attachment_not_ready" } } } : { body: {} };
+  });
+  const buttons = [[{ text: "Open", url: "https://example.com/" }]];
+  try {
+    const result = await completeRelayRequest(relay(`${server.origin}/v1`), "rq_attachment_downgrade", {
+      lease_id: sampleRequest.lease_id, outcome: "answered", duration_ms: 1,
+      answer: { action: "reply", text: "# Report\n\n" + "x".repeat(5000), reply_to: null, format: "rich_markdown", buttons, attachments: [{ attachment_id: "a0-fixture", kind: "document" }] },
+    }, () => Date.now() + 5000);
+    expect(result.delivery).toBe("accepted");
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]?.answer).toMatchObject({ format: "rich_markdown", buttons, text: bodies[0]?.answer?.text });
+    expect(bodies[1]?.answer?.attachments ?? []).toEqual([]);
+  } finally { await server.close(); }
+});
+
+test("already_completed conflict refuses a changed completion body", async () => {
+  const bodies: unknown[] = [];
+  const server = await startTestRelay((_req, body) => {
+    bodies.push(body);
+    return { status: 409, body: { error: { code: "already_completed" } } };
+  });
+  try {
+    const result = await completeRelayRequest(relay(`${server.origin}/v1`), "rq_changed_completion", {
+      lease_id: sampleRequest.lease_id, outcome: "answered", duration_ms: 1,
+      answer: { action: "reply", text: "changed body", reply_to: null, format: "rich_markdown", buttons: [] },
+    }, () => Date.now() + 5000);
+    expect(result).toMatchObject({ delivery: "refused", body: { outcome: "failed", reason: "invalid_answer" } });
+    expect(bodies).toHaveLength(1);
+  } finally { await server.close(); }
+});
+test("the identical rich completion is accepted after a lost acknowledgement",async()=>{
+  const bodies:unknown[]=[];
+  const server=await startTestRelay((_req,body)=>{bodies.push(body);return bodies.length===1?{drop:true}:{body:{}};});
+  const completion={lease_id:sampleRequest.lease_id,outcome:"answered" as const,duration_ms:1,
+    answer:{action:"reply" as const,text:"# Same",reply_to:null,format:"rich_markdown" as const,buttons:[]}};
+  try {
+    const result=await completeRelayRequest(relay(`${server.origin}/v1`),"rq_identical_rich",completion,()=>Date.now()+5000);
+    expect(result.delivery).toBe("accepted");expect(bodies).toHaveLength(2);expect(bodies[1]).toEqual(bodies[0]);
+  } finally {await server.close();}
+});
+
+
+test.each(["ok","lease_lost","refused","media_only_refused","outside","ignore"])("negotiated generated attachment crosses runner and upload (%s)", async mode => {
+  const { richRequest } = await import("./rich.fixture");
+  const sharp = (await import("sharp")).default;
+  const bytes = await sharp({create:{width:2,height:2,channels:3,background:"red"}}).png().toBuffer();
+  const request=richRequest(true); request.request_id=`rq_image_${mode}`;
+  const sent: unknown[]=[]; let puts=0;
+  const server=await startTestRelay((req,body)=>{
+    if(req.method==="PUT") {
+      puts++;
+      expect(body).toEqual(bytes);
+      expect(req.headers["delegatus-relay-lease"]).toBe(request.lease_id);
+      if(mode==="lease_lost") return {status:409,body:{error:{code:"lease_lost"}}};
+      if(mode.includes("refused")) return {status:415,body:{error:{code:"unsupported_media_type"}}};
+      return {status:201,body:{attachment_id:req.url!.split("/").at(-1),mime_type:"image/png",filename:"exec-1.png",sha256:req.headers["delegatus-relay-sha256"],byte_size:bytes.length,expires_at:new Date(Date.now()+60_000).toISOString()}};
+    }
+    if(req.url?.endsWith("/complete")) sent.push(body);
+    return {body:{status:"ok"}};
+  });
+  let seenRunDir="";
+  const marker=path.join(root,`image-home-${mode}`);
+  const command=stub(`import fs from 'node:fs'; import path from 'node:path';
+    const a=process.argv.slice(2),out=a[a.indexOf('--output-last-message')+1];
+    await Bun.stdin.text();
+    const dir=path.join(process.env.CODEX_HOME,'generated_images','thread_image');fs.mkdirSync(dir,{recursive:true});
+    const file=path.join(dir,'exec-1.png');fs.writeFileSync(file,Buffer.from(${JSON.stringify(bytes.toString("base64"))},'base64'));
+    await Bun.write(${JSON.stringify(marker)},path.dirname(out));
+    console.log(JSON.stringify({type:'thread.started',thread_id:'thread_image'}));
+    console.log(JSON.stringify({type:'item.completed',item:{type:'image_generation_call'}}));
+    await Bun.write(out,JSON.stringify({action:${JSON.stringify(mode==="ignore"?"ignore":"reply")},text:${JSON.stringify(mode==="media_only_refused"?"":"Picture")},reply_to:'m1',format:'plain',buttons:[],attachments:[{path:${mode==="outside"?JSON.stringify(path.join(root,"outside.png")):"file"},kind:'photo',caption:'Picture'}]}));`);
+  const paired=relay(`${server.origin}/v1`);
+  try {
+    const result=await runClaimedRequest(paired,request,undefined,{command});
+    seenRunDir=fs.readFileSync(marker,"utf8");
+    if(mode==="lease_lost") {expect(result).toBeNull();expect(sent).toEqual([]);}
+    else if(mode==="media_only_refused") expect(result).toMatchObject({outcome:"failed",reason:"invalid_answer"});
+    else if(mode==="ignore") expect(result).toMatchObject({outcome:"answered",answer:{action:"ignore",text:"",format:"plain",buttons:[]}});
+    else if(mode==="outside" || mode==="refused") {expect(result).toMatchObject({outcome:"answered"});expect(result && "answer" in result ? result.answer.attachments??[]:[]).toEqual([]);}
+    else {expect(result).toMatchObject({outcome:"answered",answer:{attachments:[{kind:"photo",caption:"Picture"}]}});}
+    expect(puts).toBe(mode==="outside" || mode==="ignore"?0:1);
+    expect(fs.existsSync(seenRunDir)).toBe(false);
+    const record=readAnswerRecord(paired.id,request.target_id,request.request_id);
+    expect(record).toHaveProperty("features",request.features);
+    expect(JSON.stringify(record)).not.toContain(seenRunDir);
+    if(mode==="outside") expect(record).toHaveProperty("drops",[{part:"attachment",index:0,reason:"outside_run"}]);
+    if(mode.includes("refused")) expect(record).toHaveProperty("drops",[{part:"attachment",reason:"unsupported_media_type"}]);
+  } finally {await server.close();}
+});
+
+
+test.each(["claude","codex"])("owner %s returns rich text, buttons and a document through the real MCP binding", async engine=>{
+  const { richRequest }=await import("./rich.fixture");
+  const { viewerMcpBindings, productionDomainDependencies }=await import("@/lib/mcp/bindings");
+  const ownerHome=fs.mkdtempSync(path.join("/tmp","relay-rich-owner-"));
+  fs.mkdirSync(path.join(ownerHome,"handoff")); const file=path.join(ownerHome,"handoff","report.md");fs.writeFileSync(file,"# Report");
+  const oldHome=process.env.HOME, oldState=process.env.LLV_STATE_DIR; process.env.HOME=ownerHome; process.env.LLV_STATE_DIR=path.join(ownerHome,"state");
+  const request=richRequest(true);request.request_id=`rq_owner_rich_${engine}`;
+  request.input.requester={key:"u1",is_owner:true,is_admin:true,is_anonymous_admin:false,can_delete_messages:true,can_restrict_members:true};
+  const events:string[]=[];
+  const server=await startTestRelay((req)=>{
+    if(req.method==="PUT") {events.push("upload");return {status:201,body:{attachment_id:req.url!.split("/").at(-1),mime_type:"text/markdown",filename:"report.md",byte_size:8,sha256:req.headers["delegatus-relay-sha256"],expires_at:new Date(Date.now()+60_000).toISOString()}};}
+    if(req.url?.endsWith("/complete"))events.push("complete");
+    return {body:{status:"ok"}};
+  });
+  const paired=relay(`${server.origin}/v1`);paired.targets[0]={...paired.targets[0]!,ownerTier:true,engine};
+  updateRelayStore(s=>({...s,relays:[paired]}));
+  const conversationId=`conversation_owner_rich_${engine}`;
+  const binding=(via?:{deputy:string},kind="agent")=>viewerMcpBindings(undefined,{get:async()=>({}),post:async()=>({})},{...productionDomainDependencies,callerAttribution:()=>({kind,conversationId,role:null,...(via?{via}:{})})} as never);
+  const own=binding();let observedError:unknown;
+  const text=("# Report\n\n"+"Long report. ".repeat(500)).trimEnd();
+  try {
+    const result=await runClaimedRequest(paired,request,undefined,{timeoutMs:10000,ownerPorts:{
+      launch:async body=>{expect(body.prompt).toContain("<format>");expect(body.prompt).toContain("relay_answer");return {status:202,body:{conversationId}};},
+      observe:async()=>{
+        try{
+          await expect(binding({deputy:"seat"}).relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
+          await expect(binding(undefined,"voice-gateway").relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
+          await own.relay_answer({format:"rich_markdown",buttons:[[{text:"Open",url:"https://example.com/report"}]],attachments:[{path:file,kind:"document",caption:"Report"}]});
+        }catch(error){observedError=error;}
+        return {state:"ended",finalText:text};
+      },stop:async()=>{},pollMs:1}});
+    if(observedError)throw observedError;
+    expect(result).toMatchObject({outcome:"answered",answer:{text,format:"rich_markdown",buttons:[[{text:"Open"}]],attachments:[{kind:"document",caption:"Report"}]}});
+    expect(events).toEqual(["upload","complete"]);
+    await expect(own.relay_answer({format:"plain"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
+  }finally{await server.close(); if(oldHome===undefined)delete process.env.HOME;else process.env.HOME=oldHome; if(oldState===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=oldState;fs.rmSync(ownerHome,{recursive:true,force:true});}
+});
+
+
+test("negotiated tool rounds reject plain over the cap and preserve their rich answer parts", async()=>{
+  const {richRequest}=await import("./rich.fixture");
+  const request=richRequest();request.input.tools=x1Request("member").input.tools;
+  const rich=await runLoopCase({request,plan:`return round===1?{action:'call',text:'',reply_to:null,format:'plain',buttons:[],calls:[call('search_docs',{query:'x'})]}:{action:'reply',text:'# Result\\n\\n'+'Long text. '.repeat(500),reply_to:'m1',format:'rich_markdown',buttons:[[{text:'Open',url:'https://example.com/'}]]};`});
+  expect(rich.completion).toMatchObject({outcome:"answered",answer:{format:"rich_markdown",buttons:[[{text:"Open"}]]}});
+  expect(rich.rounds).toHaveLength(2);
+  for(const round of rich.rounds) {expect(round.prompt).toContain("<format>");expect(round.schema.properties).toHaveProperty("format");}
+  const plain=richRequest();plain.request_id="rq_plain_cap";
+  const refused=await runLoopCase({request:plain,plan:`return {action:'reply',text:'x'.repeat(4001),reply_to:null,format:'plain',buttons:[]};`});
+  expect(refused.completion).toMatchObject({outcome:"failed",reason:"invalid_answer"});
+});
+test.each([false, true])("owner reply chains reuse one conversation, learn bot answers and bind only the current authority (rich %s)", async rich => {
   const { liveOwnerRelayConversation, ownerRelayPayload } = await import("./ownerAuthority");
   const { relayServiceToolsOp } = await import("./ownerServiceTools");
+  const { relayAnswerOp } = await import("./ownerAnswer");
+  const { formatGuide } = await import("./rich.fixture");
+  const text = rich ? "# Fixture answer\n\n" + "Fixture paragraph. ".repeat(300).trimEnd() : "Done";
+  const buttons = [[{ text: "Open", url: "https://example.com/report" }]];
   const { readConversations } = await import("./conversations");
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
@@ -3197,8 +3392,8 @@ test("owner reply chains reuse one conversation, learn bot answers and bind only
   const make = (n: number, parent: string | null, includeRoot = true) => {
     const message = (id: string, reply_to: string | null, self = false) => ({ ...contextRequest.input.conversation[0]!, id, reply_to,
       author: { key: self ? "fixture-bot" : contextRequest.input.requester.key, name: self ? "Assistant" : "Owner", self }, text: `Fixture turn ${id}` });
-    return { ...contextRequest, request_id: `chain-owner-${n}`, chat: { key: "fixture-owner-chain" }, answer: { max_chars: 1000, progress: "none" as const }, input: {
-      ...contextRequest.input, tools: ownerRequest().input.tools, instructions: "Static fixture instructions. ".repeat(1000), requester: { ...contextRequest.input.requester, is_owner: true },
+    return { ...contextRequest, ...(rich ? { features: ["relay_tool_calls", "relay_rich_messages"] } : {}), request_id: `chain-owner-${n}`, chat: { key: "fixture-owner-chain" }, answer: { max_chars: rich ? 32000 : 1000, progress: "none" as const }, input: {
+      ...contextRequest.input, ...(rich ? { format: formatGuide } : {}), tools: ownerRequest().input.tools, instructions: "Static fixture instructions. ".repeat(1000), requester: { ...contextRequest.input.requester, is_owner: true },
       respond_to: `turn-${n}`, conversation: [ ...(includeRoot && n > 1 ? [message("turn-1", null), message("bot-1", "turn-1", true)] : []), message(`turn-${n}`, parent) ] } };
   };
   const ports: import("./ownerRun").OwnerRunPorts = {
@@ -3213,14 +3408,15 @@ test("owner reply chains reuse one conversation, learn bot answers and bind only
     },
     observe: async () => {
       const listed = await relayServiceToolsOp("conversation_chain_fixture", { op: "list" });
-      expect(listed).toHaveProperty("tools");
-      return { state: "ended", finalText: "Done" };
+      expect(listed).toHaveProperty("tools.0");
+      if (rich) expect(await relayAnswerOp("conversation_chain_fixture", { format: "rich_markdown", buttons })).toMatchObject({ format: "rich_markdown", buttons });
+      return { state: "ended", finalText: text };
     }, stop: async () => {}, pollMs: 1,
   };
   try {
     for (const n of [1, 2, 3]) {
       const request = make(n, n === 1 ? null : "bot-1", n < 3); current = request.request_id;
-      expect(await runClaimedRequest(paired, request, undefined, { ownerPorts: ports })).toMatchObject({ outcome: "answered" });
+      expect(await runClaimedRequest(paired, request, undefined, { ownerPorts: ports })).toMatchObject({ outcome: "answered", answer: { text, ...(rich ? { format: "rich_markdown", buttons } : {}) } });
       if (n === 1) {
         const initial = readConversations()[0];
         expect(initial).toMatchObject({ conversationId: "conversation_chain_fixture",
@@ -3230,6 +3426,7 @@ test("owner reply chains reuse one conversation, learn bot answers and bind only
       expect(liveOwnerRelayConversation("conversation_chain_fixture")).toBe(false);
       expect(await relayServiceToolsOp("conversation_chain_fixture", { op: "list" })).toBeNull();
       expect(ownerRelayPayload("context", "conversation_chain_fixture")).toBeNull();
+      expect(await relayAnswerOp("conversation_chain_fixture", { format: "plain" })).toBeNull();
     }
     expect(launches).toBe(1); expect(readConversations()).toHaveLength(1);
     expect(prompts[1]).not.toContain("<service_instructions>"); expect(prompts[1]).not.toContain("[You work for the owner");

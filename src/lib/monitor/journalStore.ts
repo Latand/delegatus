@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -262,10 +263,36 @@ export function sanitizeSeatTickRecord(value: unknown): SeatTickRunRecord | null
 }
 
 export function appendSeatTickRecord(record: SeatTickRunRecord, filePath = seatTickJournalPath()): void {
-  appendJournalRecord(record, { filePath, retention: SEAT_TICK_RUN_HISTORY, busyMessage: "the seat tick journal is busy" });
+  const projectFile = seatTickProjectJournalPath(record.project, filePath);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  // The global ring remains small. Each project's own ring is independent,
+  // so unrelated checks cannot consume its diagnostic window.
+  withViewerOperation("seat-tick.audit", () => withFileTransactionSync(filePath, "the seat tick journal is busy", () => {
+    fs.mkdirSync(path.dirname(projectFile), { recursive: true, mode: 0o700 });
+    if (!fs.existsSync(projectFile)) {
+      const legacy = readJournalRecords(SEAT_TICK_RUN_HISTORY, { filePath, sanitize: sanitizeSeatTickRecord })
+        .filter(row => row.project === record.project);
+      if (legacy.length) fs.writeFileSync(projectFile, `${legacy.map(row => JSON.stringify(row)).join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
+    }
+    for (const target of [projectFile, filePath]) {
+      fs.appendFileSync(target, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
+      trim(target, SEAT_TICK_RUN_HISTORY);
+    }
+  }));
 }
 
-/** The newest `limit` checks, oldest first. */
-export function readSeatTickRecords(limit: number, filePath = seatTickJournalPath()): SeatTickRunRecord[] {
+function seatTickProjectJournalPath(project: string, filePath: string): string {
+  return path.join(`${filePath}.projects`, `${crypto.createHash("sha256").update(project).digest("hex")}.ndjson`);
+}
+
+/** The newest `limit` checks, oldest first, scoped before limiting. */
+export function readSeatTickRecords(limit: number, filePath = seatTickJournalPath(), project?: string): SeatTickRunRecord[] {
+  if (project !== undefined) {
+    const scoped = seatTickProjectJournalPath(project, filePath);
+    if (fs.existsSync(scoped)) return readJournalRecords(limit, { filePath: scoped, sanitize: sanitizeSeatTickRecord });
+    // Existing installations keep their old journal until their first new check.
+    return readJournalRecords(Number.MAX_SAFE_INTEGER, { filePath, sanitize: sanitizeSeatTickRecord })
+      .filter(row => row.project === project).slice(-Math.max(0, limit));
+  }
   return readJournalRecords(limit, { filePath, sanitize: sanitizeSeatTickRecord });
 }

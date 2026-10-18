@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
-import type { ExternalRelayRequester } from "./protocol";
+import type { AnswerDrop } from "./answerV2";
+import type { RelayMediaKind, ExternalRelayAnswer, ExternalRelayRequester } from "./protocol";
 import { exemptFromMemberLimit, type RelayAnswerProfile } from "./profile";
 
 /**
@@ -29,6 +30,9 @@ export type RelayToolCallRecord = {
   audience: string | null; truncated: boolean; replayed: boolean; withheld: boolean; local: boolean;
 };
 export type RelayAnswerRecord = {
+  features?: string[];
+  drops?: AnswerDrop[];
+  attachments?: {attachment_id:string;kind:RelayMediaKind;filename:string;bytes:number;sha256:string}[];
   conversationId?: string;
   chain?: { continued: boolean; promptBytes: number };
   compaction?: { member: string; owner: string };
@@ -55,7 +59,7 @@ export type RelayAnswerRecord = {
   state: "running" | "finished";
   /** `answered`, `declined:<reason>`, `failed:<reason>` or `lease_lost`; hand-off is `declined:handoff`. */
   outcome: string | null;
-  answer: { action: string; text: string; reply_to: string | null } | null;
+  answer: (Omit<ExternalRelayAnswer, "action"> & { action: string }) | null;
   /** Whether the service acknowledged the completion; null when none was sent. */
   delivery: RelayAnswerDelivery | null;
   /** `Request.input` exactly as received, unknown fields included. */
@@ -126,6 +130,7 @@ export function answerRecorder(base: {
   chatKey?: string | null;
   requester?: ExternalRelayRequester | null;
   input: unknown;
+  features?: string[];
 }) {
   const { requestId, targetId } = base;
   if (typeof requestId !== "string" || typeof targetId !== "string" || !safeId.test(requestId) || !safeId.test(targetId) || !safeId.test(base.relayId))
@@ -134,6 +139,7 @@ export function answerRecorder(base: {
   const file = path.join(targetDir(base.relayId, targetId), `${started}_${requestId}.json`);
   let record: RelayAnswerRecord = {
     v: 1,
+    ...(base.features ? {features:base.features} : {}),
     requestId,
     relayId: base.relayId,
     targetId,
@@ -186,6 +192,10 @@ export function answerRecorder(base: {
       } catch (error) {
         logFailure("write", error);
       }
+    },
+    annotateV2(parts: Partial<Pick<RelayAnswerRecord,"answer"|"outcome"|"drops"|"attachments">>) {
+      record = {...record,...parts};
+      try {writeRecord(file,record);} catch(error) {logFailure("write",error);}
     },
     recordDelivery(result: Pick<RelayAnswerRecord, "outcome" | "delivery">) {
       if (!finished) return;

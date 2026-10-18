@@ -22,8 +22,9 @@ export async function startTestRelay(
     try {
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(Buffer.from(chunk));
-      const text = Buffer.concat(chunks).toString("utf8");
-      const answer = await handler(req, text ? JSON.parse(text) : null);
+      const raw = Buffer.concat(chunks);
+      const text = raw.toString("utf8");
+      const answer = await handler(req, req.headers["content-type"]?.startsWith("application/json") ? text ? JSON.parse(text) : null : raw.length ? raw : null);
       if (answer.drop) {
         res.destroy();
         return;
