@@ -94,12 +94,98 @@ test("temp and disk observations share the lease, coalesce polls, and serialize 
   expect(worker.diskPressure()).toBe(disk);
   expect((await worktrees).errors).toEqual([]);
   expect((await temp)?.removed).toEqual([]);
-  expect((await disk).volumes.length).toBeGreaterThan(0);
-  expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("temp\ndisk-pressure\n");
+  await expect(disk).rejects.toThrow("stale while the sweep helper is busy");
+  expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("temp\n");
   expect(await worker.temp({ NODE_ENV: "test", LLV_TEMP_SWEEP: "off" })).toBeNull();
   await worker.close();
   expect((await launch().diskPressure()).volumes.length).toBeGreaterThan(0);
 }, 30_000);
+
+
+test("fresh disk pressure returns while a worktree sweep holds the leased helper", async () => {
+  const { root, worker } = fixture("--hold-worktree", 10_000);
+  const shared = globalThis as typeof globalThis & { __delegatusWorktreeSweepWorker?: WorktreeSweepWorker };
+  shared.__delegatusWorktreeSweepWorker = worker;
+  const { readDiskPressure } = await import("../state/diskPressure");
+  const initial = await readDiskPressure();
+  const readyPath = path.join(root, "busy-pid");
+  const ready = new Promise<void>((resolve, reject) => {
+    const watcher = fs.watch(root, (_event, file) => {
+      if (String(file) !== path.basename(readyPath)) return;
+      clearTimeout(timer);
+      watcher.close();
+      resolve();
+    });
+    const timer = setTimeout(() => {
+      watcher.close();
+      reject(new Error("worktree sweep did not acknowledge the hold"));
+    }, 5_000);
+  });
+  const sweep = worker.run("on");
+  try {
+    await ready;
+    const readDir = fs.readdirSync;
+    let processScans = 0;
+    const scan = spyOn(fs, "readdirSync").mockImplementation(((directory: fs.PathLike, ...args: unknown[]) => {
+      if (String(directory) === "/proc") { processScans++; throw new Error("process scan on caller"); }
+      return Reflect.apply(readDir, fs, [directory, ...args]);
+    }) as typeof readDir);
+    const probe = spyOn(fs, "statfsSync").mockImplementation(() => { throw new Error("volume probe on caller"); });
+    try {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const bounded = await Promise.race([
+        readDiskPressure().then(report => ({ report })),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("fresh disk read waited behind sweep")), 1_000); }),
+      ]).finally(() => { if (timer) clearTimeout(timer); });
+      expect(bounded.report.at).toBe(initial.at);
+      expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("disk-pressure\n");
+      expect(probe).not.toHaveBeenCalled();
+      expect(processScans).toBe(0);
+    } finally { scan.mockRestore(); probe.mockRestore(); }
+  } finally {
+    fs.writeFileSync(path.join(root, "release-worktree"), "release");
+  }
+  expect((await sweep).errors).toEqual([]);
+  expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("disk-pressure\n");
+}, 20_000);
+
+
+test("disk-pressure cache misses fail promptly instead of joining a held sweep", async () => {
+  const { root, worker } = fixture("--hold-worktree", 10_000);
+  const shared = globalThis as typeof globalThis & { __delegatusWorktreeSweepWorker?: WorktreeSweepWorker };
+  shared.__delegatusWorktreeSweepWorker = worker;
+  const { readDiskPressure } = await import("../state/diskPressure");
+  const ready = new Promise<void>((resolve, reject) => {
+    const watcher = fs.watch(root, (_event, file) => {
+      if (String(file) !== "busy-pid") return;
+      clearTimeout(timer);
+      watcher.close();
+      resolve();
+    });
+    const timer = setTimeout(() => {
+      watcher.close();
+      reject(new Error("worktree sweep did not acknowledge the hold"));
+    }, 5_000);
+  });
+  const sweep = worker.run("on");
+  try {
+    await ready;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      readDiskPressure().then(
+        report => ({ report }),
+        error => ({ error }),
+      ),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("disk cache miss waited behind sweep")), 1_000); }),
+    ]).finally(() => { if (timer) clearTimeout(timer); });
+    expect("error" in result && result.error.message).toContain("stale while the sweep helper is busy");
+    expect(fs.existsSync(path.join(root, "requests"))).toBe(false);
+  } finally {
+    fs.writeFileSync(path.join(root, "release-worktree"), "release");
+  }
+  expect((await sweep).errors).toEqual([]);
+  expect(fs.existsSync(path.join(root, "requests"))).toBe(false);
+}, 20_000);
 
 for (const kind of ["temp", "disk-pressure"] as const) {
   for (const flag of ["--malformed", "--wrong-kind", "--exit", "--oversize", "--hang"]) test(`${kind} refuses ${flag} under the shared lease`, async () => {

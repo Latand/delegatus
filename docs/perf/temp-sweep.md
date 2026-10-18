@@ -23,10 +23,13 @@ explicit test ports retain their existing local reader behavior. The pipeline
 engine's synchronous admission interface is unchanged.
 
 There is one process-global helper, one active request and at most one job for
-each of worktrees, temp and disk pressure. Repeated temp/disk calls join their
-pending job. Jobs serialize, including report writes; a resources cache miss
-can wait behind an active sweep. The existing 45-minute deadline includes
-queue time. Closing the worker invalidates queued jobs and ends its leased
+each of worktrees, temp and disk pressure. Repeated temp calls and disk refreshes
+join their pending job. Jobs serialize, including report writes. A validated
+disk-pressure reply is retained by the Viewer client for its 30-second
+observation window and returned immediately during a sweep. A stale or missing
+observation during an active temp/worktree sweep fails immediately without
+queueing; the next idle read can refresh it through the helper under a 10-second
+request deadline, capped by the worker's configured timeout. Closing the worker invalidates queued jobs and ends its leased
 process group before returning. Replies retain the 8 MiB limit and are checked
 against the requested report kind. Only the two temp-policy settings cross the
 request protocol; filesystem inputs are resolved in the helper.

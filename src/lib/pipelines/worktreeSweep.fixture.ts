@@ -11,6 +11,10 @@ const cache = new WorktreeSweepCache(path.join(directory, "cache.json"));
 const tree = path.join(directory, "tree");
 for await (const line of createInterface({ input: process.stdin })) {
   const { mode, kind, env } = JSON.parse(line);
+  if (mode === "on" && process.argv.includes("--hold-worktree")) {
+    fs.writeFileSync(path.join(directory, "busy-pid"), String(process.pid));
+    while (!fs.existsSync(path.join(directory, "release-worktree"))) await new Promise(resolve => setTimeout(resolve, 5));
+  }
   if (mode === "on" || kind && kind !== "worktrees") {
     if (process.argv.includes("--hang")) { process.on("SIGTERM", () => {}); fs.writeFileSync(path.join(directory,"busy-pid"), String(process.pid)); while (true) {} }
     if (process.argv.includes("--exit")) process.exit(3);
@@ -30,7 +34,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       LLV_TEMP_SWEEP: env?.LLV_TEMP_SWEEP === "off" ? "off" : "dry-run", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" }, {
       roots: [{ path: directory, via: "" }], scan,
       now: () => Date.parse("2026-10-18T00:00:00Z"), mountPoints: () => [],
-    }) : observeDiskPressure(diskVolumes(Array.from({ length: 932 }, (_, i) => ({ role: "worktrees", directory: path.join(directory, `tree-${i}`) }))), null, "2026-10-18T00:00:00Z");
+    }) : observeDiskPressure(diskVolumes(Array.from({ length: 932 }, (_, i) => ({ role: "worktrees", directory: path.join(directory, `tree-${i}`) }))), null, new Date().toISOString());
     process.stdout.write(JSON.stringify({ report }) + "\n");
     continue;
   }

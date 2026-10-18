@@ -10,6 +10,8 @@ import type { WorktreeSweepMode, WorktreeSweepReport } from "./worktreeSweep";
 
 export const WORKTREE_SWEEP_DEADLINE_MS = 45 * 60_000;
 const MAX_REPLY_BYTES = 8 * 1024 * 1024;
+const DISK_PRESSURE_CACHE_TTL_MS = 30_000;
+const DISK_PRESSURE_REQUEST_TIMEOUT_MS = 10_000;
 export type SweepWorkerLaunch = { executable: string; entry: string; args?: string[] };
 export function worktreeSweepWorkerLaunch(cwd = process.cwd()): SweepWorkerLaunch {
   const source = path.join(cwd, "src/lib/worktreeSweep.worker.ts");
@@ -35,6 +37,7 @@ export class WorktreeSweepWorker {
   private jobs = new Map<SweepRequest["kind"], Promise<SweepResult>>();
   private tail: Promise<unknown> = Promise.resolve();
   private generation = 0;
+  private diskPressureCache?: { report: DiskPressure; observedAt: number };
   private pending?: Pending;
   private output = "";
   private replyBytes = 0;
@@ -62,7 +65,8 @@ export class WorktreeSweepWorker {
         const report = response?.report;
         const kind = this.pending.request.kind;
         const valid = kind === "disk-pressure"
-          ? report && typeof report.at === "string" && Array.isArray(report.volumes) && Array.isArray(report.consumers)
+          ? report && typeof report.at === "string" && Number.isFinite(Date.parse(report.at))
+            && Array.isArray(report.volumes) && Array.isArray(report.consumers)
           : (kind === "temp" && report === null) || (report && Array.isArray(report.removed) && Array.isArray(report.errors)
             && (kind === "worktrees" ? Array.isArray(report.kept)
               : report.kept && !Array.isArray(report.kept) && typeof report.kept === "object"));
@@ -73,6 +77,9 @@ export class WorktreeSweepWorker {
         clearTimeout(pending.timer);
         this.pending = undefined;
         unrefLeasedHelper(child);
+        if (kind === "disk-pressure") {
+          this.diskPressureCache = { report: response.report as DiskPressure, observedAt: Date.parse(response.report.at) };
+        }
         pending.resolve(response.report);
       } catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); }
     });
@@ -100,21 +107,23 @@ export class WorktreeSweepWorker {
     if (existing) return request.kind === "worktrees"
       ? Promise.reject(new Error("worktree sweep is already running")) : existing;
     const generation = this.generation;
-    const deadline = Date.now() + this.timeoutMs;
+    const timeoutMs = request.kind === "disk-pressure" ? Math.min(this.timeoutMs, DISK_PRESSURE_REQUEST_TIMEOUT_MS) : this.timeoutMs;
+    const deadline = Date.now() + timeoutMs;
     const operation = request.kind === "temp" ? "temp.sweep" : request.kind === "disk-pressure" ? "resources.read" : "worktrees.sweep";
+    const deadlineLabel = request.kind === "worktrees" ? "worktree sweep" : request.kind === "temp" ? "temp sweep" : "disk pressure refresh";
     // At most one job per kind; polls join rather than retaining an unbounded
     // queue. The same deadline includes time behind another sweep.
     const execution = withViewerOperation(operation, () => this.tail.then(() => {
       if (generation !== this.generation) throw new Error("worktree sweep worker stopped");
       const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new Error(`worktree sweep exceeded ${this.timeoutMs} ms`);
+      if (remaining <= 0) throw new Error(`${deadlineLabel} exceeded ${timeoutMs} ms`);
       return new Promise<SweepResult>((resolve, reject) => {
         if (!this.child) this.start();
         const child = this.child!;
         child.ref();
         for (const stream of child.stdio) (stream as unknown as { ref?: () => void } | null)?.ref?.();
         this.replyBytes = 0;
-        const timer = setTimeout(() => this.fail(new Error(`worktree sweep exceeded ${this.timeoutMs} ms`)), remaining);
+        const timer = setTimeout(() => this.fail(new Error(`${deadlineLabel} exceeded ${timeoutMs} ms`)), remaining);
         this.pending = { request, resolve, reject, timer };
         leasedHelperInput(child).write(JSON.stringify(request) + "\n");
       });
@@ -132,6 +141,20 @@ export class WorktreeSweepWorker {
     return this.request({ kind: "temp", env: { LLV_TEMP_SWEEP: env.LLV_TEMP_SWEEP, LLV_TEMP_SWEEP_MAX_AGE_HOURS: env.LLV_TEMP_SWEEP_MAX_AGE_HOURS } }) as Promise<TempSweepReport | null>;
   }
   diskPressure(): Promise<DiskPressure> {
+    const cached = this.diskPressureCache;
+    if (cached) {
+      const age = Date.now() - cached.observedAt;
+      if (age >= 0 && age < DISK_PRESSURE_CACHE_TTL_MS) return Promise.resolve(structuredClone(cached.report));
+    }
+    const existing = this.jobs.get("disk-pressure");
+    if (existing) return existing as Promise<DiskPressure>;
+    if (this.jobs.has("worktrees") || this.jobs.has("temp")) {
+      const job = Promise.reject(new Error("disk pressure observation is stale while the sweep helper is busy"))
+        .finally(() => { if (this.jobs.get("disk-pressure") === job) this.jobs.delete("disk-pressure"); });
+      void job.catch(() => {});
+      this.jobs.set("disk-pressure", job);
+      return job as Promise<DiskPressure>;
+    }
     return this.request({ kind: "disk-pressure" }) as Promise<DiskPressure>;
   }
 
