@@ -7,7 +7,7 @@ import { readForgeCache } from "@/lib/forge/cache";
 import { pipelineRepository } from "@/lib/forge/resolve";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { readHistory } from "@/lib/limitsHistoryStore";
-import { loadArchivedPipelines, loadPipelinesForList } from "@/lib/pipelines/store";
+import { loadArchivedPipelinesForList, loadPipelinesForList } from "@/lib/pipelines/store";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { recordedProjectRemotes } from "@/lib/projects/aliases";
 import { namedProjectDirectory, resolveNamedProject, type NamedProjectDirectory } from "@/lib/projects/nameResolution";
@@ -33,21 +33,6 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
  * that cannot be read contributes nothing this time; the next projection reads
  * it again.
  */
-
-/* Settled lanes move to the archive after three days and still finished their
-   work; the archive is cold, so it is read at most once a minute. */
-const ARCHIVE_TTL_MS = 60_000;
-const archive = globalThis as typeof globalThis & { __llvDoneArchive?: { at: number; pipelines: readonly Pipeline[] } | null };
-function archivedPipelines(): readonly Pipeline[] {
-  const held = archive.__llvDoneArchive;
-  if (held && Date.now() - held.at <= ARCHIVE_TTL_MS) return held.pipelines;
-  let pipelines: readonly Pipeline[] = held?.pipelines ?? [];
-  try {
-    pipelines = loadArchivedPipelines();
-  } catch { /* the last good read stands */ }
-  archive.__llvDoneArchive = { at: Date.now(), pipelines };
-  return pipelines;
-}
 
 function quietly<T>(read: () => T, fallback: T): T {
   try {
@@ -83,9 +68,11 @@ export function productionDoneWorld(options: { recover?: boolean } = {}): DoneWo
     return tasks;
   };
   let pipelines: readonly Pipeline[] | null = null;
-  const laneList = () => (pipelines ??= [...quietly(() => loadPipelinesForList(), [] as readonly Pipeline[]), ...archivedPipelines()]);
+  const laneList = () => (pipelines ??= [...quietly(() => loadPipelinesForList(), [] as readonly Pipeline[]), ...quietly(() => loadArchivedPipelinesForList(), [] as readonly Pipeline[])]);
   let repositories: NamedProjectDirectory | null = null;
   const labels = new Map<string, Map<string, string>>();
+  // One pass owns this bounded tier cache; a new pass reads fresh decisions.
+  const rounds = new Map<string, ReturnType<typeof readPrototypeReviews>["rounds"]>();
   return {
     async preserveFrame(key, frame, refs, replaceProvisional = false, observedAt = Date.now(), expectedPreviousSrc) {
       return withViewerOperation("done.frame-source", async () => {
@@ -155,7 +142,15 @@ export function productionDoneWorld(options: { recover?: boolean } = {}): DoneWo
     },
     rounds(taskId) {
       const task = taskList().get(taskId);
-      return task ? quietly(() => readPrototypeReviews(task).rounds, []) : [];
+      // Empty tasks have no frame tier to resolve. Reading their review would
+      // still reread the dismissal document twice for every finished lane.
+      if (!task?.prototypeReviews?.length && !task?.prototypeReviewReplica?.rounds.length) return [];
+      const held = rounds.get(taskId);
+      if (held) return held;
+      const read = quietly(() => readPrototypeReviews(task).rounds, []);
+      rounds.set(taskId, read);
+      if (rounds.size > 64) rounds.delete(rounds.keys().next().value!);
+      return read;
     },
     async album(taskId, pipeline) {
       const page = await readTaskAlbum(taskId, { limit: ALBUM_PAGE_MAX }, productionAlbumDeps());
