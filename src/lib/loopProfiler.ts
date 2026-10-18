@@ -16,7 +16,7 @@ type Emit = (profile: LoopGapProfile) => void;
 
 /** Runtime names can come from computed property keys. Require nearby source
  * syntax that declares the same name before it crosses the logging boundary. */
-function location(frame: Frame, root: string, sources: Map<string, string | null>) {
+function location(frame: Frame, root: string, sources: Map<string, string[] | null>) {
   const line = frame.line;
   if (!frame.sourceURL || frame.sourceURL.length > 1024 || !/^[A-Za-z_$][\w$]{0,95}$/.test(frame.name)
     || !Number.isSafeInteger(line) || line < 1) return null;
@@ -30,23 +30,22 @@ function location(frame: Frame, root: string, sources: Map<string, string | null
   if (!/^(?:src|scripts)\/[\w./-]+\.[cm]?[jt]sx?$/.test(file)
     || file.split("/").some(part => part === ".." || part === "node_modules")) return null;
   const sourcePath = path.resolve(root, file);
-  let sourceText = sources.get(file);
-  if (sourceText === undefined) {
+  let sourceLines = sources.get(file);
+  if (sourceLines === undefined) {
     if (sources.size >= sourceFileCap) return null;
     try {
       const size = statSync(sourcePath).size;
-      const used = [...sources.values()].reduce((total, value) => total + (value?.length ?? 0), 0);
-      if (size > sourceFileBytesCap || used + size > sourceBytesCap) sourceText = null;
-      else sourceText = readFileSync(sourcePath, "utf8");
-    } catch { sourceText = null; }
-    sources.set(file, sourceText);
+      const used = [...sources.values()].reduce((total, value) => total + (value?.reduce((bytes, line) => bytes + line.length, 0) ?? 0), 0);
+      if (size > sourceFileBytesCap || used + size > sourceBytesCap) sourceLines = null;
+      else sourceLines = readFileSync(sourcePath, "utf8").split("\n");
+    } catch { sourceLines = null; }
+    sources.set(file, sourceLines);
   }
-  if (!sourceText || !hasStaticNameAtLine(sourceText, frame.name, line)) return null;
+  if (!sourceLines || !hasStaticNameAtLine(sourceLines, frame.name, line)) return null;
   return { function: frame.name, file, line };
 }
 
-function hasStaticNameAtLine(source: string, name: string, line: number) {
-  const lines = source.split("\n");
+function hasStaticNameAtLine(lines: string[], name: string, line: number) {
   const first = Math.max(0, line - 33), last = Math.min(lines.length, line);
   for (let index = last - 1; index >= first; index--) {
     const text = lines[index]!;
@@ -64,7 +63,7 @@ function hasStaticNameAtLine(source: string, name: string, line: number) {
  * was unbounded. Even spacing covers the whole window; weights use visited
  * samples, including samples whose frames privacy filtering omitted. */
 export function trimLoopProfile(raw: LoopProfile, root: string) {
-  const sources = new Map<string, string | null>();
+  const sources = new Map<string, string[] | null>();
   const frames = new Map<string, { function: string; file: string; line: number; self: number; total: number }>();
   const count = Math.min(sampleCap, raw.traces.length);
   // Misra-Gries candidates let a hot function arriving late displace earlier
