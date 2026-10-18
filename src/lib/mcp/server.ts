@@ -57,7 +57,7 @@ import {
   MIN_SNAPSHOT_STRING_LENGTH, VIEW_RESOLUTIONS, VIEW_SCOPE_KINDS,
 } from "@/lib/view/types";
 
-import { runAsMcpHttpCaller, type McpHttpCaller } from "./callerContext";
+import { runWithMcpCallerResolution, runAsMcpHttpCaller, type McpHttpCaller } from "./callerContext";
 import type { McpToolPolicy } from "./toolAllowlist";
 import { MCP_TOOL_CATALOG_CAPABILITY } from "./toolCatalog";
 
@@ -2597,7 +2597,7 @@ export function createMcpToolService(
   options: McpToolServiceOptions = {},
 ): McpToolService {
   const inFlight = new Map<string, { digest: string; result: Promise<McpToolResult> }>();
-  return {
+  const service: McpToolService = {
     callTool: async function callTool(toolName: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
       if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName)) {
         return failure(toolName, clientRequestId(args), "unknown_tool", `Unknown viewer tool: ${toolName}`, false);
@@ -3388,6 +3388,7 @@ export function createMcpToolService(
       }
     },
   };
+  return { callTool: (tool, args, context) => runWithMcpCallerResolution(() => service.callTool(tool, args, context)) };
 }
 
 /**
