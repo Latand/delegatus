@@ -661,6 +661,12 @@ export class TeamStore {
       textDigest: str(row.text_digest),
     }));
   }
+
+  /** Activity's launch-chain fallback needs one author, without decoding messages. */
+  majorityMessageAuthor(conversationId: string): string | null {
+    return this.db.query<{ member_id: string }, [string]>(`SELECT member_id FROM message_authors
+      WHERE conversation_id = ? GROUP BY member_id ORDER BY COUNT(*) DESC, member_id LIMIT 1`).get(conversationId)?.member_id ?? null;
+  }
 }
 
 /* ---- the process's handle ------------------------------------------------- */

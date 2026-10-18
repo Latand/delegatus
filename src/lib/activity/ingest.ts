@@ -1,6 +1,11 @@
 import fs from "node:fs";
 
 import path from "node:path";
+import { waitForStateLock } from "@/lib/state/lockWait";
+import { statePath } from "@/lib/configDir";
+import { readActivitySettings } from "./settings";
+import { maintainUsage } from "./tokenStore";
+import { activityOperation } from "./operation";
 
 import type { ExclusionReason } from "./humanInput";
 import { codexSessionKind } from "./humanInput";
@@ -94,7 +99,7 @@ interface ReadPiece {
 
 /** Complete lines from `offset` to the end of the file. A last line with no
     newline is still being written and stays for the next pass. */
-async function readFrom(file: string, offset: number, reader: TranscriptLineReader, maxBytes: number, chunk: Buffer): Promise<ReadPiece> {
+async function readFrom(file: string, offset: number, reader: TranscriptLineReader, maxBytes: number, chunk: Buffer, end = Infinity): Promise<ReadPiece> {
   const handle = await fs.promises.open(file, "r");
   let position = offset;
   let consumed = offset;
@@ -104,8 +109,10 @@ async function readFrom(file: string, offset: number, reader: TranscriptLineRead
   try {
     while (true) {
       /* Past the piece's size, stop at the last whole line read. */
-      if (consumed - offset >= maxBytes) break;
-      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+      if (bytes >= maxBytes) break;
+      const length = Math.min(chunk.length, end - position, bytes < maxBytes ? maxBytes - bytes : chunk.length);
+      if (length <= 0) { eof = true; break; }
+      const { bytesRead } = await handle.read(chunk, 0, length, position);
       if (bytesRead === 0) {
         eof = true;
         break;
@@ -125,6 +132,8 @@ async function readFrom(file: string, offset: number, reader: TranscriptLineRead
         start = newline + 1;
       }
       if (start < view.length) pending.push(Buffer.from(view.subarray(start)));
+      await yieldToEventLoop();
+      if (position >= end) { eof = true; break; }
     }
   } finally {
     await handle.close();
@@ -186,25 +195,38 @@ export async function ingestTranscripts(sources: readonly IngestSource[], option
     listed.add(source.path);
     if (result.bytesRead >= budget) {
       const waiting = store.fileCursor(source.path);
-      if (!waiting || waiting.size !== source.size || waiting.mtimeMs !== source.mtimeMs) result.filesDeferred += 1;
+      if (!waiting || waiting.size !== source.size || waiting.mtimeMs !== source.mtimeMs || waiting.usageOffset !== waiting.offset) result.filesDeferred += 1;
       continue;
     }
     const cursor = store.fileCursor(source.path);
-    if (cursor && cursor.size === source.size && cursor.mtimeMs === source.mtimeMs) {
+    if (cursor && cursor.size === source.size && cursor.mtimeMs === source.mtimeMs && cursor.usageOffset === cursor.offset) {
       result.filesSkipped += 1;
       continue;
     }
     try {
-      /* A transcript shorter than its cursor was rewritten: read it again from
-         the start. Its rows are keyed by their ids, so nothing doubles. */
-      const resume = cursor && source.size >= cursor.offset ? cursor : null;
+      /* A mixed-version writer can advance the old cursor past a newer token
+         cursor, or leave the token cursor beyond a rewritten file. Replay both
+         readers from zero; durable response dedupe makes the token replay safe. */
+      const storedUsageOffset = cursor?.usageOffset ?? 0;
+      const tokenCursorAhead = cursor !== null && (storedUsageOffset > cursor.offset || storedUsageOffset > source.size);
+      const resume = cursor && source.size >= cursor.offset && !tokenCursorAhead ? cursor : null;
       let offset = resume?.offset ?? 0;
       let facts = resume?.facts;
+      let usageOffset = resume?.usageOffset ?? 0;
+      let usageFacts = resume?.usageFacts;
+      if (facts && usageOffset === offset && usageFacts?.usage) facts = { ...facts, usage: usageFacts.usage };
       let prompted = resume?.prompted ?? false;
       let resolution: ConversationResolution | null = null;
       result.filesRead += 1;
       while (true) {
-        const piece = await readFrom(source.path, offset, new TranscriptLineReader(facts, true), options.batchBytes ?? INGEST_BATCH_BYTES, chunk);
+        const backfill = usageOffset < offset;
+        const reader = new TranscriptLineReader(backfill ? usageFacts : facts, !backfill, backfill);
+        const pieceBytes=Math.min(Math.max(options.batchBytes??INGEST_BATCH_BYTES,reader.state.readBytesHint??0),Math.max(1,budget-result.bytesRead));
+        const read = () => readFrom(source.path, backfill ? usageOffset : offset, reader, pieceBytes,
+          backfill ? chunk.subarray(0, 64 << 10) : chunk, backfill ? offset : source.size);
+        const piece = await (backfill ? activityOperation("activity.usage-backfill", read) : read());
+        if(piece.offset===(backfill?usageOffset:offset)&&!piece.eof) reader.state.readBytesHint=Math.min(budget,Math.max(pieceBytes*2,chunk.length));
+        else delete reader.state.readBytesHint;
         result.bytesRead += piece.bytes;
         const transcript = piece.reader.facts(source.path);
         const records = piece.reader.records;
@@ -215,12 +237,12 @@ export async function ingestTranscripts(sources: readonly IngestSource[], option
         const open = piece.reader.state.turn;
         const turns = [...piece.reader.turns, ...(open && open.end > open.start ? [{ ...open }] : [])];
         let owner: TurnOwner | null = null;
-        if (transcript && (records.length || turns.length)) {
+        if (transcript && (records.length || turns.length || piece.reader.usage?.records.length || piece.reader.usage?.malformed)) {
           resolve ??= options.resolver();
           resolution = resolve(transcript);
-          if (records.length && awaitsRegistry(transcript, resolution) && passStart - source.mtimeMs < holdMs) {
+          if ((records.length || piece.reader.usage?.records.length) && awaitsRegistry(transcript, resolution) && passStart - source.mtimeMs < holdMs) {
             result.filesHeld += 1;
-            heldFrom = Math.min(heldFrom, earliestOf(records)!);
+            heldFrom = Math.min(heldFrom, earliestOf([...records, ...(piece.reader.usage?.records ?? [])])!);
             break;
           }
           if (records.length) {
@@ -239,19 +261,26 @@ export async function ingestTranscripts(sources: readonly IngestSource[], option
           };
           result.turnsRead += turns.length;
         }
-        result.inputsWritten += store.commitFile(
+        usageOffset = piece.offset;
+        usageFacts = piece.reader.state;
+        result.inputsWritten += await waitForStateLock("activity.commit", () => store.commitFile(
           source.path,
           /* A piece short of the end keeps no size, so the next pass reads on. */
-          { offset: piece.offset, size: piece.eof ? source.size : -1, mtimeMs: source.mtimeMs, facts: piece.reader.state, prompted },
+          { offset: backfill ? offset : piece.offset, size: backfill ? resume!.size : piece.eof ? source.size : -1,
+            mtimeMs: source.mtimeMs, facts: backfill ? facts! : piece.reader.state, prompted, usageOffset, usageFacts },
           candidates,
           excluded,
           earliestOf(records),
           owner && turns.length ? { owner, turns } : null,
           resolution?.mode === "team",
-        );
-        facts = piece.reader.state;
-        offset = piece.offset;
-        if (piece.eof) break;
+          owner && piece.reader.usage ? { owner, records: piece.reader.usage.records,
+            attribution: resolution?.usageAttribution ?? (() => ({ account: "unknown", member: resolution?.mode === "team" ? "unattributed" : "operator", model: null, tier: null })),
+            malformed: piece.reader.usage.malformed, now: passStart } : null,
+        ));
+        if (!backfill) { facts = piece.reader.state; offset = piece.offset; }
+        else if (usageOffset === offset) facts = { ...facts!, usage: usageFacts.usage };
+        if (!backfill && piece.eof) break;
+        if (backfill && piece.eof && usageOffset < offset) throw new Error("token backfill cursor is not at a line boundary");
         if (result.bytesRead >= budget) {
           result.filesDeferred += 1;
           break;
@@ -270,7 +299,7 @@ export async function ingestTranscripts(sources: readonly IngestSource[], option
   const state = store.hostState(LOCAL_HOST_KEY);
   const patch: Parameters<ActivityStore["setHostState"]>[1] = { attemptAt: now() };
   if (options.complete) {
-    for (const file of store.cursorPaths()) if (!listed.has(file)) store.forgetFile(file);
+    for (const file of store.cursorPaths()) if (!listed.has(file)) await waitForStateLock("activity.forget", () => store.transaction(() => store.forgetFile(file)));
   }
   if (options.complete && !result.failures.length && !result.filesDeferred) {
     const until = Math.min(passStart, options.listedAt, heldFrom - 1);
@@ -283,6 +312,16 @@ export async function ingestTranscripts(sources: readonly IngestSource[], option
   } else if (result.failures.length) {
     patch.error = "unreadable";
   }
-  store.setHostState(LOCAL_HOST_KEY, patch);
+  await waitForStateLock("activity.host", () => store.transaction(() => store.setHostState(LOCAL_HOST_KEY, patch)));
+  await waitForStateLock("activity.usage-maintenance", () => store.transaction(() => {
+    maintainUsage(store.db, passStart, readActivitySettings(statePath("activity")).tz);
+    let pending = 0;
+    for (const source of ordered) {
+      if (source.engine !== "claude" && source.engine !== "codex") continue;
+      pending += Math.max(0, source.size - (store.fileCursor(source.path)?.usageOffset ?? 0));
+    }
+    store.db.query("UPDATE usage_meta SET pending_bytes=?, complete=?, version=version+1 WHERE singleton=1 AND (pending_bytes != ? OR complete != ?)")
+      .run(pending, options.complete && !result.failures.length && !pending ? 1 : 0, pending, options.complete && !result.failures.length && !pending ? 1 : 0);
+  }));
   return result;
 }

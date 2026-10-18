@@ -37,6 +37,24 @@ function readHost(host: string, projects: HostCoverage["projects"] = "all", cove
 }
 const LOCAL = readHost("local");
 
+test("a 366-day read matches individual days with parallel conversations and midnight crossings", () => {
+  const nowMs=Date.parse("2026-10-18T12:00:00Z");
+  const agents: AgentConversation[]=[
+    {key:"a",project:"harbor",engine:"codex",role:"builder",pipelineId:null,stageId:null,activity:[{start:Date.parse("2026-10-16T20:00:00Z"),end:Date.parse("2026-10-17T02:00:00Z")}]},
+    {key:"b",project:"harbor",engine:"claude",role:"reviewer",pipelineId:null,stageId:null,activity:[{start:Date.parse("2026-10-16T22:00:00Z"),end:Date.parse("2026-10-17T04:00:00Z")}]},
+    {key:"c",project:"client",engine:"codex",role:"builder",pipelineId:null,stageId:null,activity:[{start:Date.parse("2026-03-28T22:00:00Z"),end:Date.parse("2026-03-29T06:00:00Z")}]},
+  ];
+  const anchors:Anchor[]=[{at:Date.parse("2026-10-16T21:00:00Z"),project:"harbor",surface:"desktop",kind:"message",host:"local"}];
+  const input={params:clampMethodParams({tz:"Europe/Kyiv"}),range:"7d" as const,nowMs,agents,anchors,hosts:[LOCAL]};
+  const whole=activityReport({...input,dates:{from:"2025-10-18",to:"2026-10-18"}});
+  expect(whole.days).toHaveLength(366);
+  for(const day of whole.days.filter(d=>d.wallMs>0||d.humanMs>0)) {
+    const single=activityReport({...input,dates:{from:day.date,to:day.date}});
+    expect(single.days[0]).toEqual(day);
+  }
+  expect(whole.totals.agentHoursMs).toBe(20*3_600_000);
+});
+
 function anchor(minute: number, project: string | null = "harbor", surface: Surface = "desktop", kind: RequestKind = "message", host = "local"): Anchor {
   return { at: T0 + minute * MIN, project, surface, kind, host };
 }

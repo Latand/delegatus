@@ -91,6 +91,17 @@ const PULLED_TO_WEDNESDAY = [source("pull", "read", [{ start: at("2026-09-01", "
 const get = (query: string, overrides: Partial<ActivityResponseDependencies>) => activityResponse(new URLSearchParams(query), overrides);
 const row = (body: ActivityResponse, project: string) => body.projects.find((entry) => entry.project === project)!;
 
+test("free Time ranges retain their endpoints in the agent cache key and response", async () => {
+  const keys: string[] = [];
+  const deps = dependencies(PULLED_TO_WEDNESDAY, INPUTS, AGENTS);
+  const base = deps.agents!;
+  deps.agents = (key, range, now) => { keys.push(key); return base(key,range,now); };
+  const short = await get("from=2026-09-22&to=2026-09-23", deps);
+  const long = await get("from=2026-09-22&to=2026-09-24", deps);
+  expect(short.range.key).toBe("custom"); expect(short.days).toHaveLength(2); expect(long.days).toHaveLength(3);
+  expect(keys[0]).not.toBe(keys[1]);
+});
+
 describe("GET /api/activity?project=: the page filtered to one project", () => {
   test("the scoped totals are that project's row in the unscoped answer, for every project and range", async () => {
     const deps = dependencies(PULLED_TO_WEDNESDAY, INPUTS, AGENTS);

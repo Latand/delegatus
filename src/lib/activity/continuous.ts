@@ -1,6 +1,7 @@
 import { agentRegistry, type RegistryFile } from "@/lib/agent/registry";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { statePath } from "@/lib/configDir";
+import { waitForStateLock } from "@/lib/state/lockWait";
 
 import { conversationResolver } from "./conversationResolver";
 import { readHostsConfig } from "./hostSources";
@@ -45,7 +46,7 @@ export async function recordActivityFromIndexFeed(
   listedAt: number,
 ): Promise<IngestResult> {
   const startedAt = Date.now();
-  const store = ActivityStore.open();
+  const store = await withViewerOperation("activity.ingest", () => waitForStateLock("activity.open", () => ActivityStore.open()));
   try {
     const result = await withViewerOperation("activity.ingest", () => ingestTranscripts(sources, {
       complete,
@@ -82,8 +83,9 @@ export function startDuePulls(now: number = Date.now()): void {
   if (!due.length) return;
   const run = (async () => {
     for (const entry of due) {
-      const store = ActivityStore.open();
+      let store: ActivityStore | null = null;
       try {
+        store = await withViewerOperation("activity.ingest", () => waitForStateLock("activity.open", () => ActivityStore.open()));
         const result = await pullHost(store, entry.id, entry.pull!, sshTransport(entry.pull!));
         current.lastPulls[entry.id] = { ...result, at: Date.now() };
         if (result.error) console.error(`[activity] pull from ${entry.id}: ${result.error}`);
@@ -91,7 +93,7 @@ export function startDuePulls(now: number = Date.now()): void {
         current.lastPulls[entry.id] = { ok: false, error: "unreachable", pages: 0, rows: 0, changed: 0, at: Date.now() };
         console.error(`[activity] pull from ${entry.id} failed: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
-        store.close();
+        store?.close();
       }
     }
   })();

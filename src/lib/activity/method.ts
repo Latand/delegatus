@@ -1,4 +1,5 @@
 import type { RequestSurface } from "@/lib/view/device";
+import { dateRangeDays } from "./range";
 
 /*
  * The operator's counting method, and the agent axis beside it
@@ -552,6 +553,7 @@ export function dayReportHours(segments: readonly HumanSegment[], day: Interval,
  */
 export function intervalReportHours(intervals: readonly Interval[], day: Interval, rounding: Rounding): number {
   const inDay = clipIntervals(intervals, day.start, day.end);
+  if (!inDay.length) return 0;
   if (rounding === "half-hour") return roundHalfHour(totalMs(inDay));
   let hours = 0;
   for (const hour of clockHours(day)) hours += clockHourWeight(totalMs(clipIntervals(inDay, hour.start, hour.end)));
@@ -666,6 +668,7 @@ export const ACTIVE_ELSEWHERE_AGENT_MS = 30 * MINUTE_MS;
 export type MissingSourceReason = "unread-source" | "agent-activity";
 
 export interface ReportInput {
+  dates?: { from: string; to: string };
   params: MethodParams;
   range: RangeKey;
   nowMs: number;
@@ -797,7 +800,7 @@ export interface ProjectActivity extends AgentSplit {
 }
 
 export interface ActivityReport {
-  range: { key: RangeKey; start: number; end: number; now: number };
+  range: { key: RangeKey | "90d" | "365d" | "custom"; start: number; end: number; now: number };
   params: MethodParams;
   /** The project `totals` and `days` count, or null for every project. */
   scope: { project: string | null } | null;
@@ -865,9 +868,33 @@ function agentSplit(activities: readonly Interval[][], supervision: readonly Int
   return split;
 }
 
+/** Preserve conversation grain while visiting only the days each interval touches. */
+function agentActivitiesByDay(agents: readonly AgentConversation[], days: readonly ZonedDay[]): Map<number, Map<string, Interval[][]>> {
+  const result = new Map<number, Map<string, Interval[][]>>();
+  for (const agent of agents) {
+    const perDay = new Map<number, Interval[]>();
+    for (const interval of agent.activity) {
+      let low = 0, high = days.length;
+      while (low < high) { const mid = (low + high) >>> 1; if (days[mid]!.end <= interval.start) low = mid + 1; else high = mid; }
+      for (let index = low; index < days.length && days[index]!.start < interval.end; index++) {
+        const day = days[index]!;
+        const list = perDay.get(day.start) ?? [];
+        list.push({ start: Math.max(interval.start, day.start), end: Math.min(interval.end, day.end) });
+        perDay.set(day.start, list);
+      }
+    }
+    for (const [start, activity] of perDay) {
+      const projects = result.get(start) ?? new Map<string, Interval[][]>();
+      const key = projectKey(agent.project), list = projects.get(key) ?? [];
+      list.push(activity); projects.set(key, list); result.set(start, projects);
+    }
+  }
+  return result;
+}
+
 export function activityReport(input: ReportInput): ActivityReport {
   const { params, nowMs } = input;
-  const days = rangeDays(input.range, nowMs, params.tz);
+  const days = input.dates ? dateRangeDays(input.dates, params.tz) : rangeDays(input.range, nowMs, params.tz);
   const rangeStart = days[0]!.start;
   const rangeEnd = days.at(-1)!.end;
   const limit = Math.min(rangeEnd, nowMs);
@@ -980,6 +1007,7 @@ export function activityReport(input: ReportInput): ActivityReport {
   }
   const supervisedUnion = unionIntervals(supervisedAll);
   const wallAll = unionIntervals(agents.flatMap((agent) => agent.activity));
+  const dailyAgents = agentActivitiesByDay(agents, days);
 
   const totals: ActivityReport["totals"] = {
     humanMs: 0,
@@ -1018,8 +1046,8 @@ export function activityReport(input: ReportInput): ActivityReport {
       split.wallMs = totalMs(wall);
       split.supervisedMs = totalMs(supervised);
       split.unattendedMs = split.wallMs - split.supervisedMs;
-      for (const [key, list] of agentsByProject) {
-        const part = agentSplit(list.map((agent) => agent.activity), own.get(key) ?? [], window);
+      for (const [key, activities] of dailyAgents.get(day.start) ?? []) {
+        const part = agentSplit(activities, own.get(key) ?? [], window);
         split.agentHoursMs += part.agentHoursMs;
         split.agentHoursSupervisedMs += part.agentHoursSupervisedMs;
         split.agentHoursUnattendedMs += part.agentHoursUnattendedMs;
@@ -1105,19 +1133,23 @@ export function activityReport(input: ReportInput): ActivityReport {
   for (const day of dayRows) {
     day.unattendedUnreadMs = inWindow(unclearAll, { start: day.start, end: Math.min(day.end, limit) });
     totals.unattendedUnreadMs += day.unattendedUnreadMs;
+    const wallInDay = clipIntervals(wallAll, day.start, day.end);
+    const supervisedInDay = clipIntervals(supervisedUnion, day.start, day.end);
+    const unclearInDay = clipIntervals(unclearAll, day.start, day.end);
+    const projectWalls = [...wallByProject].map(([key, wall]) => [key, clipIntervals(wall, day.start, day.end)] as const).filter(([,wall]) => wall.length);
     day.hours = clockHourShares(segments, day).map((share) => {
       const window = { start: share.start, end: Math.min(share.end, limit) };
       let agentProject: string | null = null;
       let agentMost = 0;
-      for (const [key, wall] of wallByProject) {
+      for (const [key, wall] of projectWalls) {
         const ms = inWindow(wall, window);
         if (ms > agentMost || (ms === agentMost && ms > 0 && agentProject !== null && key > agentProject)) {
           agentMost = ms;
           agentProject = key;
         }
       }
-      const wallMs = inWindow(wallAll, window);
-      const supervisedMs = inWindow(supervisedUnion, window);
+      const wallMs = inWindow(wallInDay, window);
+      const supervisedMs = inWindow(supervisedInDay, window);
       return {
         start: share.start,
         humanMs: share.coveredMs,
@@ -1125,7 +1157,7 @@ export function activityReport(input: ReportInput): ActivityReport {
         project: share.winner === null ? null : projectOf(share.winner),
         supervisedMs,
         unattendedMs: wallMs - supervisedMs,
-        unattendedUnreadMs: inWindow(unclearAll, window),
+        unattendedUnreadMs: inWindow(unclearInDay, window),
         agentProject: agentProject === null ? null : projectOf(agentProject),
         unreadHosts: window.end > window.start ? uncoveredSpans(window, input.hosts).hosts : [],
       };
