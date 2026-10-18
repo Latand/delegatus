@@ -215,21 +215,27 @@ test("ingest yields during a real peer writer lock, then commits after release",
 });
 
 test("zone rebuild resumes after a real restart and incorporates writes to already scanned hours", async () => {
+  const sourceConversations=Array.from({length:10003},(_,i)=>({id:`c-${i}`,key:conversationDigest(`c-${i}`)})).sort((a,b)=>a.key.localeCompare(b.key));
   read(s=>s.transaction(()=>{
     const add=s.db.query("INSERT INTO usage_hours VALUES('', ?, ?, 'fixture-model', 'standard', 'account-a', 'claude', 'fixture', 'builder', 'member-a', NULL, NULL, 1, 10, 80, 10, 4, 20, 5)");
-    for(let i=0;i<10003;i++) add.run(Math.floor((USAGE_NOW-DAY)/3_600_000),conversationDigest(`c-${i}`));
+    for(const item of sourceConversations) add.run(Math.floor((USAGE_NOW-DAY)/3_600_000),item.key);
   }));
   const inventory=path.join(root,"empty.json"); fs.writeFileSync(inventory,"[]");
   const pass=async()=>{
     const child=Bun.spawn([process.execPath,path.join(import.meta.dir,"tokenIngest.child.ts"),database,inventory,"maintain:America/New_York"],{stdout:"pipe",stderr:"pipe"});
     const output=await new Response(child.stdout).text(), errors=await new Response(child.stderr).text(); expect(await child.exited,errors).toBe(0); return JSON.parse(output);
   };
-  const first=await pass(); expect(first.target_zone).toBe("America/New_York"); expect(first.rebuild_cursor).not.toBeNull();
+  let first;
+  for(let i=0;i<3;i++) first=await pass();
+  expect(first!.target_zone).toBe("America/New_York"); expect(first!.rebuild_phase).toBe("scan"); expect(first!.rebuild_cursor).not.toBeNull();
   read(s=>{
-    expect(conversationDigest("c-0") < JSON.parse(first.rebuild_cursor)[1]).toBeTrue();
+    const conversation=sourceConversations[0]!.id;
+    expect(conversationDigest(conversation) < JSON.parse(first!.rebuild_cursor!)[1]).toBeTrue();
     s.commitFile("concurrent",{offset:1,size:1,mtimeMs:1,prompted:false,facts:{engine:"claude",cwd:null,entrypoint:null,sessionMeta:null}},[],{},null,null,false,
-      {owner:{...owner,conversation:"c-0"},records:[usageRecord("concurrent",USAGE_NOW-DAY)],attribution:attr,malformed:0,now:USAGE_NOW});
+      {owner:{...owner,conversation},records:[usageRecord("concurrent",USAGE_NOW-DAY)],attribution:attr,malformed:0,now:USAGE_NOW});
   });
-  const second=await pass(); expect(second.zone).toBe("America/New_York"); expect(second.target_zone).toBeNull();
+  let second=first!;
+  for(let i=0;i<40 && second.target_zone;i++) second=await pass();
+  expect(second.zone).toBe("America/New_York"); expect(second.target_zone).toBeNull();
   expect(total().requests).toBe(10004);
 });

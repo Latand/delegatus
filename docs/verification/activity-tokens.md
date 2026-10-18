@@ -25,10 +25,16 @@ committed cursor.
 The persisted aggregates are UTC conversation-hours (92 days) and local days
 (760 days). Claude has a 64-bit response-id set; Codex has a thread watermark.
 Pruning removes at most 10,000 rows from each table per pass. Zone changes
-rebuild at most 10,000 hour rows per pass into a durable shadow day table;
-updates to already scanned hours also update the shadow. The final swap is
-atomic. Older days retain their zone. A deleted source loses its cursor while
-its aggregates remain.
+persist a bounded phase and key cursor. Preparation and cleanup delete at most
+10,000 shadow rows per pass. Hourly scans read at most 500 source rows;
+detailed-day and summary copies each read at most 5,000. History pruning is
+capped at 10,000 rows per pass.
+Ingest updates already scanned rows during scanning, then dual-writes candidate
+and active zones during copy. A constant-size metadata update activates the
+fully copied generation; readers suppress the candidate while it is partial and
+select only the new zone for dates from `zone_since`. Older days retain their
+zone. The two shadow-table cleanups resume after restart and keep each pass
+bounded. A deleted source loses its cursor while its aggregates remain.
 
 The day table additionally stores its Monday week and a numeric identity for
 the model/tier/engine combination. Its key starts with host, zone, day and

@@ -103,7 +103,7 @@ export async function activityTokensResponse(search: URLSearchParams, viewer: Ac
     }
     const projectExpression = (column: string) => Object.keys(aliases).length ? `CASE ${column} ${Object.keys(aliases).sort().map(from => `WHEN ${sqlString(from)} THEN ${sqlString(deps.canonical(from))}`).join(" ")} ELSE COALESCE(${column}, '') END` : `COALESCE(${column}, '')`;
     const dimension = (dim: TokenDimension) => dim === "kind" ? "'all'" : dim === "project" ? projectExpression("project") : dim;
-    const summaryRead=!scoped&&(!member||member==="all")&&Object.keys(filters).length===0;
+    const summaryRead=!hourlyAvailable&&!scoped&&(!member||member==="all")&&Object.keys(filters).length===0;
     const query = <T>(name: "totals" | "series" | "list" | "previous", sql: string, bindings: SQLQueryBindings[]): T[] => {
       const cpu=deps.measured?process.cpuUsage():null;
       const switches=deps.measured?process.resourceUsage().involuntaryContextSwitches:0;
@@ -126,7 +126,17 @@ export async function activityTokensResponse(search: URLSearchParams, viewer: Ac
       } else {
         clauses.push("day >= ? AND day <= ?"); binds.push(from, to);
         const zones=meta?usageZones(meta):[range.tz];
-        clauses.push(`zone IN (${zones.map(()=>"?").join(",")})`); binds.push(...zones);
+        const zoneTerms: string[] = [];
+        for (const zone of zones) {
+          if (meta?.zone_since && zone !== meta.zone) {
+            zoneTerms.push("(zone = ? AND day < ?)"); binds.push(zone, meta.zone_since);
+          } else if (!meta?.zone_since && meta?.target_zone === zone && meta.rebuild_since) {
+            zoneTerms.push("(zone = ? AND day < ?)"); binds.push(zone, meta.rebuild_since);
+          } else {
+            zoneTerms.push("zone = ?"); binds.push(zone);
+          }
+        }
+        clauses.push(`(${zoneTerms.join(" OR ")})`);
       }
       if (scoped) {
         const raw = [...new Set([scoped, ...Object.keys(aliases).filter(p => deps.canonical(p) === scoped)])];
@@ -138,7 +148,9 @@ export async function activityTokensResponse(search: URLSearchParams, viewer: Ac
     };
     const totalsRead = (from: string, to: string, name: "totals" | "previous") => {
       if (!meta) return [];
-      const w = where(false, from, to);
+      const useHours = hourlyAvailable && dateRangeDays({ from, to }, range.tz)[0]!.start >= hoursRetainedFrom;
+      const w = where(useHours, from, to);
+      if (useHours) return query<BasisRow>(name, `SELECT model, tier, engine, ${SUM_TOKENS} FROM usage_hours WHERE ${w.sql} GROUP BY model, tier, engine`, w.binds).map(basis);
       if(summaryRead) return query<BasisRow>(name,`SELECT model,tier,engine,${SUM_TOKENS} FROM usage_summaries
         WHERE ${w.sql} AND dimension='price' GROUP BY key`,w.binds).map(basis);
       return query<BasisRow>(name, `SELECT model, tier, engine, ${SUM_TOKENS} FROM (
@@ -150,12 +162,13 @@ export async function activityTokensResponse(search: URLSearchParams, viewer: Ac
     const listRows: TokenListRow[] = [];
     const buckets = new Map<string | number, Map<string, TokenCounts>>();
     if (meta) {
-      const w = where(false, range.from, range.to);
+      const w = where(hourlyAvailable, range.from, range.to);
       const listRollup=list==="model"||list==="engine"||list==="project";
       const listSource=listRollup ? `(SELECT day, model, engine, project, ${SUM_TOKENS} FROM usage_days WHERE ${w.sql}
         GROUP BY day, price_key${list==="project"?", project":""})` : "usage_days";
       const listExpression=summaryRead?(list==="project"?projectExpression("key"):"key"):dimension(list);
-      const listSQL=summaryRead?`SELECT ${listExpression} AS group_key,${SUM_TOKENS} FROM usage_summaries WHERE ${w.sql}
+      const listSQL=hourlyAvailable?`SELECT ${listExpression} AS group_key,${SUM_TOKENS} FROM usage_hours WHERE ${w.sql} GROUP BY group_key`
+        :summaryRead?`SELECT ${listExpression} AS group_key,${SUM_TOKENS} FROM usage_summaries WHERE ${w.sql}
         AND dimension=${sqlString(list)} GROUP BY group_key`:`SELECT ${listExpression} AS group_key, ${SUM_TOKENS} FROM ${listSource}
         ${listRollup?"":`WHERE ${w.sql}`} GROUP BY group_key`;
       const rows = query<CountRow & { group_key: string }>("list",listSQL,w.binds);

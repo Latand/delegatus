@@ -3,8 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ActivityStore } from "./store";
-import { commitUsage, DAY, maintainUsage } from "./tokenStore";
+import { commitUsage, DAY, HOUR, maintainUsage, USAGE_MAINTENANCE_LIMIT, USAGE_REBUILD_SCAN_LIMIT } from "./tokenStore";
 import { usageRecord, USAGE_NOW } from "./tokenUsage.fixture";
+import { addTokens, emptyTokens, type TokenCounts } from "./tokenUsage";
 import { activityTokensResponse } from "./tokenReport";
 import { ActivityMemberForbidden } from "./report";
 import { parseActivityDates } from "./range";
@@ -95,6 +96,98 @@ test("zone rebuild is persisted, preserves old-zone days and accepts new writes"
   expect(got.coverage.daysZone?.zone).toBe("Europe/Kyiv");
   seed("b", { at: USAGE_NOW - DAY });
   expect((await read("tz=America/New_York")).totals.requests).toBe(2);
+});
+test("zone generation copies and cleans in bounded restartable phases while ingest continues", async () => {
+  const store = ActivityStore.open(file);
+  const days = 80, projectsPerDay = 200, rows = days * projectsPerDay;
+  const hour = Math.floor(USAGE_NOW / HOUR);
+  try {
+    store.transaction(() => {
+      store.db.query("UPDATE usage_meta SET maintenance_day=? WHERE singleton=1").run(Math.floor(USAGE_NOW / DAY));
+      const add = store.db.query(`INSERT INTO usage_hours(host,hour,conversation,model,tier,account,engine,project,role,member,pipeline,stage,requests,input,cache_read,cache_write,cache_write_1h,output,reasoning)
+        VALUES('',?,?,?,?,?,'claude',?,'builder','member-a',NULL,NULL,1,2,3,4,0,5,1)`);
+      for (let day=0;day<days;day++) for (let project=0;project<projectsPerDay;project++) {
+        const id=day*projectsPerDay+project;
+        add.run(hour-day*24, `conversation-${String(id).padStart(5,"0")}`, "fixture-model", "standard", "account-a", `project-${day}-${project}`);
+      }
+    });
+    store.db.exec(`CREATE TABLE phase_counts(name TEXT PRIMARY KEY, inserted INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0);
+      INSERT INTO phase_counts(name) VALUES('usage_days'),('usage_days_rebuild'),('usage_summaries'),('usage_summaries_rebuild');
+      CREATE TRIGGER count_days_insert AFTER INSERT ON usage_days BEGIN UPDATE phase_counts SET inserted=inserted+1 WHERE name='usage_days'; END;
+      CREATE TRIGGER count_days_delete AFTER DELETE ON usage_days BEGIN UPDATE phase_counts SET deleted=deleted+1 WHERE name='usage_days'; END;
+      CREATE TRIGGER count_shadow_days_insert AFTER INSERT ON usage_days_rebuild BEGIN UPDATE phase_counts SET inserted=inserted+1 WHERE name='usage_days_rebuild'; END;
+      CREATE TRIGGER count_shadow_days_delete AFTER DELETE ON usage_days_rebuild BEGIN UPDATE phase_counts SET deleted=deleted+1 WHERE name='usage_days_rebuild'; END;
+      CREATE TRIGGER count_summaries_insert AFTER INSERT ON usage_summaries BEGIN UPDATE phase_counts SET inserted=inserted+1 WHERE name='usage_summaries'; END;
+      CREATE TRIGGER count_summaries_delete AFTER DELETE ON usage_summaries BEGIN UPDATE phase_counts SET deleted=deleted+1 WHERE name='usage_summaries'; END;
+      CREATE TRIGGER count_shadow_summaries_insert AFTER INSERT ON usage_summaries_rebuild BEGIN UPDATE phase_counts SET inserted=inserted+1 WHERE name='usage_summaries_rebuild'; END;
+      CREATE TRIGGER count_shadow_summaries_delete AFTER DELETE ON usage_summaries_rebuild BEGIN UPDATE phase_counts SET deleted=deleted+1 WHERE name='usage_summaries_rebuild'; END;`);
+  } finally { store.close(); }
+  const childCode = `const {ActivityStore}=await import(process.argv[1]);const {maintainUsage}=await import(process.argv[2]);const s=ActivityStore.open(process.argv[3]);try{const start=performance.now();s.transaction(()=>maintainUsage(s.db,Number(process.argv[4]),process.argv[5]));process.stdout.write(String(performance.now()-start))}finally{s.close()}`;
+  const modulePath = (name: string) => path.join(import.meta.dir, name);
+  let liveDeltaAdded = false, maxMaintenanceMs = 0, maxMaintenancePhase = "";
+  for (let pass=0;pass<64;pass++) {
+    const current = ActivityStore.open(file);
+    const phase = current.db.query<{ rebuild_phase: string | null }, []>("SELECT rebuild_phase FROM usage_meta WHERE singleton=1").get()!.rebuild_phase;
+    current.db.exec("UPDATE phase_counts SET inserted=0,deleted=0");
+    current.close();
+    if (phase === "copy-days" && !liveDeltaAdded) {
+      seed("zone-live-delta", { project: "project-live" });
+      const reset=ActivityStore.open(file); reset.db.exec("UPDATE phase_counts SET inserted=0,deleted=0"); reset.close();
+      liveDeltaAdded = true;
+    }
+    const child = Bun.spawn([process.execPath,"-e",childCode,modulePath("store.ts"),modulePath("tokenStore.ts"),file,String(USAGE_NOW),"America/New_York"],{stdout:"pipe",stderr:"pipe"});
+    const stdout=await new Response(child.stdout).text(),stderr=await new Response(child.stderr).text();
+    expect(await child.exited, stderr || stdout).toBe(0);
+    if (Number(stdout) > maxMaintenanceMs) { maxMaintenanceMs = Number(stdout); maxMaintenancePhase=phase ?? "start"; }
+    const check=ActivityStore.open(file);
+    const counts=check.db.query<{name:string;inserted:number;deleted:number}, []>("SELECT * FROM phase_counts").all();
+    const nextPhase=check.db.query<{rebuild_phase:string|null}, []>("SELECT rebuild_phase FROM usage_meta WHERE singleton=1").get()!.rebuild_phase;
+    if (phase === "scan") {
+      expect(counts.find(row=>row.name==="usage_days_rebuild")!.inserted).toBeLessThanOrEqual(USAGE_REBUILD_SCAN_LIMIT);
+    }
+    if (["prepare-days","prepare-summaries","copy-days","copy-summaries","prune-days","prune-summaries","cleanup-days","cleanup-summaries"].includes(phase ?? "")) {
+      for (const count of counts) {
+        expect(count.inserted, `${phase} ${count.name} insert bound`).toBeLessThanOrEqual(USAGE_MAINTENANCE_LIMIT);
+        expect(count.deleted, `${phase} ${count.name} delete bound`).toBeLessThanOrEqual(USAGE_MAINTENANCE_LIMIT);
+      }
+    }
+    check.close();
+    if (!nextPhase) break;
+    if (pass === 63) throw new Error("zone rebuild did not finish within the bounded pass limit");
+  }
+  expect(liveDeltaAdded).toBeTrue();
+  console.log(`zone rebuild max ${maxMaintenanceMs.toFixed(2)} ms in ${maxMaintenancePhase} for ${rows} source rows`);
+  const finished=ActivityStore.open(file);
+  try {
+    const active = finished.db.query<{ requests: number; input: number }, [string]>("SELECT SUM(requests) AS requests,SUM(input) AS input FROM usage_days WHERE zone=?").get("America/New_York")!;
+    expect(active.requests).toBe(rows+1);
+    expect(active.input).toBe(rows*2+usageRecord("zone-live-delta").counts.input);
+    expect(finished.db.query<{ requests: number }, [string]>("SELECT SUM(requests) AS requests FROM usage_summaries WHERE zone=? AND dimension='all' AND key='all'").get("America/New_York")!.requests).toBe(rows+1);
+    expect(finished.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM usage_days_rebuild").get()!.n).toBe(0);
+    expect(finished.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM usage_summaries_rebuild").get()!.n).toBe(0);
+  } finally { finished.close(); }
+});
+test("hourly totals, list and chart use the requested timezone boundaries", async () => {
+  seed("utc-boundary", { at: Date.parse("2026-10-17T21:30:00Z") });
+  for (const query of [
+    "from=2026-10-17&to=2026-10-17&tz=UTC",
+    "from=2026-10-17&to=2026-10-18&tz=UTC",
+  ]) {
+    const got = await read(query);
+    const sum = (counts: TokenCounts[]) => counts.reduce((total, row) => { addTokens(total, row); return total; }, emptyTokens());
+    const chartCounts = sum(got.series.flatMap(row => row.parts.map(part => part.counts)));
+    const listCounts = sum(got.list.map(row => row.counts));
+    const basisCounts = sum(got.costBasis.map(row => row.counts));
+    expect(got.totals.requests).toBe(1);
+    expect(basisCounts).toEqual(got.totals);
+    expect(listCounts).toEqual(got.totals);
+    expect(chartCounts).toEqual(got.totals);
+  }
+  const nextDay = await read("from=2026-10-18&to=2026-10-18&tz=UTC");
+  expect(nextDay.totals).toEqual(emptyTokens());
+  expect(nextDay.costBasis).toEqual([]);
+  expect(nextDay.list).toEqual([]);
+  expect(nextDay.series.flatMap(row => row.parts)).toEqual([]);
 });
 test("historical one and two day ranges use retained daily aggregates and agree with totals", async () => {
   const oldAt = USAGE_NOW - DAY;

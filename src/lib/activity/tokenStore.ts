@@ -7,6 +7,8 @@ export const HOUR = 3_600_000;
 export const DAY = 24 * HOUR;
 export const USAGE_RETENTION_DAYS = 92;
 export const USAGE_MAINTENANCE_LIMIT = 10_000;
+export const USAGE_REBUILD_SCAN_LIMIT = 500;
+const USAGE_REBUILD_COPY_LIMIT = 5_000;
 const columns = "requests, input, cache_read, cache_write, cache_write_1h, output, reasoning";
 const increments = columns.split(", ").map(key => `${key} = ${key} + excluded.${key}`).join(", ");
 export const tokenBindings = (c: TokenCounts) => [c.requests, c.input, c.cacheRead, c.cacheWrite, c.cacheWrite1h, c.output, c.reasoning];
@@ -14,7 +16,7 @@ export interface UsageMeta {
   schema: number; version: number; zone: string; zone_since: string | null; previous_zone: string | null;
   counted_from: number | null; skipped_old: number; malformed: number; branch_skipped: number;
   pending_bytes: number; complete: number; maintenance_day: number; target_zone: string | null; rebuild_cursor: string | null;
-  zones: string;
+  rebuild_phase: string | null; rebuild_final_cursor: string | null; rebuild_since: string | null; zones: string;
 }
 const dayDefinition = `host TEXT NOT NULL, zone TEXT NOT NULL, day TEXT NOT NULL,
   project TEXT NOT NULL, role TEXT NOT NULL, model TEXT NOT NULL, tier TEXT NOT NULL,
@@ -52,13 +54,17 @@ export function migrateUsage(db: Database): void {
       version INTEGER NOT NULL, zone TEXT NOT NULL, zone_since TEXT, previous_zone TEXT, counted_from INTEGER,
       skipped_old INTEGER NOT NULL DEFAULT 0, malformed INTEGER NOT NULL DEFAULT 0, branch_skipped INTEGER NOT NULL DEFAULT 0,
       pending_bytes INTEGER NOT NULL DEFAULT 0, complete INTEGER NOT NULL DEFAULT 0, maintenance_day INTEGER NOT NULL DEFAULT -1,
-      target_zone TEXT, rebuild_cursor TEXT, zones TEXT NOT NULL DEFAULT '[]')`,
+      target_zone TEXT, rebuild_cursor TEXT, rebuild_phase TEXT, rebuild_final_cursor TEXT, rebuild_since TEXT, zones TEXT NOT NULL DEFAULT '[]')`,
     "INSERT OR IGNORE INTO usage_meta(singleton, schema, version, zone) VALUES(1, 1, 0, 'Europe/Kyiv')",
   ];
   for (const statement of statements) db.exec(statement);
   const cols = new Set(db.query<{ name: string }, []>("PRAGMA table_info(activity_files)").all().map(r => r.name));
   if (!cols.has("usage_offset")) db.exec("ALTER TABLE activity_files ADD COLUMN usage_offset INTEGER NOT NULL DEFAULT 0");
   if (!cols.has("usage_facts")) db.exec("ALTER TABLE activity_files ADD COLUMN usage_facts TEXT");
+  const metaCols = new Set(db.query<{ name: string }, []>("PRAGMA table_info(usage_meta)").all().map(r => r.name));
+  if (!metaCols.has("rebuild_phase")) db.exec("ALTER TABLE usage_meta ADD COLUMN rebuild_phase TEXT");
+  if (!metaCols.has("rebuild_final_cursor")) db.exec("ALTER TABLE usage_meta ADD COLUMN rebuild_final_cursor TEXT");
+  if (!metaCols.has("rebuild_since")) db.exec("ALTER TABLE usage_meta ADD COLUMN rebuild_since TEXT");
 }
 
 export function usageMeta(db: Database): UsageMeta | null {
@@ -152,7 +158,14 @@ export function commitUsage(db: Database, batch: UsageBatch): void {
       VALUES('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT DO UPDATE SET ${increments}`).run(...hourKey(row), row.engine, row.project, row.role, row.member, batch.owner.pipelineId, batch.owner.stageId, ...tokenBindings(counts));
     addDay(db, "usage_days", meta.zone, row, counts);
-    if (meta.target_zone && meta.rebuild_cursor) {
+    const phase = meta.rebuild_phase ?? (meta.target_zone ? "scan" : null);
+    if (meta.target_zone && (phase === "copy-days" || phase === "copy-summaries")) {
+      // Live deltas and the resumable copy share one key, so either ordering preserves the exact total.
+      addDay(db, "usage_days_rebuild", meta.target_zone, row, counts);
+      if (!meta.rebuild_since || usageDay(row.hour * HOUR, meta.target_zone) >= meta.rebuild_since) {
+        addDay(db, "usage_days", meta.target_zone, row, counts);
+      }
+    } else if (meta.target_zone && phase === "scan" && meta.rebuild_cursor) {
       // Only previously scanned keys need dual writes. Later keys are read with their new values.
       const scanned = db.query<{ ok: number }, SQLQueryBindings[]>(`SELECT ${keyBinds} <= ${keyBinds} AS ok`).get(...hourKey(row), ...JSON.parse(meta.rebuild_cursor));
       if (scanned?.ok) addDay(db, "usage_days_rebuild", meta.target_zone, row, counts);
@@ -177,7 +190,6 @@ export function maintainUsage(db: Database, now: number, zone: string): void {
       ["usage_days", "day", usageDay(now - 760 * DAY, meta.zone)],
       ["usage_claude_seen", "at", now - 92 * DAY], ["usage_codex_threads", "at", now - 92 * DAY],
     ] as const) {
-      // Composite primary keys also work for WITHOUT ROWID tables.
       const keys = table === "usage_hours" ? "host, hour, conversation, model, tier, account" : table === "usage_days"
         ? "host, zone, day, price_key, project, role, model, tier, account, member, engine" : table === "usage_claude_seen" ? "k" : "thread";
       const zones=usageZones(meta);
@@ -199,28 +211,104 @@ export function maintainUsage(db: Database, now: number, zone: string): void {
     }
   }
   if (zone !== meta.zone && !meta.target_zone) {
-    db.exec("DELETE FROM usage_days_rebuild");
-    db.exec("DELETE FROM usage_summaries_rebuild");
-    db.query("UPDATE usage_meta SET target_zone=?, rebuild_cursor=NULL WHERE singleton=1").run(zone);
+    db.query("UPDATE usage_meta SET target_zone=?, rebuild_phase='prepare-days', rebuild_cursor=NULL, rebuild_final_cursor=NULL, rebuild_since=NULL WHERE singleton=1").run(zone);
     meta = usageMeta(db)!;
   }
   if (!meta.target_zone) return;
-  const cursor = meta.rebuild_cursor ? JSON.parse(meta.rebuild_cursor) as SQLQueryBindings[] : null;
-  const rows = db.query<HourRow, SQLQueryBindings[]>(`SELECT * FROM usage_hours WHERE host='' ${cursor ? `AND ${keyExpression} > ${keyBinds}` : ""}
-    ORDER BY hour, conversation, model, tier, account LIMIT ${USAGE_MAINTENANCE_LIMIT}`).all(...(cursor ?? []));
-  for (const row of rows) addDay(db, "usage_days_rebuild", meta.target_zone, row, countsFromRow(row));
-  if (rows.length === USAGE_MAINTENANCE_LIMIT) {
-    db.query("UPDATE usage_meta SET rebuild_cursor=? WHERE singleton=1").run(JSON.stringify(hourKey(rows.at(-1)!)));
+  const phase = meta.rebuild_phase ?? "scan";
+  if (phase === "prepare-days" || phase === "prepare-summaries") {
+    const table = phase === "prepare-days" ? "usage_days_rebuild" : "usage_summaries_rebuild";
+    const keys = phase === "prepare-days" ? "host,zone,day,price_key,project,role,model,tier,account,member,engine" : "host,zone,day,dimension,key";
+    const removed = db.query(`DELETE FROM ${table} WHERE (${keys}) IN (SELECT ${keys} FROM ${table} LIMIT ${USAGE_MAINTENANCE_LIMIT})`).run().changes;
+    if (removed < USAGE_MAINTENANCE_LIMIT) {
+      db.query("UPDATE usage_meta SET rebuild_phase=? WHERE singleton=1").run(phase === "prepare-days" ? "prepare-summaries" : "scan");
+    }
     return;
   }
-  // Days outside the retained hours keep their original zone. Drop the partial first day.
-  const since = shiftDay(usageDay(now - 92 * DAY, meta.target_zone), 1);
-  db.query("DELETE FROM usage_days WHERE day >= ?").run(since);
-  db.query("INSERT INTO usage_days SELECT * FROM usage_days_rebuild WHERE day >= ?").run(since);
-  db.query("DELETE FROM usage_summaries WHERE day >= ?").run(since);
-  db.query("INSERT INTO usage_summaries SELECT * FROM usage_summaries_rebuild WHERE day >= ?").run(since);
-  db.exec("DELETE FROM usage_days_rebuild");
-  db.exec("DELETE FROM usage_summaries_rebuild");
-  db.query(`UPDATE usage_meta SET zones=?, previous_zone=zone, zone=target_zone, zone_since=?, target_zone=NULL, rebuild_cursor=NULL, version=version+1 WHERE singleton=1`)
-    .run(JSON.stringify([...new Set([...usageZones(meta),meta.target_zone])]),since);
+  if (phase === "scan") {
+    const cursor = meta.rebuild_cursor ? JSON.parse(meta.rebuild_cursor) as SQLQueryBindings[] : null;
+    const rows = db.query<HourRow, SQLQueryBindings[]>(`SELECT * FROM usage_hours WHERE host='' ${cursor ? `AND ${keyExpression} > ${keyBinds}` : ""}
+      ORDER BY hour, conversation, model, tier, account LIMIT ${USAGE_REBUILD_SCAN_LIMIT}`).all(...(cursor ?? []));
+    for (const row of rows) addDay(db, "usage_days_rebuild", meta.target_zone, row, countsFromRow(row));
+    if (rows.length === USAGE_REBUILD_SCAN_LIMIT) {
+      db.query("UPDATE usage_meta SET rebuild_cursor=? WHERE singleton=1").run(JSON.stringify(hourKey(rows.at(-1)!)));
+    } else {
+      db.query("UPDATE usage_meta SET rebuild_phase='copy-days', rebuild_cursor=NULL, rebuild_since=? WHERE singleton=1")
+        .run(shiftDay(usageDay(now - 92 * DAY, meta.target_zone), 1));
+    }
+    return;
+  }
+  if (phase === "copy-days") {
+    const cursor = meta.rebuild_final_cursor ? JSON.parse(meta.rebuild_final_cursor) as SQLQueryBindings[] : null;
+    const rows = db.query<DayRow, SQLQueryBindings[]>(`SELECT *, CAST(price_key AS TEXT) AS cursor_price_key FROM usage_days_rebuild WHERE host='' AND zone=? AND day >= ? ${cursor ? `AND (day,price_key,project,role,model,tier,account,member,engine) > (?,CAST(? AS INTEGER),?,?,?,?,?,?,?)` : ""}
+      ORDER BY day,price_key,project,role,model,tier,account,member,engine LIMIT ${USAGE_REBUILD_COPY_LIMIT}`)
+      .all(meta.target_zone, meta.rebuild_since, ...(cursor ?? []));
+    if (rows.length) copyDayBatch(db, meta.rebuild_since!, cursor);
+    if (rows.length === USAGE_REBUILD_COPY_LIMIT) {
+      db.query("UPDATE usage_meta SET rebuild_final_cursor=? WHERE singleton=1").run(JSON.stringify(dayCursor(rows.at(-1)!)));
+    } else {
+      db.query("UPDATE usage_meta SET rebuild_phase='copy-summaries', rebuild_final_cursor=NULL WHERE singleton=1").run();
+    }
+    return;
+  }
+  if (phase === "copy-summaries") {
+    const cursor = meta.rebuild_final_cursor ? JSON.parse(meta.rebuild_final_cursor) as SQLQueryBindings[] : null;
+    const rows = db.query<SummaryRow, SQLQueryBindings[]>(`SELECT * FROM usage_summaries_rebuild WHERE host='' AND zone=? AND day>=? ${cursor ? `AND (dimension,day,key) > (?,?,?)` : ""}
+      ORDER BY dimension,day,key LIMIT ${USAGE_REBUILD_COPY_LIMIT}`).all(meta.target_zone,meta.rebuild_since,...(cursor ?? []));
+    for (const row of rows) copySummary(db, row);
+    if (rows.length === USAGE_REBUILD_COPY_LIMIT) {
+      db.query("UPDATE usage_meta SET rebuild_final_cursor=? WHERE singleton=1")
+        .run(JSON.stringify([rows.at(-1)!.dimension, rows.at(-1)!.day, rows.at(-1)!.key]));
+    } else {
+      db.query(`UPDATE usage_meta SET zones=?, previous_zone=zone, zone=target_zone, zone_since=rebuild_since,
+        rebuild_phase='prune-days', rebuild_final_cursor=NULL, version=version+1 WHERE singleton=1`)
+        .run(JSON.stringify([...new Set([...usageZones(meta),meta.target_zone])]));
+    }
+    return;
+  }
+  if (phase === "prune-days" || phase === "prune-summaries") {
+    const table = phase === "prune-days" ? "usage_days" : "usage_summaries";
+    const keys = phase === "prune-days" ? "host,zone,day,price_key,project,role,model,tier,account,member,engine" : "host,zone,day,dimension,key";
+    const oldZones=usageZones(meta).filter(value=>value!==meta.target_zone);
+    if (!oldZones.length) {
+      db.query("UPDATE usage_meta SET rebuild_phase=? WHERE singleton=1").run(phase === "prune-days" ? "prune-summaries" : "cleanup-days");
+      return;
+    }
+    const zoneClause=oldZones.map(()=>"?").join(",");
+    const dimensions=phase === "prune-summaries" ? ` AND dimension IN ('all','price','model','role','project','member','account','engine')` : "";
+    const removed = db.query(`DELETE FROM ${table} WHERE (${keys}) IN (SELECT ${keys} FROM ${table}
+      WHERE host='' AND zone IN (${zoneClause})${dimensions} AND day>=? LIMIT ${USAGE_MAINTENANCE_LIMIT})`).run(...oldZones,meta.rebuild_since).changes;
+    if (removed < USAGE_MAINTENANCE_LIMIT) {
+      db.query("UPDATE usage_meta SET rebuild_phase=? WHERE singleton=1").run(phase === "prune-days" ? "prune-summaries" : "cleanup-days");
+    }
+    return;
+  }
+  if (phase === "cleanup-days" || phase === "cleanup-summaries") {
+    const table = phase === "cleanup-days" ? "usage_days_rebuild" : "usage_summaries_rebuild";
+    const keys = phase === "cleanup-days" ? "host,zone,day,price_key,project,role,model,tier,account,member,engine" : "host,zone,day,dimension,key";
+    const removed = db.query(`DELETE FROM ${table} WHERE (${keys}) IN (SELECT ${keys} FROM ${table} LIMIT ${USAGE_MAINTENANCE_LIMIT})`).run().changes;
+    if (removed < USAGE_MAINTENANCE_LIMIT) {
+      if (phase === "cleanup-days") db.query("UPDATE usage_meta SET rebuild_phase='cleanup-summaries' WHERE singleton=1").run();
+      else db.query("UPDATE usage_meta SET target_zone=NULL, rebuild_phase=NULL, rebuild_final_cursor=NULL, rebuild_since=NULL WHERE singleton=1").run();
+    }
+    return;
+  }
+}
+
+type DayRow = CountsRow & { host: string; zone: string; day: string; project: string; role: string; model: string; tier: string; account: string; member: string; engine: string; week: string; price_key: number | bigint; cursor_price_key: string };
+type SummaryRow = CountsRow & { host: string; zone: string; day: string; dimension: string; key: string; model: string; tier: string; engine: string; week: string };
+const dayColumns = "host,zone,day,project,role,model,tier,account,member,engine,week,price_key,requests,input,cache_read,cache_write,cache_write_1h,output,reasoning";
+const summaryColumns = "host,zone,day,dimension,key,model,tier,engine,week,requests,input,cache_read,cache_write,cache_write_1h,output,reasoning";
+const dayCursor = (row: DayRow): SQLQueryBindings[] => [row.day, row.cursor_price_key, row.project, row.role, row.model, row.tier, row.account, row.member, row.engine];
+function copyDayBatch(db: Database, since: string, cursor: SQLQueryBindings[] | null): void {
+  const after = cursor ? `AND (day,price_key,project,role,model,tier,account,member,engine) > (?,CAST(? AS INTEGER),?,?,?,?,?,?,?)` : "";
+  db.query(`INSERT OR REPLACE INTO usage_days(${dayColumns}) SELECT ${dayColumns} FROM usage_days_rebuild
+    WHERE host='' AND zone=(SELECT target_zone FROM usage_meta WHERE singleton=1) AND day >= ? ${after}
+    ORDER BY day,price_key,project,role,model,tier,account,member,engine LIMIT ${USAGE_REBUILD_COPY_LIMIT}`)
+    .run(since, ...(cursor ?? []));
+}
+function copySummary(db: Database, row: SummaryRow): void {
+  db.query(`INSERT OR REPLACE INTO usage_summaries(${summaryColumns}) VALUES(${Array(16).fill("?").join(",")})`).run(
+    row.host,row.zone,row.day,row.dimension,row.key,row.model,row.tier,row.engine,row.week,
+    row.requests,row.input,row.cache_read,row.cache_write,row.cache_write_1h,row.output,row.reasoning);
 }
