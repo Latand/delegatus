@@ -17,7 +17,7 @@ process.env.LLV_STATE_DIR = sandbox;
 
 const { MERGE_POLL_MS, MERGE_REASONS, productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes } = await import("./autoMerge");
 const { patchPipeline } = await import("@/lib/pipelines/engine");
-const { loadPipelines, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
+const { loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
 const { mergeOnReviewSetting, resetProjectSettingsForTests, setMergeOnReview } = await import("@/lib/projects/settings");
 const { laneNeed } = await import("@/components/attention/needReason");
 const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
@@ -646,7 +646,20 @@ for (const kind of ["rebased", "nearby-rebase", "offset-rebase", "local-output",
       savePipelines([refreshing]);
     }
   }
+  let sharedMerge: Pipeline["merge"];
+  let sharedChain: string[];
+  if (kind === "local-output" && (initial === "blocked" || initial === "refreshing")) {
+    const shared = loadPipelinesForList().find((candidate) => candidate.id === lane.id)!;
+    sharedMerge = shared.merge;
+    sharedChain = [...shared.merge!.chain];
+    Object.freeze(shared.merge!.chain);
+    Object.freeze(shared.merge);
+    ports.loadPipelines = loadPipelinesForList;
+  }
   await sweepAutoMerge(ports);
+  if (kind === "local-output" && (initial === "blocked" || initial === "refreshing")) {
+    expect(sharedMerge!.chain).toEqual(sharedChain!);
+  }
   await sweepTaskFinishes(ports);
   const landed = loadPipelines()[0]!;
   expect(landed.merge).toMatchObject({ state: "merged", by: "outside", chain: [graph.head], mergedHead: graph.head, mergeCommit: landing, reason: null, blockedAt: null });

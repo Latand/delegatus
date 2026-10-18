@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { deepFreeze } from "@/lib/deepFreeze";
 import { NextRequest } from "next/server";
 
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -19,7 +20,7 @@ test("POST ensures a pipeline from the attached conversation profile", async () 
   }];
   const bindingCalls: unknown[] = [];
   const dependencies = {
-    loadTasks: () => tasks,
+    loadTasks: () => deepFreeze(structuredClone(tasks)),
     mutateTasks: (mutator: (current: BoardTask[]) => { tasks?: BoardTask[]; result: unknown }) => {
       const mutation = mutator(tasks);
       if (mutation.tasks) tasks = mutation.tasks;

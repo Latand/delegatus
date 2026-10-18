@@ -12,7 +12,7 @@ import { taskForResponse } from "@/lib/prototypeReview/read";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { applyAssignmentPatches, assignmentRefFromBody, dismissUnstartedLaunch, removeAssignment, type AssignmentPatch } from "@/lib/tasks/commands";
 import { isoNow } from "@/lib/tasks/helpers";
-import { loadTasks, mutateTasks } from "@/lib/tasks/store";
+import { loadTasksForList, mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { ApiError } from "@/lib/types";
 
@@ -24,7 +24,7 @@ type TaskRouteContext = {
 };
 
 interface AssignmentRouteDependencies {
-  loadTasks: typeof loadTasks;
+  loadTasks: typeof loadTasksForList;
   mutateTasks: typeof mutateTasks;
   spawnParamsForPath(pathname: string): TaskPipelineSpawnParams | null;
   ensureTaskPipelineForAssignment: typeof ensureTaskPipelineForAssignment;
@@ -47,7 +47,7 @@ function spawnParamsForPath(pathname: string): TaskPipelineSpawnParams | null {
 }
 
 const productionDependencies: AssignmentRouteDependencies = {
-  loadTasks,
+  loadTasks: loadTasksForList,
   mutateTasks,
   spawnParamsForPath,
   ensureTaskPipelineForAssignment,

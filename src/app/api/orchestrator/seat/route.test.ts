@@ -248,7 +248,7 @@ test("the status read parses the seat record once, and reads the task store once
   /* The task store is counted by CALLS: the store caches its collection, so how
      much FILE work one read of it costs depends on what ran before, while how
      many times the route asks for it does not. */
-  const store = spyOn(taskStore, "loadTasks");
+  const store = spyOn(taskStore, "loadTasksForList");
   try {
     let status = 0;
     const answer = await reads(async () => { status = (await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=proj-a"))).status; });

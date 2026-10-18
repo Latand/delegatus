@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
+import { deepFreeze } from "@/lib/deepFreeze";
 import type { Pipeline, PipelineMerge } from "@/lib/pipelines/types";
 import type { MergeOnReviewSetting } from "@/lib/projects/settings";
 
@@ -169,7 +170,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
       if (writeRefusal) throw new ForgeAppWriteRefused(writeRefusal);
       return run(args);
     },
-    loadPipelines: () => [...pipelines.values()].map((pipeline) => structuredClone(pipeline)),
+    loadPipelines: () => [...pipelines.values()].map((pipeline) => deepFreeze(structuredClone(pipeline))),
     mutate: async (id: string, change: (pipeline: Pipeline) => boolean) => {
       const pipeline = pipelines.get(id);
       if (!pipeline) return false;
@@ -849,4 +850,71 @@ describe("rollup reading", () => {
       { name: "slow", verdict: "pending" },
     ]);
   });
+});
+
+test("unchanged refusal reasons log once, changes log again, and departed hot lanes are evicted", async () => {
+  let rows = deepFreeze([lane("reason-a"), lane("reason-b")]);
+  const logs: string[] = [];
+  const size = () => (globalThis as typeof globalThis & { __llvAutoMergeAdmissionReasons?: Map<string, string> }).__llvAutoMergeAdmissionReasons?.size;
+  const ports = {
+    now: () => T0, loadPipelines: () => rows,
+    setting: () => ({ enabled: false, changedAt: iso(T0), changedBy: "operator" as const }),
+    pullRequestOf: () => null, cachedState: () => null,
+    run: async () => { throw new Error("unexpected forge read"); },
+    write: async () => { throw new Error("unexpected forge write"); },
+    mutate: async () => { throw new Error("unexpected row write"); },
+    log: (line: string) => { logs.push(line); },
+  };
+  await sweepAutoMerge(ports);
+  await sweepAutoMerge(ports);
+  expect(logs).toHaveLength(2);
+  expect(size()).toBe(2);
+  expect(logs.every(line => line.includes("not admitted:"))).toBe(true);
+  rows = deepFreeze([{ ...rows[0]!, hiddenAt: iso(T0) }, rows[1]!]);
+  await sweepAutoMerge(ports);
+  expect(logs).toHaveLength(3);
+  expect(logs.at(-1)).toContain("reason-a: not admitted: lane is hidden");
+  // Keeping the ids but reopening them must evict their completed-lane reasons.
+  rows = deepFreeze(rows.map(row => ({ ...row, state: "running" as const })));
+  await sweepAutoMerge(ports);
+  expect(size()).toBe(0);
+  rows = deepFreeze([lane("reason-a"), lane("reason-b")]);
+  await sweepAutoMerge(ports);
+  expect(logs).toHaveLength(5);
+  rows = [];
+  await sweepAutoMerge(ports);
+  expect(size()).toBe(0);
+  rows = deepFreeze([lane("reason-a")]);
+  await sweepAutoMerge(ports);
+  expect(logs).toHaveLength(6);
+});
+
+test("a restarted merge process reports its first refusal once with recreated scheduler ports", async () => {
+  const script = `
+    const { productionAutoMergePorts, sweepAutoMerge } = await import("./src/lib/forge/autoMerge");
+    const lanes = JSON.parse(process.env.MERGE_FIXTURE);
+    const ports = () => productionAutoMergePorts({
+      loadPipelines: () => lanes, now: () => ${T0},
+      setting: () => ({ enabled: false, changedAt: "${iso(T0)}", changedBy: "operator" }),
+      pullRequestOf: () => null, hasPublishedPrototype: () => false,
+      run: async () => { throw new Error("unexpected forge read"); },
+      mutate: async () => { throw new Error("unexpected row write"); },
+      log: line => console.log(line),
+    });
+    await sweepAutoMerge(ports());
+    await sweepAutoMerge(ports());
+  `;
+  const observations: string[][] = [];
+  for (let restart = 0; restart < 2; restart++) {
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      env: { ...process.env, MERGE_FIXTURE: JSON.stringify([lane("reason-restart")]) },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [out, err, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ exit, err }).toEqual({ exit: 0, err: "" });
+    observations.push(out.trim().split("\n"));
+  }
+  expect(observations[0]).toHaveLength(1);
+  expect(observations[0]![0]).toContain("reason-restart: not admitted:");
+  expect(observations[1]).toEqual(observations[0]);
 });

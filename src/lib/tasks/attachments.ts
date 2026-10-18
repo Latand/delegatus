@@ -76,7 +76,7 @@ export function storeAttachment(data: Buffer, mime: string, now: string, id = cr
 }
 
 /** Every sha256 any task currently references — the keep-set for the sweep. */
-export function referencedShas(tasks: BoardTask[]): Set<string> {
+export function referencedShas(tasks: readonly BoardTask[]): Set<string> {
   const shas = new Set<string>();
   for (const task of tasks) {
     for (const att of task.attachments ?? []) shas.add(att.sha256);
@@ -93,7 +93,7 @@ const TTL_MS = 7 * 24 * 60 * 60 * 1000;
  * touched, so a create racing the sweep can't be left with a dangling ref.
  * Never throws — a failed sweep must not break the mutation that triggered it.
  */
-export function sweepAttachments(tasks: BoardTask[], nowMs: number, dir = attachmentsDir()): void {
+export function sweepAttachments(tasks: readonly BoardTask[], nowMs: number, dir = attachmentsDir()): void {
   try {
     const keep = referencedShas(tasks);
     for (const name of fs.readdirSync(dir)) {

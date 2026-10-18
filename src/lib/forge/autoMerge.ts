@@ -11,7 +11,7 @@ import { openPipelinesOnTask } from "@/lib/pipelines/taskFinish";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline, type PipelineMerge, type PipelineMergeMethod, type PipelineStage } from "@/lib/pipelines/types";
 import { mergeOnReviewSetting, type MergeOnReviewSetting } from "@/lib/projects/settings";
 import { patchTask } from "@/lib/tasks/commands";
-import { loadTasks, mutateTasks, taskSelectionSource } from "@/lib/tasks/store";
+import { loadTasksForList, mutateTasks, taskSelectionSource } from "@/lib/tasks/store";
 
 import { forgeCacheView } from "./cache";
 import { checkFailedReason, MERGE_REASONS } from "./mergeReasons";
@@ -239,6 +239,7 @@ async function requiredContexts(repository: string, base: string, ports: AutoMer
 
 export function resetAutoMergeForTests(): void {
   repositoryFacts().clear();
+  admissionReasons.clear();
   scheduleHost.__llvAutoMergeRunning = null;
   scheduleHost.__llvAutoMergeStartedAt = undefined;
 }
@@ -690,6 +691,17 @@ export function mergeAdmission(pipeline: Pipeline, now: number, ports: MergeAdmi
   return { merge };
 }
 
+// One owner across compiled bundles and fresh scheduler ports. A pass evicts
+// lanes that left the hot collection, reopened, or acquired a merge record;
+// retained reasons can never outnumber completed hot lanes without a merge.
+const admissionHost = globalThis as typeof globalThis & { __llvAutoMergeAdmissionReasons?: Map<string, string> };
+const admissionReasons = admissionHost.__llvAutoMergeAdmissionReasons ??= new Map<string, string>();
+function notAdmitted(ports: AutoMergePorts, id: string, reason: string): void {
+  if (admissionReasons.get(id) === reason) return;
+  admissionReasons.set(id, reason);
+  ports.log?.(`[auto merge] ${id}: not admitted: ${reason}`);
+}
+
 /**
  * One pass: queue every eligible lane still missing a record, cancel what only waits
  * under a setting turned off, note merges someone else made, and take one step
@@ -698,17 +710,20 @@ export function mergeAdmission(pipeline: Pipeline, now: number, ports: MergeAdmi
 export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   return withViewerOperation("forge.auto-merge", async () => {
   const now = ports.now();
-  for (const pipeline of ports.loadPipelines()) {
+  const pipelines = ports.loadPipelines();
+  const pending = new Set(pipelines.filter(pipeline => pipeline.state === "completed" && !pipeline.merge).map(pipeline => pipeline.id));
+  for (const id of admissionReasons.keys()) if (!pending.has(id)) admissionReasons.delete(id);
+  for (const pipeline of pipelines) {
     if (pipeline.state !== "completed") continue;
     if (pipeline.hiddenAt) {
-      if (!pipeline.merge) ports.log?.(`[auto merge] ${pipeline.id}: not admitted: lane is hidden`);
+      if (!pipeline.merge) notAdmitted(ports, pipeline.id, "lane is hidden");
       continue;
     }
     const setting = ports.setting(pipeline.project);
     const merge = pipeline.merge;
     const linkedPr = ports.pullRequestOf(pipeline);
     if (!linkedPr && !merge?.prNumber && laneNeedsNoPr(pipeline, ports)) {
-      if (!merge) ports.log?.(`[auto merge] ${pipeline.id}: not admitted: no pull request is required`);
+      if (!merge) notAdmitted(ports, pipeline.id, "no pull request is required");
       // Retire an old false stop as well as refusing admission for new lanes.
       if (merge && merge.reason === MERGE_REASONS.noPr) await ports.mutate(pipeline.id, (live) => {
         if (live.state !== "completed" || live.merge?.updatedAt !== merge.updatedAt || live.merge.prNumber
@@ -721,7 +736,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
     if (!merge) {
       const admission = mergeAdmission(pipeline, now, ports);
       if ("reason" in admission) {
-        ports.log?.(`[auto merge] ${pipeline.id}: not admitted: ${admission.reason}`);
+        notAdmitted(ports, pipeline.id, admission.reason);
         continue;
       }
       let reason = "lane was missing or unavailable at admission";
@@ -733,7 +748,8 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
           if (live.merge.reason) ports.log?.(`[auto merge] ${pipeline.id}: admission blocked: ${live.merge.reason}`);
           return true;
         });
-        if (!admitted) ports.log?.(`[auto merge] ${pipeline.id}: not admitted: ${reason}`);
+        if (!admitted) notAdmitted(ports, pipeline.id, reason);
+        else admissionReasons.delete(pipeline.id);
       } catch (error) {
         ports.log?.(`[auto merge] ${pipeline.id}: admission failed; will retry next sweep`, error);
       }
@@ -811,12 +827,13 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
  * to GitHub even if the PR has since reopened. */
 async function reconcileBatchLanding(read: Pipeline, pr: { repository: string; number: number }, ports: AutoMergePorts, stopClosedRefresh = false): Promise<void> {
   const now = ports.now();
+  const merge = { ...read.merge!, chain: [...read.merge!.chain] };
   let view: PullRequestView | null = null;
   try {
     view = parsePullRequestView(await ports.run(["pr", "view", String(pr.number), "--repo", pr.repository, "--json", PR_FIELDS]));
     if (!view) throw new Error("gh returned no parsable pull request");
-    if (view.state === "CLOSED") admitLocalOutputHead(read, read.merge!, view.headRefOid);
-    if (view.state === "CLOSED" && read.merge!.chain.includes(view.headRefOid)) {
+    if (view.state === "CLOSED") admitLocalOutputHead(read, merge, view.headRefOid);
+    if (view.state === "CLOSED" && merge.chain.includes(view.headRefOid)) {
       const landed = await readBatchLanding(pr.repository, pr.number, view.baseRefName || read.baseBranch, { head: view.headRefOid, repoDir: read.repoDir }, ports.run);
       if (landed) view = { ...view, state: "MERGED", mergeCommit: landed.commit, mergedAt: landed.mergedAt };
     }
@@ -829,7 +846,7 @@ async function reconcileBatchLanding(read: Pipeline, pr: { repository: string; n
     live.nextReadAt = iso(now + MERGE_POLL_MS);
     if (stopClosedRefresh && view?.state === "CLOSED") block(live, MERGE_REASONS.closed, now);
     if (view?.state !== "MERGED") return;
-    live.chain = read.merge!.chain;
+    live.chain = merge.chain;
     live.repository = pr.repository;
     live.prNumber = pr.number;
     live.state = "merged";
@@ -879,7 +896,7 @@ function hasPublishedPrototype(pipeline: Pipeline): boolean {
   });
   if (!terminal.length) return false;
   const source = taskSelectionSource();
-  const tasks = source ? pipeline.taskIds.map((id) => source.read(id)) : loadTasks().filter((task) => pipeline.taskIds.includes(task.id));
+  const tasks = source ? pipeline.taskIds.map((id) => source.read(id)) : loadTasksForList().filter((task) => pipeline.taskIds.includes(task.id));
   return tasks.some((task) => task?.prototypeReviews?.some((round) => round.source.pipelineId === pipeline.id
     && terminal.some((end) => end.stageId === round.source.stageId && end.attempt === round.source.attempt)));
 }
