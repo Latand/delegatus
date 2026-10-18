@@ -13,7 +13,7 @@ import {
   type CandidatePerformanceEvidence,
   type CandidatePerformanceMeasurements,
 } from "./candidatePerformance";
-import type { CandidateBrowserMeasurements } from "./candidateBrowser";
+import { summarizeBrowserViews, type CandidateBrowserMeasurements, type CandidateBrowserView } from "./candidateBrowser";
 
 const latency = (p95Ms: number, maxMs = p95Ms) => ({ count: 20, p50Ms: p95Ms / 2, p95Ms, maxMs });
 
@@ -429,6 +429,23 @@ test("an unanswered browser request refuses promotion even when it only exceeded
     ok: false,
     breaches: ["1 browser API request(s) did not finish"],
     timingWarnings: ["browser /api/accounts 30000ms exceeds 10000ms"],
+  });
+});
+
+test("a board that never drew remains a failure after its readiness sentinel crosses the report boundary", () => {
+  const view: CandidateBrowserView = {
+    view: 0, readyMs: Number.POSITIVE_INFINITY, cards: 0,
+    selection: { stillSelected: true, checksLost: 0, staleNoticeSeen: 0 },
+    files: { answered: 1, answeredDuringWrites: 1, errors: 0, p95Ms: 1, maxMs: 1, queuedMaxMs: 0 },
+    api: { requests: 1, maxMs: 1, slowestRoute: null, errors: 0, firstError: null, unfinished: 0 },
+    lag: { bootMaxMs: 1, samples: 1000, p95Ms: 1, maxMs: 1 }, inputMs: [1, 1],
+  };
+  const measured = healthy();
+  const browser = healthyBrowser();
+  measured.browser = summarizeBrowserViews(Array.from({ length: 8 }, (_, index) => ({ ...view, view: index })), browser.writes, browser.server);
+  expect(measured.browser.readyMaxMs).toBe(Number.MAX_SAFE_INTEGER);
+  expect(candidatePerformanceEvidence(JSON.parse(JSON.stringify(report(measured))))).toMatchObject({
+    ok: false, breaches: ["a browser board did not finish drawing"],
   });
 });
 

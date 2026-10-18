@@ -149,6 +149,9 @@ export function candidateBrowserBreaches(
   };
   const minimum = CANDIDATE_BROWSER_MINIMUMS;
   if (measured.views < minimum.views) breaches.push(`browser views: measured ${measured.views}, at least ${minimum.views} required`);
+  // summarizeBrowserViews encodes a view whose board never drew (Infinity)
+  // as this finite sentinel. Treat it as missing readiness.
+  if (measured.readyMaxMs === Number.MAX_SAFE_INTEGER) breaches.push("a browser board did not finish drawing");
   if (measured.writes.count < minimum.writes) breaches.push(`browser writers: measured ${measured.writes.count} writes, at least ${minimum.writes} required`);
   if (measured.writes.failures) breaches.push(`${measured.writes.failures} browser writer write(s) failed`);
   over("browser board drawn", measured.readyMaxMs, bounds.readyMs);
