@@ -58,6 +58,9 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
       if (prior && prior !== adapter) throw new Error("owner service conversation already registered");
       conversations().set(conversationId, adapter);
     },
+    unbindConversation(conversationId: string) {
+      if (conversations().get(conversationId) === adapter) conversations().delete(conversationId);
+    },
     async op(args: Args, waitMs: number) {
       await check();
       if (args.op === "list") {

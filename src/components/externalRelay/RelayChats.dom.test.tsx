@@ -46,7 +46,7 @@ const file = (id: string, mtime: number): FileEntry => ({
   parent: null, mtime, size: 400, activity: "idle", proc: null, pid: null, model: "opus", pendingQuestion: null, waitingInput: null,
 });
 const chat = (id: string, over: Partial<RelayChatsPayload["chats"][number]> = {}): RelayChatsPayload["chats"][number] => ({
-  id, relayId: "relay-1", relayName: "Example relay", targetId: "bot-1", targetName: "Support bot", chatKey: "QmF6x9Lk2pTw7RzA", context: "member",
+  id, relayId: "relay-1", relayName: "Example relay", targetId: "bot-1", targetName: "Support bot", chatKey: "QmF6x9Lk2pTw7RzA", authority: "member",
   engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-09T08:00:00.000Z", lastTurnAt: "2026-10-09T09:00:00.000Z", state: "idle",
   file: file(id, 1_791_540_000), ...over,
 });
@@ -54,7 +54,7 @@ const payload: RelayChatsPayload = {
   relays: [{ id: "relay-1", name: "Example relay", origin: "https://relay.example" }, { id: "relay-2", name: "Quiet relay", origin: "https://quiet.example" }],
   chats: [
     chat("c1"),
-    chat("c2", { context: "owner" }),
+    chat("c2", { authority: "owner" }),
     chat("c3", { chatKey: "Zt81sKe04VbHn2Qd", targetName: null, targetId: "gone" }),
     /* Its first turn wrote nothing yet: there is nothing to open. */
     chat("c4", { file: null }),
@@ -86,17 +86,17 @@ test("each relay whose chats hold a conversation is one sidebar entry under its 
 test("a row names the chat, whose session it is and the target, in English and Ukrainian", () => {
   const en = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("en", key, params);
   const uk = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("uk", key, params);
-  expect(relayChatTitle(en, payload.chats[0]!)).toBe("Chat QmF6x9 · members · Support bot");
+  expect(relayChatTitle(en, payload.chats[0]!)).toBe("Chat QmF6x9 · member · Support bot");
   expect(relayChatTitle(uk, payload.chats[1]!)).toBe("Чат QmF6x9 · власник · Support bot");
-  expect(relayChatTitle(en, payload.chats[2]!)).toBe("Chat Zt81sK · members");
+  expect(relayChatTitle(en, payload.chats[2]!)).toBe("Chat Zt81sK · member");
 });
 
 test("the leaf lists the chats with a transcript, offers no delete, and opens one read only in the agent window", async () => {
   const host = await mount(<RelayChatsView relayId="relay-1" payload={payload} />);
   const rows = Array.from(host.querySelectorAll<HTMLElement>("[data-relay-chat]"));
   expect(rows.map((row) => row.getAttribute("data-relay-chat"))).toEqual(["c1", "c2", "c3"]);
-  expect(rows[1]!.getAttribute("data-relay-chat-context")).toBe("owner");
-  expect(rows[0]!.textContent).toContain("Chat QmF6x9 · members · Support bot");
+  expect(rows[1]!.getAttribute("data-relay-chat-authority")).toBe("owner");
+  expect(rows[0]!.textContent).toContain("Chat QmF6x9 · member · Support bot");
   /* The ordinary conversation row, with its delete control left out. */
   expect(rows.every((row) => row.querySelectorAll("button").length === 1)).toBe(true);
   expect(host.querySelector("[data-relay-chats-count]")?.textContent).toBe("3");
@@ -104,7 +104,7 @@ test("the leaf lists the chats with a transcript, offers no delete, and opens on
   await act(async () => rows[0]!.querySelector("button")!.click());
   expect(host.querySelector("[data-agent-window]")?.getAttribute("data-agent-window")).toBe("c1");
   expect(panes.at(-1)).toMatchObject({ readOnly: true });
-  expect(panes.at(-1)!.file.title).toBe("Chat QmF6x9 · members · Support bot");
+  expect(panes.at(-1)!.file.title).toBe("Chat QmF6x9 · member · Support bot");
   expect(host.querySelector("[data-relay-chat-read-only]")?.textContent).toBe("Read only");
 
   /* Esc leaves the window; the next row opens beside the first. */
@@ -218,4 +218,15 @@ test("the poll keeps nothing from a route that refuses this Viewer", async () =>
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
     expect(seen).toBeNull();
   } finally { globalThis.fetch = previous; }
+});
+
+
+test("chain authority labels distinguish each requester role in both languages", () => {
+  const en = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("en", key, params);
+  const uk = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("uk", key, params);
+  const admin = chat("admin-chain", { authority: "admin" });
+  expect(relayChatTitle(en, admin)).toContain("admin");
+  expect(relayChatTitle(uk, admin)).toContain("адміністратор");
+  expect(relayChatTitle(en, chat("member-chain"))).toContain("member");
+  expect(relayChatTitle(uk, chat("member-chain"))).toContain("учасник");
 });

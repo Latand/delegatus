@@ -1,11 +1,11 @@
 import type { FileEntry } from "@/lib/types";
 
 /*
- * The relay's per-chat conversations (docs/design/relay-slice3.md §4) as the
+ * The relay's reply-chain conversations (docs/design/relay.md §B.14) as the
  * operator's conversation list shows them, with the single answers this
  * install kept (relay.md §B.9). The scanner never lists them (§4.6), so the
  * operator reads them through the relay's own route and they sit in the
- * sidebar under the service's name, one row per chat and context and one per
+ * sidebar under the service's name, one row per reply chain and authority and one per
  * answered request.
  * Shared by the route and the browser; it imports nothing from Node.
  */
@@ -25,8 +25,8 @@ export interface RelayChatRow {
   /** Null when the target has left the service's list since. */
   targetName: string | null;
   chatKey: string;
-  /** Whose session this is: the members' of the chat, or its owner's. */
-  context: "member" | "owner";
+  /** The requester authority of this chain's session. */
+  authority: "member" | "admin" | "owner";
   engine: "claude" | "codex";
   turns: number;
   compactions: number;

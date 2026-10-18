@@ -1,5 +1,4 @@
-import { sweepConversations } from "./conversations";
-import { readRunLedger } from "./store";
+import { sweepConversationsAsync } from "./conversations";
 import { randomUUID } from "node:crypto";
 import { forgetRelayActivity } from "./activity";
 import { discoverRelay, ExternalRelayError, relayCall } from "./client";
@@ -162,7 +161,7 @@ export async function unpairRelay(id: string): Promise<{ warned: boolean }> {
     ...store,
     relays: store.relays.filter((item) => item.id !== id),
   }));
-  sweepConversations(readRelayStore().relays, readRunLedger().runs, Date.now(), id);
+  await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000, undefined, id);
   forgetRelayActivity(id);
   return { warned };
 }

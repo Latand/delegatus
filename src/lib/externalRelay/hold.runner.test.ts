@@ -9,9 +9,10 @@ import { procBackend } from "@/lib/proc";
 import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 import { runClaimedRequest, runningCount, advertisedSlots } from "./runner";
 import { reserveRun, dropRun, readRunLedger, externalRelayFile, updateRelayStore, type PairedRelay } from "./store";
-import { reserveConversations, releaseConversation } from "./conversations";
+import { reserveChainConversation, releaseConversation } from "./conversations";
 import { declineHeldRelayRequests } from "./hold";
 import { setRelaySwitch } from "./switches";
+import { requestSchema } from "./protocol";
 import { contextRequest } from "./request.fixture";
 import { readAnswerRecord } from "./answers";
 import { startTestRelay } from "./testRelay";
@@ -41,6 +42,56 @@ function blocker(relay: PairedRelay, id: string) {
   return { requestId: id, leaseId: "fixture-lease", relayId: relay.id, targetId: "target_1", childPid: null, childIdentity: null,
     ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), runDir: root, startedAt: new Date().toISOString() };
 }
+test("two owner chains in one chat run together; a reply waits for only its chain", async () => {
+  setRelaySwitch("chain_conversations", true);
+  let queued = false, queuedBot = false;
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.includes("/reply-a/heartbeat") && (body as { progress?: { label?: string } }).progress?.label === "queued") queued = true;
+    if (req.url?.includes("/reply-bot/heartbeat") && (body as { progress?: { label?: string } }).progress?.label === "queued") queuedBot = true;
+    return { body: { status: "ok" } };
+  });
+  const relay = paired(`${server.origin}/v1`); relay.id = "independent-owner-chains";
+  relay.targets[0]!.ownerTier = true; relay.targets[0]!.concurrency = 3;
+  updateRelayStore(store => ({ ...store, relays: [relay] }));
+  let launches = 0, sends = 0; const observed = new Set<string>();
+  let release!: () => void; const gate = new Promise<void>(r => { release = r; });
+  const make = (id: string, parent: string | null) => ({ ...claim(id, 20000), input: { ...claim(id).input,
+    requester: { ...contextRequest.input.requester, is_owner: true }, respond_to: id,
+    conversation: [{ ...contextRequest.input.conversation[0]!, id, reply_to: parent }] } });
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => { launches++; return { status: 202, body: { conversationId: `conversation_parallel_${launches}` } }; },
+    continue: async turn => { sends++; return { ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId }; },
+    observe: async turn => { observed.add(turn.conversationId!); await gate; return { state: "ended", finalText: "Done" }; },
+    stop: async () => {}, pollMs: 1,
+  };
+  const wait = async (predicate: () => boolean) => { const until = Date.now() + 5000; while (!predicate() && Date.now() < until) await Bun.sleep(10); expect(predicate()).toBe(true); };
+  const pending: Promise<unknown>[] = [];
+  try {
+    pending.push(runClaimedRequest(relay, make("root-a", null), undefined, { ownerPorts: ports }));
+    await wait(() => observed.size === 1);
+    pending.push(runClaimedRequest(relay, make("root-b", null), undefined, { ownerPorts: ports }));
+    await wait(() => observed.size === 2);
+    expect(launches).toBe(2); expect(runningCount(relay.id, "target_1")).toBe(2);
+    const reply = make("reply-a", "bot-a");
+    const bot = { ...reply.input.conversation[0]!, id: "bot-a", author: { key: "fixture-bot", name: "Assistant", self: true }, reply_to: "root-a" };
+    reply.input.conversation.unshift(make("root-a", null).input.conversation[0]!, bot as never);
+    pending.push(runClaimedRequest(relay, reply, undefined, { ownerPorts: ports }));
+    // The reply cannot reserve a third conversation while its parent is live.
+    await wait(() => queued);
+    expect(launches).toBe(2); expect(sends).toBe(0);
+    // This window lost the ancestor. Learning the bot anchor while the first
+    // reply is held must already be durable, before either turn can resume.
+    const truncated = make("reply-bot", "bot-a");
+    truncated.input.conversation.unshift({ ...bot, reply_to: null } as never);
+    pending.push(runClaimedRequest(relay, truncated, undefined, { ownerPorts: ports }));
+    await wait(() => queuedBot || launches > 2);
+    expect(launches).toBe(2); expect(queuedBot).toBe(true);
+    release();
+    for (const result of await Promise.all(pending)) expect(result).toMatchObject({ outcome: "answered" });
+    expect(launches).toBe(2); expect(sends).toBe(2);
+  } finally { release(); await Promise.allSettled(pending); await server.close(); }
+}, 15000);
+
 for (const cause of ["drain", "capacity", "chat"] as const) for (const release of [true, false])
   test(`${cause} hold acknowledges, queues, then ${release ? "serves" : "declines busy at the bound"} without taking execution capacity`, async () => {
     const beats: { progress: { label: string } | null }[] = [];
@@ -52,11 +103,11 @@ for (const cause of ["drain", "capacity", "chat"] as const) for (const release o
     });
     const relay = paired(`${server.origin}/v1`); if (cause === "chat") relay.targets[0]!.concurrency = 2;
     const held = { ...claim(`${cause}-${release}`, release ? 15000 : 14000), liveness: { ...contextRequest.liveness, heartbeat_interval_s: cause === "drain" && release ? 2 : 10 } };
-    setRelaySwitch("chat_conversations", cause === "chat");
+    setRelaySwitch("chain_conversations", cause === "chat");
     let conversationId: string | undefined;
     const clear = () => { releaseDrain(drainFile(), "hold-test"); if (conversationId) releaseConversation(conversationId); dropRun("blocker"); };
     if (cause === "drain") writeDrain(drainFile(), { id: "hold-test", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
-    else { reserveRun(blocker(relay, "blocker")); if (cause === "chat") conversationId = reserveConversations(relay, relay.targets[0]!, held.chat.key, "blocker", ["member"])![0]!.id; }
+    else { reserveRun(blocker(relay, "blocker")); if (cause === "chat") conversationId = reserveChainConversation(relay, relay.targets[0]!, requestSchema.parse({ ...held, request_id: "blocker" }), "member")!.id; }
     const start = performance.now();
     const pending = runClaimedRequest(relay, held, undefined, { command });
     try {
@@ -74,7 +125,7 @@ for (const cause of ["drain", "capacity", "chat"] as const) for (const release o
         expect(performance.now() - start).toBeGreaterThanOrEqual(3900); expect(performance.now() - start).toBeLessThan(5000); }
       expect(completions).toHaveLength(1);
       expect(readRunLedger().runs.length).toBeLessThanOrEqual(relay.targets[0]!.concurrency);
-    } finally { clear(); await pending; setRelaySwitch("chat_conversations", false); await server.close(); }
+    } finally { clear(); await pending; setRelaySwitch("chain_conversations", false); await server.close(); }
   }, 12000);
 
 test("capacity waiters take released slots in order within the configured limit", async () => {
@@ -254,11 +305,11 @@ test("an orphan conversation has free chat capacity and is recovered before admi
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const relay = paired(`${server.origin}/v1`);
   const request = claim("orphan-chat", 11000);
-  setRelaySwitch("chat_conversations", true);
-  const record = reserveConversations(relay, relay.targets[0]!, request.chat.key, "absent-owner", ["member"])![0]!;
+  setRelaySwitch("chain_conversations", true);
+  const record = reserveChainConversation(relay, relay.targets[0]!, requestSchema.parse({ ...request, request_id: "absent-owner" }), "member")!;
   try {
     expect(await runClaimedRequest(relay, request, undefined, { command })).toMatchObject({ outcome: "answered" });
-  } finally { releaseConversation(record.id); setRelaySwitch("chat_conversations", false); await server.close(); }
+  } finally { releaseConversation(record.id); setRelaySwitch("chain_conversations", false); await server.close(); }
 });
 
 test("lease loss during an asynchronous admission wait starts no agent and consumes no allowance", async () => {

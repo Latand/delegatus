@@ -593,3 +593,146 @@ test("a request for another project's tick panel leaves this seat folded", async
   expect(section(host).getAttribute("data-collapsed")).toBe("1");
   expect(dom.document.querySelector("[data-seat-tick-popover]")).toBeNull();
 });
+
+/* ── #3029: the strip that returns the page to the seat ─────────────────── */
+
+type ObserverCallback = (entries: Array<{ isIntersecting: boolean; boundingClientRect: { top: number }; rootBounds: { top: number } | null }>) => void;
+
+/** Puts a stub IntersectionObserver in place and returns what the seat asked it to watch. */
+function stubObserver() {
+  const watched: Array<{ options: IntersectionObserverInit | undefined; target: Element | null; report: ObserverCallback; disconnected: boolean }> = [];
+  class StubObserver {
+    entry = { options: undefined as IntersectionObserverInit | undefined, target: null as Element | null, report: (() => undefined) as ObserverCallback, disconnected: false };
+    constructor(callback: ObserverCallback, options?: IntersectionObserverInit) {
+      this.entry.options = options;
+      this.entry.report = callback;
+      watched.push(this.entry);
+    }
+    observe(target: Element) { this.entry.target = target; }
+    unobserve() {}
+    disconnect() { this.entry.disconnected = true; }
+  }
+  (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = StubObserver;
+  return watched;
+}
+
+const returnStrip = (host: HTMLElement) => host.querySelector("[data-seat-return]") as HTMLElement | null;
+const returnButton = (host: HTMLElement) => returnStrip(host)?.querySelector("button") as HTMLButtonElement;
+
+test("the return strip is the first node of the seat on top, hidden until the seat's head leaves the page", async () => {
+  const host = mountSeat();
+  await settle();
+
+  /* The first child of the page: sticky inside it, ahead of the skip link and the seat. */
+  expect(host.firstElementChild).toBe(returnStrip(host));
+  expect(returnStrip(host)?.hasAttribute("data-shown")).toBe(false);
+  expect(returnButton(host).getAttribute("aria-label")).toBe(translate("en", "orchPanel.seatReturnAria"));
+  expect(returnStrip(host)?.textContent).toContain(translate("en", "orchPanel.seatReturn"));
+  expect(returnStrip(host)?.textContent).toContain(translate("en", "orchPanel.seatReturnHint"));
+});
+
+test("the return strip is labelled in uk", async () => {
+  setLocale("uk");
+  const host = mountSeat();
+  await settle();
+  expect(returnButton(host).getAttribute("aria-label")).toBe("Прокрутити до чату оркестратора");
+  expect(returnStrip(host)?.textContent).toBe("До оркестраторагортайте тут або натисніть");
+});
+
+test("the return strip shows while the head sits above the strip and hides when it comes back", async () => {
+  const watched = stubObserver();
+  try {
+    const host = mountSeat();
+    await settle();
+    /* The seat's own observer is the one watching its head; the feed inside it runs others. */
+    const mine = watched.filter((entry) => entry.target === host.querySelector("[data-seat-head]"));
+    expect(mine).toHaveLength(1);
+    const watch = mine[0]!;
+    expect(watch.options?.root).toBe(section(host).parentElement as unknown as Element);
+    expect(watch.options?.rootMargin).toBe("-32px 0px 0px 0px");
+
+    flushSync(() => watch.report([{ isIntersecting: false, boundingClientRect: { top: -400 }, rootBounds: { top: 0 } }]));
+    expect(returnStrip(host)?.hasAttribute("data-shown")).toBe(true);
+
+    /* The head back in view. */
+    flushSync(() => watch.report([{ isIntersecting: true, boundingClientRect: { top: 10 }, rootBounds: { top: 0 } }]));
+    expect(returnStrip(host)?.hasAttribute("data-shown")).toBe(false);
+
+    /* Out of the root because it is below the strip, not above it (a page shorter than the seat): no strip. */
+    flushSync(() => watch.report([{ isIntersecting: false, boundingClientRect: { top: 900 }, rootBounds: { top: 0 } }]));
+    expect(returnStrip(host)?.hasAttribute("data-shown")).toBe(false);
+  } finally {
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = undefined;
+  }
+});
+
+test("a click scrolls the page to its top and puts the cursor in the composer without scrolling again", async () => {
+  const host = mountSeat();
+  await settle();
+  const page = section(host).parentElement as unknown as HTMLElement & { scrollTo: (options: ScrollToOptions) => void };
+  const scrolls: ScrollToOptions[] = [];
+  page.scrollTo = ((options: ScrollToOptions) => { scrolls.push(options); }) as typeof page.scrollTo;
+  const composer = host.querySelector("[data-orchestrator-conversation] textarea") as HTMLTextAreaElement;
+  const focused: Array<FocusOptions | undefined> = [];
+  const realFocus = composer.focus.bind(composer);
+  composer.focus = (options?: FocusOptions) => { focused.push(options); realFocus(options); };
+
+  click(returnButton(host));
+
+  expect(scrolls).toEqual([{ top: 0, behavior: "smooth" }]);
+  expect(focused).toEqual([{ preventScroll: true }]);
+  expect(dom.document.activeElement as unknown as HTMLElement).toBe(composer);
+  /* Returning never changes the folded state. */
+  expect(section(host).getAttribute("data-collapsed")).toBe("0");
+});
+
+test("a strip that holds focus when it hides hands focus to the composer instead of dropping it to the body", async () => {
+  const watched = stubObserver();
+  try {
+    const host = mountSeat();
+    await settle();
+    const watch = watched.find((entry) => entry.target === host.querySelector("[data-seat-head]"))!;
+    flushSync(() => watch.report([{ isIntersecting: false, boundingClientRect: { top: -400 }, rootBounds: { top: 0 } }]));
+    returnButton(host).focus();
+    expect(dom.document.activeElement as unknown as HTMLElement).toBe(returnButton(host));
+
+    /* The page was scrolled up by the wheel: the head is back and the strip hides. */
+    flushSync(() => watch.report([{ isIntersecting: true, boundingClientRect: { top: 10 }, rootBounds: { top: 0 } }]));
+    expect(returnStrip(host)?.hasAttribute("data-shown")).toBe(false);
+    expect(dom.document.activeElement as unknown as HTMLElement).toBe(host.querySelector("[data-orchestrator-conversation] textarea") as HTMLElement);
+  } finally {
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = undefined;
+  }
+});
+
+test("a strip that hides while focus is elsewhere leaves focus where it was", async () => {
+  const watched = stubObserver();
+  try {
+    const host = mountSeat();
+    await settle();
+    const watch = watched.find((entry) => entry.target === host.querySelector("[data-seat-head]"))!;
+    flushSync(() => watch.report([{ isIntersecting: false, boundingClientRect: { top: -400 }, rootBounds: { top: 0 } }]));
+    const fold = foldButton(host);
+    fold.focus();
+    flushSync(() => watch.report([{ isIntersecting: true, boundingClientRect: { top: 10 }, rootBounds: { top: 0 } }]));
+    expect(dom.document.activeElement as unknown as HTMLElement).toBe(fold);
+  } finally {
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = undefined;
+  }
+});
+
+test("the return strip is absent while the seat is folded or docked at the side, and the fold still works", async () => {
+  const host = mountSeat();
+  await settle();
+  expect(returnStrip(host)).not.toBeNull();
+
+  click(foldButton(host));
+  expect(returnStrip(host)).toBeNull();
+  click(foldButton(host));
+  expect(returnStrip(host)).not.toBeNull();
+  expect(section(host).getAttribute("data-collapsed")).toBe("0");
+
+  click(host.querySelector("[data-seat-placement]") as HTMLElement);
+  expect(section(host).getAttribute("data-placement")).toBe("side");
+  expect(returnStrip(host)).toBeNull();
+});
