@@ -87,3 +87,31 @@ test("the shared reader evicts a switched directory, follows replacement and reo
     }
   } finally { fs.rmSync(root,{ recursive: true,force: true }); }
 });
+
+test("reopening repairs every core index before indexed queries can run", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "state-schema-readiness-"));
+  const filename = path.join(root, "state.sqlite");
+  const seed = [{ collection: "fixture", schemaVersion: 1, migrationId: "fixture",
+    key: (row: { id: string }) => row.id, loadRecords: () => [{ id: "row" }] }];
+  try {
+    initializeStateCollections(filename, seed);
+    const db = new Database(filename);
+    try {
+      const schema = () => db.query<{ type: string; name: string; tbl_name: string }, []>(
+        "SELECT type, name, tbl_name FROM sqlite_master WHERE type IN ('table','index','trigger') ORDER BY type, name",
+      ).all();
+      const complete = schema();
+      const indexes = complete.filter(row => row.type === "index" && ["state_rows", "state_changes"].includes(row.tbl_name) && !row.name.startsWith("sqlite_autoindex_"));
+      expect(indexes.filter(row => row.name.startsWith("state_rows_task_"))).toHaveLength(9);
+      for (const { name } of indexes) {
+        db.exec(`DROP INDEX "${name}"`);
+        initializeStateCollections(filename, seed);
+        expect(schema()).toEqual(complete);
+      }
+      // A ready database opens without requesting SQLite's writer lock.
+      db.exec("BEGIN IMMEDIATE");
+      try { initializeStateCollections(filename, seed); }
+      finally { db.exec("ROLLBACK"); }
+    } finally { db.close(); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

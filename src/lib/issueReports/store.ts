@@ -1,3 +1,6 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { readdir } from "node:fs/promises";
+import { resolveShortId, uniqueShortId, type ShortIdResolution } from "@/lib/shortIds";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -201,4 +204,18 @@ export function settleIssueReportPublication(digest: string, publication: IssueR
     exist, so the preview may be published again. */
 export function releaseIssueReportPublication(digest: string, directory = issueReportsDir()): void {
   fs.rmSync(publicationFile(digest, directory), { force: true });
+}
+
+export async function resolveIssueReportDigest(given: string, directory = issueReportsDir()): Promise<ShortIdResolution & { reference?: string }> {
+  return withViewerOperation("issue-report.resolve", async () => {
+    if (!/^[a-f0-9]{7,64}$/i.test(given)) return { kind: "none" };
+    let files: string[];
+    try { files = await readdir(directory); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "none" };
+      throw error;
+    }
+    const candidates = files.filter(file => /^[a-f0-9]{64}\.json$/.test(file)).map(file => file.slice(0, -5));
+    const result = resolveShortId(candidates, given);
+    return result.kind === "match" ? { ...result, reference: uniqueShortId(result.value, candidates) } : result;
+  });
 }

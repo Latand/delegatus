@@ -267,3 +267,13 @@ test("Escape and the close button both close while the picker is idle", async ()
   flushSync(() => window.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape" }) as unknown as Event));
   expect(closed).toBe(2);
 });
+
+
+test("initialization refusal keeps the server's concrete reason visible", async () => {
+  const reason = "initialization refused for the Delegatus state directory";
+  globalThis.fetch = (async () => new Response(JSON.stringify({ error: reason, code: "initialization_refused", path: "/project" }), { status: 403 })) as unknown as typeof fetch;
+  const host = mount(<PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => undefined} onClose={() => undefined} />);
+  await settle();
+  expect(host.textContent).toContain(reason);
+  expect(host.querySelector("[data-pipeline-picker-state]")?.getAttribute("data-pipeline-picker-state")).toBe("blocked");
+});

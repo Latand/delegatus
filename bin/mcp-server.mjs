@@ -222,8 +222,16 @@ function shutdown(signal = null) {
   finishShutdown();
 }
 
+function toolVerdict(result) {
+  if (result?.structuredContent) return result.structuredContent;
+  if (result?.isError !== true || !Array.isArray(result.content)) return null;
+  const text = result.content.find((item) => item?.type === "text")?.text;
+  try { return typeof text === "string" ? JSON.parse(text) : null; }
+  catch { return null; }
+}
+
 function transportFailure(result, protocolError) {
-  const verdict = result?.structuredContent;
+  const verdict = toolVerdict(result);
   if (verdict?.ok === false && (verdict.code === "tool_failed" || verdict.code === "outcome_unknown")) {
     const reason = typeof verdict.error === "string" ? verdict.error : "";
     if (/^Viewer MCP request (?:failed|refused|returned a malformed)/.test(reason)
@@ -393,7 +401,7 @@ function start(selected) {
           failedCalls = 0;
           transportUnverified = false;
           unreadySince = null;
-        } else if (message.result?.structuredContent?.ok === false) {
+        } else if (toolVerdict(message.result)?.ok === false) {
           failedCalls = 0;
           transportUnverified = false;
           unreadySince = null;

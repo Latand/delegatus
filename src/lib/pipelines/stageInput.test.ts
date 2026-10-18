@@ -36,7 +36,11 @@ afterEach(() => {
   if (priorState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = priorState;
 });
-afterAll(() => fs.rmSync(artifactState, { recursive: true, force: true }));
+afterAll(async () => {
+  const { shutdownTaskPageWorker } = await import("@/lib/links/taskPageWorker");
+  await shutdownTaskPageWorker();
+  fs.rmSync(artifactState, { recursive: true, force: true });
+});
 
 function handoffFixture(prompt = "Build {{task}} from {{prev.output}}", spec = "AC: preserve the handoff") {
   const stage: PipelineStage = { id: "build", kind: "run", prompt, next: null,
@@ -302,3 +306,24 @@ test.each([false, true])("settlement excludes controller artifacts despite repos
   expect(prompt).toContain("Full previous output file:");
   expect(prompt).toContain("Full specification file:");
 });
+
+test("launch filtering executes stored privacy patterns away from the calling thread", async () => {
+  const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
+  const lesson = "Preserve fixtureword evidence before publishing the final verification";
+  roleMemoryCollection(true)!.boundedPatch(1, tx => tx.put({
+    kind: "rule", id: "r_stage_privacy", scope: "machine", rule: lesson, why: "", state: "active", hints: [],
+    source: { project: "fixture", pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" },
+    createdAt: "2026-10-14T00:00:00Z", changedAt: "2026-10-14T00:00:00Z",
+  }));
+  const { pipeline, stage } = handoffFixture(`Build {{task}}. ${lesson}`);
+  const original = RegExp.prototype.exec;
+  RegExp.prototype.exec = function (text: string) {
+    if (this.source.includes("fixtureword")) throw new Error("launch privacy ran on the caller thread");
+    return original.call(this, text);
+  };
+  try {
+    const prompt = await composeStageInput(pipeline, stage, stage.effectiveRole, "");
+    expect(prompt).toContain("[learned rule]");
+    expect(prompt).not.toContain(lesson);
+  } finally { RegExp.prototype.exec = original; }
+}, 30_000);

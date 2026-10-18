@@ -15,7 +15,7 @@ if (!process.env.LLV_STATE_DIR) throw new Error("task executor needs an explicit
 (globalThis as typeof globalThis & { AsyncLocalStorage?: typeof AsyncLocalStorage }).AsyncLocalStorage ??= AsyncLocalStorage;
 const { runAsMcpHttpCaller } = await import("./mcp/callerContext");
 const { TASK_EXECUTOR_FRAME_BYTES, TASK_EXECUTOR_HTTP_FRAME_BYTES, TASK_EXECUTOR_TOOLS } = await import("./mcp/taskExecutor");
-const { createProductionViewerMcpService, createViewerMcpServer, MCP_HTTP_CLIENT_ID } = await import("./mcp/server");
+const { createProductionViewerMcpService, createViewerMcpServer, mcpTextResultClient, MCP_HTTP_CLIENT_ID } = await import("./mcp/server");
 const { WebStandardStreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
 const { agentRegistry } = await import("./agent/registry");
 const { capabilityConversationResolver } = await import("./mcp/bindings");
@@ -96,7 +96,8 @@ async function httpTaskCall(request: TaskExecutorRequest, signal: AbortSignal): 
     catch { return serialized(mcpHttpRefusal(503, -32002, "The Viewer could not read its agent registry to identify this caller; retry the call.")); }
     if (!conversationId) return serialized(mcpHttpRefusal(403, -32001, "This launch capability names no current agent: it is unknown or was rotated by a later launch."));
   }
-  const server = createViewerMcpServer(service, [toolName as import("./mcp/server").McpToolName]);
+  const server = createViewerMcpServer(service, [toolName as import("./mcp/server").McpToolName],
+    mcpTextResultClient(new Headers(headers).get("user-agent")?.split("/", 1)[0]));
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   try {
     await server.connect(transport);

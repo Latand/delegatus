@@ -263,6 +263,7 @@ function normalizeReport(value: unknown): BridgeReportV1 | null {
     class: candidate.class,
     ...(typeof candidate.key === "string" && candidate.key ? { key: candidate.key } : {}),
     body: typeof candidate.body === "string" ? candidate.body : "",
+    ...(reportCards(candidate.cards) ? { cards: reportCards(candidate.cards) } : {}),
     ...(bridgeReportComplete(candidate.complete) ? { complete: bridgeReportComplete(candidate.complete) } : {}),
     ...(origin ? { origin } : {}),
     ...(project !== undefined ? { project } : {}),
@@ -908,6 +909,7 @@ export function appendBridgeReports(
            hashed `id` exactly as it was before this field existed. */
         ...(isBridgeDecisionRequestClass(input.class) ? { key: input.key } : {}),
         body: bridgeReportBody(input.body),
+        ...(reportCards(input.cards) ? { cards: reportCards(input.cards) } : {}),
         ...(bridgeReportComplete(input.complete) ? { complete: bridgeReportComplete(input.complete) } : {}),
         ...(input.origin ? { origin: normalizeOrigin(input.origin) } : {}),
         ...("project" in input ? { project: typeof input.project === "string" ? input.project : null } : {}),
@@ -1702,4 +1704,9 @@ export function checkpointBridgeReportsRollbackMirrorForDemotion(legacyPath = br
 export function checkpointBridgeRollbackMirrorsForDemotion(directory = path.dirname(bridgeReportLogPath())): void {
   checkpointBridgeReportsRollbackMirrorForDemotion(path.join(directory, "bridge-reports.json"));
   checkpointBridgeChannelsRollbackMirrorForDemotion(directory);
+}
+
+function reportCards(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return [...new Set(value.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 64))].slice(0, 16);
 }

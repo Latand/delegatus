@@ -423,3 +423,12 @@ test("a rotated seat's successor preserves the answer and resumes its predecesso
     fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), { force: true });
   }
 });
+
+test("short decision revisions are stored whole, stale reads refuse and full-form replays work", async () => {
+  const h = await parked();
+  const full = h.request.expectedRevision;
+  expect(await patchPipeline(h.id, { ...h.request, expectedRevision: "ffffffff" }, h.ports, manager)).toMatchObject({ code: "STAGE_CHANGED" });
+  const accepted = await patchPipeline(h.id, { ...h.request, expectedRevision: full.slice(0, 8).toUpperCase() }, h.ports, manager);
+  expect(accepted.error).toBeUndefined(); expect(accepted.decisionAnswer!.expectedRevision).toBe(full);
+  expect((await patchPipeline(h.id, h.request, h.ports, manager)).replayed).toBe(true);
+});

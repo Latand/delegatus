@@ -16,6 +16,11 @@ import { DONE_PROJECTION_THROTTLE_MS, projectDoneItems, resetDoneProjectionThrot
 import { acknowledgeDoneItems, DONE_ACKNOWLEDGED_RETENTION_MS, DONE_MAX_ROWS, DONE_SETTLED_RETENTION_MS, doneRevision, readDoneMemory, readDoneRows, resetDoneCollectionsForTests, unacknowledgedDoneItems, writeDoneProjection } from "./store";
 import { DONE_SWEEP_INTERVAL_MS, runDoneSweepOnce, startDoneSweep, stopDoneSweep } from "./sweep";
 import type { DoneFrame } from "./types";
+import { preserveDoneFrame, removeDoneMedia } from "./media";
+import { copyDoneFrameSource } from "./source";
+import { GET as imageGET } from "@/app/api/image/route";
+import { NextRequest } from "next/server";
+import { matchingDoneAlbumFrame } from "./world";
 
 /*
  * «Готово» (docs/design/done-section.md §2, §3, §7): one item per finished
@@ -115,6 +120,184 @@ async function activate(): Promise<void> {
 }
 
 const keys = () => unacknowledgedDoneItems().map((item) => item.key).sort();
+
+test("recording a finished outcome owns its frame before lane cleanup, and item retention releases it",async () => {
+  await activate();
+  const directory=fs.mkdtempSync(path.join(process.env.HOME!,"done-projection-lane-"));
+  try {
+    const file=path.join(directory,"frame.png");
+    fs.writeFileSync(file,Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==","base64"));
+    const state=world({pipelines:[lane("finished",{taskIds:["t-frame"]})],tasks:[task("t-frame","Rendered result")],album:async()=>({frame:{src:`/api/artifact?${new URLSearchParams({path:file})}`,caption:"Result"},settled:true})});
+    const current=ports(state);
+    current.preserveFrame=async(key,frame)=>({frame:await preserveDoneFrame(key,frame,copyDoneFrameSource,state.now),settled:true});
+    current.removeFrames=removeDoneMedia;
+    await projectDoneItems(current,{force:true});
+    const item=unacknowledgedDoneItems()[0]!;
+    fs.rmSync(directory,{recursive:true,force:true});
+    const req=new NextRequest(`http://localhost${item.frame!.src}`,{headers:{host:"localhost"}});
+    const held=await imageGET(req);expect(held.status).toBe(200);await held.arrayBuffer();
+    expect(item.frame?.src).toStartWith("/api/image?done=");
+    acknowledgeDoneItems([item.key],{undo:false,surface:"phone",now:state.now});
+    acknowledgeDoneItems([item.key],{undo:true,surface:"phone",now:state.now+1});
+    expect(unacknowledgedDoneItems()[0]?.frame).toEqual(item.frame);
+    acknowledgeDoneItems([item.key],{undo:false,surface:"phone",now:state.now+2});
+    state.now+=DONE_ACKNOWLEDGED_RETENTION_MS+3;
+    await projectDoneItems(current,{force:true});
+    expect((await imageGET(req)).status).toBe(404);
+  } finally {fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test("a settled album frame replaces a provisional design copy, survives source deletion and restart",async () => {
+  await activate();
+  const directory=fs.mkdtempSync(path.join(process.env.HOME!,"done-provisional-"));
+  try {
+    const designPath=path.join(directory,"design.png"),resultPath=path.join(directory,"result.gif");
+    const designBytes=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==","base64");
+    const resultBytes=Buffer.from("R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=","base64");
+    fs.writeFileSync(designPath,designBytes);fs.writeFileSync(resultPath,resultBytes);
+    const sourceURL=(file:string)=>`/api/artifact?${new URLSearchParams({path:file})}`;
+    const chosen={id:"review",title:"Design",taskId:"t-provisional",project:PROJECT,createdAt:iso(T0),source:{conversationId:null,pipelineId:"finished"},publicationKey:"pub",inputDigest:"digest",variants:[{number:1,name:"Design",description:"",frames:[{image:{id:"design",mime:"image/png",bytes:designBytes.length,available:true,url:sourceURL(designPath)},caption:"Design"}],videos:[]}],decision:{chosen:[1]}} as unknown as PrototypeRoundRead;
+    let pass=0;
+    const state=world({pipelines:[lane("finished",{taskIds:["t-provisional"]})],tasks:[task("t-provisional","Rendered result")],rounds:{"t-provisional":[chosen]},album:async()=>pass===0?{frame:null,settled:false}:{frame:{src:sourceURL(resultPath),caption:"Finished result"},settled:true}});
+    const current=ports(state);
+    current.preserveFrame=async(key,frame,_refs,replace,observedAt)=>({frame:await preserveDoneFrame(key,frame,copyDoneFrameSource,observedAt!,replace),settled:true});
+    current.removeFrames=removeDoneMedia;
+    await projectDoneItems(current,{force:true});
+    const provisional=unacknowledgedDoneItems()[0]!.frame!;
+    expect(provisional.src).toContain("done=");expect(unacknowledgedDoneItems()[0]!.frameCheckedAt).toBeNull();
+    pass=1;state.now+=60_000;
+    await projectDoneItems(current,{force:true});
+    const final=unacknowledgedDoneItems()[0]!.frame!;
+    expect(final.src).toContain("done=");expect(final.src).not.toBe(provisional.src);
+    fs.rmSync(directory,{recursive:true,force:true});
+    const request=new NextRequest(`http://localhost${final.src}`,{headers:{host:"localhost"}});
+    const response=await imageGET(request);expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(resultBytes);
+    expect(JSON.parse(await new Promise<string>((resolve,reject)=>{
+      const child=Bun.spawn([process.execPath,path.join(import.meta.dir,"mediaChild.fixture.ts"),"read",final.src],{env:{...process.env},stdout:"pipe",stderr:"pipe"});
+      Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]).then(([out,err,exit])=>exit===0?resolve(out):reject(new Error(err)));
+    }))).toEqual({status:200,bytes:resultBytes.length});
+  } finally {fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test("a settled lookup without a replacement keeps an owned provisional frame",async () => {
+  await activate();
+  const directory=fs.mkdtempSync(path.join(process.env.HOME!,"done-provisional-kept-"));
+  try {
+    const file=path.join(directory,"design.png");
+    fs.writeFileSync(file,Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==","base64"));
+    const src=`/api/artifact?${new URLSearchParams({path:file})}`;
+    const owner=`pr:${REPO}#56`, at=iso(T0+HOUR);
+    const saved=await preserveDoneFrame(owner,{src,caption:"Design"},copyDoneFrameSource,T0+HOUR);
+    writeDoneProjection({upserts:[{key:owner,kind:"pr",look:"visible",project:PROJECT,at,createdAt:at,title:"Provisional frame",icon:null,refs:{pipelineId:"provisional",taskIds:["t-provisional-kept"]},frame:saved,frameCheckedAt:null,acknowledgedAt:null,acknowledgedBy:null}]},T0+HOUR);
+    const current=ports(world({now:T0+2*HOUR,forge:forge([{number:56,head:"pipeline/provisional",state:"merged",mergedAt:at}]),pipelines:[lane("provisional",{taskIds:["t-provisional-kept"]})],tasks:[task("t-provisional-kept","Provisional frame")],album:async()=>({frame:null,settled:true})}));
+    current.preserveFrame=async(key,frame,_refs,replace,observedAt,expectedPreviousSrc)=>({frame:await preserveDoneFrame(key,frame,copyDoneFrameSource,observedAt!,replace,expectedPreviousSrc),settled:true});
+    current.removeFrames=removeDoneMedia;
+    await projectDoneItems(current,{force:true});
+    const retained=readDoneRows().find(row=>row.key===owner)!;
+    expect(retained.frame?.src).toBe(saved.src);
+    expect(retained.frameCheckedAt).not.toBeNull();
+    fs.rmSync(directory,{recursive:true,force:true});
+    const response=await imageGET(new NextRequest(`http://localhost${saved.src}`,{headers:{host:"localhost"}}));
+    expect(response.status).toBe(200);expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==","base64"));
+  } finally {fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test("overlapping settled projections keep the media URL committed by the winner",async () => {
+  await activate();
+  const directory=fs.mkdtempSync(path.join(process.env.HOME!,"done-promote-race-"));
+  try {
+    const png=Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==","base64");
+    const gif=Buffer.from("R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=","base64");
+    const provisionalPath=path.join(directory,"provisional.png"), firstPath=path.join(directory,"first.png"), secondPath=path.join(directory,"second.gif");
+    fs.writeFileSync(provisionalPath,png);fs.writeFileSync(firstPath,png);fs.writeFileSync(secondPath,gif);
+    const src=(file:string)=>`/api/artifact?${new URLSearchParams({path:file})}`;
+    const owner=`pr:${REPO}#55`;
+    const provisional=await preserveDoneFrame(owner,{src:src(provisionalPath),caption:"after.png"},copyDoneFrameSource,T0+HOUR);
+    const at=iso(T0+HOUR);
+    writeDoneProjection({upserts:[{key:owner,kind:"pr",look:"visible",project:PROJECT,at,createdAt:at,title:"Frame race",icon:null,refs:{pipelineId:"race",taskIds:["t-race"]},frame:provisional,frameCheckedAt:null,acknowledgedAt:null,acknowledgedBy:null}]},T0+HOUR);
+    let arrivals=0,release!:()=>void;
+    const both=new Promise<void>(resolve=>{release=resolve;});
+    const state=world({
+      now:T0+2*HOUR,
+      forge:forge([{number:55,head:"pipeline/race",state:"merged",mergedAt:iso(T0+HOUR)}]),
+      pipelines:[lane("race",{taskIds:["t-race"]})],tasks:[task("t-race","Frame race")],
+      album:async()=>{const n=++arrivals;if(arrivals===2)release();await both;return {frame:{src:src(n===1?firstPath:secondPath),caption:n===1?"First":"Second"},settled:true};},
+    });
+    const current=ports(state);
+    current.preserveFrame=async(key,frame,_refs,replace,observedAt,expectedPreviousSrc)=>({
+      frame:await preserveDoneFrame(key,frame,copyDoneFrameSource,observedAt!,replace,expectedPreviousSrc),settled:true,
+    });
+    current.removeFrames=removeDoneMedia;
+    await Promise.all([projectDoneItems(current,{force:true}),projectDoneItems(current,{force:true})]);
+    const persisted=readDoneRows().find(row=>row.key===owner)!.frame!;
+    const response=await imageGET(new NextRequest(`http://localhost${persisted.src}`,{headers:{host:"localhost"}}));
+    expect(response.status).toBe(200);
+    const bytes=Buffer.from(await response.arrayBuffer());
+    expect([png,gif]).toContainEqual(bytes);
+    const childResult=JSON.parse(await new Promise<string>((resolve,reject)=>{
+      const child=Bun.spawn([process.execPath,path.join(import.meta.dir,"mediaChild.fixture.ts"),"read",persisted.src],{env:{...process.env},stdout:"pipe",stderr:"pipe"});
+      Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]).then(([out,err,exit])=>exit===0?resolve(out):reject(new Error(err)));
+    }));
+    expect(childResult.status).toBe(200);
+  } finally {fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test("album recovery chooses one exact named image in the same pipeline and rejects ambiguity",async () => {
+  const item=(src:string,name:string,pipelineId:string)=>({id:src,src,name,ts:1,via:"named" as const,source:{key:"c",conversationId:"c",path:"/transcript",stage:{pipelineId,stageId:"build",attempt:1}},isNew:false});
+  const frame={src:"/api/artifact?path=%2Flane%2Fafter.png",caption:"after.png"};
+  const before=item("/api/tasks/t/album/image?id=before","before.png","pipeline");
+  const after=item("/api/tasks/t/album/image?id=after","after.png","pipeline");
+  expect(matchingDoneAlbumFrame([before,after],"pipeline",frame)).toEqual(after);
+  expect(matchingDoneAlbumFrame([before,after],"other",frame)).toBeNull();
+  expect(matchingDoneAlbumFrame([after,item("/api/tasks/t/album/image?id=after-2","after.png","pipeline")],"pipeline",frame)).toBeNull();
+});
+
+test("legacy frame backfill advances four owners per pass, including rows whose source is no longer a candidate",async () => {
+  await activate();
+  const at=iso(T0+HOUR);
+  writeDoneProjection({upserts:Array.from({length:6},(_,n)=>({key:`task:old-${n}`,kind:"task",look:"visible",project:PROJECT,at,createdAt:at,title:"Old result",icon:null,refs:{},frame:{src:`/api/artifact?path=old-${n}.png`,caption:"Result"},frameCheckedAt:at,acknowledgedAt:null,acknowledgedBy:null}))},T0+HOUR);
+  const current=ports(world());const captured:string[]=[];
+  current.preserveFrame=async(key,frame)=>{captured.push(key);return {frame:{...frame,src:`/api/image?done=${encodeURIComponent(key)}&media=saved`},settled:true};};
+  await projectDoneItems(current,{force:true});expect(captured).toEqual(["task:old-0","task:old-1","task:old-2","task:old-3"]);
+  resetDoneCollectionsForTests();
+  await projectDoneItems(current,{force:true});expect(captured).toHaveLength(6);
+  expect(readDoneRows().every(row=>row.frame!.src.startsWith("/api/image?done="))).toBe(true);
+  await projectDoneItems(current,{force:true});expect(captured).toHaveLength(6);
+});
+
+test("a stale projection and an acknowledgement during a held copy cannot replace a retained frame",async () => {
+  await activate();
+  const at=iso(T0+HOUR);
+  const old={key:"task:race",kind:"task" as const,look:"visible" as const,project:PROJECT,at,createdAt:at,title:"Result",icon:null,refs:{},frame:{src:"/api/artifact?path=original.png",caption:"Result"},frameCheckedAt:at,acknowledgedAt:null,acknowledgedBy:null};
+  writeDoneProjection({upserts:[old]},T0+HOUR);
+  let release!:()=>void,started!:()=>void;
+  const held=new Promise<void>(resolve=>{release=resolve;});const ready=new Promise<void>(resolve=>{started=resolve;});
+  const current=ports(world());
+  current.preserveFrame=async(_key,frame)=>{started();await held;return {frame:{...frame,src:"/api/image?done=task%3Arace&media=saved"},settled:true};};
+  const run=projectDoneItems(current,{force:true});await ready;
+  acknowledgeDoneItems([old.key],{undo:false,surface:"phone",now:T0+2*HOUR});
+  release();await run;
+  expect(readDoneRows()[0]?.acknowledgedAt).toBe(iso(T0+2*HOUR));
+  acknowledgeDoneItems([old.key],{undo:true,surface:"phone",now:T0+3*HOUR});
+  const retained={...old,frame:{...old.frame,src:"/api/image?done=task%3Arace&media=kept"}};
+  writeDoneProjection({upserts:[retained]},T0+3*HOUR);
+  writeDoneProjection({upserts:[old]},T0+4*HOUR);
+  expect(readDoneRows()[0]?.frame).toEqual(retained.frame);
+});
+
+test("a full copy pass defers new framed outcomes rather than recording transient lane URLs",async () => {
+  await activate();
+  const ids=Array.from({length:6},(_,i)=>`framed-${i}`);
+  const current=ports(world({pipelines:ids.map(id=>lane(id,{taskIds:[id]})),tasks:ids.map(id=>task(id,"Result")),album:async()=>({frame:{src:"/api/artifact?path=lane-result.png",caption:"Result"},settled:true})}));
+  let copies=0;
+  current.preserveFrame=async(key,frame)=>{copies++;return {frame:{...frame,src:`/api/image?done=${encodeURIComponent(key)}&media=saved`},settled:true};};
+  await projectDoneItems(current,{force:true});
+  expect(copies).toBe(4);expect(readDoneRows()).toHaveLength(4);
+  expect(readDoneRows().every(row=>row.frame?.src.startsWith("/api/image?done="))).toBe(true);
+  resetDoneCollectionsForTests();
+  await projectDoneItems(current,{force:true});expect(copies).toBe(6);expect(readDoneRows()).toHaveLength(6);
+});
 
 test("one item per unit of work: a direct merge, a batch member at the batch's time, never the batch, a PR-less lane, a task with no lane", async () => {
   await activate();

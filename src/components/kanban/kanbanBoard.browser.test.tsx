@@ -719,6 +719,172 @@ describe("prototype Telegram resend", () => {
   }, 240_000);
 });
 
+describe("decision form keeps the operator's typed answer", () => {
+  browserTest("a refused save keeps the choice and the words in the task window and the seat form, and a reload brings them back, at 1440, 1000 and 390px", async () => {
+    const out = path.resolve(".artifacts/decision-form-draft"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
+    fs.mkdirSync(browserHome, { recursive: true });
+    const browserTmp = fs.mkdtempSync(path.join(browserHome, "df-"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
+    const readings: unknown[] = [];
+    const seatId = `pr_${"d".repeat(32)}`, taskRound = `pr_${"e".repeat(32)}`;
+    const typed = "  Залиште стару шапку,\nа рядки зробіть щільнішими.  ";
+    const base = `${server.base}?proto=telegram&tgstate=sent&protoRefuse=1`;
+    /* What a person can read: the error and the typed field are inside the window and clear of the save button. */
+    const reading = (page: Page, field: string, error: string | null, send: string) => page.evaluate(({ field, error, send }) => {
+      const box = (selector: string) => { const el = document.querySelector<HTMLElement>(selector)!; const r = el.getBoundingClientRect(); return { el, left: r.left, right: r.right, top: r.top, bottom: r.bottom }; };
+      const text = error ? box(error) : null, area = box(field), action = box(send);
+      const lines = text ? (() => { const range = document.createRange(); range.selectNodeContents(text.el); return [...range.getClientRects()]; })() : [];
+      /* Inside the window and inside every scrolling ancestor's visible area: a scroller clips what lies past its edge. */
+      const clips = (el: HTMLElement) => {
+        const boxes: { left: number; right: number; top: number; bottom: number }[] = [];
+        for (let node = el.parentElement; node; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          if (style.overflowX !== "visible" || style.overflowY !== "visible") { const r = node.getBoundingClientRect(); boxes.push(r); }
+        }
+        return boxes;
+      };
+      const insideOf = (el: HTMLElement) => {
+        const bounds = [{ left: 0, right: innerWidth, top: 0, bottom: innerHeight }, ...clips(el)];
+        return (r: { left: number; right: number; top: number; bottom: number }) => bounds.every((b) => r.left >= b.left - 0.5 && r.right <= b.right + 0.5 && r.top >= b.top - 0.5 && r.bottom <= b.bottom + 0.5);
+      };
+      return {
+        value: (area.el as HTMLTextAreaElement).value, errorText: text?.el.textContent ?? "",
+        errorInside: text ? lines.length > 0 && lines.every(insideOf(text.el)) : null, fieldInside: insideOf(area.el)(area), sendInside: insideOf(action.el)(action),
+        errorOverlapsSend: text ? text.left < action.right && text.right > action.left && text.top < action.bottom && text.bottom > action.top : null,
+        /* Air between the error's last line and the nearest scroll edge below it. */
+        sendAirBelow: Math.min(...[innerHeight, ...clips(action.el).map((b) => b.bottom)].map((edge) => edge - action.bottom)),
+        errorAirBelow: text ? Math.min(...[innerHeight, ...clips(text.el).map((b) => b.bottom)].map((edge) => edge - text.bottom)) : null,
+      };
+    }, { field, error, send });
+    /* The key goes away once the save resolves, a beat after the optimistic form detaches. */
+    const draftGone = (page: Page, id: string) => page.waitForFunction((key) => localStorage.getItem(key) === null, `llv.prototypeReview.draft:${id}`);
+    const stored = (page: Page, id: string) => page.evaluate((key) => localStorage.getItem(key), `llv.prototypeReview.draft:${id}`);
+    try {
+      for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) for (const lang of ["uk", "en"] as const) for (const theme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const press = async (locator: import("playwright-core").Locator) => { if (phone) await locator.tap(); else await locator.click(); };
+        const tag = `${width}-${lang}-${theme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${base}&prototypeTask=t-search&prototypeReview=${taskRound}`, { width, height }, theme, lang, "reduce", phone);
+        try {
+          /* The task's review window. */
+          const field = page.locator("[data-prototype-comment-field]");
+          await field.waitFor();
+          await press(page.locator("[data-prototype-choose]").first());
+          await field.fill(typed);
+          const save = page.locator("[data-prototype-save]");
+          await press(save);
+          await page.locator("[data-prototype-error]").waitFor();
+          await page.waitForFunction(() => (window as unknown as { protoPosts: unknown[] }).protoPosts.length === 1);
+          await field.scrollIntoViewIfNeeded();
+          const refused = await reading(page, "[data-prototype-comment-field]", "[data-prototype-error]", "[data-prototype-save]");
+          expect(refused.value).toBe(typed); expect(refused.errorText).toContain("unavailable");
+          expect(refused.errorText.trim().startsWith(lang === "uk" ? "Відповідь не збережено:" : "The answer was not saved:")).toBe(true);
+          expect(refused.errorInside && refused.fieldInside && !refused.errorOverlapsSend).toBe(true);
+          expect(await page.locator("[data-prototype-choose]").first().getAttribute("aria-checked")).toBe("true");
+          await page.screenshot({ path: path.join(out, `window-${tag}-refused.png`) });
+          await press(save);
+          await page.waitForFunction(() => (window as unknown as { protoPosts: unknown[] }).protoPosts.length === 2);
+          const posts = await page.evaluate(() => (window as unknown as { protoPosts: unknown[] }).protoPosts);
+          expect(posts[1]).toEqual(posts[0]);
+          expect(posts[0]).toMatchObject({ taskId: "t-search", reviewId: taskRound, chosen: [1], comment: typed });
+          expect(await stored(page, taskRound)).not.toBeNull();
+          await page.reload();
+          await field.waitFor();
+          const restored = await field.inputValue();
+          expect(restored).toBe(typed);
+          expect(await page.locator("[data-prototype-choose]").first().getAttribute("aria-checked")).toBe("true");
+          await field.scrollIntoViewIfNeeded();
+          await page.locator("[data-prototype-save]").scrollIntoViewIfNeeded();
+          const reloadedWindow = await reading(page, "[data-prototype-comment-field]", null, "[data-prototype-save]");
+          expect(reloadedWindow.value).toBe(typed); expect(reloadedWindow.fieldInside && reloadedWindow.sendInside).toBe(true);
+          await page.screenshot({ path: path.join(out, `window-${tag}-reloaded.png`) });
+          await page.evaluate(() => (window as unknown as { protoAcceptSaves: () => void }).protoAcceptSaves());
+          await press(page.locator("[data-prototype-save]"));
+          await field.waitFor({ state: "detached" });
+          const retried = await page.evaluate(() => (window as unknown as { protoPosts: unknown[] }).protoPosts);
+          expect(retried).toHaveLength(1);
+          expect(retried[0]).toEqual(posts[0]);
+          await draftGone(page, taskRound);
+          expect(await stored(page, taskRound)).toBeNull();
+          await page.screenshot({ path: path.join(out, `window-${tag}-saved.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ surface: "task-window", width, lang, theme, ...refused, reloaded: reloadedWindow, restoredEqualsTyped: restored === typed, retrySameAnswer: true, storedAfterSave: null });
+        } finally { await context.close(); }
+
+        /* The «Рішення» card for the seat's own question. */
+        /* At 1000px the seat's form opens in the dialog the link names; elsewhere a row opens it. */
+        const seatUrl = `${base}&decisions=telegram${width === 1000 ? `&project=atlas&prototypeReview=${seatId}` : ""}`;
+        const seat = await openFixture(browser, seatUrl, { width, height }, theme, lang, "reduce", phone);
+        try {
+          const page = seat.page;
+          const open = async () => {
+            const card = page.locator(`[data-decision-card="open"][data-decision-review="${seatId}"]`);
+            if (width !== 1000) {
+              const row = page.locator(`[data-decision-row="${seatId}"]`);
+              /* On the phone the seat card opens a sheet from its strip; the sheet starts on the first decision, so the seat's own row opens its form. */
+              if (phone) {
+                await page.locator("[data-mobile2-seat-open], [data-decision-strip]").first().waitFor();
+                if (!(await page.locator("[data-decision-strip]").count())) await press(page.locator("[data-mobile2-seat-open]"));
+                await page.locator("[data-decision-strip]").waitFor();
+                await press(page.locator("[data-decision-strip]"));
+              }
+              await row.waitFor();
+              await press(row);
+            }
+            return card;
+          };
+          let form = await open();
+          const comment = form.locator("[data-decision-comment]");
+          await press(form.locator('[data-prototype-option="deploy:1"]'));
+          await comment.fill(typed);
+          await press(form.locator("[data-decision-send]"));
+          await form.locator("[data-decision-error]").waitFor();
+          /* No scrolling by the driver: the card brings its own refusal into view. */
+          await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          const refusedSeat = await reading(page, "[data-decision-comment]", "[data-decision-error]", "[data-decision-send]");
+          expect(refusedSeat.value).toBe(typed); expect(refusedSeat.errorText).toContain("unavailable");
+          expect(refusedSeat.errorText.startsWith(lang === "uk" ? "Відповідь не збережено:" : "The answer was not saved:")).toBe(true);
+          /* The footer's normal padding (12px) stays under the last line of the error. */
+          expect(refusedSeat.errorAirBelow).toBeGreaterThanOrEqual(11.5);
+          expect(refusedSeat.errorInside && refusedSeat.fieldInside && !refusedSeat.errorOverlapsSend).toBe(true);
+          expect(await form.locator('[data-prototype-option="deploy:1"]').getAttribute("aria-checked")).toBe("true");
+          await page.screenshot({ path: path.join(out, `seat-${tag}-refused.png`) });
+          await press(form.locator("[data-decision-send]"));
+          await page.waitForFunction(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length === 2);
+          const seatPosts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
+          expect(seatPosts[1]).toEqual(seatPosts[0]);
+          expect(seatPosts[0]).toMatchObject({ reviewId: seatId, comment: typed });
+          expect(await stored(page, seatId)).not.toBeNull();
+          await page.reload();
+          form = await open();
+          expect(await form.locator("[data-decision-comment]").inputValue()).toBe(typed);
+          expect(await form.locator('[data-prototype-option="deploy:1"]').getAttribute("aria-checked")).toBe("true");
+          /* The footer's end, padding included, so the field and the button are not left on the scroll edge. */
+          await form.locator("[data-decision-footer]").evaluate((el) => el.scrollIntoView({ block: "nearest" }));
+          const reloadedSeat = await reading(page, "[data-decision-comment]", null, "[data-decision-send]");
+          expect(reloadedSeat.value).toBe(typed); expect(reloadedSeat.fieldInside && reloadedSeat.sendInside).toBe(true);
+          expect(reloadedSeat.sendAirBelow).toBeGreaterThanOrEqual(11.5);
+          await page.screenshot({ path: path.join(out, `seat-${tag}-reloaded.png`) });
+          await page.evaluate(() => (window as unknown as { protoAcceptSaves: () => void }).protoAcceptSaves());
+          await press(form.locator("[data-decision-send]"));
+          await page.waitForFunction((id) => !document.querySelector(`[data-decision-card="open"][data-decision-review="${id}"]`), seatId);
+          const sent = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
+          expect(sent).toHaveLength(1);
+          expect(sent[0]).toEqual(seatPosts[0]);
+          await draftGone(page, seatId);
+          expect(await stored(page, seatId)).toBeNull();
+          expect(seat.pageErrors).toEqual([]);
+          readings.push({ surface: "seat-form", width, lang, theme, ...refusedSeat, reloaded: reloadedSeat, restoredEqualsTyped: true, retrySameAnswer: true, storedAfterSave: null });
+        } finally { await seat.context.close(); }
+      }
+      fs.mkdirSync("evidence/decision-form-draft", { recursive: true });
+      fs.writeFileSync("evidence/decision-form-draft/readings.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
+  }, 900_000);
+});
+
 describe("CPU admission queue", () => {
   browserTest("the waiting card shows queue position and remaining minutes, or a stalled queue, in en and uk", async () => {
     const out = path.resolve(".artifacts/cpu-queue");
@@ -5557,7 +5723,9 @@ describe("#1731 the seat anchors the board", () => {
       const head = document.querySelector<HTMLElement>(`${seat} .seat-head`)!;
       const top = page_.getBoundingClientRect().top;
       const box = composer.getBoundingClientRect();
-      const hit = document.elementFromPoint(box.left + box.width / 2, top + 2);
+      /* The strip that returns the page to the seat is pinned over the page's top 32 px while the head is away. */
+      const strip = document.querySelector<HTMLElement>("[data-seat-return][data-shown] > button")?.getBoundingClientRect().height ?? 0;
+      const hit = document.elementFromPoint(box.left + box.width / 2, top + strip + 2);
       return {
         headOutOfView: head.getBoundingClientRect().bottom <= top,
         composerOnTop: Boolean(hit && composer.contains(hit)),
@@ -20328,6 +20496,15 @@ describe("agent memory isolation", () => {
  * in uk and en: folded to its head, and a row accepted there leaving the
  * header's count too.
  */
+describe("done frames retained in state", () => {
+  browserTest("desktop frames survive lane removal and missing frames have a label", async () => {
+    const { captureDoneFrames } = await import("./issue1695BrowserHarness");
+    const browser = await chromium.launch({...LAUNCH,ignoreDefaultArgs:["--hide-scrollbars"]});
+    try {expect(await captureDoneFrames(browser,false)).toEqual([]);}
+    finally {await browser.close();}
+  },120_000);
+});
+
 describe("«Готово» in «Чекають на вас»", () => {
   browserTest("the desktop panel ends in «Готово»: thumbnail, groups, acceptance and the counter at 1440 in uk", async () => {
     const out = path.resolve(".artifacts/done-section/desktop");
@@ -32724,15 +32901,18 @@ describe("independent panel scroll", () => {
     await settle(page);
   }
 
-  async function open(browser: Browser, base: string, layout: Layout, touch = false) {
-    const context = await browser.newContext({ viewport: { width: layout.width, height: layout.height }, colorScheme: "light", reducedMotion: "reduce", ...(touch ? { hasTouch: true } : {}) });
+  async function open(browser: Browser, base: string, layout: Layout, touch = false, look: { scheme: "light" | "dark"; lang: "en" | "uk" } = { scheme: "light", lang: "en" }) {
+    const context = await browser.newContext({ viewport: { width: layout.width, height: layout.height }, colorScheme: look.scheme, reducedMotion: "reduce", ...(touch ? { hasTouch: true } : {}) });
     await context.addInitScript(stored(layout));
+    if (look.lang !== "en") await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(look.lang)}); } catch {}`);
     const page = await context.newPage();
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`${base}?scenario=agent-report`);
     await page.waitForSelector(`${COLUMN} .card[data-id]`, { state: "attached", timeout: 30_000 });
     await page.waitForTimeout(1_200);
+    /* The fixture's attention toast sits over the page's scrollbar and the strip's right end; production's is transient. */
+    await page.evaluate(() => { for (const button of document.querySelectorAll<HTMLElement>("[data-attention-toast-dismiss]")) button.click(); });
     return { context, page, pageErrors };
   }
 
@@ -32919,6 +33099,263 @@ describe("independent panel scroll", () => {
     fs.mkdirSync("evidence/panel-scroll", { recursive: true });
     fs.writeFileSync("evidence/panel-scroll/desktop.json", JSON.stringify({ contained, uncontained, placed, held, failures }, null, 2) + "\n");
     for (const row of placed) if (Math.abs(row.to - row.from) < Math.min(NOTCH, pageRoom.get(row.layout) ?? 0) - 1) failures.push(`${row.layout}: ${row.row} by ${row.input} moved the page only ${row.from} → ${row.to}`);
+    expect(failures).toEqual([]);
+  }, 600_000);
+
+  /*
+   * The way back up (docs/design/independent-panel-scroll.md, "The way back"). The lock above holds, and it traps the
+   * page low: one notch from a column head moves the page, and the conversation then slides under the pointer and takes
+   * every later notch. A strip pinned to the top of the page (`.seat-return`, shown while the seat's head is above it)
+   * stays under the pointer, so a wheel, a trackpad gesture or a finger over it reaches the top, and a click or Enter
+   * does too and leaves the cursor in the composer. The control row hides the strip and reads the old trap, so the case
+   * is proven able to fail. Readings go to `evidence/panel-scroll/return.json`, frames to `LLV_KANBAN_FRAMES` or
+   * `.artifacts/panel-scroll-return`.
+   */
+  const RETURN = ".kb .kb-page > .seat-return";
+  const RETURN_LAYOUTS: Layout[] = [
+    { name: "rail-open", width: 1440, height: 900, rail: "open", seat: "top" },
+    { name: "tabs", width: 1000, height: 800, rail: "open", seat: "top" },
+    { name: "narrow", width: 700, height: 800, rail: "open", seat: "top" },
+  ];
+
+  /* The strip's state and its text, measured from ranges: the label and the hint whole inside the strip, the strip clear of the board's rows. */
+  const stripReading = (page: Page) => page.evaluate(({ strip, frame }) => {
+    const host = document.querySelector<HTMLElement>(strip)!;
+    const button = host.querySelector<HTMLElement>("button")!;
+    const box = button.getBoundingClientRect();
+    const visible = getComputedStyle(button).visibility === "visible";
+    const words: Array<{ text: string; left: number; right: number; top: number; bottom: number }> = [];
+    for (const span of button.querySelectorAll<HTMLElement>("span")) {
+      if (getComputedStyle(span).display === "none") continue;
+      const range = document.createRange(); range.selectNodeContents(span);
+      const rect = range.getBoundingClientRect();
+      words.push({ text: span.textContent ?? "", left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom });
+    }
+    const pageBox = document.querySelector<HTMLElement>(".kb .kb-page")!.getBoundingClientRect();
+    const board = document.querySelector<HTMLElement>(frame)!.getBoundingClientRect();
+    return {
+      visible, shown: host.hasAttribute("data-shown"), top: box.top - pageBox.top, height: box.height, width: box.width,
+      whole: words.length > 0 && words.every((word) => word.left >= box.left - 0.5 && word.right <= box.right + 0.5 && word.top >= box.top - 0.5 && word.bottom <= box.bottom + 0.5),
+      words: words.map((word) => word.text), hintShown: words.length > 1,
+      boardTop: board.top - pageBox.top, boardHeight: board.height, pageHeight: pageBox.height, pageWidth: pageBox.width,
+      focus: document.activeElement ? `${document.activeElement.tagName}${document.activeElement.closest("[data-kanban-seat]") ? " in the seat" : ""}` : null,
+    };
+  }, { strip: RETURN, frame: ".kb .board-frame" });
+
+  browserTest("a strip pinned to the page returns it to the seat by wheel, gesture, finger, click and keys, and the lock holds", async () => {
+    const out = process.env.LLV_KANBAN_FRAMES ? path.resolve(process.env.LLV_KANBAN_FRAMES) : path.resolve(".artifacts/panel-scroll-return");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const readings: Record<string, unknown>[] = [];
+    const column = `${COLUMN} > .col-body`;
+    /* The fixture's attention toast covers the strip's right end; production's is transient. */
+    const clearToast = (page: Page) => page.evaluate(() => { for (const button of document.querySelectorAll<HTMLElement>("[data-attention-toast-dismiss]")) button.click(); });
+    const stripAt = (page: Page): Promise<Spot> => page.evaluate((selector) => {
+      const box = document.querySelector<HTMLElement>(`${selector} > button`)!.getBoundingClientRect();
+      return { x: Math.round(box.left + box.width * 0.2), y: Math.round(box.top + box.height / 2) };
+    }, RETURN);
+    const check = (condition: boolean, message: string) => { if (!condition) failures.push(message); };
+    try {
+      for (const layout of RETURN_LAYOUTS) {
+        const { context, page, pageErrors } = await open(browser, server.base, layout);
+        const row: Record<string, unknown> = { layout: layout.name };
+        try {
+          await clearToast(page);
+          const room = await maxOf(page, PAGE);
+          const pageWidth = await page.evaluate((selector) => document.querySelector<HTMLElement>(selector)!.clientWidth, PAGE);
+
+          /* 1. At the top: no strip, and the board is 32 px shorter. */
+          await setScroll(page, PAGE, 0);
+          await settle(page);
+          const top = await stripReading(page);
+          row.top = top;
+          check(!top.shown && !top.visible, `${layout.name}: the strip shows with the page at its top`);
+          check(Math.abs(top.boardHeight - Math.max(440, top.pageHeight - 32)) <= 1, `${layout.name}: the board is ${top.boardHeight} px, not max(440, ${top.pageHeight} - 32)`);
+          await setScroll(page, PAGE, 10);
+          await settle(page);
+          check(!(await stripReading(page)).shown, `${layout.name}: the strip shows with the page 10 px down`);
+
+          /* 2. At the end: shown, whole text, clear of the board's rows. */
+          await setScroll(page, PAGE, "end");
+          await settle(page);
+          const end = await stripReading(page);
+          row.end = end;
+          const headTop = await page.evaluate((selector) => document.querySelector<HTMLElement>(selector)!.getBoundingClientRect().top - document.querySelector<HTMLElement>(".kb .kb-page")!.getBoundingClientRect().top, `${COLUMN} .col-head`);
+          check(end.shown && end.visible, `${layout.name}: no strip at the page's end`);
+          check(end.top === 0 && end.height === 32, `${layout.name}: the strip is ${end.height} px at ${end.top}`);
+          check(end.whole, `${layout.name}: the strip's text is cut: ${JSON.stringify(end.words)}`);
+          check(end.boardTop >= end.top + end.height - 0.5 && headTop >= end.height, `${layout.name}: the strip covers the board (board ${end.boardTop}, column head ${headTop})`);
+          check(end.hintShown === (pageWidth > 520), `${layout.name}: the hint is ${end.hintShown ? "shown" : "hidden"} at a page ${pageWidth} px wide`);
+          await page.screenshot({ path: path.join(out, `end-${layout.name}-light-en.png`) });
+
+          /* 3. Mid-page: the head above the strip. */
+          await setScroll(page, PAGE, Math.round(room / 2));
+          await settle(page);
+          check((await stripReading(page)).shown, `${layout.name}: no strip mid-page`);
+          await page.screenshot({ path: path.join(out, `mid-${layout.name}-light-en.png`) });
+
+          /* 4. Wheel and trackpad gesture over the strip reach the top. */
+          const inputs: Record<string, number> = {};
+          await setScroll(page, PAGE, "end");
+          await settle(page);
+          await wheel(page, await stripAt(page), -NOTCH, 5);
+          inputs.wheel = await pageTop(page);
+          await setScroll(page, PAGE, "end");
+          await settle(page);
+          await gesture(page, await stripAt(page), 2_000);
+          inputs.gesture = await pageTop(page);
+
+          /* 5. Click: the top, the strip gone, the cursor in the composer. */
+          await setScroll(page, PAGE, "end");
+          await settle(page);
+          await page.mouse.click((await stripAt(page)).x, (await stripAt(page)).y);
+          await settle(page);
+          inputs.click = await pageTop(page);
+          const afterClick = await stripReading(page);
+          row.afterClick = afterClick;
+          check(!afterClick.shown && afterClick.focus === "TEXTAREA in the seat", `${layout.name}: after a click the strip is ${afterClick.shown ? "shown" : "hidden"} and focus is ${afterClick.focus}`);
+          await page.screenshot({ path: path.join(out, `after-return-${layout.name}-light-en.png`) });
+          for (const key of ["Enter", "Space"] as const) {
+            await setScroll(page, PAGE, "end");
+            await settle(page);
+            await page.locator(`${RETURN} > button`).focus();
+            await page.keyboard.press(key);
+            await settle(page);
+            inputs[key] = await pageTop(page);
+            check((await stripReading(page)).focus === "TEXTAREA in the seat", `${layout.name}: after ${key} focus is ${(await stripReading(page)).focus}`);
+          }
+          row.inputs = inputs;
+          for (const [name, value] of Object.entries(inputs)) check(value === 0, `${layout.name}: ${name} over the strip left the page at ${value}`);
+
+          /* 5b. Tab onto the strip moves nothing: the page stays where the operator read, and Enter then returns it. */
+          await setScroll(page, PAGE, "end");
+          await settle(page);
+          const beforeTab = await pageTop(page);
+          await page.evaluate((selector) => {
+            const tabbable = [...document.querySelectorAll<HTMLElement>("a[href], button, input, textarea, select, [tabindex]")].filter((el) => !el.matches(":disabled") && el.tabIndex >= 0 && getComputedStyle(el).visibility !== "hidden");
+            const strip = document.querySelector<HTMLElement>(`${selector} > button`)!;
+            tabbable[tabbable.indexOf(strip) - 1]!.focus({ preventScroll: true });
+          }, RETURN);
+          await page.keyboard.press("Tab");
+          await settle(page);
+          const afterTab = await stripReading(page);
+          row.tab = { from: beforeTab, to: await pageTop(page), focus: afterTab.focus, shown: afterTab.shown };
+          check(await page.evaluate((selector) => document.activeElement === document.querySelector(`${selector} > button`), RETURN), `${layout.name}: Tab did not land on the strip`);
+          check(Math.abs((await pageTop(page)) - beforeTab) <= 1, `${layout.name}: Tab onto the strip moved the page ${beforeTab} → ${await pageTop(page)}`);
+          check(afterTab.shown, `${layout.name}: the strip is hidden after Tab landed on it`);
+          await page.screenshot({ path: path.join(out, `tab-${layout.name}-light-en.png`) });
+          await page.keyboard.press("Enter");
+          await settle(page);
+          check((await pageTop(page)) === 0 && (await stripReading(page)).focus === "TEXTAREA in the seat", `${layout.name}: Enter after Tab left the page at ${await pageTop(page)} with focus ${(await stripReading(page)).focus}`);
+
+          /* 6. The lock holds: a column at its top, wheel up, the page stays. */
+          await setScroll(page, PAGE, "end");
+          await setScroll(page, column, 0);
+          const lockedFrom = await pageTop(page);
+          await wheel(page, await spotIn(page, column), -NOTCH, 3);
+          row.lock = { from: lockedFrom, to: await pageTop(page) };
+          check(Math.abs((await pageTop(page)) - lockedFrom) <= 1, `${layout.name}: a column at its top carried the page ${lockedFrom} → ${await pageTop(page)}`);
+
+          /* 7. «Fold» still folds, from the head and from O; a folded seat draws no strip. */
+          await setScroll(page, PAGE, 0);
+          await page.locator("[data-seat-collapse]").click();
+          await settle(page);
+          row.folded = { strips: await page.locator("[data-seat-return]").count(), room: await maxOf(page, PAGE) };
+          check((row.folded as { strips: number }).strips === 0, `${layout.name}: the folded seat draws a strip`);
+          await page.keyboard.press("o");
+          await settle(page);
+          check((await page.locator("[data-seat-return]").count()) === 1 && (await page.locator('[data-kanban-seat][data-collapsed="0"]').count()) === 1, `${layout.name}: O did not unfold the seat and bring the strip back`);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+
+        /* 4b. A finger dragged down on the strip reaches the top, twice over. */
+        const touch = await open(browser, server.base, layout, true);
+        try {
+          await clearToast(touch.page);
+          await setScroll(touch.page, PAGE, "end");
+          await settle(touch.page);
+          await finger(touch.page, await stripAt(touch.page), 400);
+          const first = await pageTop(touch.page);
+          if (first > 0) await finger(touch.page, await stripAt(touch.page), 400);
+          row.finger = { first, second: await pageTop(touch.page) };
+          check((await pageTop(touch.page)) === 0, `${layout.name}: two fingers over the strip left the page at ${await pageTop(touch.page)}`);
+        } finally { await touch.context.close(); }
+
+        /* The control: with the strip taken away a wheel from a column head stops at the conversation. */
+        const control = await open(browser, server.base, layout);
+        try {
+          await clearToast(control.page);
+          await control.page.addStyleTag({ content: `${RETURN} { display: none !important }` });
+          const roomWithout = await maxOf(control.page, PAGE);
+          await setScroll(control.page, PAGE, "end");
+          await settle(control.page);
+          await wheel(control.page, await spotIn(control.page, `${COLUMN} .col-head`), -NOTCH, 5);
+          const stuck = await pageTop(control.page);
+          row.withoutStrip = { room: roomWithout, stuckAt: stuck };
+          check(stuck > 0, `${layout.name}: without the strip a wheel from a column head reached the top, so the case cannot fail`);
+        } finally { await control.context.close(); }
+        readings.push(row);
+      }
+
+      /* Dark and uk: the strip at the end and mid-page, at the desktop width. */
+      const look = await open(browser, server.base, RETURN_LAYOUTS[0]!, false, { scheme: "dark", lang: "uk" });
+      try {
+        await clearToast(look.page);
+        await setScroll(look.page, PAGE, "end");
+        await settle(look.page);
+        const dark = await stripReading(look.page);
+        readings.push({ layout: "rail-open", look: "dark-uk", strip: dark });
+        check(dark.shown && dark.whole && dark.words.join("|") === "До оркестратора|гортайте тут або натисніть", `dark uk: the strip reads ${JSON.stringify(dark.words)}`);
+        await look.page.screenshot({ path: path.join(out, "end-rail-open-dark-uk.png") });
+        await setScroll(look.page, PAGE, 300);
+        await settle(look.page);
+        await look.page.screenshot({ path: path.join(out, "mid-rail-open-dark-uk.png") });
+        await setScroll(look.page, PAGE, 0);
+        await settle(look.page);
+        await look.page.screenshot({ path: path.join(out, "top-rail-open-dark-uk.png") });
+      } finally { await look.context.close(); }
+
+      /* Layouts that draw no strip: the seat docked at the side, and a window under 800 px tall (it starts folded). */
+      const side = await open(browser, server.base, { name: "seat-side", width: 1440, height: 900, rail: "hidden", seat: "side" });
+      try {
+        readings.push({ layout: "seat-side", strips: await side.page.locator("[data-seat-return]").count(), room: await maxOf(side.page, PAGE) });
+        check((await side.page.locator("[data-seat-return]").count()) === 0, "the seat at the side draws a strip");
+      } finally { await side.context.close(); }
+      const short = await browser.newContext({ viewport: { width: 1440, height: 760 }, colorScheme: "light", reducedMotion: "reduce" });
+      try {
+        const shortPage = await short.newPage();
+        await shortPage.goto(`${server.base}?scenario=agent-report`);
+        await shortPage.waitForSelector(`${COLUMN} .card[data-id]`, { state: "attached", timeout: 30_000 });
+        await shortPage.waitForTimeout(800);
+        readings.push({ layout: "short-window", collapsed: await shortPage.locator('[data-kanban-seat][data-collapsed="1"]').count(), strips: await shortPage.locator("[data-seat-return]").count() });
+        check((await shortPage.locator('[data-kanban-seat][data-collapsed="1"]').count()) === 1 && (await shortPage.locator("[data-seat-return]").count()) === 0, "a window under 800 px tall draws a strip");
+      } finally { await short.close(); }
+
+      /* The seat still on its create draft is as tall as the draft; the strip is there and shows once the page has room to scroll. */
+      const created = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "light", reducedMotion: "reduce" });
+      try {
+        await created.addInitScript(stored(RETURN_LAYOUTS[0]!));
+        const createdPage = await created.newPage();
+        await createdPage.goto(`${server.base}?scenario=orchestrator-first`);
+        await createdPage.waitForSelector('[data-orchestrator-draft="create"]', { state: "visible", timeout: 30_000 });
+        await createdPage.waitForTimeout(800);
+        await clearToast(createdPage);
+        const draftRoom = await maxOf(createdPage, PAGE);
+        const reading: Record<string, unknown> = { layout: "create-draft", strips: await createdPage.locator("[data-seat-return]").count(), room: draftRoom };
+        check((reading.strips as number) === 1, "the create-draft seat draws no strip");
+        if (draftRoom > 40) {
+          await setScroll(createdPage, PAGE, "end");
+          await settle(createdPage);
+          reading.shownAtEnd = (await stripReading(createdPage)).shown;
+          check(reading.shownAtEnd === true, "the strip is hidden at the end of the create-draft page");
+        }
+        readings.push(reading);
+      } finally { await created.close(); }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/panel-scroll", { recursive: true });
+    fs.writeFileSync("evidence/panel-scroll/return.json", JSON.stringify({ readings, failures }, null, 2) + "\n");
     expect(failures).toEqual([]);
   }, 600_000);
 });
@@ -33335,6 +33772,49 @@ describe("full autonomy", () => {
 });
 
 
+describe("pipeline repository initialization", () => {
+  browserTest("the picker admits a new folder and shows a concrete refusal", async () => {
+    const out = path.resolve(".artifacts/pipeline-repository-initialization");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle"));
+    const browserTemp = fs.mkdtempSync(path.join(os.tmpdir(), "browser-"));
+    const browserTempFd = fs.openSync(browserTemp, "r");
+    // Keep Chromium's Unix socket path short while its files stay in stage scratch.
+    const socketRoot = process.platform === "linux" ? "/proc/" + process.pid + "/fd/" + browserTempFd : browserTemp;
+    let browser: Browser | undefined;
+    const readings: unknown[] = [];
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: socketRoot } });
+      for (const width of [390, 1280]) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        for (const state of ["ready", "refused"]) {
+          const { context, page, pageErrors } = await openFixture(browser, server.base + "?pipelineinit=" + state,
+            { width, height: 900 }, scheme, lang, "reduce", width === 390);
+          try {
+            const expected = state === "ready" ? "ready" : "blocked";
+            const picker = page.locator('[data-pipeline-picker-state="' + expected + '"]');
+            await picker.waitFor();
+            const text = await picker.innerText();
+            if (state === "refused") expect(text).toContain("initialization refused for the Delegatus state directory");
+            expect(text).not.toContain("pipelinePreflight.initialization_refused");
+            const dialog = page.getByRole("dialog");
+            const box = await dialog.boundingBox();
+            expect(box).toBeTruthy();
+            expect(box!.x).toBeGreaterThanOrEqual(0);
+            expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+            expect(box!.y + box!.height).toBeLessThanOrEqual(901);
+            expect(pageErrors).toEqual([]);
+            const screenshot = width + "-" + scheme + "-" + lang + "-" + state + ".png";
+            await page.screenshot({ path: path.join(out, screenshot) });
+            readings.push({ width, scheme, lang, state, screenshot, box });
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser?.close(); server.stop(); fs.closeSync(browserTempFd); fs.rmSync(browserTemp, { recursive: true, force: true }); }
+    fs.mkdirSync("evidence/pipeline-repository-initialization", { recursive: true });
+    fs.writeFileSync("evidence/pipeline-repository-initialization/readings.json", JSON.stringify(readings, null, 2) + "\n");
+  }, 120_000);
+});
+
 describe("saved decision delivery", () => {
   browserTest("C: the Decisions badge and panel retain saved answers until delivery", async () => {
     const out = path.resolve(".artifacts/answer-delivery/frames"); fs.mkdirSync(out, { recursive: true });
@@ -33402,4 +33882,415 @@ describe("saved decision delivery", () => {
       fs.writeFileSync("evidence/answer-delivery/panel.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
     } finally { await browser.close(); served.stop(); }
   }, 180_000);
+});
+
+describe("overlays opened from a conversation draw above the full-screen view that hosts it", () => {
+  /*
+   * The agent window (`z-index: 64`) and the stages sheet (62) host conversations. What a conversation
+   * opens — the runtime menu in its composer, the document preview from a link in its feed — is portalled
+   * into <body> and used to sit at 40 and 60, under the window. `reader` is the layer of those hosts and
+   * everything a conversation opens takes its place above it (`src/components/layers.ts`).
+   *
+   * Every check is a hit test: the point at the centre of the overlay's own part answers with that part,
+   * and a real click lands on it. Run on a desktop board (1440 and 1000 wide) in the agent window and in
+   * the stages sheet.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "overlays opened from a conversation"
+   *
+   * Frames go to `.artifacts/reader-overlays/`; measurements to `evidence/reader-overlays/desktop.json`.
+   */
+  const texts: Record<string, string> = {
+    "plan.md": `# Rollout plan\n\n${Array.from({ length: 40 }, (_, step) => `## Step ${step + 1}\n\nRe-run the rebuild against live traffic and compare the alias swap window with step ${step}.\n`).join("\n")}`,
+    "run.txt": Array.from({ length: 80 }, (_, row) => `${String(row + 1).padStart(3, "0")} rebuild shard ${row % 7} finished without errors`).join("\n"),
+  };
+  const PDF = "%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]>>endobj\ntrailer<</Root 1 0 R/Size 4>>\n%%EOF\n";
+  const stubs = async () => {
+    const png = await sharp({ create: { width: 640, height: 360, channels: 3, background: { r: 40, g: 120, b: 200 } } }).png().toBuffer();
+    return {
+      "/api/artifact": (request: Request) => {
+        const url = new URL(request.url), name = path.basename(url.searchParams.get("path") ?? "");
+        const mode = url.searchParams.get("mode");
+        const meta = (kind: string, mime: string, size: number, frame?: string) => Response.json({ name, kind, mime, size, mtimeMs: 1790000000000, etag: "\"fixture\"", ...(frame ? { frame } : {}) });
+        if (name === "plan.md") return mode === "meta" ? meta("text", "text/markdown", texts[name]!.length) : new Response(texts[name], { headers: { "content-type": "text/markdown; charset=utf-8", etag: "\"fixture\"" } });
+        if (name === "run.txt") return mode === "meta" ? meta("text", "text/plain", texts[name]!.length) : new Response(texts[name], { headers: { "content-type": "text/plain; charset=utf-8", etag: "\"fixture\"" } });
+        if (name === "page.html") return mode === "meta" ? meta("text", "text/html", 120, "/api/artifact/frame/notes/page.html") : new Response("<h1>Report</h1>", { headers: { "content-type": "text/html; charset=utf-8", etag: "\"fixture\"" } });
+        if (name === "shot.png") return mode === "meta" ? meta("image", "image/png", png.length) : new Response(png, { headers: { "content-type": "image/png", etag: "\"fixture\"" } });
+        if (name === "report.pdf") return mode === "meta" ? meta("pdf", "application/pdf", PDF.length) : new Response(PDF, { headers: { "content-type": "application/pdf", etag: "\"fixture\"" } });
+        return Response.json({ error: "missing", code: "not-found" }, { status: 404 });
+      },
+      "/api/artifact/frame/notes/page.html": () => new Response("<!doctype html><body style=\"font:16px sans-serif\"><h1>Report</h1><p>Rebuild finished.</p></body>", { headers: { "content-type": "text/html; charset=utf-8" } }),
+    };
+  };
+  /* Every sample point of the part answers with the part itself (or something inside it). */
+  const onTop = (page: Page, selector: string, nth = 0) => page.evaluate(({ selector, nth }) => {
+    const element = document.querySelectorAll<HTMLElement>(selector)[nth];
+    if (!element) return { found: false, hits: [] as boolean[] };
+    const box = element.getBoundingClientRect();
+    const left = Math.max(box.left, 0), right = Math.min(box.right, innerWidth), top = Math.max(box.top, 0), bottom = Math.min(box.bottom, innerHeight);
+    const hits = [[.5, .5], [.15, .25], [.85, .75]].map(([x, y]) => {
+      const hit = document.elementFromPoint(left + (right - left) * x!, top + (bottom - top) * y!);
+      return Boolean(hit && element.contains(hit));
+    });
+    return { found: true, hits, visible: right > left && bottom > top };
+  }, { selector, nth });
+  const expectOnTop = async (page: Page, selector: string, label: string, nth = 0) => {
+    const reading = await onTop(page, selector, nth);
+    expect(reading.found, `${label} exists`).toBe(true);
+    expect(reading.hits, `${label} answers a hit test`).toEqual([true, true, true]);
+  };
+  const SIZES = [{ width: 1440, height: 900, lang: "uk", scheme: "light" }, { width: 1440, height: 900, lang: "en", scheme: "dark" }, { width: 1000, height: 760, lang: "uk", scheme: "light" }, { width: 1000, height: 760, lang: "en", scheme: "dark" }] as const;
+  const LINKS = ["plan", "page", "log", "shot", "report", "gone"] as const;
+
+  browserTest("the runtime menu and every kind of preview land on the full-screen conversation and work", async () => {
+    const out = path.resolve(".artifacts/reader-overlays"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, await stubs());
+    const browserServer = await chromium.launchServer({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    fs.writeFileSync(path.join(out, "browser.pid"), String(browserServer.process()?.pid));
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: unknown[] = [];
+    try {
+      for (const { width, height, lang, scheme } of SIZES) for (const host of ["window", "sheet"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured&overlay-links`, { width, height }, scheme, lang, "reduce");
+        const tag = `${width}-${lang}-${scheme}-${host}`;
+        const frame = (name: string) => page.screenshot({ path: path.join(out, `${tag}-${name}.png`) });
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          await page.locator(`.card[data-id="task:t-search"] .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          if (host === "window") await page.click('.card[data-id="task:t-search"] .pb-pills [data-stage="verify"]');
+          else {
+            await page.click('.card[data-id="task:t-search"] [data-open-stages]');
+            await page.waitForSelector(".gsheet .pane[data-stage]", { timeout: 10_000 });
+            await page.click('.gsheet .gs-graph .pnode[data-stage="verify"]');
+          }
+          const hostSelector = host === "window" ? "[data-agent-window]" : ".gsheet";
+          await page.waitForSelector(`${hostSelector} [data-runtime-pill]`, { timeout: 15_000 });
+          await page.waitForSelector(`${hostSelector} [data-file-link]`, { timeout: 15_000 });
+          await page.waitForTimeout(500);
+          const hostZ = await page.evaluate((selector) => Number(getComputedStyle(document.querySelector(selector)!).zIndex), host === "window" ? ".kb .agent-window" : ".kb .gsheet-scrim");
+          expect(hostZ).toBe(host === "window" ? 64 : 62);
+
+          /* The runtime menu: root panel, then the model list; a real click picks, and the chip says so. */
+          const pill = page.locator(`${hostSelector} [data-runtime-pill]:visible`).first();
+          const before = (await pill.textContent())?.replace(/\s+/g, " ").trim();
+          await pill.click();
+          await page.waitForSelector("[data-runtime-popover]", { timeout: 5_000 });
+          await expectOnTop(page, "[data-runtime-popover]", `${tag} runtime menu`);
+          const rows = await page.locator("[data-runtime-popover] [data-runtime-row]").count();
+          expect(rows).toBeGreaterThan(1);
+          for (let row = 0; row < rows; row++) await expectOnTop(page, "[data-runtime-popover] [data-runtime-row]", `${tag} runtime row ${row}`, row);
+          await frame("runtime-root");
+          await page.click('[data-runtime-popover] [data-runtime-row="submenu"][data-runtime-value="model"]');
+          const models = await page.locator('[data-runtime-popover] [data-runtime-row="model"]').count();
+          expect(models).toBeGreaterThan(1);
+          for (let row = 0; row < models; row++) await expectOnTop(page, '[data-runtime-popover] [data-runtime-row="model"]', `${tag} model row ${row}`, row);
+          await frame("runtime-models");
+          /* A real click on a model that is not the current one changes the chip. */
+          await page.locator('[data-runtime-popover] [data-runtime-row="model"]', { hasText: /^Sonnet$/ }).click();
+          await page.waitForFunction(({ selector, text }) => {
+            const chip = [...document.querySelectorAll<HTMLElement>(selector)].find((element) => element.offsetParent !== null);
+            return chip !== undefined && chip.textContent?.replace(/\s+/g, " ").trim() !== text;
+          }, { selector: `${hostSelector} [data-runtime-pill]`, text: before }, { timeout: 5_000 });
+          const after = (await pill.textContent())?.replace(/\s+/g, " ").trim();
+          expect(after, `${tag} the chip names the model that was picked`).toContain("Sonnet");
+          await page.waitForSelector("[data-runtime-popover]", { state: "detached", timeout: 5_000 }).catch(() => undefined);
+          /* Escape closes the menu alone; the conversation stays. */
+          await pill.click();
+          await page.waitForSelector("[data-runtime-popover]", { timeout: 5_000 });
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-runtime-popover]", { state: "detached", timeout: 5_000 });
+          expect(await page.locator(hostSelector).count()).toBeGreaterThan(0);
+          /* The Account panel, when the pill offers one. */
+          await pill.click();
+          await page.waitForSelector("[data-runtime-popover]");
+          const account = page.locator('[data-runtime-popover] [data-runtime-row="submenu"][data-runtime-value="account"]');
+          let accountPanel = false;
+          if (await account.count()) {
+            await account.click();
+            const accountRows = await page.locator("[data-runtime-popover] [data-runtime-row]").count();
+            for (let row = 0; row < accountRows; row++) await expectOnTop(page, "[data-runtime-popover] [data-runtime-row]", `${tag} account row ${row}`, row);
+            accountPanel = true;
+            await frame("runtime-account");
+          }
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-runtime-popover]", { state: "detached", timeout: 5_000 });
+
+          /* Every kind of preview, opened from a link in the feed. */
+          const preview: Record<string, unknown> = {};
+          for (const name of LINKS) {
+            await page.locator(`${hostSelector} [data-file-link]`, { hasText: name }).first().click();
+            await page.waitForSelector("[data-artifact-preview]", { timeout: 5_000 });
+            await page.waitForFunction(() => document.querySelector("[data-artifact-preview]")?.getAttribute("data-artifact-state") !== "loading", undefined, { timeout: 10_000 });
+            const state = await page.locator("[data-artifact-preview]").getAttribute("data-artifact-state");
+            expect(state, `${tag} ${name} preview state`).toBe(name === "gone" ? "missing" : "ready");
+            await expectOnTop(page, "[data-artifact-preview]", `${tag} ${name} preview`);
+            await expectOnTop(page, `[data-artifact-preview] button[aria-label="${translate(lang, "preview.close")}"]`, `${tag} ${name} close`);
+            await expectOnTop(page, "[data-artifact-preview] [data-preview-open-external]", `${tag} ${name} open-external`);
+            const body = await page.evaluate(() => {
+              const root = document.querySelector<HTMLElement>("[data-artifact-preview]")!;
+              const scroller = [...root.querySelectorAll<HTMLElement>("*")].find((element) => element.scrollHeight > element.clientHeight + 8 && /auto|scroll/.test(getComputedStyle(element).overflowY));
+              const box = root.getBoundingClientRect();
+              const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height * 0.7);
+              return { bodyHit: Boolean(hit && root.contains(hit)), scroller: Boolean(scroller), top: scroller?.scrollTop ?? null, zIndex: Number(getComputedStyle(root).zIndex) };
+            });
+            expect(body.bodyHit).toBe(true);
+            expect(body.zIndex).toBe(65);
+            if (name === "plan" || name === "log") {
+              expect(body.scroller).toBe(true);
+              await page.mouse.move(width - 200, height / 2);
+              await page.mouse.wheel(0, 600);
+              const scrolled = await page.waitForFunction(() => {
+                const root = document.querySelector<HTMLElement>("[data-artifact-preview]")!;
+                return [...root.querySelectorAll<HTMLElement>("*")].some((element) => element.scrollTop > 0 && element.scrollHeight > element.clientHeight);
+              }, undefined, { timeout: 5_000 }).then(() => true, () => false);
+              expect(scrolled, `${tag} ${name} body scrolls under the wheel`).toBe(true);
+            }
+            if (name === "plan") await frame("preview-md");
+            if (name === "gone") await frame("preview-missing");
+            preview[name] = { state, ...body };
+            /* The × leaves the conversation open. */
+            await page.click(`[data-artifact-preview] button[aria-label="${translate(lang, "preview.close")}"]`);
+            await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+            expect(await page.locator(hostSelector).count()).toBeGreaterThan(0);
+          }
+
+          /* Escape, top to bottom: the menu, then the preview, then the window. */
+          await page.locator(`${hostSelector} [data-file-link]`, { hasText: "plan" }).first().click();
+          await page.waitForSelector("[data-artifact-preview]");
+          const feedBox = (await page.locator(`${hostSelector} [data-log-feed-scroller]`).first().boundingBox())!;
+          await page.mouse.click(feedBox.x + 24, feedBox.y + feedBox.height / 2);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+          expect(await page.locator(hostSelector).count(), `${tag} one Escape leaves the conversation open under a preview`).toBeGreaterThan(0);
+
+          /* The reader's ⋯ menu is above the host (regression: it was already). */
+          const menuButton = page.locator(`${hostSelector} [data-reader-menu]`).first();
+          if (await menuButton.count()) {
+            await menuButton.click();
+            await page.waitForSelector(".kb .menu", { timeout: 5_000 });
+            await expectOnTop(page, ".kb .menu", `${tag} reader menu`);
+            await page.keyboard.press("Escape");
+          }
+          expect(pageErrors).toEqual([]);
+          readings.push({ width, height, lang, scheme, host, hostZ, rows, models, accountPanel, before, after, preview, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/reader-overlays", { recursive: true });
+      fs.writeFileSync("evidence/reader-overlays/desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { await browser.close(); browserServer.close(); server.stop(); }
+  }, 600_000);
+
+  browserTest("Escape closes the topmost surface first, and a preview left on the board stays under the menus opened after it", async () => {
+    const out = path.resolve(".artifacts/reader-overlays"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, await stubs());
+    const browserServer = await chromium.launchServer({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    fs.writeFileSync(path.join(out, "browser-escape.pid"), String(browserServer.process()?.pid));
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: unknown[] = [];
+    try {
+      for (const { width, height, lang, scheme } of [SIZES[0], SIZES[3]]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured&overlay-links`, { width, height }, scheme, lang, "reduce");
+        const tag = `${width}-${lang}-${scheme}`;
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          await page.locator(`.card[data-id="task:t-search"] .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await page.click('.card[data-id="task:t-search"] .pb-pills [data-stage="verify"]');
+          await page.waitForSelector("[data-agent-window] [data-file-link]", { timeout: 15_000 });
+          await page.waitForTimeout(500);
+          const open = (selector: string) => page.locator(selector).count();
+          const zOf = (selector: string) => page.evaluate((target) => Number(getComputedStyle(document.querySelector(target)!).zIndex), selector);
+
+          /* The menu opened over the preview closes first, then the preview, then the window. */
+          await page.locator("[data-agent-window] [data-file-link]", { hasText: "plan" }).first().click();
+          await page.waitForSelector("[data-artifact-preview]");
+          await page.waitForFunction(() => document.querySelector("[data-artifact-preview]")?.getAttribute("data-artifact-state") === "ready", undefined, { timeout: 10_000 });
+          await page.locator("[data-agent-window] [data-runtime-pill]:visible").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-runtime-popover]");
+          expect(await zOf("[data-runtime-popover]")).toBeGreaterThan(await zOf("[data-artifact-preview]"));
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-runtime-popover]", { state: "detached", timeout: 5_000 });
+          expect(await open("[data-artifact-preview]"), `${tag} the menu took the first Escape`).toBe(1);
+          expect(await open("[data-agent-window]")).toBe(1);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+          expect(await open("[data-agent-window]"), `${tag} the preview took the second Escape`).toBe(1);
+          await page.keyboard.press("Escape");
+          await page.waitForFunction(() => !document.querySelector("[data-agent-window]"), undefined, { timeout: 5_000 });
+
+          /* A preview that outlives the window, on the plain board: a card's menu opened after it draws above it. */
+          await page.click('.card[data-id="task:t-search"] .pb-pills [data-stage="verify"]');
+          await page.waitForSelector("[data-agent-window] [data-file-link]", { timeout: 15_000 });
+          await page.locator("[data-agent-window] [data-file-link]", { hasText: "log" }).first().click();
+          await page.waitForSelector("[data-artifact-preview]");
+          await page.locator("[data-agent-window] [data-reader-close]").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForFunction(() => !document.querySelector("[data-agent-window]"), undefined, { timeout: 5_000 });
+          expect(await open("[data-artifact-preview]"), `${tag} the preview stays on the board`).toBe(1);
+          await page.locator('.card[data-id="task:t-search"] [data-menu]').evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector(".kb .menu");
+          const previewZ = await zOf("[data-artifact-preview]");
+          const menuZ = await zOf(".kb .menu");
+          expect(menuZ).toBeGreaterThan(previewZ);
+          await expectOnTop(page, ".kb .menu", `${tag} card menu over the preview`);
+          await page.screenshot({ path: path.join(out, `${tag}-board-preview-menu.png`) });
+          /* Escape belongs to the menu opened after the preview, then to the preview. */
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(".kb .menu", { state: "detached", timeout: 5_000 });
+          expect(await open("[data-artifact-preview]"), `${tag} the card menu took the first Escape`).toBe(1);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+
+          /* The same inside the agent window: its ⋯ menu opened over a preview. */
+          await page.click('.card[data-id="task:t-search"] .pb-pills [data-stage="verify"]');
+          await page.waitForSelector("[data-agent-window] [data-file-link]", { timeout: 15_000 });
+          await page.locator("[data-agent-window] [data-file-link]", { hasText: "plan" }).first().click();
+          await page.waitForSelector("[data-artifact-preview]");
+          await page.locator("[data-agent-window] [data-reader-menu]").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector(".kb .menu");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(".kb .menu", { state: "detached", timeout: 5_000 });
+          expect(await open("[data-artifact-preview]"), `${tag} the reader menu took the first Escape`).toBe(1);
+          expect(await open("[data-agent-window]")).toBe(1);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+          expect(await open("[data-agent-window]"), `${tag} the preview took the next Escape`).toBe(1);
+          expect(pageErrors).toEqual([]);
+          readings.push({ width, height, lang, scheme, previewZ, menuZ, menuEscapeFirst: true, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/reader-overlays", { recursive: true });
+      fs.writeFileSync("evidence/reader-overlays/escape-and-board.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { await browser.close(); browserServer.close(); server.stop(); }
+  }, 300_000);
+
+  browserTest("the preview over the agent window keeps 320px of conversation from the column's edge, and the board's geometry is unchanged", async () => {
+    /*
+     * The conversation is the window's right column, which starts after the window's margin and its agent list.
+     * The sheet measures its floor from that edge. Either at least 320px of conversation stay visible, or the
+     * narrowest useful sheet no longer fits beside that floor and the sheet takes the whole window, the list included.
+     * Nothing lands between, whether the width was stored by default or dragged narrower. The conversation wraps at the
+     * sheet's edge: no line of it, no title and no file list is cut there, measured from text ranges.
+     *
+     *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "keeps 320px of conversation"
+     */
+    const out = path.resolve(".artifacts/reader-overlays"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, await stubs());
+    const browserServer = await chromium.launchServer({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    fs.writeFileSync(path.join(out, "browser-geometry.pid"), String(browserServer.process()?.pid));
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: unknown[] = [];
+    /* The named widths, and one between each pair: 850 to 900 and 1100 sit where the stored width once capped the sheet. */
+    const RUNS = [
+      { width: 1440, height: 900 }, { width: 1320, height: 860 }, { width: 1200, height: 800 }, { width: 1100, height: 760 },
+      { width: 1000, height: 700 }, { width: 920, height: 800 }, { width: 900, height: 700 }, { width: 850, height: 800 }, { width: 700, height: 900 },
+    ];
+    /* The default width in both looks, and a width dragged down to the narrowest sheet. */
+    const LOOKS = [["uk", "light", null], ["en", "dark", null], ["en", "light", 380]] as const;
+    try {
+      for (const { width, height } of RUNS) for (const [lang, scheme, dragged] of LOOKS) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured&overlay-links`, { width, height }, scheme, lang, "reduce");
+        const tag = `${width}-${lang}-${scheme}${dragged ? `-dragged${dragged}` : ""}`;
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          if (dragged) await page.evaluate((value) => localStorage.setItem("llvPreviewWidth", String(value)), dragged);
+          await page.locator(`.card[data-id="task:t-search"] .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await page.click('.card[data-id="task:t-search"] .pb-pills [data-stage="verify"]');
+          await page.waitForSelector("[data-agent-window] [data-file-link]", { timeout: 15_000 });
+          await page.waitForTimeout(500);
+          const measure = () => page.evaluate(() => {
+            const preview = document.querySelector<HTMLElement>("[data-artifact-preview]")!.getBoundingClientRect();
+            const column = document.querySelector<HTMLElement>("[data-agent-window] .aw-reader")?.getBoundingClientRect() ?? null;
+            const list = document.querySelector<HTMLElement>("[data-agent-window] .aw-list")?.getBoundingClientRect() ?? null;
+            /* Every line of text the conversation draws, from ranges, cut to the box that clips it; one that crosses the sheet's edge is cut by it. */
+            const edge = preview.left;
+            const cut: string[] = [];
+            const walker = document.createTreeWalker(document.querySelector("[data-agent-window] .aw-reader")!, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              const text = node.textContent ?? "";
+              const owner = node.parentElement;
+              if (!text.trim() || !owner || getComputedStyle(owner).visibility === "hidden") continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const rect of range.getClientRects()) {
+                if (rect.width < 1) continue;
+                let right = rect.right, left = rect.left;
+                for (let clip: HTMLElement | null = owner; clip; clip = clip.parentElement) {
+                  if (getComputedStyle(clip).overflowX === "visible") continue;
+                  const box = clip.getBoundingClientRect();
+                  right = Math.min(right, box.right); left = Math.max(left, box.left);
+                }
+                if (right - left > 1 && left < edge - 0.5 && right > edge + 0.5) cut.push(text.trim().slice(0, 40));
+              }
+            }
+            return {
+              preview: { left: preview.left, width: preview.width },
+              column: column && { left: column.left, width: column.width },
+              list: list && { left: list.left, width: list.width },
+              inset: Number(document.querySelector("[data-artifact-preview]")!.getAttribute("data-artifact-preview-inset")),
+              viewport: innerWidth,
+              cut,
+            };
+          });
+          for (const name of ["plan", "log"]) {
+            await page.locator("[data-agent-window] [data-file-link]", { hasText: name }).first().click();
+            await page.waitForSelector("[data-artifact-preview]", { timeout: 5_000 });
+            await page.waitForFunction(() => document.querySelector("[data-artifact-preview]")?.getAttribute("data-artifact-state") === "ready", undefined, { timeout: 10_000 });
+            await page.waitForTimeout(150);
+            const reading = await measure();
+            const visible = reading.preview.left - reading.column!.left;
+            const takesColumn = visible <= 1;
+            expect(takesColumn || visible >= 319.5, `${tag} ${name}: ${visible}px of conversation left of the preview`).toBe(true);
+            /* Where it takes the column the list gives way with it: the sheet starts at the window's edge. */
+            if (takesColumn) expect(Math.abs(reading.preview.left - reading.list!.left), `${tag} ${name}: the sheet starts at the window's edge`).toBeLessThanOrEqual(1);
+            expect(reading.preview.left + reading.preview.width, `${tag} the sheet reaches the right edge`).toBeCloseTo(width, 0);
+            expect(reading.preview.width, `${tag} the sheet is never narrower than a usable strip`).toBeGreaterThanOrEqual(359.5);
+            expect(reading.cut, `${tag} ${name}: conversation text cut at the sheet's edge`).toEqual([]);
+            if (name === "plan") await page.screenshot({ path: path.join(out, `${tag}-preview-over-window.png`) });
+            readings.push({ width, height, lang, scheme, dragged, host: "window", file: name, ...reading, conversationVisible: visible, takesColumn });
+            await page.click(`[data-artifact-preview] button[aria-label="${translate(lang, "preview.close")}"]`);
+            await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+          }
+          /* A preview that outlives the window sits on the plain board: the board's geometry, untouched. */
+          await page.locator("[data-agent-window] [data-file-link]", { hasText: "plan" }).first().click();
+          await page.waitForSelector("[data-artifact-preview]");
+          await page.locator("[data-agent-window] [data-reader-close]").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForFunction(() => !document.querySelector("[data-agent-window]"), undefined, { timeout: 5_000 });
+          const board = await page.evaluate(() => {
+            const sheet = document.querySelector<HTMLElement>("[data-artifact-preview]")!;
+            return { sheetWidth: sheet.getBoundingClientRect().width, inset: Number(sheet.getAttribute("data-artifact-preview-inset")), viewport: innerWidth };
+          });
+          expect(board.sheetWidth, `${tag} board preview width`).toBeCloseTo(Math.max(380, Math.min(dragged ?? 560, board.viewport - 320 - board.inset)), 0);
+          if (!dragged) await page.screenshot({ path: path.join(out, `${tag}-preview-on-board.png`) });
+          readings.push({ width, height, lang, scheme, dragged, host: "board", ...board });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/reader-overlays", { recursive: true });
+      fs.writeFileSync("evidence/reader-overlays/preview-geometry.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { await browser.close(); browserServer.close(); server.stop(); }
+  }, 1_500_000);
+});
+
+describe("relay reply-chain conversation list", () => {
+  browserTest("each chain has its own authority label in both languages and themes", async () => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), "relay-chain-frames-"));
+    const fixture = await serveEvidenceFixture(out);
+    // Keep Chrome's Unix socket path short while every file stays in this case's sandbox.
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+        ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }) });
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const context = await browser.newContext({ viewport: { width: 1100, height: 720 }, colorScheme: theme });
+        try {
+          await context.addInitScript(({ lang, theme }) => { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme); }, { lang, theme });
+          const page = await context.newPage();
+          await page.goto(`${fixture.base}?scenario=relay-chain-list`);
+          await page.locator('[data-relay-chat-authority="admin"]').waitFor();
+          expect(await page.locator("[data-relay-chat-authority]").count()).toBe(3);
+          expect(await page.locator('[data-relay-chat-authority="admin"]').innerText()).toContain(lang === "en" ? "admin" : "адміністратор");
+          const destination = process.env.LLV_RELAY_CHAIN_FRAMES ?? out; fs.mkdirSync(destination, { recursive: true });
+          await page.screenshot({ path: path.join(destination, `${lang}-${theme}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser?.close(); if (tempFd !== null) fs.closeSync(tempFd); fixture.stop(); }
+  }, 60000);
 });

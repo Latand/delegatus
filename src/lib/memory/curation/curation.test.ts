@@ -1,3 +1,4 @@
+import * as pipelineStore from "@/lib/pipelines/store";
 import { chooseSource } from "../fixtures/source";
 import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -28,6 +29,10 @@ import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projec
 import { seatTickWakeCommit, seatTickWakeCommitPlan } from "@/lib/monitor/seatTick";
 import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
+import { loadTasks } from "@/lib/tasks/store";
+import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
+import { groupHideState } from "@/lib/tasks/groupHide";
+import { commitTaskMembership } from "@/lib/tasks/membership";
 
 const PROJECT = "curation-fixture";
 const NOW = Date.parse("2026-10-11T00:00:00Z");
@@ -120,6 +125,26 @@ function hostingFixture() {
     observe: async () => ({ state: "running" as const }), archive: () => {} };
   return { sources, seats, lives, bodies, seat, ports, controller: productionCurationController(sources, ports), tick: { ...tickInput(), project: PROJECT, now: NOW } };
 }
+test("curator admission joins a hidden system task without an open board task", async () => {
+  fixture(); const f = hostingFixture(); f.seat();
+  expect(await f.controller.launchIfDue(f.tick)).toContain("launched");
+  const body = f.bodies[0];
+  expect(body.taskId).toBeString();
+  // Exercise the real shared reservation membership prerequisite, including
+  // the conversation which makes board:hidden alone insufficient.
+  admitReservedLaunch({ engine: "codex", cwd: dir, explicitProject: PROJECT, clientAttemptId: String(body.clientAttemptId), role: "curator", taskIds: [String(body.taskId)] },
+    { conversationId: "conversation_fixture_curator", launchId: "launch_fixture_curator" }, reason => { throw new Error(reason); }, {
+      commit: input => commitTaskMembership(input, path.join(dir, "tasks.json")), pipelineContext: () => null, projectForCwd: () => PROJECT,
+    });
+  const tasks = loadTasks(path.join(dir, "tasks.json"));
+  expect(tasks).toHaveLength(1);
+  expect(tasks.filter(task => task.status !== "done")).toHaveLength(0);
+  expect(tasks[0].assignments[0].conversationId).toBe("conversation_fixture_curator");
+  expect(groupHideState(tasks[0], { members: [], pipelines: [] }).hidden).toBe(true);
+  expect(readPass(String(body.clientAttemptId))?.conversationId).toBe("conversation_fixture_curator");
+  expect(await f.controller.reconcile(PROJECT)).toBeNull();
+  expect(loadTasks(path.join(dir, "tasks.json"))).toHaveLength(1);
+});
 test("the engines memory source pauses curator admission and preserves its store", async () => {
   fixture(); const f = hostingFixture(); f.seat();
   chooseSource("engines");
@@ -310,7 +335,7 @@ test.each(["succeeded", "failed"] as const)("a %s pass counts later lessons and 
   expect(pass(NOW + 31 * 60_000)).not.toBeNull();
   expect(curationStatus(PROJECT, NOW + 31 * 60_000).newLessons).toBe(0);
 });
-test("curator reads and the window distinguish rewrites across the same clock instant", () => {
+test("curator reads and the window distinguish rewrites across the same clock instant", async () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
   const shown = () => projectView(PROJECT).scopes.find(item => item.scope === scope)!.active.find(item => item.id === one)!;
   expect(shown().awaitingCuration).toBe(true);
@@ -320,13 +345,13 @@ test("curator reads and the window distinguish rewrites across the same clock in
   recordLessonRequest({ ...source, at: at() });
   leaveLessons({ request: source, source, lessons: [], rewrite: { id: one, rule: "Inspect the current readers before changing stored guidance.", why }, none: null, now: at() });
   expect(shown().awaitingCuration).toBe(true);
-  const page = readCuration(p, scope);
+  const page = await readCuration(p, scope);
   expect("rules" in page && page.rules.find(item => item.id === one)?.newSincePass).toBe(true);
   ended(p);
   const next = pass(NOW + CURATION_INTERVAL_MS + 1000);
   applyCuration(next, input({ [scope]: [one] }), at());
   expect(shown().awaitingCuration).toBe(false);
-  const reread = readCuration(next, scope);
+  const reread = await readCuration(next, scope);
   expect("rules" in reread && reread.rules.find(item => item.id === one)?.newSincePass).toBe(false);
 });
 test.each([roleScope(PROJECT, "builder"), "role:*:builder"])("pass undo preserves a later agent rewrite at the same clock instant in %s", to => {
@@ -353,26 +378,26 @@ test("pass undo preserves another curator's ranking at the same clock instant", 
   expect(revertCuratorPass(p.id, at(CURATION_INTERVAL_MS + 3000)).skipped.sort()).toEqual([one, two, three].sort());
   expect(projectView(PROJECT).scopes.find(item => item.scope === scope)!.active.map(item => item.id)).toEqual([three, one, two]);
 });
-test("scope rereads retain departures from every call of the current pass", () => {
+test("scope rereads retain departures from every call of the current pass", async () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), two = fixture(scope), p = pass();
   applyCuration(p, input({ [scope]: [two] }, { archive: [{ id: one, reason: "stale", note: "The first old command was replaced." }] }), at(100));
   applyCuration(p, input({ [scope]: [] }, { archive: [{ id: two, reason: "task-specific", note: "The second row records one completed task." }] }), at(200));
-  const page = readCuration(p, scope);
+  const page = await readCuration(p, scope);
   expect("rules" in page && page.rules.map(r => r.id).sort()).toEqual([one, two].sort());
 });
-test("read pages are revision bound and include scaffold, budget archives and prior text", () => {
+test("read pages are revision bound and include scaffold, budget archives and prior text", async () => {
   const scope = roleScope(PROJECT, "builder");
   for (let n = 0; n < 80; n++) fixture(scope, { rule: `${text} ${"Read the stored record. ".repeat(8)} ${n}` });
   const archive = fixture(scope, { state: "archived", reason: "budget" });
-  const p = pass(); const first = readCuration(p, scope);
+  const p = pass(); const first = await readCuration(p, scope);
   if (!("cursor" in first)) throw Error("expected a scope page");
   expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(24_000);
   expect(first).toHaveProperty("scaffold"); expect(first.cursor).toBeTruthy();
   let cursor = first.cursor; const ids = first.rules.map(r => r.id);
-  while (cursor) { const next = readCuration(p, scope, cursor); if (!("rules" in next)) throw Error("expected a scope page"); ids.push(...next.rules.map(r => r.id)); cursor = next.cursor; }
+  while (cursor) { const next = await readCuration(p, scope, cursor); if (!("rules" in next)) throw Error("expected a scope page"); ids.push(...next.rules.map(r => r.id)); cursor = next.cursor; }
   expect(ids).toContain(archive); expect(new Set(ids).size).toBe(ids.length);
   fixture(scope);
-  expect(() => readCuration(p, scope, first.cursor!)).toThrow(/changed/);
+  await expect(readCuration(p, scope, first.cursor!)).rejects.toThrow(/changed/);
 });
 test("stale revisions and total-partition failures refuse atomically", () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), two = fixture(scope), p = pass();
@@ -648,22 +673,22 @@ test("post-succession same-time curator rankings remain a later undo guard", () 
   expect(revertCuratorPass(targetPass.id, at(CURATION_INTERVAL_MS + 7000))).toEqual({ skipped: [targetRule] });
   expect(row(targetRule).rule).toBe(rewritten);
 });
-test("a live pass reads and applies canonical scopes after project succession", () => {
+test("a live pass reads and applies canonical scopes after project succession", async () => {
   const originalScope = roleScope(PROJECT, "builder"), one = fixture(originalScope), p = pass();
   const staleCursor = Buffer.from(JSON.stringify({ scope: originalScope, revision: 1, offset: 0 })).toString("base64url");
   expect(persistProjectAliases([{ source: PROJECT, target: "curation-renamed", displayName: "curation-renamed" }])).toBe(true);
 
   const renamedScope = roleScope("curation-renamed", "builder");
-  const overview = readCuration(p);
+  const overview = await readCuration(p);
   if (!("scopes" in overview) || !overview.scopes) throw Error("expected the pass scope list");
   const listed = overview.scopes.find(item => item.scope === renamedScope);
   if (!listed) throw Error("successor scope is missing from the live pass");
   const current = roleMemoryCollection()?.get(`s:${renamedScope}`);
   expect(listed.revision).toBe(current?.kind === "scope" ? current.revision : -1);
-  const read = readCuration(p, renamedScope);
+  const read = await readCuration(p, renamedScope);
   if (!("rules" in read)) throw Error("expected the successor scope rules");
   expect(read.rules.some(rule => rule.kind === "active" && rule.id === one)).toBe(true);
-  try { readCuration(p, originalScope, staleCursor); throw Error("accepted a cursor from before succession"); }
+  try { await readCuration(p, originalScope, staleCursor); throw Error("accepted a cursor from before succession"); }
   catch (error) { expect((error as { code?: string }).code).toBe("CURATE_STALE"); }
 
   const edit = input({ [renamedScope]: [one] }, { rewrite: [{ id: one, rule: text + " Follow the current scope revision.", note: "This remains useful to builders in every task." }] });
@@ -807,7 +832,8 @@ test("stubbed launch, restart reconcile and settle keep no board card", async ()
   expect(await controller.launchIfDue(tick)).toContain("deployment"); expect(machinePass()).toBeNull();
   sources.latestDeployment = () => ({ state: "ok", value: null });
   expect(await controller.launchIfDue(tick)).toContain("launched"); await controller.launchIfDue(tick); expect(bodies).toHaveLength(1);
-  expect(bodies[0]).toMatchObject({ role: "curator", cwd: dir, mcpServers: ["viewer"] }); expect(bodies[0]).not.toHaveProperty("taskId");
+  expect(bodies[0]).toMatchObject({ role: "curator", cwd: dir, mcpServers: ["viewer"] }); expect(bodies[0].taskId).toBeString();
+  expect(loadTasks(path.join(dir, "tasks.json")).find(task => task.id === bodies[0].taskId)).toMatchObject({ status: "done", board: "hidden" });
   now += 1000; endedTurn = true; expect(await controller.reconcile(PROJECT)).toContain("settled"); expect(archived).toHaveLength(1); expect(machinePass()).toBeNull();
   expect(projectView(PROJECT).curation?.passes[0].state).toBe("succeeded");
 });
@@ -930,4 +956,36 @@ test("early pressure is dispatched even when a quieter project has a newer wake"
   const f = hostingFixture(); f.seat(PROJECT, at(-20_000)); f.seat(quiet, at(-1000));
   expect(await f.controller.launchIfDue(f.tick)).toContain("launched");
   expect(f.bodies).toHaveLength(1); expect(f.bodies[0].project).toBe(PROJECT);
+});
+
+
+test.each(["off","sqlite"] as const)("curator authority is equivalent through the keyed %s registry view", mode => {
+  fixture(); const p = pass();
+  const registry = new AgentRegistry(path.join(dir,"keyed-registry.json"),undefined,undefined,{sqliteMode:mode});
+  const conversation = registry.ensureConversation("codex",path.join(dir,"curator.jsonl"),null);
+  const begun = registry.beginSpawnRequest({engine:"codex",cwd:dir,accountId:null,role:"curator" as never,
+    clientAttemptId:p.id,explicitProject:PROJECT,transport:"structured",conversationId:conversation.id,
+    launchProfile:{cwd:dir,project:PROJECT,role:"curator" as never,title:"Role memory curation"}});
+  if (begun.kind!=="created") throw new Error("fixture admission failed");
+  const old = curatorCallerOf(conversation.id,registry.readOnlySnapshot());
+  const full = spyOn(registry,"readOnlySnapshot");
+  try {
+    const narrowed = registry.curatorConversationSnapshot(conversation.id);
+    expect(curatorCallerOf(conversation.id,narrowed).id).toBe(old.id);
+    expect(Object.keys(narrowed.receipts)).toEqual([begun.receipt.launchId]);
+    if (mode==="sqlite") expect(full).not.toHaveBeenCalled();
+    narrowed.conversations[conversation.id].agentRole="builder";
+    expect(()=>curatorCallerOf(conversation.id,narrowed)).toThrow(/not a curator/);
+    expect(curatorCallerOf(conversation.id,registry.curatorConversationSnapshot(conversation.id)).id).toBe(old.id);
+  } finally {full.mockRestore();}
+});
+
+
+test("a foreign read scope refuses before requesting pipeline history",async () => {
+  fixture();const p=pass();
+  const history=spyOn(pipelineStore,"pipelineSelectionSource").mockImplementation(()=>{throw new Error("history is unavailable");});
+  try {
+    await expect(readCuration(p,roleScope("foreign-project","builder"))).rejects.toMatchObject({code:"CURATE_SCOPE"});
+    expect(history).not.toHaveBeenCalled();
+  } finally {history.mockRestore();}
 });

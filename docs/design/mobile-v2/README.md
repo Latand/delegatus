@@ -172,7 +172,7 @@ At 390 px: `[‹ 44] [title ≥ 190] [⚠ ~56] [search 44] [⋯ 44]` with 4 px g
 
 ### 3.3 The navigation contract
 
-Screens: Board, Conversation, Pipelines, Pipeline, Accounts & limits. Sheets: Projects, Needs you, board `⋯`, Host, Search, Seat, Rotate draft (fullscreen), conversation `⋯`, Switcher, Next message, Stage configuration (from a never-run stage's row on the pipeline screen). Sheets take at most 88% of the height, keep the screen behind visible and dimmed, and are modal in the sense `useModalLayer` already implements.
+Screens: Board, Conversation, Pipelines, Pipeline, Accounts & limits. Sheets: Projects, Needs you, board `⋯`, Host, Search, Seat, Rotate draft (fullscreen), conversation `⋯`, Switcher, Next message, Stage configuration (from a never-run stage's row on the pipeline screen). Sheets take at most 88% of the height, keep the screen behind visible and dimmed, and are modal in the sense `useModalLayer` already implements. The Needs-you sheet (`expandable`) has a second detent: its handle or header pulls it up, or a flick, to the full height less the top bar and the safe area, where the body is the one scroller; a drag down folds it to the first detent and only from there closes it, and a tap on the handle switches between the two.
 
 | Gesture | What it does |
 | --- | --- |

@@ -458,6 +458,12 @@ const doneItems: DoneItemV1[] = DONE ? [
   done("limit:codex:acct-b:session:1", { kind: "limit", look: "limit", project: null, at: doneAt(6.2 * 3_600),
     refs: { account: { engine: "codex", accountId: "acct-b", window: "session", label: "B" }, limit: { from: doneAt(6.2 * 3_600), to: doneAt(4 * 3_600), lanes: 16 } } }),
 ] : [];
+if (params.has("doneframes") && doneItems[0]) {
+  const item = doneItems[0];
+  const state = params.get("doneframes");
+  const src = state === "error" ? "/api/image?done=evicted&media=missing" : params.get("done-frame-src")!;
+  doneItems.splice(0,doneItems.length,{...item,frame:{src,caption:"Saved result",...(state === "missing" ? {unavailable:true} : {}),...(state === "retained" ? {before:src} : {})}});
+}
 (window as unknown as { __doneFixture?: { count: number } }).__doneFixture = { count: doneItems.length };
 
 let board = {

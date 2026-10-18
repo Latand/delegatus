@@ -643,6 +643,19 @@ test("a thumbnail opens the image viewer with the before and after of its frame"
   expect(document.querySelector('[role="dialog"][aria-modal="true"]')).toBeNull();
 });
 
+test("lost and evicted done frames show a clear placeholder and leave acceptance available",async () => {
+  doneServer=[doneItem("pr:lost",{look:"visible",frame:{src:"/api/image?done=lost",caption:"Result",unavailable:true}}),doneItem("pr:evicted",{look:"visible",frame:{src:"/api/image?done=evicted",caption:"Result"}})];
+  const host=await mountDone();
+  expect(host.querySelector('[data-done-frame-missing="pr:lost"]')?.textContent).toBe("Frames were not retained");
+  expect(host.querySelector('[data-done-thumb="pr:lost"]')).toBeNull();
+  const image=host.querySelector('[data-done-thumb="pr:evicted"] img')!;
+  await act(async()=>{image.dispatchEvent(new Event("error"));});
+  expect(host.querySelector('[data-done-frame-missing="pr:evicted"]')?.textContent).toBe("Frames were not retained");
+  expect(host.querySelector('[data-done-thumb="pr:evicted"]')).toBeNull();
+  await click(host.querySelector('[data-done-accept="pr:lost"]')!);
+  expect(host.querySelector('[data-done-receipt="pr:lost"]')).not.toBeNull();
+});
+
 test("an empty «Готово» draws nothing, and «Nothing is waiting» shows only when both are empty", async () => {
   doneServer = [];
   const host = await mountDone({ files: [], pipelines: [] });

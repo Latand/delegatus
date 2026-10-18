@@ -262,3 +262,50 @@ and the jump into the review, in both languages and both themes. Readings are
 in `evidence/prototype-review/readings.json` and
 `evidence/prototype-review/composer-notice.json`; frames stay under
 `$HOME/Projects/delegatus-wt/handoff/prototype-review/`.
+
+## Settling a saved answer after seat succession
+
+Saving a decision still returns immediately. An explicit delivery retry waits
+for its run through the same worker and round lock, then returns its actual
+result. A confirmed delivery or admitted pending message returns success. An
+unknown prior execution returns HTTP 409 explaining the duplicate risk; a
+failed attempt returns 503, and a project without a seat returns 409. The worker
+keeps the saved answer and its retry schedule: at most 10 dispatch attempts,
+10 failed or unconfirmed observations, or 30 minutes per budget, with receipt
+reconciliation continuing every minute after exhaustion. An explicit retry
+resets that budget. Repeated presses preserve
+the message key and the answer bytes. Reposting a decided form to Telegram is
+refused with the saved-answer delivery action, so it cannot appear to retry the
+answer while publishing another form.
+
+A terminal reservation can learn of a later delivered journal receipt. On a
+seat change, an uncertain operation also enters the existing retirement check:
+only a terminal proof of non-execution permits a send to the replacement seat.
+Unreadable evidence, a missing journal operation, an executing operation and an
+unverified terminal outcome withhold another send.
+
+The seat's existing wake agenda also carries complete saved answers. Its
+accounting credits a signal version only after delivery of the complete agenda
+bullet; the version binds the round, saved message key, operation reference and
+answer text. The delivery worker can settle a saved answer from this record in
+the current seat epoch, even after its attempt or age budget is exhausted. An
+older epoch, a different answer, a partial bullet, redacted text, an unlanded
+plan or an accounting gap supplies no proof. A local `delivery.wakeReceipt`
+records the seat, epoch, item version and latest accounted wake time. This
+time is the accounting watermark. The original `operationId` and its uncertain
+receipt retain their own outcome; no second
+message is sent to manufacture a confirmation. Public review responses and
+replicas keep their existing delivery shape.
+
+After an approved deployment, the Viewer's existing startup sweep rediscovers
+both task and taskless answers across projects. It settles answers whose exact
+signal version already reached the current seat. Answers without that proof
+remain on the seat's ordinary wake agenda; after a complete wake is confirmed,
+the next delivery sweep settles them. An operator can press the answer's
+**Send again** action to run the same reconciliation immediately. A safe
+unadmitted answer can then be delivered to the current seat within the reset
+budget; an unresolved execution reports its duplicate risk. No database edits,
+new message keys, forced operation retries or Telegram form reposts are part of
+recovery. Verify each affected round as `sent` and inspect its original receipt
+or local wake proof before closing the recovery. Deployment and installation
+verification belong to the approved Deployer stage.

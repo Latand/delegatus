@@ -41,18 +41,55 @@ export async function captureTools(repoDir: string, run: typeof command = comman
     || value.chrome !== null && typeof value.chrome !== "string" || !value.chrome && !value.missing.includes("Chrome")) throw new Error("capture tools could not be read");
   return value;
 }
-export async function requiredReleaseChecks(repo: string, commits: string[]): Promise<"green" | "red" | "pending"> {
-  const branch = JSON.parse(await command("gh", ["api", `repos/${repo}/branches/main`])) as { protection?: { required_status_checks?: { contexts?: string[]; checks?: { context: string }[] } } };
+type ReleaseCheckVerdict = "green" | "red" | "pending";
+interface ReleaseChecks {
+  runs: { check_runs: { name: string; status: string; conclusion: string | null }[] };
+  statuses: { statuses: { context: string; state: string }[] };
+}
+function checkVerdict(name: string, { runs, statuses }: ReleaseChecks): ReleaseCheckVerdict {
+  const run = runs.check_runs.find(c => c.name === name);
+  const status = statuses.statuses.find(c => c.context === name);
+  if (run?.conclusion && !["success", "neutral", "skipped"].includes(run.conclusion) || status && ["failure", "error"].includes(status.state)) return "red";
+  return run?.status === "completed" && ["success", "neutral", "skipped"].includes(run.conclusion ?? "") || status?.state === "success" ? "green" : "pending";
+}
+async function readReleaseChecks(repo: string, sha: string, run: typeof command): Promise<ReleaseChecks> {
+  const runs = JSON.parse(await run("gh", ["api", `repos/${repo}/commits/${sha}/check-runs?per_page=100`]));
+  const statuses = JSON.parse(await run("gh", ["api", `repos/${repo}/commits/${sha}/status?per_page=100`]));
+  return { runs, statuses };
+}
+/** Only this known PR-only context can use merge evidence. Unknown contexts
+    still wait on the release SHA, including a newly required push check. */
+async function mergedRuntimeVerdict(repo: string, sha: string, run: typeof command): Promise<ReleaseCheckVerdict> {
+  const workflow = Bun.YAML.parse(await run("gh", ["api", `repos/${repo}/contents/.github/workflows/bun-runtime.yml?ref=${sha}`,
+    "--header", "Accept: application/vnd.github.raw+json"])) as { on?: string | string[] | Record<string, unknown>; jobs?: Record<string, { name?: string }> };
+  const events = typeof workflow.on === "string" ? [workflow.on] : Array.isArray(workflow.on) ? workflow.on : Object.keys(workflow.on ?? {});
+  const job = workflow.jobs?.["runtime-gate"];
+  // Read the definition at each checked revision: restoring a push trigger
+  // restores the requirement for a run on that revision, even before it starts.
+  if (events.includes("push") || !events.includes("pull_request") || !job || job.name && job.name !== "runtime-gate") return "pending";
+  const pulls = JSON.parse(await run("gh", ["api", `repos/${repo}/commits/${sha}/pulls?per_page=100`])) as {
+    merged_at?: string | null; merge_commit_sha?: string; base?: { ref?: string; repo?: { full_name?: string } }; head?: { sha?: string };
+  }[];
+  const head = pulls.find(p => p.merged_at && p.merge_commit_sha === sha && p.base?.ref === "main"
+    && p.base.repo?.full_name?.toLowerCase() === repo.toLowerCase())?.head?.sha;
+  if (!head || !/^[a-f0-9]{40}$/.test(head)) return "pending";
+  // Branch protection applies at merge time; also require the actual PR gate
+  // so direct pushes and missing, pending or failed PR evidence cannot pass.
+  return checkVerdict("runtime-gate", await readReleaseChecks(repo, head, run));
+}
+export async function requiredReleaseChecks(repo: string, commits: string[], run: typeof command = command): Promise<ReleaseCheckVerdict> {
+  const branch = JSON.parse(await run("gh", ["api", `repos/${repo}/branches/main`])) as { protection?: { required_status_checks?: { contexts?: string[]; checks?: { context: string }[] } } };
   const required = [...new Set([...(branch.protection?.required_status_checks?.contexts ?? []), ...(branch.protection?.required_status_checks?.checks?.map(c => c.context) ?? [])])];
   let pending = false;
   for (const sha of [...new Set(commits)]) {
-    const runs = JSON.parse(await command("gh", ["api", `repos/${repo}/commits/${sha}/check-runs?per_page=100`])) as { check_runs: { name: string; status: string; conclusion: string | null }[] };
-    const statuses = JSON.parse(await command("gh", ["api", `repos/${repo}/commits/${sha}/status?per_page=100`])) as { statuses: { context: string; state: string }[] };
+    const checks = await readReleaseChecks(repo, sha, run);
     for (const name of required) {
-      const run = runs.check_runs.find(c => c.name === name);
-      const status = statuses.statuses.find(c => c.context === name);
-      if (run?.conclusion && !["success", "neutral", "skipped"].includes(run.conclusion) || status && ["failure", "error"].includes(status.state)) return "red";
-      if (!(run?.status === "completed" && ["success", "neutral", "skipped"].includes(run.conclusion ?? "") || status?.state === "success")) pending = true;
+      let verdict = checkVerdict(name, checks);
+      if (name === "runtime-gate" && !checks.runs.check_runs.some(c => c.name === name) && !checks.statuses.statuses.some(c => c.context === name)) {
+        verdict = await mergedRuntimeVerdict(repo, sha, run);
+      }
+      if (verdict === "red") return "red";
+      if (verdict === "pending") pending = true;
     }
   }
   return pending ? "pending" : "green";

@@ -1120,7 +1120,7 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
 /*
  * The relay's chat conversations (relay-slice3.md §4) in the conversation
  * list: the paired service is an entry of the sidebar (the phone's project
- * sheet) under its own name, its leaf lists one row per chat and context with
+ * sheet) under its own name, its leaf lists one row per chain and authority with
  * long target names, and a row opens the conversation in the agent window —
  * the open chats on its left, the transcript in the reader, «Read only» where
  * a composer would be, and no field to type into. The single answers the
@@ -1134,7 +1134,11 @@ browserTest("external relay: the relay's chats and single answers in the convers
   const { base, stop } = await serveFixture();
   const out = path.resolve(".artifacts/external-relay");
   fs.mkdirSync(out, { recursive: true });
-  const launched = await chromium.launchServer({ headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+  const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+  const launched = await chromium.launchServer({ headless: true, ignoreDefaultArgs: ["--hide-scrollbars"],
+    args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}),
+    ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+  }).catch(error => { if (tempFd !== null) fs.closeSync(tempFd); stop(); throw error; });
   const browserPid = launched.process().pid ?? null;
   const browser = await chromium.connect(launched.wsEndpoint());
   const readings: Record<string, unknown>[] = [];
@@ -1167,7 +1171,7 @@ browserTest("external relay: the relay's chats and single answers in the convers
         const list = await page.evaluate(() => ({
           rail: (document.querySelector('[data-rail-project="relay-chats-relay-1"]') as HTMLElement | null)?.innerText.trim() ?? null,
           railDimmed: (document.querySelector('[data-rail-project="relay-chats-relay-1"]') as HTMLElement | null)?.className.includes("opacity-70") ?? null,
-          rows: Array.from(document.querySelectorAll<HTMLElement>("[data-relay-chat]")).map((row) => ({ context: row.getAttribute("data-relay-chat-context"), text: row.innerText.replace(/\s+/g, " ").trim(), height: Math.round(row.getBoundingClientRect().height) })),
+          rows: Array.from(document.querySelectorAll<HTMLElement>("[data-relay-chat]")).map((row) => ({ authority: row.getAttribute("data-relay-chat-authority"), text: row.innerText.replace(/\s+/g, " ").trim(), height: Math.round(row.getBoundingClientRect().height) })),
           deleteButtons: document.querySelectorAll("[data-relay-chats-rows] [data-delete-file], [data-relay-chats-rows] button[aria-label*='elete'], [data-relay-chats-rows] button[aria-label*='идал']").length,
           answers: Array.from(document.querySelectorAll<HTMLElement>("[data-relay-answer]")).map((row) => ({
             id: row.getAttribute("data-relay-answer"), dot: row.querySelector("[data-relay-answer-dot]")?.getAttribute("data-relay-answer-dot") ?? null,
@@ -1258,9 +1262,9 @@ browserTest("external relay: the relay's chats and single answers in the convers
         });
         await page.screenshot({ path: path.join(out, `${label}-window.png`) });
         readings.push({ label, list, window: windowReading });
-        const heading = locale === "uk" ? "Чат QmF6x9 · учасники · Support bot" : "Chat QmF6x9 · members · Support bot";
+        const heading = locale === "uk" ? "Чат QmF6x9 · учасник · Support bot" : "Chat QmF6x9 · member · Support bot";
         if (!list.rows[0]?.text.includes(heading)) failures.push(`${label}: the first row reads ${JSON.stringify(list.rows[0])}`);
-        if (list.rows.length !== 5 || list.rows[1]?.context !== "owner") failures.push(`${label}: the rows read ${JSON.stringify(list.rows)}`);
+        if (list.rows.length !== 5 || list.rows[1]?.authority !== "owner") failures.push(`${label}: the rows read ${JSON.stringify(list.rows)}`);
         if (list.deleteButtons) failures.push(`${label}: a relay chat row offers to delete`);
         if (!phone && list.railDimmed) failures.push(`${label}: the sidebar entry is dimmed`);
         if (windowReading.overflow) failures.push(`${label}: the page scrolls sideways`);
@@ -1276,7 +1280,7 @@ browserTest("external relay: the relay's chats and single answers in the convers
       } finally { await context.close(); }
     }
   } finally {
-    await browser.close(); await launched.close(); stop();
+    await browser.close(); await launched.close(); if (tempFd !== null) fs.closeSync(tempFd); stop();
     if (launched.process().exitCode === null && launched.process().signalCode === null) {
       failures.push(`the browser ${browserPid} outlived its close`);
       await stopFixtureProcess(launched.process());
@@ -3499,7 +3503,8 @@ browserTest("#2072 slice 4 touch: the pager swipes, a column scrolls alone, a he
  * The phone board has no page to carry a scroll to: the document does not
  * overflow, the seat card, the tabs and the dock never leave the screen, and
  * the four column pages are the only vertical scrollers, each contained. A
- * finger dragged down at a column's top or up at its end moves nothing else.
+ * finger dragged down at a column's top or up at its end moves nothing else,
+ * the seat card stays on screen, and the desktop's return strip is not drawn.
  * Readings go to `evidence/panel-scroll/phone.json`.
  *
  *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
@@ -3546,6 +3551,8 @@ browserTest("independent panel scroll: the phone has no page to scroll, and a co
         if (others.length) fail(`scrollers other than the columns overflow: ${JSON.stringify(others)}`);
         for (const scroller of resting.scrollers) if (scroller.column && scroller.overscrollY !== "contain") fail(`${scroller.name} has overscroll-behavior-y ${scroller.overscrollY}`);
         if (!resting.scrollers.some((scroller) => scroller.name === "column:assigned")) fail("the Assigned column does not overflow, so a finger has nothing to reach the end of");
+        /* The strip that returns the desktop page to the seat has no page to return: the phone draws none. */
+        if (await page.locator("[data-seat-return]").count()) fail("the phone draws the desktop's return strip");
         const column = await rectOf(page, '[data-phone-kanban-column="assigned"]');
         if (!column) throw new Error("no Assigned column");
         const x = column.x + column.width / 2;
@@ -3566,6 +3573,7 @@ browserTest("independent panel scroll: the phone has no page to scroll, and a co
           if (named(before) !== named(after)) fail(`a finger at the ${end} of a column moved ${named(before)} → ${named(after)}`);
           for (const place of ["seat", "tabs", "dock"] as const) if (JSON.stringify(before[place]) !== JSON.stringify(after[place])) fail(`a finger at the ${end} of a column moved the ${place}: ${JSON.stringify(before[place])} → ${JSON.stringify(after[place])}`);
           if (after.scrollY !== 0) fail(`a finger at the ${end} of a column scrolled the document to ${after.scrollY}`);
+          if (!after.seat || after.seat[1] < 0 || after.seat[1] + after.seat[3] > viewport.height) fail(`the seat card is off screen with a column at its ${end}: ${JSON.stringify(after.seat)}`);
         }
         await page.screenshot({ path: path.join(out, `${key}-column-end.png`) });
         expect(pageErrors).toEqual([]);
@@ -7862,6 +7870,15 @@ describe("agent memory isolation", () => {
  * the decisions. Then the same list pinned above the orchestrator's report
  * log screen in uk and en, folded to its head.
  */
+describe("done frames retained in state", () => {
+  browserTest("phone frames survive lane removal and missing frames have a label", async () => {
+    const { captureDoneFrames } = await import("@/components/kanban/issue1695BrowserHarness");
+    const browser = await launchChromium();
+    try {expect(await captureDoneFrames(browser,true)).toEqual([]);}
+    finally {await browser.close();}
+  },120_000);
+});
+
 describe("«Готово» in the phone sheet", () => {
   browserTest("the sheet opens on «Готово»: square checks, groups, the viewer and the badge at 390 in uk; the report log pins it too", async () => {
     const out = path.resolve(".artifacts/done-section/phone");
@@ -8197,6 +8214,205 @@ browserTest("stage agent row: conversations, parked questions and earlier attemp
     fs.writeFileSync("evidence/stage-open-agent/geometry.json", JSON.stringify(readings, null, 2) + "\n");
   } finally { await browser.close(); stop(); }
 }, 180_000);
+
+/*
+ * The phone's «Чекають на вас» sheet has two detents (MobileSheet `expandable`):
+ * it opens where it always did, the handle pulls it up to nearly the full
+ * screen under the top bar, its list scrolls there, and a drag down folds it
+ * back. At 390 and the iPhone-class 440, dark and light, in uk and en, over the
+ * needs-you fixture with «Готово» (a tall list), without it, and in the short
+ * case with the decisions dismissed down to one row (a sheet well under 88 %).
+ * The handle is a named button: Tab reaches it, Enter and Space switch the
+ * detent, and it is 44 px high above the header.
+ */
+describe("the «Чекають на вас» sheet pulls up to nearly full height", () => {
+  browserTest("collapsed and expanded at 390 and 440: drag, flick, scroll, fold back, close", async () => {
+    const out = path.resolve(".artifacts/needs-you-detents");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await launchChromium();
+    const readings: Record<string, unknown>[] = [];
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    try {
+      const cases = [
+        { width: 390, scheme: "dark", lang: "uk", done: true },
+        { width: 390, scheme: "light", lang: "uk", done: true },
+        { width: 390, scheme: "light", lang: "en", done: true },
+        { width: 440, scheme: "dark", lang: "uk", done: true },
+        { width: 440, scheme: "light", lang: "uk", done: true },
+        { width: 390, scheme: "light", lang: "uk", done: false },
+        { width: 390, scheme: "light", lang: "uk", done: false, short: true },
+        { width: 440, scheme: "light", lang: "uk", done: false, short: true },
+      ] as const;
+      for (const { width, scheme, lang, done, ...rest } of cases) {
+        const short = "short" in rest;
+        const height = width === 390 ? 844 : 932;
+        const tag = `${width}-${lang}-${scheme}${short ? "-one-row" : done ? "" : "-no-done"}`;
+        const context = await browser.newContext({ viewport: { width, height }, isMobile: true, hasTouch: true, colorScheme: scheme, reducedMotion: "reduce" });
+        try {
+          await context.addInitScript((value) => localStorage.setItem("llv_lang", value), lang);
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          const cdp = await context.newCDPSession(page);
+          await page.goto(`${server.base}?lang=${lang}${done ? "&done=1" : ""}`);
+          await page.waitForSelector('[data-mobile2-open="attention"]', { timeout: 15_000 });
+          if (done) await page.waitForFunction(() => Number(document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? 0) > 18, undefined, { timeout: 15_000 });
+          await page.locator('[data-mobile2-open="attention"]').click();
+          const sheet = page.locator('[data-mobile2-sheet="attention"]');
+          await sheet.waitFor({ timeout: 15_000 });
+          await page.locator("[data-needs-you-row]").first().waitFor();
+          if (short) {
+            /* Dismiss the decisions down to one row, then wait for the receipt to leave the sheet. */
+            const rows = page.locator("[data-needs-you-row]");
+            while ((await rows.count()) > 1) {
+              const before = await rows.count();
+              await page.locator("[data-needs-you-dismiss]").first().click();
+              await page.waitForFunction((n) => document.querySelectorAll("[data-needs-you-row]").length < n, before, { timeout: 15_000 });
+            }
+            await page.waitForSelector("[data-mobile2-receipt]", { state: "detached", timeout: 30_000 });
+          }
+          const bar = (await page.locator("[data-mobile2-bar]").boundingBox())!;
+          const read = () => sheet.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            const body = element.querySelector("[data-mobile2-sheet-body]")!;
+            const handle = element.querySelector("[data-mobile2-grab]")!.getBoundingClientRect();
+            return {
+              detent: element.getAttribute("data-mobile2-detent"), top: Math.round(rect.top), bottom: Math.round(rect.bottom), height: Math.round(rect.height),
+              bodyHeight: Math.round(body.getBoundingClientRect().height), bodyScrolls: body.scrollHeight > body.clientHeight,
+              handleX: Math.round(handle.left + handle.width / 2), handleY: Math.round(handle.top + handle.height / 2),
+              overflow: document.documentElement.scrollWidth > innerWidth,
+            };
+          });
+          const touch = async (x: number, steps: Array<[number, number]>) => {
+            await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: steps[0]![1] }] });
+            for (const [at, wait] of steps.slice(1)) {
+              if (wait) await sleep(wait);
+              await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: at }] });
+            }
+            await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+            await sleep(450);
+          };
+          /** A finger path from `from` to `to` in twelve moves, one per 25 ms. */
+          const ramp = (from: number, to: number): Array<[number, number]> => [[0, from], ...Array.from({ length: 12 }, (_, i): [number, number] => [from + ((to - from) * (i + 1)) / 12, 25])];
+
+          /* Collapsed: where the sheet opens today. */
+          const collapsed = await read();
+          expect(collapsed.detent).toBe("collapsed");
+          expect(collapsed.height).toBeLessThanOrEqual(Math.round(height * 0.88) + 1);
+          if (short) expect(collapsed.height, "one row is a sheet well under 88 %").toBeLessThan(Math.round(height * 0.5));
+          await page.screenshot({ path: path.join(out, `${tag}-1-collapsed.png`) });
+
+          /* Pulled up by the handle: nearly full height, the top bar left showing. */
+          await touch(collapsed.handleX, ramp(collapsed.handleY, 40));
+          const expanded = await read();
+          expect(expanded.detent).toBe("expanded");
+          expect(expanded.bottom).toBe(height);
+          expect(expanded.top, "the top bar stays visible above the sheet").toBeGreaterThanOrEqual(bar.y + bar.height);
+          expect(expanded.top).toBeLessThanOrEqual(bar.y + bar.height + 8);
+          expect(expanded.height).toBeGreaterThanOrEqual(Math.round(height * 0.9));
+          expect(expanded.height).toBeGreaterThan(collapsed.height);
+          expect(expanded.bodyHeight).toBeGreaterThan(done ? collapsed.bodyHeight : 0);
+          expect(expanded.overflow).toBe(false);
+          await page.screenshot({ path: path.join(out, `${tag}-2-expanded.png`) });
+
+          /* The list scrolls inside the sheet; the sheet stays put. */
+          const body = sheet.locator("[data-mobile2-sheet-body]");
+          let scrolled = 0;
+          if (done) {
+            expect(expanded.bodyScrolls, "the decisions overflow the expanded body").toBe(true);
+            await body.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+            scrolled = await body.evaluate((element) => element.scrollTop);
+            expect(scrolled).toBeGreaterThan(0);
+            const last = await sheet.locator("[data-needs-you-row]").last().evaluate((row) => {
+              const rect = row.getBoundingClientRect();
+              const scroller = row.closest("[data-mobile2-sheet-body]")!.getBoundingClientRect();
+              return { cutAbove: rect.top < scroller.top - 0.5, cutBelow: rect.bottom > scroller.bottom + 0.5 };
+            });
+            expect(last, "the last decision is whole at the scroll edge").toEqual({ cutAbove: false, cutBelow: false });
+            expect((await read()).top).toBe(expanded.top);
+            await page.screenshot({ path: path.join(out, `${tag}-3-expanded-scrolled.png`) });
+            await body.evaluate((element) => { element.scrollTop = 0; });
+          }
+
+          /* A drag down, held, follows the finger to the first detent and no lower; the release settles there with no jump and does not close. */
+          const step = async (at: number, wait = 25) => {
+            await sleep(wait);
+            await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: expanded.handleX, y: at }] });
+          };
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: expanded.handleX, y: expanded.handleY }] });
+          for (let i = 1; i <= 5; i += 1) await step(expanded.handleY + 20 * i);
+          await sleep(100);
+          const held = await read();
+          expect(Math.abs(held.height - Math.max(collapsed.height, expanded.height - 100)), "the held sheet is 100 px lower, never below the first detent").toBeLessThanOrEqual(2);
+          /* On past the first detent, wherever it lies: a short sheet is far below the tall one's. */
+          const farthest = Math.max(160, expanded.height - collapsed.height + 80);
+          for (let i = 1; i <= 12; i += 1) await step(expanded.handleY + 100 + ((farthest - 100) * i) / 12);
+          await sleep(100);
+          const heldFar = await read();
+          expect(Math.abs(heldFar.height - collapsed.height), "the held sheet stops at the first detent's own height").toBeLessThanOrEqual(2);
+          await page.screenshot({ path: path.join(out, `${tag}-4-held.png`) });
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          const justAfter = await read();
+          await sleep(450);
+          const folded = await read();
+          expect(folded.detent).toBe("collapsed");
+          expect(Math.abs(justAfter.height - collapsed.height), "no jump on release").toBeLessThanOrEqual(2);
+          expect(Math.abs(folded.height - collapsed.height), "no jump after the settle").toBeLessThanOrEqual(2);
+          await page.screenshot({ path: path.join(out, `${tag}-5-folded.png`) });
+
+          /* A flick of 30 px, two moves sent together, opens it: under the 40 px distance, over the speed. */
+          const x = folded.handleX;
+          const y = folded.handleY;
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+          await Promise.all([y - 15, y - 30].map((at) => cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: at }] })));
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          await sleep(450);
+          expect((await read()).detent).toBe("expanded");
+          /* The handle is a named button: Tab reaches it, Enter and Space switch the detent once each. */
+          const grab = sheet.locator("[data-mobile2-grab]");
+          const semantics = await grab.evaluate((element) => ({ tag: element.tagName, label: element.getAttribute("aria-label"), tabindex: element.getAttribute("tabindex") }));
+          expect(semantics.tag).toBe("BUTTON");
+          expect(semantics.label, "the handle is named").toBeTruthy();
+          expect(semantics.tabindex).toBeNull();
+          const detentOf = () => sheet.getAttribute("data-mobile2-detent");
+          const startDetent = await detentOf();
+          await sheet.evaluate((element) => (element as HTMLElement).focus());
+          await page.keyboard.press("Tab");
+          expect(await page.evaluate(() => document.activeElement?.hasAttribute("data-mobile2-grab")), "Tab reaches the handle first").toBe(true);
+          await page.keyboard.press("Enter");
+          expect(await detentOf(), "Enter switches the detent once").toBe(startDetent === "expanded" ? "collapsed" : "expanded");
+          expect(await grab.getAttribute("aria-expanded")).toBe(startDetent === "expanded" ? "false" : "true");
+          await page.keyboard.press("Space");
+          expect(await detentOf(), "Space switches it back once").toBe(startDetent);
+          /* Its target is 44 px tall and takes a tap anywhere in it, above the header and over none of its controls. */
+          const target = await grab.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            const header = element.closest("[data-mobile2-sheet]")!.querySelector("[data-mobile2-sheet-header]")!.getBoundingClientRect();
+            const x = rect.left + rect.width / 2;
+            const owns = (y: number) => !!document.elementFromPoint(x, y)?.closest("[data-mobile2-grab]");
+            return { x, height: rect.height, aboveHeader: rect.bottom <= header.top + 0.5, low: rect.top + 42, reaches1: owns(rect.top + 1), reaches43: owns(rect.top + 43) };
+          });
+          expect(target.height, "the handle is 44 px high").toBeGreaterThanOrEqual(44);
+          expect([target.reaches1, target.reaches43], "its whole height takes the press").toEqual([true, true]);
+          expect(target.aboveHeader, "it stands above the header, over none of its controls").toBe(true);
+          const tapped = await detentOf();
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: target.x, y: target.low }] });
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          await sleep(450);
+          expect(await detentOf(), "a tap low in the 44 px target switches the detent once").toBe(tapped === "expanded" ? "collapsed" : "expanded");
+          /* The × closes from either detent, as before. */
+          await sheet.locator("[data-mobile2-close]").click();
+          await sheet.waitFor({ state: "detached" });
+          expect(errors).toEqual([]);
+          readings.push({ tag, width, height, lang, scheme, done, collapsed, expanded, folded, scrolled });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/needs-you-detents", { recursive: true });
+      fs.writeFileSync("evidence/needs-you-detents/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+});
 
 describe("seat hand-over with evidence answered last", () => {
   browserTest("Claude and Codex keep the opened card at 390 in en and uk", async () => {
@@ -11794,3 +12010,91 @@ describe("keys settings", () => {
     expect(failures).toEqual([]);
   }, 3_600_000);
 });
+
+browserTest("what a full-screen conversation opens draws above it on the phone: the runtime sheet picks a model and a document preview opens and closes", async () => {
+  /* The phone's reader hosts sit on the `reader` layer; the runtime sheet is a popover and the preview is one step
+     above `reader` (`src/components/layers.ts`). The conversation is deep-linked, so no board is under it. */
+  const out = path.resolve(".artifacts/reader-overlays-phone"); fs.mkdirSync(out, { recursive: true });
+  const text = `# Rollout plan\n\n${Array.from({ length: 40 }, (_, step) => `## Step ${step + 1}\n\nRe-run the rebuild against live traffic and compare the alias swap window with step ${step}.\n`).join("\n")}`;
+  const { base, stop } = await (async () => {
+    const served = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx", {
+      "/api/artifact": (request: Request) => {
+        const url = new URL(request.url), name = path.basename(url.searchParams.get("path") ?? "");
+        if (name !== "plan.md" && name !== "run.txt") return Response.json({ error: "missing", code: "not-found" }, { status: 404 });
+        if (url.searchParams.get("mode") === "meta") return Response.json({ name, kind: "text", mime: name === "plan.md" ? "text/markdown" : "text/plain", size: text.length, mtimeMs: 1790000000000, etag: "\"fixture\"" });
+        return new Response(text, { headers: { "content-type": name === "plan.md" ? "text/markdown; charset=utf-8" : "text/plain; charset=utf-8", etag: "\"fixture\"" } });
+      },
+    });
+    return { base: served.base.replace(/\/$/, ""), stop: served.stop };
+  })();
+  const browser = await launchChromium();
+  const readings: unknown[] = [];
+  try {
+    for (const { lang, scheme } of [{ lang: "uk", scheme: "light" }, { lang: "en", scheme: "dark" }] as const) {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+      await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const cdp = await context.newCDPSession(page);
+        const shot = (name: string) => page.screenshot({ path: path.join(out, `${lang}-${scheme}-${name}.png`) });
+        await page.goto(`${base}/?account=spare&overlay-links#c=conversation_running`);
+        await page.waitForSelector("[data-runtime-pill]", { timeout: 20_000 });
+        await page.waitForSelector("[data-file-link]", { timeout: 20_000 });
+        await pause(page, 600);
+        const chip = () => page.evaluate(() => document.querySelector("[data-runtime-pill]")?.textContent?.replace(/\s+/g, " ").trim() ?? "");
+        const before = await chip();
+
+        /* The runtime sheet: its parts answer a hit test, a tapped model row reconfigures, and the chip says so. */
+        await tap(page, cdp, "[data-runtime-pill]");
+        await page.waitForSelector("[data-runtime-sheet]", { timeout: 5_000 });
+        await pause(page, 400);
+        for (const [selector, label] of [["[data-runtime-sheet] h2", "title"], ["[data-runtime-sheet-close]", "close"], ["[data-runtime-sheet] [role=\"radiogroup\"] [data-runtime-sheet-row]", "first row"]] as const) {
+          const part = await reachable(page, selector, "[data-runtime-sheet]");
+          expect(part, `${lang} ${scheme} sheet ${label}`).toMatchObject({ inside: true, hitOwn: true });
+        }
+        await shot("runtime-sheet");
+        const requests = (await page.evaluate(() => (window as unknown as { evidence: { runtimeRequests: unknown[] } }).evidence.runtimeRequests.length));
+        await page.evaluate(() => {
+          [...document.querySelectorAll<HTMLElement>("[data-runtime-sheet-row]")].find((row) => row.getAttribute("aria-checked") === "false")?.setAttribute("data-evidence-pick", "1");
+        });
+        await tap(page, cdp, "[data-evidence-pick]");
+        await pause(page, 700);
+        const sent = await page.evaluate(() => (window as unknown as { evidence: { runtimeRequests: unknown[] } }).evidence.runtimeRequests.length);
+        expect(sent, `${lang} ${scheme} a tap on another row sends a reconfigure`).toBeGreaterThan(requests);
+        if (await page.locator("[data-runtime-sheet]").count()) await tap(page, cdp, "[data-runtime-sheet-close]");
+        await page.waitForSelector("[data-runtime-sheet]", { state: "detached", timeout: 5_000 });
+        const after = await chip();
+
+        /* The document preview: opened from the link in the feed, whole over the conversation, closed by its ×. */
+        for (const name of ["plan", "log"]) {
+          await page.evaluate((word) => [...document.querySelectorAll<HTMLElement>("[data-file-link]")].find((link) => link.textContent === word)?.scrollIntoView({ block: "center" }), name);
+          await pause(page, 300);
+          const link = (await page.locator("[data-file-link]", { hasText: name }).first().boundingBox())!;
+          await touch(cdp, [[link.x + link.width / 2, link.y + link.height / 2]]);
+          await page.waitForSelector("[data-artifact-preview]", { timeout: 5_000 });
+          await page.waitForFunction(() => document.querySelector("[data-artifact-preview]")?.getAttribute("data-artifact-state") === "ready", undefined, { timeout: 10_000 });
+          const close = `[data-artifact-preview] button[aria-label="${translate(lang, "preview.close")}"]`;
+          const reading = await page.evaluate((closeSelector) => {
+            const root = document.querySelector<HTMLElement>("[data-artifact-preview]")!;
+            const box = root.getBoundingClientRect();
+            const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height * 0.6);
+            return { covers: box.left <= 0.5 && box.top <= 0.5 && box.width >= innerWidth - 0.5 && box.height >= innerHeight - 0.5, bodyHit: Boolean(hit && root.contains(hit)), zIndex: Number(getComputedStyle(root).zIndex), closeHeight: document.querySelector<HTMLElement>(closeSelector)!.getBoundingClientRect().height };
+          }, close);
+          expect(reading).toMatchObject({ covers: true, bodyHit: true, zIndex: 65 });
+          expect(reading.closeHeight).toBeGreaterThanOrEqual(44);
+          expect(await reachable(page, close, "[data-artifact-preview]"), `${lang} ${scheme} ${name} close`).toMatchObject({ inside: true, hitOwn: true });
+          if (name === "plan") await shot("preview-md");
+          await tap(page, cdp, close);
+          await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+          expect(await page.locator("[data-runtime-pill]").count()).toBeGreaterThan(0);
+        }
+        expect(pageErrors).toEqual([]);
+        readings.push({ lang, scheme, viewport: { width: 390, height: 844 }, before, after, runtimeRequests: sent - requests, pageErrors });
+      } finally { await context.close(); }
+    }
+    fs.mkdirSync("evidence/reader-overlays", { recursive: true });
+    fs.writeFileSync("evidence/reader-overlays/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", readings }, null, 2));
+  } finally { await browser.close(); stop(); }
+}, 300_000);

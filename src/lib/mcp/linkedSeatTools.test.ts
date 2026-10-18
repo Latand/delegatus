@@ -21,7 +21,12 @@ const { viewerMcpBindings, viewerMcpRecoverableTools } = await import("./binding
 const { createMcpToolService, MemoryMcpReceiptStore, McpDispatchUncertainError } = await import("./server");
 import type { ViewerMcpDomainDependencies } from "./bindings";
 
-afterAll(() => { for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key]; Object.assign(process.env, previous); fs.rmSync(root, { recursive: true, force: true }); });
+afterAll(async () => {
+  await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
+  for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
+  Object.assign(process.env, previous);
+  fs.rmSync(root, { recursive: true, force: true });
+});
 
 const project = projectIdentityFromRemote("https://code.example.test/acme/widget", root)!;
 recordProjectRemote(project);

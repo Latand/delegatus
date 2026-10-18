@@ -90,12 +90,25 @@ for (const alreadyRemote of [false, true]) test(`parked publication accepts a cl
   const h = fixture();
   try {
     if (alreadyRemote) h.git("push", "-q", "origin", `${h.head}:refs/heads/${h.lane.branch}`);
-    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, h.ports)).error).toBeUndefined();
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: alreadyRemote ? h.head : h.head.slice(0, 8) }, h.ports)).error).toBeUndefined();
     await h.tick();
     expect(h.current()).toMatchObject({ lastPassedCommit: h.head, publishedCommit: h.head, state: "completed" });
     expect(h.current().runs[0]!.attempts).toHaveLength(1);
     expect(h.current().runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
     expect(h.pushes()).toBe(alreadyRemote ? 0 : 1);
+  } finally { h.cleanup(); }
+});
+
+test("publication refuses stale and ambiguous short heads without changing accepted evidence", async () => {
+  const h = fixture();
+  try {
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: "ffffffff" }, h.ports)).status).toBe(409);
+    h.lane.lastPassedCommit = h.head.slice(0, 8) + (h.head[8] === "a" ? "b" : "a") + h.head.slice(9);
+    savePipelines([h.lane]);
+    const accepted = h.current().lastPassedCommit;
+    expect(await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head.slice(0, 8) }, h.ports)).toMatchObject({ code: "short_id_ambiguous", field: "acceptedSha" });
+    expect(h.current().lastPassedCommit).toBe(accepted);
+    expect(h.pushes()).toBe(0);
   } finally { h.cleanup(); }
 });
 

@@ -159,8 +159,15 @@ function freePort(): Promise<number> {
  * the loads nor the server can reach a live state directory, journal or socket
  * belonging to whoever started this. The image pins production, and what is
  * under test must see the same.
+ *
+ * TMPDIR is the sandbox itself, so HOME, the config home and the state
+ * directory all sit under the child's temp root. The state-ownership rules
+ * (`src/lib/stateOwnership.ts`) admit a caller-chosen directory only when it is
+ * under a temp root; with TMPDIR one level down, a sandbox made inside a stage
+ * scratch directory (itself inside the installation's state tree) read as the
+ * operator's own and the module probe refused a valid build.
  */
-function sandboxEnvironment(sandbox: string): NodeJS.ProcessEnv {
+export function sandboxEnvironment(sandbox: string): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     NODE_ENV: "production",
@@ -168,7 +175,7 @@ function sandboxEnvironment(sandbox: string): NodeJS.ProcessEnv {
     NEXT_PUBLIC_RUNTIME_UI: "1",
     HOME: sandbox,
     XDG_CONFIG_HOME: path.join(sandbox, "config"),
-    TMPDIR: path.join(sandbox, "tmp"),
+    TMPDIR: sandbox,
     LLV_STATE_DIR: path.join(sandbox, "state"),
     LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
   };
@@ -363,7 +370,6 @@ export async function verifyBuiltCodexSocket(root: string): Promise<{ ok: boolea
   const runtime = `bun ${Bun.version}`;
   const processName = "Viewer (compiled Next server, .next/server)";
   const sandbox = codexSocketSandbox();
-  fs.mkdirSync(path.join(sandbox, "tmp"), { recursive: true, mode: 0o700 });
   try {
     const child = spawn(process.execPath, [path.join(root, "scripts", "verify-viewer-runtime.ts"), "--codex-socket-child"], {
       cwd: root,
@@ -484,7 +490,6 @@ export async function verifyViewerRuntime(root: string): Promise<ViewerRuntimeEv
   }
 
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-viewer-runtime-"));
-  fs.mkdirSync(path.join(sandbox, "tmp"), { recursive: true, mode: 0o700 });
   try {
     const loads = await probeModules(root, sandbox);
     if (loads.detail) return verdict(modules.length, loads.failures, null, { detail: loads.detail, log: loads.log });

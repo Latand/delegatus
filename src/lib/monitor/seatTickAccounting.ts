@@ -11,7 +11,7 @@ type Base = { key: string; schemaVersion: 1; project: string };
     file that has not changed is not read again, and one that could not be read
     keeps saying so until it changes. */
 type OwnerScan = { identity: string; gap: boolean };
-export type AccountingProject = Base & { kind: "project"; revision: number; sequence: number; ownerScan?: OwnerScan; state: SeatTickProjectState; migration: "ready" | "pending" | "unknown"; gap: string | null };
+export type AccountingProject = Base & { kind: "project"; revision: number; sequence: number; catchUpPollThrough?: number | null; ownerScan?: OwnerScan; state: SeatTickProjectState; migration: "ready" | "pending" | "unknown"; gap: string | null };
 /** A seat that owns children: the active one and every predecessor the seat
     file records. `after` is where its discovery sweep stands, and `pollKey`
     its ticket in the owner queue, so discovery can move the ticket without a
@@ -145,12 +145,13 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
       };
       const wake = state.outstandingWake;
       if (wake !== null && !validWake(wake)) return null;
+      if (row.catchUpPollThrough !== undefined && row.catchUpPollThrough !== null && !integer(row.catchUpPollThrough)) return null;
       if (row.ownerScan !== undefined && (!row.ownerScan || !string(row.ownerScan.identity) || typeof row.ownerScan.gap !== "boolean")) return null;
       /* Retired attempts (#1594) are absent on every row written before the
          slot existed, and absent is exactly what those rows mean: nothing has
          been retired. Reading them back as an empty list is the migration. */
       const retired = state.retiredWakes;
-      if (retired === undefined) return { ...row, state: { ...state, retiredWakes: [] } };
+      if (retired === undefined) return { ...row, catchUpPollThrough: row.catchUpPollThrough ?? null, state: { ...state, retiredWakes: [] } };
       /* The retention bound is the WRITER's (see `retire`), and is deliberately
          not re-asserted here: a row that a future, smaller bound would exceed
          is still a row full of obligations, and refusing to read it would take
@@ -170,7 +171,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
         if (reason === "unresolved-age" && by !== null) return null;
         entries.push({ ...entry, supersededBy: by, reason });
       }
-      return { ...row, state: { ...state, retiredWakes: entries } };
+      return { ...row, catchUpPollThrough: row.catchUpPollThrough ?? null, state: { ...state, retiredWakes: entries } };
     }
     case "owner": {
       if (!string(row.conversationId) || !integer(row.epoch)) return null;
@@ -248,9 +249,21 @@ export class SeatTickAccounting {
     if (row && row.kind !== "project") throw new Error("invalid project accounting row");
     return row;
   }
-  page(kind: AccountingRow["kind"], limit: number): AccountingRow[] {
+  /** Freeze the child tickets visible to one outage recovery. Tickets created
+      by successful polls move beyond this sequence, so later passes cover each
+      known child once while a cut ledger can still return at the priority head. */
+  beginCatchUpPoll(): number {
+    return this.mutate((_tx, row) => {
+      row.catchUpPollThrough ??= row.sequence;
+      return row.catchUpPollThrough;
+    });
+  }
+  endCatchUpPoll(): void {
+    this.mutate((_tx, row) => { row.catchUpPollThrough = null; });
+  }
+  page(kind: AccountingRow["kind"], limit: number, after?: string): AccountingRow[] {
     const prefix = key(kind, this.project);
-    return this.collection.keyRange(prefix, `${prefix}~`, limit);
+    return this.collection.keyRange(after ? `${after}\0` : prefix, `${prefix}~`, limit);
   }
   /** Reserve cold visits even while priority ledgers keep arriving. */
   pollPage(limit: number): AccountingRow[] {

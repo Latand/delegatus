@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { join } from "node:path";
 import { checkForUpdate, readRevision, runGit } from "./git";
 import { applyCheck, initialCheck } from "./checkState";
 
 /* A local bare repository stands in for the canonical remote: no network. */
-const root = mkdtempSync("/var/tmp/self-update-git-");
+const root = mkdtempSync(join(os.tmpdir(), "self-update-git-"));
 const remote = join(root, "remote.git");
 const work = join(root, "work");
 const checkout = join(root, "checkout");
@@ -182,4 +183,13 @@ describe("checkForUpdate against a bare-repo remote", () => {
     expect(state.check.state).toBe("update-available");
     expect(state.check.relation).toBe("diverged");
   });
+});
+
+test("tracked revision prefixes resolve only branch ancestors and refuse ambiguous history", async () => {
+  const { resolveTrackedRevision } = await import("./git");
+  expect(await resolveTrackedRevision(checkout, remote, "main", tipSha.slice(0, 9))).toBe(tipSha);
+  expect(await resolveTrackedRevision(checkout, remote, "main", tipSha)).toBe(tipSha);
+  await expect(resolveTrackedRevision(checkout, remote, "main", "ffffffff")).rejects.toThrow("not found");
+  const prefix = "12345678";
+  await expect(resolveTrackedRevision(checkout, remote, "main", prefix, async () => ({ code: 0, stderr: "", stdout: `${prefix}${"a".repeat(32)}\n${prefix}${"b".repeat(32)}\n` }))).rejects.toThrow("pass more characters");
 });

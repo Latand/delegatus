@@ -237,3 +237,96 @@ for (const engine of ["codex", "claude"] as const)
       expect(sent).toEqual(schema);
       expect(JSON.stringify(body)).not.toContain(marker);
     }, 30_000);
+
+
+codexProbe("native image generation stays in its run and an outside image cannot be edited", async () => {
+  const sharp=(await import("sharp")).default;
+  const png=await sharp({create:{width:2,height:2,channels:3,background:"red"}}).png().toBuffer();
+  const answer=request("codex");
+  answer.imageGeneration={readableRoot:path.join(answer.runDir,"cwd")};
+  const outside=path.join(root,"outside-native.png");fs.writeFileSync(outside,png);
+  const encode=(value:unknown)=>Buffer.from(JSON.stringify(value)).toString("base64url");
+  const token=[encode({alg:"none",typ:"JWT"}),encode({exp:Math.floor(Date.now()/1000)+86400,
+    "https://api.openai.com/auth":{chatgpt_account_id:"probe",chatgpt_plan_type:"pro",chatgpt_user_id:"probe"}}),encode("synthetic")].join(".");
+  fs.writeFileSync(path.join(answer.account.home, "auth.json"), JSON.stringify({
+    auth_mode: "chatgpt", OPENAI_API_KEY: null,
+    tokens: { id_token: token, access_token: token, refresh_token: ["synthetic", "refresh"].join("-"), account_id: "probe" },
+    last_refresh: new Date().toISOString(),
+  }));
+  const outputs:string[]=[];let generated=0,edits=0,offered="";
+  const longText="Рядок тексту. ".repeat(3000).slice(0,32000);
+  const server=Bun.serve({hostname:"127.0.0.1",port:0,async fetch(req){
+    const pathname=new URL(req.url).pathname;
+    if(pathname.endsWith("/responses")) {
+      const body=await req.json() as {input:{type:string;output?:unknown}[]};
+      const calls=body.input.filter(i=>i.type==="custom_tool_call_output");
+      outputs.splice(0,outputs.length,...calls.map(c=>JSON.stringify(c.output)));
+      let item:Record<string,unknown>;
+      const step=calls.length;
+      if(step===0)item={type:"custom_tool_call",id:"ctc_list",call_id:"call_list",status:"completed",name:"exec",input:"text(ALL_TOOLS.map(t=>t.name));"};
+      else if(step===1){offered=outputs[0]??"";item={type:"custom_tool_call",id:"ctc_generate",call_id:"call_generate",status:"completed",name:"exec",input:'const result=await tools.image_gen__imagegen({prompt:"a red square",transparent_background:false}); text({ok:!!result});'};}
+      else if(step===2)item={type:"custom_tool_call",id:"ctc_edit",call_id:"call_edit",status:"completed",name:"exec",input:`const result=await tools.image_gen__imagegen({prompt:"edit the square",referenced_image_paths:[${JSON.stringify(outside)}],transparent_background:false}); text({ok:!!result});`};
+      else item={type:"message",id:"msg_final",role:"assistant",status:"completed",content:[{type:"output_text",text:JSON.stringify({action:"reply",text:longText,reply_to:null})}]};
+      const events=[{type:"response.created",response:{id:`response_${step}`}},{type:"response.output_item.done",output_index:0,item},{type:"response.completed",response:{id:`response_${step}`,usage:{input_tokens:10,output_tokens:16000,total_tokens:16010}}}];
+      return new Response(events.map(e=>`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""),{headers:{"content-type":"text/event-stream"}});
+    }
+    if(pathname.endsWith("/images/generations")){generated++;return Response.json({created:1,data:[{b64_json:png.toString("base64")}],output_format:"png"});}
+    if(pathname.endsWith("/images/edits")){edits++;return Response.json({created:1,data:[{b64_json:png.toString("base64")}],output_format:"png"});}
+    return Response.json({},{status:404});
+  }});
+  const built=buildEphemeralCommand(answer);
+  const origin=`http://127.0.0.1:${server.port}`;
+  built.args.push("-c","model_provider=probe","-c",`chatgpt_base_url=${JSON.stringify(origin+"/backend-api/")}`,"-c",`model_providers.probe={name="probe",base_url=${JSON.stringify(origin+"/v1")},wire_api="responses",requires_openai_auth=true}`);
+  const env={...built.env,HOME:path.join(root,"native-home"),HTTP_PROXY:"http://127.0.0.1:1",HTTPS_PROXY:"http://127.0.0.1:1",ALL_PROXY:"http://127.0.0.1:1",NO_PROXY:"127.0.0.1,localhost",http_proxy:"http://127.0.0.1:1",https_proxy:"http://127.0.0.1:1",all_proxy:"http://127.0.0.1:1",no_proxy:"127.0.0.1,localhost"};
+  for(const key of ["OPENAI_API_KEY","OPENAI_AUTH_TOKEN","ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"]) delete (env as NodeJS.ProcessEnv)[key];
+  let stdout="",stderr="";
+  const child=spawn(built.command,built.args,{cwd:answer.imageGeneration.readableRoot,env,detached:true,stdio:["pipe","pipe","pipe"]});
+  child.stdout.on("data",chunk=>{stdout+=chunk;});child.stderr.on("data",chunk=>{stderr+=chunk;});child.stdin.end("Create a red square, then try editing the selected image, and return the requested JSON.");
+  let hardKill:ReturnType<typeof setTimeout>|undefined;
+  const deadline=setTimeout(()=>{if(child.pid && child.exitCode===null){process.kill(-child.pid,"SIGTERM");hardKill=setTimeout(()=>{if(child.pid && child.exitCode===null)process.kill(-child.pid,"SIGKILL");},2000);}},60000);
+  try {
+    const code=await new Promise<number|null>((resolve,reject)=>{child.once("exit",resolve);child.once("error",reject);});
+    expect(code,stderr.slice(-1000)).toBe(0);
+    expect(offered).toContain("image_gen__imagegen");expect(generated).toBe(1);expect(edits).toBe(0);
+    expect(fs.readFileSync(outside)).toEqual(png);
+    const thread=stdout.split("\n").filter(Boolean).map(line=>JSON.parse(line)).find(e=>e.type==="thread.started").thread_id;
+    const images=fs.readdirSync(path.join(built.env.CODEX_HOME!,"generated_images",thread));expect(images).toHaveLength(1);
+    expect(fs.readFileSync(path.join(built.env.CODEX_HOME!,"generated_images",thread,images[0]!))).toEqual(png);
+    expect(JSON.parse(fs.readFileSync(built.outputPath!,"utf8")).text).toBe(longText);
+    expect(stdout).not.toContain('"type":"image_generation');
+  } finally {clearTimeout(deadline);clearTimeout(hardKill);await server.stop(true);}
+},70000);
+
+
+claudeProbe("installed Claude preserves a 32000-character rich answer within its requested token budget", async()=>{
+  const {richRequest}=await import("@/lib/externalRelay/rich.fixture");
+  const {answerCapabilities,withAnswerParts}=await import("@/lib/externalRelay/answerV2");
+  const input=request("claude"); const rich=richRequest();
+  input.schema=withAnswerParts(answerSchema,answerCapabilities(rich,"claude"));
+  const text="Рядок тексту. ".repeat(3000).slice(0,32000);
+  const output={action:"reply",text,reply_to:null,format:"rich_markdown",buttons:[]};
+  let calls=0,maxTokens=0;
+  const server=Bun.serve({hostname:"127.0.0.1",port:0,async fetch(req){
+    const pathname=new URL(req.url).pathname;
+    if(pathname.endsWith("/count_tokens"))return Response.json({input_tokens:10});
+    if(!pathname.endsWith("/messages"))return Response.json({},{status:404});
+    const body=await req.json() as {max_tokens:number;stream?:boolean};
+    maxTokens=body.max_tokens;calls++;
+    const first=calls===1;
+    const block=first?{type:"tool_use",id:"tool_output",name:"StructuredOutput",input:output}:{type:"text",text:"Done"};
+    const stop=first?"tool_use":"end_turn";
+    const message={id:`msg_${calls}`,type:"message",role:"assistant",model:"haiku",content:[block],stop_reason:stop,stop_sequence:null,usage:{input_tokens:10,output_tokens:16000}};
+    if(!body.stream)return Response.json(message);
+    const events=[{type:"message_start",message:{...message,content:[],stop_reason:null,usage:{input_tokens:10,output_tokens:0}}},
+      {type:"content_block_start",index:0,content_block:first?{...block,input:{}}:{type:"text",text:""}},
+      {type:"content_block_delta",index:0,delta:first?{type:"input_json_delta",partial_json:JSON.stringify(output)}:{type:"text_delta",text:"Done"}},
+      {type:"content_block_stop",index:0},{type:"message_delta",delta:{stop_reason:stop,stop_sequence:null},usage:{output_tokens:16000}},{type:"message_stop"}];
+    return new Response(events.map(e=>`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""),{headers:{"content-type":"text/event-stream"}});
+  }});
+  input.account.env={...input.account.env,HOME:path.join(root,"claude-long-home"),CLAUDE_CONFIG_DIR:input.account.home,ANTHROPIC_BASE_URL:`http://127.0.0.1:${server.port}`,ANTHROPIC_API_KEY:"probe",CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:"1",HTTP_PROXY:"http://127.0.0.1:1",HTTPS_PROXY:"http://127.0.0.1:1",ALL_PROXY:"http://127.0.0.1:1",NO_PROXY:"127.0.0.1,localhost",http_proxy:"http://127.0.0.1:1",https_proxy:"http://127.0.0.1:1",all_proxy:"http://127.0.0.1:1",no_proxy:"127.0.0.1,localhost"};
+  for(const key of ["OPENAI_API_KEY","ANTHROPIC_AUTH_TOKEN","CLAUDE_CODE_OAUTH_TOKEN"])delete input.account.env[key];
+  try{
+    const result=await runEphemeralAgent(input).done;
+    expect(result.status).toBe("done");expect(result.answer).toEqual(output);expect(maxTokens).toBeGreaterThanOrEqual(16000);
+  }finally{await server.stop(true);}
+},70000);

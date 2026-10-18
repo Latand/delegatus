@@ -5227,7 +5227,7 @@ describe("CodexAppServerHost", () => {
     const deployment = {
       deploymentId: "deployment_seat_successor",
       phase: "succeeded",
-      revision: "e".repeat(40),
+      revision: "e".repeat(8),
     };
     let controlRequests = 0;
     const control = Bun.serve({

@@ -21,7 +21,7 @@ const server = new McpServer({ name: "curator-evaluation", version: "1.0.0" });
 server.registerTool("curate_rules", { description: "Read or apply this isolated curator pass. Orders are best first. Every change needs a note; follow the pass checklist.", inputSchema: TOOL_INPUT_SCHEMAS.curate_rules }, async args => {
   try {
     const held = curatorCallerOf(id, snapshot);
-    const result = args.action === "read" ? readCuration(held, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined) : applyCuration(held, args as unknown as CurationApply);
+    const result = args.action === "read" ? await readCuration(held, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined) : applyCuration(held, args as unknown as CurationApply);
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
   } catch (error) {
     return { isError: true, content: [{ type: "text", text: JSON.stringify({ code: (error as { code?: string }).code ?? "CURATE_FAILED", error: (error as Error).message }) }] };

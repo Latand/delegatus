@@ -73,7 +73,10 @@ type HostState = import("@/lib/runtime/engineHost").HostState;
    cursor; keep that wake-up away from the real default ports in this suite. */
 registerPipelineTick(async () => {});
 
-afterAll(() => fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }));
+afterAll(async () => {
+  await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
+  fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+});
 
 /** These state-machine assertions wait for remote settlement. Immediate
     acceptance and concurrent reads are covered by remoteActions.test.ts. */

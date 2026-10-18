@@ -8,10 +8,15 @@ import { MEMORY_RESPONSE_BYTES } from "@/lib/memory/index";
 import { memoryIndex } from "@/lib/memory/service";
 import { GET, POST } from "./route";
 
+// The explicit-path gate gives each file a private TMPDIR but may leave its
+// directory creation to the test. The OS temp root itself must exist first.
+fs.mkdirSync(os.tmpdir(), { recursive: true });
+
 test("the real MCP binding searches both engines via the Viewer route, filters scope, opens bounded hits and records outcomes", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-route-"));
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(root, "state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
   const claude = path.join(root, "topic.md"), codex = path.join(root, "MEMORY.md");
   fs.writeFileSync(claude, "---\nname: Widget feedback\ndescription: Widget report preference\ntype: feedback\n---\nKeep widget reports brief.\n");
   fs.writeFileSync(codex, "# Task Group: Widget\n## Task 1: Widget cache\n### rollout_summary_files\n- rollout_summaries/example.md (cwd=/workspace/widget, updated_at=2026-10-01T10:00:00Z)\n### Reusable knowledge\n- Widget cache holds eight entries.\n");
@@ -26,11 +31,28 @@ test("the real MCP binding searches both engines via the Viewer route, filters s
     expect((cross.items as Array<{ engine: string }>).map(item => item.engine).sort()).toEqual(["claude", "codex"]);
     const page = await bindings.search_memory({ clientRequestId: "scoped-search", query: "widget", project: "project-a", kind: "preference" });
     const id = (page.items as Array<{ id: string }>)[0].id;
+    const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
+    const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
+    const compactSearch = await service.callTool("search_memory", { clientRequestId: "short-search", query: "widget", project: "project-a", kind: "preference" });
+    if (!compactSearch.ok) throw new Error(compactSearch.error);
+    const shortId = (compactSearch.items as Array<{ id: string }>)[0]!.id;
+    expect(shortId).toMatch(/^m_[a-f0-9]{8}$/i);
+    const compactOpen = await service.callTool("search_memory", { clientRequestId: "short-open", id: shortId, project: "project-a" });
+    expect(compactOpen).toMatchObject({ ok: true, item: { body: "Keep widget reports brief.\n" } });
+    const upperShort = await POST(new Request("http://localhost/api/search/memory", { method: "POST", body: JSON.stringify({ id: shortId.toUpperCase(), requestId: "short-open-upper", project: "project-a" }) }));
+    expect(upperShort.status).toBe(200);
     expect((await bindings.search_memory({ clientRequestId: "other-project", query: "widget", project: "project-b" })).items).toEqual([]);
     expect((await bindings.search_memory({ clientRequestId: "open-hit", id, project: "project-a" })).item).toMatchObject({ body: "Keep widget reports brief.\n" });
     await bindings.search_memory({ clientRequestId: "open-hit", id, project: "project-a" });
-    expect(index.offers(id)).toHaveLength(1);
+    expect(index.offers(id)).toHaveLength(3);
     expect((await POST(new Request("http://localhost/api/search/memory", { method: "POST", body: JSON.stringify({ id, requestId: "wrong-scope", project: "project-b" }) }))).status).toBe(404);
+    expect((await POST(new Request("http://localhost/api/search/memory", { method: "POST", body: JSON.stringify({ id: "m_ffffffff", requestId: "stale-short-id" }) }))).status).toBe(404);
+    const db = (index as unknown as { database(): { query(sql: string): { run(...values: unknown[]): unknown } } }).database();
+    const insert = db.query("INSERT INTO memory_entries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    for (const suffix of ["a", "b"]) insert.run(`m_12345678${suffix.repeat(16)}`, "claude", "preference", "global", null, claude, "claude_memory", "Collision", "Collision summary", "Collision body", "2026-10-01T00:00:00.000Z", "[]");
+    const collision = await POST(new Request("http://localhost/api/search/memory", { method: "POST", body: JSON.stringify({ id: "m_12345678", requestId: "colliding-short-id" }) }));
+    expect(collision.status).toBe(409);
+    expect(await collision.json()).toMatchObject({ code: "short_id_ambiguous" });
     expect((await GET(new Request("http://localhost/api/search/memory?q=widget&kind=typo"))).status).toBe(400);
     expect((await GET(new Request("http://localhost/api/search/memory"))).status).toBe(400);
     const routedSummary = path.join(root, "memory_summary.md");
@@ -85,7 +107,7 @@ test("an unavailable memory index returns one bounded failure through MCP and ca
     const result = await service.callTool("search_memory", { clientRequestId: "unavailable-search", query: "widget" }, { deadlineAt: Date.now() + 30_000 });
     expect(result).toMatchObject({ ok: false, error: "Memory search is unavailable; retry later or check index diagnostics." });
     expect(requests).toBe(1);
-    const opened = await POST(new Request("http://localhost/api/search/memory", { method: "POST", body: JSON.stringify({ id: "m_fixture", requestId: "unavailable-open" }) }));
+    const opened = await POST(new Request("http://localhost/api/search/memory", { method: "POST", body: JSON.stringify({ id: "m_12345678", requestId: "unavailable-open" }) }));
     expect(opened.status).toBe(503);
     expect(await opened.json()).toEqual({ code: "MEMORY_SEARCH_UNAVAILABLE", error: "Memory search is unavailable; retry later or check index diagnostics." });
     memoryIndex().close();

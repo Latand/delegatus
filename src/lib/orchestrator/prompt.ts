@@ -1,3 +1,4 @@
+import { shortId } from "@/lib/shortIds";
 /* The MANAGER's draft defaults and versioned system directive (#182, #691 §4/§6).
  *
  * The per-project panel initializes its shared launch controls from these defaults
@@ -641,7 +642,7 @@ function resetNote(resets: readonly { row: string; from: RoleConfig }[]): string
 export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string {
   const registry = (roles as RegistryRoleDefinitions).registry;
   const registryStatus = registry
-    ? `Registry revision: ${registry.revision}. Registry health: ${registry.health.state}${registry.health.state === "degraded" ? ` (${registry.health.reason}; shipped defaults shown)` : ""}.${resetNote(registry.resets ?? [])}`
+    ? `Registry revision: ${shortId(registry.revision)}. Registry health: ${registry.health.state}${registry.health.state === "degraded" ? ` (${registry.health.reason}; shipped defaults shown)` : ""}.${resetNote(registry.resets ?? [])}`
     : "Registry health: unknown (no snapshot).";
   const overriddenNote = overriddenScaffoldNote(roles);
   return [

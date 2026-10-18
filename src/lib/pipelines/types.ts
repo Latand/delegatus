@@ -7,14 +7,15 @@ export type PipelineSandbox = "full" | "restricted";
 
 /** A write whose stated expectation (`expectedStageDigest`, `expectedStageId`,
     `expectedAttempt`) no longer holds: nothing was changed. */
-export type PipelineGuardErrorCode = "STAGE_CHANGED";
-export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId" | "expectedRevision" | "addRounds";
+export type PipelineGuardErrorCode = "STAGE_CHANGED" | "short_id_ambiguous";
+export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId" | "expectedRevision" | "addRounds" | "acceptedSha";
 
 export type PipelineRepoPreflightErrorCode =
   | "missing"
   | "not_directory"
   | "repo_unreadable"
   | "repo_untraversable"
+  | "initialization_refused"
   | "not_git"
   /** A Git probe could not reach a verdict — a spawn/exec failure, a timeout, or
       a transient non-zero exit that is not the definitive "not a git repository"
@@ -23,8 +24,17 @@ export type PipelineRepoPreflightErrorCode =
   | "git_metadata_unwritable"
   | "worktree_parent_unwritable";
 
+export interface RepositoryInitialization {
+  message: string;
+  project: string;
+  commit: string;
+  committedFiles: string[];
+  ignoredPaths: string[];
+  defaultIgnorePatterns: string[];
+}
+
 export type PipelineRepoPreflight =
-  | { ok: true; repoDir: string; gitCommonDir: string; worktreeParent: string }
+  | { ok: true; repoDir: string; gitCommonDir: string; worktreeParent: string; repositoryInitialization?: RepositoryInitialization }
   /** `detail` carries the underlying stderr/reason for a probe_failed transient so
       the failure preserves fidelity instead of collapsing to a generic code. */
   | { ok: false; code: PipelineRepoPreflightErrorCode; path: string; detail?: string };
@@ -298,8 +308,8 @@ export type PipelineStageProvenance = {
 
 /** A stage attempt's own completion report (graph slice 2): the intent the
     attempt stated through the MCP tool. The attempt settles when its turn
-    completes, on this verdict; a second call before settlement replaces this
-    record, and one after it is refused. */
+    completes, on this verdict. An explicit PR privacy rewrite request later
+    admits only a replacement summary, retaining verdict and provenance. */
 export type PipelineStageReport = {
   /** Shared with the pipeline's attributed journal entry for this call. */
   seq: number;
@@ -465,6 +475,28 @@ export type PipelineStageAttempt = {
       a refusal of an unchanged head, or a push interrupted before it landed.
       Each failed operation is counted once; `exhausted` waits for retry-stage. */
   publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
+  /** Bounded PR summary corrections preserve the accepted verdict and SHA.
+      Persisted before delivery so a restart reuses the same request. */
+  publicationTextRepair?: {
+    sha: string;
+    /** Legacy terminal outputs stay local; its PR still names the published head. */
+    pullRequestHead?: string;
+    stageId: string;
+    attempt: number;
+    rounds: number;
+    maxRounds: number;
+    detail: string;
+    part: "title" | "body" | "title/body";
+    state: "pending" | "answered" | "exhausted";
+    reportSeq: number | null;
+    requestedAt: string;
+    delivered?: boolean;
+    answeredAt?: string;
+  };
+  /** A legacy terminal report remains local after an ordinary PR forge
+      refusal; retry the PR against the published head without publishing this
+      output commit. */
+  terminalOutputPublication?: { localSha: string; pullRequestHead: string };
   /** Authoritative projection of the embedded flow. The generation is a
       content digest, so reconciliation remains idempotent across processes and
       independently committed flow/pipeline writes. */

@@ -10,6 +10,10 @@ export function markTaskExport<T extends object>(value: T, from: object | string
   return value;
 }
 export function assertTaskExportCurrent(value: object | undefined): void {
+  // Agent parts can be filtered after task parts and nested into the same wire.
+  const nested = value as { push?: { agents?: object }; agents?: object } | undefined;
+  if (nested?.push?.agents) assertTaskExportCurrent(nested.push.agents);
+  if (nested?.agents) assertTaskExportCurrent(nested.agents);
   const key = value && (value as Record<symbol, unknown>)[revision];
   if (typeof key === "string" && storedLessonRevision() !== key) {
     throw Object.assign(new Error("Task export privacy changed; nothing was sent"), { code: "LESSON_PRIVACY_UNAVAILABLE" });

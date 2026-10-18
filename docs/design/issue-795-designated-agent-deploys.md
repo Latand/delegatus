@@ -35,7 +35,7 @@ operator hears about deploys through bridge reports; nothing ever asks them to
 confirm, approve, repeat, or say anything.
 
 **Execution:** the orchestrator resolves the revision itself (e.g. remote
-`main`) and calls `deploy_exact_sha` with one full 40-hex commit SHA.
+`main`) and calls `deploy_exact_sha` with the commit SHA or its unique tracked-branch prefix (at least seven hex characters; checkout installs). Managed installs require the full SHA.
 
 **Authority** is derived from the server-attributed caller identity — process
 ancestry merged with the admission-injected spawn capability, checked against
@@ -49,7 +49,7 @@ Prose, reasoning, prompts and arguments carry zero authority.
 | caller not attributed as a designated seat       | `deploy_caller_not_designated`|
 | caller holds no validated seat                   | `deploy_caller_not_designated`|
 | seat acting from another project's context       | `deploy_cross_project`        |
-| revision not a full 40-hex SHA                   | error before any call         |
+| revision not 7–40 hex characters                   | error before any call         |
 
 ### What is preserved mechanically
 

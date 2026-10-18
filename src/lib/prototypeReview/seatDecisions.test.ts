@@ -4,13 +4,14 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 import { saveTasks, loadTasks } from "@/lib/tasks/store";
 import { GET as imageGET } from "@/app/api/image/route";
+import { prototypeMediaGET } from "./media";
 import { decisionsGET, decisionsPOST as decisionsRoutePOST, publishPOST, reviewReadPOST, reviewScopePOST } from "./http";
 import { resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
 import { decidePrototype, prototypeDecisionText } from "./decision";
 import { seatDecisionNotices } from "./read";
 import { prototypeReviewNotices } from "./model";
 import { publishPrototype, roundDirectory } from "./store";
-import { clearSeatRoundsForTests, loadSeatRounds } from "./seatRounds";
+import { clearSeatRoundsForTests, insertSeatRound, loadSeatRounds } from "./seatRounds";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 import type { OperatorDecisionsRead, PrototypeDecision, PrototypeReviewRead, PrototypeReviewRound, PublishPrototypeInput } from "./types";
 import { questions } from "./questionnaire.fixture";
@@ -180,6 +181,29 @@ test("an existing seat round's pictures are served without a task and survive an
   const image = await imageGET(request(url));
   expect(image.status).toBe(200);
   expect(Buffer.from(await image.arrayBuffer())).toEqual(PNG);
+});
+
+test("taskless image reads resolve short review ids, reject collisions, and keep the project fence", async () => {
+  const root = await fs.mkdtemp(path.join(process.env.HOME!, "seat-prefix-source-")); roots.push(root);
+  await fs.writeFile(path.join(root, "v1.png"), PNG);
+  const input = { clientRequestId: "seat-prefix", title: "Which layout?", questions: one,
+    variants: [{ number: 1, name: "Compact", description: "Tight.", frames: [{ path: path.join(root, "v1.png"), caption: "" }] }] };
+  const round = await publishPrototype(input, null, { conversationId: "conversation_seat" }, "project-a");
+  const media = round.variants[0]!.frames[0]!.image;
+  const short = round.id.slice(0, 11);
+  for (const reviewId of [round.id, short]) {
+    const response = await prototypeMediaGET(request("/api/image"), "", reviewId, media.id.slice(0, 8), "image", seat);
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(PNG);
+  }
+  const foreign: PrototypeWorld = { ...seat, caller: () => ({ conversationId: "conversation_foreign", project: "project-b" }) };
+  expect((await prototypeMediaGET(request("/api/image"), "", short, media.id, "image", foreign)).status).toBe(403);
+
+  const collision = structuredClone(round);
+  collision.id = `${round.id.slice(0, 11)}${round.id[11] === "a" ? "b" : "a"}${round.id.slice(12)}`;
+  collision.publicationKey = "seat-prefix-collision";
+  insertSeatRound(collision);
+  expect((await prototypeMediaGET(request("/api/image"), "", short, media.id, "image", seat)).status).toBe(409);
 });
 
 test("a task-bound decision message stays byte for byte", () => {
@@ -362,4 +386,31 @@ test("a seat decision skips one question and exposes it through the column and M
   expect((await decisions("project-a", reviewId)).round?.decision?.answers).toEqual(answers);
   const read = await (await reviewReadPOST(request("/api/prototype-reviews/read", {}), seat)).json() as PrototypeReviewRead;
   expect(read.rounds[0]!.decision!.answers).toEqual(answers);
+});
+
+test("an issue-report reference stores the exact full consent form and legacy composed forms still publish", async () => {
+  const { recordIssueReportPreview } = await import("@/lib/issueReports/store");
+  const { issueReportApprovalForm } = await import("@/lib/issueReports/approvalForm");
+  const { operatorLocale } = await import("@/lib/operator/settings");
+  const preview = recordIssueReportPreview({ title: "A repeated answer", body: "The tool answered twice." }, "conversation_reporter");
+  const response = await publishPOST(request("/api/prototype-reviews", { clientRequestId: "report-reference", issueReport: preview.digest.slice(0, 8) }), seat);
+  expect(response.status).toBe(200);
+  const id = (await response.json()).reviewId;
+  const stored = loadSeatRounds().find(round => round.id === id)!;
+  const form = issueReportApprovalForm(preview, operatorLocale() ?? "en");
+  expect(stored.title).toBe(form.title); expect(stored.questions).toEqual(form.questions);
+  const old = await publishPOST(request("/api/prototype-reviews", { clientRequestId: "report-full-form", ...form }), seat);
+  expect(old.status).toBe(200);
+  const mixed = await publishPOST(request("/api/prototype-reviews", { clientRequestId: "report-mixed", issueReport: preview.digest.slice(0, 8), title: "Override" }), seat);
+  expect(mixed.status).toBe(400);
+});
+
+test("review id prefixes resolve, keep full values and refuse unknown or ambiguous ids", async () => {
+  const { resolvePrototypeReviewId } = await import("./store");
+  const a = "pr_12345678" + "a".repeat(24), b = "pr_12345678" + "b".repeat(24);
+  expect(resolvePrototypeReviewId([{ id: a }], a.slice(0, 11))).toBe(a);
+  expect(resolvePrototypeReviewId([{ id: a }], a)).toBe(a);
+  expect(resolvePrototypeReviewId([{ id: a }], "pr_ffffffff")).toBeNull();
+  expect(() => resolvePrototypeReviewId([{ id: a }, { id: b }], a.slice(0, 11))).toThrow("ambiguous");
+  expect(resolvePrototypeReviewId([{ id: a }, { id: b }], b.slice(0, 15))).toBe(b);
 });
