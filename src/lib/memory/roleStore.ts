@@ -6,12 +6,15 @@ import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
-import { canonicalProject } from "@/lib/projects/aliases";
-import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
+import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { databaseFileIdentity } from "@/lib/state/currentDatabase";
+import { effectiveCurationSetting, readSeatTickSettings, seatTickSettingsPath } from "@/lib/monitor/seatTickSettings";
+import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature, StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 
 import { appendRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
 import { roleMemoryEnabled } from "./settings";
-import { curationView } from "./curation/store";
+import { curationRevision, curationView } from "./curation/store";
+import { projectViewRows, projectViewRowsCooperatively, roleScopeKeys, roleViewVersion } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
 import { renderLearnedRulesSelection } from "./roleRender";
 import {
@@ -126,7 +129,7 @@ export function joinMovedScopes(now = new Date().toISOString()): void {
   const held = roleMemoryCollection();
   if (!held) return;
   const resolve = scopeResolver();
-  const moved = held.snapshot().flatMap((row) => row.kind === "scope" && resolve(row.scope) !== row.scope ? [row.scope] : []);
+  const moved = roleScopeKeys().filter(scope => resolve(scope) !== scope);
   if (!moved.length) return;
   held.boundedPatch(4096, (tx) => {
     const rulesOf = (ids: readonly string[]) => ids.flatMap((id) => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; });
@@ -497,18 +500,109 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
 
 /** The rules window: every scope the project reads or wrote, with what left each. */
 export function projectView(project: string, now = Date.now()): RoleMemoryProjectView {
-  joinMovedScopes();
+  return withViewerOperation("role-memory.view", () => performanceSpans.sync("memory.project-view", () => projectViewMemo(project, now)));
+}
+
+/** Production readers yield between bounded history slices on cold and revised views. */
+export async function projectViewAsync(project: string, now = Date.now()): Promise<RoleMemoryProjectView> {
+  return withViewerOperation("role-memory.view", () => projectViewAsyncMemo(project, now));
+}
+
+type ProjectViewMemo = { stamp: string; guard: string; from: number; until: number; bytes: number; value: RoleMemoryProjectView };
+// One LRU across Next server bundles, bounded by both entries and serialized
+// bytes. It owns only rendered views; scope histories never enter this memo.
+const projectViewOwner = globalThis as typeof globalThis & { __llvProjectViews?: Map<string, ProjectViewMemo> };
+const projectViews = projectViewOwner.__llvProjectViews ??= new Map();
+const PROJECT_VIEW_MEMO_BYTES = 8 * 1024 * 1024;
+const PROJECT_VIEW_MEMO_ENTRIES = 16;
+function freezeProjectView<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) freezeProjectView(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+function timedProjectView(value: RoleMemoryProjectView, now: number): RoleMemoryProjectView {
+  const curation = value.curation;
+  return { ...value, ...(curation ? { curation: { ...curation,
+    nextAt: curation.nextAt && Date.parse(curation.nextAt) < now ? new Date(now).toISOString() : curation.nextAt } } : {}) };
+}
+function projectViewContext(project: string, now: number): {
+  canonical: string; file: string; memoKey: string; guard: string; enabled: boolean;
+  stamp: () => string; hit: RoleMemoryProjectView | null;
+} {
   const canonical = canonicalProject(project);
+  const file = statePath("state.sqlite");
+  const memoKey = `${file}:${canonical}`;
+  const settingsFile = seatTickSettingsPath();
+  const fileStamp = (filename: string) => {
+    try { const stat = fs.statSync(filename, { bigint: true }); return `${filename}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}`; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return `${filename}:missing`; throw error; }
+  };
+  // The fast guard observes peer commits before checking collection revisions.
+  // File settings can change independently of SQLite.
+  // A relocated settings store has its own SQLite authority.
+  const settingsDatabase = path.join(path.dirname(settingsFile), "state.sqlite");
+  const guard = `${roleViewVersion()}:${settingsDatabase === file ? "" : stateDatabaseSignature(settingsDatabase)}:${[path.join(path.dirname(file), "project-aliases.json"), path.join(path.dirname(file), "memory-source.json"), settingsFile].map(fileStamp).join("|")}:${process.env.LLV_ROLE_MEMORY}`;
+  const memo = projectViews.get(memoKey);
+  if (memo?.guard === guard && now >= memo.from && now < memo.until) {
+    projectViews.delete(memoKey); projectViews.set(memoKey, memo);
+    return { canonical, file, memoKey, guard, enabled: roleMemoryEnabled(), stamp: () => "", hit: timedProjectView(memo.value, now) };
+  }
+  const enabled = roleMemoryEnabled();
+  const stamp = () => `${databaseFileIdentity(file)}:${roleMemoryCollection()?.revision()}:${curationRevision()}:${enabled}:${JSON.stringify(projectAliasSnapshot().aliases)}:${JSON.stringify(effectiveCurationSetting(readSeatTickSettings(canonical)))}`;
+  const revision = stamp();
+  if (memo?.stamp === revision && now >= memo.from && now < memo.until) {
+    memo.guard = guard;
+    projectViews.delete(memoKey); projectViews.set(memoKey, memo);
+    return { canonical, file, memoKey, guard, enabled, stamp, hit: timedProjectView(memo.value, now) };
+  }
+  return { canonical, file, memoKey, guard, enabled, stamp, hit: null };
+}
+
+function projectViewMemo(project: string, now: number): RoleMemoryProjectView {
+  const context = projectViewContext(project, now);
+  if (context.hit) return context.hit;
+  joinMovedScopes();
+  const buildRevision = context.stamp();
+  const all = projectViewRows(context.canonical);
+  return buildProjectView(context, now, buildRevision, all);
+}
+
+async function projectViewAsyncMemo(project: string, now: number): Promise<RoleMemoryProjectView> {
+  const context = projectViewContext(project, now);
+  if (context.hit) return context.hit;
+  joinMovedScopes();
+  const buildRevision = context.stamp();
+  const all = await projectViewRowsCooperatively(context.canonical);
+  return performanceSpans.sync("memory.project-view", () => buildProjectView(context, now, buildRevision, all));
+}
+
+function buildProjectView(context: ReturnType<typeof projectViewContext>, now: number, buildRevision: string, all: RoleMemoryRow[]): RoleMemoryProjectView {
+  const { canonical, file, memoKey, guard, enabled, stamp } = context;
   const resolve = scopeResolver();
-  const all = rows();
-  const rulesById = new Map(all.flatMap((row) => row.kind === "rule" ? [[row.id, row] as const] : []));
+  const rulesById = new Map<string, RoleMemoryRule>();
+  const scopesByKey = new Map<string, RoleMemoryScopeRow>();
+  const leftByScope = new Map<string, RoleMemoryRule[]>();
+  let until = Infinity;
+  for (const row of all) {
+    if (row.kind === "scope") scopesByKey.set(row.scope, row);
+    if (row.kind !== "rule") continue;
+    rulesById.set(row.id, row);
+    const boundary = Date.parse(row.createdAt) + DAY_MS;
+    if (boundary > now) until = Math.min(until, boundary);
+    if (row.state !== "active" && !row.versionOf) {
+      const scope = resolve(row.scope), list = leftByScope.get(scope) ?? [];
+      list.push(row); leftByScope.set(scope, list);
+    }
+  }
   const ruleTasks = taskCounter(all, rulesById);
   const wanted = [...all.flatMap((row) => row.kind === "scope" && (scopeProject(row.scope) === canonical || isCrossProjectRoleScope(row.scope)) && scopeKind(row.scope) === "role" ? [row.scope] : []).sort(),
     projectScope(canonical), MACHINE_SCOPE];
   const scopes: ScopeView[] = wanted.map((scope) => {
-    const held = all.find((row): row is RoleMemoryScopeRow => row.kind === "scope" && row.scope === scope);
+    const held = scopesByKey.get(scope);
     const active = (held?.active ?? []).flatMap((id) => { const found = rulesById.get(id); return found ? [found] : []; });
-    const left = [...rulesById.values()].filter((row) => row.state !== "active" && !row.versionOf && resolve(row.scope) === scope)
+    const left = (leftByScope.get(scope) ?? [])
       .sort((a, b) => b.changedAt.localeCompare(a.changedAt));
     return {
       scope, kind: scopeKind(scope), roleId: scopeRole(scope), revision: held?.revision ?? 0,
@@ -517,7 +611,18 @@ export function projectView(project: string, now = Date.now()): RoleMemoryProjec
       active: active.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))), left: left.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))),
     };
   });
-  return { project: canonical, enabled: roleMemoryEnabled(), scopes, curation: curationView(canonical, now) };
+  const value = { project: canonical, enabled, scopes, curation: curationView(canonical, now, all.flatMap(row => row.kind === "scope" ? [row] : []), false) };
+  if (stamp() !== buildRevision) throw new StateSnapshotChangedError();
+  const bytes = Buffer.byteLength(JSON.stringify(value));
+  projectViews.delete(memoKey);
+  freezeProjectView(value);
+  if (bytes <= PROJECT_VIEW_MEMO_BYTES) projectViews.set(memoKey, { stamp: buildRevision, guard, from: now, until, bytes, value });
+  let total = [...projectViews.values()].reduce((sum, entry) => sum + entry.bytes, 0);
+  while (projectViews.size > PROJECT_VIEW_MEMO_ENTRIES || total > PROJECT_VIEW_MEMO_BYTES) {
+    const oldest = projectViews.keys().next().value!;
+    total -= projectViews.get(oldest)!.bytes; projectViews.delete(oldest);
+  }
+  return timedProjectView(value, now);
 }
 
 /** What each stage attempt of a project left, for the line under its report on the card. */
