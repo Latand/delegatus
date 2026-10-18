@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { TASK_COLORS, type TaskColor, type TaskStatus } from "@/lib/tasks/types";
+import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 
 /* Menus and popovers of the kanban board, ported from the approved prototype
    (`prototypes/kanban-board/app.js` openMenu/openTray): fixed to the viewport
@@ -67,18 +68,12 @@ export function useMenuDismiss(ref: React.RefObject<HTMLElement | null>, anchor:
       if (ref.current?.contains(target) || anchor.contains(target)) return;
       onClose(false);
     };
-    const key = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.stopPropagation();
-      onClose(true);
-    };
     document.addEventListener("pointerdown", down, true);
-    document.addEventListener("keydown", key, true);
-    return () => {
-      document.removeEventListener("pointerdown", down, true);
-      document.removeEventListener("keydown", key, true);
-    };
+    return () => document.removeEventListener("pointerdown", down, true);
   }, [ref, anchor, onClose]);
+  /* Escape goes to the newest overlay: a menu opened over a preview closes
+     first, and a menu the preview was opened over leaves the key to it. */
+  useOverlayEscape(() => onClose(true));
 }
 
 export const CheckGlyph = () => (

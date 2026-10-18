@@ -5656,6 +5656,23 @@ export class AgentRegistry {
     return this.scopedConversationSnapshot(target, false);
   }
 
+  /** Curator authority needs one identity and its receipts, role and project.
+      Keyed reads preserve alias resolution without hydrating retained history. */
+  curatorConversationSnapshot(conversationId: string): RegistryFile {
+    return this.readKeyed(file => {
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      const id = resolveConversationAlias(file, conversationId as ViewerConversationId);
+      for (const identity of conversationIdentities(file, id)) {
+        if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+      }
+      if (file.conversations[id]) result.conversations[id] = clone(file.conversations[id]!);
+      if (file.lineageEdges[id]) result.lineageEdges[id] = clone(file.lineageEdges[id]!);
+      if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
+      for (const receipt of registryRowsMatching(file, "receipts", "conversationId", id)) result.receipts[receipt.launchId] = clone(receipt);
+      return result;
+    });
+  }
+
   /** Activity attribution needs one conversation's custody, role and launch
       receipts. It must not hydrate unrelated retained history. */
   activityConversationSnapshot(artifactPath: string): RegistryFile {

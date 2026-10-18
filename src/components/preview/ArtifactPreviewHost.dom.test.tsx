@@ -1,14 +1,16 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { installActEnv } from "@/test-helpers/actEnv";
 import { formatArtifactFragment } from "@/lib/artifact/fragment";
 import { setLocale } from "@/lib/i18n";
 
-import { setLeftShellInset } from "../shellLayout";
-import { ArtifactPreviewHost, roomForSheet } from "./ArtifactPreviewHost";
+import { hostedSheetEdge, setHostedColumnLeft, setLeftShellInset } from "../shellLayout";
+import { useModalLayer } from "../modalLayer";
+import { useMenuDismiss } from "../kanban/kanbanMenus";
+import { ArtifactPreviewHost, hostedRoom, hostedSheetWidth, roomForSheet } from "./ArtifactPreviewHost";
 import { artifactMetaUrl } from "./artifactResource";
 import { openArtifactPreview } from "./previewBus";
 
@@ -210,6 +212,104 @@ test("escape closes the preview, restores opener focus and never touches history
   expect(surface()).toBeNull();
   expect(dom.location.hash).toBe(hashBefore);
   expect(dom.document.activeElement).toBe(opener);
+});
+
+/* A dialog that coordinates only through the modal-layer stack (search, the
+   decision sheet, the pickers), the way every body-portalled dialog does. */
+function Dialog({ onClose }: { onClose: () => void }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useModalLayer({ containerRef: ref, onClose });
+  return (
+    <div ref={ref} tabIndex={-1} data-test-dialog="">
+      <input data-test-dialog-input="" />
+    </div>
+  );
+}
+
+function PreviewWithDialog() {
+  const [dialog, setDialog] = useState(false);
+  return (
+    <>
+      <ArtifactPreviewHost mobile={false} />
+      <button data-test-open-dialog="" onClick={() => setDialog(true)} />
+      {dialog ? <Dialog onClose={() => setDialog(false)} /> : null}
+    </>
+  );
+}
+
+test("a modal dialog opened over the preview takes the first Escape; the second closes the preview", async () => {
+  textRoutes();
+  await act(async () => {
+    root!.render(<PreviewWithDialog />);
+  });
+  await act(async () => openArtifactPreview(TEXT_PATH));
+  await flush();
+  await flush();
+  expect(surface()).not.toBeNull();
+
+  await act(async () => {
+    (dom.document.querySelector("[data-test-open-dialog]") as unknown as HTMLElement).click();
+  });
+  const dialog = () => dom.document.querySelector("[data-test-dialog]");
+  const input = dom.document.querySelector("[data-test-dialog-input]") as unknown as HTMLElement;
+  expect(dialog()).not.toBeNull();
+  input.focus();
+
+  await act(async () => {
+    input.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never);
+  });
+  expect({ dialogOpen: dialog() !== null, previewOpen: surface() !== null }).toEqual({ dialogOpen: false, previewOpen: true });
+
+  await act(async () => {
+    dom.window.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never);
+  });
+  expect(surface()).toBeNull();
+});
+
+/* A board menu (the kanban menus dismiss through useMenuDismiss) opened over
+   the preview. */
+function BoardMenu({ anchor, onClose }: { anchor: HTMLElement; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useMenuDismiss(ref, anchor, onClose);
+  return <div ref={ref} role="menu" data-test-board-menu="" />;
+}
+
+function PreviewWithBoardMenu() {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  return (
+    <>
+      <ArtifactPreviewHost mobile={false} />
+      <button data-test-open-menu="" onClick={(event) => setAnchor(event.currentTarget)} />
+      {anchor ? <BoardMenu anchor={anchor} onClose={() => setAnchor(null)} /> : null}
+    </>
+  );
+}
+
+test("a board menu opened over the preview takes the first Escape; the second closes the preview", async () => {
+  textRoutes();
+  await act(async () => {
+    root!.render(<PreviewWithBoardMenu />);
+  });
+  await act(async () => openArtifactPreview(TEXT_PATH));
+  await flush();
+  await flush();
+  expect(surface()).not.toBeNull();
+
+  await act(async () => {
+    (dom.document.querySelector("[data-test-open-menu]") as unknown as HTMLElement).click();
+  });
+  const menu = () => dom.document.querySelector("[data-test-board-menu]");
+  expect(menu()).not.toBeNull();
+
+  await act(async () => {
+    dom.document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never);
+  });
+  expect({ menuOpen: menu() !== null, previewOpen: surface() !== null }).toEqual({ menuOpen: false, previewOpen: true });
+
+  await act(async () => {
+    dom.document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as never);
+  });
+  expect(surface()).toBeNull();
 });
 
 test("switching artifacts reuses the same sheet element", async () => {
@@ -482,6 +582,77 @@ test("the desktop sheet yields to the orchestrator dock so the board keeps its 3
 
   await act(async () => setLeftShellInset(0));
   expect(surface()!.getAttribute("data-artifact-preview-inset")).toBe("0");
+});
+
+/* Over the full-screen agent window the conversation is the window's right
+   column, which starts after the window's margin and its agent list. */
+test("opened over the agent window, the sheet keeps 320px of conversation measured from its column, or takes the window", async () => {
+  /* The column's left edge at the widths the window stands in: 8 + 220 below
+     1100 px, 248 + 8 + 220 from 1100 px up; the window itself starts at 8 / 256. */
+  const visible = (stored: number, viewport: number, column: number, frame: number) => viewport - column - hostedSheetWidth(stored, viewport, column, frame);
+  expect(hostedSheetWidth(560, 1_440, 504, 256)).toBe(560);
+  expect(visible(560, 1_440, 504, 256)).toBeGreaterThanOrEqual(320);
+  expect(hostedSheetWidth(560, 1_200, 504, 256)).toBe(376);
+  expect(visible(560, 1_200, 504, 256)).toBe(320);
+  /* 1000 px: the 560 the board geometry would give is cut to the floor. */
+  expect(hostedSheetWidth(560, 1_000, 228, 8)).toBe(452);
+  expect(visible(560, 1_000, 228, 8)).toBe(320);
+  /* Where the narrowest useful sheet and the floor no longer fit, the sheet takes the window whole, however wide it was stored. */
+  for (const [viewport, column, frame] of [[700, 228, 8], [850, 228, 8], [900, 228, 8], [1_100, 476, 256], [1_150, 476, 256]] as const) {
+    for (const stored of [380, 560, 700]) {
+      expect(hostedSheetWidth(stored, viewport, column, frame), `${viewport} stored ${stored}`).toBe(viewport - frame);
+      expect(viewport - hostedSheetWidth(stored, viewport, column, frame), `${viewport} stored ${stored}`).toBeLessThanOrEqual(column);
+    }
+  }
+  /* The only widths left are at most the room, or the whole window: nothing lands between, stored or dragged. */
+  for (let viewport = 500; viewport <= 1_700; viewport += 7) {
+    for (const [column, frame] of [[228, 8], [504, 256], [476, 256]] as const) {
+      for (const stored of [380, 420, 560, 900]) {
+        const width = hostedSheetWidth(stored, viewport, column, frame);
+        const room = hostedRoom(viewport, column);
+        if (room === null) expect(width, `${viewport}/${column}`).toBe(Math.max(380, viewport - frame));
+        else expect(viewport - column - width, `${viewport}/${column}/${stored}`).toBeGreaterThanOrEqual(320);
+      }
+    }
+  }
+  expect(hostedRoom(908, 228)).toBe(360);
+  expect(hostedRoom(907, 228)).toBeNull();
+  /* The board's geometry is the same function without a host. */
+  expect(roomForSheet(1_000, 228)).toBe(452);
+  expect(roomForSheet(700, 228)).toBe(380);
+  expect(roomForSheet(1_440, 0)).toBe(1_120);
+});
+
+test("the sheet sizes itself to the agent window's column while the window is open, and back to the board's geometry after", async () => {
+  textRoutes();
+  const happy = dom as unknown as { happyDOM: { setViewport(size: { width: number; height: number }): void } };
+  happy.happyDOM.setViewport({ width: 1_000, height: 760 });
+  await render();
+  await act(async () => openArtifactPreview(TEXT_PATH));
+  await flush();
+  await flush();
+  /* The board: the CSS clamp, whose max()/min() this DOM does not parse, so no pixel width is written. */
+  expect(surface()!.getAttribute("style")).not.toContain("px;");
+
+  await act(async () => setHostedColumnLeft(228, 8));
+  expect(surface()!.getAttribute("data-artifact-preview-inset")).toBe("228");
+  expect(surface()!.getAttribute("style")).toContain("width: 452px");
+  /* The window is told where the sheet's edge stands, to wrap its conversation there. */
+  expect(hostedSheetEdge()).toBe(548);
+
+  /* The window's list narrows or the viewport shrinks: the sheet follows both. */
+  await act(async () => happy.happyDOM.setViewport({ width: 700, height: 760 }));
+  await act(async () => {
+    dom.dispatchEvent(new dom.Event("resize") as never);
+  });
+  /* Too narrow for the floor: the sheet takes the window whole, the list included. */
+  expect(surface()!.getAttribute("style")).toContain("width: 692px");
+  expect(hostedSheetEdge()).toBe(8);
+
+  await act(async () => setHostedColumnLeft(0));
+  expect(surface()!.getAttribute("data-artifact-preview-inset")).toBe("0");
+  expect(hostedSheetEdge()).toBe(0);
+  happy.happyDOM.setViewport({ width: 1_024, height: 768 });
 });
 
 test("the mobile sheet ignores the dock — it is fullscreen and nothing is docked beside it", async () => {

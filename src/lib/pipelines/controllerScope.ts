@@ -107,3 +107,9 @@ export function controllerTickFingerprint(pipeline: Pipeline): string {
 export function withControllerPipelineScope<T>(keys: readonly string[], run: () => Promise<T>, attempts?: ReadonlySet<string>, references?: Scope["references"]): Promise<T> {
   return scope.run({ keys, attempts, references, closes: new Map() }, run);
 }
+
+/** Global work must not inherit the signalling lane's mutation window. Async
+ * descendants stay unscoped; the caller retains its own scope on return. */
+export function withoutControllerPipelineScope<T>(run: () => T): T {
+  return scope.exit(run);
+}

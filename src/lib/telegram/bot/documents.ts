@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import sharp from "sharp";
 import path from "node:path";
 
 import { knownProviderSecretOffset } from "@/lib/accounts/providerSecretRedaction";
@@ -392,13 +393,24 @@ export function readUnderRoots<Admitted = void>(
   refusePlace(real, requested, realRoots, roots, environment);
   const admitted = admit(real);
 
+  return { ...readOpenedFile(requested, real, maxBytes, opened => refusePlace(opened, requested, realRoots, roots, environment)), admitted };
+}
+
+/** Private generated output has no document root. Its exact path, including
+ * every parent, must still name the file selected from this run's listing. */
+export function readExactFile(requested: string, maxBytes: number): { real: string; bytes: Buffer } {
+  const real = fs.realpathSync.native(requested);
+  if (real !== path.resolve(requested)) throw new DocumentRefusal("document_forbidden_path", "generated file is a link");
+  return readOpenedFile(requested, real, maxBytes, () => {});
+}
+function readOpenedFile(requested: string, real: string, maxBytes: number, recheck: (opened: string) => void): { real: string; bytes: Buffer } {
   let descriptor: number | null = null;
   try {
     descriptor = fs.openSync(real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
     const stat = fs.fstatSync(descriptor);
     const opened = openedPath(descriptor);
     if (opened !== null) {
-      refusePlace(opened, requested, realRoots, roots, environment);
+      recheck(opened);
       if (opened !== real) throw new DocumentRefusal("document_forbidden_path", `${requested} changed while it was being opened`);
     } else {
       let again: string | null;
@@ -421,7 +433,7 @@ export function readUnderRoots<Admitted = void>(
       chunks.push(Buffer.from(chunk.subarray(0, read)));
     }
     if (total === 0) throw new DocumentRefusal("document_invalid", `${requested} is empty`);
-    return { real, bytes: Buffer.concat(chunks, total), admitted };
+    return { real, bytes: Buffer.concat(chunks, total) };
   } catch (error) {
     if (error instanceof DocumentRefusal) throw error;
     throw new DocumentRefusal("document_invalid", `${requested} cannot be read on the Viewer host`);
@@ -496,4 +508,14 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
     caption: typeof caption === "string" && caption !== "" ? caption : null,
     bytes: bytes.length,
   };
+}
+
+/** Fully decode the same JPEG/PNG photo accepted by both outbound paths. */
+export async function checkPhotoBytes(bytes: Buffer, maxPixels = 20_000_000): Promise<"image/jpeg" | "image/png"> {
+  const metadata = await sharp(bytes, { failOn: "warning", limitInputPixels: maxPixels }).metadata();
+  const width = metadata.width ?? 0, height = metadata.height ?? 0;
+  if (!["jpeg", "png"].includes(metadata.format ?? "") || width < 1 || height < 1 || width * height > maxPixels || width + height > 10000 || Math.max(width, height) / Math.min(width, height) > 20)
+    throw new Error("unsupported photo format or dimensions");
+  await sharp(bytes, { failOn: "warning", limitInputPixels: maxPixels }).raw().toBuffer();
+  return metadata.format === "jpeg" ? "image/jpeg" : "image/png";
 }

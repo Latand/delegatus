@@ -204,7 +204,7 @@ function normalizeRelayHold(hold: Round["relayHold"]): Round["relayHold"] {
 
 /** The shared history validator is deliberately permissive. A live store also
     validates the fields its decoder dereferences before admitting the row. */
-function isStoredFlow(value: unknown): value is Flow {
+export function isStoredFlow(value: unknown): value is Flow {
   try {
     return isFlow(value) && typeof value.project === "string"
       && Boolean(value.roles && isRoleConfig(value.roles.implementer) && isRoleConfig(value.roles.reviewer))

@@ -206,6 +206,11 @@ test("promotion captures a retiring legacy write and demotion publishes later SQ
       },
     });
     await initializeHotStateStoresAtStartup(boundary);
+    const projections = new Database(path.join(sandbox,"state.sqlite"),{readonly:true});
+    try {
+      expect(projections.query<{n:number},[]>("SELECT count(*) AS n FROM history_pending").get()!.n).toBe(0);
+      expect(projections.query<{n:number},[]>("SELECT count(*) AS n FROM history_inputs WHERE collection='flows'").get()!.n).toBe(2);
+    } finally {projections.close();}
     expect(loadFlows().map((flow) => flow.id)).toEqual([first.id, retiring.id]);
     const sqliteRecords = loadFlows();
     sqliteRecords[0]!.stateDetail = "sqlite-after-promotion";
