@@ -237,3 +237,18 @@ test("a contended store lock that frees at the cutoff cannot commit expired wait
     expect(writes).toBe(0);
   } finally { await pending.catch(() => {}); clock.mockRestore(); }
 });
+
+test("an asynchronous file-lock action retains ownership until its work finishes", async () => {
+  const file = path.join(root, "async-action-lock.json");
+  let entered!: () => void, release!: () => void;
+  const inside = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const pending = withFileLockAsync(file, async () => { entered(); await held; return "committed"; }, Date.now() + 5000);
+  try {
+    await inside;
+    expect(fs.existsSync(`${file}.lock`)).toBe(true);
+    release();
+    await expect(pending).resolves.toBe("committed");
+    expect(fs.existsSync(`${file}.lock`)).toBe(false);
+  } finally { release(); await pending.catch(() => {}); }
+});

@@ -94,3 +94,66 @@ test("action retry guidance accounts for post-execution denials", () => {
   expect(prompt).not.toContain("unless its result was error or denied");
   expect(prompt).toContain("An action denial may hide a completed effect: finish without further calls.");
 });
+
+
+test("owner continuation sends unseen data and refreshes changed instructions", async () => {
+  const { ownerContinuationPrompt, ownerRunPrompt } = await import("./ownerRun");
+  const request = requestSchema.parse(await Bun.file(`${import.meta.dir}/fixtures/service-wire/claimed_rc_owner.json`).json().then(value => value.request));
+  const owner = { messageId: request.input.respond_to!, text: "Continue fixture", requestText: null };
+  const record = { seen: [], staticDigest: null } as unknown as import("./conversations").RelayConversation;
+  const first = ownerContinuationPrompt(request, owner, 1, record);
+  const next = { ...record, seen: first.seen, staticDigest: first.digest };
+  const continued = ownerContinuationPrompt(request, owner, 1, next);
+  expect(continued.prompt).not.toContain("<service_instructions>");
+  expect(continued.prompt).not.toContain("[You work for the owner");
+  expect(continued.prompt).toContain("<owner_request>");
+  expect(Buffer.byteLength(continued.prompt)).toBeLessThan(Buffer.byteLength(ownerRunPrompt(request, owner, 1)) / 10);
+  request.input.tools = [];
+  expect(ownerContinuationPrompt(request, owner, 1, next).prompt).toContain("<service_instructions>");
+  expect(ownerContinuationPrompt(request, owner, 1, record).prompt).toContain("<service_instructions>");
+});
+
+
+test("owner continuation carries an unseen explicit reply alongside local outbound context", async () => {
+  const { ownerContinuationPrompt } = await import("./ownerRun");
+  const request = requestSchema.parse(contextRequest);
+  request.input.conversation[0]!.reply_to = "unseen-parent";
+  request.input.conversation.unshift({ ...request.input.conversation[0]!, id: "unseen-parent", text: "Explicit fixture context", reply_to: null,
+    author: { key: "fixture-bot", name: "Assistant", self: true } });
+  const owner = { messageId: request.input.respond_to!, text: "Continue fixture", requestText: null,
+    localContext: { resolution: "explicit_parent" as const, questionIds: [], origins: {}, conversation: [] } };
+  const first = ownerContinuationPrompt(request, owner, 1, { seen: [], staticDigest: null });
+  const prompt = ownerContinuationPrompt(request, owner, 1, { seen: [], staticDigest: first.digest }).prompt;
+  expect(prompt).toContain("<local_outbound_context>"); expect(prompt).toContain("<owner_reply_context>");
+  expect(ownerContinuationPrompt(request, owner, 1, { seen: ["unseen-parent"], staticDigest: first.digest }).prompt).not.toContain("<owner_reply_context>");
+});
+
+test("owner continuation never repeats seen reply context and prefers complete recovered rows", async () => {
+  const { ownerContinuationPrompt } = await import("./ownerRun");
+  const request = requestSchema.parse(contextRequest);
+  const root = { ...request.input.conversation[0]!, id: "seen-root", reply_to: null, text: "already delivered root" };
+  const parent = { ...root, id: "new-parent", reply_to: root.id, text: "new parent" };
+  const current = { ...root, id: "current-owner", reply_to: parent.id, text: "current request" };
+  request.input.conversation = [root, { ...parent, text: "truncated recovered text" }, current];
+  request.input.respond_to = current.id;
+  const owner = { messageId: current.id, text: current.text, requestText: null,
+    localContext: { resolution: "history" as const, questionIds: [], origins: {},
+      conversation: [{ ...parent, text: "full confirmed recovered text" }] } };
+  const turn = ownerContinuationPrompt(request, owner, 1, { seen: [root.id], staticDigest: null });
+  expect(turn.prompt).not.toContain("already delivered root");
+  expect(turn.prompt).not.toContain("truncated recovered text");
+  expect(turn.prompt.match(/full confirmed recovered text/g)).toHaveLength(1);
+  expect(turn.prompt).toContain('"id":"new-parent"');
+  expect(turn.prompt).toContain("full confirmed recovered text");
+  expect(turn.prompt).toContain("current request");
+  expect(turn.prompt).not.toContain("<owner_reply_context>");
+});
+
+test("owner initial cursor records the exact conversation sent with the first prompt", async () => {
+  const { ownerInitialCursor } = await import("./ownerRun");
+  const request = requestSchema.parse(contextRequest);
+  const owner = { messageId: request.input.respond_to!, text: "current owner request", requestText: null };
+  const cursor = ownerInitialCursor(request, owner, 1);
+  expect(cursor.seen).toEqual([...new Set([...request.input.conversation.map(message => message.id), owner.messageId])]);
+  expect(cursor.digest).toMatch(/^[0-9a-f]{64}$/);
+});
