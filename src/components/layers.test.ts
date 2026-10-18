@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 
-import { CONTENT_MAX, LAYER, Z, type Layer } from "./layers";
+import { above, CONTENT_MAX, LAYER, Z, type Layer } from "./layers";
 
 const COMPONENTS = path.resolve(import.meta.dir);
 const SCALE_MODULE = path.join(COMPONENTS, "layers.ts");
@@ -18,7 +18,6 @@ const LEGACY_RAW_Z: Record<string, readonly string[]> = {
   "SoundToggle.tsx": ["z-50"],
   "Viewer.tsx": ["z-50", "z-50", "z-40", "z-40"],
   "AccountBadge.tsx": ["z-[95]"],
-  "RuntimePill.tsx": ["z-40", "z-[70]"],
   "mobile/MobileFocusView.tsx": ["z-[55]"],
   "kanban/kanbanBoard.css": [
     "z-index: 60",
@@ -98,7 +97,7 @@ describe("the guard reads every spelling of a raw z-index", () => {
 
 describe("one layering scale", () => {
   test("the layers keep their documented order and sit above the content range", () => {
-    const order: Layer[] = ["lifted", "sticky", "dock", "sheet", "modal", "popover", "overlay", "toast", "tooltip", "feedback"];
+    const order: Layer[] = ["lifted", "sticky", "dock", "sheet", "reader", "modal", "popover", "overlay", "toast", "tooltip", "feedback"];
     expect(Object.keys(LAYER)).toEqual(order);
     const values = order.map((name) => LAYER[name]);
     expect(values[0]).toBeGreaterThan(CONTENT_MAX);
@@ -114,6 +113,33 @@ describe("one layering scale", () => {
     expect(LAYER.popover).toBeGreaterThan(LAYER.modal);
     expect(LAYER.overlay).toBeGreaterThan(LAYER.popover);
     expect(LAYER.modal).toBeGreaterThan(LAYER.sheet);
+  });
+
+  test("what a conversation opens draws above the full-screen surfaces that host it", () => {
+    const css = fs.readFileSync(path.join(COMPONENTS, "kanban/kanbanBoard.css"), "utf8");
+    const zOf = (selector: string): number => {
+      const rule = css.split("\n").find((line) => line.startsWith(`${selector} {`)) ?? "";
+      const value = rule.match(/z-index:\s*(\d+)/)?.[1];
+      expect(value, `${selector} carries a z-index`).toBeDefined();
+      return Number(value);
+    };
+    /* The agent window, its field and scrim, and the phone's reader screen. */
+    for (const host of [".kb .aw-field", ".kb .aw-scrim", ".kb .reader-screen"]) expect(zOf(host)).toBe(LAYER.reader);
+    expect(css).toMatch(/\.kb \.agent-window[^{]*\{[^}]*z-index:\s*64/);
+
+    const stages = zOf(".kb .gsheet-scrim");
+    const preview = above("reader");
+    expect(LAYER.sheet).toBeLessThan(stages);
+    expect(stages).toBeLessThan(LAYER.reader);
+    expect(LAYER.reader).toBeLessThan(preview);
+    expect(preview).toBeLessThan(LAYER.modal);
+    /* The runtime menu and sheet are popovers: over every host. */
+    expect(LAYER.popover).toBeGreaterThan(LAYER.reader);
+
+    const source = (file: string) => fs.readFileSync(path.join(COMPONENTS, file), "utf8");
+    expect(source("preview/ArtifactPreviewHost.tsx")).toContain('above("reader")');
+    expect(rawZIndexes(source("RuntimePill.tsx"))).toEqual([]);
+    expect(source("RuntimePill.tsx")).toContain("${Z.popover}");
   });
 
   test("no component under src/components uses a raw z-index outside the scale module", () => {
