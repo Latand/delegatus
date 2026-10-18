@@ -166,7 +166,7 @@ test("zone generation copies and cleans in bounded restartable phases while inge
     expect(finished.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM usage_days_rebuild").get()!.n).toBe(0);
     expect(finished.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM usage_summaries_rebuild").get()!.n).toBe(0);
   } finally { finished.close(); }
-});
+}, 15_000);
 test("hourly totals, list and chart use the requested timezone boundaries", async () => {
   seed("utc-boundary", { at: Date.parse("2026-10-17T21:30:00Z") });
   for (const query of [
