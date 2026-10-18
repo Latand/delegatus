@@ -164,6 +164,7 @@ export function candidateBrowserBreaches(
   if (measured.inputsMin < minimum.inputsPerView) breaches.push(`a browser view answered ${measured.inputsMin} input(s), at least ${minimum.inputsPerView} required`);
   if (measured.filesErrors) breaches.push(`${measured.filesErrors} browser /api/files request(s) failed`);
   if (measured.apiErrors) breaches.push(`${measured.apiErrors} other browser API request(s) failed, first ${measured.apiFirstError ?? "unnamed"}`);
+  if (measured.apiUnfinished) breaches.push(`${measured.apiUnfinished} browser API request(s) did not finish`);
   if (measured.viewsWithoutAnswerDuringWrites) breaches.push(`${measured.viewsWithoutAnswerDuringWrites} browser view(s) received no board answer while the writers ran`);
   if (measured.selectionsLost) breaches.push(`${measured.selectionsLost} browser view(s) lost their selected conversation`);
   if (measured.staleNotices) breaches.push(`browser views showed the missing-conversation notice ${measured.staleNotices} time(s)`);

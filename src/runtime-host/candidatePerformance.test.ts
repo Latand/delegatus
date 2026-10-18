@@ -416,7 +416,20 @@ test("a browser request left unanswered or answered 5xx refuses the candidate", 
   expect(candidatePerformanceBreaches(measured)).toEqual([
     "browser /api/tmux/targets (unanswered) 30412ms exceeds 10000ms",
     "8 other browser API request(s) failed, first /api/runtime/snapshot HTTP 503",
+    "8 browser API request(s) did not finish",
   ]);
+});
+
+test("an unanswered browser request refuses promotion even when it only exceeded a diagnostic time threshold", () => {
+  const measured = healthy();
+  measured.browser!.apiUnfinished = 1;
+  measured.browser!.apiMaxMs = 30000;
+  const evidence = candidatePerformanceEvidence(report(measured));
+  expect(evidence).toMatchObject({
+    ok: false,
+    breaches: ["1 browser API request(s) did not finish"],
+    timingWarnings: ["browser /api/accounts 30000ms exceeds 10000ms"],
+  });
 });
 
 /* #2761: the reviewer held the event loop of the server under the views for

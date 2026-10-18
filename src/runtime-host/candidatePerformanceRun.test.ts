@@ -58,12 +58,12 @@ test.skipIf(process.env.LLV_CANDIDATE_PERFORMANCE_FULL !== "1")("the candidate g
   expect({ code, ok: report.ok }).toEqual({ code: 0, ok: true });
 }, 600_000);
 
-test("an induced slow candidate is refused with the bounds it breached", async () => {
+test("an induced slow candidate is refused and keeps duration observations as warnings", async () => {
   const { code, report } = await runGate(["--scale", "0.1", "--induce-slow-ms", "600"]);
   expect(code).toBe(1);
   expect(report.ok).toBe(false);
   expect(report.inducedDelayMs).toBe(600);
-  expect(report.breaches).toEqual(expect.arrayContaining([
+  expect(report.timingWarnings).toEqual(expect.arrayContaining([
     expect.stringMatching(/^grant-bearing write p95 \d+(\.\d+)?ms exceeds 350ms$/),
     expect.stringMatching(/^grant-bearing write max \d+(\.\d+)?ms exceeds 500ms$/),
     expect.stringMatching(/^Viewer event-loop delay p95 \d+(\.\d+)?ms exceeds 50ms$/),
