@@ -250,3 +250,29 @@ test("all earlier fixtures and wire evidence retain their slice 2b hashes; X3 co
     expect(bytes.length).toBe(Number(row[2])); expect(createHash("sha256").update(bytes).digest("hex")).toBe(row[3]);
   }
 });
+
+
+test("rich negotiation fields survive parsing without changing legacy requests", () => {
+  const format = { version: "celestia-rich-v1", formats: { plain: 4000, rich_markdown: 32000 }, guide: "Use rich Markdown for tables and long answers.", markdown_subset: ["headings"], max_blocks: 500, max_depth: 16, max_table_columns: 20,
+    buttons: { allowed: true, placement: "answer.buttons", kind: "url", max_rows: 2, max_per_row: 3, max_total: 6, item_schema: { type: "object" } }, forbidden: ["raw_html"] };
+  const media = { max_items: 4, max_total_bytes: 67108864, kinds: ["photo", "document", "audio", "video"] };
+  const raw = { ...sampleRequest, features: ["relay_rich_messages", "relay_media_out"], input: { ...sampleRequest.input, format }, answer: { ...sampleRequest.answer, attachments: media } };
+  const parsed = requestSchema.parse(raw);
+  expect(parsed).toHaveProperty("features", raw.features);
+  expect(parsed.input).toHaveProperty("format", format);
+  expect(parsed.answer).toHaveProperty("attachments", media);
+  for (const bad of [null, [], { version: "other" }]) {
+    const malformed = requestSchema.parse({ ...raw, features: bad === null ? null : {}, input: { ...raw.input, format: bad }, answer: { ...raw.answer, attachments: bad } });
+    expect(malformed).toHaveProperty("features", undefined);
+    expect(malformed.input).toHaveProperty("format", undefined);
+    expect(malformed.answer).toHaveProperty("attachments", undefined);
+  }
+  expect(requestSchema.parse(sampleRequest) as unknown).toEqual(sampleRequest);
+});
+test("owner answer URL button labels and filenames use Unicode code point limits", async () => {
+  const { relayAnswerSchema } = await import("./protocol");
+  expect(relayAnswerSchema.safeParse({ buttons: [[{ text: "😀".repeat(64), url: "https://example.com/" }]] }).success).toBe(true);
+  expect(relayAnswerSchema.safeParse({ buttons: [[{ text: "😀".repeat(65), url: "https://example.com/" }]] }).success).toBe(false);
+  expect(relayAnswerSchema.safeParse({ attachments: [{ path: "/file", kind: "document", filename: "😀".repeat(124) + ".pdf" }] }).success).toBe(true);
+  expect(relayAnswerSchema.safeParse({ attachments: [{ path: "/file", kind: "document", filename: "😀".repeat(125) + ".pdf" }] }).success).toBe(false);
+});

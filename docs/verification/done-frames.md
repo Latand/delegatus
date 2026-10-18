@@ -27,6 +27,12 @@ Task and image ids in this public table are aliases: the publication gate
 refuses the installation's live resource identifiers. Exact URLs were checked
 locally and are retained only in this stage's private diagnosis output.
 
+An isolated replay of the two reported rows through the new projector copied
+their exact transcript images and served HTTP 200 with 167,937 and 54,215 bytes.
+The additional #3028 row was already acknowledged; clearing that acknowledgement
+only in the private replay simulated Undo and recovered its 154,432-byte frame
+with HTTP 200 too. Production rows and source transcripts were left untouched.
+
 Two mechanisms explain the failure:
 
 1. `src/lib/runtime/structuredSpawn.ts:198` creates the stage-scratch removal

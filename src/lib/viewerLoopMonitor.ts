@@ -16,9 +16,11 @@ export type ViewerOperation = "pipelines.repository-initialization" | "tasks.not
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "pipelines.evidence" | "pipelines.get" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
   | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
+  | "relay.attachments" | "relay.attachments.read" | "relay.attachments.upload"
   | "external-relay.owner-history" | "relay.owner-continuation.send" | "relay.owner-turn.observe" | "external-relay.chains" | "relay.service-tools" | "relay.tool-index"
   | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
   | "done.media" | "done.frame-source"
+  | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
   | "codex.protocol-admission"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"
   | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel";
