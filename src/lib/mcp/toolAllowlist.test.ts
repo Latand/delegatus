@@ -209,3 +209,13 @@ test("maintenance can read needs-you but every dismissal field remains refused",
   expect(permitMaintainerTool("dismiss_attention", { project: "project-a" }).allowed).toBe(true);
   for (const field of ["target", "undo", "reason"]) expect(permitMaintainerTool("dismiss_attention", { [field]: field === "undo" ? false : "value" }).allowed).toBe(false);
 });
+
+
+test("maintenance and curator read-only settings access cannot change the curation timer", async () => {
+  const { permitMaintainerTool, permitCuratorTool } = await import("./toolAllowlist");
+  for (const permit of [permitMaintainerTool, permitCuratorTool]) {
+    expect(permit("seat_tick_settings", { verbose: true }).allowed).toBe(true);
+    expect(permit("seat_tick_settings", { curation: { enabled: false } }).allowed).toBe(false);
+    expect(permit("seat_tick_settings", { curation: { intervalHours: 1 } }).allowed).toBe(false);
+  }
+});

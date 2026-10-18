@@ -106,6 +106,7 @@ export interface SeatTickSettings {
   release?: ReleaseSetting | null;
   autoRotate?: AutoRotateSetting | null;
   maintenance?: BoardMaintenanceSetting | null;
+  curation?: BoardMaintenanceSetting | null;
   project: string;
   /** Whether the Viewer ticks this project at all. */
   enabled: boolean;
@@ -137,6 +138,8 @@ export interface EffectiveSeatTickSettings {
   autoRotate?: AutoRotateSetting | null;
   maintenance: { enabled: boolean; intervalHours: number; intervalMs: number };
   maintenanceSetting?: BoardMaintenanceSetting | null;
+  curation?: { enabled: boolean; intervalHours: number; intervalMs: number };
+  curationSetting?: BoardMaintenanceSetting | null;
   enabled: boolean;
   wakeIntervalMs: number;
   reason: string | null;
@@ -173,6 +176,7 @@ export interface SeatTickSettingsChange {
   release?: ReleaseSettingChange;
   autoRotate?: { enabled?: boolean; thresholdPercent?: number | string | null; why?: string | null };
   maintenance?: { enabled?: boolean; intervalHours?: number | string | null };
+  curation?: { enabled?: boolean; intervalHours?: number | string | null };
   enabled?: boolean;
   /** `null` restores the default interval. */
   wakeIntervalMinutes?: number | null;
@@ -248,6 +252,7 @@ function normalizeRow(project: string, value: unknown): SeatTickSettings {
     ...(Array.isArray(raw.autonomyHistory) ? { autonomyHistory: raw.autonomyHistory.map(normalizeAutonomy).filter((entry): entry is AutonomySetting => entry !== null) } : {}),
     ...(normalizeRelease(raw.release) ? { release: normalizeRelease(raw.release) } : {}),
     ...(normalizeAutoRotate(raw.autoRotate) ? { autoRotate: normalizeAutoRotate(raw.autoRotate) } : {}),
+    ...(normalizeMaintenance(raw.curation) ? { curation: normalizeMaintenance(raw.curation) } : {}),
     ...(normalizeMaintenance(raw.maintenance) ? { maintenance: normalizeMaintenance(raw.maintenance) } : {}),
     enabled: raw.enabled !== false,
     wakeIntervalMinutes: normalizeInterval(raw.wakeIntervalMinutes),
@@ -377,6 +382,11 @@ export function writeSeatTickSettings(project: string, settings: SeatTickSetting
   }));
 }
 
+export function effectiveCurationSetting(settings: Pick<SeatTickSettings, "curation">) {
+  const intervalHours = settings.curation?.intervalHours ?? 6;
+  return { enabled: settings.curation?.enabled ?? true, intervalHours, intervalMs: intervalHours * 3_600_000 };
+}
+
 /**
  * The settings one check decides on: the record with its own expiry applied.
  *
@@ -396,7 +406,7 @@ export function effectiveSeatTickSettings(
   const configured = settings.updatedAt !== null;
   if (lapsed || seatTickSettingsAreDefault(settings)) {
     return {
-      release: settings.release, maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
+      release: settings.release, curation: effectiveCurationSetting(settings), curationSetting: settings.curation, maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
       autonomy: endedAutonomy(settings.autonomy, nowMs), autonomyHistory: settings.autonomyHistory,
       enabled: true,
       wakeIntervalMs: defaultWakeIntervalMs,
@@ -413,7 +423,7 @@ export function effectiveSeatTickSettings(
     };
   }
   return {
-    release: settings.release, maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
+    release: settings.release, curation: effectiveCurationSetting(settings), curationSetting: settings.curation, maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
     autonomy: endedAutonomy(settings.autonomy, nowMs), autonomyHistory: settings.autonomyHistory,
     enabled: settings.enabled,
     wakeIntervalMs: settings.wakeIntervalMinutes === null
@@ -444,11 +454,11 @@ export function effectiveSeatTickSettings(
  */
 export function seatTickSettingsAfterLapse(
   project: string,
-  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "maintenanceSetting" | "autoRotate" | "release" | "autonomy" | "autonomyHistory">>,
+  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "maintenanceSetting" | "curationSetting" | "autoRotate" | "release" | "autonomy" | "autonomyHistory">>,
 ): SeatTickSettings {
   const restored = defaultSeatTickSettings(project);
-  if (!lapsed.reason && !lapsed.monitorPrompt && !lapsed.maintenanceSetting && !lapsed.autoRotate && !lapsed.release && !lapsed.autonomy && !lapsed.autonomyHistory?.length) return restored;
-  return { ...restored, ...(lapsed.autonomy ? { autonomy: lapsed.autonomy } : {}), ...(lapsed.autonomyHistory ? { autonomyHistory: lapsed.autonomyHistory } : {}), ...(lapsed.release ? { release: lapsed.release } : {}), ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), ...(lapsed.autoRotate ? { autoRotate: lapsed.autoRotate } : {}), reason: lapsed.reason, monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
+  if (!lapsed.reason && !lapsed.monitorPrompt && !lapsed.maintenanceSetting && !lapsed.curationSetting && !lapsed.autoRotate && !lapsed.release && !lapsed.autonomy && !lapsed.autonomyHistory?.length) return restored;
+  return { ...restored, ...(lapsed.curationSetting ? { curation: lapsed.curationSetting } : {}), ...(lapsed.autonomy ? { autonomy: lapsed.autonomy } : {}), ...(lapsed.autonomyHistory ? { autonomyHistory: lapsed.autonomyHistory } : {}), ...(lapsed.release ? { release: lapsed.release } : {}), ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), ...(lapsed.autoRotate ? { autoRotate: lapsed.autoRotate } : {}), reason: lapsed.reason, monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
 }
 
 export type SeatTickSettingsChangeResult =
@@ -474,7 +484,7 @@ export function applySeatTickSettingsChange(
     const effective = effectiveSeatTickSettings(current, Date.parse(context.at), 60 * 60_000);
     if (effective.lapsed) current = seatTickSettingsAfterLapse(current.project, effective);
   }
-  const touched = ["enabled", "wakeIntervalMinutes", "reason", "monitorPrompt", "until", "maintenance", "autoRotate", "release", "autonomy", "autonomyDecision"].filter((key) => Object.hasOwn(change, key));
+  const touched = ["enabled", "wakeIntervalMinutes", "reason", "monitorPrompt", "until", "maintenance", "curation", "autoRotate", "release", "autonomy", "autonomyDecision"].filter((key) => Object.hasOwn(change, key));
   if (touched.length === 0) return { ok: false, error: "a tick settings change needs at least one field" };
 
   const enabled = Object.hasOwn(change, "enabled") ? change.enabled : current.enabled;
@@ -557,6 +567,25 @@ export function applySeatTickSettingsChange(
     }
     maintenance = { enabled: on, intervalHours: hours, updatedAt: context.at, setBy: context.actor };
   }
+  let curation = current.curation;
+  if (Object.hasOwn(change, "curation")) {
+    const raw = change.curation;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "curation must be an object" };
+    const on = Object.hasOwn(raw, "enabled") ? raw.enabled : curation?.enabled ?? true;
+    if (typeof on !== "boolean") return { ok: false, error: "curation.enabled must be a boolean" };
+    let hours = curation?.intervalHours ?? 6;
+    if (Object.hasOwn(raw, "intervalHours")) {
+      const given = raw.intervalHours;
+      const number = typeof given === "number" ? given : typeof given === "string" && given.trim() ? Number(given) : NaN;
+      if (given === null) hours = 6;
+      else if (!Number.isFinite(number)) notes.push("curation.intervalHours was not a number; kept the stored interval");
+      else {
+        hours = Math.max(1, Math.min(168, Math.round(number)));
+        if (hours !== given) notes.push(`curation.intervalHours normalized to ${hours}`);
+      }
+    }
+    curation = { enabled: on, intervalHours: hours, updatedAt: context.at, setBy: context.actor };
+  }
   let autoRotate = current.autoRotate;
   if (Object.hasOwn(change, "autoRotate")) {
     const raw = change.autoRotate;
@@ -616,6 +645,7 @@ export function applySeatTickSettingsChange(
     ...(release ? { release } : {}),
     project: current.project,
     ...(maintenance ? { maintenance } : {}),
+    ...(curation ? { curation } : {}),
     ...(autoRotate ? { autoRotate } : {}),
     enabled,
     wakeIntervalMinutes,

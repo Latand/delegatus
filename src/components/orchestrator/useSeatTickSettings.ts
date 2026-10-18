@@ -47,6 +47,7 @@ export interface SeatTickChange {
    * names it instead of a `null` restoring the default.
    */
   maintenance?: { enabled?: boolean; intervalHours?: number | string | null };
+  curation?: { enabled?: boolean; intervalHours?: number | string | null };
 }
 
 export interface SeatTickSettingsRead {
@@ -175,6 +176,10 @@ function optimistic(answer: SeatTickSettingsAnswer, change: SeatTickChange): Sea
   return {
     ...answer,
     ...(maintenance ? { maintenance } : {}),
+    ...(answer.curation && change.curation ? { curation: { ...answer.curation,
+      ...(change.curation.enabled !== undefined ? { enabled: change.curation.enabled } : {}),
+      ...(typeof change.curation.intervalHours === "number" ? { intervalHours: change.curation.intervalHours } : {}),
+      ...(change.curation.intervalHours === null ? { intervalHours: answer.curation.defaultIntervalHours } : {}) } } : {}),
     ...(answer.release && change.release ? { release: { ...answer.release,
       ...(typeof change.release.enabled === "boolean" ? { enabled: change.release.enabled } : {}),
       ...(typeof change.release.askBeforePublish === "boolean" ? { askBeforePublish: change.release.askBeforePublish } : {}),
