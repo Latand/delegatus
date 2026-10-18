@@ -8,7 +8,7 @@ const id = z.string().regex(/^pr_[0-9a-f]{32}$/);
 const instant = z.string().datetime({ offset: true });
 const state = z.enum(["pending", "sent", "failed", "uncertain", "no-orchestrator"]);
 const chosen = z.array(z.number().int().min(1).max(9)).max(9);
-const media = z.object({ id: z.string().regex(/^[0-9a-f]{64}$/), mime: z.enum(["image/png", "image/jpeg", "image/webp", "video/mp4", "video/webm"]),
+const media = z.object({ id: z.string().regex(/^[0-9a-f]{64}$/), mime: z.enum(["image/png", "image/jpeg", "image/webp", "image/gif", "video/mp4", "video/webm"]),
   bytes: z.number().int().min(1).max(64 * 1024 * 1024), available: z.literal(false), url: z.null() }).strict();
 const caption = z.string().max(200);
 const ownerText = z.string().refine(value => prototypeTextLength(value) <= 20_000);

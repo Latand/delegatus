@@ -3650,6 +3650,7 @@ export const en = {
   "done.group.expand": "Show each of «{group}»",
   "done.group.collapse": "Fold «{group}»",
   "done.thumbOpen": "Open the picture: {title}",
+  "done.framesMissing": "Frames were not retained",
   "done.meta.merged": "merged {time}",
   "done.meta.laneDone": "lane finished {time}",
   "done.meta.taskDone": "task closed {time}",

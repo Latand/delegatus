@@ -7870,6 +7870,15 @@ describe("agent memory isolation", () => {
  * the decisions. Then the same list pinned above the orchestrator's report
  * log screen in uk and en, folded to its head.
  */
+describe("done frames retained in state", () => {
+  browserTest("phone frames survive lane removal and missing frames have a label", async () => {
+    const { captureDoneFrames } = await import("@/components/kanban/issue1695BrowserHarness");
+    const browser = await launchChromium();
+    try {expect(await captureDoneFrames(browser,true)).toEqual([]);}
+    finally {await browser.close();}
+  },120_000);
+});
+
 describe("«Готово» in the phone sheet", () => {
   browserTest("the sheet opens on «Готово»: square checks, groups, the viewer and the badge at 390 in uk; the report log pins it too", async () => {
     const out = path.resolve(".artifacts/done-section/phone");
