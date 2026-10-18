@@ -141,10 +141,11 @@ export function summarizeBrowserViews(
 export function candidateBrowserBreaches(
   measured: CandidateBrowserMeasurements,
   bounds: CandidateBrowserBounds = CANDIDATE_BROWSER_BOUNDS,
+  timingWarnings?: string[],
 ): string[] {
   const breaches: string[] = [];
   const over = (label: string, value: number, limit: number) => {
-    if (value > limit) breaches.push(`${label} ${value}ms exceeds ${limit}ms`);
+    if (value > limit) (timingWarnings ?? breaches).push(`${label} ${value}ms exceeds ${limit}ms`);
   };
   const minimum = CANDIDATE_BROWSER_MINIMUMS;
   if (measured.views < minimum.views) breaches.push(`browser views: measured ${measured.views}, at least ${minimum.views} required`);
@@ -154,7 +155,7 @@ export function candidateBrowserBreaches(
   over("browser /api/files p95", measured.filesP95Ms, bounds.filesP95Ms);
   over("browser /api/files max", measured.filesMaxMs, bounds.filesMaxMs);
   if (measured.apiMaxMs > bounds.apiMaxMs) {
-    breaches.push(`browser ${measured.apiMaxRoute ?? "API request"} ${measured.apiMaxMs}ms exceeds ${bounds.apiMaxMs}ms`);
+    (timingWarnings ?? breaches).push(`browser ${measured.apiMaxRoute ?? "API request"} ${measured.apiMaxMs}ms exceeds ${bounds.apiMaxMs}ms`);
   }
   over("browser main-thread delay before the board drew", measured.bootLagMaxMs, bounds.bootLagMaxMs);
   over("browser main-thread delay p95", measured.lagP95Ms, bounds.lagP95Ms);

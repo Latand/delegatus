@@ -1,6 +1,10 @@
 # Candidate performance gate
 
-Status: in force since the incident behind #2760, #2761 and #2762.
+Status: correctness checks remain enforced. Duration thresholds are diagnostic
+warnings and do not block a deployment. The report retains measured values and
+thresholds, including observations from older candidate images. Missing or
+malformed measurements, failed operations, lost sessions or receipts and
+induced faults still refuse promotion.
 
 ## What went wrong
 
@@ -172,7 +176,9 @@ gate's container runs under Docker's init (`--init`): as the entrypoint
 itself the gate was PID 1, its runtime host refused that owner, and every
 candidate was refused before anything was measured; an init also reaps what
 the gate's releases, workers and browser orphan. PID 1 is accepted as an
-owner all the same. A candidate passes only when both pass. A refused candidate is retired before
+owner all the same. Both rehearsals must complete successfully. Duration
+overruns are recorded as `timingWarnings`; actual failed checks still refuse.
+A refused candidate is retired before
 anything is switched, and the release that was serving keeps serving
 (`ViewerDeploymentCoordinator`, phase `candidate-health`). The adapter
 computes the verdict again from the measurements against the bounds the

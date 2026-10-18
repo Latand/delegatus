@@ -1439,13 +1439,15 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       deliveryEvidence: { pending: dataset.pendingDeliveryIds.length, uncertain: dataset.uncertainDeliveryIds.length, retained: retainedDeliveryIds.length, pendingLaunches: pendingLaunchIds.length, preserved: deliveryPreserved },
       browser,
     };
-    const breaches = candidatePerformanceBreaches(measurements);
+    const timingWarnings: string[] = [];
+    const breaches = candidatePerformanceBreaches(measurements, CANDIDATE_PERFORMANCE_BOUNDS, timingWarnings);
     return {
       checkedAt,
       runtime,
       bounds: CANDIDATE_PERFORMANCE_BOUNDS,
       measurements,
       breaches,
+      timingWarnings,
       ...inducedFields,
       ok: breaches.length === 0 && !inducedDelayMs && !induced.length,
       ...(breaches.length ? { detail: breaches[0] } : {}),

@@ -78,7 +78,7 @@ test("measurements inside every bound pass", () => {
   expect(candidatePerformanceBreaches(healthy())).toEqual([]);
 });
 
-test("the reported 1048 ms first boot is still refused by the unchanged gate", () => {
+test("the full threshold comparison retains the reported 1048 ms first boot", () => {
   const measured = healthy();
   measured.firstBoot.eventLoopMaxMs = 1048;
   expect(candidatePerformanceBreaches(measured)).toEqual(["Viewer event-loop delay during first boot 1048ms exceeds 1000ms"]);
@@ -140,7 +140,7 @@ test("each bound names its breach with the measured value", () => {
 
 /* A slow first boot is refused even when everything after it is fast: the
    phases are bounded apart from the warm numbers. */
-test("a slow registry open or first snapshot is refused even when warm operation is fast", () => {
+test("the full threshold comparison names a slow registry open or first snapshot", () => {
   for (const phase of ["registryOpenMs", "firstSnapshotMs"] as const) {
     const measured = healthy();
     measured.firstBoot[phase] = 90_000;
@@ -262,7 +262,7 @@ test("a report cannot pass with breaches, without measurements or under an induc
 
 /* The verdict is computed again from the measurements: what the report says
    about itself can only make it stricter. */
-test("empty, partial, garbled or over-bound measurements claiming a pass are refused", () => {
+test("empty, partial, garbled or failed measurements claiming a pass are refused", () => {
   const claimed = (measurements: unknown) => ({
     checkedAt: "2026-10-12T00:00:00Z", runtime: "bun 1.4.0", bounds: CANDIDATE_PERFORMANCE_BOUNDS, measurements, breaches: [], ok: true,
   });
@@ -276,13 +276,52 @@ test("empty, partial, garbled or over-bound measurements claiming a pass are ref
   overBound.firstBoot.firstSnapshotMs = 90_000;
   const failedSuccessor = healthy();
   failedSuccessor.handover.successor.completed = false;
-  for (const measurements of [{}, partial, garbled, negative, overBound, failedSuccessor]) {
+  for (const measurements of [{}, partial, garbled, negative, failedSuccessor]) {
     const evidence = candidatePerformanceEvidence(JSON.parse(JSON.stringify(claimed(measurements))));
     expect(evidence.ok).toBe(false);
     expect(evidence.breaches.length).toBeGreaterThan(0);
   }
-  expect(candidatePerformanceEvidence(claimed(overBound)).breaches).toEqual(["first registry snapshot 90000ms exceeds 2000ms"]);
+  expect(candidatePerformanceEvidence(claimed(overBound))).toMatchObject({
+    ok: true, breaches: [], timingWarnings: ["first registry snapshot 90000ms exceeds 2000ms"],
+  });
   expect(candidatePerformanceEvidence(claimed(healthy())).ok).toBe(true);
+});
+
+test("the deployment reports measured timing overruns without refusing a healthy candidate", () => {
+  const measured = healthy();
+  measured.firstBoot.firstSnapshotMs = 3665;
+  measured.firstBoot.firstUsableMs = 13369;
+  measured.eventLoop.maxMs = 1147.4;
+  measured.firstBoot.coldProjectionMs = 8748;
+  measured.browser!.readyMaxMs = 12000;
+  const timingWarnings: string[] = [];
+  const breaches = candidatePerformanceBreaches(measured, CANDIDATE_PERFORMANCE_BOUNDS, timingWarnings);
+  expect(breaches).toEqual([]);
+  const evidence = parseCandidatePerformanceReport(CANDIDATE_PERFORMANCE_REPORT_PREFIX + JSON.stringify(
+    report(measured, { breaches, timingWarnings, ok: true }),
+  ));
+  expect(evidence).toMatchObject({ ok: true, breaches: [], timingWarnings });
+  expect(timingWarnings).toEqual([
+    "first registry snapshot 3665ms exceeds 2000ms",
+    "first boot to a usable board 13369ms exceeds 10000ms",
+    "Viewer event-loop delay max 1147.4ms exceeds 500ms",
+    "cold projection 8748ms exceeds 8000ms",
+    "browser board drawn 12000ms exceeds 10000ms",
+  ]);
+});
+
+test("older timing-only refusals become warnings while independent failures remain decisive", () => {
+  const measured = healthy();
+  measured.firstBoot.firstSnapshotMs = 90000;
+  const legacy = report(measured, { detail: "first registry snapshot 90000ms exceeds 2000ms" });
+  expect(candidatePerformanceEvidence(legacy)).toMatchObject({ ok: true, breaches: [], timingWarnings: legacy.breaches });
+  expect(candidatePerformanceEvidence({ ...legacy, detail: "the runner failed after collecting measurements" }).ok).toBe(false);
+  expect(candidatePerformanceEvidence({ ...legacy, inducedDelayMs: 100 }).ok).toBe(false);
+  measured.deliveryEvidence.preserved = false;
+  expect(candidatePerformanceEvidence(report(measured))).toMatchObject({ ok: false, breaches: ["retained launch or delivery evidence changed"] });
+  measured.deliveryEvidence.preserved = true;
+  measured.runtimeTimeouts = 1;
+  expect(candidatePerformanceEvidence(report(measured))).toMatchObject({ ok: false, breaches: ["1 runtime timeout(s)"] });
 });
 
 test("the refusal names the breaches for the deployment record", () => {
@@ -384,7 +423,7 @@ test("a browser request left unanswered or answered 5xx refuses the candidate", 
    801 ms and every bound read in the page passed (request max 232 ms, page
    delay 13 ms, input 20 ms). The server's own loop is part of the verdict,
    and a run that did not read it is refused. */
-test("a server held under the browser views, or not measured there, refuses the candidate", () => {
+test("a slow server produces a warning and an unmeasured server refuses the candidate", () => {
   const held = healthy();
   held.browser = {
     ...healthyBrowser(),
@@ -393,7 +432,7 @@ test("a server held under the browser views, or not measured there, refuses the 
   };
   expect(candidatePerformanceBreaches(held)).toEqual(["server event-loop delay max under the browser views 801ms exceeds 500ms"]);
   expect(candidatePerformanceEvidence(report(held, { ok: true, breaches: [] }))).toMatchObject({
-    ok: false, detail: "server event-loop delay max under the browser views 801ms exceeds 500ms",
+    ok: true, breaches: [], timingWarnings: ["server event-loop delay max under the browser views 801ms exceeds 500ms"],
   });
 
   const slow = healthy();

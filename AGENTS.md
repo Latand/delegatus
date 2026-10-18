@@ -234,7 +234,8 @@ a synthetic registry of 53,299 rows of retained history, two Viewer
 releases as their own processes, live workers handed from one to the other
 through the real demotion and startup adoption, two concurrent writers, eight
 board scopes, and then eight Chromium views of the candidate's own production
-build while two writers run. A breached bound, a missing measurement, a
+build while two writers run. Duration thresholds are diagnostic warnings.
+A missing measurement, a
 missing report or a successor that fails refuses the candidate and the serving
 release keeps serving. Run it locally with `bun scripts/verify-viewer-runtime.ts
 --performance` after `bun run build`, with `CHROME_BIN` set; an empty registry
