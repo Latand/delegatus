@@ -973,6 +973,17 @@ test("a claim already waiting when drain begins is held until its busy bound wit
 });
 
 
+test("chain and legacy local switches never advertise an unagreed wire feature", () => {
+  const file = path.join(root, "external-relay/switches.json");
+  const previous = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ v: 1, chat_conversations: true, chain_conversations: true, compact: true }));
+    expect(relayClaimCapabilities()).toEqual({ kinds: ["answer", "compact"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"] });
+    setRelaySwitch("compact", false); expect(relayClaimCapabilities().kinds).toEqual(["answer"]);
+  } finally { if (previous) fs.writeFileSync(file, previous); else fs.rmSync(file, { force: true }); }
+});
+
 test("claim advertises on-demand tools only when the stored descriptor offers them", () => {
   expect(relayClaimCapabilities({ features: ["relay_tool_calls", "relay_tools_on_demand"] }).features).toContain("relay_tools_on_demand");
   expect(relayClaimCapabilities({ features: ["relay_tool_calls"] }).features).not.toContain("relay_tools_on_demand");

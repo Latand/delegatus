@@ -34258,3 +34258,30 @@ describe("overlays opened from a conversation draw above the full-screen view th
     } finally { await browser.close(); browserServer.close(); server.stop(); }
   }, 1_500_000);
 });
+
+describe("relay reply-chain conversation list", () => {
+  browserTest("each chain has its own authority label in both languages and themes", async () => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), "relay-chain-frames-"));
+    const fixture = await serveEvidenceFixture(out);
+    // Keep Chrome's Unix socket path short while every file stays in this case's sandbox.
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+        ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }) });
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const context = await browser.newContext({ viewport: { width: 1100, height: 720 }, colorScheme: theme });
+        try {
+          await context.addInitScript(({ lang, theme }) => { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme); }, { lang, theme });
+          const page = await context.newPage();
+          await page.goto(`${fixture.base}?scenario=relay-chain-list`);
+          await page.locator('[data-relay-chat-authority="admin"]').waitFor();
+          expect(await page.locator("[data-relay-chat-authority]").count()).toBe(3);
+          expect(await page.locator('[data-relay-chat-authority="admin"]').innerText()).toContain(lang === "en" ? "admin" : "адміністратор");
+          const destination = process.env.LLV_RELAY_CHAIN_FRAMES ?? out; fs.mkdirSync(destination, { recursive: true });
+          await page.screenshot({ path: path.join(destination, `${lang}-${theme}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser?.close(); if (tempFd !== null) fs.closeSync(tempFd); fixture.stop(); }
+  }, 60000);
+});
