@@ -12,22 +12,26 @@ afterEach(() => {
   for (const cache of caches.splice(0)) cache.close();
   for (const root of roots.splice(0)) fs.rmSync(root,{recursive:true,force:true});
 });
-function setup() {
+function setup(options: { flat?: boolean; bounds?: { trees: number; entries: number; bytes: number; directories?: number } } = {}) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),"sweep-cache-"));roots.push(root);
-  const tree=path.join(root,"tree");fs.mkdirSync(path.join(tree,"nested"),{recursive:true});
-  fs.writeFileSync(path.join(tree,"nested/file"),"cache");
+  const tree=path.join(root,"tree");
+  if(options.flat) { fs.mkdirSync(tree);fs.writeFileSync(path.join(tree,"file"),"cache"); }
+  else { fs.mkdirSync(path.join(tree,"nested"),{recursive:true});fs.writeFileSync(path.join(tree,"nested/file"),"cache"); }
   const callbacks = new Map<string,()=>void>();
   const observers = new Map<string,EventEmitter>();
   const closed = new Set<string>();
+  const installed: { path: string; closed: boolean }[] = [];
   const watch = ((directory: string, _options: unknown, callback:()=>void) => {
     callbacks.set(directory,callback);
-    const emitter=Object.assign(new EventEmitter(),{close:()=>closed.add(directory)});
+    const entry = { path: directory, closed: false };
+    installed.push(entry);
+    const emitter=Object.assign(new EventEmitter(),{close:()=>{entry.closed=true;closed.add(directory);}});
     observers.set(directory,emitter);return emitter;
   }) as unknown as typeof fs.watch;
   let now=1_000;
   const file=path.join(root,"cache.json");
-  const cache=new WorktreeSweepCache(file,()=>now,watch);caches.push(cache);
-  return {root,tree,file,cache,callbacks,observers,closed,setNow:(value:number)=>{now=value;}};
+  const cache=new WorktreeSweepCache(file,()=>now,watch,options.bounds);caches.push(cache);
+  return {root,tree,file,cache,callbacks,observers,closed,installed,setNow:(value:number)=>{now=value;}};
 }
 async function size(cache: WorktreeSweepCache, tree: string, seen=new Set<string>(), excluded: string[]=[], clock="settled") {
   return cache.allocation(tree,clock,excluded,seen,()=>allocatedBytes(tree,excluded,seen));
@@ -102,6 +106,39 @@ test("deep invalidation, retention-clock changes, expiry and backward clocks req
   setNow(86_401_000);await size(cache,tree,new Set(),[],"retention-expired");
   setNow(1);await size(cache,tree);
   expect(cache.stats.allocationMisses).toBe(5);
+});
+
+test("repeated allocation refreshes keep one live file observer and warm reuse",async()=>{
+  const {tree,cache,installed,setNow}=setup({flat:true,bounds:{trees:2,entries:2,bytes:4096,directories:4}});
+  const file=path.join(tree,"file");
+  const liveObservers=()=>installed.filter(observer=>!observer.closed);
+  const liveFileObservers=()=>liveObservers().filter(observer=>observer.path===file);
+
+  await size(cache,tree);
+  await size(cache,tree);
+  expect(cache.stats.allocationHits).toBe(1);
+  expect(liveFileObservers()).toHaveLength(1);
+
+  for(let day=1;day<=5;day++) {
+    setNow(day*86_400_000+1_000);
+    await size(cache,tree);
+    expect(cache.stats.allocationMisses).toBe(day+1);
+    expect(liveFileObservers()).toHaveLength(1);
+    expect(liveObservers()).toHaveLength(2);
+    await size(cache,tree);
+    expect(cache.stats.allocationHits).toBe(day+1);
+    expect(liveFileObservers()).toHaveLength(1);
+    expect(liveObservers()).toHaveLength(2);
+  }
+
+  await size(cache,tree,new Set(),[],"changed-context");
+  expect(cache.stats.allocationMisses).toBe(7);
+  expect(liveFileObservers()).toHaveLength(1);
+  expect(liveObservers()).toHaveLength(2);
+  await size(cache,tree,new Set(),[],"changed-context");
+  expect(cache.stats.allocationHits).toBe(7);
+  expect(liveFileObservers()).toHaveLength(1);
+  expect(liveObservers()).toHaveLength(2);
 });
 
 test("discovery reuse never supplies removal authority and observer failures disable reuse",async()=>{

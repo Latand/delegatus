@@ -13,7 +13,7 @@ const MAX_BYTES = 24 * 1024 * 1024;
 /** In walk order: inode identity, allocated bytes, parent row (-1 for root). */
 export type Allocation = [string, number, number];
 type Entry = { key: string; at: number; allocation?: Allocation[]; candidates?: string[]; candidateClock?: string; allocationClock?: string };
-type Watch = { watchers: fs.FSWatcher[]; generation: number; identity: string; directories: number; files: number; invalidate: () => void };
+type Watch = { watchers: fs.FSWatcher[]; fileWatchers: fs.FSWatcher[]; generation: number; identity: string; directories: number; files: number; invalidate: () => void };
 
 /** One leased worker owns the cache and every directory observer. A new owner
  * invalidates persisted observations: no filesystem change journal spans its
@@ -53,9 +53,25 @@ export class WorktreeSweepCache {
     this.rows.delete(directory);
     const watch = this.watches.get(directory);
     for (const watcher of watch?.watchers ?? []) watcher.close();
+    for (const watcher of watch?.fileWatchers ?? []) watcher.close();
     this.watchDirectories -= watch?.directories ?? 0;
     this.watchFiles -= watch?.files ?? 0;
     this.watches.delete(directory);
+  }
+
+  private retireAllocation(directory: string, row: Entry | null | undefined) {
+    const observer = this.watches.get(directory);
+    for (const watcher of observer?.fileWatchers ?? []) watcher.close();
+    if (observer) {
+      observer.fileWatchers = [];
+      this.watchFiles -= observer.files;
+      observer.files = 0;
+    }
+    if (row?.allocation) this.entries -= row.allocation.length;
+    if (row) {
+      row.allocation = undefined;
+      row.allocationClock = undefined;
+    }
   }
 
   private key(directory: string): string | null {
@@ -69,7 +85,7 @@ export class WorktreeSweepCache {
         while (this.watches.size >= this.bounds.trees) this.forget(this.watches.keys().next().value!);
         const plan = directoryWatchSet(directory, (this.bounds.directories ?? SWEEP_WATCH_DIRECTORIES) - this.watchDirectories);
         if (plan === null) return null;
-        observer = { watchers: [], generation: ++this.generation, identity, directories: plan.length, files: 0, invalidate: () => {} };
+        observer = { watchers: [], fileWatchers: [], generation: ++this.generation, identity, directories: plan.length, files: 0, invalidate: () => {} };
         this.watchDirectories += plan.length;
         this.watches.set(directory, observer);
         const watched = observer;
@@ -94,7 +110,7 @@ export class WorktreeSweepCache {
     const key = observed;
     let row = this.rows.get(directory);
     if (!row || row.key !== key || this.now() < row.at || this.now() - row.at >= DAY) {
-      this.entries -= row?.allocation?.length ?? 0;
+      this.retireAllocation(directory, row);
       row = { key, at: this.now() };
     }
     // LRU: the next pass naturally retires paths no longer in its kept set.
@@ -121,6 +137,7 @@ export class WorktreeSweepCache {
     if (allocation) this.stats.allocationHits++;
     else {
       this.stats.allocationMisses++;
+      this.retireAllocation(directory, row);
       const before = this.key(directory);
       const captured = await captureAllocation(directory, excluded);
       if (!captured) return fallback();
@@ -158,7 +175,7 @@ export class WorktreeSweepCache {
       try {
         const watcher = this.watch(file, { persistent: false }, observer.invalidate);
         watcher.on("error", observer.invalidate);
-        observer.watchers.push(watcher);
+        observer.fileWatchers.push(watcher);
         observer.files++;
         this.watchFiles++;
         const stat = fs.lstatSync(file);
