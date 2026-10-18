@@ -47,7 +47,7 @@ const {
 } = await import("./deploymentProxy");
 const { recordViewerEntries, VIEWER_ENTRIES_FILE } = await import("./viewerEntries");
 const { ReceiptSweepReporter, receiptSweepDebugEnabled } = await import("./receiptSweep");
-const { registryConversationRetentionStates } = await import("./journalRetention");
+const { maintainRuntimeJournal } = await import("./journalRetention");
 const {
   inspectRuntimeJournalFreelist,
   runtimeJournalVacuumDue,
@@ -332,8 +332,7 @@ let lastJournalVacuumAttemptAt = 0;
 const journalMaintenanceTimer = journal.isWritable() ? setInterval(() => {
   if (!journal.isWritable()) return;
   try {
-    const registry = agentRegistry().readOnlySnapshot();
-    const effects = journal.settleStalePendingEffects(registryConversationRetentionStates(registry));
+    const effects = maintainRuntimeJournal(journal, agentRegistry);
     if (effects.settled > 0) {
       console.error(`[runtime journal] stale effect sweep settled ${effects.settled} of ${effects.scanned} pending spawn/kill effects`);
     }

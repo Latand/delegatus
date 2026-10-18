@@ -17,6 +17,7 @@ export type ViewerOperation = "worktrees.sweep" | "history.prepare" | "history.r
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "pipelines.evidence" | "pipelines.get" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
+  | "runtime-journal.maintenance"
   | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
   | "relay.attachments" | "relay.attachments.read" | "relay.attachments.upload"
   | "external-relay.owner-history" | "mcp.project-prefix" | "issue-report.resolve" | "self-update.revision-prefix"

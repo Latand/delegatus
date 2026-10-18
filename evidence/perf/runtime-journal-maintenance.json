@@ -1,0 +1,1835 @@
+{
+  "schemaVersion": 1,
+  "baseRevision": "7ef6d95aa",
+  "copyStartedUtc": "2026-10-18T18:49:23.702421Z",
+  "runtime": "bun 1.4.0",
+  "conditions": {
+    "logicalCpuAffinity": 24,
+    "cpuQuota": "unlimited at all ancestors",
+    "gate": "scripts/gate-slot.sh",
+    "copies": "fresh per case and revision, cloned from one immutable VACUUM INTO seed",
+    "isolation": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "LLV_STATE_DIR",
+      "TMPDIR",
+      "CODEX_HOME"
+    ],
+    "viewerControl": "closed loopback port"
+  },
+  "seed": {
+    "runtime-events.sqlite": {
+      "bytes": 518131712,
+      "sha256": "8968fa45c8cdbdb8e326900f597ad8b9b5aed4f3009142b9429d58626981de3d"
+    },
+    "agent-registry.sqlite": {
+      "bytes": 562262016,
+      "sha256": "919f1e4f93df84557d408621a89ec55bf4a7cda836cf747f55b1f2f0ae13370a"
+    }
+  },
+  "sourceSha256": {
+    "src/lib/agent/registry.ts": "6e3e18c7f418d749fcf01e96caa30bc3d51273fc5f0f4cd77d7222ad0696669d",
+    "src/lib/performanceSpans.ts": "5f62e41fcfa457689b36663da3516fd0542543af3b25176c6e8be65ac9c210d0",
+    "src/lib/viewerLoopMonitor.ts": "6091659a244fdc815e59b5cd3194c7334ca04357e183411bda3702b7144254bd",
+    "src/runtime-host/journal.ts": "e96cc9b7064841670c03f26ad9d705157be442f6968145ec9018ad8800b3da45",
+    "src/runtime-host/journalRetention.ts": "33dfa0c0f290e7edc97bca9333b936fb63558eb9ea245dd4e4e0db2e3f4bd5f5",
+    "src/runtime-host/main.ts": "38100c693738d3d72a6aa0c07411ddbe1a2b480d9222f35790c03f03148f3d0d"
+  },
+  "copiedEquivalence": {
+    "pendingIds": 3,
+    "targeted": {
+      "reads": 11,
+      "parses": 11
+    },
+    "fullMapSize": 8401,
+    "selected": [
+      "current",
+      "current",
+      "dead"
+    ],
+    "equal": true
+  },
+  "runtimeHostRehearsal": {
+    "checkedAt": "2026-10-18T19:02:05.140Z",
+    "runtime": "bun 1.4.0",
+    "succession": {
+      "predecessorReadyMs": 513,
+      "successorTookOverMs": 505,
+      "completed": true
+    },
+    "listener": {
+      "windowMs": 15000,
+      "polls": 27,
+      "answered": 27,
+      "abandoned": 13
+    },
+    "socket": {
+      "polls": 27,
+      "answered": 27,
+      "abandoned": 13
+    },
+    "ok": true
+  },
+  "summary": {
+    "R2-maintenance": {
+      "before": {
+        "warmCount": 10,
+        "wallMs": {
+          "min": 708.4756420000003,
+          "median": 736.1216660000002,
+          "max": 817.3870739999993
+        },
+        "coldWallMs": [
+          1452.7044420000002,
+          1489.883831
+        ],
+        "load1m": {
+          "min": 3.59,
+          "max": 5.69
+        }
+      },
+      "after": {
+        "warmCount": 10,
+        "wallMs": {
+          "min": 2.419810000000325,
+          "median": 4.503437500000246,
+          "max": 6.893286999999873
+        },
+        "coldWallMs": [
+          269.088763,
+          371.8628900000001
+        ],
+        "load1m": {
+          "min": 6.04,
+          "max": 9.33
+        }
+      }
+    },
+    "R2-map": {
+      "before": {
+        "warmCount": 10,
+        "wallMs": {
+          "min": 687.4965910000001,
+          "median": 714.975011,
+          "max": 872.2088750000003
+        },
+        "coldWallMs": [
+          645.192429,
+          686.265482
+        ],
+        "load1m": {
+          "min": 3.72,
+          "max": 5.88
+        }
+      },
+      "after": {
+        "warmCount": 10,
+        "wallMs": {
+          "min": 2.0114760000001297,
+          "median": 3.7913564999998925,
+          "max": 4.931481000000076
+        },
+        "coldWallMs": [
+          10.685698000000002,
+          15.895803999999998
+        ],
+        "load1m": {
+          "min": 5.87,
+          "max": 9.33
+        }
+      }
+    },
+    "R2-settle": {
+      "before": {
+        "warmCount": 10,
+        "wallMs": {
+          "min": 0.37707000000000335,
+          "median": 0.4265154999998231,
+          "max": 0.7076370000004317
+        },
+        "coldWallMs": [
+          0.8805229999998119,
+          1.0200660000000425
+        ],
+        "load1m": {
+          "min": 3.58,
+          "max": 6.21
+        }
+      },
+      "after": {
+        "warmCount": 10,
+        "wallMs": {
+          "min": 0.36812400000007983,
+          "median": 0.571382500000027,
+          "max": 0.7657860000003893
+        },
+        "coldWallMs": [
+          0.4570489999998699,
+          0.6773249999998825
+        ],
+        "load1m": {
+          "min": 5.87,
+          "max": 9.14
+        }
+      }
+    }
+  },
+  "runs": [
+    {
+      "phase": "before",
+      "case": "R2-maintenance",
+      "start": {
+        "event": "start",
+        "name": "R2-maintenance",
+        "utc": "2026-10-18T18:49:43.645Z",
+        "readiness": {
+          "condition": "the tick body of src/runtime-host/main.ts:332-343; run 0 includes the cold registry load"
+        },
+        "load": [
+          3.38,
+          3.02,
+          3.66
+        ],
+        "bun": "1.4.0"
+      },
+      "samples": [
+        {
+          "name": "R2-maintenance",
+          "index": 0,
+          "utc": "2026-10-18T18:49:45.512Z",
+          "wallMs": 1452.7044420000002,
+          "cpuMs": 1713.257,
+          "maxLoopGapMs": 1479.266354,
+          "heapDeltaBytes": 142391760,
+          "rssDeltaBytes": 367005696,
+          "rchar": 951920189,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            3.38,
+            3.02,
+            3.66
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 1,
+          "utc": "2026-10-18T18:49:46.793Z",
+          "wallMs": 812.6460739999998,
+          "cpuMs": 916.501,
+          "maxLoopGapMs": 893.4288980000001,
+          "heapDeltaBytes": 98081517,
+          "rssDeltaBytes": 272347136,
+          "rchar": 114598644,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            3.59,
+            3.07,
+            3.67
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 2,
+          "utc": "2026-10-18T18:49:47.989Z",
+          "wallMs": 715.7655240000004,
+          "cpuMs": 776.526,
+          "maxLoopGapMs": 812.4614689999994,
+          "heapDeltaBytes": 109924393,
+          "rssDeltaBytes": 110895104,
+          "rchar": 114596878,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            3.59,
+            3.07,
+            3.67
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 3,
+          "utc": "2026-10-18T18:49:49.216Z",
+          "wallMs": 752.8145890000005,
+          "cpuMs": 806.294,
+          "maxLoopGapMs": 843.9076380000006,
+          "heapDeltaBytes": 110887843,
+          "rssDeltaBytes": 117841920,
+          "rchar": 114597328,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            3.59,
+            3.07,
+            3.67
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 4,
+          "utc": "2026-10-18T18:49:50.491Z",
+          "wallMs": 801.503858,
+          "cpuMs": 884.607,
+          "maxLoopGapMs": 892.2359529999994,
+          "heapDeltaBytes": 108084080,
+          "rssDeltaBytes": 50982912,
+          "rchar": 114598143,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            3.59,
+            3.07,
+            3.67
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 5,
+          "utc": "2026-10-18T18:49:51.692Z",
+          "wallMs": 726.7627140000004,
+          "cpuMs": 775.892,
+          "maxLoopGapMs": 815.4960959999999,
+          "heapDeltaBytes": 108081500,
+          "rssDeltaBytes": 80322560,
+          "rchar": 114597275,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            3.87,
+            3.14,
+            3.69
+          ]
+        }
+      ]
+    },
+    {
+      "phase": "before",
+      "case": "R2-map",
+      "start": {
+        "event": "start",
+        "name": "R2-map",
+        "utc": "2026-10-18T18:49:52.960Z",
+        "readiness": {
+          "condition": "registry snapshot built before run 0"
+        },
+        "load": [
+          3.87,
+          3.14,
+          3.69
+        ],
+        "bun": "1.4.0"
+      },
+      "samples": [
+        {
+          "name": "R2-map",
+          "index": 0,
+          "utc": "2026-10-18T18:49:54.030Z",
+          "wallMs": 645.192429,
+          "cpuMs": 892.67,
+          "maxLoopGapMs": 683.255572,
+          "heapDeltaBytes": 84694161,
+          "rssDeltaBytes": 263675904,
+          "rchar": 114583771,
+          "result": 8401,
+          "load": [
+            3.87,
+            3.14,
+            3.69
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 1,
+          "utc": "2026-10-18T18:49:55.276Z",
+          "wallMs": 777.8373809999998,
+          "cpuMs": 892.431,
+          "maxLoopGapMs": 859.8623069999999,
+          "heapDeltaBytes": 101668498,
+          "rssDeltaBytes": 284143616,
+          "rchar": 114577768,
+          "result": 8401,
+          "load": [
+            3.87,
+            3.14,
+            3.69
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 2,
+          "utc": "2026-10-18T18:49:56.436Z",
+          "wallMs": 695.0267879999997,
+          "cpuMs": 751.297,
+          "maxLoopGapMs": 774.2187920000001,
+          "heapDeltaBytes": 109712337,
+          "rssDeltaBytes": 116899840,
+          "rchar": 114576198,
+          "result": 8401,
+          "load": [
+            3.72,
+            3.12,
+            3.68
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 3,
+          "utc": "2026-10-18T18:49:57.597Z",
+          "wallMs": 692.3076010000004,
+          "cpuMs": 733.998,
+          "maxLoopGapMs": 776.0056909999994,
+          "heapDeltaBytes": 110053137,
+          "rssDeltaBytes": 84135936,
+          "rchar": 114576074,
+          "result": 8401,
+          "load": [
+            3.72,
+            3.12,
+            3.68
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 4,
+          "utc": "2026-10-18T18:49:58.755Z",
+          "wallMs": 698.8691419999996,
+          "cpuMs": 747.318,
+          "maxLoopGapMs": 771.7846089999994,
+          "heapDeltaBytes": 107105623,
+          "rssDeltaBytes": 90214400,
+          "rchar": 114576315,
+          "result": 8401,
+          "load": [
+            3.72,
+            3.12,
+            3.68
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 5,
+          "utc": "2026-10-18T18:49:59.907Z",
+          "wallMs": 687.4965910000001,
+          "cpuMs": 726.676,
+          "maxLoopGapMs": 767.2834060000005,
+          "heapDeltaBytes": 108546708,
+          "rssDeltaBytes": 116129792,
+          "rchar": 114576113,
+          "result": 8401,
+          "load": [
+            3.72,
+            3.12,
+            3.68
+          ]
+        }
+      ]
+    },
+    {
+      "phase": "before",
+      "case": "R2-settle",
+      "start": {
+        "event": "start",
+        "name": "R2-settle",
+        "utc": "2026-10-18T18:50:02.258Z",
+        "readiness": {
+          "stateMapSize": 8401
+        },
+        "load": [
+          3.58,
+          3.1,
+          3.67
+        ],
+        "bun": "1.4.0"
+      },
+      "samples": [
+        {
+          "name": "R2-settle",
+          "index": 0,
+          "utc": "2026-10-18T18:50:02.694Z",
+          "wallMs": 0.8805229999998119,
+          "cpuMs": 1.003,
+          "maxLoopGapMs": 46.27386800000022,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 1671327,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            3.58,
+            3.1,
+            3.67
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 1,
+          "utc": "2026-10-18T18:50:03.134Z",
+          "wallMs": 0.3968249999998079,
+          "cpuMs": 0.425,
+          "maxLoopGapMs": 49.64810200000011,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 20638,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            3.58,
+            3.1,
+            3.67
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 2,
+          "utc": "2026-10-18T18:50:03.577Z",
+          "wallMs": 0.44694399999980305,
+          "cpuMs": 0.538,
+          "maxLoopGapMs": 52.874995000000126,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 20600,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            3.58,
+            3.1,
+            3.67
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 3,
+          "utc": "2026-10-18T18:50:04.016Z",
+          "wallMs": 0.37707000000000335,
+          "cpuMs": 0.403,
+          "maxLoopGapMs": 47.93491300000005,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 20600,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            3.58,
+            3.1,
+            3.67
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 4,
+          "utc": "2026-10-18T18:50:04.457Z",
+          "wallMs": 0.40371700000014243,
+          "cpuMs": 0.444,
+          "maxLoopGapMs": 50.82370899999978,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 20600,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            3.58,
+            3.1,
+            3.67
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 5,
+          "utc": "2026-10-18T18:50:04.909Z",
+          "wallMs": 0.7076370000004317,
+          "cpuMs": 0.76,
+          "maxLoopGapMs": 62.368655999999646,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 20600,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            3.58,
+            3.1,
+            3.67
+          ]
+        }
+      ]
+    },
+    {
+      "phase": "before-confirmation",
+      "case": "R2-maintenance",
+      "start": {
+        "event": "start",
+        "name": "R2-maintenance",
+        "utc": "2026-10-18T19:00:41.926Z",
+        "readiness": {
+          "condition": "the tick body of src/runtime-host/main.ts:332-343; run 0 includes the cold registry load"
+        },
+        "load": [
+          5.48,
+          6.41,
+          5.24
+        ],
+        "bun": "1.4.0"
+      },
+      "samples": [
+        {
+          "name": "R2-maintenance",
+          "index": 0,
+          "utc": "2026-10-18T19:00:43.831Z",
+          "wallMs": 1489.883831,
+          "cpuMs": 1725.462,
+          "maxLoopGapMs": 1518.6261339999996,
+          "heapDeltaBytes": 148550595,
+          "rssDeltaBytes": 364150784,
+          "rchar": 951921104,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            5.48,
+            6.41,
+            5.24
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 1,
+          "utc": "2026-10-18T19:00:45.041Z",
+          "wallMs": 745.480618,
+          "cpuMs": 847.301,
+          "maxLoopGapMs": 819.3145810000001,
+          "heapDeltaBytes": 104199511,
+          "rssDeltaBytes": 282415104,
+          "rchar": 114598308,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            5.48,
+            6.41,
+            5.24
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 2,
+          "utc": "2026-10-18T19:00:46.218Z",
+          "wallMs": 708.4756420000003,
+          "cpuMs": 771.635,
+          "maxLoopGapMs": 792.5699959999997,
+          "heapDeltaBytes": 110357524,
+          "rssDeltaBytes": 111968256,
+          "rchar": 114597110,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            5.69,
+            6.44,
+            5.26
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 3,
+          "utc": "2026-10-18T19:00:47.511Z",
+          "wallMs": 817.3870739999993,
+          "cpuMs": 876.919,
+          "maxLoopGapMs": 902.2456920000004,
+          "heapDeltaBytes": 110998358,
+          "rssDeltaBytes": 99467264,
+          "rchar": 114598607,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            5.69,
+            6.44,
+            5.26
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 4,
+          "utc": "2026-10-18T19:00:48.700Z",
+          "wallMs": 715.3720979999998,
+          "cpuMs": 758.294,
+          "maxLoopGapMs": 804.1182040000003,
+          "heapDeltaBytes": 107944831,
+          "rssDeltaBytes": 65376256,
+          "rchar": 114597395,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            5.69,
+            6.44,
+            5.26
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 5,
+          "utc": "2026-10-18T19:00:49.875Z",
+          "wallMs": 710.9853700000003,
+          "cpuMs": 754.445,
+          "maxLoopGapMs": 785.2581140000002,
+          "heapDeltaBytes": 109428611,
+          "rssDeltaBytes": 104660992,
+          "rchar": 114597188,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            5.69,
+            6.44,
+            5.26
+          ]
+        }
+      ]
+    },
+    {
+      "phase": "before-confirmation",
+      "case": "R2-map",
+      "start": {
+        "event": "start",
+        "name": "R2-map",
+        "utc": "2026-10-18T19:00:51.205Z",
+        "readiness": {
+          "condition": "registry snapshot built before run 0"
+        },
+        "load": [
+          5.87,
+          6.46,
+          5.27
+        ],
+        "bun": "1.4.0"
+      },
+      "samples": [
+        {
+          "name": "R2-map",
+          "index": 0,
+          "utc": "2026-10-18T19:00:52.319Z",
+          "wallMs": 686.265482,
+          "cpuMs": 966.819,
+          "maxLoopGapMs": 725.8538879999999,
+          "heapDeltaBytes": 85619704,
+          "rssDeltaBytes": 261955584,
+          "rchar": 114584574,
+          "result": 8401,
+          "load": [
+            5.87,
+            6.46,
+            5.27
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 1,
+          "utc": "2026-10-18T19:00:53.674Z",
+          "wallMs": 872.2088750000003,
+          "cpuMs": 1010.997,
+          "maxLoopGapMs": 969.1074520000002,
+          "heapDeltaBytes": 102576635,
+          "rssDeltaBytes": 251707392,
+          "rchar": 114579388,
+          "result": 8401,
+          "load": [
+            5.87,
+            6.46,
+            5.27
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 2,
+          "utc": "2026-10-18T19:00:54.841Z",
+          "wallMs": 704.856581,
+          "cpuMs": 758.481,
+          "maxLoopGapMs": 781.515355,
+          "heapDeltaBytes": 108877195,
+          "rssDeltaBytes": 112713728,
+          "rchar": 114576606,
+          "result": 8401,
+          "load": [
+            5.87,
+            6.46,
+            5.27
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 3,
+          "utc": "2026-10-18T19:00:56.049Z",
+          "wallMs": 744.8927439999998,
+          "cpuMs": 799.128,
+          "maxLoopGapMs": 822.8461449999995,
+          "heapDeltaBytes": 110204627,
+          "rssDeltaBytes": 95707136,
+          "rchar": 114576951,
+          "result": 8401,
+          "load": [
+            5.88,
+            6.46,
+            5.28
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 4,
+          "utc": "2026-10-18T19:00:57.310Z",
+          "wallMs": 792.0914919999996,
+          "cpuMs": 843.85,
+          "maxLoopGapMs": 871.018787,
+          "heapDeltaBytes": 107728356,
+          "rssDeltaBytes": 69943296,
+          "rchar": 114577836,
+          "result": 8401,
+          "load": [
+            5.88,
+            6.46,
+            5.28
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 5,
+          "utc": "2026-10-18T19:00:58.507Z",
+          "wallMs": 725.093441,
+          "cpuMs": 770.623,
+          "maxLoopGapMs": 812.7711009999994,
+          "heapDeltaBytes": 108851578,
+          "rssDeltaBytes": 116228096,
+          "rchar": 114576773,
+          "result": 8401,
+          "load": [
+            5.88,
+            6.46,
+            5.28
+          ]
+        }
+      ]
+    },
+    {
+      "phase": "before-confirmation",
+      "case": "R2-settle",
+      "start": {
+        "event": "start",
+        "name": "R2-settle",
+        "utc": "2026-10-18T19:01:01.120Z",
+        "readiness": {
+          "stateMapSize": 8401
+        },
+        "load": [
+          6.21,
+          6.51,
+          5.3
+        ],
+        "bun": "1.4.0"
+      },
+      "samples": [
+        {
+          "name": "R2-settle",
+          "index": 0,
+          "utc": "2026-10-18T19:01:01.580Z",
+          "wallMs": 1.0200660000000425,
+          "cpuMs": 1.157,
+          "maxLoopGapMs": 69.6605810000001,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 1671327,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            6.21,
+            6.51,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 1,
+          "utc": "2026-10-18T19:01:02.029Z",
+          "wallMs": 0.4687539999999899,
+          "cpuMs": 0.505,
+          "maxLoopGapMs": 58.861127000000124,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20638,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            6.21,
+            6.51,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 2,
+          "utc": "2026-10-18T19:01:02.473Z",
+          "wallMs": 0.4060869999998431,
+          "cpuMs": 0.526,
+          "maxLoopGapMs": 53.31269800000018,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20600,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            6.21,
+            6.51,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 3,
+          "utc": "2026-10-18T19:01:02.928Z",
+          "wallMs": 0.46167600000035236,
+          "cpuMs": 0.579,
+          "maxLoopGapMs": 64.78080899999986,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20728,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            6.21,
+            6.51,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 4,
+          "utc": "2026-10-18T19:01:03.375Z",
+          "wallMs": 0.39810599999964325,
+          "cpuMs": 0.432,
+          "maxLoopGapMs": 57.08413399999972,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20600,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            6.21,
+            6.51,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 5,
+          "utc": "2026-10-18T19:01:03.833Z",
+          "wallMs": 0.6745099999998274,
+          "cpuMs": 0.725,
+          "maxLoopGapMs": 67.96167400000013,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20600,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            6.21,
+            6.51,
+            5.3
+          ]
+        }
+      ]
+    },
+    {
+      "phase": "after-final",
+      "case": "R2-maintenance",
+      "start": {
+        "event": "start",
+        "name": "R2-maintenance",
+        "utc": "2026-10-18T19:01:05.106Z",
+        "readiness": {
+          "condition": "pending query then keyed retention evidence; run 0 includes registry open"
+        },
+        "load": [
+          6.21,
+          6.51,
+          5.3
+        ],
+        "bun": "1.4.0"
+      },
+      "samples": [
+        {
+          "name": "R2-maintenance",
+          "index": 0,
+          "utc": "2026-10-18T19:01:05.762Z",
+          "wallMs": 269.088763,
+          "cpuMs": 149.499,
+          "maxLoopGapMs": 266.47516900000005,
+          "heapDeltaBytes": 9996668,
+          "rssDeltaBytes": 25546752,
+          "rchar": 5820516,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            6.21,
+            6.51,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 1,
+          "utc": "2026-10-18T19:01:06.155Z",
+          "wallMs": 2.850054,
+          "cpuMs": 4.373,
+          "maxLoopGapMs": 2.5284149999999954,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 983040,
+          "rchar": 33071,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            6.04,
+            6.47,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 2,
+          "utc": "2026-10-18T19:01:06.546Z",
+          "wallMs": 4.099026000000322,
+          "cpuMs": 6.983,
+          "maxLoopGapMs": 0.9534040000003188,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 2752512,
+          "rchar": 32991,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            6.04,
+            6.47,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 3,
+          "utc": "2026-10-18T19:01:06.934Z",
+          "wallMs": 2.5304869999999937,
+          "cpuMs": 4.168,
+          "maxLoopGapMs": 0.086355000000367,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 983040,
+          "rchar": 32953,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            6.04,
+            6.47,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 4,
+          "utc": "2026-10-18T19:01:07.321Z",
+          "wallMs": 2.419810000000325,
+          "cpuMs": 2.679,
+          "maxLoopGapMs": 0.7148779999997714,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 1179648,
+          "rchar": 32953,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            6.04,
+            6.47,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 5,
+          "utc": "2026-10-18T19:01:07.709Z",
+          "wallMs": 2.8745820000003732,
+          "cpuMs": 3.725,
+          "maxLoopGapMs": 0.08388899999999921,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 589824,
+          "rchar": 32991,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            6.04,
+            6.47,
+            5.3
+          ]
+        }
+      ]
+    },
+    {
+      "phase": "after-final",
+      "case": "R2-map",
+      "start": {
+        "event": "start",
+        "name": "R2-map",
+        "utc": "2026-10-18T19:01:09.010Z",
+        "readiness": {
+          "pendingIds": 3
+        },
+        "load": [
+          6.04,
+          6.47,
+          5.3
+        ],
+        "bun": "1.4.0"
+      },
+      "samples": [
+        {
+          "name": "R2-map",
+          "index": 0,
+          "utc": "2026-10-18T19:01:09.413Z",
+          "wallMs": 10.685698000000002,
+          "cpuMs": 13.629,
+          "maxLoopGapMs": 12.292781000000105,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 1572864,
+          "rchar": 311681,
+          "result": [
+            "current",
+            "current",
+            "dead"
+          ],
+          "load": [
+            6.04,
+            6.47,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 1,
+          "utc": "2026-10-18T19:01:09.813Z",
+          "wallMs": 4.144377000000077,
+          "cpuMs": 6.077,
+          "maxLoopGapMs": 10.161767999999938,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 786432,
+          "rchar": 12442,
+          "result": [
+            "current",
+            "current",
+            "dead"
+          ],
+          "load": [
+            6.04,
+            6.47,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 2,
+          "utc": "2026-10-18T19:01:10.202Z",
+          "wallMs": 2.638734999999997,
+          "cpuMs": 5.834,
+          "maxLoopGapMs": 0.09068600000000515,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 2555904,
+          "rchar": 12480,
+          "result": [
+            "current",
+            "current",
+            "dead"
+          ],
+          "load": [
+            6.04,
+            6.47,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 3,
+          "utc": "2026-10-18T19:01:10.590Z",
+          "wallMs": 2.0114760000001297,
+          "cpuMs": 3.955,
+          "maxLoopGapMs": 0.09482299999990573,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 12442,
+          "result": [
+            "current",
+            "current",
+            "dead"
+          ],
+          "load": [
+            6.04,
+            6.47,
+            5.3
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 4,
+          "utc": "2026-10-18T19:01:10.979Z",
+          "wallMs": 2.0495160000000396,
+          "cpuMs": 2.434,
+          "maxLoopGapMs": 0.0990590000001248,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 786432,
+          "rchar": 12442,
+          "result": [
+            "current",
+            "current",
+            "dead"
+          ],
+          "load": [
+            5.87,
+            6.43,
+            5.29
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 5,
+          "utc": "2026-10-18T19:01:11.372Z",
+          "wallMs": 3.9086150000002817,
+          "cpuMs": 5.453,
+          "maxLoopGapMs": 2.3724959999999555,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 589824,
+          "rchar": 12480,
+          "result": [
+            "current",
+            "current",
+            "dead"
+          ],
+          "load": [
+            5.87,
+            6.43,
+            5.29
+          ]
+        }
+      ]
+    },
+    {
+      "phase": "after-final",
+      "case": "R2-settle",
+      "start": {
+        "event": "start",
+        "name": "R2-settle",
+        "utc": "2026-10-18T19:01:12.720Z",
+        "readiness": {
+          "stateMapSize": 3
+        },
+        "load": [
+          5.87,
+          6.43,
+          5.29
+        ],
+        "bun": "1.4.0"
+      },
+      "samples": [
+        {
+          "name": "R2-settle",
+          "index": 0,
+          "utc": "2026-10-18T19:01:13.110Z",
+          "wallMs": 0.4570489999998699,
+          "cpuMs": 0.573,
+          "maxLoopGapMs": 0.25307699999984834,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20628,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            5.87,
+            6.43,
+            5.29
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 1,
+          "utc": "2026-10-18T19:01:13.506Z",
+          "wallMs": 0.6212849999999435,
+          "cpuMs": 0.666,
+          "maxLoopGapMs": 6.056162000000086,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20590,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            5.87,
+            6.43,
+            5.29
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 2,
+          "utc": "2026-10-18T19:01:13.898Z",
+          "wallMs": 0.6777430000001914,
+          "cpuMs": 0.843,
+          "maxLoopGapMs": 1.2241989999997713,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20590,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            5.87,
+            6.43,
+            5.29
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 3,
+          "utc": "2026-10-18T19:01:14.288Z",
+          "wallMs": 0.6141769999999269,
+          "cpuMs": 0.651,
+          "maxLoopGapMs": 0.07105400000000373,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20590,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            5.87,
+            6.43,
+            5.29
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 4,
+          "utc": "2026-10-18T19:01:14.674Z",
+          "wallMs": 0.36812400000007983,
+          "cpuMs": 0.394,
+          "maxLoopGapMs": 0.092775999999958,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 20628,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            5.87,
+            6.43,
+            5.29
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 5,
+          "utc": "2026-10-18T19:01:15.060Z",
+          "wallMs": 0.40412400000013804,
+          "cpuMs": 0.434,
+          "maxLoopGapMs": 0.08101200000010067,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 20590,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            5.87,
+            6.43,
+            5.29
+          ]
+        }
+      ]
+    },
+    {
+      "phase": "after-confirmation",
+      "case": "R2-maintenance",
+      "start": {
+        "event": "start",
+        "name": "R2-maintenance",
+        "utc": "2026-10-18T19:01:54.451Z",
+        "readiness": {
+          "condition": "pending query then keyed retention evidence; run 0 includes registry open"
+        },
+        "load": [
+          9.27,
+          7.34,
+          5.65
+        ],
+        "bun": "1.4.0"
+      },
+      "samples": [
+        {
+          "name": "R2-maintenance",
+          "index": 0,
+          "utc": "2026-10-18T19:01:55.218Z",
+          "wallMs": 371.8628900000001,
+          "cpuMs": 299.742,
+          "maxLoopGapMs": 376.744964,
+          "heapDeltaBytes": 9611159,
+          "rssDeltaBytes": 24104960,
+          "rchar": 5821608,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            9.27,
+            7.34,
+            5.65
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 1,
+          "utc": "2026-10-18T19:01:55.624Z",
+          "wallMs": 5.990778999999975,
+          "cpuMs": 8.038,
+          "maxLoopGapMs": 15.785403999999971,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 786432,
+          "rchar": 32952,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            9.27,
+            7.34,
+            5.65
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 2,
+          "utc": "2026-10-18T19:01:56.021Z",
+          "wallMs": 6.893286999999873,
+          "cpuMs": 11.81,
+          "maxLoopGapMs": 6.597407000000203,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 3342336,
+          "rchar": 33108,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            9.33,
+            7.38,
+            5.67
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 3,
+          "utc": "2026-10-18T19:01:56.416Z",
+          "wallMs": 4.907849000000169,
+          "cpuMs": 7.638,
+          "maxLoopGapMs": 4.944958000000042,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 786432,
+          "rchar": 33070,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            9.33,
+            7.38,
+            5.67
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 4,
+          "utc": "2026-10-18T19:01:56.811Z",
+          "wallMs": 5.283583999999792,
+          "cpuMs": 6.079,
+          "maxLoopGapMs": 4.987547000000177,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 393216,
+          "rchar": 33070,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            9.33,
+            7.38,
+            5.67
+          ]
+        },
+        {
+          "name": "R2-maintenance",
+          "index": 5,
+          "utc": "2026-10-18T19:01:57.205Z",
+          "wallMs": 5.08451100000002,
+          "cpuMs": 6.418,
+          "maxLoopGapMs": 3.035001000000193,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 393216,
+          "rchar": 33032,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            9.33,
+            7.38,
+            5.67
+          ]
+        }
+      ]
+    },
+    {
+      "phase": "after-confirmation",
+      "case": "R2-map",
+      "start": {
+        "event": "start",
+        "name": "R2-map",
+        "utc": "2026-10-18T19:01:58.960Z",
+        "readiness": {
+          "pendingIds": 3
+        },
+        "load": [
+          9.33,
+          7.38,
+          5.67
+        ],
+        "bun": "1.4.0"
+      },
+      "samples": [
+        {
+          "name": "R2-map",
+          "index": 0,
+          "utc": "2026-10-18T19:01:59.374Z",
+          "wallMs": 15.895803999999998,
+          "cpuMs": 21.52,
+          "maxLoopGapMs": 23.113049000000046,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 1572864,
+          "rchar": 311801,
+          "result": [
+            "current",
+            "current",
+            "dead"
+          ],
+          "load": [
+            9.33,
+            7.38,
+            5.67
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 1,
+          "utc": "2026-10-18T19:01:59.776Z",
+          "wallMs": 4.434619999999995,
+          "cpuMs": 5.95,
+          "maxLoopGapMs": 11.524032000000034,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 786432,
+          "rchar": 12443,
+          "result": [
+            "current",
+            "current",
+            "dead"
+          ],
+          "load": [
+            9.33,
+            7.38,
+            5.67
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 2,
+          "utc": "2026-10-18T19:02:00.174Z",
+          "wallMs": 4.931481000000076,
+          "cpuMs": 9.462,
+          "maxLoopGapMs": 8.112660000000233,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 2949120,
+          "rchar": 12599,
+          "result": [
+            "current",
+            "current",
+            "dead"
+          ],
+          "load": [
+            9.33,
+            7.38,
+            5.67
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 3,
+          "utc": "2026-10-18T19:02:00.570Z",
+          "wallMs": 3.100669999999809,
+          "cpuMs": 5.618,
+          "maxLoopGapMs": 5.444507000000158,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 786432,
+          "rchar": 12443,
+          "result": [
+            "current",
+            "current",
+            "dead"
+          ],
+          "load": [
+            9.33,
+            7.38,
+            5.67
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 4,
+          "utc": "2026-10-18T19:02:00.969Z",
+          "wallMs": 3.7372629999999845,
+          "cpuMs": 4.31,
+          "maxLoopGapMs": 7.400576000000001,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 1179648,
+          "rchar": 12443,
+          "result": [
+            "current",
+            "current",
+            "dead"
+          ],
+          "load": [
+            9.14,
+            7.38,
+            5.68
+          ]
+        },
+        {
+          "name": "R2-map",
+          "index": 5,
+          "utc": "2026-10-18T19:02:01.366Z",
+          "wallMs": 3.8454499999998006,
+          "cpuMs": 5.4,
+          "maxLoopGapMs": 7.076691999999639,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 393216,
+          "rchar": 12481,
+          "result": [
+            "current",
+            "current",
+            "dead"
+          ],
+          "load": [
+            9.14,
+            7.38,
+            5.68
+          ]
+        }
+      ]
+    },
+    {
+      "phase": "after-confirmation",
+      "case": "R2-settle",
+      "start": {
+        "event": "start",
+        "name": "R2-settle",
+        "utc": "2026-10-18T19:02:02.718Z",
+        "readiness": {
+          "stateMapSize": 3
+        },
+        "load": [
+          9.14,
+          7.38,
+          5.68
+        ],
+        "bun": "1.4.0"
+      },
+      "samples": [
+        {
+          "name": "R2-settle",
+          "index": 0,
+          "utc": "2026-10-18T19:02:03.117Z",
+          "wallMs": 0.6773249999998825,
+          "cpuMs": 0.895,
+          "maxLoopGapMs": 8.560717000000068,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 20628,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            9.14,
+            7.38,
+            5.68
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 1,
+          "utc": "2026-10-18T19:02:03.511Z",
+          "wallMs": 0.4493849999998929,
+          "cpuMs": 0.48,
+          "maxLoopGapMs": 3.199867999999924,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20590,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            9.14,
+            7.38,
+            5.68
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 2,
+          "utc": "2026-10-18T19:02:03.898Z",
+          "wallMs": 0.4433520000002318,
+          "cpuMs": 0.555,
+          "maxLoopGapMs": 0.08294500000010885,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20590,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            9.14,
+            7.38,
+            5.68
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 3,
+          "utc": "2026-10-18T19:02:04.285Z",
+          "wallMs": 0.5285880000001271,
+          "cpuMs": 0.569,
+          "maxLoopGapMs": 0.07527000000027328,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20590,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            9.14,
+            7.38,
+            5.68
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 4,
+          "utc": "2026-10-18T19:02:04.675Z",
+          "wallMs": 0.6675000000000182,
+          "cpuMs": 0.725,
+          "maxLoopGapMs": 0.07294999999976426,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20628,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            9.14,
+            7.38,
+            5.68
+          ]
+        },
+        {
+          "name": "R2-settle",
+          "index": 5,
+          "utc": "2026-10-18T19:02:05.065Z",
+          "wallMs": 0.7657860000003893,
+          "cpuMs": 0.888,
+          "maxLoopGapMs": 0.07975900000019465,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 20708,
+          "result": {
+            "scanned": 3,
+            "settled": 0
+          },
+          "load": [
+            9.14,
+            7.38,
+            5.68
+          ]
+        }
+      ]
+    }
+  ]
+}
