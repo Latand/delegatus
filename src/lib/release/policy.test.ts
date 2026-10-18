@@ -39,6 +39,14 @@ test.each([
   expect((await releaseState({ ...ready(), ...patch })).blocker).toBe(blocker);
 });
 
+test.each([
+  ["green", "due", null, "amount"],
+  ["pending", "blocked", 5, "checks-pending"],
+  ["red", "blocked", 5, "checks-red"],
+] as const)("release checks %s retain the launch decision and diagnostic", async (checks, state, blocker, reason) => {
+  expect(await releaseState({ ...ready(), checks })).toMatchObject({ state, blocker, reason });
+});
+
 test("soak picks the newest six-hour revision retained by every later deployment", async () => {
   const isAncestor = (a: string, b: string) => a === b || a === "old";
   const deployments = [{ revision: "old", at: 0 }, { revision: "bad", at: 7 * hour }, { revision: "old", at: 10 * hour }];
