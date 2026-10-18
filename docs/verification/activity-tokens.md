@@ -1,8 +1,10 @@
 # Activity token store and API
 
-This implements slices 1 and 2 of the activity token design (PR #3026), plus
-the Time API's free date range. The next stage builds the selected interface
-and applies the dated API price table.
+This implements the activity token design (PR #3026): slices 1 and 2 (the
+store and the API, plus the Time API's free date range) and slices 3 and 4
+(variant 1's Tokens tab, the drawer's tokens section, the chosen extras and
+one free range for the whole page). The interface is described under
+[Interface](#interface).
 
 ## Data and write path
 
@@ -185,7 +187,60 @@ lock, a zone rebuild with a concurrent update, range boundaries, DST,
 authority, alias folding, remainders and cache invalidation/eviction. Existing
 Time, ingest, export and pull tests cover their compatibility paths.
 
-The prototype route and components are absent from this stage's base. The UI
-stage owns their removal if they enter the branch with the design/prototype
-merge. Required hosted privacy-tracker and runtime checks run after pipeline
-publication; this stage creates no remote branch.
+Required hosted privacy-tracker and runtime checks run after pipeline
+publication.
+
+## Interface
+
+The choices made on the prototype review (2026-10-18) were variant 1, the
+cache and reasoning shares plus an estimate at API prices as the optional
+extras, seven days by default, members and accounts as separate breakdowns,
+and one free range for the whole page, the Time tab included. The last one
+replaces §9.2's "the custom range belongs to «Токени» only".
+
+- `src/components/activity/ActivityTokens.tsx` reads
+  `GET /api/activity/tokens` while the tab is shown, once a minute while the
+  page is visible, and draws the total with its coverage dot, the kind meter,
+  one stacked column chart and «Розбити за». The chart stacks by the list's
+  choice; «Тип» stacks by kind. The seven largest entries take a colour and
+  the rest fold into «Інші», so a list row and its column share one colour.
+  On the phone a range over 31 days draws Monday weeks.
+- A row filters the page: a project scopes both tabs, a member sets the
+  page's member, and a role, model or account adds a chip that clears it.
+  Member and account breakdowns are offered only when the answer says
+  `canChoose`; the route refuses them otherwise, and a refused link drops the
+  member, the breakdown and the account filter.
+- The project picker's rows come from one `list=project&top=all` read when it
+  opens. `top=all` raises the list's bound from 12 to 500 named rows; the
+  answer still holds one row of the rest beyond it.
+- `src/lib/activity/tokenPrices.ts` is the dated price table (read
+  2026-10-18 from the providers' pricing pages), per model and tier, with
+  five-minute and one-hour cache writes priced apart. A model or tier with no
+  published price reads «—» and stays out of the sum; the estimate's tooltip
+  and the drawer name those models. The figure is labelled an estimate at API
+  prices and never called spending.
+- `src/components/activity/ActivityRangeControl.tsx` is the page's one range
+  control: Today, 7, 30 and 90 days and «Період…», two native date fields
+  that apply once both are valid and keep at most 366 days. The address
+  carries `range` or `from`/`to`, `view` and the breakdown. The Time tab
+  reads the same range; past 92 days its chart draws one pair per Monday week,
+  and a range of one date draws hours.
+- The drawer opened from the Tokens tab holds the tokens section: coverage,
+  what one count is, which engines report, the zone notes, and the price
+  table's date and sources.
+
+Rendered evidence comes from the board-geometry driver's `activity-tokens`
+case over `src/lib/activity/tokenEvidence.fixture.ts` (invented history
+written through the ingest's own commit) and is recorded in
+`evidence/activity-tokens/ui.json`: ten states at 1440, 1024 and 390 px,
+light and dark, Ukrainian and English, 120 frames with no failed check, made
+from the commit the record names. The frames stay outside the repository.
+
+The Time tab over 366 days, measured in the same run on that revision
+(production build, one Chromium, through `scripts/gate-slot.sh`): five reads
+of `GET /api/activity` took 35.1 to 55.2 ms over HTTP for a 1,620,435-byte
+answer, and the page drew 53 week columns, 12,143 elements and two long tasks
+(71 and 85 ms), loaded 320 ms after navigation. That store holds no human or
+agent history, so these timings bound the drawing of 366 days and say nothing
+of a populated read; the populated read is the controlled rehearsal above
+(51.2 ms median, 172.1 ms maximum).
