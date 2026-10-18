@@ -6,6 +6,7 @@ import { createLoopHeapSignals } from "./loopHeapSignals";
 
 export type ViewerOperation = "pipelines.repository-initialization" | "tasks.note" | "mcp.receipts" | "mcp.tasks.executor" | "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
   | "transcript.index" | "memory.discovery" | "memory.refresh"
+  | "memory.privacy.compile" | "memory.privacy.match" | "memory.privacy.worker"
   | "memory.source-read" | "memory.source-write"
   | "tasks.system-run" | "telegram.report-task-settle" | "memory.curation-cleanup"
   | "delivery.inbox-batch"
@@ -15,7 +16,7 @@ export type ViewerOperation = "pipelines.repository-initialization" | "tasks.not
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "pipelines.evidence" | "pipelines.get" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
   | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
-  | "external-relay.owner-history" | "relay.service-tools" | "relay.tool-index"
+  | "external-relay.owner-history" | "relay.owner-continuation.send" | "relay.owner-turn.observe" | "external-relay.chains" | "relay.service-tools" | "relay.tool-index"
   | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
   | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
   | "codex.protocol-admission"

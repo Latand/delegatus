@@ -70,6 +70,26 @@ test("owner prompt isolates the single request and escapes every data section", 
   expect(ownerRunPrompt(r, instruction(), 30)).not.toContain("[handoff]");
 });
 
+test("owner continuation sends each unseen service and recovered message once", async () => {
+  const { ownerContinuationPrompt } = await import("./ownerRun");
+  const r = request();
+  r.input.conversation = [
+    { ...r.input.conversation[0]!, id: "seen-message" },
+    { ...r.input.conversation[0]!, id: "new-message" },
+  ];
+  r.input.respond_to = "new-message";
+  const owner = { ...instruction(), localContext: { resolution: "history" as const, questionIds: [], origins: {},
+    conversation: [
+      { ...r.input.conversation[0]!, id: "seen-message" },
+      { ...r.input.conversation[0]!, id: "new-message" },
+      { ...r.input.conversation[0]!, id: "recovered-message" },
+    ] } };
+  const turn = ownerContinuationPrompt(r, owner, 1, { seen: ["seen-message"], staticDigest: null });
+  const sections = [...turn.prompt.matchAll(/<conversation>\n([^]*?)\n<\/conversation>/g)].map(match => JSON.parse(match[1]!));
+  expect(sections.flat().map((message: { id: string }) => message.id)).toEqual(["new-message", "recovered-message"]);
+  expect(turn.seen).toEqual(["seen-message", "new-message", "recovered-message", "m1"]);
+});
+
 test("final answer redacts before truncation, keeps sentinels and counts Unicode code points", () => {
   const r = request(); const owner = instruction();
   expect(ownerAnswer(" answer ", r, owner)).toEqual({ action: "reply", text: "answer", reply_to: "m1" });
@@ -174,6 +194,7 @@ test("production owner observation scrubs raw transcript answers before ordinary
   const sources = { registry: () => ({
     spawnReceiptForClientAttempt: () => ({ state: "completed", conversationId: id, launchId: "launch_reader_fixture", artifactPath: transcript }),
     readOnlySnapshot: () => ({ heldDeliveries: {} }),
+    deliverySnapshotForOperation: () => ({ heldDeliveries: {}, deliveryOperationOwners: {} }),
   }), now: Date.now, liveness: async () => [{ reason: "host_alive_turn_idle", lastRecordAt: new Date().toISOString() }] } as unknown as Pick<SeatTickSources, "registry" | "liveness" | "now">;
   try {
     for (const engine of ["codex", "claude"] as const) {
@@ -227,6 +248,35 @@ test("normal spawn fields and final turn are used without a child or progress st
   expect(bodies).toHaveLength(1);
   expect(bodies[0]).toMatchObject({ engine: "codex", model: "gpt-6-sol", effort: "low", accountId: "answer", mcpServers: ["viewer"], plugins: [], notifyLauncher: false, clientAttemptId: "relay-owner-rq_1" });
   expect(bound).toEqual(["conversation_owner"]);
+});
+
+test("initial owner prompt exposes its durable delivery cursor after binding", async () => {
+  let binding: unknown;
+  const run = runOwnerAgent({ request: request(), owner: instruction(), target, accountId: "answer", hardCapMs: 1000,
+    onConversation: (_id, initialPrompt) => { binding = initialPrompt; }, ports: {
+      launch: async () => ({ status: 202, body: { conversationId: "conversation_owner", launchId: "launch_owner", initialMessage: "delivered" } }),
+      observe: async () => ({ state: "ended", finalText: "Done" }), stop: async () => {}, pollMs: 1,
+    } });
+  await run.done;
+  expect(binding).toEqual({ operationId: "spawn_message_launch_owner", initialMessage: "delivered" });
+});
+
+test("a lost launch acknowledgement recovers the initial prompt operation before releasing custody", async () => {
+  const requestId = request().request_id;
+  reserveRun({ requestId, relayId: "relay_fixture", targetId: target.id, leaseId: "lease_fixture",
+    ownerTurn: { clientAttemptId: `relay-owner-${requestId}` }, ownerPid: process.pid, ownerIdentity: "fixture",
+    childPid: null, childIdentity: null, runDir: "", startedAt: new Date().toISOString() }, 1);
+  let binding: unknown;
+  const run = runOwnerAgent({ request: request(), owner: instruction(), target, accountId: "answer", hardCapMs: 1000,
+    onConversation: (_id, initialPrompt) => { binding = initialPrompt; }, ports: {
+      launch: async () => { throw Error("launch acknowledgement lost"); },
+      observe: async () => ({ state: "failed", conversationId: "conversation_owner", initialMessageOperationId: "spawn_message_launch_owner" }),
+      stop: async () => {}, pollMs: 1,
+    } });
+  try {
+    await run.done;
+    expect(binding).toEqual({ operationId: "spawn_message_launch_owner", initialMessage: "delivered" });
+  } finally { dropRun(requestId); }
 });
 
 test("cancel before admission retains custody and kills the late conversation", async () => {
@@ -470,16 +520,241 @@ for (const failure of ["write", "read"] as const) test(`owner ${trigger} stops t
 });
 
 
+test("continued owner hard cap interrupts the shared host without launching", async () => {
+  const { continueOwnerAgent } = await import("./ownerRun");
+  const stops: string[] = []; let sends = 0;
+  const run = continueOwnerAgent({ request: request(), owner: instruction(), target, accountId: "answer", hardCapMs: 50,
+    conversationId: "conversation_pinned", prompt: "new turn", onConversation: () => {}, ports: {
+      launch: async () => { throw Error("unexpected launch"); },
+      continue: async () => { sends++; return { ok: true, structured: true, target: "conversation_pinned", outcome: "held", operationId: "relay-owner-rq_1" }; },
+      observe: async () => ({ state: "running", firstMessagePending: true }),
+      stop: async (_id, action) => { stops.push(action); }, pollMs: 1,
+    } });
+  expect(await run.done).toMatchObject({ status: "timeout" });
+  expect(sends).toBe(1); expect(stops).toEqual(["interrupt"]);
+});
+
+test("continuation observation waits for an assistant after the delivered user", async () => {
+  const { observeOwnerContinuation } = await import("./ownerRun");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-continuation-"));
+  const transcript = path.join(root, "transcript.jsonl"); const id = "conversation_pinned";
+  const at = "2026-10-17T12:00:00Z";
+  const registry = { conversation: () => ({ id, engine: "codex", generations: [{ path: transcript }] }) } as unknown as AgentRegistry;
+  const sources = { registry: () => registry, liveness: async () => [{ reason: "host_alive_turn_idle", lastRecordAt: "2026-10-17T12:00:02Z" }], now: () => Date.parse("2026-10-17T12:00:03Z") } as unknown as Pick<SeatTickSources, "registry" | "liveness" | "now">;
+  const turn = { clientAttemptId: "relay-owner-fixture", conversationId: id, claimedAt: at, continuation: { operationId: "relay-owner-fixture" } };
+  const receipt = async () => ({ state: "delivered", acceptedAt: at, settledAt: at, conversationId: id });
+  try {
+    expect(await observeOwnerContinuation(turn, sources, async () => null)).toMatchObject({ state: "running", firstMessagePending: true });
+    expect(await observeOwnerContinuation(turn, sources, async () => ({ ...await receipt(), state: "failed" }) as never)).toMatchObject({ state: "failed" });
+    expect(await observeOwnerContinuation(turn, sources, async () => ({ ...await receipt(), conversationId: "conversation_other" }) as never)).toMatchObject({ state: "running", firstMessagePending: true });
+    const records = [ { timestamp: "2026-10-17T11:59:59Z", payload: { type: "agent_message", message: "Old answer" } },
+      { timestamp: at, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "new request" }] } } ];
+    fs.writeFileSync(transcript, records.map(r => JSON.stringify(r)).join("\n") + "\n");
+    expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "running" });
+    fs.appendFileSync(transcript, Array.from({ length: 144 }, (_, index) => JSON.stringify({ timestamp: `2026-10-17T12:00:00.${String(index).padStart(3, "0")}Z`,
+      payload: { type: "tool_output", message: "x".repeat(64 * 1024) } })).join("\n") + "\n");
+    fs.appendFileSync(transcript, JSON.stringify({ timestamp: "2026-10-17T12:00:01Z", payload: { type: "agent_message", message: "New answer" } }) + "\n");
+    expect(fs.statSync(transcript).size).toBeGreaterThan(8 * 1024 * 1024);
+    expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "ended", finalText: "New answer" });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Claude continuation observation retains a delivered turn across large tool output", async () => {
+  const { observeOwnerContinuation } = await import("./ownerRun");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-claude-continuation-"));
+  const transcript = path.join(root, "transcript.jsonl"); const id = "conversation_claude";
+  const at = "2026-10-17T12:00:00Z";
+  const registry = { conversation: () => ({ id, engine: "claude", generations: [{ path: transcript }] }) } as unknown as AgentRegistry;
+  const sources = { registry: () => registry, liveness: async () => [{ reason: "host_alive_turn_idle", lastRecordAt: "2026-10-17T12:00:02Z" }],
+    now: () => Date.parse("2026-10-17T12:00:03Z") } as unknown as Pick<SeatTickSources, "registry" | "liveness" | "now">;
+  const turn = { clientAttemptId: "relay-owner-claude-fixture", conversationId: id, claimedAt: at,
+    continuation: { operationId: "relay-owner-claude-fixture" } };
+  const receipt = async () => ({ state: "delivered", acceptedAt: at, settledAt: at, conversationId: id });
+  try {
+    const rows = [
+      { type: "assistant", timestamp: "2026-10-17T11:59:59Z", message: { content: [{ type: "text", text: "Old Claude answer" }] } },
+      { type: "user", timestamp: at, message: { content: [{ type: "text", text: "new request" }] } },
+      { type: "assistant", timestamp: at, message: { content: [{ type: "tool_use", name: "read_file" }] } },
+    ];
+    fs.writeFileSync(transcript, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+    fs.appendFileSync(transcript, Array.from({ length: 144 }, (_, index) => JSON.stringify({ type: "user", timestamp: `2026-10-17T12:00:00.${String(index).padStart(3, "0")}Z`,
+      message: { content: [{ type: "tool_result", content: "x".repeat(64 * 1024) }] } })).join("\n") + "\n");
+    expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "running" });
+    fs.appendFileSync(transcript, JSON.stringify({ type: "assistant", timestamp: "2026-10-17T12:00:01Z",
+      message: { content: [{ type: "text", text: "New Claude answer" }] } }) + "\n");
+    expect(fs.statSync(transcript).size).toBeGreaterThan(8 * 1024 * 1024);
+    expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "ended", finalText: "New Claude answer" });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Codex and Claude continuation readers skip one oversized record without losing the delivered turn", async () => {
+  const { observeOwnerContinuation } = await import("./ownerRun");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-oversized-record-"));
+  const at = "2026-10-17T12:00:00Z";
+  const receipt = async (id: string) => ({ state: "delivered", acceptedAt: at, settledAt: at, conversationId: id });
+  try {
+    for (const engine of ["codex", "claude"] as const) {
+      const id = `conversation_${engine}`;
+      const transcript = path.join(root, `${engine}.jsonl`);
+      const registry = { conversation: () => ({ id, engine, generations: [{ path: transcript }] }) } as unknown as AgentRegistry;
+      const sources = { registry: () => registry, liveness: async () => [{ reason: "host_alive_turn_idle", lastRecordAt: "2026-10-17T12:00:02Z" }],
+        now: () => Date.parse("2026-10-17T12:00:03Z") } as unknown as Pick<SeatTickSources, "registry" | "liveness" | "now">;
+      const turn = { clientAttemptId: `relay-owner-${engine}`, conversationId: id, claimedAt: at,
+        continuation: { operationId: `relay-owner-${engine}` } };
+      const oldAnswer = engine === "codex"
+        ? { timestamp: "2026-10-17T11:59:59Z", payload: { type: "agent_message", message: "Old answer" } }
+        : { type: "assistant", timestamp: "2026-10-17T11:59:59Z", message: { content: [{ type: "text", text: "Old answer" }] } };
+      const deliveredUser = engine === "codex"
+        ? { timestamp: at, payload: { type: "message", role: "user", content: [{ type: "input_text", text: "new request" }] } }
+        : { type: "user", timestamp: at, message: { content: [{ type: "text", text: "new request" }] } };
+      const oversized = engine === "codex"
+        ? { timestamp: "2026-10-17T12:00:00.500Z", payload: { type: "tool_output", message: "x".repeat(2 * 1024 * 1024) } }
+        : { type: "user", timestamp: "2026-10-17T12:00:00.500Z", message: { content: [{ type: "tool_result", content: "x".repeat(2 * 1024 * 1024) }] } };
+      const answer = engine === "codex"
+        ? { timestamp: "2026-10-17T12:00:01Z", payload: { type: "agent_message", message: "New answer" } }
+        : { type: "assistant", timestamp: "2026-10-17T12:00:01Z", message: { content: [{ type: "text", text: "New answer" }] } };
+      const writeRecords = (...rows: object[]) => fs.writeFileSync(transcript, `${rows.map(row => JSON.stringify(row)).join("\n")}\n`);
+      const observation = () => observeOwnerContinuation(turn, sources, () => receipt(id).then(value => ({ ...value, conversationId: id }) as never));
+      const olderContext = Array.from({ length: 4 }, (_, index) => engine === "codex"
+        ? { timestamp: `2026-10-17T11:59:58.${String(index).padStart(3, "0")}Z`, payload: { type: "tool_output", message: "x".repeat(32 * 1024) } }
+        : { type: "assistant", timestamp: `2026-10-17T11:59:58.${String(index).padStart(3, "0")}Z`, message: { content: [{ type: "tool_use", name: "read_file", input: "x".repeat(32 * 1024) }] } });
+      writeRecords(...olderContext, deliveredUser, oversized, answer);
+      expect(fs.statSync(transcript).size).toBeLessThan(4 * 1024 * 1024);
+      expect(await observation()).toMatchObject({ state: "ended", finalText: "New answer" });
+      writeRecords(...olderContext, oldAnswer, deliveredUser, oversized);
+      expect(await observation()).toMatchObject({ state: "running" });
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("queued owner continuation authority is bound to its durable operation and conversation", async () => {
+  const { ownerRelayOperationAuthorized } = await import("./ownerAuthority");
+  const { procBackend } = await import("@/lib/proc");
+  const { writeRelayFile } = await import("./store");
+  const previous = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-operation-authority-"));
+  process.env.LLV_STATE_DIR = root;
+  const requestId = "operation-authority-fixture";
+  const operationId = `relay-owner-${requestId}`;
+  try {
+    writeRelayFile(externalRelayFile("relays"), { v: 1, relays: [{ id: "relay-fixture", paused: false,
+      targets: [{ id: "target-fixture", enabled: true, ownerTier: true }] }] });
+    reserveRun({ requestId, leaseId: "lease-fixture", relayId: "relay-fixture", targetId: "target-fixture",
+      childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid)!,
+      runDir: root, startedAt: new Date().toISOString(), conversationId: "conversation_pinned",
+      ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, continuation: { operationId } } });
+    expect(ownerRelayOperationAuthorized(operationId, "conversation_pinned")).toBe(true);
+    expect(ownerRelayOperationAuthorized(operationId, "conversation_other")).toBe(false);
+    writeRelayFile(externalRelayFile("relays"), { v: 1, relays: [{ id: "relay-fixture", paused: false,
+      targets: [{ id: "target-fixture", enabled: true, ownerTier: false }] }] });
+    expect(ownerRelayOperationAuthorized(operationId, "conversation_pinned")).toBe(false);
+  } finally {
+    dropRun(requestId); fs.rmSync(root, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+
+test("restart custody for an unadmitted continuation forces interrupt and retires only its operation", async () => {
+  const { settleOwnerContinuation } = await import("./ownerRun");
+  const rows = { own: { id: "own", conversationId: "conversation_pinned", command: { operationId: "own-operation" }, state: "queued", text: "own" },
+    peer: { id: "peer", conversationId: "conversation_pinned", command: { operationId: "peer-operation" }, state: "queued", text: "peer" } };
+  const registry = { deliverySnapshotForOperation: (operationId: string) => ({ deliveryOperationOwners: { [operationId]: { deliveryId: "own" } },
+      heldDeliveries: { own: rows.own } }), deliveryWrite: async (_meta: unknown, action: () => void) => { action(); return { acquired: true }; },
+    terminalizeHeldDelivery: (id: "own" | "peer") => { rows[id].state = "failed"; rows[id].text = ""; } } as unknown as AgentRegistry;
+  const requestId = "continuation-restart-custody";
+  const run = { requestId, relayId: "relay_fixture", targetId: target.id, leaseId: "lease_fixture", conversationId: "conversation_pinned",
+    ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, continuation: { operationId: "own-operation" }, cancel: "kill" as const, admissionComplete: false },
+    ownerPid: process.pid, ownerIdentity: "fixture", childPid: null, childIdentity: null, runDir: "", startedAt: "2026-10-17T12:00:00Z" };
+  reserveRun(run, 1);
+  try {
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { confirmOwnerStop } from "./src/lib/externalRelay/ownerRun";
+      import { readRunLedger } from "./src/lib/externalRelay/store";
+      const stops=[];
+      const run=readRunLedger().runs.find(r=>r.requestId==="continuation-restart-custody");
+      const confirmed=await confirmOwnerStop(run,{ launch:async()=>{throw Error("unexpected launch")},observe:async()=>({state:"running"}),stop:async(_id,action)=>{stops.push(action)} });
+      console.log(JSON.stringify({confirmed,stops}));
+    `], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+    const output = await new Response(child.stdout).text();
+    expect(await child.exited).toBe(0);
+    expect(JSON.parse(output)).toEqual({ confirmed: true, stops: ["interrupt"] });
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn).toMatchObject({ cancel: "interrupt", confirmed: true });
+    expect(await settleOwnerContinuation("own-operation", "conversation_pinned", registry)).toBe(true);
+    expect(rows.own.text).toBe(""); expect(rows.peer).toMatchObject({ state: "queued", text: "peer" });
+  } finally { dropRun(requestId); }
+});
+
+
+test("owner continuation requires its original account and a current transcript before delivery", async () => {
+  const { sendOwnerContinuation } = await import("./ownerRun");
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+  const delivery = await import("@/lib/runtime/structuredMessageDelivery");
+  const own = createManagedClaudeAccount("Pinned fixture"), peer = createManagedClaudeAccount("Peer fixture");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-account-preflight-")); const transcript = path.join(root, "session.jsonl");
+  fs.writeFileSync(transcript, "fixture");
+  const record = { id: "conversation_pinned", engine: "claude", generations: [{ id: "fixture-session", path: transcript, accountId: own.id }] };
+  const lookup = spyOn(agentRegistry(), "conversation").mockImplementation(() => record as never);
+  let pick: "own" | "peer" | "exhausted" = "own";
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation((_engine, requested, _excluded, _project, _model, unavailable) => {
+    expect(requested).toBe(own.id); expect(unavailable).toContain(peer.id); expect(unavailable).not.toContain(own.id);
+    return pick === "exhausted" ? { kind: "exhausted", resetsAt: null } : { kind: "available", account: { accountId: pick === "own" ? own.id : peer.id } as never };
+  });
+  const dispatch = spyOn(delivery, "enqueueStructuredMessage").mockImplementation(async (request, deps) => {
+    expect(request.clientMessageId).toBe("relay-owner-fixture"); expect(await deps?.idleContinuationAllowed?.()).toBe(true);
+    return { ok: true, structured: true, target: record.id, outcome: "held", operationId: "own-operation" };
+  });
+  const turn = { clientAttemptId: "relay-owner-fixture", conversationId: record.id, claimedAt: "2026-10-17T12:00:00Z", continuation: { operationId: "own-operation" } };
+  const selectedTarget = { ...target, engine: "claude" as const };
+  try {
+    expect(await sendOwnerContinuation(turn, "new turn", selectedTarget, () => {})).toMatchObject({ ok: true });
+    for (const failed of ["peer", "exhausted"] as const) { pick = failed; expect(await sendOwnerContinuation(turn, "new turn", selectedTarget, () => {})).toMatchObject({ ok: false, admission: "refused" }); }
+    lookup.mockReturnValueOnce(null);
+    expect(await sendOwnerContinuation(turn, "new turn", selectedTarget, () => {})).toMatchObject({ ok: false, admission: "refused" });
+    record.engine = "codex";
+    expect(await sendOwnerContinuation(turn, "new turn", selectedTarget, () => {})).toMatchObject({ ok: false, admission: "refused" });
+    record.engine = "claude";
+    fs.rmSync(transcript); expect(await sendOwnerContinuation(turn, "new turn", selectedTarget, () => {})).toMatchObject({ ok: false, admission: "refused" });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    await expect(sendOwnerContinuation(turn, "new turn", selectedTarget, () => { throw Error("revoked"); })).rejects.toThrow("revoked");
+  } finally { lookup.mockRestore(); selection.mockRestore(); dispatch.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("revoking an unadmitted continuation interrupts without killing its pinned host", async () => {
+  const controls = await import("@/lib/conversation/actions");
+  const actions: string[] = [];
+  const control = spyOn(controls, "applyConversationAction").mockImplementation(async (request): Promise<import("@/lib/conversation/actions").ConversationActionResult> => {
+    actions.push(request.action); return { status: 200, body: { ok: true, structured: true, target: request.conversationId, outcome: "delivered" } };
+  });
+  const requestId = "revoked-unadmitted-continuation";
+  reserveRun({ requestId, relayId: "revoked-continuation-relay", targetId: target.id, leaseId: "fixture-lease",
+    conversationId: "conversation_pinned", ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
+      continuation: { operationId: "revoked-own-operation" }, admissionComplete: false },
+    ownerPid: process.pid, ownerIdentity: "fixture", childPid: null, childIdentity: null, runDir: "",
+    startedAt: "2026-10-17T10:00:00Z" }, 1);
+  try {
+    await revokeOwnerRuns("revoked-continuation-relay");
+    expect(readRunLedger().runs.find(row => row.requestId === requestId)?.ownerTurn).toMatchObject({ cancel: "interrupt", confirmed: true });
+    expect(actions).not.toContain("kill");
+  } finally { control.mockRestore(); dropRun(requestId); }
+});
+
 test("owner callable tools use a compact index and on-demand MCP instructions", async () => {
   const { ownerRequest } = await import("./toolLoop.fixture");
   const r = ownerRequest();
-  const prompt = ownerRunPrompt(r, instruction(), 30);
-  const tools = JSON.parse(prompt.match(/<tools>\n([^]*?)\n<\/tools>/)![1]!);
-  expect(tools.find((t: { name: string }) => t.name === "react_to_message")).toBeDefined();
-  expect(tools.every((t: object) => !("parameters" in t) && !("spec" in t))).toBe(true);
-  expect(prompt).toContain("relay_service_tools");
-  expect(prompt).toContain("Describe an action before calling it");
-  expect(prompt).not.toContain(r.input.tool_guidance!);
+  const { ownerContinuationPrompt } = await import("./ownerRun");
+  const prompts = [ownerRunPrompt(r, instruction(), 30),
+    ownerContinuationPrompt(r, instruction(), 30, { seen: [], staticDigest: null }).prompt];
+  for (const prompt of prompts) {
+    const tools = JSON.parse(prompt.match(/<tools>\n([^]*?)\n<\/tools>/)![1]!);
+    expect(tools.find((t: { name: string }) => t.name === "react_to_message")).toBeDefined();
+    expect(tools.every((t: object) => !("parameters" in t) && !("spec" in t))).toBe(true);
+    expect(prompt).toContain("relay_service_tools");
+    expect(prompt).toContain("Describe an action before calling it");
+    expect(prompt).not.toContain(r.input.tool_guidance!);
+  }
 });
 
 

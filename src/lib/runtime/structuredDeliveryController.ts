@@ -7,7 +7,7 @@ import { creditGuardBlock } from "@/lib/accounts/creditGuard";
 import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountCreditGuard";
 import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
-import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
+import { ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
 import { pipelineHostHasLiveWork, providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
@@ -994,15 +994,22 @@ export async function bindStructuredDeliveryQueue(
          already ended — the only answer it could give while this socket was
          unreachable — must not be actuated when the socket comes back. */
       settled: (operationId: string) => {
-        const snapshot = registry.readOnlySnapshot();
-        const receipt = operationId.startsWith("spawn_message_") ? snapshot.receipts[operationId.slice("spawn_message_".length)] : null;
-        return !ownerRelaySpawnAuthorized(receipt?.clientAttemptId) || sendIsSettled(snapshot, operationId);
+        const snapshot = registry.deliverySnapshotForOperation(operationId);
+        const receipt = operationId.startsWith("spawn_message_") ? registry.spawnReceipt(operationId.slice("spawn_message_".length)) : null;
+        const owner = snapshot.deliveryOperationOwners[operationId];
+        const delivery = owner ? snapshot.heldDeliveries[owner.deliveryId] : undefined;
+        const conversationId = delivery?.conversationId;
+        return !ownerRelaySpawnAuthorized(receipt?.clientAttemptId)
+          || !!conversationId && !ownerRelayOperationAuthorized(operationId, conversationId)
+          || sendIsSettled(snapshot, operationId);
       },
       diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
       authorizeDispatch: (operationId: string, conversationId: string) => {
         authorizeAccountDispatch(conversationId);
+        if (!ownerRelayOperationAuthorized(operationId, conversationId))
+          throw new StructuredSendRefusedError("owner relay continuation authorization revoked");
         if (!operationId.startsWith("spawn_message_")) return;
-        const receipt = registry.readOnlySnapshot().receipts[operationId.slice("spawn_message_".length)];
+        const receipt = registry.spawnReceipt(operationId.slice("spawn_message_".length));
         if (!ownerRelaySpawnAuthorized(receipt?.clientAttemptId))
           throw new StructuredSendRefusedError("owner relay first prompt authorization revoked");
       },

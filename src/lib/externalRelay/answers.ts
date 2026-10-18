@@ -30,6 +30,7 @@ export type RelayToolCallRecord = {
 };
 export type RelayAnswerRecord = {
   conversationId?: string;
+  chain?: { continued: boolean; promptBytes: number };
   compaction?: { member: string; owner: string };
   rounds?: number;
   toolCalls?: RelayToolCallRecord[];
@@ -175,7 +176,7 @@ export function answerRecorder(base: {
         try { writeRecord(file, record); } catch (error) { logFailure("write", error); }
       }
     },
-    finish(result: Pick<RelayAnswerRecord, "outcome" | "answer" | "delivery"> & Partial<Pick<RelayAnswerRecord, "rounds" | "toolCalls" | "compaction">>) {
+    finish(result: Pick<RelayAnswerRecord, "outcome" | "answer" | "delivery"> & Partial<Pick<RelayAnswerRecord, "rounds" | "toolCalls" | "compaction" | "chain">>) {
       if (finished) return;
       finished = true;
       const now = Date.now();

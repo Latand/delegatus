@@ -1,3 +1,5 @@
+import { RelayChatsView } from "@/components/externalRelay/RelayChats";
+import type { RelayChatsPayload } from "@/lib/externalRelay/relayChats";
 import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplatePicker";
 import { AttentionCard } from "@/components/runtime/AttentionCard";
 import { codexAttentionActions, projectCodexAttentionActions } from "@/lib/runtime/codexAttentionActions";
@@ -4858,7 +4860,10 @@ const diskDensity = new URLSearchParams(location.search).get("disk-density");
 // Mount the production dock beside the Viewer for shared desktop-host cases.
 const dockWidth = new URLSearchParams(location.search).get("dockWidth");
 if (dockWidth === "440" || dockWidth === "360") localStorage.setItem(`llvOrchestratorPanelWidth:${PROJECT}`, dockWidth);
-createRoot(document.getElementById("root")!).render(PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : dockWidth === "440" || dockWidth === "360" ? (
+const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
+  (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
+    engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
+createRoot(document.getElementById("root")!).render(PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
