@@ -453,6 +453,7 @@ export function candidatePerformanceEvidence(value: unknown): CandidatePerforman
     || (report.measurements !== null && typeof report.measurements !== "object")
     || (report.inducedDelayMs !== undefined && typeof report.inducedDelayMs !== "number")
     || (report.induced !== undefined && (!Array.isArray(report.induced) || report.induced.some((item) => typeof item !== "string")))
+    || (report.timingWarnings !== undefined && (!Array.isArray(report.timingWarnings) || report.timingWarnings.some((item) => typeof item !== "string")))
     || (report.log !== undefined && (!Array.isArray(report.log) || report.log.some((line) => typeof line !== "string")))) {
     throw new Error("the candidate performance report is malformed");
   }
@@ -482,11 +483,13 @@ export function candidatePerformanceEvidence(value: unknown): CandidatePerforman
   const normalized: CandidatePerformanceEvidence = { ...report, breaches };
   delete normalized.timingWarnings;
   if (timingWarnings.length) normalized.timingWarnings = timingWarnings;
+  if (report.inducedDelayMs || report.induced?.length) {
+    return { ...normalized, ok: false, detail: "the candidate performance report ran under an induced fault" };
+  }
   if (breaches.length) return {
     ...normalized, ok: false,
     detail: !report.ok && report.detail && !timingWarnings.includes(report.detail) ? report.detail : breaches[0]!,
   };
-  if (report.inducedDelayMs || report.induced?.length) return refuse("the candidate performance report ran under an induced fault");
   if (!report.ok && !timingOnlyRefusal) return normalized;
   delete normalized.detail;
   return { ...normalized, ok: true };

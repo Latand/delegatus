@@ -138,8 +138,7 @@ test("each bound names its breach with the measured value", () => {
   ]);
 });
 
-/* A slow first boot is refused even when everything after it is fast: the
-   phases are bounded apart from the warm numbers. */
+/* The diagnostic comparison names first-boot overruns separately from warm operation. */
 test("the full threshold comparison names a slow registry open or first snapshot", () => {
   for (const phase of ["registryOpenMs", "firstSnapshotMs"] as const) {
     const measured = healthy();
@@ -260,8 +259,7 @@ test("a report cannot pass with breaches, without measurements or under an induc
   }
 });
 
-/* The verdict is computed again from the measurements: what the report says
-   about itself can only make it stricter. */
+/* The verdict is recomputed from complete measurements; actual failures stay decisive. */
 test("empty, partial, garbled or failed measurements claiming a pass are refused", () => {
   const claimed = (measurements: unknown) => ({
     checkedAt: "2026-10-12T00:00:00Z", runtime: "bun 1.4.0", bounds: CANDIDATE_PERFORMANCE_BOUNDS, measurements, breaches: [], ok: true,
@@ -316,12 +314,22 @@ test("older timing-only refusals become warnings while independent failures rema
   const legacy = report(measured, { detail: "first registry snapshot 90000ms exceeds 2000ms" });
   expect(candidatePerformanceEvidence(legacy)).toMatchObject({ ok: true, breaches: [], timingWarnings: legacy.breaches });
   expect(candidatePerformanceEvidence({ ...legacy, detail: "the runner failed after collecting measurements" }).ok).toBe(false);
-  expect(candidatePerformanceEvidence({ ...legacy, inducedDelayMs: 100 }).ok).toBe(false);
+  expect(candidatePerformanceEvidence({ ...legacy, inducedDelayMs: 100 })).toMatchObject({
+    ok: false, detail: "the candidate performance report ran under an induced fault",
+  });
   measured.deliveryEvidence.preserved = false;
   expect(candidatePerformanceEvidence(report(measured))).toMatchObject({ ok: false, breaches: ["retained launch or delivery evidence changed"] });
   measured.deliveryEvidence.preserved = true;
   measured.runtimeTimeouts = 1;
   expect(candidatePerformanceEvidence(report(measured))).toMatchObject({ ok: false, breaches: ["1 runtime timeout(s)"] });
+});
+
+test("malformed timing warnings are refused on successful and failed reports", () => {
+  for (const timingWarnings of [5, { value: "slow" }, [1, null]]) {
+    for (const measurements of [healthy(), null]) {
+      expect(() => candidatePerformanceEvidence({ ...report(measurements), timingWarnings })).toThrow("malformed");
+    }
+  }
 });
 
 test("the refusal names the breaches for the deployment record", () => {
@@ -403,9 +411,7 @@ test("runtime-host calls are bounded, and a timeout or a failed call refuses", (
   expect(candidatePerformanceEvidence(unread).detail).toBe("the candidate performance report lacks or garbles runtimeRpc");
 });
 
-/* #2761: an ordinary request the page is still waiting for, or one that
-   failed, is the operator's wait as much as a slow answer: a side request
-   left open past the bound and a 5xx from any route refuse the candidate. */
+/* An unfinished ordinary request and an HTTP failure remain blocking outcomes. */
 test("a browser request left unanswered or answered 5xx refuses the candidate", () => {
   const measured = healthy();
   measured.browser = {

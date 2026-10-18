@@ -182,8 +182,10 @@ A refused candidate is retired before
 anything is switched, and the release that was serving keeps serving
 (`ViewerDeploymentCoordinator`, phase `candidate-health`). The adapter
 computes the verdict again from the measurements against the bounds the
-deploying release holds: a report whose measurements are missing, garbled or
-over a bound is refused whatever its own `ok` says. A `verify-candidate`
+deploying release holds. Missing or garbled measurements and failed operations
+refuse promotion. Duration observations become warnings. For older reports,
+only exact duration strings recomputed from complete measurements, with no
+independent failure detail, can become warnings. A `verify-candidate`
 answer that carries no performance report, or no runtime-host rehearsal, is
 refused too: it reads exactly like an adapter that skipped them. Only
 `verify-promoted`, which reads the release already serving, owes neither.
@@ -310,10 +312,9 @@ verdict; it skips the browser, as does a run under an induced fault.
 | Browser views | each of eight views: board drawn ≤ 10 s from navigation; `/api/files` p95 ≤ 5 s, max ≤ 10 s; any other ordinary API request ≤ 10 s whether answered, failed or still open, and none answered 5xx or failed; main thread ≤ 1 s before the board drew, p95 ≤ 50 ms and max ≤ 500 ms after; a wheel answered ≤ 500 ms; selection held, no missing-conversation notice, a board answer while the writers ran; ≥ 50 writes, none failed; the serving process's own event loop ≤ 1 s while the views opened, p95 ≤ 50 ms and max ≤ 500 ms while they operated, with ≥ 300 samples, and a run that did not read it is refused | What the operator sees is the page, not the handler. The HTTP bounds above held while the page took 15-19 s to draw: `/api/accounts` enumerated every conversation of the history once per completed account migration, through a lazy reader that stats the database twice per row, and held the server's thread for two thirds of a minute-long run ("What changed" lists the page's other whole-history reads). |
 | Sufficiency | full dataset (≥ 53,000 rows, ≥ 90 % cold; ≥ 10,971 receipts with 892 structured failures, 122 legacy failures and 133 conflicts; 20 pending launches and 666 retained deliveries preserved); ≥ 50 writes per writer, ≥ 20 keyed reads, ≥ 8 warm builds, ≥ 64 board requests, ≥ 8 compared rounds, ≥ 2 workers, pending and uncertain deliveries present | A run that measured nothing passes nothing. |
 
-The latency numbers are the bounds the post-incident audit proposed, with the
-first-boot and activation bounds added here. They were kept because the fixed
-code meets them, on a machine whose 24 cores carried a load near 23 from
-other agents while it ran.
+The latency numbers are diagnostic reference values from the post-incident
+audit. The table retains them for comparison; they do not refuse a deployment.
+The non-timing requirements in the table remain mandatory.
 
 ### Proving the gate refuses
 
@@ -331,15 +332,15 @@ adapter and acted on by the coordinator retires the candidate without a
 promote. `candidateBrowserRun.test.ts` drives the browser helper against a
 board fast in every way but one: it passes clean, and a
 `/api/tmux/targets` that never answers or a `/api/runtime/snapshot` that
-answers 503 refuses it through the same adapter and coordinator, and so
-does a board whose server is held once for 800 ms while every request stays
-fast, or whose server carries no probe. `--induce server-stall` does the same
-to the real production server under the gate's own views. `deployment.test.ts` requires a refused
+answers 503 refuses it through the same adapter and coordinator. A server
+held for 800 ms while requests complete produces a timing warning; a missing
+server probe still refuses. `--induce server-stall` deliberately marks a fault
+in the real production server and therefore remains refused. `deployment.test.ts` requires a refused
 candidate to be retired with the previous release still current, and an
 adapter answer without a performance report, read through the real
 host-command adapter, to be retired the same way. The full pass runs with
 `LLV_CANDIDATE_PERFORMANCE_FULL=1` and needs a production build and
-`CHROME_BIN`. A report that passes with breaches, without or with garbled
+`CHROME_BIN`. A report that passes with actual failures, without or with garbled
 measurements, without the browser views, or under an induced fault is read as
 a refusal.
 

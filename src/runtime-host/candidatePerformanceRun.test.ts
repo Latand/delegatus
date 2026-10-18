@@ -212,7 +212,7 @@ test.skipIf(!served)("a production server held under the browser views is refuse
   expect(browser.views).toBe(8);
   expect(browser.server!.samples).toBeGreaterThan(1_000);
   expect(browser.server!.maxMs).toBeGreaterThanOrEqual(780);
-  expect(report.breaches).toEqual(expect.arrayContaining([
+  expect(report.timingWarnings).toEqual(expect.arrayContaining([
     expect.stringMatching(/^server event-loop delay max under the browser views \d+(\.\d+)?ms exceeds 500ms$/),
   ]));
   expect(report.log?.some((line) => line.startsWith("induced: held the production server's event loop for 800ms"))).toBe(true);

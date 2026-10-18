@@ -415,8 +415,7 @@ function passingPerformance(): CandidatePerformanceEvidence {
   };
 }
 
-/* #2761: the performance gate's verdict crosses into the durable record, and a
-   refused gate refuses the candidate whatever the rest of the evidence says. */
+/* Duration observations cross into the durable record as warnings. */
 test("duration-only candidate observations reach the record without refusing the candidate", async () => {
   const measured: CandidatePerformanceMeasurements = {
     ...PASSING_MEASUREMENTS,

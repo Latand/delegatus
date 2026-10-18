@@ -37,7 +37,8 @@
    Every board answer is compared with its scope's settled answer from before
    the first write; every worker's progress is read back from its transcript.
    It prints one report line (`CANDIDATE_PERFORMANCE_REPORT_PREFIX`) and exits
-   non-zero when a bound is breached or a measurement is missing.
+   non-zero when an operation fails, a measurement is missing, or a fault is induced.
+   Duration threshold observations remain in timingWarnings.
    `verify-candidate` runs it inside a container from the candidate image.
    Everything it creates sits under one temporary directory removed on exit,
    and every process it starts leaves when it does; it never reads the
