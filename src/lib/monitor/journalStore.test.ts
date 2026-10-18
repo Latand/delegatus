@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -229,6 +230,44 @@ describe("seat tick check journal", () => {
     const partial = path.join(SANDBOX, "seat-tick-partial.ndjson");
     fs.writeFileSync(partial, `${JSON.stringify(check())}\n{"broken":\n${JSON.stringify(check({ verdict: "no-seat" }))}\n`);
     expect(readSeatTickRecords(10, partial).map((entry) => entry.verdict)).toEqual(["quiet", "no-seat"]);
+  });
+
+  test("a busy peer cannot erase a project's 13-hour tick audit", () => {
+    const file = path.join(SANDBOX, "project-retention.ndjson");
+    const start = Date.parse("2026-10-17T14:20:00Z");
+    for (let minute = 0; minute <= 13 * 60; minute += 5) {
+      const at = new Date(start + minute * 60_000).toISOString();
+      appendSeatTickRecord(check({ project: "quiet-project", at }), file);
+      for (let peer = 0; peer < 5; peer++) appendSeatTickRecord(check({ project: "busy-project", at }), file);
+    }
+    const records = readSeatTickRecords(2 * SEAT_TICK_RUN_HISTORY, file);
+    const own = readSeatTickRecords(SEAT_TICK_RUN_HISTORY, file, "quiet-project");
+    expect(own).toHaveLength(157);
+    expect(own[0]!.at).toBe(new Date(start).toISOString());
+    expect(readSeatTickRecords(SEAT_TICK_RUN_HISTORY, file, "busy-project")).toHaveLength(SEAT_TICK_RUN_HISTORY);
+  });
+
+  test("the first project append preserves its available pre-upgrade audit", () => {
+    const file = path.join(SANDBOX, "legacy-project.ndjson");
+    const old = check({ project: "project", detail: "old refusal" });
+    fs.writeFileSync(file, [old, check({ project: "peer" })].map(row => JSON.stringify(row)).join("\n") + "\n");
+    appendSeatTickRecord(check({ project: "project", detail: "after upgrade" }), file);
+    expect(readSeatTickRecords(10, file, "project").map(row => row.detail)).toEqual(["old refusal", "after upgrade"]);
+  });
+
+  test("the per-project row bound survives a fresh writer and many peer projects", () => {
+    const file = path.join(SANDBOX, "bounded-projects.ndjson");
+    for (let i = 0; i < SEAT_TICK_RUN_HISTORY; i++) appendSeatTickRecord(check({ project: "quiet-project", detail: `check ${i}` }), file);
+    for (let i = 0; i < 130; i++) appendSeatTickRecord(check({ project: `peer-${i}` }), file);
+    expect(readSeatTickRecords(SEAT_TICK_RUN_HISTORY, file, "quiet-project")).toHaveLength(SEAT_TICK_RUN_HISTORY);
+    const code = `const { appendSeatTickRecord } = await import(${JSON.stringify(path.join(import.meta.dir, "journalStore.ts"))});
+      appendSeatTickRecord(${JSON.stringify(check({ project: "quiet-project", detail: "after restart" }))}, ${JSON.stringify(file)});`;
+    const child = spawnSync(process.execPath, ["-e", code], { env: { ...process.env }, encoding: "utf8", timeout: 30_000 });
+    expect(child.status).toBe(0);
+    const own = readSeatTickRecords(SEAT_TICK_RUN_HISTORY + 1, file, "quiet-project");
+    expect(own).toHaveLength(SEAT_TICK_RUN_HISTORY);
+    expect(own[0]!.detail).toBe("check 1");
+    expect(own.at(-1)!.detail).toBe("after restart");
   });
 
   test("retention drops the oldest lines rather than growing without bound", () => {

@@ -10,7 +10,7 @@ import { relayChatsProject, shortChatKey, type RelayAnswerRow, type RelayChatRow
 import { readRelayStore } from "./store";
 
 /*
- * The operator's read of the relay's per-chat conversations and of the single
+ * The operator's read of the relay's reply-chain conversations and of the single
  * answers it kept. The scanner skips the transcripts (relay-slice3.md §4.6),
  * so search, the MCP tools, flows and composers never reach them; this module
  * finds them from the conversation records instead, for the relay's own
@@ -44,7 +44,7 @@ export function relayTranscriptFor(record: RelayConversation): string | null {
   if (!record.sessionId || !/^[A-Za-z0-9_-]{1,128}$/.test(record.sessionId)) return null;
   if (record.engine === "codex") return codexRollout(record);
   for (const root of claudeProjectRoots()) {
-    const candidate = path.join(root, encodedCwd(record.cwd), `${record.sessionId}.jsonl`);
+    const candidate = path.join(root, encodedCwd(record.cwd!), `${record.sessionId}.jsonl`);
     if (fs.existsSync(candidate)) return candidate;
   }
   return null;
@@ -60,7 +60,7 @@ function entryFor(record: RelayConversation, transcript: string, relayName: stri
     name: path.basename(transcript),
     project: relayChatsProject(record.relayId),
     projectName: relayName,
-    cwd: record.cwd,
+    cwd: record.cwd!,
     sessionStartedAt: record.createdAt,
     title: `${targetName ?? record.targetId} · ${shortChatKey(record.chatKey)}`,
     engine: record.engine,
@@ -117,6 +117,7 @@ export function relayChats(): RelayChatsPayload {
   const store = readRelayStore();
   const relays = store.relays.map((relay) => ({ id: relay.id, name: relay.name, origin: relay.origin }));
   const chats: RelayChatRow[] = records.flatMap((record) => {
+    if (record.authority === "owner-tier") return [];
     const relay = store.relays.find((item) => item.id === record.relayId);
     if (!relay) return [];
     const target = relay.targets.find((item) => item.id === record.targetId) ?? null;
@@ -128,7 +129,7 @@ export function relayChats(): RelayChatsPayload {
       targetId: record.targetId,
       targetName: target?.name ?? null,
       chatKey: record.chatKey,
-      context: record.context,
+      authority: record.authority,
       engine: record.engine,
       turns: record.turns,
       compactions: record.compactions,
