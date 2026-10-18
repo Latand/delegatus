@@ -189,6 +189,33 @@ test("hourly totals, list and chart use the requested timezone boundaries", asyn
   expect(nextDay.list).toEqual([]);
   expect(nextDay.series.flatMap(row => row.parts)).toEqual([]);
 });
+test("fractional timezone hourly ranges include every UTC edge bucket for one and two days", async () => {
+  const now = Date.parse("2026-10-19T12:00:00Z");
+  for (const [zoneIndex, tz] of ["Asia/Kolkata", "Asia/Kathmandu"].entries()) {
+    if (zoneIndex > 0) { fs.rmSync(root, { recursive: true, force: true }); root = fs.mkdtempSync(path.join(os.tmpdir(), "token-report-")); file = path.join(root, "records.sqlite"); }
+    const firstDay = parseActivityDates(new URLSearchParams("from=2026-10-18&to=2026-10-18"), now, tz).days[0]!;
+    const secondDay = parseActivityDates(new URLSearchParams("from=2026-10-19&to=2026-10-19"), now, tz).days[0]!;
+    for (const [index, at] of [firstDay.start + 60_000, firstDay.end - 60_000, secondDay.start + 60_000, secondDay.end - 60_000].entries()) {
+      seed(`fractional-${tz}-${index}`, { at });
+    }
+    for (const [to, expectedRequests] of [["2026-10-18", 3], ["2026-10-19", 4]] as const) {
+      const from = "2026-10-18";
+      const got = await read(`from=${from}&to=${to}&tz=${tz}`, { now: () => now, tz: () => tz });
+      const sum = (rows: TokenCounts[]) => rows.reduce((total, row) => { addTokens(total, row); return total; }, emptyTokens());
+      const listCounts = sum(got.list.map(row => row.counts));
+      const basisCounts = sum(got.costBasis.map(row => row.counts));
+      const seriesCounts = sum(got.series.flatMap(row => row.parts.map(part => part.counts)));
+      expect(got.totals.requests).toBe(expectedRequests);
+      expect(basisCounts).toEqual(got.totals);
+      expect(listCounts).toEqual(got.totals);
+      expect(seriesCounts).toEqual(got.totals);
+      const days = parseActivityDates(new URLSearchParams(`from=${from}&to=${to}`), now, tz).days;
+      expect(got.series[0]!.start).toBe(Math.floor(days[0]!.start / HOUR) * HOUR);
+      expect(got.series.at(-1)!.end).toBe(Math.ceil(days.at(-1)!.end / HOUR) * HOUR);
+      expect(got.series).toHaveLength(Math.ceil(days.at(-1)!.end / HOUR) - Math.floor(days[0]!.start / HOUR));
+    }
+  }
+});
 test("historical one and two day ranges use retained daily aggregates and agree with totals", async () => {
   const oldAt = USAGE_NOW - DAY;
   seed("old", { at: oldAt });

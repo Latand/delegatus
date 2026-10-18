@@ -201,9 +201,12 @@ export async function activityTokensResponse(search: URLSearchParams, viewer: Ac
     if (listRows.length > 12) { const counts=emptyTokens(); for(const row of listRows.slice(12)) addTokens(counts,row.counts); selected.push({ key: "other", name: null, counts }); }
     const series: ActivityTokensResponse["series"] = [];
     const ranges = new Map<string | number, { start: number; end: number }>();
-    for (const day of range.days) {
-      if (bucket === "hour") for (let start = day.start; start < day.end; start += HOUR) ranges.set(Math.floor(start / HOUR), { start, end: Math.min(start + HOUR, day.end) });
-      else { const key = bucket === "week" ? weekOfDay(day.date) : day.date; const into = ranges.get(key); ranges.set(key, { start: into?.start ?? day.start, end: day.end }); }
+    if (bucket === "hour") {
+      const first = Math.floor(range.days[0]!.start / HOUR);
+      const afterLast = Math.ceil(range.days.at(-1)!.end / HOUR);
+      for (let key = first; key < afterLast; key++) ranges.set(key, { start: key * HOUR, end: (key + 1) * HOUR });
+    } else for (const day of range.days) {
+      const key = bucket === "week" ? weekOfDay(day.date) : day.date; const into = ranges.get(key); ranges.set(key, { start: into?.start ?? day.start, end: day.end });
     }
     for (const [key, span] of ranges) series.push({ ...span, counted: meta?.counted_from != null && span.end > meta.counted_from,
       parts: [...(buckets.get(key) ?? [])].sort(([a],[b]) => a.localeCompare(b)).map(([key, counts]) => ({ key, counts })) });
