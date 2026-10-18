@@ -247,8 +247,8 @@ before it says it is not counted. The frames stay outside the repository.
 The Time tab over 366 days, measured in the same run on that revision
 (production build, one Chromium, through `scripts/gate-slot.sh`) over a store
 with 142 workdays of human input and agent runs: five reads of
-`GET /api/activity` took 106.2 to 131.1 ms over HTTP for a 1,718,684-byte
+`GET /api/activity` took 90.0 to 99.8 ms over HTTP for a 1,718,684-byte
 answer, and the page drew 53 week columns, 12,199 elements and two long tasks
-(102 and 91 ms), loaded 597 ms after navigation. The weeks before the ledger's
+(123 and 104 ms), loaded 580 ms after navigation. The weeks before the ledger's
 retained 90 days draw as not read. The populated read in isolation is the
 controlled rehearsal above (51.2 ms median, 172.1 ms maximum).
