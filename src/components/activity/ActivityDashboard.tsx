@@ -985,7 +985,7 @@ export function ActivityDashboard({ initialRange, initialView, initialBy = "mode
                 locale={locale}
                 t={viewerT}
               />
-            ) : !tokenRead.failed ? <div className="py-10 text-center text-[12px] text-muted">{viewerT("common.loadingCap")}</div> : null}
+            ) : !tokenRead.failed ? <div className="py-10 text-center text-[12px] text-muted" data-activity-skeleton="">{viewerT("common.loadingCap")}</div> : null}
             {tokensDrawer && answer ? <TokensCountingDrawer ctx={{ answer, locale, t: viewerT }} onClose={() => setTokensDrawer(false)} /> : null}
           </>
         ) : null}

@@ -31,6 +31,8 @@ export interface UsageFacts {
   model?: string;
   recordsSeen?: boolean;
 }
+/** Claude and Codex both name their main account "default", so a stored account carries its engine. */
+export const accountKey = (engine: string, id: string) => `${engine}:${id}`;
 export interface UsageAttribution {
   account: string; member: string; model: string | null; tier: string | null;
 }

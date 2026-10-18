@@ -123,6 +123,13 @@ export function modelName(model: string, engine: string | undefined, t: TFunctio
   return modelDisplayName(engine ?? "claude", model);
 }
 
+/** A stored account is «engine:id»; one the account stores no longer list reads as its engine and id. */
+function unlabelledAccount(key: string): string {
+  const colon = key.indexOf(":");
+  const engine = colon > 0 ? ENGINE_NAMES[key.slice(0, colon)] : undefined;
+  return engine ? `${engine} · ${key.slice(colon + 1)}` : key;
+}
+
 /** A key of a dimension as the page names it. The answer carries project,
     member and account names for its list; roles and models are named here. */
 export function entityName(dimension: TokenDimension, key: string, ctx: TokenCtx): string {
@@ -143,7 +150,7 @@ export function entityName(dimension: TokenDimension, key: string, ctx: TokenCtx
       const roster = answer.member.members.find((member) => member.id === key);
       return memberLabel({ id: key, name: roster?.name ?? listed }, t);
     }
-    case "account": return key ? listed ?? key : t("activity.tokens.account.unknown");
+    case "account": return key ? listed ?? unlabelledAccount(key) : t("activity.tokens.account.unknown");
     case "engine": return ENGINE_NAMES[key] ?? key;
   }
 }
@@ -202,16 +209,25 @@ const anchorOf = (element: Element): TipAnchor => {
 
 export type TokenTrust = "ok" | "lower" | "none";
 
-export function tokenTrust(answer: ActivityTokensResponse): TokenTrust {
-  if (answer.coverage.countedFrom === null) return "none";
-  return answer.coverage.complete ? "ok" : "lower";
+/** How much of the asked range the counting reaches: every bucket, some, or none. */
+export function rangeCounted(answer: ActivityTokensResponse): "all" | "some" | "none" {
+  const counted = answer.series.filter((bucket) => bucket.counted).length;
+  return counted === answer.series.length ? "all" : counted === 0 ? "none" : "some";
 }
 
-const TRUST_KEYS: Record<TokenTrust, MessageKey> = {
-  ok: "activity.tokens.coverage.ok",
-  lower: "activity.tokens.coverage.lower",
-  none: "activity.tokens.coverage.none",
-};
+/** A range that starts before the first counted moment is a lower bound too. */
+export function tokenTrust(answer: ActivityTokensResponse): TokenTrust {
+  if (answer.coverage.countedFrom === null) return "none";
+  return answer.coverage.complete && rangeCounted(answer) === "all" ? "ok" : "lower";
+}
+
+/** The words for the dot, its popover and the drawer: a lower bound names its cause. */
+export function trustKey(answer: ActivityTokensResponse): MessageKey {
+  const trust = tokenTrust(answer);
+  if (trust === "ok") return "activity.tokens.coverage.ok";
+  if (trust === "none") return "activity.tokens.coverage.none";
+  return answer.coverage.complete ? "activity.tokens.coverage.partial" : "activity.tokens.coverage.lower";
+}
 
 /** The lines the coverage popover and the drawer both start with. */
 export function coverageLines(ctx: TokenCtx): string[] {
@@ -235,7 +251,7 @@ export function CoverageDot({ ctx }: { ctx: TokenCtx }) {
     <>
       <button
         type="button"
-        aria-label={`${t("activity.tokens.coverage.aria")}: ${t(TRUST_KEYS[trust])}`}
+        aria-label={`${t("activity.tokens.coverage.aria")}: ${t(trustKey(ctx.answer))}`}
         aria-describedby={anchor ? id : undefined}
         onMouseEnter={(event) => show(event.currentTarget)}
         onMouseLeave={() => setAnchor(null)}
@@ -250,7 +266,7 @@ export function CoverageDot({ ctx }: { ctx: TokenCtx }) {
       </button>
       {anchor ? (
         <Tooltip anchor={anchor} side="below" id={id}>
-          <div className="font-semibold text-primary">{t(TRUST_KEYS[trust])}</div>
+          <div className="font-semibold text-primary">{t(trustKey(ctx.answer))}</div>
           <div className="mt-1 grid gap-0.5 text-secondary" data-token-coverage-lines="">
             {coverageLines(ctx).map((line) => <span key={line}>{line}</span>)}
           </div>
@@ -387,11 +403,16 @@ export function foldWeeks(buckets: readonly ChartBucket[], tz: string): ChartBuc
   return out;
 }
 
-function niceMax(value: number): number {
+export function niceMax(value: number): number {
   if (value <= 0) return 1;
   const power = 10 ** Math.floor(Math.log10(value));
   for (const step of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (step * power >= value) return step * power;
   return 10 * power;
+}
+
+/** Gridlines whose labels would read the same are not drawn: nothing counted keeps the zero line only. */
+export function axisFractions(peak: number): readonly number[] {
+  return peak === 0 ? [0] : niceMax(peak) < 4 ? [0, 1] : [0, 0.5, 1];
 }
 
 export function ColumnChart({ buckets, bucket, by, named, height, ctx }: {
@@ -413,7 +434,9 @@ export function ColumnChart({ buckets, bucket, by, named, height, ctx }: {
   const innerW = Math.max(0, width - left - 4);
   const innerH = height - bottom - top;
   const totals = buckets.map((entry) => entry.parts.reduce((sum, part) => sum + tokenTotal(part.counts), 0));
-  const max = niceMax(Math.max(0, ...totals));
+  const peak = Math.max(0, ...totals);
+  const max = niceMax(peak);
+  const fractions = axisFractions(peak);
   const band = buckets.length ? innerW / buckets.length : 0;
   const barW = Math.max(3, Math.min(30, band * 0.64));
   const hour = bucket === "hour";
@@ -444,7 +467,7 @@ export function ColumnChart({ buckets, bucket, by, named, height, ctx }: {
     <div ref={box} className="relative w-full" style={{ height }} data-token-chart={by}>
       {width > 0 ? (
         <svg width={width} height={height} role="group" aria-label={t("activity.tokens.chart.aria", { bucket: t(hour ? "activity.tokens.chart.hour" : bucket === "week" ? "activity.tokens.chart.week" : "activity.tokens.chart.day") })} className="block">
-          {[0, 0.5, 1].map((fraction) => (
+          {fractions.map((fraction) => (
             <g key={fraction} aria-hidden>
               <line x1={left} x2={width} y1={Math.round(y(max * fraction)) + 0.5} y2={Math.round(y(max * fraction)) + 0.5} stroke="var(--color-border)" strokeWidth={1} />
               <text x={left - 6} y={y(max * fraction) + 3.5} textAnchor="end" fontSize={10} fill="var(--color-muted)" className="tabular-nums" data-token-scale-top={fraction === 1 ? "" : undefined}>{fraction === 0 ? "0" : compact(max * fraction, locale)}</text>

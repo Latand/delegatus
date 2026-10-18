@@ -22,7 +22,7 @@ import { ActivityDashboard } from "./ActivityDashboard";
 import { memberFromSearch } from "./ActivityMembers";
 import { hoursText, projectFromSearch } from "./format";
 import { byFromSearch, rangeFromSearch, viewFromSearch } from "./pageParams";
-import { compact, datesLabel, percent } from "./tokenParts";
+import { axisFractions, compact, datesLabel, niceMax, percent } from "./tokenParts";
 
 /* The desktop /activity page scoped to one project, driven the way the
    operator drives it, over the real API function with invented hosts,
@@ -123,13 +123,13 @@ const tokenFile = path.join(tokenRoot, "records.sqlite");
 afterAll(() => fs.rmSync(tokenRoot, { recursive: true, force: true }));
 const TOKEN_OWNER = "m_owner0000000000000000000000000";
 const counts = (partial: Partial<TokenCounts>): TokenCounts => ({ input: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0, reasoning: 0, requests: 1, ...partial });
-function seedTokens(id: string, project: string, role: string, engine: "claude" | "codex", model: string, tier: string, usage: TokenCounts) {
+function seedTokens(id: string, project: string, role: string, engine: "claude" | "codex", model: string, tier: string, usage: TokenCounts, at = NOW - 86_400_000) {
   const store = ActivityStore.open(tokenFile);
   try {
     store.transaction(() => commitUsage(store.db, {
       owner: { conversation: id, project, engine, role, pipelineId: null, stageId: null },
       /* A Codex response carries its thread's running total, as a rollout's record does. */
-      records: [{ engine, id, at: NOW - 86_400_000, model, tier, counts: usage, ...(engine === "codex" ? { cumulative: {
+      records: [{ engine, id, at, model, tier, counts: usage, ...(engine === "codex" ? { cumulative: {
         total: usage.input + usage.cacheRead + usage.cacheWrite + usage.output, input: usage.input + usage.cacheRead + usage.cacheWrite,
         cached: usage.cacheRead, cacheWrite: usage.cacheWrite, output: usage.output, reasoning: usage.reasoning,
       } } : {}) }],
@@ -148,6 +148,8 @@ function markTokensRead() {
 seedTokens("opus", HARBOR, "builder", "claude", "claude-opus-5-5", "standard", counts({ input: 1e6, cacheRead: 40e6, cacheWrite: 2e6, cacheWrite1h: 1e6, output: 5e5, reasoning: 2e5 }));
 seedTokens("sol", CLIENT, "reviewer", "codex", "gpt-6.1-sol", "default", counts({ input: 2e6, cacheRead: 20e6, output: 1e6, reasoning: 5e5 }));
 seedTokens("mystery", HARBOR, "builder", "claude", "fixture-model", "standard", counts({ input: 1e5 }));
+/* Counting reaches back before the default week, so a 7-day range is read in full. */
+seedTokens("early", HARBOR, "builder", "claude", "claude-opus-5-5", "standard", counts({ input: 10 }), NOW - 20 * 86_400_000);
 markTokensRead();
 const TOKEN_TOTAL = 43.5e6 + 23e6 + 1e5;
 const tokenRequests: URLSearchParams[] = [];
@@ -656,6 +658,31 @@ describe("the Tokens tab", () => {
     await click($('[data-token-member-menu] button:last-child'));
     expect(lastTokens().get("member")).toBe("m_owner0000000000000000000000000");
     expect($("[data-token-members]")!.textContent).toContain("Ada Quill");
+  });
+
+  test("a range that starts before counting is a lower bound, and a range wholly before it says it is not counted", async () => {
+    await open("/activity?view=tokens&range=7d");
+    expect($("[data-token-coverage]")!.getAttribute("data-token-coverage")).toBe("ok");
+    expect($("[data-token-hero]")!.textContent).not.toContain("≥");
+    /* Counting starts 20 days before NOW; this range starts 27 days before it. */
+    await unmount();
+    await open("/activity?view=tokens&from=2026-08-28&to=2026-09-24&stack=model&list=model");
+    expect($("[data-token-coverage]")!.getAttribute("data-token-coverage")).toBe("lower");
+    expect($("[data-token-hero]")!.textContent).toBe(`≥ ${compact(TOKEN_TOTAL + 10, "en")}`);
+    expect($("[data-token-coverage]")!.getAttribute("aria-label")).toContain(t("activity.tokens.coverage.partial"));
+    await unmount();
+    await open("/activity?view=tokens&from=2026-08-01&to=2026-08-10&stack=model&list=model");
+    expect($("[data-token-coverage]")!.getAttribute("data-token-coverage")).toBe("lower");
+    expect($("[data-token-hero]")!.textContent).toBe("≥ 0");
+    expect($("[data-token-empty]")!.textContent).toBe(t("activity.tokens.emptyUncounted"));
+    expect($("[data-token-empty]")!.textContent).not.toContain(t("activity.tokens.empty"));
+    expect($("[data-token-none]")).toBeNull();
+    /* An all-zero chart draws its zero line alone, and no scale repeats a label. */
+    expect(axisFractions(0)).toEqual([0]);
+    for (const peak of [1, 2, 3, 4, 9, 1e6]) {
+      const labels = axisFractions(peak).map((fraction) => fraction === 0 ? "0" : compact(niceMax(peak) * fraction, "en"));
+      expect(new Set(labels).size).toBe(labels.length);
+    }
   });
 
   test("the drawer explains the count and the dated price table", async () => {

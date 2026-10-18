@@ -139,8 +139,10 @@
  * Tokens tab (docs/design/activity-token-usage.md §9.2) over a token store
  * seeded through the ingest's own commit (src/lib/activity/tokenEvidence.fixture.ts):
  * seven days, the free range open and applied, one project, by member, by
- * kind, the amber coverage popover, the drawer, nothing counted yet, and the
- * Time tab on the same free range, at 1440, 1024 and 390 px, light and dark,
+ * account, by kind, the amber coverage popover, the drawer, a range wholly
+ * before counting, the loading and error states, nothing counted yet, and the
+ * Time tab on the same free range over a seeded history of your input and
+ * agent runs, at 1440, 1024 and 390 px, light and dark,
  * uk and en. It measures overflow, cut text, chart text, the range control and
  * its fields, the optional extras, the kinds and target sizes, and times the
  * Time tab's read and render over 366 days. With ACTIVITY_RENDER_DIR set, the
@@ -7969,7 +7971,7 @@ const TOKEN_SIZES: ReadonlyArray<{ width: number; height: number; phone: boolean
   { width: 1024, height: 768, phone: false },
   { width: 390, height: 844, phone: true },
 ];
-const TOKEN_STATES = ["7d", "range-open", "range-applied", "project", "by-member", "by-kind", "coverage", "drawer", "time-range", "nothing"] as const;
+const TOKEN_STATES = ["7d", "range-open", "range-applied", "project", "by-member", "by-account", "by-kind", "coverage", "drawer", "empty-range", "loading", "error", "time-range", "nothing"] as const;
 type TokenState = typeof TOKEN_STATES[number];
 
 function readTokenFrame() {
@@ -8061,6 +8063,12 @@ function readTokenFrame() {
   const tooltip = document.querySelector("[role=tooltip]");
   const drawer = document.querySelector("[data-activity-drawer] [role=dialog]");
   return {
+    loading: document.querySelector("[data-activity-skeleton]") !== null,
+    alert: document.querySelector("[role=alert]")?.textContent ?? null,
+    scaleLabels: Array.from(document.querySelectorAll("[data-token-chart] svg text:not([data-token-tick])")).map((text) => (text.textContent ?? "").trim()),
+    empty: document.querySelector("[data-token-empty]")?.textContent ?? null,
+    weekColumns: document.querySelectorAll("[data-activity-pair]").length,
+    cappedColumns: Array.from(document.querySelectorAll("[data-activity-pair] text")).map((text) => (text.textContent ?? "").trim()).filter((text) => text !== ""),
     tab: document.querySelector("[data-activity-tab]")?.getAttribute("data-activity-tab") ?? (document.querySelector("[data-token-tab]") ? "tokens" : "time"),
     layout: page.dataset.activityLayout ?? "phone",
     width: window.innerWidth,
@@ -8074,6 +8082,7 @@ function readTokenFrame() {
     narrowSegments: Array.from(document.querySelectorAll<HTMLElement>("[data-token-segment]")).map((el) => el.getBoundingClientRect().width).filter((w) => w < 6).map((w) => Math.round(w * 10) / 10),
     segmentContrast: Array.from(document.querySelectorAll<HTMLElement>("[data-token-segment]")).map((el) => ({ kind: el.dataset.tokenSegment ?? "", ratio: contrast(getComputedStyle(el).backgroundColor, cardColor(el)) })),
     rows: Array.from(document.querySelectorAll<HTMLElement>("[data-token-row]")).map((el) => el.dataset.tokenRow ?? ""),
+    rowNames: Array.from(document.querySelectorAll<HTMLElement>("[data-token-row]")).map((el) => (el.querySelector("button")?.textContent ?? "").split(/\d/)[0]!.trim()),
     rowCosts: Array.from(document.querySelectorAll<HTMLElement>("[data-token-row-cost]")).map((el) => el.textContent ?? ""),
     by: document.querySelector("[data-token-by] [aria-selected=true]")?.getAttribute("data-activity-option") ?? null,
     chips: Array.from(document.querySelectorAll("[data-activity-scope-chip]")).map((chip) => chip.textContent ?? ""),
@@ -8105,7 +8114,9 @@ async function activityTokensMain(): Promise<void> {
   /* The Viewer control URL on a closed port: nothing this run starts can reach a live Viewer. */
   SERVER_EXTRA_ENV.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:9";
   process.env.LLV_STATE_DIR = STATE_DIR;
-  const { seedTokenEvidence, markTokenBackfill, evidenceRange, EVIDENCE_TZ } = await import("../src/lib/activity/tokenEvidence.fixture");
+  const { seedTokenEvidence, markTokenBackfill, evidenceRange, evidenceUncountedRange, EVIDENCE_TZ } = await import("../src/lib/activity/tokenEvidence.fixture");
+  const { zonedDays } = await import("../src/lib/activity/method");
+  const { exportLines, ledgerRowKey } = await import("../src/lib/activity/humanInput");
   const activityDir = path.join(STATE_DIR, "activity");
   fs.mkdirSync(activityDir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(activityDir, "settings.json"), JSON.stringify({ v: 1, tz: EVIDENCE_TZ, billable: [] }));
@@ -8113,9 +8124,45 @@ async function activityTokensMain(): Promise<void> {
   const now = Date.now();
   const seeded = seedTokenEvidence(store, now);
   const free = evidenceRange(now);
+  const uncounted = evidenceUncountedRange(now);
+  /* Your input and agent runs for the Time tab over the free range and the year: a request ledger and one invented
+     Claude conversation per workday over the last 200 days, the workstation's export covering all of them. */
+  const history = zonedDays(now, 200, EVIDENCE_TZ);
+  const historyRepo = path.join(HOME, "Projects", "orchard-client");
+  const historyFolder = path.join(HOME, ".claude/projects", projectSlug(historyRepo));
+  fs.mkdirSync(historyFolder, { recursive: true });
+  let historyInputs = 0;
+  let historyRuns = 0;
+  for (const [index, day] of history.entries()) {
+    const weekday = new Date(`${day.date}T12:00:00Z`).getUTCDay();
+    if (weekday === 0 || weekday === 6 || day.end > now) continue;
+    const turns: Array<{ start: number; minutes: number }> = [];
+    for (const [hour, minutes] of [[9, 120], [13, 150]] as const) {
+      const start = day.start + hour * 3_600_000;
+      turns.push({ start, minutes });
+      for (let offset = 0; offset <= minutes - 10; offset += 6) {
+        const at = start + offset * 60_000;
+        fs.appendFileSync(path.join(activityDir, `requests-${new Date(at).toISOString().slice(0, 10)}.jsonl`), JSON.stringify({ v: 1, key: ledgerRowKey(`history-${index}-${offset}-${hour}`), at, kind: "message", surface: "desktop", project: "orchard-client" }) + "\n", { mode: 0o600 });
+        historyInputs += 1;
+      }
+    }
+    const id = `${String(index + 1).padStart(8, "0")}-2026-4000-8000-000000000000`;
+    const lines: unknown[] = [];
+    for (const [turn, { start, minutes }] of turns.entries()) {
+      const stamp = (minute: number) => new Date(start + minute * 60_000).toISOString();
+      lines.push({ type: "user", uuid: `${id}-u${turn}`, timestamp: stamp(0), cwd: historyRepo, sessionId: id, message: { role: "user", content: `Next step ${turn + 1}.` } });
+      for (let minute = 2; minute < minutes; minute += 17) lines.push({ type: "assistant", uuid: `${id}-a${turn}-${minute}`, timestamp: stamp(minute), cwd: historyRepo, sessionId: id, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text: `Progress, minute ${minute}.` }] } });
+      lines.push({ type: "assistant", uuid: `${id}-a${turn}-end`, timestamp: stamp(minutes), cwd: historyRepo, sessionId: id, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text: `Done with step ${turn + 1}.` }] } });
+    }
+    fs.writeFileSync(path.join(historyFolder, `${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf8");
+    historyRuns += 1;
+  }
+  const localHistory = path.join(activityDir, "hosts", "workstation");
+  fs.mkdirSync(localHistory, { recursive: true });
+  fs.writeFileSync(path.join(localHistory, "human-input.jsonl"), exportLines({ host: "workstation", coveredFrom: history[0]!.start - 86_400_000, coveredUntil: history.at(-1)!.end, exportedAt: now, records: 0, excluded: {} }, []));
   const failures: string[] = [];
   const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
-  const report: Record<string, unknown> = { commit: captureCommit(), case: "activity-tokens", seeded: { records: seeded.records, countedFrom: new Date(seeded.countedFrom).toISOString(), range: free }, frames: {} as Record<string, unknown> };
+  const report: Record<string, unknown> = { commit: captureCommit(), case: "activity-tokens", seeded: { records: seeded.records, countedFrom: new Date(seeded.countedFrom).toISOString(), range: free, uncountedRange: uncounted, timeHistory: { workdays: historyRuns, inputs: historyInputs } }, frames: {} as Record<string, unknown> };
   const frames = report.frames as Record<string, unknown>;
   const shots: string[] = [];
   let server: ChildProcess | null = null;
@@ -8126,7 +8173,7 @@ async function activityTokensMain(): Promise<void> {
     env: { ...process.env, LANGUAGE: "uk", LANG: "uk_UA.UTF-8" },
     ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}),
   });
-  const queries: Record<Exclude<TokenState, "nothing">, string> & { nothing: string } = {
+  const queries: Record<TokenState, string> = {
     "7d": "view=tokens&range=7d&stack=model&list=model",
     "range-open": "view=tokens&range=7d&stack=model&list=model",
     "range-applied": `view=tokens&from=${free.from}&to=${free.to}&stack=model&list=model`,
@@ -8135,6 +8182,10 @@ async function activityTokensMain(): Promise<void> {
     "by-kind": "view=tokens&range=7d&stack=kind&list=model",
     coverage: "view=tokens&range=7d&stack=model&list=model",
     drawer: "view=tokens&range=7d&stack=model&list=model",
+    "by-account": "view=tokens&range=30d&stack=account&list=account",
+    "empty-range": `view=tokens&from=${uncounted.from}&to=${uncounted.to}&stack=model&list=model`,
+    loading: "view=tokens&range=7d&stack=model&list=model",
+    error: "view=tokens&range=7d&stack=model&list=model",
     "time-range": `view=days&from=${free.from}&to=${free.to}`,
     nothing: "view=tokens&range=7d&stack=model&list=model",
   };
@@ -8163,6 +8214,20 @@ async function activityTokensMain(): Promise<void> {
     const { shiftDay } = await import("../src/lib/activity/range");
     const today = todayIn(EVIDENCE_TZ, now);
     const year = `from=${shiftDay(today, -365)}&to=${today}`;
+    /* The Viewer's own index must carry the invented conversations before anything is framed. */
+    {
+      const deadline = Date.now() + 420_000;
+      let indexed = 0;
+      while (Date.now() < deadline) {
+        const body = await (await fetch(`${baseUrl}/api/activity?${year}`, { headers })).json() as { coverage?: { agentIndex?: string }; projects?: Array<{ conversations: number }> };
+        indexed = body.coverage?.agentIndex === "ok" ? (body.projects ?? []).reduce((sum, row) => sum + row.conversations, 0) : 0;
+        if (indexed >= historyRuns) break;
+        await Bun.sleep(3_000);
+      }
+      must(indexed >= historyRuns, `the agent axis carries ${indexed} of ${historyRuns} seeded conversations`);
+      const seen = await (await fetch(`${baseUrl}/api/activity?${year}`, { headers })).json() as { totals: { humanHours: number; agentHoursMs: number } };
+      must(seen.totals.humanHours > 0 && seen.totals.agentHoursMs > 0, `the year reads ${JSON.stringify(seen.totals)} of your time and agent hours`);
+    }
     const timeReads: Array<{ ms: number; bytes: number; days: number }> = [];
     for (let run = 0; run < 5; run++) {
       const started = performance.now();
@@ -8188,8 +8253,11 @@ async function activityTokensMain(): Promise<void> {
       await context.addInitScript(seedInit);
       await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
       const page = await context.newPage();
+      /* Loading holds the tokens request open; the error answers it with a 500. */
+      if (state === "loading") await page.route("**/api/activity/tokens**", () => new Promise(() => undefined));
+      if (state === "error") await page.route("**/api/activity/tokens**", (route) => route.fulfill({ status: 500, contentType: "application/json", body: "{\"error\":\"fixture\"}" }));
       await page.goto(`${baseUrl}/activity?${queries[state]}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
-      await page.waitForSelector(state === "time-range" ? "[data-activity-layout], [data-activity-days]" : state === "nothing" ? "[data-token-none]" : "[data-token-hero]", { timeout: 120_000 });
+      await page.waitForSelector(state === "time-range" ? "[data-activity-layout], [data-activity-days]" : state === "nothing" ? "[data-token-none]" : state === "loading" ? "[data-activity-skeleton]" : state === "error" ? "[role=alert]" : "[data-token-hero]", { timeout: 120_000 });
       if (state === "time-range") await page.waitForSelector("[data-activity-loaded]", { timeout: 120_000 });
       await page.waitForTimeout(400);
       if (state === "range-open") {
@@ -8220,6 +8288,7 @@ async function activityTokensMain(): Promise<void> {
       shots.push(file);
       frames[name] = reading;
       const tokensTab = state !== "time-range";
+      const figured = tokensTab && state !== "nothing" && state !== "loading" && state !== "error";
       must(reading.layout === (size.phone ? "phone" : "desktop"), `${name}: the ${reading.layout} layout at ${size.width}px`);
       must(reading.tab === (tokensTab ? "tokens" : "time"), `${name}: the ${reading.tab} tab`);
       must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
@@ -8233,7 +8302,7 @@ async function activityTokensMain(): Promise<void> {
         must(reading.covered.length === 0, `${name}: the range fields cover ${JSON.stringify(reading.covered)}`);
         must(reading.small.length === 0, `${name}: controls under 44px: ${JSON.stringify(reading.small)}`);
       }
-      if (tokensTab && state !== "nothing") {
+      if (figured) {
         for (const kind of ["cacheRead", "input", "cacheWrite", "output"]) must(reading.meterValues.some((entry) => entry.kind === kind && /(\d|—)/.test(entry.text)), `${name}: no printed ${kind} value in ${JSON.stringify(reading.meterValues)}`);
         const optional = lang === "uk" ? "Додатково" : "Optional";
         must(reading.extras.length === 3 && reading.extras.every((extra) => extra.optional === optional), `${name}: the extras read ${JSON.stringify(reading.extras)}`);
@@ -8245,6 +8314,24 @@ async function activityTokensMain(): Promise<void> {
         must(reading.popover !== null && reading.popover.inside, `${name}: the range fields ${JSON.stringify(reading.popover)} leave the viewport`);
         must(reading.inputs.join(" ") === `${free.from} ${free.to}`, `${name}: the date fields hold ${reading.inputs.join(" ")}`);
       } else must(reading.popover === null, `${name}: the range fields are open`);
+      if (figured && state !== "range-open") {
+        /* A range that reaches back before counting is a lower bound wherever the page draws it. */
+        const partly = state === "range-applied" || state === "project" || state === "empty-range";
+        must(reading.coverage === (partly ? "lower" : "ok") || (state === "coverage" && reading.coverage === "lower"), `${name}: coverage ${reading.coverage}`);
+        must((reading.hero ?? "").startsWith("≥") === (partly || state === "coverage"), `${name}: figure ${reading.hero}`);
+      }
+      if (state === "empty-range") {
+        must(reading.hero === "≥ 0" && reading.unread >= 4, `${name}: figure ${reading.hero}, ${reading.unread} uncounted days drawn`);
+        must(reading.empty === (lang === "uk" ? "Цей період ще не пораховано." : "This range is not counted yet."), `${name}: the empty line reads ${reading.empty}`);
+        must(!/немає|No tokens in this range/.test(`${reading.empty} ${reading.hero}`), `${name}: claims there are no tokens`);
+        must(new Set(reading.scaleLabels).size === reading.scaleLabels.length && reading.scaleLabels.length > 0, `${name}: axis labels ${JSON.stringify(reading.scaleLabels)}`);
+      }
+      if (state === "loading") must(reading.loading && reading.hero === null && reading.alert === null, `${name}: loading ${reading.loading}, figure ${reading.hero}, alert ${reading.alert}`);
+      if (state === "error") must(reading.alert !== null && reading.hero === null && !reading.loading, `${name}: error alert ${reading.alert}, figure ${reading.hero}`);
+      if (state === "by-account") {
+        must(reading.by === "account" && reading.rows.includes("claude:default") && reading.rows.includes("codex:default"), `${name}: by ${reading.by}, rows ${JSON.stringify(reading.rows)}`);
+        must(new Set(reading.rowNames).size === reading.rowNames.length, `${name}: two accounts share a name: ${JSON.stringify(reading.rowNames)}`);
+      }
       if (state === "range-applied" || state === "project" || state === "range-open") {
         must(reading.segments.find((segment) => segment.option === "custom")?.pressed === "true", `${name}: the free range is not the pressed segment`);
         if (state !== "range-open") must(reading.unread > 0, `${name}: no uncounted day is drawn before ${new Date(seeded.countedFrom).toISOString()}`);
@@ -8258,7 +8345,10 @@ async function activityTokensMain(): Promise<void> {
         must(reading.tooltip !== null && reading.tooltip.inside && /2[,.]1/.test(reading.tooltipText ?? ""), `${name}: the coverage popover ${JSON.stringify(reading.tooltip)} reads ${reading.tooltipText}`);
       }
       if (state === "drawer") must(reading.drawer !== null && reading.drawer.inside && (reading.drawerText ?? "").includes("2026-10-18"), `${name}: the drawer ${JSON.stringify(reading.drawer)}`);
-      if (state === "time-range") must(reading.timeChart || size.phone, `${name}: the Time tab draws no chart over the free range`);
+      if (state === "time-range") {
+        must(reading.timeChart || size.phone, `${name}: the Time tab draws no chart over the free range`);
+        must(!reading.cappedColumns.every((text) => text === "?"), `${name}: every column cap reads «?»: ${JSON.stringify(reading.cappedColumns)}`);
+      }
       if (state === "nothing") must(reading.none !== null && reading.coverage === "none" && reading.by === null, `${name}: nothing counted reads ${reading.none} (${reading.coverage}), breakdown ${reading.by}`);
       await context.close();
     };
@@ -8291,10 +8381,12 @@ async function activityTokensMain(): Promise<void> {
       const measured = await page.evaluate(() => ({
         longTasks: (globalThis as unknown as { __longTasks: number[] }).__longTasks,
         pairs: document.querySelectorAll("[data-activity-pair]").length,
+        caps: Array.from(document.querySelectorAll("[data-activity-pair] text")).map((text) => (text.textContent ?? "").trim()),
         nodes: document.querySelectorAll("*").length,
       }));
       report.timeYearRender = { loadedMs, ...measured };
       must(measured.pairs > 0 && measured.pairs <= 54, `the Time chart over 366 days draws ${measured.pairs} columns`);
+      must(measured.caps.some((text) => text !== "?" && text !== ""), `the year's column caps read ${JSON.stringify(measured.caps.slice(0, 12))}`);
       await page.screenshot({ path: path.join(OUT_DIR, "time-year-1440-light-en.png") });
       shots.push(path.join(OUT_DIR, "time-year-1440-light-en.png"));
       await context.close();

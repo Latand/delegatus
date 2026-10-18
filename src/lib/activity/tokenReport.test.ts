@@ -16,11 +16,11 @@ const owner = { mode: "team" as const, memberId: "member-a", canChoose: true };
 const deps = () => ({ now: () => USAGE_NOW, file: () => file, tz: () => "Europe/Kyiv", aliases: () => ({ "project-old": "project-new" }),
   canonical: (p: string) => p === "project-old" ? "project-new" : p, projectNames: async () => new Map([["project-new", "Project"]]),
   roster: () => [{ id: "member-a", name: "Member", color: "teal", initials: "M", self: true }], accounts: () => new Map([["account-a", "Account"]]) });
-function seed(id: string, extra: { model?: string; tier?: string; at?: number; project?: string } = {}) {
+function seed(id: string, extra: { model?: string; tier?: string; at?: number; project?: string; engine?: "claude" | "codex"; account?: string } = {}) {
   const store = ActivityStore.open(file);
-  try { store.transaction(() => commitUsage(store.db, { owner: { conversation: id, project: extra.project ?? "project-old", engine: "claude", role: "builder", pipelineId: null, stageId: null },
+  try { store.transaction(() => commitUsage(store.db, { owner: { conversation: id, project: extra.project ?? "project-old", engine: extra.engine ?? "claude", role: "builder", pipelineId: null, stageId: null },
     records: [{ ...usageRecord(id, extra.at), ...(extra.model ? { model: extra.model } : {}), ...(extra.tier ? { tier: extra.tier } : {}) }],
-    attribution: () => ({ member: "member-a", account: "account-a", model: null, tier: null }), malformed: 0, now: USAGE_NOW })); }
+    attribution: () => ({ member: "member-a", account: extra.account ?? "account-a", model: null, tier: null }), malformed: 0, now: USAGE_NOW })); }
   finally { store.close(); }
 }
 const read = (query = "", overrides = {}) => activityTokensResponse(new URLSearchParams(query), owner, { ...deps(), ...overrides });
@@ -285,4 +285,14 @@ test("a real process restart starts with an empty answer cache", async () => {
     const child=Bun.spawn([process.execPath,"-e",code,path.join(import.meta.dir,"tokenReport.ts"),file],{stdout:"pipe",stderr:"pipe"});
     const output=await new Response(child.stdout).text(),errors=await new Response(child.stderr).text(); expect(await child.exited,errors).toBe(0); expect(JSON.parse(output)).toBe(3);
   }
+});
+test("a Claude and a Codex account both named default are two rows with their own labels, and a filter keeps one engine", async () => {
+  seed("claude-conversation", { engine: "claude", account: "claude:default" });
+  seed("codex-conversation", { engine: "codex", account: "codex:default" });
+  const accounts = () => new Map([["claude:default", "Claude main"], ["codex:default", "Codex main"]]);
+  const both = await read("list=account&range=7d", { accounts });
+  expect(both.list.map(row => [row.key, row.name]).sort()).toEqual([["claude:default", "Claude main"], ["codex:default", "Codex main"]]);
+  const one = await read("list=account&range=7d&account=codex:default", { accounts });
+  expect(one.list.map(row => row.key)).toEqual(["codex:default"]);
+  expect(one.totals.input).toBe(both.list.find(row => row.key === "codex:default")!.counts.input);
 });

@@ -9,7 +9,7 @@ import { ActivityStore, activityStorePath } from "./store";
 import { ActivityMemberForbidden, catalogProjectNames, type ActivityRequestViewer } from "./report";
 import { readActivitySettings } from "./settings";
 import { parseActivityDates, shiftDay, dateRangeDays, weekOfDay, type TokenPreset } from "./range";
-import { addTokens, emptyTokens, tokenTotal, type TokenCounts } from "./tokenUsage";
+import { accountKey, addTokens, emptyTokens, tokenTotal, type TokenCounts } from "./tokenUsage";
 import { countsFromRow, DAY, HOUR, SUM_TOKENS, usageMeta, usageZones, type UsageMeta } from "./tokenStore";
 
 export const TOKEN_DIMENSIONS = ["kind", "model", "role", "project", "member", "account", "engine"] as const;
@@ -51,7 +51,8 @@ const production: Dependencies = {
   now: Date.now, file: activityStorePath, tz: () => readActivitySettings(statePath("activity")).tz,
   aliases: () => projectAliasSnapshot().aliases, canonical: canonicalProject, projectNames: catalogProjectNames,
   roster: () => (existingTeamStore()?.members() ?? []).map(m => ({ id: m.id, name: m.name, color: m.color, initials: memberInitials(m.name), self: false })),
-  accounts: () => new Map([...listClaudeAccounts(), ...listCodexAccounts()].map(a => [a.id, a.label])),
+  accounts: () => new Map([...listClaudeAccounts().map(a => [accountKey("claude", a.id), a.label] as const),
+    ...listCodexAccounts().map(a => [accountKey("codex", a.id), a.label] as const)]),
 };
 type CacheEntry = { key: string; body: ActivityTokensResponse; at: number };
 const shared = globalThis as typeof globalThis & { __delegatusActivityTokensCache?: Map<string, CacheEntry> };

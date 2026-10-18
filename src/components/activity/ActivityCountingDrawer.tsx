@@ -11,7 +11,7 @@ import type { MessageKey } from "@/lib/i18n";
 
 import { agentHoursText, approxAtLeast, clockText, dateTimeText, datesText, dayLong, hostName, scopeHosts } from "./format";
 import type { TipContext } from "./tips";
-import { coverageLines, entityName, exact, Optional, tokenTrust, type TokenCtx } from "./tokenParts";
+import { coverageLines, entityName, exact, Optional, tokenTrust, trustKey, type TokenCtx } from "./tokenParts";
 
 /*
  * Question 4 on demand (docs/design/activity-dashboard-v2.md, "Trust chip and
@@ -264,7 +264,7 @@ export function TokensCountingDrawer({ ctx, onClose }: { ctx: TokenCtx; onClose(
       <h3 className={heading}>{t("activity.tokens.drawer.title")}</h3>
       <div className={`mb-2 flex items-start gap-2 rounded-[8px] px-2.5 py-2 text-primary ${trust === "ok" ? "bg-sunken" : "bg-warning-soft"}`} data-token-drawer-trust={trust}>
         {trust === "ok" ? <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" aria-hidden /> : <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />}
-        <span>{t(trust === "ok" ? "activity.tokens.coverage.ok" : trust === "lower" ? "activity.tokens.coverage.lower" : "activity.tokens.coverage.none")}</span>
+        <span>{t(trustKey(answer))}</span>
       </div>
       <ul className="grid list-disc gap-1.5 pl-4" data-token-drawer-lines="">
         {coverageLines(ctx).map((line) => <li key={line}>{line}</li>)}

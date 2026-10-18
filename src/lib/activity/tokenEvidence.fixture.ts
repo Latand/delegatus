@@ -1,7 +1,7 @@
 import { zonedDays } from "./method";
 import { ActivityStore } from "./store";
 import { commitUsage, HOUR } from "./tokenStore";
-import type { TokenCounts, UsageRecord } from "./tokenUsage";
+import { accountKey, type TokenCounts, type UsageRecord } from "./tokenUsage";
 
 /*
  * The token store the rendered evidence draws (docs/design/activity-token-usage.md
@@ -20,6 +20,12 @@ export const EVIDENCE_COUNTED_DAYS = 30;
 export function evidenceRange(now: number): { from: string; to: string } {
   const days = zonedDays(now, EVIDENCE_DAYS, EVIDENCE_TZ);
   return { from: days[1]!.date, to: days[16]!.date };
+}
+
+/** Four days at the window's start, all before anything was counted. */
+export function evidenceUncountedRange(now: number): { from: string; to: string } {
+  const days = zonedDays(now, EVIDENCE_DAYS, EVIDENCE_TZ);
+  return { from: days[0]!.date, to: days[3]!.date };
 }
 
 const MODELS: ReadonlyArray<[string, "claude" | "codex", number]> = [
@@ -85,7 +91,7 @@ export function seedTokenEvidence(file: string, now: number): { countedFrom: num
         const role = pick(ROLES, 1, roll());
         const project = pick(EVIDENCE_PROJECTS, 1, roll());
         const member = pick(EVIDENCE_MEMBERS, 1, roll());
-        const account = engine === "codex" ? "codex-c" : roll() < 0.6 ? "default" : "claude-b";
+        const account = engine === "codex" ? accountKey("codex", "default") : accountKey("claude", roll() < 0.6 ? "default" : "claude-b");
         const input = Math.round(scale * (2.5e6 + roll() * 6e6));
         const cacheWrite = engine === "claude" ? Math.round(input * 0.015) : 0;
         const output = Math.round(input * (0.0035 + roll() * 0.002));

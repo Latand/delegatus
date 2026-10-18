@@ -4,7 +4,7 @@ import { claudeTranscriptOwnership } from "@/lib/accounts/claude";
 import { codexHomeOwningSessionPath, listCodexAccounts } from "@/lib/accounts/codex";
 import { findPipelineRecord } from "@/lib/pipelines/store";
 import { existingTeamStore } from "@/lib/team/store";
-import type { UsageAttribution } from "./tokenUsage";
+import { accountKey, type UsageAttribution } from "./tokenUsage";
 import type { TranscriptFacts } from "./transcriptExport";
 
 export interface LaunchMemberDependencies {
@@ -82,14 +82,15 @@ export function usageAttribution(facts: TranscriptFacts, conversation: RegistryC
       try {
         if (facts.engine === "codex") {
           const home = codexHomeOwningSessionPath(facts.path);
-          fallback = listCodexAccounts().find(a => a.home === home)?.id ?? "unknown";
+          const found = listCodexAccounts().find(a => a.home === home)?.id;
+          fallback = found ? accountKey("codex", found) : "unknown";
         } else {
           const owner = claudeTranscriptOwnership(facts.path);
-          if (owner.kind === "owned" && (owner.source === "path" || owner.source === "recorded")) fallback = owner.accountId;
+          if (owner.kind === "owned" && (owner.source === "path" || owner.source === "recorded")) fallback = accountKey("claude", owner.accountId);
         }
       } catch { /* An inaccessible store cannot prove an account. */ }
     }
-    return { account: generation?.accountId ?? fallback ?? "unknown", member,
+    return { account: generation?.accountId ? accountKey(facts.engine, generation.accountId) : fallback ?? "unknown", member,
       model: profile?.model ?? null, tier: profile?.serviceTier ?? null };
   };
 }

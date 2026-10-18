@@ -47,11 +47,17 @@ test("account selection follows response time across generations, and an unprove
   ],continuityPaths:[] } as unknown as RegistryConversation;
   const facts={path:"/missing/fixture.jsonl",engine:"codex" as const,cwd:null,entrypoint:null,sessionMeta:null};
   const attr=usageAttribution(facts,conversation,"member-a");
-  expect(attr(USAGE_NOW-86400000)).toMatchObject({account:"account-a",model:"model-a",member:"member-a"});
-  expect(attr(USAGE_NOW)).toMatchObject({account:"account-b",model:"model-b",tier:"priority"});
+  expect(attr(USAGE_NOW-86400000)).toMatchObject({account:"codex:account-a",model:"model-a",member:"member-a"});
+  expect(attr(USAGE_NOW)).toMatchObject({account:"codex:account-b",model:"model-b",tier:"priority"});
   expect(usageAttribution({...facts,path:"/missing/subagent.jsonl"},conversation,"member-a")(USAGE_NOW))
     .toMatchObject({account:"unknown",model:"model-b",tier:"priority"});
   expect(usageAttribution({...facts,engine:"claude"},null,"unattributed")(USAGE_NOW).account).toBe("unknown");
+});
+test("both engines' main account \"default\" stores as two accounts", () => {
+  const conversation={ generations:[{id:"gen",path:"/missing/fixture.jsonl",accountId:"default",launchProfile:emptyLaunchProfile({model:"model-a"}),historyHash:null,host:null,createdAt:"2026-10-17T00:00:00Z",archivedAt:null}],continuityPaths:[] } as unknown as RegistryConversation;
+  const facts={path:"/missing/fixture.jsonl",cwd:null,entrypoint:null,sessionMeta:null};
+  const stored=(engine:"claude"|"codex")=>usageAttribution({...facts,engine},conversation,"member-a")(USAGE_NOW).account;
+  expect(stored("claude")).toBe("claude:default"); expect(stored("codex")).toBe("codex:default");
 });
 let root:string;
 beforeEach(()=>{root=fs.mkdtempSync(path.join(os.tmpdir(),"token-authorship-"));});

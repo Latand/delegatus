@@ -15,7 +15,7 @@ import { MarkPatterns } from "./marks";
 import { writeRange, type PageRange } from "./pageParams";
 import {
   BY_KEYS, chartBuckets, ColumnChart, compact, CoverageDot, entityName, exact, foldWeeks, inputTotal, KindMeter, Legend, money, namedKeys,
-  Optional, OWNER_BY, percent, RankedList, TOKEN_BY, TOKEN_KINDS, tokenTotal, tokenTrust,
+  Optional, OWNER_BY, percent, RankedList, rangeCounted, TOKEN_BY, TOKEN_KINDS, tokenTotal, tokenTrust,
   type ListEntry, type TokenBy, type TokenCtx,
 } from "./tokenParts";
 
@@ -299,6 +299,7 @@ export function ActivityTokensBody({ answer, by, onBy, project, onProject, membe
     else if (by !== "kind") onFilter(by, filters[by] === key ? null : key);
   };
   const empty = total === 0;
+  const counted = rangeCounted(answer);
 
   const figure = (
     <div>
@@ -338,7 +339,7 @@ export function ActivityTokensBody({ answer, by, onBy, project, onProject, membe
     </div>
   );
   const list = trust === "none" ? null : empty ? (
-    <p className="px-4 py-6 text-center text-[12px] text-muted" data-token-empty="">{t("activity.tokens.empty")}</p>
+    <p className="px-4 py-6 text-center text-[12px] text-muted" data-token-empty="">{t(counted === "all" ? "activity.tokens.empty" : counted === "none" ? "activity.tokens.emptyUncounted" : "activity.tokens.emptyPartly")}</p>
   ) : (
     <>
       {priced ? (
@@ -352,12 +353,12 @@ export function ActivityTokensBody({ answer, by, onBy, project, onProject, membe
   const dim = `transition-opacity ${loading ? "opacity-60" : ""}`;
 
   /* Until anything is counted there is nothing to break down. */
-  const counted = trust !== "none";
+  const anything = trust !== "none";
   if (!phone) {
     return (
       <div className={`grid grid-cols-[minmax(0,1fr)_420px] items-start gap-4 ${dim}`} data-token-tab="desktop" data-activity-loaded="tokens">
         <section className="rounded-[12px] border border-border bg-card px-[22px] pb-3.5 pt-5 shadow-1" data-token-card="main">{figure}{chart}</section>
-        {counted ? (
+        {anything ? (
           <section className="overflow-hidden rounded-[12px] border border-border bg-card shadow-1" data-token-card="breakdown">
             <div className="px-[18px] pb-3 pt-4">
               <div className="mb-2 text-[12px] font-semibold text-secondary">{t("activity.tokens.by.title")}</div>
@@ -374,7 +375,7 @@ export function ActivityTokensBody({ answer, by, onBy, project, onProject, membe
       {/* The desktop page defines the hatch of uncounted days; the phone draws it here. */}
       <MarkPatterns />
       <section className="rounded-[12px] border border-border bg-card px-4 pb-3 pt-4 shadow-1" data-token-card="main">{figure}{chart}</section>
-      {counted ? (
+      {anything ? (
         <>
           <div className="text-[12px] font-semibold text-secondary">{t("activity.tokens.by.title")}</div>
           {byControl}
