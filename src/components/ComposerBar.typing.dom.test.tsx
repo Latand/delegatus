@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { useEffect } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import { useComposer } from "@/hooks/useComposer";
@@ -166,4 +166,37 @@ test("the field carries the marker the typing watch looks for, and focusing it m
   expect(document.documentElement.hasAttribute(COMPOSER_FOCUS_ATTRIBUTE)).toBe(true);
   field.blur();
   expect(document.documentElement.hasAttribute(COMPOSER_FOCUS_ATTRIBUTE)).toBe(false);
+});
+
+test("a composer portalled into the floating window marks that window's document, and the opener's too, while a main-window composer stays mounted", () => {
+  const pip = new Window();
+  const pipDocument = pip.document as unknown as Document;
+  (pip as unknown as { matchMedia(query: string): unknown }).matchMedia = (query) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const pipHost = pipDocument.createElement("div");
+  pipDocument.body.append(pipHost);
+  root = createRoot(host);
+  flushSync(() => root!.render(<>
+    <Owner />
+    {createPortal(<Owner />, pipHost)}
+  </>));
+  const main = host.querySelector("textarea")!;
+  const floating = pipHost.querySelector("textarea")!;
+  expect(floating.ownerDocument).toBe(pipDocument);
+  const marked = (target: Document) => target.documentElement.hasAttribute(COMPOSER_FOCUS_ATTRIBUTE);
+  floating.focus();
+  expect(marked(pipDocument)).toBe(true);
+  expect(marked(document)).toBe(true);
+  floating.blur();
+  expect(marked(pipDocument)).toBe(false);
+  expect(marked(document)).toBe(false);
+  main.focus();
+  expect(marked(document)).toBe(true);
+  main.blur();
+  expect(marked(document)).toBe(false);
+  flushSync(() => root!.unmount());
+  root = null;
+  floating.focus();
+  expect(marked(pipDocument)).toBe(false);
 });

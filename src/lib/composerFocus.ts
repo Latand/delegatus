@@ -17,28 +17,49 @@ function isComposerField(target: EventTarget | null): boolean {
   return typeof (target as Element | null)?.hasAttribute === "function" && (target as Element).hasAttribute("data-composer-field");
 }
 
-let users = 0;
-let detach: (() => void) | null = null;
+/* One watch per document: the composer can sit in the opener's document and in
+   the floating PiP window at once, and a focus event only reaches the document
+   it happened in. The animations run on the one main thread both documents
+   share, so a field focused in either holds the motion in all of them. */
+interface Watch { users: number; focused: boolean; detach: () => void }
+const watches = new Map<Document, Watch>();
+
+function applyMark(): void {
+  const on = [...watches.values()].some((watch) => watch.focused);
+  for (const document of watches.keys()) {
+    if (on) document.documentElement.setAttribute(COMPOSER_FOCUS_ATTRIBUTE, "");
+    else document.documentElement.removeAttribute(COMPOSER_FOCUS_ATTRIBUTE);
+  }
+}
 
 export function watchComposerFocus(root: Document = document): () => void {
-  users += 1;
-  if (users === 1) {
-    const element = root.documentElement;
-    const onIn = (event: Event) => { if (isComposerField(event.target)) element.setAttribute(COMPOSER_FOCUS_ATTRIBUTE, ""); };
-    const onOut = (event: Event) => { if (isComposerField(event.target)) element.removeAttribute(COMPOSER_FOCUS_ATTRIBUTE); };
+  let watch = watches.get(root);
+  if (!watch) {
+    const created: Watch = { users: 0, focused: false, detach: () => {} };
+    const onIn = (event: Event) => { if (isComposerField(event.target)) { created.focused = true; applyMark(); } };
+    const onOut = (event: Event) => { if (isComposerField(event.target)) { created.focused = false; applyMark(); } };
     root.addEventListener("focusin", onIn);
     root.addEventListener("focusout", onOut);
-    if (isComposerField(root.activeElement)) element.setAttribute(COMPOSER_FOCUS_ATTRIBUTE, "");
-    detach = () => {
+    created.detach = () => {
       root.removeEventListener("focusin", onIn);
       root.removeEventListener("focusout", onOut);
-      element.removeAttribute(COMPOSER_FOCUS_ATTRIBUTE);
     };
+    watches.set(root, created);
+    watch = created;
   }
+  watch.users += 1;
+  if (isComposerField(root.activeElement)) watch.focused = true;
+  applyMark();
+  const mine = watch;
+  let released = false;
   return () => {
-    users -= 1;
-    if (users > 0) return;
-    detach?.();
-    detach = null;
+    if (released) return;
+    released = true;
+    mine.users -= 1;
+    if (mine.users > 0) return;
+    mine.detach();
+    watches.delete(root);
+    root.documentElement.removeAttribute(COMPOSER_FOCUS_ATTRIBUTE);
+    applyMark();
   };
 }

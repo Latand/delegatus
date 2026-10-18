@@ -37,7 +37,9 @@ Object.defineProperty(dom.HTMLTextAreaElement.prototype, "scrollHeight", {
   configurable: true,
   get(this: HTMLTextAreaElement) {
     reads.push(this.style.height);
-    const content = Math.max(1, Math.ceil(this.value.length / COLUMNS)) * LINE_PX;
+    /* An empty field is as tall as its (possibly wrapped) placeholder. */
+    const lines = this.value ? Math.ceil(this.value.length / COLUMNS) : Number(this.getAttribute("data-placeholder-lines") ?? 1);
+    const content = Math.max(1, lines) * LINE_PX;
     return Math.max(content, parseFloat(this.style.height) || 0);
   },
 });
@@ -46,10 +48,10 @@ Object.defineProperty(dom.HTMLTextAreaElement.prototype, "clientHeight", {
   get(this: HTMLTextAreaElement) { return parseFloat(this.style.height) || 0; },
 });
 
-function Field({ value, maxPx = 200 }: { value: string; maxPx?: number }) {
+function Field({ value, maxPx = 200, placeholderLines }: { value: string; maxPx?: number; placeholderLines?: number }) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
   useAutosizePinned(ref, value, { maxPx, pinned: false });
-  return <textarea ref={ref} value={value} readOnly rows={1} />;
+  return <textarea ref={ref} value={value} readOnly rows={1} data-placeholder-lines={placeholderLines} />;
 }
 
 let root: Root | null = null;
@@ -60,20 +62,21 @@ afterEach(() => {
   dom.document.body.replaceChildren();
 });
 
-function mount(value: string, maxPx?: number) {
+function mount(value: string, maxPx?: number, placeholderLines?: number) {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   root = createRoot(host as unknown as HTMLElement);
-  flushSync(() => root!.render(<Field value={value} maxPx={maxPx} />));
-  return { field: host.querySelector("textarea")!, set: (next: string) => flushSync(() => root!.render(<Field value={next} maxPx={maxPx} />)) };
+  flushSync(() => root!.render(<Field value={value} maxPx={maxPx} placeholderLines={placeholderLines} />));
+  return { field: host.querySelector("textarea")!, set: (next: string) => flushSync(() => root!.render(<Field value={next} maxPx={maxPx} placeholderLines={placeholderLines} />)) };
 }
 
 test("typing at the end of the text never collapses the field and still grows it by a line", () => {
   const { field, set } = mount("");
   expect(field.style.height).toBe(`${LINE_PX + 2}px`);
+  let text = "x";
+  set(text);
   reads = [];
-  let text = "";
-  for (let key = 0; key < 25; key++) {
+  for (let key = 1; key < 25; key++) {
     text += "x";
     set(text);
     const lines = Math.ceil(text.length / COLUMNS);
@@ -106,4 +109,17 @@ test("a changed ceiling is measured afresh and the field never exceeds it", () =
   set("x".repeat(96));
   expect(reads.filter((height) => height === "0px")).toEqual([]);
   expect(field.style.height).toBe("60px");
+});
+
+test("the first character replaces a wrapped placeholder and the field shrinks to the text, after which appends skip the collapse", () => {
+  const { field, set } = mount("", 200, 4);
+  expect(field.style.height).toBe(`${4 * LINE_PX + 2}px`);
+  reads = [];
+  set("x");
+  expect(reads).toContain("0px");
+  expect(field.style.height).toBe(`${LINE_PX + 2}px`);
+  reads = [];
+  set("xy");
+  expect(reads.filter((height) => height === "0px")).toEqual([]);
+  expect(field.style.height).toBe(`${LINE_PX + 2}px`);
 });

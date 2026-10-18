@@ -37,9 +37,16 @@ function ComposerTextarea({ composer, ...props }: Omit<React.TextareaHTMLAttribu
   const draft = useSyncExternalStore(subscribeText, getText, getText);
   const value = dictation.liveText ? (draft ? draft.trimEnd() + " " : "") + dictation.liveText : draft;
   const fieldRef = useRef<HTMLTextAreaElement | null>(null);
+  const focusWatch = useRef<{ document: Document; stop: () => void } | null>(null);
   const attach = useCallback((el: HTMLTextAreaElement | null) => {
     fieldRef.current = el;
     attachInput(el);
+    /* The focus watch follows the document the field is in: a bar portalled
+       into the floating PiP window remounts its field there. */
+    const document = el?.ownerDocument ?? null;
+    if (focusWatch.current?.document === document) return;
+    focusWatch.current?.stop();
+    focusWatch.current = document ? { document, stop: watchComposerFocus(document) } : null;
   }, [attachInput]);
   useAutosizePinned(fieldRef, value, autosize);
   return <textarea ref={attach} value={value} data-composer-field="" {...props} />;
@@ -399,14 +406,10 @@ export function ComposerBar({
   } = composer;
   const { t } = useLocale();
   const isMobile = useIsMobile();
-  /* The document-wide watch over composer typing: the main-thread attention
-     animations pause while a field has the focus, and a slow keystroke is
-     recorded (numbers only) for the Viewer's journal. */
-  useEffect(() => {
-    const stopFocus = watchComposerFocus();
-    const stopLatency = watchTypingLatency();
-    return () => { stopFocus(); stopLatency(); };
-  }, []);
+  /* A slow keystroke is recorded (numbers only) for the Viewer's journal. The
+     matching pause of the main-thread attention animations while a field has
+     the focus is registered by the field itself, per document. */
+  useEffect(() => watchTypingLatency(), []);
   const micHint = useMicPermissionHint();
   const [sendMenuOpen, setSendMenuOpen] = useState(false);
   /* Where the menu goes when it opens: measured off the send control, because

@@ -1489,10 +1489,8 @@ for (const initialState of ["in-flight", "failed"] as const) {
           kind: "send", state: "failed", reason: "pre-dispatch rejection", resend: "safe",
           acceptedAt: captured.admittedAt, settledAt: captured.at,
         } as SendReceipt), revision: 5 };
-        snapshotReceipts = [safe];
-        // The composer reads the stream on its next render.
-        await settle(() => composerControls(mounted.host).type("later draft "));
-        await settle(() => composerControls(mounted.host).type("later draft"));
+        /* The receipt hook subscribes to the stream; a keystroke no longer renders the owner. */
+        await settle(() => publishSnapshotReceipts([safe]));
         const safeEntry = readOutbox(file.conversationId!).find(entry => entry.id === sends[0]!.idempotencyKey)!;
         expect(safeEntry.deliveryReceipt?.resend).toBe("safe");
         expect(mounted.host.querySelectorAll("[data-outbox-retry]").length).toBe(0);

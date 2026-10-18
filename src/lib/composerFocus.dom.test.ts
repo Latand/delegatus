@@ -44,3 +44,37 @@ test("a field already focused when the watch starts is picked up, and the last s
   second();
   expect(marked()).toBe(false);
 });
+
+test("a second document registered beside the first gets its own watch and the mark follows either", () => {
+  const other = new Window().document as unknown as Document;
+  const stopMain = watchComposerFocus(root);
+  const stopOther = watchComposerFocus(other);
+  const floating = other.createElement("textarea");
+  floating.setAttribute("data-composer-field", "");
+  other.body.append(floating);
+  floating.focus();
+  expect(other.documentElement.hasAttribute(COMPOSER_FOCUS_ATTRIBUTE)).toBe(true);
+  expect(marked()).toBe(true);
+  floating.blur();
+  expect(other.documentElement.hasAttribute(COMPOSER_FOCUS_ATTRIBUTE)).toBe(false);
+  expect(marked()).toBe(false);
+  /* Releasing the floating window's watch leaves the opener's running. */
+  stopOther();
+  const composer = field(true);
+  composer.focus();
+  expect(marked()).toBe(true);
+  stopMain();
+  expect(marked()).toBe(false);
+});
+
+test("a release is counted once", () => {
+  const first = watchComposerFocus(root);
+  const second = watchComposerFocus(root);
+  first();
+  first();
+  const composer = field(true);
+  composer.focus();
+  expect(marked()).toBe(true);
+  second();
+  expect(marked()).toBe(false);
+});

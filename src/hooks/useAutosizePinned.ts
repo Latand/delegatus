@@ -100,7 +100,9 @@ function fit(el: HTMLTextAreaElement, maxPx: number, minPx: number, pinned: bool
   const prevTop = el.scrollTop;
   const atEnd = caretAtEnd(el.selectionStart, el.selectionEnd, el.value.length);
   const last = fitted.get(el);
-  const appended = fromValue && last !== undefined
+  /* The first character replaces the placeholder, whose wrapped rows the old
+     height may still hold: that transition is always measured afresh. */
+  const appended = fromValue && last !== undefined && last.value !== ""
     && last.maxPx === maxPx && last.minPx === minPx
     && el.value.length >= last.value.length && el.value.startsWith(last.value)
     && el.style.height !== "" && el.clientWidth === last.width;
