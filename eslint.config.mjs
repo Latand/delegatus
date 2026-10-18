@@ -22,6 +22,24 @@ const eslintConfig = defineConfig([
     ".tmux-multi-agent/**",
   ]),
   {
+    files: ["src/lib/**", "src/app/api/**", "src/runtime-host/**"],
+    ignores: ["**/*.test.*", "**/*.fixture.*", "**/fixtures/**", "**/*.worker.ts",
+      "**/*Child.ts", "src/lib/pipelines/worktreeSweep.ts"],
+    rules: {
+      "no-restricted-imports": ["error", { paths: [{ name: "@/lib/pipelines/store",
+        importNames: ["loadArchivedPipelines"],
+        message: "Use loadArchivedPipelinesForList for frozen projection reads; mutable archive copies belong to archive maintenance." }] }],
+      // Dynamic store imports and namespace calls need the same restriction.
+      "no-restricted-syntax": ["error",
+        { selector: "ImportSpecifier[imported.name='loadArchivedPipelines'], ImportSpecifier[imported.value='loadArchivedPipelines']",
+          message: "Use loadArchivedPipelinesForList for archive projections, including relative imports." },
+        { selector: "VariableDeclarator > ObjectPattern > Property[key.name='loadArchivedPipelines'], VariableDeclarator > ObjectPattern > Property[key.value='loadArchivedPipelines']",
+          message: "Use loadArchivedPipelinesForList for archive projections." },
+        { selector: "MemberExpression[property.name='loadArchivedPipelines'], MemberExpression[computed=true][property.value='loadArchivedPipelines']",
+          message: "Use loadArchivedPipelinesForList for archive projections." }],
+    },
+  },
+  {
     // `.cjs` names CommonJS, and these files mean it: they are mounted into the
     // pinned puppeteer image and run by plain `node`, where `puppeteer` and
     // `sharp` resolve through NODE_PATH — which Node honours for `require` and
