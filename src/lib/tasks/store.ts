@@ -542,18 +542,47 @@ export function loadTasksFile(filePath = TASKS_FILE): TasksFileState {
 export function taskSelectionSource(filePath = TASKS_FILE) {
   const collection = taskCollection(filePath, "read");
   if (!collection) return null;
+  const select = (ids: ReadonlySet<string>, limit: number): BoardTask[] => {
+    const ordered = collection.keysInOrder([...ids].map(id => `t:${id}`), limit).map(key => key.slice(2));
+    const tasks = new Map<string, BoardTask>();
+    for (const id of ordered) {
+      const task = collection.get(`t:${id}`);
+      if (task) {
+        const decoded = coerceTask(task);
+        if (decoded) tasks.set(id, decoded);
+      }
+    }
+
+    const aliases = projectAliasSnapshot().aliases;
+    for (const task of tasks.values()) {
+      if (task.status === "done" || task.findingKey === undefined) continue;
+      const projects = [task.project, ...Object.keys(aliases).filter(alias => canonicalProject(alias) === task.project)];
+      for (const project of new Set(projects)) {
+        for (const key of collection.findingTaskKeys(project, task.findingKey)) {
+          if (tasks.has(key.slice(2))) continue;
+          const related = collection.get(key);
+          if (!related) continue;
+          const decoded = coerceTask(related);
+          if (decoded) tasks.set(decoded.id, decoded);
+        }
+      }
+    }
+
+    const projected = reconcileOpenFindings([...tasks.values()]);
+    const byId = new Map(projected.map(task => {
+      if (tasks.get(task.id) !== task) Object.assign(task, { revision: `task-legacy:${taskFingerprint(task)}` });
+      return [task.id, task] as const;
+    }));
+    return ordered.flatMap(id => {
+      const task = byId.get(id);
+      return task ? [task] : [];
+    });
+  };
   return {
     filename: legacyDatabasePath(filePath),
     orderedIds: (ids: ReadonlySet<string>, limit: number) => collection.keysInOrder([...ids].map(id => `t:${id}`), limit).map(key => key.slice(2)),
-    read: (id: string) => {
-      const row = collection.get(`t:${id}`);
-      const task = row ? coerceTask(row) : null;
-      // A keyed task in a converged project needs the same ownership projection
-      // as the board list; ordinary bounded selections keep the direct read.
-      if (!task || task.status === "done" || task.findingKey === undefined
-        || !Object.values(projectAliasSnapshot().aliases).some(project => canonicalProject(project) === task.project)) return task;
-      return structuredClone(loadTasksForList(filePath).find(task => task.id === id) ?? null);
-    },
+    read: (id: string) => select(new Set([id]), 1)[0] ?? null,
+    select,
   };
 }
 
@@ -565,10 +594,7 @@ export function loadTasksByIds(ids: ReadonlySet<string>, filePath = TASKS_FILE, 
   if (!ids.size || limit <= 0) return [];
   const source = taskSelectionSource(filePath);
   if (!source) return loadTasksForList(filePath).filter(task => ids.has(task.id)).slice(0, limit);
-  return source.orderedIds(ids, limit).flatMap(id => {
-    const task = source.read(id);
-    return task ? [task] : [];
-  });
+  return source.select(ids, limit);
 }
 
 const taskListOwner = globalThis as typeof globalThis & { __delegatusTaskListReaders?: {

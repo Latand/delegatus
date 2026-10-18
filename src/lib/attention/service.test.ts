@@ -616,31 +616,39 @@ test("a notice ends with its record's clock, and a refused one is never shown", 
 });
 
 
-test.each([20, 200])("production attention reads decode only the two named tasks with %i unrelated tasks", async (count) => {
-  const task = (id: string): BoardTask => ({ id, project: "demo", status: "inbox", text: id,
-    placement: "unplaced", assignments: [], createdAt: T0.toISOString(), updatedAt: T0.toISOString() });
+test.each([20, 200])("production attention reads decode only the two named alias-target tasks with %i unrelated tasks", async (count) => {
+  const task = (id: string, findingKey?: string): BoardTask => ({ id, project: "demo", status: "inbox", text: id,
+    placement: "unplaced", assignments: [], ...(findingKey ? { findingKey } : {}), createdAt: T0.toISOString(), updatedAt: T0.toISOString() });
   // Deliberately reverse the requested order: the response keeps store order.
   raise({ target: { kind: "task", taskId: "task-second" } });
   raiseAttentionRequest({ origin: "operator", target: { kind: "task", taskId: "task-first" },
     frameAtCreation: frame, intent: "show", reason: "Read the task" }, { now: T0, id: "attention_2" });
-  mutateTasks(() => ({ tasks: [task("task-first"), ...Array.from({ length: count }, (_, i) => task(`task-unrelated-${i}`)), task("task-second")], result: null }));
-  const child = Bun.spawn([process.execPath, "-e", `
-    const { readAttribution } = await import("./src/lib/readAttribution");
-    const { attentionForDevice } = await import("./src/lib/attention/service");
-    let decoded = 0;
-    const original = readAttribution.sync.bind(readAttribution);
-    readAttribution.sync = (...args) => {
-      const result = original(...args);
-      if (args[0] === "state.json" && result && typeof result === "object" && String(result.id).startsWith("task-")) decoded++;
-      return result;
-    };
-    const response = attentionForDevice("device-desktop", { now: new Date("2026-07-01T10:00:00.000Z"), filePath: process.env.ATTENTION_FIXTURE });
-    console.log(JSON.stringify({ decoded, ids: response.records?.tasks.map(row => row.id) }));
-  `], { env: { ...process.env, LLV_STATE_DIR: path.dirname(TASKS_FILE), ATTENTION_FIXTURE: path.join(sandbox, "attention.json") },
-    stdout: "pipe", stderr: "pipe" });
-  const [out, err, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  expect({ exit, err }).toEqual({ exit: 0, err: "" });
-  expect(JSON.parse(out)).toEqual({ decoded: 2, ids: ["task-first", "task-second"] });
+  mutateTasks(() => ({ tasks: [task("task-first", "finding-first"), ...Array.from({ length: count }, (_, i) => task(`task-unrelated-${i}`)), task("task-second", "finding-second")], result: null }));
+  const aliasesFile = path.join(path.dirname(TASKS_FILE), "project-aliases.json");
+  const priorAliases = fs.existsSync(aliasesFile) ? fs.readFileSync(aliasesFile) : null;
+  fs.writeFileSync(aliasesFile, JSON.stringify({ schemaVersion: 1, aliases: { "demo-legacy": "demo" }, displayNames: {} }));
+  try {
+    const child = Bun.spawn([process.execPath, "-e", `
+      const { readAttribution } = await import("./src/lib/readAttribution");
+      const { attentionForDevice } = await import("./src/lib/attention/service");
+      let decoded = 0;
+      const original = readAttribution.sync.bind(readAttribution);
+      readAttribution.sync = (...args) => {
+        const result = original(...args);
+        if (args[0] === "state.json" && result && typeof result === "object" && String(result.id).startsWith("task-")) decoded++;
+        return result;
+      };
+      const response = attentionForDevice("device-desktop", { now: new Date("2026-07-01T10:00:00.000Z"), filePath: process.env.ATTENTION_FIXTURE });
+      console.log(JSON.stringify({ decoded, ids: response.records?.tasks.map(row => row.id) }));
+    `], { env: { ...process.env, LLV_STATE_DIR: path.dirname(TASKS_FILE), ATTENTION_FIXTURE: path.join(sandbox, "attention.json") },
+      stdout: "pipe", stderr: "pipe" });
+    const [out, err, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ exit, err }).toEqual({ exit: 0, err: "" });
+    expect(JSON.parse(out)).toEqual({ decoded: 2, ids: ["task-first", "task-second"] });
+  } finally {
+    if (priorAliases === null) fs.rmSync(aliasesFile, { force: true });
+    else fs.writeFileSync(aliasesFile, priorAliases);
+  }
   loadPipelinesForList();
   // Frozen readers remain valid after the attention projection has run.
   const frozen = loadTasksForList();
@@ -659,6 +667,28 @@ test.each([20, 200])("production attention reads decode only the two named tasks
     expect(decoded).toBe(2);
     expect(JSON.stringify(frozen)).toBe(before);
   } finally { hook.mockRestore(); }
+});
+
+test("attention task records match the full reader's ownership projection for duplicate findings", () => {
+  const finding = (id: string, count: number, createdAt: string): BoardTask => ({
+    id, project: "demo", status: "inbox", text: id, placement: "unplaced", assignments: [],
+    findingKey: "finding:duplicate", finding: { count, lastSeenAt: createdAt }, createdAt, updatedAt: createdAt,
+  });
+  const older = finding("task-older", 1, "2026-07-01T09:00:00.000Z");
+  const newer = finding("task-newer", 2, "2026-07-01T09:30:00.000Z");
+  mutateTasks(() => ({ tasks: [older, newer], result: null }));
+  raise({ target: { kind: "task", taskId: older.id } });
+  raiseAttentionRequest({ origin: "operator", target: { kind: "task", taskId: newer.id },
+    frameAtCreation: frame, intent: "show", reason: "Read the duplicate finding" }, { now: T0, id: "attention_2" });
+
+  const expected = loadTasksForList().filter(task => task.id === older.id || task.id === newer.id);
+  const response = attentionForDevice(DEVICE, { now: T0 }).records?.tasks;
+  expect(expected).toMatchObject([
+    { id: older.id, findingKey: "finding:duplicate", finding: { count: 3, lastSeenAt: newer.createdAt } },
+    { id: newer.id },
+  ]);
+  expect(expected[1]).not.toHaveProperty("findingKey");
+  expect(response).toEqual(expected);
 });
 
 test("attention surface reads frozen records in store order, caps tasks, and never changes its rows", () => {
