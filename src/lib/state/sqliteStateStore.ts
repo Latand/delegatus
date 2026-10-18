@@ -1430,6 +1430,17 @@ export class SqliteStateCollection<T> {
     return this.loadControllerReadonly().map((record) => this.options.clone(record));
   }
 
+  /** Seek the supplied keys before sorting their metadata. No payload is read
+      or decoded here; callers retain collection order for a bounded selection. */
+  keysInOrder(rowKeys: readonly string[], limit: number): string[] {
+    if (!rowKeys.length || limit <= 0) return [];
+    return this.readDb.query<{ row_key: string }, [string, string, number]>(`
+      SELECT DISTINCT r.row_key, r.row_order FROM json_each(?) AS wanted CROSS JOIN state_rows AS r
+      WHERE r.collection = ? AND r.row_key = wanted.value
+      ORDER BY r.row_order, r.row_key LIMIT ?
+    `).all(JSON.stringify(rowKeys), this.options.collection, limit).map(row => row.row_key);
+  }
+
   get(rowKey: string): T | null {
     const row = this.readDb.query<Pick<CollectionRow, "value_json">, [string, string]>(
       "SELECT value_json FROM state_rows WHERE collection = ? AND row_key = ?",

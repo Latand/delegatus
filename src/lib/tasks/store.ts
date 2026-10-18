@@ -544,6 +544,7 @@ export function taskSelectionSource(filePath = TASKS_FILE) {
   if (!collection) return null;
   return {
     filename: legacyDatabasePath(filePath),
+    orderedIds: (ids: ReadonlySet<string>, limit: number) => collection.keysInOrder([...ids].map(id => `t:${id}`), limit).map(key => key.slice(2)),
     read: (id: string) => {
       const row = collection.get(`t:${id}`);
       const task = row ? coerceTask(row) : null;
@@ -554,6 +555,20 @@ export function taskSelectionSource(filePath = TASKS_FILE) {
       return structuredClone(loadTasksForList(filePath).find(task => task.id === id) ?? null);
     },
   };
+}
+
+/** Read only the requested tasks, retaining collection order and the keyed
+ * reader's ownership projection. The index seeks precede payload decoding;
+ * ordinary keyed reads never decode unrelated history. Converged finding
+ * ownership retains taskSelectionSource's existing reconciliation. */
+export function loadTasksByIds(ids: ReadonlySet<string>, filePath = TASKS_FILE, limit = ids.size): BoardTask[] {
+  if (!ids.size || limit <= 0) return [];
+  const source = taskSelectionSource(filePath);
+  if (!source) return loadTasksForList(filePath).filter(task => ids.has(task.id)).slice(0, limit);
+  return source.orderedIds(ids, limit).flatMap(id => {
+    const task = source.read(id);
+    return task ? [task] : [];
+  });
 }
 
 const taskListOwner = globalThis as typeof globalThis & { __delegatusTaskListReaders?: {

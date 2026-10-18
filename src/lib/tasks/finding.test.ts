@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createTask, patchTask, type CreateTaskInput } from "./commands";
-import { loadTasksFile, loadTasksForList, mutateTasksFile, taskSelectionSource } from "./store";
+import { loadTasksFile, loadTasksForList, loadTasksByIds, mutateTasksFile, taskSelectionSource } from "./store";
 import { readFindingKey } from "./finding";
 import { taskRevision } from "./revision";
 import { persistProjectAliases } from "@/lib/projects/aliases";
@@ -38,6 +38,7 @@ describe("finding identity", () => {
     expect(taskRevision(projected.find(task => task.id === old.task.id)!)).not.toBe(taskRevision(old.task));
     expect(taskRevision(projected.find(task => task.id === current.task.id)!)).not.toBe(taskRevision(current.task));
     expect(loadTasksForList(file)).toEqual(projected);
+    expect(loadTasksByIds(new Set([current.task.id, old.task.id]), file)).toEqual(projected);
     expect(taskSelectionSource(file)!.read(current.task.id)?.findingKey).toBeUndefined();
     expect(taskSelectionSource(file)!.read(old.task.id)?.finding?.count).toBe(3);
     const match = create({ ...input, project: "dir-converging" }, later);

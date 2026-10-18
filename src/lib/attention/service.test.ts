@@ -1,8 +1,14 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { deepFreeze } from "@/lib/deepFreeze";
+import type { Pipeline } from "@/lib/pipelines/types";
+import { readAttribution, type ReadTotals } from "@/lib/readAttribution";
+import { TASKS_FILE, loadTasksForList, mutateTasks } from "@/lib/tasks/store";
+import { loadPipelinesForList } from "@/lib/pipelines/store";
+import type { BoardTask } from "@/lib/tasks/types";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { resetPresenceForTest, upsertPresence } from "@/lib/view/presenceStore";
 import type { PresencePayloadV1 } from "@/lib/view/types";
@@ -609,3 +615,75 @@ test("a notice ends with its record's clock, and a refused one is never shown", 
   expect(attentionNotices(declined, T0)).toEqual([]);
 });
 
+
+test.each([20, 200])("production attention reads decode only the two named tasks with %i unrelated tasks", async (count) => {
+  const task = (id: string): BoardTask => ({ id, project: "demo", status: "inbox", text: id,
+    placement: "unplaced", assignments: [], createdAt: T0.toISOString(), updatedAt: T0.toISOString() });
+  // Deliberately reverse the requested order: the response keeps store order.
+  raise({ target: { kind: "task", taskId: "task-second" } });
+  raiseAttentionRequest({ origin: "operator", target: { kind: "task", taskId: "task-first" },
+    frameAtCreation: frame, intent: "show", reason: "Read the task" }, { now: T0, id: "attention_2" });
+  mutateTasks(() => ({ tasks: [task("task-first"), ...Array.from({ length: count }, (_, i) => task(`task-unrelated-${i}`)), task("task-second")], result: null }));
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { readAttribution } = await import("./src/lib/readAttribution");
+    const { attentionForDevice } = await import("./src/lib/attention/service");
+    let decoded = 0;
+    const original = readAttribution.sync.bind(readAttribution);
+    readAttribution.sync = (...args) => {
+      const result = original(...args);
+      if (args[0] === "state.json" && result && typeof result === "object" && String(result.id).startsWith("task-")) decoded++;
+      return result;
+    };
+    const response = attentionForDevice("device-desktop", { now: new Date("2026-07-01T10:00:00.000Z"), filePath: process.env.ATTENTION_FIXTURE });
+    console.log(JSON.stringify({ decoded, ids: response.records?.tasks.map(row => row.id) }));
+  `], { env: { ...process.env, LLV_STATE_DIR: path.dirname(TASKS_FILE), ATTENTION_FIXTURE: path.join(sandbox, "attention.json") },
+    stdout: "pipe", stderr: "pipe" });
+  const [out, err, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ exit, err }).toEqual({ exit: 0, err: "" });
+  expect(JSON.parse(out)).toEqual({ decoded: 2, ids: ["task-first", "task-second"] });
+  loadPipelinesForList();
+  // Frozen readers remain valid after the attention projection has run.
+  const frozen = loadTasksForList();
+  const before = JSON.stringify(frozen);
+  let decoded = 0;
+  const original = readAttribution.sync.bind(readAttribution);
+  const hook = spyOn(readAttribution, "sync").mockImplementation(<T>(reader: string, work: () => T, connection = 0, bytes = 0, sampleIo = true, counters?: ReadTotals) => {
+    const result = original(reader, work, connection, bytes, sampleIo, counters);
+    if (reader === "state.json" && result && typeof result === "object" && "id" in result
+      && String(result.id).startsWith("task-")) decoded++;
+    return result;
+  });
+  try {
+    const response = attentionForDevice(DEVICE, { now: T0 });
+    expect(response.records?.tasks.map(row => row.id)).toEqual(["task-first", "task-second"]);
+    expect(decoded).toBe(2);
+    expect(JSON.stringify(frozen)).toBe(before);
+  } finally { hook.mockRestore(); }
+});
+
+test("attention surface reads frozen records in store order, caps tasks, and never changes its rows", () => {
+  const tasks = deepFreeze(Array.from({ length: 10 }, (_, index): BoardTask => ({
+    id: `task-${index}`, project: "demo", status: "inbox", text: "Read this task",
+    placement: "unplaced", assignments: [], createdAt: T0.toISOString(), updatedAt: T0.toISOString(),
+  })));
+  const ids = tasks.map(task => task.id).reverse();
+  const pipelines = deepFreeze([{ id: "pipeline-frozen", taskIds: ids, createdAt: T0.toISOString() } as Pipeline]);
+  const before = JSON.stringify({ tasks, pipelines });
+  const records = { pipelines: () => pipelines, tasks: (wanted: ReadonlySet<string>, limit: number) => {
+    expect([...wanted]).toEqual(ids);
+    expect(limit).toBe(8);
+    return tasks;
+  } };
+  for (let pass = 0; pass < 2; pass++) {
+    const read = attentionRecordsForSurface({ now: T0, records }).records;
+    expect(read?.tasks.map(task => task.id)).toEqual(tasks.slice(0, 8).map(task => task.id));
+    expect(read?.pipelines).toEqual(pipelines);
+    expect(JSON.stringify({ tasks, pipelines })).toBe(before);
+  }
+  expect(attentionRecordsForSurface({ now: T0, records: {
+    pipelines: () => [], tasks: () => { throw new Error("unexpected task read"); },
+  } }).records).toBeNull();
+  expect(() => attentionRecordsForSurface({ now: T0, records: {
+    pipelines: () => pipelines, tasks: () => { throw new Error("task store unavailable"); },
+  } })).toThrow("task store unavailable");
+});

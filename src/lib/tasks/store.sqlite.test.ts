@@ -14,6 +14,8 @@ import {
   checkpointTaskRollbackMirrorForDemotion,
   importLegacyTasks,
   loadTasks,
+  loadTasksByIds,
+  loadTasksForList,
   loadTasksFile,
   mutateTasks,
   mutateTasksFile,
@@ -739,4 +741,24 @@ describe("(f) rollback mirror and roll-forward", () => {
     expect(outcome.state).toBe("reconcile-deferred");
     expect(fs.readFileSync(file, "utf8")).toBe(mirrorText);
   });
+});
+
+test("keyed task reads preserve collection order, caps and frozen values across writes and missing ids", () => {
+  const { file } = sandbox();
+  const at = "2026-10-01T12:00:00.000Z";
+  const make = (id: string) => task(id, { createdAt: at, updatedAt: at });
+  mutateTasksFile(() => ({ state: { tasks: [make("task-z"), make("task-middle"), make("task-a")], recentCreates: [] }, result: null }), file);
+  const ids = new Set(["task-missing", "task-a", "task-z"]);
+  const frozen = loadTasksForList(file);
+  const before = JSON.stringify(frozen);
+  expect(loadTasksByIds(ids, file)).toEqual(frozen.filter(row => ids.has(row.id)));
+  expect(loadTasksByIds(ids, file, 1).map(row => row.id)).toEqual(["task-z"]);
+  expect(loadTasksByIds(ids, file, 0)).toEqual([]);
+  expect(loadTasksByIds(new Set(), file)).toEqual([]);
+  expect(loadTasksByIds(new Set(["task-missing"]), file)).toEqual([]);
+  expect(JSON.stringify(frozen)).toBe(before);
+  mutateTasksFile(state => ({ state: { ...state, tasks: [state.tasks[2]!, state.tasks[0]!] }, result: null }), file);
+  expect(loadTasksByIds(ids, file).map(row => row.id)).toEqual(["task-z", "task-a"]);
+  expect(loadTasksByIds(ids, file)).toEqual(loadTasksForList(file).filter(row => ids.has(row.id)));
+  expect(JSON.stringify(frozen)).toBe(before);
 });

@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
+import { deepFreeze } from "@/lib/deepFreeze";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -159,9 +160,9 @@ function harness(options: { tasks?: BoardTask[]; lanes?: Pipeline[] } = {}): Har
       if (byPath) return { conversationId: byPath[0], path: byPath[1] };
       return ref.path ? { conversationId: null, path: ref.path } : null;
     },
-    task: (taskId) => (options.tasks ?? []).find((entry) => entry.id === taskId) ?? null,
-    pipelines: () => [...lanes.values()],
-    pipeline: (pipelineId) => lanes.get(pipelineId) ?? null,
+    task: (taskId) => deepFreeze(structuredClone((options.tasks ?? []).find((entry) => entry.id === taskId) ?? null)),
+    pipelines: () => deepFreeze(structuredClone([...lanes.values()])),
+    pipeline: (pipelineId) => deepFreeze(structuredClone(lanes.get(pipelineId) ?? null)),
     setPipelineDismissal: async (pipelineId, dismiss, by) => {
       writes.push({ pipelineId, dismiss, by });
       const current = lanes.get(pipelineId)!;
