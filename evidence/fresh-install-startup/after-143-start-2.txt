@@ -1,0 +1,18 @@
+Delegatus: delegatus-gate-RUN_ID_1.service stops every agent after one OOM kill. Add this drop-in, then daemon-reload and restart the service when agents finish:
+# $HOME/.config/systemd/user/delegatus-gate-RUN_ID_1.service.d/oom.conf
+[Service]
+OOMPolicy=continue
+OOMScoreAdjust=100
+
+systemctl --user daemon-reload
+systemctl --user restart 'delegatus-gate-RUN_ID_1.service'
+
+  ✳ Delegatus v1.13.0
+  Open http://127.0.0.1:35563/ in your browser.
+  Claude Code CLI and Codex CLI were not found. Install either to run an orchestrator:
+  Claude Code: curl -fsSL https://claude.ai/install.sh | bash
+  Codex: curl -fsSL https://chatgpt.com/codex/install.sh | sh
+  Claude Desktop requires a separate CLI. Codex.app may include a CLI; check its installation.
+  After installing, restart Delegatus and open the setup guide.
+  Ctrl+C — stop.  --tailscale — access from your phone.
+  DELEGATUS_DEBUG=1 — show startup diagnostics.

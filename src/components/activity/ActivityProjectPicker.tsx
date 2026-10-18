@@ -35,13 +35,15 @@ function yourValue(row: ActivityProjectRow, unread: boolean, locale: Locale, t: 
   return `${row.coverage.complete ? "" : "≥ "}${hoursText(row.humanHours, locale, t)}`;
 }
 
-export function ActivityProjectPicker({ data, names, entries, selected, unread, onSelect, locale, t }: {
+export function ActivityProjectPicker({ data, names, entries, onOpen, selected, unread, onSelect, locale, t }: {
   data?: ActivityResponse;
   names?: ReadonlyMap<string | null, string>;
   /** Rows given by the caller in place of the time report's projects (the
-      token prototype, docs/design/activity-token-usage.md §9), already in
-      their order, each with the value it prints. */
+      Tokens tab, docs/design/activity-token-usage.md §9.2), already in their
+      order, each with the value it prints. */
   entries?: ReadonlyArray<{ project: string; label: string; value: string }>;
+  /** Called as the list opens, so a caller can read its rows on demand. */
+  onOpen?(): void;
   selected: string | null;
   /** None of your input was read for the range. */
   unread: boolean;
@@ -78,6 +80,7 @@ export function ActivityProjectPicker({ data, names, entries, selected, unread, 
     setQuery("");
     setActive(Math.max(0, selected === null ? 0 : rows.findIndex((row) => row.project === selected) + 1));
     setOpen(true);
+    onOpen?.();
   };
   const close = (restoreFocus = true) => {
     setOpen(false);

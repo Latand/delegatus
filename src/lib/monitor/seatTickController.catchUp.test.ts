@@ -24,7 +24,7 @@ test("one catch-up carries all 35 held outcomes and original times, then owes on
   expect(result?.deferred).toBe(0);
   expect(rig.sent).toHaveLength(1);
   const text = rig.sent[0]!.text;
-  expect(text).toContain(`unreachable window ${FROM} through ${new Date(NOW).toISOString()}`);
+  expect(text).toContain(`backlog window ${FROM} through ${new Date(NOW).toISOString()}`);
   for (const lane of lanes) { expect(text).toContain(lane.id); expect(text).toContain(lane.movedAt); }
   expect(text).not.toContain("held back for the next wake");
   const row = rig.deps.readState!(PROJECT);
@@ -116,7 +116,7 @@ test("catch-up crosses the event page boundary and leaves later events for later
   expect(next.sent).toHaveLength(1);
   expect(next.sent[0]!.text).toContain("after-recovery");
   expect(next.sent[0]!.text).not.toContain("merged-225");
-  expect(next.sent[0]!.text).not.toContain("unreachable window");
+  expect(next.sent[0]!.text).not.toContain("backlog window");
 });
 
 test("500 UUID outcomes and a mixed lane manifest fit transport and credit only after delivery", async () => {
@@ -142,7 +142,7 @@ test("500 UUID outcomes and a mixed lane manifest fit transport and credit only 
   expect(rig.sent).toHaveLength(1);
   const text = rig.sent[0]!.text;
   expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
-  expect(text).toContain(`unreachable window ${from} through ${new Date(f.now).toISOString()}`);
+  expect(text).toContain(`backlog window ${from} through ${new Date(f.now).toISOString()}`);
   expect(text).toContain(`manifest catch-up:7:${from}`);
   expect(text).toContain(`key catch-up:7:${from}`);
   const base = Date.parse(events[0]!.at);
@@ -178,7 +178,7 @@ test("500 UUID outcomes and a mixed lane manifest fit transport and credit only 
 test("a landed catch-up stays acknowledged after a real process restart", async () => {
   const directory = fs.mkdtempSync(path.join(SANDBOX, "catch-up-process-"));
   const stateFile = path.join(directory, "tick.json");
-  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, unreachableSince: FROM }, stateFile);
+  writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE, unreachableSince: new Date(NOW).toISOString(), unreachableBacklogSince: FROM }, stateFile);
   const script = path.join(directory, "restart.test.ts");
   const resultFile = path.join(directory, "result.json");
   fs.writeFileSync(script, `import { test } from "bun:test";
@@ -186,8 +186,9 @@ test("a landed catch-up stays acknowledged after a real process restart", async 
     test("restart", async () => {
       const rig = harness({ stateFile: ${JSON.stringify(stateFile)}, pipelines: ${JSON.stringify(lanes)}, now: NOW });
       rig.deps.sources.reports = { log: () => [], enabled: () => true, operatorLocale: () => "uk" };
+      const before = rig.deps.readState(PROJECT);
       await runSeatTickCheck(PROJECT, rig.deps);
-      await Bun.write(${JSON.stringify(resultFile)}, JSON.stringify({ sent: rig.sent.length, state: rig.deps.readState(PROJECT) }));
+      await Bun.write(${JSON.stringify(resultFile)}, JSON.stringify({ sent: rig.sent.length, before, state: rig.deps.readState(PROJECT) }));
     });`);
   const run = () => new Promise<void>((resolve, reject) => {
     const child = spawn(process.execPath, ["test", script], { env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
@@ -196,7 +197,12 @@ test("a landed catch-up stays acknowledged after a real process restart", async 
     child.on("error", reject); child.on("close", code => code === 0 ? resolve() : reject(new Error(output)));
   });
   await run();
-  expect(JSON.parse(fs.readFileSync(resultFile, "utf8")).sent).toBe(1);
+  const first = JSON.parse(fs.readFileSync(resultFile, "utf8"));
+  expect(first.sent).toBe(1);
+  expect(first.before.unreachableSince).toBe(new Date(NOW).toISOString());
+  expect(first.before.unreachableBacklogSince).toBe(FROM);
+  expect(first.state.unreachableSince).toBeNull();
+  expect(first.state.unreachableBacklogSince).toBeNull();
   await run();
   const result = JSON.parse(fs.readFileSync(resultFile, "utf8"));
   expect(result.sent).toBe(0);
@@ -282,16 +288,24 @@ test("one child ledger gap cannot release a partial catch-up while other snapsho
   expect(later.sent[0]!.text).not.toContain(`Catch-up manifest catch-up:7:${FROM}`);
 }, 60_000);
 
-test("a legacy dead-seat row catches up its entire pre-upgrade delivery gap", async () => {
+test.each(["dead", "healthy"] as const)("a legacy dead-seat row catches up its entire pre-upgrade backlog window with %s MCP", async health => {
   const rig = recoveryRig({ state: { ...OVERDUE, lastWakeAt: FROM },
     seatActivity: { conversationId: CONVERSATION, lifecycle: "gone", reason: "host_gone_turn_settled", host: { state: "gone", kind: "structured", pid: null } } });
-  rig.deps.mcpHealth = () => ({ status: "dead", detail: "predecessor MCP unavailable" });
+  rig.deps.mcpHealth = () => ({ status: health, detail: "independent MCP health" });
   expect(rig.deps.readState!(PROJECT).unreachableSince ?? null).toBeNull();
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.sent).toHaveLength(1);
   for (const lane of lanes) expect(rig.sent[0]!.text).toContain(lane.id);
-  expect(rig.sent[0]!.text).toContain("host loss may have occurred later");
+  expect(rig.sent[0]!.text).toContain(`backlog window ${FROM} through ${new Date(NOW).toISOString()}`);
   expect(rig.deps.readState!(PROJECT).announcedLanes).toHaveLength(35);
+  const observed = rig.written.find(row => row.unreachableSince);
+  expect(observed?.unreachableSince).toBe(new Date(NOW).toISOString());
+  expect(observed?.unreachableBacklogSince).toBe(FROM);
+  expect(rig.deps.readState!(PROJECT).unreachableBacklogSince).toBeNull();
+  const next = recoveryRig({ pipelines: lanes, stateFile: rig.deps.readState!(PROJECT).accounting!.filename.replace(/\.sqlite$/, ""),
+    now: NOW + 5 * MINUTE });
+  await runSeatTickCheck(PROJECT, next.deps);
+  expect(next.sent).toHaveLength(0);
 });
 
 test("an old frozen wake landing after the outage preserves one fresh catch-up", async () => {
@@ -317,4 +331,144 @@ test("an ordinary wake received within the interval closes its gap even if confi
   }, NOW, receivedAt);
   expect(state.lastWakeAt).toBe(receivedAt);
   expect(state.unreachableSince).toBeNull();
+});
+
+test.each(["idle", "busy"] as const)("MCP failure with a live %s host never opens a backlog window", async turn => {
+  const rig = recoveryRig({ pipelines: [], turn, state: { ...OVERDUE, lastWakeAt: FROM },
+    seatActivity: { conversationId: CONVERSATION, lifecycle: turn === "idle" ? "waiting" : "running",
+      reason: "host_alive_turn_active", host: { state: "alive", kind: "structured", pid: 123 } } });
+  rig.deps.mcpHealth = () => ({ status: "dead", detail: "MCP pipe unavailable" });
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.deps.readState!(PROJECT).unreachableSince ?? null).toBeNull();
+  expect(rig.sent).toHaveLength(0);
+  expect(rig.cards.some(row => row.card.kind === "mcp-unavailable")).toBe(true);
+});
+
+test.each(["queued", "delivering", "pending", "held", "refused", "unreturned"] as const)("%s delivery keeps its fence without opening an outage", async delivery => {
+  const rig = recoveryRig({ pipelines: lanes.slice(0, 1), state: { ...OVERDUE, lastWakeAt: FROM },
+    deliveryThrows: delivery === "unreturned",
+    delivery: delivery === "refused" ? { ok: false, outcome: "failed", status: 409, error: "busy", admission: "refused" }
+      : { ok: true, target: null, outcome: delivery, operationId: "pending-wake" } as never });
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.sent).toHaveLength(1);
+  const row = rig.deps.readState!(PROJECT);
+  expect(row.unreachableSince ?? null).toBeNull();
+  expect(row.announcedLanes ?? []).toHaveLength(0);
+  expect(row.outstandingWake).not.toBeNull();
+  const next = recoveryRig({ pipelines: lanes.slice(0, 1), stateFile: row.accounting!.filename.replace(/\.sqlite$/, ""),
+    now: NOW + 5 * MINUTE, wakeState: "retained" });
+  await runSeatTickCheck(PROJECT, next.deps);
+  expect(next.sent).toHaveLength(0);
+  expect(next.deps.readState!(PROJECT).unreachableSince ?? null).toBeNull();
+});
+
+test.each(["absent", "unreadable", "foreign", "unverified", "rotated", "replaced"] as const)("%s host evidence cannot open an outage", async scenario => {
+  const rig = recoveryRig({ pipelines: [], turn: "busy", state: { ...OVERDUE, lastWakeAt: FROM } });
+  rig.deps.mcpHealth = () => ({ status: "dead", detail: "MCP unavailable" });
+  let generation = 0;
+  const registry = rig.deps.sources!.registry;
+  rig.deps.sources!.registry = () => ({ ...registry(), seatMcpReceipt: () => ({ generation }) }) as never;
+  rig.deps.sources!.liveness = async () => {
+    if (scenario === "unreadable") throw new Error("probe unavailable");
+    if (scenario === "absent") return [];
+    if (scenario === "rotated") rig.seat = { conversationId: CONVERSATION, seatEpoch: 8, path: null };
+    if (scenario === "replaced") generation++;
+    return [{ conversationId: scenario === "foreign" ? "other-seat" : CONVERSATION,
+      lifecycle: "gone", reason: scenario === "unverified" ? "host_gone_turn_unverified" : "host_gone_turn_settled",
+      host: { state: "gone", kind: "structured", pid: null } }] as never;
+  };
+  await runSeatTickCheck(PROJECT, rig.deps);
+  expect(rig.written.every(row => !row.unreachableSince)).toBe(true);
+  expect(rig.sent.every(message => !message.text.includes("Catch-up manifest"))).toBe(true);
+});
+
+test("a recent host-loss observation retains an older backlog across a normal landing", () => {
+  const observedAt = new Date(NOW).toISOString();
+  const row = seatTickWakeCommit({ ...emptySeatTickState(), unreachableSince: observedAt, unreachableBacklogSince: FROM }, {
+    proposal: false, reasons: [], fingerprint: "old", eventsThrough: 0, children: [], wakeIntervalMs: 60 * MINUTE,
+  }, NOW + MINUTE);
+  expect(row.unreachableSince).toBe(observedAt);
+  expect(row.unreachableBacklogSince).toBe(FROM);
+});
+
+test("quiet idle host probe reads only its designated registry rows", async () => {
+  let unrelatedEntryReads = 0;
+  const f = childFixture("idle-keyed-host-probe", false, "sqlite", (collection, count) => {
+    if (collection === "entries") unrelatedEntryReads += count;
+  });
+  f.seed({ lastWakeAt: new Date(NOW - 5 * MINUTE).toISOString(), lastProposalAt: new Date(NOW - MINUTE).toISOString() });
+  for (let index = 0; index < 160; index += 1) {
+    f.registry.upsert({ key: { engine: "claude", sessionId: `unrelated-${index}` },
+      artifactPath: path.join(f.dir, `unrelated-${index}.jsonl`), cwd: f.cwd, accountId: null,
+      status: "dead", host: null, structuredHost: null, claimEpoch: 1, claimOwner: null, pendingAction: null });
+  }
+  setAgentRegistryForTests(f.registry);
+  const rig = childRig(f);
+  const production = (await import("./seatTickSources")).defaultSeatTickSources();
+  rig.deps.sources!.liveness = production.liveness;
+  rig.deps.mcpHealth = () => ({ status: "dead", detail: "MCP unavailable" });
+  unrelatedEntryReads = 0;
+
+  await runSeatTickCheck(f.project, rig.deps);
+
+  expect(unrelatedEntryReads).toBeLessThanOrEqual(2);
+  expect(rig.sent).toHaveLength(0);
+  expect(f.row().unreachableSince ?? null).toBeNull();
+});
+
+test("targeted production liveness keeps a live alternate owner of the seat transcript", async () => {
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  let unrelatedEntryReads = 0;
+  const f = childFixture("idle-alternate-transcript-owner", false, "sqlite", (collection, count) => {
+    if (collection === "entries") unrelatedEntryReads += count;
+  });
+  f.seed({ lastWakeAt: new Date(f.now - 5 * MINUTE).toISOString(), lastProposalAt: new Date(f.now - MINUTE).toISOString() });
+  const conversation = f.registry.conversation(f.seat.conversationId as never)!;
+  const generation = conversation.generations.at(-1)!;
+  const resumedPath = path.join(f.dir, `resumed-${path.basename(f.seat.path!)}`);
+  f.registry.reconcileConversations([{ engine: "claude", path: resumedPath, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: f.cwd }), turn: { state: "idle", source: "empty", terminalAt: null },
+    observedAt: new Date(f.now).toISOString() }]);
+  const resumed = f.registry.conversation(f.seat.conversationId as never)!;
+  expect(resumed.continuityPaths).toContain(f.seat.path!);
+  const currentGeneration = resumed.generations.at(-1)!;
+  f.registry.upsert({ key: { engine: "claude", sessionId: currentGeneration.id }, artifactPath: resumedPath, cwd: f.cwd,
+    accountId: null, status: "dead", host: null, structuredHost: null, claimEpoch: 1, claimOwner: null, pendingAction: null });
+  const owner = captureProcessIdentity(process.pid);
+  f.registry.upsert({ key: { engine: "claude", sessionId: "alternate-live-seat-owner" }, artifactPath: resumedPath, cwd: f.cwd,
+    accountId: null, status: "idle", host: null,
+    structuredHost: { kind: "claude-broker", endpoint: "stdio:fixture", process: owner, eventCursor: 1,
+      protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: null, pendingAction: null });
+  const selected = f.registry.livenessConversationSnapshot(f.seat.conversationId);
+  expect(selected.entries["claude:alternate-live-seat-owner"]?.artifactPath).toBe(resumedPath);
+  expect(selected.entries[`claude:${currentGeneration.id}`]?.artifactPath).toBe(resumedPath);
+  for (let index = 0; index < 160; index += 1) {
+    f.registry.upsert({ key: { engine: "claude", sessionId: `unrelated-owner-${index}` },
+      artifactPath: path.join(f.dir, `unrelated-owner-${index}.jsonl`), cwd: f.cwd, accountId: null,
+      status: "dead", host: null, structuredHost: null, claimEpoch: 1, claimOwner: null, pendingAction: null });
+  }
+  const rig = childRig(f);
+  const { productionLivenessSources } = await import("@/lib/lifecycle/liveness");
+  const production = productionLivenessSources();
+  const liveness = await agentLivenessSnapshot({ conversationId: f.seat.conversationId }, {
+    ...production,
+    registrySnapshot: () => f.registry.readOnlySnapshot(),
+    registrySnapshotForConversation: id => f.registry.livenessConversationSnapshot(id),
+    describeTranscript: async transcriptPath => ({ path: transcriptPath, project: f.project, title: "seat", engine: "claude",
+      mtimeMs: f.now - MINUTE, sizeBytes: 0, conversationId: f.seat.conversationId, activity: "idle", activityReason: "fixture" }),
+    transcriptEvidence: async () => ({ turn: "idle", lastRecordTs: f.now - MINUTE, providerProgressAt: null }),
+    probe: { now: () => f.now, pidAlive: pid => pid === owner.pid, processIdentity: pid => pid === owner.pid ? owner.startIdentity : null },
+    listFiles: async () => [], pipelines: () => [], flows: () => [],
+  });
+  rig.deps.sources!.liveness = async () => liveness.conversations;
+  rig.deps.mcpHealth = () => ({ status: "healthy", detail: "fixture" });
+  unrelatedEntryReads = 0;
+
+  await runSeatTickCheck(f.project, rig.deps);
+
+  expect(liveness.conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "host_alive_turn_idle", host: { state: "alive" } });
+  expect(unrelatedEntryReads).toBeLessThanOrEqual(2);
+  expect(f.row().unreachableSince ?? null).toBeNull();
+  expect(rig.sent.every(message => !message.text.includes("Catch-up manifest"))).toBe(true);
 });

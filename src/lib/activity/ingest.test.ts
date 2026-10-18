@@ -128,7 +128,8 @@ test("scoped activity context preserves roles, custody aliases and delivered sub
     for (const pathname of dataset.conversationPaths) {
       const facts: TranscriptFacts = { path: pathname, engine: "codex", cwd: null, entrypoint: null, sessionMeta: null };
       const before = expected(facts), after = scoped(facts);
-      expect({ ...after, deliveryOrigin: undefined }).toEqual({ ...before, deliveryOrigin: undefined });
+      expect({ ...after, deliveryOrigin: undefined, usageAttribution: undefined }).toEqual({ ...before, deliveryOrigin: undefined, usageAttribution: undefined });
+      expect(after.usageAttribution?.(Date.parse("2026-10-18T12:00:00Z"))).toEqual(before.usageAttribution?.(Date.parse("2026-10-18T12:00:00Z")));
       for (const operationId of [...dataset.coldOperationIds, ...dataset.hotOperationIds]) {
         const record = { engine: "codex", markerOrigin: "operator", deliveryKey: deliveryDedupToken(operationId) } as UserRecord;
         expect(after.deliveryOrigin?.(record)).toEqual(before.deliveryOrigin?.(record));

@@ -5,7 +5,7 @@ import { Database, type SQLQueryBindings } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { installHistoryProjection, readHistoryProjection, historyAttemptCounts, historyPipelineRef, historyHeadlessFlows, historyHeadlessDeadRounds, historyFleetLimitWaits } from "./historyProjection";
+import { installHistoryProjection, readHistoryProjection, historyAttemptCounts, historyPipelineRef, historyHeadlessFlows, historyHeadlessFlowsForTarget, historyHeadlessDeadRounds, historyFleetLimitWaits } from "./historyProjection";
 import { fleetLimitWaits } from "@/lib/mcp/agentFleet";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { buildPipeline } from "@/lib/pipelines/store";
@@ -351,6 +351,25 @@ test("unchanged headless history reuses the bounded shared round projection",asy
       } finally {query.mockRestore();}
     });
   } finally {f.db.close();}
+});
+
+test("targeted headless liveness uses owner indexes and skips unrelated rounds", async () => {
+  const f = fixture();
+  try {
+    f.put(flow({ id: "flow-target", rounds: [{ reviewerPid: 41, reviewerPath: "target-path", reviewerConversationId: "conversation_target", reviewerIdentity: "target-start" }] }), "flows", 1);
+    for (let index = 0; index < 80; index += 1) {
+      f.put(flow({ id: `flow-unrelated-${index}`, rounds: [{ reviewerPid: 1000 + index, reviewerPath: `other-path-${index}`, reviewerConversationId: `conversation_other_${index}`, reviewerIdentity: `other-start-${index}` }] }), "flows", index + 2);
+    }
+    const rows = (await f.read(db => historyHeadlessFlowsForTarget(db, ["conversation_target"], ["target-path"])))
+      .flatMap(item => item.rounds);
+    expect(rows.map(row => row.reviewerPid)).toEqual([41]);
+    const plan = f.db.query<{ detail: string }, [string, string]>(`EXPLAIN QUERY PLAN SELECT r.*,p.row_order FROM history_rounds r
+      JOIN history_inputs p ON p.collection='flows' AND p.row_key=r.row_key
+      WHERE r.reviewerConversationId IN (?) OR r.reviewerPath IN (?)
+      ORDER BY p.row_order,p.row_key,r.round`).all("conversation_target", "target-path").map(row => row.detail).join("\n");
+    expect(plan).toContain("history_reviewer_conversation");
+    expect(plan).toContain("history_reviewer_path");
+  } finally { f.db.close(); }
 });
 
 test("large headless history reuses its cached rows and applies one changed flow",async()=>{

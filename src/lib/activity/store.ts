@@ -6,10 +6,13 @@ import path from "node:path";
 import type { Database as BunDatabase } from "bun:sqlite";
 
 import { statePath } from "@/lib/configDir";
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
+import { stateDatabaseBusy, StateLockDeferredError, stateLockAttempt } from "@/lib/state/lockWait";
 
 import { EXCLUSION_REASONS, type ExclusionReason, type InputCandidate } from "./humanInput";
 import type { AgentTurn, TranscriptFactsState } from "./transcriptExport";
 import type { RequestKind, Surface } from "./method";
+import { commitUsage, migrateUsage, type UsageBatch } from "./tokenStore";
 
 /*
  * Delegatus's own record of human input (docs/design/activity-dashboard.md,
@@ -97,6 +100,8 @@ export interface FileCursor {
   mtimeMs: number;
   facts: TranscriptFactsState;
   prompted: boolean;
+  usageOffset?: number;
+  usageFacts?: TranscriptFactsState;
 }
 
 export interface HostState {
@@ -205,11 +210,14 @@ export class ActivityStore {
 
   /** The writer: creates the file and its schema. */
   static open(file: string = activityStorePath()): ActivityStore {
+    assertStateStartupMutation(path.dirname(file), "activity schema");
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const Database = sqliteDatabase();
     const db = observeSqlite(new Database(file, { create: true, strict: true }), "activity");
     try {
-      db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+      db.exec("PRAGMA busy_timeout = 0");
+      db.exec("PRAGMA journal_mode = WAL");
+      db.exec("PRAGMA synchronous = NORMAL");
       db.exec(`
         CREATE TABLE IF NOT EXISTS activity_inputs (
           host TEXT NOT NULL,
@@ -286,6 +294,9 @@ export class ActivityStore {
       }
       if (!hostColumns.has("pulled_member")) db.exec("ALTER TABLE activity_hosts ADD COLUMN pulled_member TEXT");
       if (!hostColumns.has("unknown_authors")) db.exec("ALTER TABLE activity_hosts ADD COLUMN unknown_authors INTEGER NOT NULL DEFAULT 0");
+      db.exec("BEGIN IMMEDIATE");
+      try { migrateUsage(db); db.exec("COMMIT"); }
+      catch (error) { db.exec("ROLLBACK"); throw error; }
       db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
       for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
         try { fs.chmodSync(candidate, 0o600); } catch { /* Not created yet. */ }
@@ -293,6 +304,7 @@ export class ActivityStore {
       return new ActivityStore(db, false);
     } catch (error) {
       db.close();
+      if (stateDatabaseBusy(error)) throw new StateLockDeferredError("activity.open");
       throw error;
     }
   }
@@ -303,7 +315,11 @@ export class ActivityStore {
     const Database = sqliteDatabase();
     const db = observeSqlite(new Database(file, { readonly: true, strict: true }), "activity");
     try {
-      db.exec("PRAGMA busy_timeout = 250; PRAGMA query_only = ON;");
+      db.exec("PRAGMA busy_timeout = 0");
+      db.exec("PRAGMA query_only = ON");
+      db.exec("PRAGMA temp_store = MEMORY");
+      db.exec("PRAGMA cache_size = -8192");
+      db.exec("PRAGMA mmap_size = 134217728");
       if ((db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0) < SCHEMA_VERSION) {
         db.close();
         return null;
@@ -320,7 +336,7 @@ export class ActivityStore {
   }
 
   transaction<T>(work: () => T): T {
-    this.db.exec("BEGIN IMMEDIATE");
+    stateLockAttempt("activity.transaction", () => this.db.exec("BEGIN IMMEDIATE"));
     try {
       const result = work();
       this.db.exec("COMMIT");
@@ -336,8 +352,8 @@ export class ActivityStore {
   }
 
   fileCursor(file: string): FileCursor | null {
-    const row = this.db.query<{ offset: number; size: number; mtime_ms: number; facts: string; prompted: number }, [string]>(
-      "SELECT offset, size, mtime_ms, facts, prompted FROM activity_files WHERE path = ?",
+    const row = this.db.query<{ offset: number; size: number; mtime_ms: number; facts: string; prompted: number; usage_offset?: number; usage_facts?: string | null }, [string]>(
+      "SELECT * FROM activity_files WHERE path = ?",
     ).get(file);
     if (!row) return null;
     let facts: TranscriptFactsState;
@@ -346,7 +362,10 @@ export class ActivityStore {
     } catch {
       return null;
     }
-    return { offset: row.offset, size: row.size, mtimeMs: row.mtime_ms, facts, prompted: row.prompted === 1 };
+    let usageFacts: TranscriptFactsState | undefined;
+    try { usageFacts = row.usage_facts ? parseSqliteJson(row.usage_facts, this.db) as TranscriptFactsState : undefined; }
+    catch { /* A missing token cursor is replayed through durable dedupe. */ }
+    return { offset: row.offset, size: row.size, mtimeMs: row.mtime_ms, facts, prompted: row.prompted === 1, usageOffset: row.usage_offset ?? 0, usageFacts };
   }
 
   /** Every cursor path, for the pass that forgets transcripts gone from disk. */
@@ -371,16 +390,21 @@ export class ActivityStore {
     earliest: number | null,
     turns: { owner: TurnOwner; turns: readonly AgentTurn[] } | null = null,
     teamHistory = false,
+    usage: UsageBatch | null = null,
   ): number {
     return this.transaction(() => {
       let written = 0;
       for (const candidate of candidates) if (this.recordLocal(candidate)) written += 1;
       if (turns) for (const turn of turns.turns) this.recordTurn(turns.owner, turn);
+      if (usage) commitUsage(this.db, usage);
       this.db.query(`
         INSERT INTO activity_files(path, offset, size, mtime_ms, facts, prompted) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET offset = excluded.offset, size = excluded.size, mtime_ms = excluded.mtime_ms,
           facts = excluded.facts, prompted = excluded.prompted
       `).run(file, cursor.offset, cursor.size, cursor.mtimeMs, JSON.stringify(cursor.facts), cursor.prompted ? 1 : 0);
+      // Callers without token state have the older writer's semantics.
+      if (cursor.usageOffset !== undefined) this.db.query("UPDATE activity_files SET usage_offset=?, usage_facts=? WHERE path=?")
+        .run(cursor.usageOffset, JSON.stringify(cursor.usageFacts ?? cursor.facts), file);
       const current = this.hostState(LOCAL_HOST_KEY);
       const counts = { ...(current?.excluded ?? {}) };
       for (const [reason, count] of Object.entries(excluded) as Array<[ExclusionReason, number]>) counts[reason] = (counts[reason] ?? 0) + count;

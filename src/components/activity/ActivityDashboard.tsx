@@ -1,18 +1,23 @@
 "use client";
 
-import { ArrowLeft, ChevronDown, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ChevronDown, Info, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
 import type { HostReport } from "@/lib/activity/hostSources";
-import { EXCLUSION_REASONS, REQUEST_KINDS, SURFACES, type Coverage, type DayActivity, type RangeKey } from "@/lib/activity/method";
+import { EXCLUSION_REASONS, REQUEST_KINDS, SURFACES, type Coverage, type DayActivity } from "@/lib/activity/method";
 import type { ActivityHostRow, ActivityProjectRow, ActivityResponse } from "@/lib/activity/report";
 import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
 import { useLocale, type Locale, type MessageKey, type TFunction } from "@/lib/i18n";
 
-import { ActivityDesktop } from "./ActivityDesktop";
+import { TokensCountingDrawer } from "./ActivityCountingDrawer";
+import { ActivityDesktop, ActivityFailed, type TokensTab } from "./ActivityDesktop";
 import { ActivityMemberBreakdown, ActivityMemberFilter, countedLabel, countedWording, MEMBER_FORBIDDEN, memberFromSearch, type MemberChoice } from "./ActivityMembers";
 import { ActivityScopeChip } from "./ActivityProjectPicker";
+import { ActivityRangeControl } from "./ActivityRangeControl";
+import { byFromSearch, rangeFromSearch, todayIn, viewFromSearch, writeRange, type ActivityView, type PageRange } from "./pageParams";
+import { ActivityTokensBody, TokenFilterChips, tokensQuery, TokensMemberChooser, useActivityTokens, useTokenProjects, type TokenFilters } from "./ActivityTokens";
 import { nothingRead, projectFromSearch } from "./format";
+import { OWNER_BY, type TokenBy } from "./tokenParts";
 
 /*
  * The activity dashboard. From 1024 px wide it draws the desktop page
@@ -27,11 +32,13 @@ import { nothingRead, projectFromSearch } from "./format";
  * zero.
  */
 
-export type ActivityView = "days" | "projects";
+export type { ActivityView } from "./pageParams";
 type ProjectSort = "human" | "agent";
 
-const RANGES: readonly RangeKey[] = ["today", "7d", "30d"];
 const REFRESH_MS = 60_000;
+/** Longer ranges than this show only the newest PHONE_DAYS days as rows. */
+const PHONE_DAYS_LIMIT_FROM = 92;
+const PHONE_DAYS = 14;
 const DESKTOP_QUERY = "(min-width: 1024px)";
 
 function subscribeDesktop(onChange: () => void) {
@@ -668,16 +675,19 @@ async function errorCode(response: Response): Promise<string | null> {
 
 /** The query of one read: the range, the project the page is scoped to, and
     whose input it counts. */
-export function activityQuery(range: RangeKey, project: string | null, member: MemberChoice = null): string {
-  const search = new URLSearchParams({ range });
+export function activityQuery(range: PageRange, project: string | null, member: MemberChoice = null): string {
+  const search = new URLSearchParams();
+  writeRange(search, range);
   if (project !== null) search.set("project", project);
   if (member !== null) search.set("member", member);
   return search.toString();
 }
 
-export function ActivityDashboard({ initialRange, initialView, initialProject = null, initialMember = null }: {
-  initialRange: RangeKey;
+export function ActivityDashboard({ initialRange, initialView, initialBy = "model", initialProject = null, initialMember = null }: {
+  initialRange: PageRange;
   initialView: ActivityView;
+  /** `?stack=`/`?list=`: what the Tokens tab breaks its tokens down by. */
+  initialBy?: TokenBy;
   /** `?project=`: the project the whole page is scoped to, or none. */
   initialProject?: string | null;
   /** `?member=`: `all`, a member id, or none for the viewer's own input. */
@@ -685,7 +695,10 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
 }) {
   const { t: viewerT, locale } = useLocale();
   const desktop = useDesktop();
-  const [range, setRange] = useState<RangeKey>(initialRange);
+  const [range, setRange] = useState<PageRange>(initialRange);
+  const [by, setBy] = useState<TokenBy>(initialBy);
+  const [filters, setFilters] = useState<TokenFilters>({});
+  const [tokensDrawer, setTokensDrawer] = useState(false);
   const [view, setView] = useState<ActivityView>(initialView);
   const [project, setProject] = useState<string | null>(initialProject);
   const [member, setMember] = useState<MemberChoice>(initialMember);
@@ -703,7 +716,7 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
   /* No zone is sent: days and hours follow the zone in the settings
      (Europe/Kyiv unless changed), whatever zone this device is in. A
      project's figures are the server's own count for that project. */
-  const load = useCallback(async (target: RangeKey, scope: string | null, person: MemberChoice) => {
+  const load = useCallback(async (target: PageRange, scope: string | null, person: MemberChoice) => {
     const id = ++request.current;
     setLoading(true);
     try {
@@ -729,36 +742,63 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
     }
   }, []);
 
+  /* Each tab reads only while it is shown; the other's answer stays as it was. */
+  const onTokens = view === "tokens";
   useEffect(() => {
+    if (onTokens) return;
     void load(range, project, member);
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void load(range, project, member);
     }, REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [load, range, project, member]);
+  }, [load, range, project, member, onTokens]);
+
+  /* A member who opened an owner's link is refused the member and account
+     breakdowns: the page drops them, as it drops the member. */
+  const tokenRead = useActivityTokens({
+    enabled: onTokens,
+    query: tokensQuery(range, project, member, by, filters),
+    onForbidden: () => {
+      setMember(null);
+      setBy((current) => (OWNER_BY.has(current) ? "model" : current));
+      setFilters((current) => {
+        const next = { ...current };
+        delete next.account;
+        return next;
+      });
+    },
+  });
+  const tokenProjects = useTokenProjects(`${tokensQuery(range, null, member, "project", filters)}&top=all`, locale, viewerT);
 
   /* The range, view and project live in the address, so a reload or a shared
      link opens the same page. Choosing or clearing a project is a step Back
      undoes; a range or view switch replaces the entry it is on. */
   useEffect(() => {
     const url = new URL(window.location.href);
-    url.searchParams.set("range", range);
+    writeRange(url.searchParams, range);
     url.searchParams.set("view", view);
     if (project !== null) url.searchParams.set("project", project);
     else url.searchParams.delete("project");
     if (member !== null) url.searchParams.set("member", member);
     else url.searchParams.delete("member");
+    if (onTokens) {
+      url.searchParams.set("stack", by);
+      url.searchParams.set("list", by === "kind" ? "model" : by);
+    } else {
+      url.searchParams.delete("stack");
+      url.searchParams.delete("list");
+    }
     if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url);
-  }, [range, view, project, member]);
+  }, [range, view, project, member, by, onTokens]);
 
   useEffect(() => {
     const onPopState = () => {
       const search = new URLSearchParams(window.location.search);
-      const range = search.get("range");
       setProject(projectFromSearch(window.location.search));
       setMember(memberFromSearch(window.location.search));
-      if (RANGES.includes(range as RangeKey)) setRange(range as RangeKey);
-      setView(search.get("view") === "projects" ? "projects" : "days");
+      setRange(rangeFromSearch(search));
+      setView(viewFromSearch(search));
+      if (search.has("stack") || search.has("list")) setBy(byFromSearch(search));
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -804,7 +844,9 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
       : rows.sort((a, b) => b.humanMs - a.humanMs || b.wallMs - a.wallMs);
   }, [data, sort]);
   const projectMax = Math.max(0, ...projects.map((row) => Math.max(row.humanMs, row.wallMs)));
-  const days = useMemo(() => [...(data?.days ?? [])].reverse(), [data]);
+  /* Past 92 days (a year) a row per day is a page of its own: the phone keeps the newest two weeks and says so. */
+  const dayRowsCapped = (data?.days.length ?? 0) > PHONE_DAYS_LIMIT_FROM;
+  const days = useMemo(() => [...(data?.days ?? [])].reverse().slice(0, dayRowsCapped ? PHONE_DAYS : undefined), [data, dayRowsCapped]);
   const hosts = data?.coverage.hosts ?? [];
   const tz = data?.params.tz ?? "Europe/Kyiv";
   const totals = data?.totals;
@@ -815,21 +857,49 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
   const scopedRow = scope ? data?.projects.find((row) => row.project === scope.project) : undefined;
   const roundingName = data ? t(data.params.rounding === "half-hour" ? "activity.rounding.halfHour" : "activity.rounding.clockHour") : "";
 
+  const answer = tokenRead.answer;
+  const zone = data?.params.tz ?? answer?.params.tz ?? null;
+  const today = zone ? todayIn(zone) : null;
+  const changeRange = (next: PageRange) => { setRange(next); setExpanded(null); };
+  const changeFilter = (dimension: keyof TokenFilters, key: string | null) => setFilters((current) => {
+    const next = { ...current };
+    if (key === null) delete next[dimension];
+    else next[dimension] = key;
+    return next;
+  });
+  const tokens: TokensTab = {
+    answer,
+    loading: tokenRead.loading,
+    failed: tokenRead.failed,
+    onRetry: tokenRead.retry,
+    by,
+    onBy: setBy,
+    filters,
+    onFilter: changeFilter,
+    projects: tokenProjects,
+  };
+  /* The token figures' project, as the answer names it. */
+  const tokenScope = project === null ? null : { project: answer?.scope?.project ?? project, name: answer?.scope?.name ?? scope?.name ?? projectName(project, null, t) };
+
   if (desktop) {
     return (
       <ActivityDesktop
+        tab={onTokens ? "tokens" : "time"}
+        onTab={(next) => setView(next === "tokens" ? "tokens" : view === "tokens" ? "days" : view)}
         data={data}
         range={range}
-        onRange={(next) => { setRange(next); setExpanded(null); }}
-        scope={scope}
+        onRange={changeRange}
+        today={today}
+        scope={onTokens ? tokenScope : scope}
         onProject={selectProject}
         member={member}
         onMember={selectMember}
         loading={loading}
         failed={failed}
         onRetry={() => void load(range, project, member)}
+        tokens={tokens}
         locale={locale}
-        t={t}
+        t={onTokens ? viewerT : t}
       />
     );
   }
@@ -849,32 +919,83 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
               <h1 className="text-[15px] font-bold text-primary">{t("activity.title")}</h1>
-              {scope ? <ActivityScopeChip name={scope.name} onClear={() => selectProject(null)} t={t} /> : null}
+              {!onTokens && scope ? <ActivityScopeChip name={scope.name} onClear={() => selectProject(null)} t={t} /> : null}
             </div>
-            <p className="text-[11.5px] text-muted">{t("activity.subtitle")}</p>
+            {onTokens ? null : <p className="text-[11.5px] text-muted">{t("activity.subtitle")}</p>}
           </div>
-          <div className="flex flex-wrap items-center gap-2 max-sm:w-full max-sm:flex-col max-sm:items-stretch">
-            <Segmented<RangeKey>
-              label={t("activity.rangeAria")}
-              value={range}
-              onChange={(next) => { setRange(next); setExpanded(null); }}
-              options={RANGES.map((key) => ({ value: key, label: t(`activity.range.${key}` as MessageKey) }))}
-            />
+          {onTokens ? (
+            <button
+              type="button"
+              onClick={() => setTokensDrawer(true)}
+              aria-haspopup="dialog"
+              disabled={!answer}
+              className="inline-flex h-11 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[8px] px-2 text-[12px] font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
+              data-activity-how=""
+            >
+              <Info className="h-3.5 w-3.5" aria-hidden />
+              {viewerT("activity.how")}
+            </button>
+          ) : null}
+          <div className="flex w-full flex-col items-stretch gap-2">
             <Segmented<ActivityView>
               label={t("activity.viewAria")}
               value={view}
               onChange={setView}
-              options={[{ value: "days", label: t("activity.view.days") }, { value: "projects", label: t("activity.view.projects") }]}
+              options={[
+                { value: "days", label: t("activity.view.days") },
+                { value: "projects", label: t("activity.view.projects") },
+                { value: "tokens", label: t("activity.view.tokens") },
+              ]}
             />
-            {data?.member.canChoose ? <ActivityMemberFilter data={data} selected={member} onSelect={selectMember} locale={locale} t={t} wide /> : null}
+            {onTokens
+              ? answer?.member.canChoose ? <TokensMemberChooser answer={answer} selected={member} onSelect={selectMember} t={viewerT} wide /> : null
+              : data?.member.canChoose ? <ActivityMemberFilter data={data} selected={member} onSelect={selectMember} locale={locale} t={t} wide /> : null}
+            {/* The Tokens tab's filters, the project's among them, on their own row. */}
+            {onTokens && (tokenScope || Object.keys(filters).length) ? (
+              <div className="flex flex-wrap gap-2">
+                {tokenScope ? <ActivityScopeChip name={tokenScope.name} onClear={() => selectProject(null)} t={viewerT} /> : null}
+                <TokenFilterChips answer={answer} filters={filters} onClear={(dimension) => changeFilter(dimension, null)} locale={locale} t={viewerT} />
+              </div>
+            ) : null}
+            <ActivityRangeControl
+              range={range}
+              shown={onTokens ? answer ? { from: answer.params.from, to: answer.params.to } : null : data?.days.length ? { from: data.days[0]!.date, to: data.days.at(-1)!.date } : null}
+              today={today}
+              onChange={changeRange}
+              locale={locale}
+              t={t}
+              phone
+            />
           </div>
         </header>
 
-        {failed && !data ? (
-          <div role="alert" className="rounded-[12px] border border-border bg-warning-soft px-4 py-3 text-[12px] text-warning">{t("activity.failed")}</div>
+        {onTokens ? (
+          <>
+            {tokenRead.failed && !answer ? <ActivityFailed t={viewerT} onRetry={tokenRead.retry} phone /> : null}
+            {answer ? (
+              <ActivityTokensBody
+                answer={answer}
+                by={by}
+                onBy={setBy}
+                project={project}
+                onProject={selectProject}
+                member={member}
+                onMember={selectMember}
+                filters={filters}
+                onFilter={changeFilter}
+                loading={tokenRead.loading}
+                phone
+                locale={locale}
+                t={viewerT}
+              />
+            ) : !tokenRead.failed ? <div className="py-10 text-center text-[12px] text-muted" data-activity-skeleton="">{viewerT("common.loadingCap")}</div> : null}
+            {tokensDrawer && answer ? <TokensCountingDrawer ctx={{ answer, locale, t: viewerT }} onClose={() => setTokensDrawer(false)} /> : null}
+          </>
         ) : null}
 
-        {data && totals ? (
+        {!onTokens && failed && !data ? <ActivityFailed t={t} onRetry={() => void load(range, project, member)} phone /> : null}
+
+        {onTokens ? null : data && totals ? (
           <div className={`flex flex-col gap-4 transition-opacity ${loading ? "opacity-60" : ""}`} data-activity-loaded={data.range.key}>
             {incomplete || agentsIncomplete || totals.missingSourceDays || noAgentIndex ? (
               <div className="flex flex-col gap-1 rounded-[12px] border border-border bg-card px-4 py-3 text-[12px] leading-snug text-secondary" data-activity-gap="">
@@ -946,6 +1067,7 @@ export function ActivityDashboard({ initialRange, initialView, initialProject = 
             {view === "days" ? (
               <section className="rounded-[12px] border border-border bg-card px-4 pb-1.5 pt-3" aria-label={t("activity.view.days")} data-activity-days="">
                 <DayAxis />
+                {dayRowsCapped ? <p className="pb-1 text-[11px] text-muted" data-activity-days-capped="">{t("activity.days.capped")}</p> : null}
                 <ul>
                   {days.map((day) => (
                     <DayRow key={day.date} day={day} tz={tz} nowMs={data.range.now} names={names} hosts={hosts} locale={locale} t={t} />

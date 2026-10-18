@@ -179,7 +179,7 @@
   --mark-track: #f1ede6;
   --mark-hatch: var(--border-strong);
   --mark-stripe: rgb(255 253 250 / 0.78);
-  /* Token usage prototype (docs/design/activity-token-usage.md §9.1): the
+  /* Token usage (docs/design/activity-token-usage.md §9.1): the
      dataviz reference categorical order, validated on the card surface in
      both themes (adjacent CVD ΔE ≥ 8.4, normal-vision ΔE ≥ 19.3). Three light
      steps sit under 3:1, so every value they carry is also printed. Slots
@@ -192,7 +192,10 @@
   --mark-series-6: #008300;
   --mark-series-7: #6250d6;
   --mark-series-8: #e34948;
-  --mark-series-other: var(--border-strong);
+  /* «Other» is a slate that clears 3:1 on the card (4.3:1) and sits apart
+     from the warm kind ramp; the dark theme swaps to a taupe (4.8:1) for the
+     cool kind ramp there. */
+  --mark-series-other: #6b7a90;
   /* The four token kinds are a neutral ink ramp, so a kind never reads as a
      model, role or person: cache reads (most of every total) are the quietest
      step, output the darkest. Every kind is also printed with its number.
@@ -328,6 +331,7 @@
     --mark-series-6: #008300;
     --mark-series-7: #9085e9;
     --mark-series-8: #e66767;
+    --mark-series-other: #8f8678;
     --mark-kind-1: #454955;
     --mark-kind-2: #6c7180;
     --mark-kind-3: #9ba0ad;
@@ -425,6 +429,7 @@
   --mark-series-6: #008300;
   --mark-series-7: #9085e9;
   --mark-series-8: #e66767;
+  --mark-series-other: #8f8678;
   --mark-kind-1: #454955;
   --mark-kind-2: #6c7180;
   --mark-kind-3: #9ba0ad;

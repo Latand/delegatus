@@ -11,6 +11,7 @@ import { existingTeamStore } from "@/lib/team/store";
 import type { TranscriptContext, UserRecord } from "./humanInput";
 import { NO_ROLE } from "./method";
 import type { ConversationResolution, TranscriptFacts } from "./transcriptExport";
+import { launchMemberResolver, usageAttribution } from "./tokenAttribution";
 
 /**
  * A transcript's conversation context on this host, shared by the exporter
@@ -27,6 +28,7 @@ export function conversationResolver(
 ): (facts: TranscriptFacts) => ConversationResolution {
   const fixedLookup = typeof registrySource !== "function" && registrySource
     ? readOnlyConversationLookupFromSnapshot(registrySource) : null;
+  const memberOf = launchMemberResolver();
   return (facts) => {
     const snapshot = typeof registrySource === "function" ? registrySource(facts) : registrySource;
     const lookup = typeof registrySource === "function" && snapshot ? readOnlyConversationLookupFromSnapshot(snapshot) : fixedLookup;
@@ -51,7 +53,8 @@ export function conversationResolver(
       project = null;
     }
     if (project === UNRESOLVED_PROJECT) project = null;
-    if (!conversation || !snapshot) return { project, launch: null, registered: false, mode };
+    if (!conversation || !snapshot) return { project, launch: null, registered: false, mode,
+      usageAttribution: usageAttribution(facts, null, mode === "solo" ? "operator" : "unattributed") };
     const memberships = (snapshot.memberships[conversation.id] ?? []).filter((membership) => membership.kind === "pipeline");
     const pipeline = memberships.length > 0;
     const stage = [...memberships].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
@@ -107,6 +110,7 @@ export function conversationResolver(
       registered: true,
       mode,
       conversation: conversation.id,
+      usageAttribution: usageAttribution(facts, conversation, memberOf(conversation.id, snapshot, mode)),
       deliveryOrigin,
       agent: {
         role: conversationAgentRole(snapshot, conversation.id) ?? NO_ROLE,

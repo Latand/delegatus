@@ -8,7 +8,6 @@ import net from "node:net";
 import { constants, homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { telemetryNotice } from "./telemetry-notice.mjs";
 import { agentStartupMessage } from "./agent-binaries.mjs";
 
 /* The checkout may be older than this file. No checkout sibling is linked
@@ -854,9 +853,8 @@ function printBanner(version, options, runtime, browser, debug) {
   const url = localUrl(options, runtime);
   console.log(`  ✳ Delegatus v${version}`);
   console.log(browser === "opened" ? m.bannerOpened(url) : browser === "opening" ? m.bannerOpening(url) : m.bannerOpenUrl(url));
-  console.log(m.bannerReads());
+  if (debug) console.log(m.bannerReads());
   console.log(agentStartupMessage(LANG));
-  console.log(telemetryNotice[LANG]);
   console.log(m.bannerStop());
   if (!debug) console.log(m.bannerDebug());
 }
@@ -1125,8 +1123,12 @@ async function main() {
   /* Everything started below inherits the choice (#2168). */
   const debug = process.env.LLV_DEBUG === "1";
   startupOutput.setDebug(debug);
-  if (debug) delete process.env[QUIET_DIAGNOSTICS_ENV];
-  else process.env[QUIET_DIAGNOSTICS_ENV] = "1";
+  // Pipes/files keep service diagnostics, and journal metadata takes precedence
+  // even when a service gives the launcher a terminal. Clear an inherited quiet
+  // choice too: a shell or a previous launcher must not silence the service.
+  const quiet = !debug && process.stdout.isTTY === true && process.env.JOURNAL_STREAM === undefined;
+  if (quiet) process.env[QUIET_DIAGNOSTICS_ENV] = "1";
+  else delete process.env[QUIET_DIAGNOSTICS_ENV];
 
   /* Before anything can fail on a port the old unit still holds. */
   const legacyNotice = legacySystemdNotice(findLegacySystemdUnits(), LANG);

@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 import type { createLoopProfiler, LoopGapProfile } from "./loopProfiler";
 
-export type ViewerOperation = "history.prepare" | "history.read" | "history.project-row" | "memory.curation-admission" | "pipelines.repository-initialization" | "memory.curation-panel" | "tasks.note" | "mcp.receipts" | "mcp.tasks.executor" | "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
+export type ViewerOperation = "worktrees.sweep" | "history.prepare" | "history.read" | "history.project-row" | "memory.curation-admission" | "pipelines.repository-initialization" | "memory.curation-panel" | "tasks.note" | "mcp.receipts" | "mcp.tasks.executor" | "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
   | "loop-profiler.collect" | "loop-profiler.trim" | "loop-profiler.settings"
   | "transcript.index" | "memory.discovery" | "memory.refresh"
   | "memory.privacy.compile" | "memory.privacy.match" | "memory.privacy.worker"
@@ -30,8 +30,11 @@ export type ViewerOperation = "history.prepare" | "history.read" | "history.proj
 type Operation = { name: ViewerOperation; start: number; end?: number };
 const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 
-/** A slow journal must not grow the heap or block the loop that it measures. */
-export function createLoopLogSink(write = (line: string, done: () => void) => { process.stderr.write(`${line}\n`, done); }) {
+/** Stall evidence stays visible even in a quiet terminal. A slow journal must
+ * not grow the heap or block the loop that it measures. */
+export function createLoopLogSink(write = (line: string, done: () => void) => {
+  process.stderr.write(`${line}\n`, done);
+}) {
   const queue: string[] = [];
   let writing = false, dropped = 0;
   const drain = () => {
@@ -138,7 +141,9 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         },
       };
       const emit = (jsProfile?: LoopGapProfile) => writeLog(`[viewer loop-gap] ${JSON.stringify({ ...report, ...(jsProfile ? { jsProfile } : {}) })}`);
-      if (!profiler?.correlate(last, at, gapMs, emit)) emit();
+      if (!profiler?.correlate(last, at, report.gapMs, emit)) {
+        emit(report.gapMs >= 2000 ? { status: "not-armed", reason: "profiler-not-started" } : undefined);
+      }
     }
     completed = [];
     if (at - lastSummary >= 60_000) {

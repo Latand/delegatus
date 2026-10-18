@@ -6,15 +6,25 @@ read in `src/lib/lifecycle/transcript.ts` uses the existing native turn decoder.
 An open tail still needs its opening boundary; recovery admission, registry
 identity checks and seat-epoch fences remain in the tick controller.
 
-The controller records the first observed unreachable time. The gather also
-records a gone seat observed by liveness. Failed delivery preserves this time.
-For a legacy row without this field, the last confirmed wake bounds the
-undelivered window. The wake says host loss may have occurred later; the bound
-does not claim the host died at that instant. A catch-up landing clears it.
-A normal landing clears it only within the interval frozen in its plan. An
-older already-admitted wake keeps its immutable payload and preserves a long
-gap for the next fresh catch-up. Once it exceeds the configured wake
-interval, a wake becomes a catch-up.
+The controller records `unreachableSince` only after a bounded liveness probe
+confirms a gone host with a settled or open turn for the designated conversation.
+It checks the seat epoch and registry ownership identity again after the probe.
+Recovery admission shares that check's observation and rechecks its identity
+before dispatch; a replacement seen during the probe waits for fresh evidence
+on the next check. After an attempted revival fails, fallback rotation probes
+its resulting host again under the existing identity guard.
+Missing, unreadable, foreign or unverified evidence leaves reachability unknown.
+MCP failure keeps its own diagnosis; queued, busy, outstanding and refused
+deliveries keep their normal delivery fences without opening an outage.
+
+`unreachableSince` records when host loss was observed. A separate
+`unreachableBacklogSince` freezes the last confirmed wake as the backlog
+watermark. The manifest calls its bounds a backlog window. Legacy outage rows
+without the watermark retain their existing bound. A catch-up landing clears
+both fields. A normal landing clears them only within the interval frozen in
+its plan, measured from the backlog watermark. An older already-admitted wake
+keeps its immutable payload and preserves a long gap for the next fresh
+catch-up. A gap exceeding the configured wake interval becomes a catch-up.
 
 The catch-up gathers all retained, actionable held outcomes through its snapshot:
 own lanes, deployments, maintenance, lifecycle events and ready child outcomes.
@@ -31,10 +41,10 @@ complete compact agenda in one delivery; the ordinary 4,000-character renderer
 limit applies to ordinary wakes. Catch-up size scales with held changed work.
 This change claims no performance improvement.
 
-`unreachableSince` is optional project state: the controller and gather produce
-it; the JSON decoder and SQLite accounting preserve it; epoch replacement
-resets it. The decision reads it and the landing clears it. A frozen wake's
-optional `catchUp` plan records the outage window, one report key and the
+The two optional reachability fields are produced only by the controller;
+the JSON decoder and SQLite accounting preserve them; epoch replacement
+resets them. The decision reads them and the landing clears them. A frozen wake's
+optional `catchUp` plan records the backlog window, one report key and the
 previous owed keys observed at preparation. The plan also retains the configured wake interval for delayed settlement.
 The decision produces the plan;
 the controller freezes its text; the legacy decoder and accounting retain it;
