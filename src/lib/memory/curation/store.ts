@@ -6,7 +6,7 @@ import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { ROLE_IDS } from "@/lib/roles/types";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 import { canonicalScope, projectScope, roleMemoryCollection, roleScope } from "../roleStore";
-import { crossProjectRoleScope, MACHINE_SCOPE } from "../roleScopes";
+import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeProject } from "../roleScopes";
 import { scopeChars } from "../roleConsolidate";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ROLE_MEMORY_BOUND, type RoleMemoryRule, type RoleMemoryScopeRow, CURATION_NEW_LESSONS, type CuratorPassView } from "../roleTypes";
@@ -110,6 +110,29 @@ export function curationScopes(project: string): RoleMemoryScopeRow[] {
   }
   return [...scopes.values()];
 }
+/** Keep project-view curation aligned with the scope membership and order used
+ * by curationScopes, while reusing already projected rows and their histories. */
+function selectCurationScopeRows(project: string, rows: readonly RoleMemoryScopeRow[]) {
+  const p = canonicalProject(project);
+  const projects = [...new Set([p, ...Object.keys(projectAliasSnapshot().aliases).filter(key => canonicalProject(key) === p)])];
+  const projectRank = new Map(projects.map((key, index) => [key, index]));
+  const rank = (scope: string): [number, string] | null => {
+    if (scope.startsWith("project:")) {
+      const raw = scope.slice("project:".length);
+      const index = projectRank.get(raw);
+      return index === undefined ? null : [index, ""];
+    }
+    if (scope === MACHINE_SCOPE) return [projects.length, ""];
+    if (isCrossProjectRoleScope(scope)) return [projects.length * 2 + 1, scope];
+    const owner = scopeProject(scope);
+    const index = owner === null ? undefined : projectRank.get(owner);
+    return index === undefined ? null : [projects.length + 1 + index, scope];
+  };
+  return rows.flatMap(row => {
+    const order = rank(row.scope);
+    return order ? [{ row, order }] : [];
+  }).sort((a, b) => a.order[0] - b.order[0] || (a.order[1] < b.order[1] ? -1 : a.order[1] > b.order[1] ? 1 : 0)).map(item => item.row);
+}
 export function passScopes(project: string): string[] {
   const p = canonicalProject(project);
   const existing = curationScopes(p).map(row => canonicalScope(row.scope));
@@ -124,7 +147,7 @@ type CurationSummary = { active: boolean; pressure: boolean; newLessons: number;
 // Compiled Viewer bundles share one LRU owner; only 32 tiny summaries survive.
 const shared = globalThis as typeof globalThis & { __llvCurationSummaries?: Map<string, { stamp: string; summary: CurationSummary }> };
 const summaries = shared.__llvCurationSummaries ??= new Map();
-export function curationStatus(project: string, now = Date.now(), setting = effectiveCurationSetting(readSeatTickSettings(canonicalProject(project))), scopeRows?: readonly RoleMemoryScopeRow[]) {
+export function curationStatus(project: string, now = Date.now(), setting = effectiveCurationSetting(readSeatTickSettings(canonicalProject(project))), scopeRows?: readonly RoleMemoryScopeRow[], cacheSummary = true) {
   return withViewerOperation("memory.curation-status", () => {
     const collection = roleMemoryCollection();
     const key = `${statePath("state.sqlite")}:${canonicalProject(project)}`;
@@ -163,8 +186,10 @@ export function curationStatus(project: string, now = Date.now(), setting = effe
         pressure ||= scopeRules.some(rule => !rule.curatedAt) && scopeChars(scopeRules) >= ROLE_MEMORY_BOUND * 0.9;
       }
       summary = { active, pressure, newLessons, lastAt: held?.lastAt ?? null, lastClaimAt: held?.lastClaimAt ?? null };
-      summaries.delete(key); summaries.set(key, { stamp, summary });
-      while (summaries.size > 32) summaries.delete(summaries.keys().next().value!);
+      if (cacheSummary) {
+        summaries.delete(key); summaries.set(key, { stamp, summary });
+        while (summaries.size > 32) summaries.delete(summaries.keys().next().value!);
+      }
     }
     const { active, pressure, newLessons, lastAt, lastClaimAt } = summary;
     // Every trigger spends the same durable interval, including failed/no-op
@@ -224,8 +249,9 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
     return next;
   });
 }
-export function curationView(project: string, now = Date.now(), scopeRows = curationScopes(project)) {
-  const { lastAt, nextAt, newLessons } = curationStatus(project, now, undefined, scopeRows);
+export function curationView(project: string, now = Date.now(), scopeRows = curationScopes(project), cacheSummary = true) {
+  scopeRows = selectCurationScopeRows(project, scopeRows);
+  const { lastAt, nextAt, newLessons } = curationStatus(project, now, undefined, scopeRows, cacheSummary);
   // A call touching several scopes leaves the same receipt in each history.
   // Preserve readPass's last-scope-wins deduplication by (pass, timestamp).
   const calls = new Map<string, Map<string, CuratorPass["counts"]>>();

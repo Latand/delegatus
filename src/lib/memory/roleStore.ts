@@ -611,7 +611,7 @@ function buildProjectView(context: ReturnType<typeof projectViewContext>, now: n
       active: active.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))), left: left.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))),
     };
   });
-  const value = { project: canonical, enabled, scopes, curation: curationView(canonical, now, all.flatMap(row => row.kind === "scope" ? [row] : [])) };
+  const value = { project: canonical, enabled, scopes, curation: curationView(canonical, now, all.flatMap(row => row.kind === "scope" ? [row] : []), false) };
   if (stamp() !== buildRevision) throw new StateSnapshotChangedError();
   const bytes = Buffer.byteLength(JSON.stringify(value));
   projectViews.delete(memoKey);

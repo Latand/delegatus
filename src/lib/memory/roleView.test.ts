@@ -6,7 +6,8 @@ import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projec
 import { effectiveCurationSetting, readSeatTickSettings, writeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { projectView, projectViewAsync, roleMemoryCollection } from "./roleStore";
 import { otherProjectRoleRules, roleViewVersion } from "./roleViewSource";
-import { claimPass, curationView, patchPass, readPass } from "./curation/store";
+import { claimPass, curationStatus, curationView, patchPass, readPass } from "./curation/store";
+import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { readCuration } from "./curation/read";
 import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
@@ -61,7 +62,7 @@ function measuredView() {
   finally { a.mockRestore(); b.mockRestore(); snapshot.mockRestore(); }
 }
 
-test("one scope-history walk derives the same pass counts as individual reads, including duplicate receipts", () => {
+test("one scope-history walk derives the same pass counts as individual reads, including duplicate receipts", async () => {
   const memory = seed([rule(), rule("r_0000000000000002", `project:${PROJECT}`)]);
   const ids: string[] = [];
   for (let i = 0; i < 5; i++) {
@@ -82,6 +83,9 @@ test("one scope-history walk derives the same pass counts as individual reads, i
   expect(view.passes.map(p => p.id)).toEqual(ids.toReversed());
   for (const pass of view.passes) expect(pass.counts).toEqual(readPass(pass.id)!.counts);
   expect(view.passes[0].counts).toEqual({ ...counts, calls: 2, changed: 4, rewritten: 2, moved: 2 });
+  expect(projectView(PROJECT, NOW).curation?.passes.map(pass => pass.counts)).toEqual(view.passes.map(pass => pass.counts));
+  (globalThis as typeof globalThis & { __llvProjectViews?: Map<string, unknown> }).__llvProjectViews?.clear();
+  expect((await projectViewAsync(PROJECT, NOW)).curation?.passes.map(pass => pass.counts)).toEqual(view.passes.map(pass => pass.counts));
 });
 
 test("project view decoding is flat across tenfold retained passes and unrelated rules", () => {
@@ -141,6 +145,34 @@ test("the production view reader yields while projecting retained scope history"
   expect(performanceSpans.snapshot().records.some(record => record.sequence > priorSpans && performanceSites[record.site] === "memory.project-view" && record.kind === "sync" && !record.failed)).toBe(true);
   expect(result.scopes[0].revision).toBe(1);
   expect(result.scopes[0].active[0].awaitingCuration).toBe(false);
+});
+
+test("a refused cooperative refresh cannot publish a curation summary for its stale scope snapshot", async () => {
+  const memory = seed();
+  memory.boundedPatch(2, tx => {
+    const held = tx.get(`s:${SCOPE}`) as RoleMemoryScopeRow;
+    tx.put({ ...held, history: Array.from({ length: 32 }, (_, index) => ({
+      revision: index + 1, at: AT, by: "operator" as const, added: [], merged: [], archived: [],
+    })) });
+  });
+  const lesson = rule("committed-during-yield");
+  const write = new Promise<void>(resolve => setImmediate(() => {
+    memory.boundedPatch(3, tx => {
+      const held = tx.get(`s:${SCOPE}`) as RoleMemoryScopeRow;
+      tx.put(lesson);
+      tx.put({ ...held, revision: held.revision + 1, active: [...held.active, lesson.id], history: [...held.history,
+        { revision: held.revision + 1, at: new Date(NOW + 1).toISOString(), by: "agent", added: [lesson.id], merged: [], archived: [] }] });
+    });
+    resolve();
+  }));
+  const pending = projectViewAsync(PROJECT, NOW + 2);
+  await expect(pending).rejects.toBeInstanceOf(StateSnapshotChangedError);
+  await write;
+  const next = await projectViewAsync(PROJECT, NOW + 2);
+  expect(next.scopes.flatMap(item => item.active).map(item => item.id)).toContain(lesson.id);
+  expect(next.curation).toMatchObject({ newLessons: 1 });
+  const status = curationStatus(PROJECT, NOW + 2);
+  expect(status).toMatchObject({ active: true, due: true, newLessons: 1 });
 });
 
 test("settings, kill switch and project succession invalidate warmed answers", () => {
@@ -240,7 +272,7 @@ test("independently loaded server modules reuse the same immutable memo", async 
   expect(duplicate.projectView(PROJECT, NOW).scopes[0].active[0].rule).toBe("Recheck guidance after a commit from a separate process.");
 });
 
-test("split task lineage reads a foreign ancestor's scope history after project succession", () => {
+test("split task lineage reads a foreign ancestor's scope history after project succession", async () => {
   const oldScope = "role:old-foreign:builder";
   const memory = seed([
     rule(undefined, SCOPE, { splitFrom: "ancestor", splitAt: new Date(NOW + 5).toISOString() }),
@@ -250,10 +282,42 @@ test("split task lineage reads a foreign ancestor's scope history after project 
   ]);
   memory.boundedPatch(2, tx => {
     const row = tx.get(`s:${oldScope}`) as RoleMemoryScopeRow;
-    tx.put({ ...row, history: [{ revision: 1, at: new Date(NOW + 1).toISOString(), by: "curator", added: [], merged: [{ from: "merged-parent", into: "ancestor" }], archived: [] }] });
+    tx.put({ ...row, history: [
+      { revision: 1, at: new Date(NOW + 1).toISOString(), by: "curator", added: [], merged: [{ from: "merged-parent", into: "ancestor" }], archived: [] },
+      { revision: 2, at: new Date(NOW + 3).toISOString(), by: "agent", added: ["foreign-lesson"], merged: [], archived: [] },
+    ] });
   });
   persistProjectAliases([{ source: "old-foreign", target: "new-foreign", displayName: "Foreign fixture" }]);
-  expect(projectView(PROJECT, NOW).scopes[0].active[0].tasks).toBe(1);
+  const view = projectView(PROJECT, NOW + 4);
+  expect(view.scopes[0].active[0].tasks).toBe(1);
+  expect(view.curation?.newLessons).toBe(0);
+  (globalThis as typeof globalThis & { __llvProjectViews?: Map<string, unknown> }).__llvProjectViews?.clear();
+  expect((await projectViewAsync(PROJECT, NOW + 4)).curation?.newLessons).toBe(0);
+});
+
+test("project-view curation follows canonical curation scope ordering for conflicting receipts", async () => {
+  const memory = seed([rule(), rule("project-rule", `project:${PROJECT}`)]);
+  const pass = claimPass({ project: PROJECT, repoDir: null, now: NOW })!;
+  patchPass(pass.id, { state: "succeeded", endedAt: AT });
+  const projectCounts = { ...pass.counts, calls: 9 };
+  const roleCounts = { ...pass.counts, calls: 1 };
+  memory.boundedPatch(4, tx => {
+    const role = tx.get(`s:${SCOPE}`) as RoleMemoryScopeRow;
+    const project = tx.get(`s:project:${PROJECT}`) as RoleMemoryScopeRow;
+    tx.put({ ...role, history: [
+      { revision: 1, at: AT, by: "curator", pass: pass.id, counts: roleCounts, added: [], merged: [], archived: [] },
+      { revision: 2, at: new Date(NOW + 1).toISOString(), by: "curator", pass: pass.id, counts: roleCounts, added: [], merged: [], archived: [], revertedAt: AT },
+    ] });
+    tx.put({ ...project, history: [
+      { revision: 1, at: AT, by: "curator", pass: pass.id, counts: projectCounts, added: [], merged: [], archived: [] },
+      { revision: 2, at: new Date(NOW + 1).toISOString(), by: "curator", pass: pass.id, counts: projectCounts, added: [], merged: [], archived: [], revertedAt: AT },
+    ] });
+  });
+  const expected = readPass(pass.id)!.counts;
+  expect(expected.calls).toBe(2);
+  expect(projectView(PROJECT, NOW).curation?.passes[0]?.counts).toEqual(expected);
+  (globalThis as typeof globalThis & { __llvProjectViews?: Map<string, unknown> }).__llvProjectViews?.clear();
+  expect((await projectViewAsync(PROJECT, NOW)).curation?.passes[0]?.counts).toEqual(expected);
 });
 
 test("reopening the shared reader cannot reuse a token from before a peer commit", async () => {
