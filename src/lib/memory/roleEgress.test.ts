@@ -10,7 +10,10 @@ import path from "node:path";
    and the scratch repository are private to this file. */
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-memory-egress-"));
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
-afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+afterAll(async () => {
+  await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
+  fs.rmSync(sandbox, { recursive: true, force: true });
+});
 
 const { leaveLessons, lessonPublicationEnv, projectView, recordLessonRequest, revertRule, storedLessonTexts, withoutStoredLessons, WITHHELD_LESSON: WITHHELD_LESSON_TEXT } = await import("./roleStore");
 const { outboundTask } = await import("@/lib/links/taskFeed");
@@ -105,7 +108,8 @@ test("rewritten and reverted text is withheld at every existing egress and in pu
 });
 const { encodeTask } = await import("@/lib/links/taskWire");
 const { prototypeReviewReplica } = await import("@/lib/prototypeReview/model");
-const { AgentFeed } = await import("@/lib/links/agentFeed");
+const { AgentFeed, agentPart, dropAgents } = await import("@/lib/links/agentFeed");
+const { sharedLinkState } = await import("@/lib/links/runtimeState");
 const { withAgentConfigSandbox } = await import("@/lib/runtime/agentConfigSandbox");
 type FileEntry = import("@/lib/types").FileEntry;
 type PrototypeReviewRound = import("@/lib/prototypeReview/types").PrototypeReviewRound;
@@ -152,16 +156,21 @@ test("every text of a task the linked board receives withholds a stored lesson: 
   expect(original.prototypeReviews![0]!.title).toBe(`Variants for: ${RULE}`);
 });
 
-test("an agent's title on the linked board withholds a lesson its task's first line quotes, before the line is cut", () => {
-  const at = Date.now();
+test("an agent's title on the linked board withholds a lesson its task's first line quotes, before the line is cut", async () => {
+  const at = Date.parse("2026-10-14T00:00:00Z");
   const task = { id: uuid("d"), project: WIRE_PROJECT, text: `Follow this before every push: ${RULE} That holds in every lane of the project.\nDetails`, chosen: true, status: "assigned",
     placement: "unplaced", assignments: [{ conversationId: "conversation_feed" }], createdAt: new Date(at).toISOString(), updatedAt: new Date(at).toISOString() } as unknown as BoardTask;
   const file = { conversationId: "conversation_feed", project: WIRE_PROJECT, path: "/sandbox/feed.jsonl", title: "", engine: "claude", model: "claude-opus-5",
     proc: "running", activity: "live", mtime: Math.floor(at / 1000), lastAgentWorkAt: at, pendingQuestion: null, waitingInput: null } as unknown as FileEntry;
-  const page = new AgentFeed("role-memory", () => [file], () => [task] as never, () => []).page(null, new Set([WIRE_PROJECT]));
-  const row = (page.rows as AgentRow[]).find((entry) => entry.task === task.id)!;
-  expect(row.t).toStartWith("Follow this before every push: [learned rule]");
-  expect(JSON.stringify(page).toLowerCase()).not.toContain("write the test");
+  const id = "role-memory";
+  const feed = new AgentFeed(id, () => [file], () => [task] as never, () => []);
+  sharedLinkState("agentFeed.feeds", () => new Map<string, InstanceType<typeof AgentFeed>>()).set(id, feed);
+  try {
+    const page = await agentPart(id, null, new Set([WIRE_PROJECT]));
+    const row = (page.rows as AgentRow[]).find((entry) => entry.task === task.id)!;
+    expect(row.t).toStartWith("Follow this before every push: [learned rule]");
+    expect(JSON.stringify(page).toLowerCase()).not.toContain("write the test");
+  } finally { dropAgents(id); }
 });
 
 test("short reasons and symbol-heavy rules are refused at leave_lesson; one stored before that is still withheld on every path", () => {

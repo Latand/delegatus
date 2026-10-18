@@ -1,6 +1,6 @@
 import { confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
 import { changeRun } from "./store";
-import { sweepConversations } from "./conversations";
+import { sweepConversationsAsync } from "./conversations";
 import { readRelaySwitches } from "./switches";
 import fs from "node:fs";
 import path from "node:path";
@@ -14,7 +14,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { noteRelayOutcome, relayActivity } from "./activity";
 import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
-import { RELAY_OWNER_TOOLS } from "./protocol";
+import { RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND } from "./protocol";
 import {
   advertisedSlots,
   externalRelayTempRoot,
@@ -152,7 +152,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
       run.ownerTurn ? readRunLedger().runs.find(r => r.requestId === run.requestId)?.conversationId : undefined);
     dropRun(run.requestId);
   }
-  sweepConversations(readRelayStore().relays, readRunLedger().runs);
+  await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000);
 }
 /* A paired relay's targets come from endpoint 6 whenever the settings page
    reads them (at most every 30 s), every 5 min from the claim loop, and once
@@ -264,8 +264,9 @@ export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls", "relay_t
 export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
   const switches = readRelaySwitches();
   const rich = switches.rich_media && relay?.features?.includes("relay_rich_messages");
-  const baseFeatures = switches.chat_conversations ? [...CLAIM_FEATURES, "chat_conversations"] : CLAIM_FEATURES;
-  const features = [...baseFeatures, ...(rich ? ["relay_rich_messages", ...(relay?.features?.includes("relay_media_out") ? ["relay_media_out"] : [])] : [])];
+  const features = [...CLAIM_FEATURES,
+    ...(relay?.features?.includes(RELAY_TOOLS_ON_DEMAND) ? [RELAY_TOOLS_ON_DEMAND] : []),
+    ...(rich ? ["relay_rich_messages", ...(relay?.features?.includes("relay_media_out") ? ["relay_media_out"] : [])] : [])];
   return { kinds: switches.compact ? ["answer", "compact"] : ["answer"],
     features: switches.owner_tools && relay?.features?.includes(RELAY_OWNER_TOOLS)
       ? [...features, RELAY_OWNER_TOOLS] : features };
@@ -430,7 +431,7 @@ async function sweepAndRefresh(): Promise<void> {
   ) {
     controller.prunedAt = Date.now();
     pruneAnswerRecords(Date.now(), () => readRunLedger().runs);
-    sweepConversations(readRelayStore().relays, readRunLedger().runs);
+    await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000);
   }
 }
 export function refreshExternalRelayPollers(changedId?: string): void {

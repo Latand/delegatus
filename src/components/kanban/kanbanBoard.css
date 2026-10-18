@@ -1135,6 +1135,27 @@
 /* A reply that landed while the seat was folded, as a marker and a word. */
 .kb .seat .seat-unread { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: var(--text-caption); font-weight: 600; color: var(--color-accent); background: var(--surface-well); white-space: nowrap; }
 .kb .seat .seat-unread i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+/* The way back up from the tasks (#3029): a strip pinned to the page's top while
+   the seat's head is above it. It sits outside both contained panels, so the
+   wheel, a trackpad or a finger over it scrolls the page; the lock between the
+   seat and the columns is untouched. It takes no layout (height 0), and the
+   board is 32 px shorter so the strip covers none of its rows at the page's end. */
+.kb .kb-page > .seat-return { position: sticky; top: 0; height: 0; z-index: 5; flex: 0 0 auto; }
+.kb .kb-page > .seat-return > button {
+  position: absolute; inset: 0 0 auto 0; height: 32px; display: flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--color-accent-soft); color: var(--color-accent); border: 0; border-bottom: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+  font-size: var(--text-label); font-weight: 600; white-space: nowrap;
+}
+.kb .kb-page > .seat-return > button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.kb .kb-page > .seat-return > button svg { width: 14px; height: 14px; flex-shrink: 0; }
+.kb .kb-page > .seat-return:not([data-shown]) > button { visibility: hidden; pointer-events: none; }
+.kb .kb-page > .seat-return .hint { font-weight: 500; }
+@container (max-width: 520px) { .kb .kb-page > .seat-return .hint { display: none; } }
+.kb .kb-page:has(> .seat-return) { scroll-padding-top: 32px; }
+/* The scroll padding above keeps a focused row clear of the strip, and it makes the browser treat the pinned
+   button itself as sitting inside the padding and scroll the page to reveal it. Tab onto the strip moves nothing. */
+.kb .kb-page > .seat-return > button { scroll-margin-top: -32px; }
+.kb .kb-page:has(> .seat-return) > .board-frame { height: max(440px, 100% - 32px); }
 .kb .seat-grip { position: absolute; left: 0; right: 0; bottom: -7px; height: 14px; z-index: 4; cursor: ns-resize; display: flex; align-items: center; justify-content: center; touch-action: none; }
 .kb .seat-grip::before { content: ""; width: 44px; height: 4px; border-radius: 2px; background: var(--border-strong); }
 .kb .seat-grip:hover::before, .kb .seat-grip:focus-visible::before { background: var(--color-accent); }

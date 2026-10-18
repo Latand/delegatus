@@ -44,7 +44,7 @@ const SESSION = "0f0e0d0c-0b0a-0908-0706-050403020100";
 const THREAD = "0a0a0a0a-0000-0000-0000-000000000001";
 const cwd = (id: string) => path.join("/tmp", `llv-relay-conv-${id}`);
 const record = (id: string, over: Record<string, unknown>) => ({
-  id, relayId: "relay_chats", targetId: "bot-1", chatKey: "chat_key_aaaaaaaaaaaa", context: "member", engine: "claude",
+  id, relayId: "relay_chats", targetId: "bot-1", chatKey: "chat_key_aaaaaaaaaaaa", authority: "member", requesterKey: "fixture-requester", anchors: [], conversationId: null, engine: "claude",
   sessionId: null, accountId: null, cwd: cwd(id), turns: 2, turnsSinceCompaction: 2, createdAt: "2026-10-09T08:00:00.000Z",
   lastTurnAt: "2026-10-09T08:10:00.000Z", seen: [], staticDigest: null, lastPromptTokens: null, compactions: 0, state: "idle", runningRequestId: null, ...over,
 });
@@ -78,9 +78,10 @@ updateRelayStore((store) => ({
   }],
 }));
 fs.mkdirSync(statePath("external-relay"), { recursive: true });
-fs.writeFileSync(statePath("external-relay/conversations.json"), JSON.stringify({ v: 1, conversations: [
+fs.writeFileSync(statePath("external-relay/conversations.json"), JSON.stringify({ v: 2, conversations: [
+    record("00000000-0000-0000-0000-000000000099", { authority: "owner-tier", cwd: null, conversationId: "conversation_fixture_owner" }),
   record(CLAUDE_ID, { sessionId: SESSION, lastTurnAt: "2026-10-09T09:00:00.000Z" }),
-  record(CODEX_ID, { engine: "codex", context: "owner", sessionId: THREAD, chatKey: "chat_key_bbbbbbbbbbbb" }),
+  record(CODEX_ID, { engine: "codex", authority: "owner", sessionId: THREAD, chatKey: "chat_key_bbbbbbbbbbbb" }),
   record(EMPTY_ID, { chatKey: "chat_key_cccccccccccc", lastTurnAt: "2026-10-09T07:00:00.000Z" }),
 ] }));
 
@@ -96,10 +97,10 @@ test("the operator reads each chat's conversation with its relay, target, chat a
   expect(body.relays).toEqual([{ id: "relay_chats", name: "Example relay", origin: "https://relay.example" }]);
   expect(body.chats.map((chat: { id: string }) => chat.id)).toEqual([CLAUDE_ID, CODEX_ID, EMPTY_ID]);
   const [claude, codex, empty] = body.chats;
-  expect(claude).toMatchObject({ relayName: "Example relay", targetName: "Support bot", chatKey: "chat_key_aaaaaaaaaaaa", context: "member", engine: "claude", turns: 2 });
+  expect(claude).toMatchObject({ relayName: "Example relay", targetName: "Support bot", chatKey: "chat_key_aaaaaaaaaaaa", authority: "member", engine: "claude", turns: 2 });
   expect(claude.file).toMatchObject({ path: claudeTranscript, root: "claude-projects", project: "relay-chats-relay_chats", projectName: "Example relay", engine: "claude", fmt: "claude", kind: "session", model: "opus", activity: "idle" });
   expect(codex.file).toMatchObject({ path: codexTranscript, root: "codex-sessions", engine: "codex", fmt: "codex", model: null });
-  expect(codex.context).toBe("owner");
+  expect(codex.authority).toBe("owner");
   /* A conversation whose first turn wrote nothing yet has no transcript to open. */
   expect(empty.file).toBeNull();
   /* No credential and no chat text cross this route. */

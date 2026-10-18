@@ -6,11 +6,11 @@
         "width": 1440,
         "height": 900
       },
-      "seat": "compact",
+      "seat": "default",
       "seatHeights": null,
       "scroll": {
-        "scrollTop": 214,
-        "maxScroll": 282,
+        "scrollTop": 619,
+        "maxScroll": 655,
         "headOutOfView": true,
         "composerOnTop": true,
         "composerClipped": true
@@ -18,36 +18,36 @@
       "wrap": {
         "heights": [
           28,
-          44
+          46
         ],
-        "shortLength": 179,
-        "longLength": 188
+        "shortLength": 89,
+        "longLength": 98
       },
       "fixed": {
         "fieldHeights": [
           28,
-          44
+          46
         ],
         "frameTops": [
-          190.39
+          116
         ],
         "scrollTops": [
-          214
+          619
         ],
         "swings": 0
       },
       "unfixed": {
         "fieldHeights": [
           28,
-          44
+          46
         ],
         "frameTops": [
-          190.39,
-          200.39
+          116,
+          128
         ],
         "scrollTops": [
-          214,
-          204
+          619,
+          607
         ],
         "swings": 12,
         "overflowAnchor": "auto"
@@ -58,14 +58,14 @@
         "width": 1440,
         "height": 900
       },
-      "seat": "grip-expanded",
+      "seat": "grip-shrunk",
       "seatHeights": {
-        "before": 270,
-        "after": 520
+        "before": 675,
+        "after": 425
       },
       "scroll": {
-        "scrollTop": 464,
-        "maxScroll": 532,
+        "scrollTop": 369,
+        "maxScroll": 405,
         "headOutOfView": true,
         "composerOnTop": true,
         "composerClipped": true
@@ -75,8 +75,8 @@
           28,
           46
         ],
-        "shortLength": 179,
-        "longLength": 188
+        "shortLength": 89,
+        "longLength": 98
       },
       "fixed": {
         "fieldHeights": [
@@ -84,10 +84,10 @@
           46
         ],
         "frameTops": [
-          190.39
+          116
         ],
         "scrollTops": [
-          464
+          369
         ],
         "swings": 0
       },
@@ -97,12 +97,12 @@
           46
         ],
         "frameTops": [
-          190.39,
-          202.39
+          116,
+          128
         ],
         "scrollTops": [
-          464,
-          452
+          369,
+          357
         ],
         "swings": 12,
         "overflowAnchor": "auto"
@@ -113,11 +113,11 @@
         "width": 1100,
         "height": 800
       },
-      "seat": "compact",
+      "seat": "default",
       "seatHeights": null,
       "scroll": {
-        "scrollTop": 182,
-        "maxScroll": 250,
+        "scrollTop": 544,
+        "maxScroll": 580,
         "headOutOfView": true,
         "composerOnTop": true,
         "composerClipped": true
@@ -125,36 +125,36 @@
       "wrap": {
         "heights": [
           28,
-          44
+          46
         ],
-        "shortLength": 134,
-        "longLength": 143
+        "shortLength": 116,
+        "longLength": 125
       },
       "fixed": {
         "fieldHeights": [
           28,
-          44
+          46
         ],
         "frameTops": [
-          190.39
+          116
         ],
         "scrollTops": [
-          182
+          544
         ],
         "swings": 0
       },
       "unfixed": {
         "fieldHeights": [
           28,
-          44
+          46
         ],
         "frameTops": [
-          190.39,
-          200.39
+          116,
+          128
         ],
         "scrollTops": [
-          182,
-          172
+          544,
+          532
         ],
         "swings": 12,
         "overflowAnchor": "auto"
@@ -165,14 +165,14 @@
         "width": 1100,
         "height": 800
       },
-      "seat": "grip-expanded",
+      "seat": "grip-shrunk",
       "seatHeights": {
-        "before": 240,
-        "after": 490
+        "before": 600,
+        "after": 350
       },
       "scroll": {
-        "scrollTop": 432,
-        "maxScroll": 500,
+        "scrollTop": 294,
+        "maxScroll": 330,
         "headOutOfView": true,
         "composerOnTop": true,
         "composerClipped": true
@@ -182,8 +182,8 @@
           28,
           46
         ],
-        "shortLength": 134,
-        "longLength": 143
+        "shortLength": 116,
+        "longLength": 125
       },
       "fixed": {
         "fieldHeights": [
@@ -191,10 +191,10 @@
           46
         ],
         "frameTops": [
-          190.39
+          116
         ],
         "scrollTops": [
-          432
+          294
         ],
         "swings": 0
       },
@@ -204,12 +204,12 @@
           46
         ],
         "frameTops": [
-          190.39,
-          202.39
+          116,
+          128
         ],
         "scrollTops": [
-          432,
-          420
+          294,
+          282
         ],
         "swings": 12,
         "overflowAnchor": "auto"

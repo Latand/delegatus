@@ -6,14 +6,15 @@ import { readRelaySwitches, setRelaySwitch } from "./switches";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-switches-"));
 process.env.LLV_STATE_DIR = root;
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
-test("dark switches fail closed and compact requires conversations on the next read", () => {
-  const off = { chat_conversations: false, compact: false, owner_tools: false, rich_media: true };
+test("chain pinning defaults on and compact requires conversations on the next read", () => {
+  const off = { chain_conversations: true, compact: false, owner_tools: false, rich_media: true };
   expect(readRelaySwitches()).toEqual(off);
+  setRelaySwitch("chain_conversations", false);
   setRelaySwitch("compact", true);
-  expect(readRelaySwitches()).toEqual(off);
-  setRelaySwitch("chat_conversations", true);
-  expect(readRelaySwitches()).toEqual({ ...off, compact: true, chat_conversations: true });
-  for (const value of ["{", JSON.stringify({ v: 2, chat_conversations: true }), JSON.stringify({ v: 1, chat_conversations: "true" })]) {
+  expect(readRelaySwitches()).toEqual({ ...off, chain_conversations: false });
+  setRelaySwitch("chain_conversations", true);
+  expect(readRelaySwitches()).toEqual({ ...off, compact: true, chain_conversations: true });
+  for (const value of ["{", JSON.stringify({ v: 2, chain_conversations: true }), JSON.stringify({ v: 1, chain_conversations: "true" })]) {
     fs.writeFileSync(path.join(root, "external-relay/switches.json"), value);
     expect(readRelaySwitches()).toEqual(off);
   }
@@ -23,7 +24,7 @@ test("dark switches fail closed and compact requires conversations on the next r
 });
 test("relay:owner_tools:enabled is independent, explicit and default OFF", () => {
   fs.rmSync(path.join(root, "external-relay/switches.json"), { recursive: true, force: true });
-  expect(setRelaySwitch("relay:owner_tools:enabled", true)).toEqual({ chat_conversations: false, compact: false, owner_tools: true, rich_media: true });
+  expect(setRelaySwitch("relay:owner_tools:enabled", true)).toEqual({ chain_conversations: true, compact: false, owner_tools: true, rich_media: true });
   expect(setRelaySwitch("relay:owner_tools:enabled", false).owner_tools).toBe(false);
   for (const value of ["true", 1, null]) {
     fs.writeFileSync(path.join(root, "external-relay/switches.json"), JSON.stringify({ v: 1, "relay:owner_tools:enabled": value }));
@@ -45,4 +46,24 @@ test("rich media defaults on and only explicit false stops both claim features",
   fs.writeFileSync(file, "{}");
   expect(relayClaimCapabilities({ features: ["relay_media_out"] }).features).not.toContain("relay_media_out");
   expect(relayClaimCapabilities().features).not.toContain("relay_rich_messages");
+});
+
+test("a legacy per-chat switch cannot disable chain pinning", () => {
+  fs.writeFileSync(path.join(root, "external-relay/switches.json"), JSON.stringify({ v: 1, chat_conversations: false }));
+  expect(readRelaySwitches()).toMatchObject({ chain_conversations: true, compact: false });
+});
+
+
+test("rich media claims coexist with on-demand tools and chain compaction", async () => {
+  const { relayClaimCapabilities } = await import("./poller");
+  setRelaySwitch("chain_conversations", true);
+  setRelaySwitch("compact", true);
+  const features = ["relay_tools_on_demand", "relay_rich_messages", "relay_media_out"];
+  expect(relayClaimCapabilities({ features })).toMatchObject({ kinds: ["answer", "compact"], features: expect.arrayContaining(features) });
+  setRelaySwitch("relay:rich_media", false);
+  const legacy = relayClaimCapabilities({ features });
+  expect(legacy.features).toContain("relay_tools_on_demand");
+  expect(legacy.features).not.toContain("relay_rich_messages");
+  expect(legacy.features).not.toContain("relay_media_out");
+  expect(legacy.kinds).toEqual(["answer", "compact"]);
 });

@@ -96,6 +96,9 @@ export interface PrototypeDecision {
     attempts?: number;
     startedAt?: string;
     exhaustedAt?: string;
+    /** Local proof that this exact answer reached the current seat in a wake.
+        The original operationId remains available with its original outcome. */
+    wakeReceipt?: { conversationId: string; seatEpoch: number; itemVersion: string; accountedThrough: string };
     /** Fenced predecessors retained when a saved answer follows seat succession. */
     predecessors?: Array<{ conversationId: string; operationId: string }>;
   };

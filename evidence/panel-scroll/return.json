@@ -1,0 +1,298 @@
+{
+  "readings": [
+    {
+      "layout": "rail-open",
+      "top": {
+        "visible": false,
+        "shown": false,
+        "top": 0,
+        "height": 32,
+        "width": 1177,
+        "whole": true,
+        "words": [
+          "Back to the orchestrator",
+          "scroll here or click"
+        ],
+        "hintShown": true,
+        "boardTop": 687,
+        "boardHeight": 820,
+        "pageHeight": 852,
+        "pageWidth": 1192,
+        "focus": "BODY"
+      },
+      "end": {
+        "visible": true,
+        "shown": true,
+        "top": 0,
+        "height": 32,
+        "width": 1177,
+        "whole": true,
+        "words": [
+          "Back to the orchestrator",
+          "scroll here or click"
+        ],
+        "hintShown": true,
+        "boardTop": 32,
+        "boardHeight": 820,
+        "pageHeight": 852,
+        "pageWidth": 1192,
+        "focus": "BODY"
+      },
+      "afterClick": {
+        "visible": false,
+        "shown": false,
+        "top": 0,
+        "height": 32,
+        "width": 1177,
+        "whole": true,
+        "words": [
+          "Back to the orchestrator",
+          "scroll here or click"
+        ],
+        "hintShown": true,
+        "boardTop": 687,
+        "boardHeight": 820,
+        "pageHeight": 852,
+        "pageWidth": 1192,
+        "focus": "TEXTAREA in the seat"
+      },
+      "inputs": {
+        "wheel": 0,
+        "gesture": 0,
+        "click": 0,
+        "Enter": 0,
+        "Space": 0
+      },
+      "tab": {
+        "from": 655,
+        "to": 655,
+        "focus": "BUTTON",
+        "shown": true
+      },
+      "lock": {
+        "from": 655,
+        "to": 655
+      },
+      "folded": {
+        "strips": 0,
+        "room": 54
+      },
+      "finger": {
+        "first": 28,
+        "second": 0
+      },
+      "withoutStrip": {
+        "room": 655,
+        "stuckAt": 415
+      }
+    },
+    {
+      "layout": "tabs",
+      "top": {
+        "visible": false,
+        "shown": false,
+        "top": 0,
+        "height": 32,
+        "width": 737,
+        "whole": true,
+        "words": [
+          "Back to the orchestrator",
+          "scroll here or click"
+        ],
+        "hintShown": true,
+        "boardTop": 612,
+        "boardHeight": 720,
+        "pageHeight": 752,
+        "pageWidth": 752,
+        "focus": "BODY"
+      },
+      "end": {
+        "visible": true,
+        "shown": true,
+        "top": 0,
+        "height": 32,
+        "width": 737,
+        "whole": true,
+        "words": [
+          "Back to the orchestrator",
+          "scroll here or click"
+        ],
+        "hintShown": true,
+        "boardTop": 32,
+        "boardHeight": 720,
+        "pageHeight": 752,
+        "pageWidth": 752,
+        "focus": "BODY"
+      },
+      "afterClick": {
+        "visible": false,
+        "shown": false,
+        "top": 0,
+        "height": 32,
+        "width": 737,
+        "whole": true,
+        "words": [
+          "Back to the orchestrator",
+          "scroll here or click"
+        ],
+        "hintShown": true,
+        "boardTop": 612,
+        "boardHeight": 720,
+        "pageHeight": 752,
+        "pageWidth": 752,
+        "focus": "TEXTAREA in the seat"
+      },
+      "inputs": {
+        "wheel": 0,
+        "gesture": 0,
+        "click": 0,
+        "Enter": 0,
+        "Space": 0
+      },
+      "tab": {
+        "from": 580,
+        "to": 580,
+        "focus": "BUTTON",
+        "shown": true
+      },
+      "lock": {
+        "from": 580,
+        "to": 580
+      },
+      "folded": {
+        "strips": 0,
+        "room": 54
+      },
+      "finger": {
+        "first": 0,
+        "second": 0
+      },
+      "withoutStrip": {
+        "room": 580,
+        "stuckAt": 340
+      }
+    },
+    {
+      "layout": "narrow",
+      "top": {
+        "visible": false,
+        "shown": false,
+        "top": 0,
+        "height": 32,
+        "width": 437,
+        "whole": true,
+        "words": [
+          "Back to the orchestrator"
+        ],
+        "hintShown": false,
+        "boardTop": 612,
+        "boardHeight": 720,
+        "pageHeight": 752,
+        "pageWidth": 452,
+        "focus": "BODY"
+      },
+      "end": {
+        "visible": true,
+        "shown": true,
+        "top": 0,
+        "height": 32,
+        "width": 437,
+        "whole": true,
+        "words": [
+          "Back to the orchestrator"
+        ],
+        "hintShown": false,
+        "boardTop": 32,
+        "boardHeight": 720,
+        "pageHeight": 752,
+        "pageWidth": 452,
+        "focus": "BODY"
+      },
+      "afterClick": {
+        "visible": false,
+        "shown": false,
+        "top": 0,
+        "height": 32,
+        "width": 437,
+        "whole": true,
+        "words": [
+          "Back to the orchestrator"
+        ],
+        "hintShown": false,
+        "boardTop": 612,
+        "boardHeight": 720,
+        "pageHeight": 752,
+        "pageWidth": 452,
+        "focus": "TEXTAREA in the seat"
+      },
+      "inputs": {
+        "wheel": 0,
+        "gesture": 0,
+        "click": 0,
+        "Enter": 0,
+        "Space": 0
+      },
+      "tab": {
+        "from": 580,
+        "to": 580,
+        "focus": "BUTTON",
+        "shown": true
+      },
+      "lock": {
+        "from": 580,
+        "to": 580
+      },
+      "folded": {
+        "strips": 0,
+        "room": 54
+      },
+      "finger": {
+        "first": 0,
+        "second": 0
+      },
+      "withoutStrip": {
+        "room": 580,
+        "stuckAt": 340
+      }
+    },
+    {
+      "layout": "rail-open",
+      "look": "dark-uk",
+      "strip": {
+        "visible": true,
+        "shown": true,
+        "top": 0,
+        "height": 32,
+        "width": 1177,
+        "whole": true,
+        "words": [
+          "До оркестратора",
+          "гортайте тут або натисніть"
+        ],
+        "hintShown": true,
+        "boardTop": 32,
+        "boardHeight": 820,
+        "pageHeight": 852,
+        "pageWidth": 1192,
+        "focus": "BODY"
+      }
+    },
+    {
+      "layout": "seat-side",
+      "strips": 0,
+      "room": 0
+    },
+    {
+      "layout": "short-window",
+      "collapsed": 1,
+      "strips": 0
+    },
+    {
+      "layout": "create-draft",
+      "strips": 1,
+      "room": 300,
+      "shownAtEnd": true
+    }
+  ],
+  "failures": []
+}

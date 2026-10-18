@@ -93,9 +93,14 @@ export async function relayCall<T = unknown>(
     /** Trusted caller rechecks its body after DNS, immediately before emission. */
     prepareBody?: () => unknown;
     binary?: { bytes: Buffer; headers: Record<string, string> };
+    /** Trusted request authority is rechecked after DNS, before every send. */
+    beforeSend?: () => void | Promise<void>;
   } = {},
 ): Promise<{ status: number; body: T | null }> {
   const { url, address } = await targetWithSignal(apiBase, options.signal, options.detailedErrors);
+  options.signal?.throwIfAborted();
+  await options.beforeSend?.();
+  options.signal?.throwIfAborted();
   if (!url.pathname.endsWith("/v1") || !route.startsWith("/"))
     throw new ExternalRelayError("invalid_address");
   const outgoing = options.prepareBody ? options.prepareBody() : body;
