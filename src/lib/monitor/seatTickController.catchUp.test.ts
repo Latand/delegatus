@@ -415,3 +415,60 @@ test("quiet idle host probe reads only its designated registry rows", async () =
   expect(rig.sent).toHaveLength(0);
   expect(f.row().unreachableSince ?? null).toBeNull();
 });
+
+test("targeted production liveness keeps a live alternate owner of the seat transcript", async () => {
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  let unrelatedEntryReads = 0;
+  const f = childFixture("idle-alternate-transcript-owner", false, "sqlite", (collection, count) => {
+    if (collection === "entries") unrelatedEntryReads += count;
+  });
+  f.seed({ lastWakeAt: new Date(f.now - 5 * MINUTE).toISOString(), lastProposalAt: new Date(f.now - MINUTE).toISOString() });
+  const conversation = f.registry.conversation(f.seat.conversationId as never)!;
+  const generation = conversation.generations.at(-1)!;
+  const resumedPath = path.join(f.dir, `resumed-${path.basename(f.seat.path!)}`);
+  f.registry.reconcileConversations([{ engine: "claude", path: resumedPath, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: f.cwd }), turn: { state: "idle", source: "empty", terminalAt: null },
+    observedAt: new Date(f.now).toISOString() }]);
+  const resumed = f.registry.conversation(f.seat.conversationId as never)!;
+  expect(resumed.continuityPaths).toContain(f.seat.path!);
+  const currentGeneration = resumed.generations.at(-1)!;
+  f.registry.upsert({ key: { engine: "claude", sessionId: currentGeneration.id }, artifactPath: resumedPath, cwd: f.cwd,
+    accountId: null, status: "dead", host: null, structuredHost: null, claimEpoch: 1, claimOwner: null, pendingAction: null });
+  const owner = captureProcessIdentity(process.pid);
+  f.registry.upsert({ key: { engine: "claude", sessionId: "alternate-live-seat-owner" }, artifactPath: resumedPath, cwd: f.cwd,
+    accountId: null, status: "idle", host: null,
+    structuredHost: { kind: "claude-broker", endpoint: "stdio:fixture", process: owner, eventCursor: 1,
+      protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: null, pendingAction: null });
+  const selected = f.registry.livenessConversationSnapshot(f.seat.conversationId);
+  expect(selected.entries["claude:alternate-live-seat-owner"]?.artifactPath).toBe(resumedPath);
+  expect(selected.entries[`claude:${currentGeneration.id}`]?.artifactPath).toBe(resumedPath);
+  for (let index = 0; index < 160; index += 1) {
+    f.registry.upsert({ key: { engine: "claude", sessionId: `unrelated-owner-${index}` },
+      artifactPath: path.join(f.dir, `unrelated-owner-${index}.jsonl`), cwd: f.cwd, accountId: null,
+      status: "dead", host: null, structuredHost: null, claimEpoch: 1, claimOwner: null, pendingAction: null });
+  }
+  const rig = childRig(f);
+  const { productionLivenessSources } = await import("@/lib/lifecycle/liveness");
+  const production = productionLivenessSources();
+  const liveness = await agentLivenessSnapshot({ conversationId: f.seat.conversationId }, {
+    ...production,
+    registrySnapshot: () => f.registry.readOnlySnapshot(),
+    registrySnapshotForConversation: id => f.registry.livenessConversationSnapshot(id),
+    describeTranscript: async transcriptPath => ({ path: transcriptPath, project: f.project, title: "seat", engine: "claude",
+      mtimeMs: f.now - MINUTE, sizeBytes: 0, conversationId: f.seat.conversationId, activity: "idle", activityReason: "fixture" }),
+    transcriptEvidence: async () => ({ turn: "idle", lastRecordTs: f.now - MINUTE, providerProgressAt: null }),
+    probe: { now: () => f.now, pidAlive: pid => pid === owner.pid, processIdentity: pid => pid === owner.pid ? owner.startIdentity : null },
+    listFiles: async () => [], pipelines: () => [], flows: () => [],
+  });
+  rig.deps.sources!.liveness = async () => liveness.conversations;
+  rig.deps.mcpHealth = () => ({ status: "healthy", detail: "fixture" });
+  unrelatedEntryReads = 0;
+
+  await runSeatTickCheck(f.project, rig.deps);
+
+  expect(liveness.conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "host_alive_turn_idle", host: { state: "alive" } });
+  expect(unrelatedEntryReads).toBeLessThanOrEqual(2);
+  expect(f.row().unreachableSince ?? null).toBeNull();
+  expect(rig.sent.every(message => !message.text.includes("Catch-up manifest"))).toBe(true);
+});

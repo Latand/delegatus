@@ -5679,14 +5679,15 @@ export class AgentRegistry {
     return this.scopedConversationSnapshot({ path: artifactPath }, true);
   }
 
-  /** Liveness for one conversation needs its current generation, aliases and
-      launch receipts. Keep that read keyed so a targeted poll does not hydrate
-      unrelated host rows from the retained registry. */
+  /** Liveness needs every generation and artifact-path owner for one
+      conversation, plus its aliases and launch receipts. Keep that read keyed
+      so a targeted poll does not hydrate unrelated host rows from retained
+      registry history. */
   livenessConversationSnapshot(conversationId: string): RegistryFile {
-    return this.scopedConversationSnapshot({ conversationId }, true);
+    return this.scopedConversationSnapshot({ conversationId }, true, true);
   }
 
-  private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean): RegistryFile {
+  private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean, liveness = false): RegistryFile {
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
       const id = target.conversationId ? resolveConversationAlias(file, target.conversationId as ViewerConversationId)
@@ -5703,6 +5704,21 @@ export class AgentRegistry {
         if (generation) {
           const key = `${conversation.engine}:${generation.id}`;
           if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+        }
+        if (liveness) {
+          const paths = new Set([
+            ...conversation.generations.map(candidate => candidate.path),
+            ...conversation.continuityPaths,
+          ]);
+          for (const candidate of conversation.generations) {
+            const key = `${conversation.engine}:${candidate.id}`;
+            if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+          }
+          for (const pathname of paths) {
+            for (const entry of registryRowsMatching(file, "entries", "artifactPath", pathname)) {
+              result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = clone(entry);
+            }
+          }
         }
       }
       if (activity) {
