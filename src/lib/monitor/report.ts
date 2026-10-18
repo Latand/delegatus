@@ -354,6 +354,9 @@ export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage
     // Preserve every agenda identity and source time while shrinking only
     // descriptive text. Count encoded bytes because catch-up labels may be
     // multilingual, and leave headroom for the structured envelope.
+    const fullItems = input.items.map(item => ({ ...item, finalMessage: undefined }));
+    const fullText = seatTickWakeMessage({ ...input, items: fullItems });
+    if (Buffer.byteLength(fullText, "utf8") <= MAX_STRUCTURED_TEXT_BYTES - 2_000) return { text: fullText, items: fullItems };
     const compact = (limit: number): SeatTickItem[] => input.items.map(item => {
       const raw = item.label.replace(/\s+/g, " ").trim();
       const withoutTime = item.occurredAt && raw.startsWith(`${item.occurredAt}: `)
