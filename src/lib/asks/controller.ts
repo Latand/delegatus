@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { agentRegistry, readOnlyConversationLookupFromSnapshot, type RegistryFile } from "@/lib/agent/registry";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { finalAssistantMessage } from "@/lib/scanner/lastAssistantMessage";
@@ -139,7 +140,7 @@ export function startAsksClassifier(ports: {
   const sweep = ports.sweep ?? runAsksSweepOnce;
   const arm = (delayMs: number) => {
     const timer = schedule(() => {
-      void sweep()
+      void withViewerOperation("asks.sweep", sweep)
         /* The class of what failed, never a message: a provider error may
            quote the request. */
         .catch((error) => console.error("[asks you] sweep failed", error instanceof Error ? error.name : "unknown"))

@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { loadPipelineListRecords, projectPipelineCompactRows, selectPipelineListRecords } from "./listProjection";
-import { archiveSettledPipelines, buildPipeline, findPipelineRecord, loadArchivedPipelines, loadPipelinesForList, savePipelines } from "./store";
+import { archiveSettledPipelines, buildPipeline, findPipelineRecord, loadArchivedPipelines, loadArchivedPipelinesForList, loadPipelinesForList, savePipelines } from "./store";
 import { projectKeyIndexSnapshot } from "@/lib/projects/projectKeyIndex";
 import type { Pipeline } from "./types";
 
@@ -139,6 +139,65 @@ test("closed-inclusive pages preserve filters, order and details without decodin
     await expect(projectPipelineCompactRows({ project: "none", includeClosed: true }, {
       checkpoint: () => { if (++checks > 3) throw new Error("cancelled"); },
     })).rejects.toThrow("cancelled");
+  } finally {
+    if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("done, album and seat readers share the frozen archive and observe revisions immediately", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-archive-reads-"));
+  const prior = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  try {
+    const lane = buildPipeline({ id: "archived-fixture", task: "Archived work", project: "fixture", repoDir: "/repo",
+      taskIds: ["task-fixture"], stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+        effectiveRole: { roleId: null, engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-only", promptScaffold: null } }],
+      srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z" });
+    lane.state = "closed"; lane.cursor = null; lane.closedAt = "2026-07-02T00:00:00.000Z";
+    savePipelines([lane]);
+    await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"));
+    const frozen = loadArchivedPipelinesForList();
+    expect(Object.isFrozen(frozen)).toBe(true);
+    expect(Object.isFrozen(frozen[0]!.stages[0]!.effectiveRole)).toBe(true);
+    const original = JSON.stringify(frozen);
+    const { productionDoneWorld } = await import("@/lib/done/world");
+    const { productionAlbumWorld } = await import("@/lib/taskAlbum/world");
+    const { taskAlbumTranscripts } = await import("@/lib/taskAlbum/sources");
+    const { defaultSeatTickSources, pipelineSummary } = await import("@/lib/monitor/seatTickSources");
+    const { runDoneSweepOnce } = await import("@/lib/done/sweep");
+    const { viewerLoopMonitor } = await import("@/lib/viewerLoopMonitor");
+    const album = productionAlbumWorld();
+    const sources = defaultSeatTickSources();
+    expect(sources.archivedPipelines()).toBe(frozen);
+    expect(album.pipelines()[0]).toBe(frozen[0]!);
+    expect(productionDoneWorld().pipelines()[0]).toBe(frozen[0]!);
+    expect(taskAlbumTranscripts("task-fixture", { ...album,
+      task: () => ({ assignments: [] } as unknown as import("@/lib/tasks/types").BoardTask) })).toEqual([]);
+    expect(pipelineSummary(frozen[0]!)).toBeDefined();
+    const world = () => ({ ...productionDoneWorld(), now: () => Date.parse("2026-08-01T00:00:00Z"),
+      preserveFrame: undefined, removeFrames: undefined });
+    expect(await runDoneSweepOnce({ ownsTraffic: async () => {
+      expect(viewerLoopMonitor.current()).toBe("done.sweep"); return true;
+    }, world })).toBe(true);
+    expect(await runDoneSweepOnce({ ownsTraffic: async () => false, world: () => { throw Error("must not read"); } })).toBe(false);
+    await expect(runDoneSweepOnce({ ownsTraffic: async () => true, world: () => { throw Error("fixture refusal"); } })).rejects.toThrow("fixture refusal");
+    expect(viewerLoopMonitor.current()).toBeUndefined();
+    const mutable = loadArchivedPipelines(); mutable[0]!.stages[0]!.prompt = "Caller overlay";
+    expect(JSON.stringify(loadArchivedPipelinesForList())).toBe(original);
+    const next = buildPipeline({ id: "new-archive-fixture", task: lane.task, project: lane.project,
+      repoDir: lane.repoDir, stages: lane.stages, srcPath: null, srcConversationId: null, now: lane.createdAt });
+    next.state = "closed"; next.cursor = null; next.closedAt = lane.closedAt;
+    savePipelines([next]);
+    await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"));
+    const updated = loadArchivedPipelinesForList();
+    expect(updated).not.toBe(frozen);
+    expect(updated.map(row => row.id)).toEqual([lane.id, next.id]);
+    expect(productionAlbumWorld().pipelines()).toHaveLength(2);
+    expect(productionDoneWorld().pipelines()).toHaveLength(2);
+    expect(sources.archivedPipelines()).toBe(updated);
+    expect(Object.isFrozen(updated[1]!.stages[0]!)).toBe(true);
   } finally {
     if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
     fs.rmSync(root, { recursive: true, force: true });

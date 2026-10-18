@@ -342,7 +342,7 @@ export async function initializeHotStateStoresAtStartup(
   });
   flows.loadFlows();
   pipelines.loadPipelines();
-  pipelines.loadArchivedPipelines();
+  pipelines.loadArchivedPipelinesForList();
   workflows.loadWorkflows();
   // Requests consume the persisted narrow projections from their first call.
   const { readHistoryProjection } = await import("@/lib/state/historyProjection");

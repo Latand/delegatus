@@ -146,6 +146,7 @@ import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRu
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
 import { pipelineHostHasLiveWork } from "./hostRetirement";
+import { pipelineRecordRevalidator } from "./revalidation";
 import { controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
@@ -5063,7 +5064,9 @@ export async function preparePipelineReviewRepair(flowId: string, ports: Pipelin
   } catch (error) { return { ok: false, retryable: false, detail: error instanceof Error ? error.message : "Pipeline locking unavailable" }; }
   if (descriptor === null) return { ok: false, retryable: true, detail: "review repair is waiting for its owned Git lock" };
   const abort = new AbortController();
-  const revalidate = () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); };
+  const revalidate = pipelineRecordRevalidator(preview.id,
+    (current) => { if (JSON.stringify(current) !== fingerprint) abort.abort(); },
+    () => { if (!abort.signal.aborted && JSON.stringify(ports.getFlow(flowId)) !== flowFingerprint) abort.abort(); });
   const watch = setInterval(revalidate, 50);
   const exec: ExecPort = async (command, args, cwd, env, options) => {
     revalidate();
@@ -6343,9 +6346,9 @@ async function spawnRunStage(
       if (restartStagePrompt(renderStagePrompt(pipeline, bound, attempt.effectiveRole, previousOutput, effectiveWorkerLimit(pipeline.project).value, resolveStageTestGuidance()), attempt) !== spawnInput.prompt) throw new ActivationSuperseded();
       const expected = JSON.stringify(pipeline);
       const abort = new AbortController();
-      const revalidate = () => {
-        if (attempt.activation && JSON.stringify(findPipelineRecord(pipeline.id)) !== expected) abort.abort();
-      };
+      const revalidate = pipelineRecordRevalidator(pipeline.id, (current) => {
+        if (attempt.activation && JSON.stringify(current) !== expected) abort.abort();
+      });
       const watch = setInterval(revalidate, 50);
       const exec: ExecPort = async (command, args, cwd, env, options) => {
         revalidate();
@@ -8284,22 +8287,24 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
   // Production's realExec always selects the native asynchronous implementation.
   const exec = ports.provisionExec ?? (ports.exec === realExec ? realProvisionExec
     : async (command, args, cwd) => (await ports.exec(command, args, cwd)));
-  const jobs = pending.map((pipeline) => ({ pipeline, fence: JSON.stringify(provisionFence(pipeline)), abort: new AbortController() }));
+  const jobs = pending.map((pipeline) => {
+    const fence = JSON.stringify(provisionFence(pipeline)), abort = new AbortController();
+    const revalidate = pipelineRecordRevalidator(pipeline.id, (record) => {
+      if (!record || record.state !== "provisioning" || record.hiddenAt || record.closedAt
+        || JSON.stringify(provisionFence(record)) !== fence) abort.abort();
+    });
+    return { pipeline, abort, revalidate };
+  });
   const revalidate = () => {
     try {
-      const current = new Map(jobs.flatMap(job => { const current = findPipelineRecord(job.pipeline.id); return current ? [[current.id, current] as const] : []; }));
-      for (const job of jobs) {
-        const record = current.get(job.pipeline.id);
-        if (!record || record.state !== "provisioning" || record.hiddenAt || record.closedAt
-          || JSON.stringify(provisionFence(record)) !== job.fence) job.abort.abort();
-      }
+      for (const job of jobs) job.revalidate();
     } catch {
       // An unreadable registry cannot authorize more provisioning work.
       for (const job of jobs) job.abort.abort();
     }
   };
-  // Close/delete may originate in another process. Projection reads are cached
-  // by collection revision; polling needs no lease and no close-path hook.
+  // Close/delete may originate in another process. Indexed row revisions
+  // invalidate only changed jobs; polling needs no lease or close-path hook.
   const watch = setInterval(revalidate, 50);
   const repositoryTails = new Map<string, Promise<void>>();
   const diskAdmission = ports.worktreeDiskWait ?? ((repoDir: string, worktreeDir: string, usesClaude: boolean) =>
@@ -10121,10 +10126,9 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
 async function admitExistingPipelineDelivery(pipeline: Pipeline, ports: PipelinePorts): Promise<Pipeline | null> {
   const admission = pipeline.publicationAdmission?.state === "pending" ? pipeline.publicationAdmission : null;
   const abort = new AbortController();
-  const revalidate = () => {
-    const current = findPipelineRecord(pipeline.id);
+  const revalidate = pipelineRecordRevalidator(pipeline.id, (current) => {
     if (admission && (!current || current.publicationAdmission?.id !== admission.id || remoteActionFence(current) !== admission.fence)) abort.abort();
-  };
+  });
   const watch = setInterval(revalidate, 50);
   let remote: Awaited<ReturnType<ExecPort>>;
   try {
@@ -10252,10 +10256,9 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       if (state !== action.retryReceipt.state) return false;
       return true;
     };
-    const revalidate = () => {
-      const current = findPipelineRecord(preview.id);
-      if (!matches(current) || budgetRefusal(current) || !receiptMatches()) abort.abort();
-    };
+    const revalidate = pipelineRecordRevalidator(preview.id,
+      (current) => { if (!matches(current) || budgetRefusal(current)) abort.abort(); },
+      () => { if (!abort.signal.aborted && !receiptMatches()) abort.abort(); });
     const watch = setInterval(revalidate, 50);
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();
@@ -10377,10 +10380,9 @@ async function collectReviewIngressHeads(ports: PipelinePorts, candidates?: Pipe
     if (!requiresReviewIngress(pipeline)) continue;
     const fence = reviewIngressFence(pipeline);
     const abort = new AbortController();
-    const revalidate = () => {
-      const current = findPipelineRecord(pipeline.id);
+    const revalidate = pipelineRecordRevalidator(pipeline.id, (current) => {
       if (!current || current.state !== pipeline.state || reviewIngressFence(current) !== fence) abort.abort();
-    };
+    });
     const watch = setInterval(revalidate, 50);
     const exec: ExecPort = async (command, args, cwd, env) => {
       revalidate();
@@ -10443,7 +10445,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     }
     if (descriptor === null) { ports.scheduleTick?.(250); continue; }
     const abort = new AbortController();
-    const revalidate = () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); };
+    const revalidate = () => withViewerOperation("pipelines.revalidate", () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); });
     const watch = setInterval(revalidate, 50);
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();

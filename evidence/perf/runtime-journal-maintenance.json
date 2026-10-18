@@ -1,0 +1,2495 @@
+{
+  "schemaVersion": 2,
+  "baseRevision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+  "candidateRevision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+  "copyStartedUtc": "2026-10-18T19:41:03.856555Z",
+  "runtime": "bun 1.4.0",
+  "conditions": {
+    "logicalCpuAffinity": 24,
+    "gate": "scripts/gate-slot.sh; one admitted command per process",
+    "copies": "two fresh processes per case and revision; each cloned the same immutable VACUUM INTO seed",
+    "samplesPerProcess": {
+      "first": 1,
+      "warm": 5
+    },
+    "isolation": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_CACHE_HOME",
+      "LLV_STATE_DIR",
+      "TMPDIR",
+      "CODEX_HOME"
+    ],
+    "viewerControl": "closed loopback port",
+    "load1mAcrossSamples": {
+      "min": 6.31,
+      "max": 8.7
+    },
+    "nodeModules": "pinned release dependencies from 8f79707c"
+  },
+  "seed": {
+    "runtime-events.sqlite": {
+      "bytes": 517804032,
+      "sha256": "9f195eb22a25d89e0e3b8671e9766e97ada40507743c4df7ee6437f7bc976849"
+    },
+    "agent-registry.sqlite": {
+      "bytes": 563560448,
+      "sha256": "e97679b1169a3abddfe54f1513c4e23c7aad8536354ae2d016cd514934dc48ad"
+    }
+  },
+  "sourceSha256": {
+    "before": {
+      "src/lib/agent/registry.ts": "ae30a91345104e4a6c09851c10614df8142d1fb3e8f676e1a11340711f8e0106",
+      "src/lib/agent/sqliteRegistryStore.ts": "ee5528a114736b21b6c4f670f2c7943383d63362362461458972310e553552de",
+      "src/runtime-host/journalRetention.ts": "57acf41635d1856f4e6b34c0e84d1c7f800c895b62f8c9a697e12c569f3fc863",
+      "src/runtime-host/journal.ts": "7d10c97fc39ccfd97164dcbf3bca189e5195ef2718e10222806d1035058e366a",
+      "src/runtime-host/main.ts": "1b1e39f001a2efdeb4636154c6f35afc8c8259446434ceb3fa956c6a9bb085a5",
+      "src/lib/performanceSpans.ts": "80c06da1ec1b8d82e03485d96a33bae792d77d3f7a6cf4a8fef8b6e0a8e4ba24",
+      "src/lib/viewerLoopMonitor.ts": "b5944b90b06936695fcc9a69ee1b03a868fb0aa884edcad7ccd8b8859dacce0a"
+    },
+    "after": {
+      "src/lib/agent/registry.ts": "2e6b425c2a946852b0aea62ea3569758953145cefd1d90fb75a04dd87fafd1e8",
+      "src/lib/agent/sqliteRegistryStore.ts": "765e015c3e8fde08eaf67745dce60ec74c7a72be8eb79d324b659ec1e8dceb13",
+      "src/runtime-host/journalRetention.ts": "33dfa0c0f290e7edc97bca9333b936fb63558eb9ea245dd4e4e0db2e3f4bd5f5",
+      "src/runtime-host/journal.ts": "e96cc9b7064841670c03f26ad9d705157be442f6968145ec9018ad8800b3da45",
+      "src/runtime-host/main.ts": "38100c693738d3d72a6aa0c07411ddbe1a2b480d9222f35790c03f03148f3d0d",
+      "src/lib/performanceSpans.ts": "5f62e41fcfa457689b36663da3516fd0542543af3b25176c6e8be65ac9c210d0",
+      "src/lib/viewerLoopMonitor.ts": "6091659a244fdc815e59b5cd3194c7334ca04357e183411bda3702b7144254bd"
+    }
+  },
+  "probeSha256": "0e391b5d3e73914346126ab5692edf073dbe3156bfc7078247aba735250211c3",
+  "copiedEquivalence": {
+    "pendingIds": 3,
+    "targeted": {
+      "reads": 11,
+      "parses": 3
+    },
+    "fullMapSize": 8415,
+    "selected": [
+      "current",
+      "current",
+      "dead"
+    ],
+    "equal": true,
+    "settlement": {
+      "scanned": 3,
+      "settled": 0
+    }
+  },
+  "runtimeHostRehearsal": {
+    "checkedAt": "2026-10-18T19:54:39.942Z",
+    "runtime": "bun 1.4.0",
+    "sourceRevision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+    "succession": {
+      "predecessorReadyMs": 511,
+      "successorTookOverMs": 504,
+      "completed": true
+    },
+    "listener": {
+      "windowMs": 15000,
+      "polls": 27,
+      "answered": 27,
+      "abandoned": 13
+    },
+    "socket": {
+      "polls": 27,
+      "answered": 27,
+      "abandoned": 13
+    },
+    "ok": true
+  },
+  "summary": {
+    "R2-maintenance": {
+      "before": {
+        "warmCount": 10,
+        "wallMs": {
+          "min": 805.8507680000002,
+          "median": 876.2822929999998,
+          "max": 1306.4318090000006
+        },
+        "coldWallMs": [
+          1286.4927969999999,
+          1440.1822490000002
+        ],
+        "load1m": {
+          "min": 8.23,
+          "max": 8.7
+        },
+        "maxLoopGapMs": {
+          "min": 833.2861990000001,
+          "median": 918.8682475,
+          "max": 1366.9495500000003
+        },
+        "lastWarmRegistryRowsRead": 22680,
+        "lastWarmRegistryRowsParsed": 22680,
+        "result": {
+          "scanned": 3,
+          "settled": 0
+        }
+      },
+      "after": {
+        "warmCount": 10,
+        "wallMs": {
+          "min": 1.4865140000001702,
+          "median": 2.1115005000000338,
+          "max": 3.860008999999991
+        },
+        "coldWallMs": [
+          6.904511000000184,
+          5.189341000000013
+        ],
+        "load1m": {
+          "min": 8.06,
+          "max": 8.7
+        },
+        "maxLoopGapMs": {
+          "min": 0.05572499999993852,
+          "median": 0.06332100000008722,
+          "max": 0.07907900000009249
+        },
+        "lastWarmRegistryRowsRead": 11,
+        "lastWarmRegistryRowsParsed": 3,
+        "result": {
+          "scanned": 3,
+          "settled": 0
+        }
+      }
+    },
+    "R2-map": {
+      "before": {
+        "warmCount": 10,
+        "wallMs": {
+          "min": 728.9924439999995,
+          "median": 775.0593284999995,
+          "max": 897.659576
+        },
+        "coldWallMs": [
+          899.7792409999997,
+          842.0566140000001
+        ],
+        "load1m": {
+          "min": 7.32,
+          "max": 8.29
+        },
+        "maxLoopGapMs": {
+          "min": 754.1275229999992,
+          "median": 803.9324715000002,
+          "max": 949.0951370000002
+        },
+        "lastWarmRegistryRowsRead": 22680,
+        "lastWarmRegistryRowsParsed": 22680,
+        "result": 8415
+      },
+      "after": {
+        "warmCount": 10,
+        "wallMs": {
+          "min": 1.1207359999998516,
+          "median": 1.2373640000000705,
+          "max": 2.2057489999997415
+        },
+        "coldWallMs": [
+          2.0190600000000813,
+          2.0703020000000834
+        ],
+        "load1m": {
+          "min": 7.13,
+          "max": 7.93
+        },
+        "maxLoopGapMs": {
+          "min": 19.768920999999864,
+          "median": 26.2810864999999,
+          "max": 29.767511000000013
+        },
+        "lastWarmRegistryRowsRead": 11,
+        "lastWarmRegistryRowsParsed": 3,
+        "result": 3
+      }
+    },
+    "R2-settle": {
+      "before": {
+        "warmCount": 10,
+        "wallMs": {
+          "min": 0.36312900000029913,
+          "median": 0.38198499999975866,
+          "max": 0.41443299999991723
+        },
+        "coldWallMs": [
+          0.8677880000000187,
+          0.8832640000000538
+        ],
+        "load1m": {
+          "min": 6.31,
+          "max": 6.88
+        },
+        "maxLoopGapMs": {
+          "min": 21.1175989999997,
+          "median": 25.27658899999983,
+          "max": 30.160407000000305
+        },
+        "lastWarmRegistryRowsRead": 0,
+        "lastWarmRegistryRowsParsed": 0,
+        "result": {
+          "scanned": 3,
+          "settled": 0
+        }
+      },
+      "after": {
+        "warmCount": 10,
+        "wallMs": {
+          "min": 0.35688100000015766,
+          "median": 0.41928749999988213,
+          "max": 0.5707870000001094
+        },
+        "coldWallMs": [
+          0.8950750000001335,
+          0.8849920000000111
+        ],
+        "load1m": {
+          "min": 6.31,
+          "max": 6.65
+        },
+        "maxLoopGapMs": {
+          "min": 0.05590600000004997,
+          "median": 0.059575499999937165,
+          "max": 0.07278499999983978
+        },
+        "lastWarmRegistryRowsRead": 0,
+        "lastWarmRegistryRowsParsed": 0,
+        "result": {
+          "scanned": 3,
+          "settled": 0
+        }
+      }
+    }
+  },
+  "runs": [
+    {
+      "event": "start",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "utc": "2026-10-18T19:46:47.781Z",
+      "bun": "1.4.0",
+      "load": [
+        8.34,
+        6.55,
+        6.03
+      ],
+      "readiness": {
+        "pendingCount": 3,
+        "condition": "complete tick body; first call includes cold registry read"
+      },
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 0,
+      "utc": "2026-10-18T19:46:49.392Z",
+      "wallMs": 1286.4927969999999,
+      "cpuMs": 1752.779,
+      "maxLoopGapMs": 1282.3811729999998,
+      "heapDeltaBytes": 181806193,
+      "rssDeltaBytes": 338673664,
+      "readChars": 950172581,
+      "registryRowsRead": 23508,
+      "registryRowsParsed": 23469,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.34,
+        6.55,
+        6.03
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 1,
+      "utc": "2026-10-18T19:46:50.807Z",
+      "wallMs": 946.2923559999999,
+      "cpuMs": 1085.923,
+      "maxLoopGapMs": 973.61139,
+      "heapDeltaBytes": -35078152,
+      "rssDeltaBytes": 241819648,
+      "readChars": 114915867,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.34,
+        6.55,
+        6.03
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 2,
+      "utc": "2026-10-18T19:46:52.206Z",
+      "wallMs": 877.8914299999997,
+      "cpuMs": 950.469,
+      "maxLoopGapMs": 939.4830689999999,
+      "heapDeltaBytes": -931896,
+      "rssDeltaBytes": 98324480,
+      "readChars": 114914326,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.23,
+        6.55,
+        6.04
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 3,
+      "utc": "2026-10-18T19:46:53.619Z",
+      "wallMs": 869.4460829999998,
+      "cpuMs": 927.745,
+      "maxLoopGapMs": 914.7308640000001,
+      "heapDeltaBytes": -590269,
+      "rssDeltaBytes": 113541120,
+      "readChars": 114914241,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.23,
+        6.55,
+        6.04
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 4,
+      "utc": "2026-10-18T19:46:55.465Z",
+      "wallMs": 1306.4318090000006,
+      "cpuMs": 1405.646,
+      "maxLoopGapMs": 1366.9495500000003,
+      "heapDeltaBytes": 71899,
+      "rssDeltaBytes": 50044928,
+      "readChars": 114919729,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.23,
+        6.55,
+        6.04
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 5,
+      "utc": "2026-10-18T19:46:56.788Z",
+      "wallMs": 806.6694689999986,
+      "cpuMs": 857.226,
+      "maxLoopGapMs": 856.1700879999989,
+      "heapDeltaBytes": -126074,
+      "rssDeltaBytes": 126570496,
+      "readChars": 114913692,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.37,
+        6.61,
+        6.06
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "end",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "utc": "2026-10-18T19:46:56.930Z",
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "start",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "utc": "2026-10-18T19:47:05.034Z",
+      "bun": "1.4.0",
+      "load": [
+        8.1,
+        6.58,
+        6.05
+      ],
+      "readiness": {
+        "pendingCount": 3,
+        "condition": "complete tick body; first call includes cold registry read"
+      },
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 0,
+      "utc": "2026-10-18T19:47:06.800Z",
+      "wallMs": 1440.1822490000002,
+      "cpuMs": 1911.664,
+      "maxLoopGapMs": 1437.703289,
+      "heapDeltaBytes": 189113511,
+      "rssDeltaBytes": 333824000,
+      "readChars": 950174519,
+      "registryRowsRead": 23508,
+      "registryRowsParsed": 23469,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.5,
+        6.69,
+        6.09
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 1,
+      "utc": "2026-10-18T19:47:08.142Z",
+      "wallMs": 874.6731559999998,
+      "cpuMs": 997.395,
+      "maxLoopGapMs": 902.2377179999999,
+      "heapDeltaBytes": -35302334,
+      "rssDeltaBytes": 284454912,
+      "readChars": 114914888,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.5,
+        6.69,
+        6.09
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 2,
+      "utc": "2026-10-18T19:47:09.446Z",
+      "wallMs": 805.8507680000002,
+      "cpuMs": 864.753,
+      "maxLoopGapMs": 833.2861990000001,
+      "heapDeltaBytes": -937096,
+      "rssDeltaBytes": 191139840,
+      "readChars": 114913497,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.5,
+        6.69,
+        6.09
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 3,
+      "utc": "2026-10-18T19:47:10.788Z",
+      "wallMs": 833.0061020000003,
+      "cpuMs": 880.405,
+      "maxLoopGapMs": 862.2302680000003,
+      "heapDeltaBytes": -560228,
+      "rssDeltaBytes": 91652096,
+      "readChars": 114913830,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.5,
+        6.69,
+        6.09
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 4,
+      "utc": "2026-10-18T19:47:12.210Z",
+      "wallMs": 886.078207999999,
+      "cpuMs": 975.662,
+      "maxLoopGapMs": 923.005631,
+      "heapDeltaBytes": 67582,
+      "rssDeltaBytes": 59744256,
+      "readChars": 114914482,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.7,
+        6.76,
+        6.12
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 5,
+      "utc": "2026-10-18T19:47:13.628Z",
+      "wallMs": 900.4982170000003,
+      "cpuMs": 960.503,
+      "maxLoopGapMs": 933.081916000001,
+      "heapDeltaBytes": -121755,
+      "rssDeltaBytes": 91832320,
+      "readChars": 114914769,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.7,
+        6.76,
+        6.12
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "end",
+      "case": "R2-maintenance",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "utc": "2026-10-18T19:47:13.760Z",
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "start",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "utc": "2026-10-18T19:47:15.464Z",
+      "bun": "1.4.0",
+      "load": [
+        8.7,
+        6.76,
+        6.12
+      ],
+      "readiness": {
+        "pendingCount": 3,
+        "condition": "complete tick body; first call includes cold registry read"
+      },
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 0,
+      "utc": "2026-10-18T19:47:15.797Z",
+      "wallMs": 6.904511000000184,
+      "cpuMs": 8.2,
+      "maxLoopGapMs": 2.518780000000106,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 983040,
+      "readChars": 1786114,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 11,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.7,
+        6.76,
+        6.12
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 1,
+      "utc": "2026-10-18T19:47:16.209Z",
+      "wallMs": 1.8482750000000578,
+      "cpuMs": 2.978,
+      "maxLoopGapMs": 0.0754380000000765,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 0,
+      "readChars": 32950,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.7,
+        6.76,
+        6.12
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 2,
+      "utc": "2026-10-18T19:47:16.619Z",
+      "wallMs": 3.107469999999921,
+      "cpuMs": 3.678,
+      "maxLoopGapMs": 0.06702199999972436,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 0,
+      "readChars": 32950,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.32,
+        6.72,
+        6.1
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 3,
+      "utc": "2026-10-18T19:47:17.030Z",
+      "wallMs": 3.0782930000000306,
+      "cpuMs": 5.752,
+      "maxLoopGapMs": 0.0591180000001259,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 3735552,
+      "readChars": 33025,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.32,
+        6.72,
+        6.1
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 4,
+      "utc": "2026-10-18T19:47:17.438Z",
+      "wallMs": 1.4865140000001702,
+      "cpuMs": 2.079,
+      "maxLoopGapMs": 0.059395999999651394,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 393216,
+      "readChars": 32912,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.32,
+        6.72,
+        6.1
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 5,
+      "utc": "2026-10-18T19:47:17.846Z",
+      "wallMs": 1.6923679999999877,
+      "cpuMs": 2.054,
+      "maxLoopGapMs": 0.061913000000004104,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 786432,
+      "readChars": 32950,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.32,
+        6.72,
+        6.1
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "end",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "utc": "2026-10-18T19:47:17.931Z",
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "start",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "utc": "2026-10-18T19:47:19.563Z",
+      "bun": "1.4.0",
+      "load": [
+        8.32,
+        6.72,
+        6.1
+      ],
+      "readiness": {
+        "pendingCount": 3,
+        "condition": "complete tick body; first call includes cold registry read"
+      },
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 0,
+      "utc": "2026-10-18T19:47:19.891Z",
+      "wallMs": 5.189341000000013,
+      "cpuMs": 7.041,
+      "maxLoopGapMs": 0.06274299999995492,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 724992,
+      "readChars": 1786227,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 11,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.32,
+        6.72,
+        6.1
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 1,
+      "utc": "2026-10-18T19:47:20.298Z",
+      "wallMs": 1.6896189999999933,
+      "cpuMs": 2.683,
+      "maxLoopGapMs": 0.05572499999993852,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 589824,
+      "readChars": 32912,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.32,
+        6.72,
+        6.1
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 2,
+      "utc": "2026-10-18T19:47:20.707Z",
+      "wallMs": 2.3747260000000097,
+      "cpuMs": 3.305,
+      "maxLoopGapMs": 0.06472900000017034,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 32950,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.32,
+        6.72,
+        6.1
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 3,
+      "utc": "2026-10-18T19:47:21.118Z",
+      "wallMs": 3.860008999999991,
+      "cpuMs": 7.295,
+      "maxLoopGapMs": 0.07907900000009249,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 2949120,
+      "readChars": 32912,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.32,
+        6.72,
+        6.1
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 4,
+      "utc": "2026-10-18T19:47:21.527Z",
+      "wallMs": 1.7994359999997869,
+      "cpuMs": 2.559,
+      "maxLoopGapMs": 0.0582179999996697,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 589824,
+      "readChars": 33025,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.06,
+        6.69,
+        6.1
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 5,
+      "utc": "2026-10-18T19:47:21.936Z",
+      "wallMs": 2.42068399999971,
+      "cpuMs": 2.763,
+      "maxLoopGapMs": 0.0721440000002076,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 393216,
+      "readChars": 32950,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        8.06,
+        6.69,
+        6.1
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "end",
+      "case": "R2-maintenance",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "utc": "2026-10-18T19:47:22.019Z",
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "start",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "utc": "2026-10-18T19:47:28.167Z",
+      "bun": "1.4.0",
+      "load": [
+        8.29,
+        6.76,
+        6.12
+      ],
+      "readiness": {
+        "pendingCount": 3,
+        "fullMapSize": 8415,
+        "selectedStates": [
+          "current",
+          "current",
+          "dead"
+        ]
+      },
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 0,
+      "utc": "2026-10-18T19:47:29.433Z",
+      "wallMs": 899.7792409999997,
+      "cpuMs": 1071.455,
+      "maxLoopGapMs": 938.4916870000002,
+      "heapDeltaBytes": -33468512,
+      "rssDeltaBytes": 235339776,
+      "readChars": 114895078,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": 8415,
+      "load": [
+        8.29,
+        6.76,
+        6.12
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 1,
+      "utc": "2026-10-18T19:47:30.736Z",
+      "wallMs": 774.3360000000002,
+      "cpuMs": 830.346,
+      "maxLoopGapMs": 811.5323320000007,
+      "heapDeltaBytes": -525722,
+      "rssDeltaBytes": 113025024,
+      "readChars": 114892452,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": 8415,
+      "load": [
+        8.29,
+        6.76,
+        6.12
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 2,
+      "utc": "2026-10-18T19:47:31.977Z",
+      "wallMs": 739.4872559999994,
+      "cpuMs": 781.846,
+      "maxLoopGapMs": 767.4889499999999,
+      "heapDeltaBytes": -991120,
+      "rssDeltaBytes": 65777664,
+      "readChars": 114892197,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": 8415,
+      "load": [
+        8.27,
+        6.78,
+        6.13
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 3,
+      "utc": "2026-10-18T19:47:33.384Z",
+      "wallMs": 897.659576,
+      "cpuMs": 994.019,
+      "maxLoopGapMs": 949.0951370000002,
+      "heapDeltaBytes": 88164,
+      "rssDeltaBytes": 73523200,
+      "readChars": 114894298,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": 8415,
+      "load": [
+        8.27,
+        6.78,
+        6.13
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 4,
+      "utc": "2026-10-18T19:47:34.645Z",
+      "wallMs": 773.1094540000004,
+      "cpuMs": 812.958,
+      "maxLoopGapMs": 799.4758000000002,
+      "heapDeltaBytes": -82160,
+      "rssDeltaBytes": 191602688,
+      "readChars": 114892764,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": 8415,
+      "load": [
+        8.27,
+        6.78,
+        6.13
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 5,
+      "utc": "2026-10-18T19:47:35.862Z",
+      "wallMs": 728.9924439999995,
+      "cpuMs": 770.128,
+      "maxLoopGapMs": 754.1275229999992,
+      "heapDeltaBytes": 7560,
+      "rssDeltaBytes": 67108864,
+      "readChars": 114892346,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": 8415,
+      "load": [
+        8.27,
+        6.78,
+        6.13
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "end",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "utc": "2026-10-18T19:47:35.999Z",
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "start",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "utc": "2026-10-18T19:47:50.743Z",
+      "bun": "1.4.0",
+      "load": [
+        7.56,
+        6.69,
+        6.11
+      ],
+      "readiness": {
+        "pendingCount": 3,
+        "fullMapSize": 8415,
+        "selectedStates": [
+          "current",
+          "current",
+          "dead"
+        ]
+      },
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 0,
+      "utc": "2026-10-18T19:47:51.940Z",
+      "wallMs": 842.0566140000001,
+      "cpuMs": 1021.18,
+      "maxLoopGapMs": 868.6665430000003,
+      "heapDeltaBytes": -33583590,
+      "rssDeltaBytes": 229904384,
+      "readChars": 114894334,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": 8415,
+      "load": [
+        7.43,
+        6.68,
+        6.11
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 1,
+      "utc": "2026-10-18T19:47:53.183Z",
+      "wallMs": 740.3959330000002,
+      "cpuMs": 799.483,
+      "maxLoopGapMs": 767.9228190000003,
+      "heapDeltaBytes": -173720,
+      "rssDeltaBytes": 117882880,
+      "readChars": 114892041,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": 8415,
+      "load": [
+        7.43,
+        6.68,
+        6.11
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 2,
+      "utc": "2026-10-18T19:47:54.478Z",
+      "wallMs": 779.4433499999996,
+      "cpuMs": 829.545,
+      "maxLoopGapMs": 807.93919,
+      "heapDeltaBytes": -848859,
+      "rssDeltaBytes": 62930944,
+      "readChars": 114892693,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": 8415,
+      "load": [
+        7.43,
+        6.68,
+        6.11
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 3,
+      "utc": "2026-10-18T19:47:55.750Z",
+      "wallMs": 778.5091660000007,
+      "cpuMs": 856.704,
+      "maxLoopGapMs": 808.3387779999994,
+      "heapDeltaBytes": -462655,
+      "rssDeltaBytes": 95907840,
+      "readChars": 114892771,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": 8415,
+      "load": [
+        7.43,
+        6.68,
+        6.11
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 4,
+      "utc": "2026-10-18T19:47:57.029Z",
+      "wallMs": 775.7826569999988,
+      "cpuMs": 822.085,
+      "maxLoopGapMs": 799.9257530000004,
+      "heapDeltaBytes": -24839,
+      "rssDeltaBytes": 60727296,
+      "readChars": 114892732,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": 8415,
+      "load": [
+        7.32,
+        6.67,
+        6.11
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 5,
+      "utc": "2026-10-18T19:47:58.304Z",
+      "wallMs": 779.9905870000002,
+      "cpuMs": 821.248,
+      "maxLoopGapMs": 808.8862200000003,
+      "heapDeltaBytes": -13470,
+      "rssDeltaBytes": 137330688,
+      "readChars": 114893005,
+      "registryRowsRead": 22680,
+      "registryRowsParsed": 22680,
+      "result": 8415,
+      "load": [
+        7.32,
+        6.67,
+        6.11
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "end",
+      "case": "R2-map",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "utc": "2026-10-18T19:47:58.434Z",
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "start",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "utc": "2026-10-18T19:47:40.973Z",
+      "bun": "1.4.0",
+      "load": [
+        7.93,
+        6.73,
+        6.12
+      ],
+      "readiness": {
+        "pendingCount": 3,
+        "fullMapSize": 8415,
+        "selectedStates": [
+          "current",
+          "current",
+          "dead"
+        ]
+      },
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 0,
+      "utc": "2026-10-18T19:47:41.326Z",
+      "wallMs": 2.0190600000000813,
+      "cpuMs": 2.216,
+      "maxLoopGapMs": 22.829525999999987,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": -17195008,
+      "readChars": 340293,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": 3,
+      "load": [
+        7.93,
+        6.73,
+        6.12
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 1,
+      "utc": "2026-10-18T19:47:41.798Z",
+      "wallMs": 1.5032579999997324,
+      "cpuMs": 1.59,
+      "maxLoopGapMs": 27.328430000000026,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 348160,
+      "readChars": 12449,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": 3,
+      "load": [
+        7.69,
+        6.71,
+        6.12
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 2,
+      "utc": "2026-10-18T19:47:42.266Z",
+      "wallMs": 1.3131069999999454,
+      "cpuMs": 1.647,
+      "maxLoopGapMs": 23.304442999999992,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 12449,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": 3,
+      "load": [
+        7.69,
+        6.71,
+        6.12
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 3,
+      "utc": "2026-10-18T19:47:42.730Z",
+      "wallMs": 1.168662999999924,
+      "cpuMs": 1.629,
+      "maxLoopGapMs": 21.177950000000237,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 0,
+      "readChars": 12449,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": 3,
+      "load": [
+        7.69,
+        6.71,
+        6.12
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 4,
+      "utc": "2026-10-18T19:47:43.206Z",
+      "wallMs": 1.1207359999998516,
+      "cpuMs": 1.151,
+      "maxLoopGapMs": 29.130387000000155,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": -200704,
+      "readChars": 12449,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": 3,
+      "load": [
+        7.69,
+        6.71,
+        6.12
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 5,
+      "utc": "2026-10-18T19:47:43.674Z",
+      "wallMs": 1.215712999999596,
+      "cpuMs": 1.912,
+      "maxLoopGapMs": 27.384446000000025,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 12449,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": 3,
+      "load": [
+        7.69,
+        6.71,
+        6.12
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "end",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "utc": "2026-10-18T19:47:43.787Z",
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "start",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "utc": "2026-10-18T19:48:01.374Z",
+      "bun": "1.4.0",
+      "load": [
+        7.32,
+        6.67,
+        6.11
+      ],
+      "readiness": {
+        "pendingCount": 3,
+        "fullMapSize": 8415,
+        "selectedStates": [
+          "current",
+          "current",
+          "dead"
+        ]
+      },
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 0,
+      "utc": "2026-10-18T19:48:01.728Z",
+      "wallMs": 2.0703020000000834,
+      "cpuMs": 2.513,
+      "maxLoopGapMs": 23.85359699999981,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": -13918208,
+      "readChars": 340169,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": 3,
+      "load": [
+        7.13,
+        6.64,
+        6.11
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 1,
+      "utc": "2026-10-18T19:48:02.198Z",
+      "wallMs": 2.2057489999997415,
+      "cpuMs": 2.325,
+      "maxLoopGapMs": 25.532452999999805,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 946176,
+      "readChars": 12449,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": 3,
+      "load": [
+        7.13,
+        6.64,
+        6.11
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 2,
+      "utc": "2026-10-18T19:48:02.663Z",
+      "wallMs": 1.251390999999785,
+      "cpuMs": 1.675,
+      "maxLoopGapMs": 23.22876899999983,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 0,
+      "readChars": 12449,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": 3,
+      "load": [
+        7.13,
+        6.64,
+        6.11
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 3,
+      "utc": "2026-10-18T19:48:03.136Z",
+      "wallMs": 1.2428429999999935,
+      "cpuMs": 1.868,
+      "maxLoopGapMs": 27.029719999999998,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 0,
+      "readChars": 12449,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": 3,
+      "load": [
+        7.13,
+        6.64,
+        6.11
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 4,
+      "utc": "2026-10-18T19:48:03.610Z",
+      "wallMs": 1.2318850000001476,
+      "cpuMs": 1.269,
+      "maxLoopGapMs": 29.767511000000013,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": -20480,
+      "readChars": 12449,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": 3,
+      "load": [
+        7.13,
+        6.64,
+        6.11
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 5,
+      "utc": "2026-10-18T19:48:04.074Z",
+      "wallMs": 1.2225140000000465,
+      "cpuMs": 1.681,
+      "maxLoopGapMs": 19.768920999999864,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 12449,
+      "registryRowsRead": 11,
+      "registryRowsParsed": 3,
+      "result": 3,
+      "load": [
+        7.13,
+        6.64,
+        6.11
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "end",
+      "case": "R2-map",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "utc": "2026-10-18T19:48:04.183Z",
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "start",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "utc": "2026-10-18T19:48:10.589Z",
+      "bun": "1.4.0",
+      "load": [
+        6.88,
+        6.6,
+        6.09
+      ],
+      "readiness": {
+        "pendingCount": 3,
+        "preparedLookupSize": 3
+      },
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 0,
+      "utc": "2026-10-18T19:48:10.945Z",
+      "wallMs": 0.8677880000000187,
+      "cpuMs": 1.005,
+      "maxLoopGapMs": 25.915367999999944,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 393216,
+      "readChars": 1482906,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.88,
+        6.6,
+        6.09
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 1,
+      "utc": "2026-10-18T19:48:11.421Z",
+      "wallMs": 0.37522800000033385,
+      "cpuMs": 0.41,
+      "maxLoopGapMs": 24.24945899999966,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 0,
+      "readChars": 20634,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.88,
+        6.6,
+        6.09
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 2,
+      "utc": "2026-10-18T19:48:11.894Z",
+      "wallMs": 0.41443299999991723,
+      "cpuMs": 0.521,
+      "maxLoopGapMs": 30.160407000000305,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": -24576,
+      "readChars": 20634,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.65,
+        6.55,
+        6.08
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 3,
+      "utc": "2026-10-18T19:48:12.360Z",
+      "wallMs": 0.3877349999997932,
+      "cpuMs": 0.418,
+      "maxLoopGapMs": 23.006352999999763,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 20596,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.65,
+        6.55,
+        6.08
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 4,
+      "utc": "2026-10-18T19:48:12.831Z",
+      "wallMs": 0.39564100000006874,
+      "cpuMs": 0.43,
+      "maxLoopGapMs": 26.467442999999548,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": -4096,
+      "readChars": 20596,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.65,
+        6.55,
+        6.08
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 5,
+      "utc": "2026-10-18T19:48:13.308Z",
+      "wallMs": 0.36312900000029913,
+      "cpuMs": 0.391,
+      "maxLoopGapMs": 29.105295999999726,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 0,
+      "readChars": 20596,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.65,
+        6.55,
+        6.08
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "end",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "utc": "2026-10-18T19:48:13.420Z",
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 1
+    },
+    {
+      "event": "start",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "utc": "2026-10-18T19:48:20.597Z",
+      "bun": "1.4.0",
+      "load": [
+        6.6,
+        6.55,
+        6.08
+      ],
+      "readiness": {
+        "pendingCount": 3,
+        "preparedLookupSize": 3
+      },
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 0,
+      "utc": "2026-10-18T19:48:20.955Z",
+      "wallMs": 0.8832640000000538,
+      "cpuMs": 1.014,
+      "maxLoopGapMs": 27.446179999999913,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 1482906,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.6,
+        6.55,
+        6.08
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 1,
+      "utc": "2026-10-18T19:48:21.420Z",
+      "wallMs": 0.371063999999933,
+      "cpuMs": 0.399,
+      "maxLoopGapMs": 23.547535000000153,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 20634,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.6,
+        6.55,
+        6.08
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 2,
+      "utc": "2026-10-18T19:48:21.888Z",
+      "wallMs": 0.4122339999998985,
+      "cpuMs": 0.513,
+      "maxLoopGapMs": 26.303719,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 393216,
+      "readChars": 20634,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.31,
+        6.49,
+        6.07
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 3,
+      "utc": "2026-10-18T19:48:22.368Z",
+      "wallMs": 0.3762349999997241,
+      "cpuMs": 0.404,
+      "maxLoopGapMs": 21.1175989999997,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 20596,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.31,
+        6.49,
+        6.07
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 4,
+      "utc": "2026-10-18T19:48:22.831Z",
+      "wallMs": 0.41287000000011176,
+      "cpuMs": 0.448,
+      "maxLoopGapMs": 21.60540300000048,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 20596,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.31,
+        6.49,
+        6.07
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "index": 5,
+      "utc": "2026-10-18T19:48:23.299Z",
+      "wallMs": 0.3638600000003862,
+      "cpuMs": 0.392,
+      "maxLoopGapMs": 27.353785000000244,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 20596,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.31,
+        6.49,
+        6.07
+      ],
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "end",
+      "case": "R2-settle",
+      "revision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+      "utc": "2026-10-18T19:48:23.412Z",
+      "phase": "before",
+      "phaseRevision": "before",
+      "repeat": 2
+    },
+    {
+      "event": "start",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "utc": "2026-10-18T19:48:15.196Z",
+      "bun": "1.4.0",
+      "load": [
+        6.65,
+        6.55,
+        6.08
+      ],
+      "readiness": {
+        "pendingCount": 3,
+        "preparedLookupSize": 3
+      },
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 0,
+      "utc": "2026-10-18T19:48:15.519Z",
+      "wallMs": 0.8950750000001335,
+      "cpuMs": 1.026,
+      "maxLoopGapMs": 0.060255999999981213,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 1482898,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.65,
+        6.55,
+        6.08
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 1,
+      "utc": "2026-10-18T19:48:15.925Z",
+      "wallMs": 0.4449930000000677,
+      "cpuMs": 0.471,
+      "maxLoopGapMs": 0.056561999999985346,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 20626,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.65,
+        6.55,
+        6.08
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 2,
+      "utc": "2026-10-18T19:48:16.330Z",
+      "wallMs": 0.39014300000008006,
+      "cpuMs": 0.484,
+      "maxLoopGapMs": 0.07278499999983978,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 0,
+      "readChars": 20588,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.65,
+        6.55,
+        6.08
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 3,
+      "utc": "2026-10-18T19:48:16.737Z",
+      "wallMs": 0.39147400000001653,
+      "cpuMs": 0.415,
+      "maxLoopGapMs": 0.05590600000004997,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 20588,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.6,
+        6.55,
+        6.08
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 4,
+      "utc": "2026-10-18T19:48:17.142Z",
+      "wallMs": 0.35688100000015766,
+      "cpuMs": 0.379,
+      "maxLoopGapMs": 0.056872999999995955,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 20588,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.6,
+        6.55,
+        6.08
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 5,
+      "utc": "2026-10-18T19:48:17.550Z",
+      "wallMs": 0.5707870000001094,
+      "cpuMs": 0.605,
+      "maxLoopGapMs": 0.05809399999998277,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 20588,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.6,
+        6.55,
+        6.08
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "end",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "utc": "2026-10-18T19:48:17.633Z",
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 1
+    },
+    {
+      "event": "start",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "utc": "2026-10-18T19:48:25.067Z",
+      "bun": "1.4.0",
+      "load": [
+        6.31,
+        6.49,
+        6.07
+      ],
+      "readiness": {
+        "pendingCount": 3,
+        "preparedLookupSize": 3
+      },
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 0,
+      "utc": "2026-10-18T19:48:25.391Z",
+      "wallMs": 0.8849920000000111,
+      "cpuMs": 1.004,
+      "maxLoopGapMs": 0.056419000000005326,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 1482898,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.31,
+        6.49,
+        6.07
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 1,
+      "utc": "2026-10-18T19:48:25.799Z",
+      "wallMs": 0.5618729999998777,
+      "cpuMs": 0.668,
+      "maxLoopGapMs": 0.06105699999989156,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 589824,
+      "readChars": 20739,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.31,
+        6.49,
+        6.07
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 2,
+      "utc": "2026-10-18T19:48:26.205Z",
+      "wallMs": 0.3766259999997601,
+      "cpuMs": 0.501,
+      "maxLoopGapMs": 0.05634300000019721,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 20588,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.31,
+        6.49,
+        6.07
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 3,
+      "utc": "2026-10-18T19:48:26.613Z",
+      "wallMs": 0.5270379999997203,
+      "cpuMs": 0.562,
+      "maxLoopGapMs": 0.06236799999987852,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 0,
+      "readChars": 20588,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.45,
+        6.51,
+        6.08
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 4,
+      "utc": "2026-10-18T19:48:27.023Z",
+      "wallMs": 0.5692099999996572,
+      "cpuMs": 0.606,
+      "maxLoopGapMs": 0.06436399999984133,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 20626,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.45,
+        6.51,
+        6.08
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "sample",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "index": 5,
+      "utc": "2026-10-18T19:48:27.431Z",
+      "wallMs": 0.39358199999969656,
+      "cpuMs": 0.422,
+      "maxLoopGapMs": 0.061714999999821885,
+      "heapDeltaBytes": 0,
+      "rssDeltaBytes": 196608,
+      "readChars": 20588,
+      "registryRowsRead": 0,
+      "registryRowsParsed": 0,
+      "result": {
+        "scanned": 3,
+        "settled": 0
+      },
+      "load": [
+        6.45,
+        6.51,
+        6.08
+      ],
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    },
+    {
+      "event": "end",
+      "case": "R2-settle",
+      "revision": "55ee6ad99a7ebcd99dd9a5a5a3bad1a6e2c06f33",
+      "utc": "2026-10-18T19:48:27.515Z",
+      "phase": "after",
+      "phaseRevision": "after",
+      "repeat": 2
+    }
+  ]
+}

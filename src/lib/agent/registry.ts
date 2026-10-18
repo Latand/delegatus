@@ -5651,6 +5651,56 @@ export class AgentRegistry {
       ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot()));
   }
 
+  /** Retention evidence for one pending runtime effect. SQLite selectors run
+      in one keyed read transaction without materializing unrelated history. */
+  conversationRetentionSnapshot(conversationId: string): Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+      return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.conversationRetentionSnapshot(conversationId));
+    }
+    return this.readKeyed(file => {
+      const result: Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> = {
+        conversations: {}, entries: {}, receipts: {}, conversationAliases: {},
+      };
+      const seen = new Set<string>();
+      let canonical = conversationId as ViewerConversationId;
+      while (file.conversationAliases[canonical]) {
+        if (seen.has(canonical)) return result; // The retention reducer keeps cycles current.
+        seen.add(canonical);
+        const next = file.conversationAliases[canonical]!;
+        result.conversationAliases[canonical] = next;
+        canonical = next;
+      }
+      // An alias may also have its own conversation row. The full reducer
+      // retains that state when its canonical destination has no evidence.
+      for (const id of new Set([conversationId, canonical])) {
+        const conversation = file.conversations[id];
+        if (!conversation) continue;
+        result.conversations[id] = clone(conversation);
+        const generation = conversation.generations.at(-1);
+        if (generation) {
+          const key = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
+          if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+        }
+      }
+      // Walk the reverse alias index once, including receipt-only aliases.
+      const identities = new Set<ViewerConversationId>([canonical]);
+      const pending = [canonical];
+      while (pending.length) {
+        const target = pending.pop()!;
+        for (const alias of registryKeysMatching(file, "conversationAliases", "alias", target) as ViewerConversationId[]) {
+          if (identities.has(alias)) continue;
+          identities.add(alias);
+          result.conversationAliases[alias] = target;
+          pending.push(alias);
+        }
+      }
+      for (const receipt of registryRowsMatching(file, "receipts", "conversationId", [...identities])) {
+        result.receipts[receipt.launchId] = clone(receipt);
+      }
+      return result;
+    });
+  }
+
   /** A detached delivery view for one conversation, including historical aliases. */
   conversationDeliverySnapshot(target: { conversationId?: string | null; path?: string }): RegistryFile {
     return this.scopedConversationSnapshot(target, false);

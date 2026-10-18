@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import os from "node:os";
 
 import { githubRunner, githubUnavailableFromError, type GithubRunner } from "@/lib/monitor/githubEvidence";
@@ -254,6 +255,7 @@ function applyOutcome(entry: ForgeRepositoryEntry, outcome: RepositoryOutcome, s
  * written once per repository. Returns the repositories it read.
  */
 export async function sweepForgeLinks(ports: ForgeSweepPorts): Promise<string[]> {
+  return withViewerOperation("forge.sweep", async () => {
   const file = ports.file ?? forgeCacheFile();
   const demand = collectDemand(ports);
   const nudged = pendingForgeNudges();
@@ -283,6 +285,7 @@ export async function sweepForgeLinks(ports: ForgeSweepPorts): Promise<string[]>
     read.push(name);
   }
   return read;
+  });
 }
 
 /* ── Scheduling from the controller cycle ───────────────────────────────── */

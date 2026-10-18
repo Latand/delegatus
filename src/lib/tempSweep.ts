@@ -1,3 +1,5 @@
+import { performanceSpans } from "@/lib/performanceSpans";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { openHostTempRoots } from "@/lib/state/hostTempViews";
@@ -122,6 +124,7 @@ function readLink(file: string): string | null {
 /** Every process this user can inspect, in one pass over `/proc`. A process of
     another user answers nothing and cannot be using a 0700 directory of ours. */
 export function scanProcesses(procRoot = "/proc"): ProcessScan {
+  return performanceSpans.sync("proc.scan", () => {
   let entries: string[];
   try {
     entries = fs.readdirSync(procRoot);
@@ -176,6 +179,7 @@ export function scanProcesses(procRoot = "/proc"): ProcessScan {
     processes.push({ pid: Number(name), namespace, stamped, paths, references });
   }
   return { ownNamespace: readLink(path.join(procRoot, "self", "ns", "mnt")), processes };
+  });
 }
 
 /** Without `/proc`: working directories and open files through the platform backend, one namespace. */
@@ -791,7 +795,7 @@ async function cleanupWorktrees() {
 }
 
 /** The production sweep: threshold from the environment, worktrees from the pipelines store. */
-export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
+export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
   const maxAgeMs = tempSweepMaxAgeMs(env);
   const mode = tempSweepMode(env);
   if (maxAgeMs === null || mode === null) return null;
@@ -821,6 +825,14 @@ export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: 
   return report;
 }
 
+/** Production calls share the leased sweep helper. Explicit inspection ports
+ * keep the policy tests local without changing any removal decision. */
+export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
+  if (Object.keys(ports).length) return runTempSweepInHelper(env, ports);
+  const { runTempSweepOffThread } = await import("@/lib/pipelines/worktreeSweepWorker");
+  return runTempSweepOffThread(env);
+}
+
 const sweepHost = globalThis as typeof globalThis & {
   __llvTempSweepTimer?: ReturnType<typeof setTimeout>;
 };
@@ -840,7 +852,7 @@ export function startTempSweep(ports: {
   const sweep = ports.sweep ?? (() => runTempSweep());
   const arm = (delayMs: number) => {
     const timer = schedule(() => {
-      void sweep()
+      void withViewerOperation("temp.sweep", sweep)
         .catch((error) => console.error("[temp sweep] failed", error instanceof Error ? error.message : String(error)))
         .finally(() => {
           if (sweepHost.__llvTempSweepTimer === timer) arm(ports.intervalMs ?? TEMP_SWEEP_INTERVAL_MS);

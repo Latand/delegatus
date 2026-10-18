@@ -486,7 +486,7 @@ describe("MCP tool service", () => {
       expect((await service.callTool("list_tasks", args)).replayed).toBe(true);
       expect(output).toHaveBeenCalledTimes(1);
       const line = String(output.mock.calls[0]![0]);
-      expect(line).toMatch(/^\[mcp slow\] tool=list_tasks(?: [a-zA-Z]+Ms=\d+)+$/);
+      expect(line).toMatch(/^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=list_tasks(?: [a-zA-Z]+Ms=\d+)+$/);
       for (const phase of ["caller", "claim", "binding", "completion", "serialization", "serviceTotal"]) expect(line).toContain(`${phase}Ms=`);
       expect(line).not.toContain(privateSentinel);
     } finally { output.mockRestore(); }
@@ -949,7 +949,7 @@ describe("MCP tool service", () => {
     expect(processResult.exit).toBe(0);
     /* The claimant walks its wait on a stepped clock (server.lockChild.ts), so
        the budget it spent is exact: the whole 5 s, and not one pause past it. */
-    expect(processResult.error).toMatch(/^\[mcp slow\] tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
+    expect(processResult.error).toMatch(/^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
     expect(Number(processResult.error.match(/claimMs=(\d+)/)?.[1])).toBe(5_000);
     expect(JSON.parse(fs.readFileSync(resultPath, "utf8"))).toMatchObject({
       outcome: "failed",
@@ -1480,7 +1480,7 @@ describe("MCP tool service", () => {
 
     for (const claimant of claimants) {
       expect(claimant.exit).toBe(0);
-      expect(claimant.error).toMatch(/^\[mcp slow\] tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
+      expect(claimant.error).toMatch(/^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
       // Exact on the claimant's stepped clock: the whole budget, no pause past it.
       expect(Number(claimant.error.match(/claimMs=(\d+)/)?.[1])).toBe(5_000);
     }

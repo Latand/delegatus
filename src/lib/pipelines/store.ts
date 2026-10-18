@@ -1953,6 +1953,20 @@ export function savePipelines(pipelines: Pipeline[]): void {
     the full record for the closed list and by-id reads. */
 const SETTLED_PIPELINE_ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 
+/** Shared archive rows, validated by revision, database identity and decoder
+ * authority. Projection consumers must never mutate this frozen graph. */
+export function loadArchivedPipelinesForList(): readonly Pipeline[] {
+  const rows = archiveStore().loadReadonly();
+  freezeArchive(rows);
+  return rows;
+}
+
+function freezeArchive(value: unknown): void {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return;
+  for (const child of Object.values(value)) freezeArchive(child);
+  Object.freeze(value);
+}
+
 /** Cold records use the same per-record isolation and strict JSON parsing as
     the active collection. */
 export function loadArchivedPipelines(): Pipeline[] {
@@ -2015,6 +2029,28 @@ export async function checkpointPipelineRollbackMirrorsForDemotionAsync(): Promi
 export function pipelineSelectionSource() {
   const collection = pipelineStore();
   return { filename: stateDatabaseFile(), read: (id: string) => collection.get(id) };
+}
+
+/** Bind one in-flight operation to its store, avoiding state-path resolution
+ * on every tick. Replacement at the same path is guarded by the connection. */
+export function pipelineRecordReader(pipelineId: string) {
+  const { active, archive } = stores();
+  const aliasesFile = statePath("project-aliases.json");
+  // The decoder reads this file and worktree_recovery. Revision metadata for
+  // the latter travels in the same SQL query; no alias graph is copied here.
+  const authority = () => {
+    try {
+      const stat = fs.statSync(aliasesFile, { bigint: true });
+      return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.size}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+      throw error;
+    }
+  };
+  return {
+    version: active.pipelineRecordVersionReader(pipelineId, authority),
+    read: () => active.get(pipelineId) ?? archive.get(pipelineId),
+  };
 }
 
 /** Full-record read by id: the hot registry first, then the archive. */

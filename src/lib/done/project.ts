@@ -116,6 +116,9 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
           return world.album(taskId, pipeline);
         },
       });
+      // Thumbnail tiers include synchronous round and transcript-path reads.
+      // Let timers run between them even when each album promise is already settled.
+      await new Promise<void>(resolve => setImmediate(resolve));
       frame = answer.frame ?? row?.frame ?? null;
       frameCheckedAt = answer.settled ? at : null;
       if (frame && world.preserveFrame) {

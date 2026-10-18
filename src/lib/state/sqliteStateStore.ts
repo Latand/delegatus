@@ -1,3 +1,4 @@
+import { blockingWaitRole } from "@/lib/blockingWaits";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
 import crypto from "node:crypto";
@@ -16,7 +17,7 @@ import { installPipelineControllerSchedule, selectPipelineTickWork, type Pipelin
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
 import { installPipelineControllerReferences, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
 import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady } from "./pipelineEvidenceIndex";
-import { databaseFileIdentity, openCurrentDatabase } from "./currentDatabase";
+import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
 import { FileTransactionBusyError } from "./fileTransaction";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, StateDiskFullError, stateFreeBytes, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
@@ -536,7 +537,7 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
     throw classifyStateError(error, "state transaction");
   } finally {
     const heldMs = performance.now() - holdStart;
-    if (heldMs >= 50) console.warn("[state transaction-hold]", { collection, heldMs: Math.round(heldMs) });
+    if (heldMs >= 50) console.warn(`[state transaction-hold] ${JSON.stringify({ collection, heldMs: Math.round(heldMs), pid: process.pid, role: blockingWaitRole() })}`);
   }
 }
 
@@ -1182,7 +1183,7 @@ export class SqliteStateCollection<T> {
     }
     const key = this.options.readCacheKey ? JSON.stringify([path.resolve(this.filename), identity,
       this.options.collection, this.options.schemaVersion, this.options.readCacheKey, authority]) : undefined;
-    if (key) this.cacheSlot = collectionReadCache(key);
+    if (key) this.cacheSlot = collectionReadCache(key, this.options.collection === "pipelines_archive");
     return { identity, authority, key };
   }
 
@@ -1197,7 +1198,7 @@ export class SqliteStateCollection<T> {
   private publishCache(value: CollectionCache<T>, context: CollectionReadContext): readonly T[] {
     this.assertReadContext(context);
     if (context.key) {
-      this.cacheSlot = collectionReadCache(context.key);
+      this.cacheSlot = collectionReadCache(context.key, this.options.collection === "pipelines_archive");
       let bytes = 0;
       for (const row of value.records.values()) bytes += row.sourceBytes;
       rememberCollectionReadCache(this.cacheSlot, value, bytes);
@@ -1994,6 +1995,36 @@ export class SqliteStateCollection<T> {
 
   async patch<C = never>(prepare: () => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[]; companion?: CompanionPatch<C> }, options: { fenceOwner?: boolean; companion?: SqliteStateCollection<C> } = {}): Promise<void> {
     await waitForStateLock("state.patch", () => this.patchSync(prepare, options), { subject: this.options.collection });
+  }
+
+  /** One prepared, indexed revision reader per in-flight pipeline operation.
+      Check the file fence before reusing its statement, as openCurrentDatabase
+      does before preparing one. A swap rebinds it to the replacement inode. */
+  pipelineRecordVersionReader(rowKey: string, authority: () => unknown = () => this.options.decodeAuthority?.()): () => string {
+    const marker = databaseSwapMarker(this.filename);
+    let boundIdentity: string | null | undefined;
+    let read: (() => { hot: number | null; archive: number | null; recovery: number | null } | null) | undefined;
+    let previous: { identity: string | null; hot: number | null; archive: number | null; recovery: number | null; authority: unknown } | undefined;
+    let token = "";
+    return () => {
+      const identity = databaseFileIdentity(this.filename);
+      if (fs.existsSync(marker) && databaseSwapInProgress(this.filename)) throw new DatabaseReplacedError("pipeline state is being restored; try again");
+      if (!read || boundIdentity !== identity) {
+        const statement = this.readDb.query<{ hot: number | null; archive: number | null; recovery: number | null }, [string, string]>(`
+          SELECT (SELECT row_revision FROM state_rows WHERE collection = 'pipelines' AND row_key = ?) AS hot,
+                 (SELECT row_revision FROM state_rows WHERE collection = 'pipelines_archive' AND row_key = ?) AS archive,
+                 (SELECT revision FROM state_collections WHERE collection = 'worktree_recovery') AS recovery`);
+        read = () => statement.get(rowKey, rowKey);
+        boundIdentity = identity;
+      }
+      const row = read(), currentAuthority = authority();
+      if (!previous || previous.identity !== identity || previous.hot !== row?.hot
+        || previous.archive !== row?.archive || previous.recovery !== row?.recovery || previous.authority !== currentAuthority) {
+        previous = { identity, hot: row?.hot ?? null, archive: row?.archive ?? null, recovery: row?.recovery ?? null, authority: currentAuthority };
+        token = JSON.stringify(previous);
+      }
+      return token;
+    };
   }
 
   /** Each row's last-written collection revision, by row key. */

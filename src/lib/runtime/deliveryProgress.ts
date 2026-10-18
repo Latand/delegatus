@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
@@ -622,6 +623,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   }
 
   private prune(db: Database): void {
+    return withViewerOperation("delivery-progress.prune", () => {
     this.lastPruneAt = this.now();
     const cutoff = this.now() - DELIVERY_PROGRESS_TERMINAL_RETENTION_MS;
     db.query("DELETE FROM delivery_progress WHERE terminal = 1 AND updated_at < ?").run(cutoff);
@@ -637,6 +639,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     for (const [operationId, record] of this.records) {
       if (Date.parse(record.updatedAt) < cutoff && !this.dirty.has(operationId)) this.records.delete(operationId);
     }
+    });
   }
 
   /** The records already on disk, read once, so a restarted Viewer continues

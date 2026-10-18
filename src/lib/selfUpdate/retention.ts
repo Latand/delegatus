@@ -1,3 +1,5 @@
+import { performanceSpans } from "@/lib/performanceSpans";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -30,6 +32,7 @@ const under = (entry: string, root: string) => entry === root || entry.startsWit
 
 /** A lower-bound allocation count. Symlinks and device boundaries are never followed. */
 function bytesOf(directory: string): number {
+  return performanceSpans.sync("self-update.bytes", () => {
   let bytes = 0; let count = 0;
   const pending = [directory];
   const device = fs.lstatSync(directory).dev;
@@ -41,6 +44,7 @@ function bytesOf(directory: string): number {
     if (stat.isDirectory() || stat.nlink === 1) bytes += stat.blocks * 512;
   }
   return bytes;
+  });
 }
 
 function pointerDir(raw: string | null): string | null {
@@ -61,6 +65,7 @@ function releaseAge(directory: string, checkout: boolean): number {
 
 /** Successful applies call this after persisting their outcome, while update admission is held. */
 export async function retainReleases(record: LauncherRecord, inputs: RetentionInputs = {}, ports: RetentionPorts = {}): Promise<RetentionReport> {
+  return withViewerOperation("self-update.retention", async () => {
   const now = ports.now ?? Date.now;
   const run = ports.git ?? runGit;
   const report: RetentionReport = { at: new Date(now()).toISOString(), removed: [], reclaimedCacheBytes: 0, kept: [], errors: [] };
@@ -341,6 +346,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   }
   console.log(`[self-update] retention removed ${report.removed.length}; reclaimed ${report.reclaimedCacheBytes} cache bytes; ${report.errors.length} error(s)`);
   return report;
+  });
 }
 
 export function releaseRetentionStatus() {
