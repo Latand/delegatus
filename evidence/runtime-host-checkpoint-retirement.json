@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-10-18T09:49:03.976053+00:00",
+  "measuredAt": "2026-10-18T09:57:04.517608+00:00",
   "baseCommit": "f69ba98f92fcd84743c9570ca7a2ba011b474742",
   "sourceFile": "src/runtime-host/journal.ts",
   "sourceBlobs": {
@@ -9,10 +9,10 @@
   "runtime": "Bun 1.4.0 (34cbb9a40)",
   "method": {
     "source": "Verifier cbaaf29a mixed-burst harness, recovered from its tool transcript. The verifier removed its original backup; this is a fresh read-only SQLite backup of the same installation with the same retained-event/checkpoint shape.",
-    "harnessSha256": "edeafb0abad0b943efb595b51ce863530aa3ae2d9d0e432c1f6d4e89071fc69f",
+    "harnessSha256": "69f37ae938f294455e02526f21e7ee75602ead0eaa0a8f2ef09acfe00dcf4569",
     "adaptations": [
       "One repetition per invocation, interleaved base/head three times.",
-      "Measure the keyed statement run in addition to the original exec timing; request workload and 400 ms cadence unchanged."
+      "Time keyed statement lookup/preparation, binding and run together, matching the entire original exec call boundary; workload and 400 ms cadence unchanged."
     ],
     "isolation": "Scratch clone, private HOME/XDG_CONFIG_HOME/XDG_CACHE_HOME/TMPDIR/LLV_STATE_DIR, closed Viewer control port, private Unix sockets; source opened mode=ro and backed up once.",
     "command": "bash scripts/gate-slot.sh python3 <scratch>/measure.py; each sample runs bun scripts/stall-audit.ts recovered from the verifier.",
@@ -28,7 +28,7 @@
       "summarySnapshots": 12
     },
     "processes": "Real RuntimeJournal, RuntimeHost and socket server in one child; UnixRuntimeHostClient in a separate caller process.",
-    "claim": "Checkpoint DELETE execution only. Other compaction, projection and RPC work is excluded from this component measurement."
+    "claim": "Checkpoint DELETE call, including statement lookup/preparation, binding and execution. Other compaction, projection and RPC work is excluded from this component measurement."
   },
   "fixture": {
     "bytes": 609464320,
@@ -55,14 +55,30 @@
     ]
   },
   "loadContext": {
-    "loadavg": [
-      "6.97",
-      "6.11",
-      "5.73"
-    ],
     "cpuCount": 24,
     "tightestCpuQuota": "max 100000",
-    "tightestMemoryBytes": 4294967296
+    "tightestMemoryBytes": 4294967296,
+    "scope": "Caller cgroup limits; load observations during the aligned campaign.",
+    "observations": [
+      {
+        "at": "2026-10-18T09:55:59.976252+00:00",
+        "loadavg": [
+          "7.65",
+          "7.09",
+          "6.41"
+        ],
+        "completedSamples": 4
+      },
+      {
+        "at": "2026-10-18T09:56:37.858055+00:00",
+        "loadavg": [
+          "7.68",
+          "7.18",
+          "6.47"
+        ],
+        "completedSamples": 6
+      }
+    ]
   },
   "results": [
     {
@@ -70,22 +86,22 @@
       "round": 1,
       "cleanupMs": {
         "n": 240,
-        "p50": 6.555562,
-        "p95": 9.908588,
-        "max": 11.619632,
-        "sum": 1695.178091
+        "p50": 6.586463,
+        "p95": 9.367802,
+        "max": 12.378711,
+        "sum": 1662.564019
       },
       "requests": 504,
       "errors": 0,
       "clientFailures": 0,
-      "elapsedMs": 23791.190755,
-      "hostGapMaxMs": 612.517267,
+      "elapsedMs": 23796.086434,
+      "hostGapMaxMs": 615.986365,
       "appendServiceMs": {
         "n": 240,
-        "p50": 14.995766,
-        "p95": 22.5511,
-        "max": 321.825725,
-        "sum": 4139.307667
+        "p50": 14.96408,
+        "p95": 22.886559,
+        "max": 333.070165,
+        "sum": 4132.376275
       }
     },
     {
@@ -93,22 +109,22 @@
       "round": 1,
       "cleanupMs": {
         "n": 240,
-        "p50": 0.024825,
-        "p95": 0.047637,
-        "max": 0.124203,
-        "sum": 6.643849
+        "p50": 0.053649,
+        "p95": 0.124223,
+        "max": 1.914848,
+        "sum": 16.80214
       },
       "requests": 504,
       "errors": 0,
       "clientFailures": 0,
-      "elapsedMs": 23759.378535,
-      "hostGapMaxMs": 821.260998,
+      "elapsedMs": 23824.504567,
+      "hostGapMaxMs": 741.01619,
       "appendServiceMs": {
         "n": 240,
-        "p50": 10.124401,
-        "p95": 16.140598,
-        "max": 194.111142,
-        "sum": 2786.131172
+        "p50": 10.07837,
+        "p95": 16.683744,
+        "max": 346.399159,
+        "sum": 2932.981847
       }
     },
     {
@@ -116,22 +132,22 @@
       "round": 2,
       "cleanupMs": {
         "n": 240,
-        "p50": 6.882878,
-        "p95": 10.841859,
-        "max": 12.886294,
-        "sum": 1846.388293
+        "p50": 6.795092,
+        "p95": 10.441083,
+        "max": 11.877525,
+        "sum": 1756.067812
       },
       "requests": 504,
       "errors": 0,
       "clientFailures": 0,
-      "elapsedMs": 23859.853924,
-      "hostGapMaxMs": 677.161234,
+      "elapsedMs": 23814.636752,
+      "hostGapMaxMs": 639.351933,
       "appendServiceMs": {
         "n": 240,
-        "p50": 17.309912,
-        "p95": 25.283568,
-        "max": 276.722061,
-        "sum": 4684.128645
+        "p50": 16.235054,
+        "p95": 25.75724,
+        "max": 268.636047,
+        "sum": 4407.526315
       }
     },
     {
@@ -139,22 +155,22 @@
       "round": 2,
       "cleanupMs": {
         "n": 240,
-        "p50": 0.029004,
-        "p95": 0.051965,
-        "max": 0.095711,
-        "sum": 7.69218
+        "p50": 0.057448,
+        "p95": 0.11687,
+        "max": 0.207424,
+        "sum": 15.671842
       },
       "requests": 504,
       "errors": 0,
       "clientFailures": 0,
-      "elapsedMs": 23795.537491,
-      "hostGapMaxMs": 822.771994,
+      "elapsedMs": 23803.783699,
+      "hostGapMaxMs": 750.043627,
       "appendServiceMs": {
         "n": 240,
-        "p50": 11.532762,
-        "p95": 18.069503,
-        "max": 334.713055,
-        "sum": 3239.946396
+        "p50": 10.899248,
+        "p95": 19.116492,
+        "max": 274.58289,
+        "sum": 3204.90143
       }
     },
     {
@@ -162,22 +178,22 @@
       "round": 3,
       "cleanupMs": {
         "n": 240,
-        "p50": 7.346293,
-        "p95": 10.780592,
-        "max": 12.8779,
-        "sum": 1953.268126
+        "p50": 7.402503,
+        "p95": 11.273487,
+        "max": 26.317902,
+        "sum": 1981.768829
       },
       "requests": 504,
       "errors": 0,
       "clientFailures": 0,
-      "elapsedMs": 23816.173874,
-      "hostGapMaxMs": 710.792779,
+      "elapsedMs": 23836.451918,
+      "hostGapMaxMs": 750.497639,
       "appendServiceMs": {
         "n": 240,
-        "p50": 18.454154,
-        "p95": 27.651452,
-        "max": 294.989916,
-        "sum": 5050.273852
+        "p50": 19.642615,
+        "p95": 28.866767,
+        "max": 288.969317,
+        "sum": 5202.295966
       }
     },
     {
@@ -185,22 +201,22 @@
       "round": 3,
       "cleanupMs": {
         "n": 240,
-        "p50": 0.027444,
-        "p95": 0.052687,
-        "max": 0.070013,
-        "sum": 7.341017
+        "p50": 0.054811,
+        "p95": 0.11125,
+        "max": 0.189349,
+        "sum": 14.813816
       },
       "requests": 504,
       "errors": 0,
       "clientFailures": 0,
-      "elapsedMs": 23774.173224,
-      "hostGapMaxMs": 724.321866,
+      "elapsedMs": 23784.171545,
+      "hostGapMaxMs": 830.114889,
       "appendServiceMs": {
         "n": 240,
-        "p50": 10.833768,
-        "p95": 18.350926,
-        "max": 257.771431,
-        "sum": 3146.165476
+        "p50": 10.721679,
+        "p95": 17.011694,
+        "max": 274.952785,
+        "sum": 2990.405428
       }
     }
   ],
