@@ -224,8 +224,7 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
     return next;
   });
 }
-export function curationView(project: string, now = Date.now()) {
-  const scopeRows = curationScopes(project);
+export function curationView(project: string, now = Date.now(), scopeRows = curationScopes(project)) {
   const { lastAt, nextAt, newLessons } = curationStatus(project, now, undefined, scopeRows);
   // A call touching several scopes leaves the same receipt in each history.
   // Preserve readPass's last-scope-wins deduplication by (pass, timestamp).

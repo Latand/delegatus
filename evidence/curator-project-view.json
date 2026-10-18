@@ -3,20 +3,28 @@
   "baseRevision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
   "sourceFiles": [
     {
+      "path": "src/app/api/role-memory/route.ts",
+      "sha256": "67a55e510d5819b2399659a444697ff21ac52b3e9be49ebf687a4e53e9a2a1d9"
+    },
+    {
       "path": "src/lib/memory/curation/read.ts",
-      "sha256": "59220ff7513ca32eb62bbc9c0a88f34f072a790637041bc4050293d0cbc34c53"
+      "sha256": "d5f8295886feb58519f479ba675d8aee8f22d3e690b651a2abbb921c6406c177"
     },
     {
       "path": "src/lib/memory/curation/store.ts",
-      "sha256": "dd1f0ca3ff1276d6e93958229c741d51784c367125e718ea886e7e5a31701cc4"
+      "sha256": "0d7f067052479c47e8037b7d89e97cc45488400bd9e28c73e1606a9ff00257fa"
     },
     {
       "path": "src/lib/memory/roleStore.ts",
-      "sha256": "8ae4b8b7825f80988a3cd092b72783e77d66faa88e1d9b85b4ec1c605cd59426"
+      "sha256": "c56e229c79e13f666767bc5ad6af338ddd1664abbe60cf1acf9af6ba9c566ac3"
+    },
+    {
+      "path": "src/lib/memory/roleView.test.ts",
+      "sha256": "11db5c56fa69649eacd8e33d173b8f91d43c2345221c4b15bc596e6f6d2d8153"
     },
     {
       "path": "src/lib/memory/roleViewSource.ts",
-      "sha256": "0dab89b1d0be385adf51c6181da60197abb2c1a87e8b827e12f19ba8e1fb6e10"
+      "sha256": "6311ae875f19e047a3e40ec66fefede02299aeeef71715f9b3a73dde7877d194"
     },
     {
       "path": "src/lib/performanceSpans.ts",
@@ -2660,23 +2668,230 @@
   "verification": [
     {
       "command": "bun test src/lib/memory/roleView.test.ts src/lib/memory/roleStore.test.ts src/lib/memory/curation/curation.test.ts",
-      "passed": 116,
+      "passed": 117,
       "failed": 0
     },
     {
-      "command": "bun test src/lib/performanceSpans.test.ts src/lib/viewerLoopMonitor.test.ts",
-      "passed": 18,
-      "failed": 0
+      "command": "bunx tsc --noEmit",
+      "exitCode": 0
     },
     {
-      "command": "node --max-old-space-size=6144 node_modules/typescript/bin/tsc --noEmit --incremental false",
+      "command": "bun run privacy:check",
       "exitCode": 0
     }
   ],
   "verificationFiles": [
     {
+      "path": "src/app/api/role-memory/route.ts",
+      "sha256": "67a55e510d5819b2399659a444697ff21ac52b3e9be49ebf687a4e53e9a2a1d9"
+    },
+    {
+      "path": "src/lib/memory/curation/read.ts",
+      "sha256": "d5f8295886feb58519f479ba675d8aee8f22d3e690b651a2abbb921c6406c177"
+    },
+    {
+      "path": "src/lib/memory/curation/store.ts",
+      "sha256": "0d7f067052479c47e8037b7d89e97cc45488400bd9e28c73e1606a9ff00257fa"
+    },
+    {
+      "path": "src/lib/memory/roleStore.ts",
+      "sha256": "c56e229c79e13f666767bc5ad6af338ddd1664abbe60cf1acf9af6ba9c566ac3"
+    },
+    {
       "path": "src/lib/memory/roleView.test.ts",
-      "sha256": "fe549b0ce7bd69c4630ee34f348043c0f28ae3b6eb4558e168163e7272a23b4b"
+      "sha256": "11db5c56fa69649eacd8e33d173b8f91d43c2345221c4b15bc596e6f6d2d8153"
+    },
+    {
+      "path": "src/lib/memory/roleViewSource.ts",
+      "sha256": "6311ae875f19e047a3e40ec66fefede02299aeeef71715f9b3a73dde7877d194"
+    },
+    {
+      "path": "src/lib/performanceSpans.ts",
+      "sha256": "bc110f29b5cb830b32ba1ea832fae4b5832129f597f57a11c6835ba60058040a"
+    },
+    {
+      "path": "src/lib/viewerLoopMonitor.ts",
+      "sha256": "5f6deddf6179556885114738c586042b2a9cfba4a04db8ed63c8dc98d85c387d"
     }
-  ]
+  ],
+  "refreshReplay": {
+    "method": "Production projectViewAsync via HTTP/curator path; 10 ms timer with 80 ms settlement; each cold state in a fresh Bun process; actual roleMemoryCollection boundedPatch revision increments before post-revision reads.",
+    "input": {
+      "logicalSha256": "720c7f6a220c35d67560eebdab2a84a1972e9a78619e818b096d4446891d3848",
+      "scopeRows": 112,
+      "scopeBytes": 15245443,
+      "roleMemoryBytes": 15322816,
+      "activeRules": 200,
+      "retainedPasses": 50,
+      "bun": "1.4.0"
+    },
+    "runs": [
+      {
+        "startedAt": "2026-10-18T19:57:16.263Z",
+        "loadAverage": [
+          6.4,
+          6.02,
+          5.89
+        ],
+        "h8Cold": [
+          73.54,
+          12.17
+        ],
+        "h8Hit": [
+          0.31,
+          0.1
+        ],
+        "d6Overview": [
+          1.98,
+          1.07
+        ],
+        "d6Scope": [
+          14.79,
+          4.8
+        ],
+        "h8AfterRevision": [
+          [
+            74.59,
+            12.26
+          ],
+          [
+            65.67,
+            8.54
+          ],
+          [
+            67.2,
+            9.75
+          ]
+        ],
+        "d6ScopeAfterRevision": [
+          [
+            70.39,
+            11.28
+          ],
+          [
+            82.15,
+            20.1
+          ],
+          [
+            72.48,
+            12.84
+          ]
+        ]
+      },
+      {
+        "startedAt": "2026-10-18T19:57:19.617Z",
+        "loadAverage": [
+          6.53,
+          6.05,
+          5.9
+        ],
+        "h8Cold": [
+          78.19,
+          6.21
+        ],
+        "h8Hit": [
+          0.49,
+          0.11
+        ],
+        "d6Overview": [
+          1.89,
+          0.09
+        ],
+        "d6Scope": [
+          20.21,
+          10.23
+        ],
+        "h8AfterRevision": [
+          [
+            75.74,
+            11.7
+          ],
+          [
+            68.39,
+            10.79
+          ],
+          [
+            69.95,
+            11.02
+          ]
+        ],
+        "d6ScopeAfterRevision": [
+          [
+            73.3,
+            10.87
+          ],
+          [
+            75.95,
+            6.54
+          ],
+          [
+            73.54,
+            12.76
+          ]
+        ]
+      },
+      {
+        "startedAt": "2026-10-18T19:57:24.397Z",
+        "loadAverage": [
+          7.13,
+          6.18,
+          5.95
+        ],
+        "h8Cold": [
+          127.53,
+          17.57
+        ],
+        "h8Hit": [
+          0.62,
+          0.14
+        ],
+        "d6Overview": [
+          2.77,
+          0.09
+        ],
+        "d6Scope": [
+          31.57,
+          21.59
+        ],
+        "h8AfterRevision": [
+          [
+            120.08,
+            20.59
+          ],
+          [
+            113.77,
+            16.13
+          ],
+          [
+            127.57,
+            29.27
+          ]
+        ],
+        "d6ScopeAfterRevision": [
+          [
+            104.47,
+            18.02
+          ],
+          [
+            126.79,
+            22.42
+          ],
+          [
+            117.4,
+            19.45
+          ]
+        ]
+      }
+    ],
+    "sampleTuple": [
+      "wallMs",
+      "maxTimerGapMs"
+    ],
+    "loadAverageTuple": [
+      "1m",
+      "5m",
+      "15m"
+    ],
+    "inputComparison": "This deterministic generated fixture differs from the frozen production copy used by the original before/after replay; no cross-input speed ratio is claimed."
+  }
 }

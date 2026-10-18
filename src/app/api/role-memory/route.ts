@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
-import { deleteRule, projectView, restoreRule, revertRule, RoleMemoryRefusal } from "@/lib/memory/roleStore";
+import { deleteRule, projectViewAsync, restoreRule, revertRule, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { revertCuratorPass } from "@/lib/memory/curation/apply";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 export const runtime = "nodejs";
@@ -12,8 +12,8 @@ export const dynamic = "force-dynamic";
 const NO_STORE = { headers: { "Cache-Control": "no-store" } };
 /** A rule id as the store draws it (eight random bytes), or the four-byte form it drew before. */
 const RULE_ID = /^r_(?:[0-9a-f]{16}|[0-9a-f]{8})$/;
-function answer(project: string) {
-  try { return Response.json(projectView(project), NO_STORE); }
+async function answer(project: string) {
+  try { return Response.json(await projectViewAsync(project), NO_STORE); }
   catch { return Response.json({ error: "unavailable" }, { status: 503, ...NO_STORE }); }
 }
 export async function GET(request: NextRequest) {

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { effectiveCurationSetting, readSeatTickSettings, writeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
-import { projectView, roleMemoryCollection } from "./roleStore";
+import { projectView, projectViewAsync, roleMemoryCollection } from "./roleStore";
 import { otherProjectRoleRules, roleViewVersion } from "./roleViewSource";
 import { claimPass, curationView, patchPass, readPass } from "./curation/store";
 import { readCuration } from "./curation/read";
@@ -118,6 +118,29 @@ test("memo hits decode nothing, preserve time fields and refuse mutation of shar
   expect(() => first.value.scopes[0].active.push(first.value.scopes[0].active[0])).toThrow();
   expect(projectView(PROJECT, NOW + 86_400_000).scopes[0].active[0].fresh).toBe(false);
   expect(projectView(PROJECT, NOW - 1).scopes[0].active[0].fresh).toBe(true);
+});
+
+test("the production view reader yields while projecting retained scope history", async () => {
+  const memory = seed([rule(undefined, SCOPE, { curatedAt: AT })]);
+  const largePrior = "previous rule payload ".repeat(500);
+  memory.boundedPatch(2, tx => {
+    const held = tx.get(`s:${SCOPE}`) as RoleMemoryScopeRow;
+    tx.put({ ...held, curatedAt: AT, history: Array.from({ length: 32 }, (_, index) => ({
+      revision: index + 1, at: AT, by: "operator" as const, added: [], merged: [], archived: [], before: [largePrior],
+    })) });
+  });
+  const expected = projectView(PROJECT, NOW);
+  (globalThis as typeof globalThis & { __llvProjectViews?: Map<string, unknown> }).__llvProjectViews?.clear();
+  let yielded = false;
+  const priorSpans = Math.max(0, ...performanceSpans.snapshot().records.map(record => record.sequence));
+  const nextTurn = new Promise<void>(resolve => setImmediate(() => { yielded = true; resolve(); }));
+  const result = await projectViewAsync(PROJECT, NOW);
+  await nextTurn;
+  expect(yielded).toBe(true);
+  expect(result).toEqual(expected);
+  expect(performanceSpans.snapshot().records.some(record => record.sequence > priorSpans && performanceSites[record.site] === "memory.project-view" && record.kind === "sync" && !record.failed)).toBe(true);
+  expect(result.scopes[0].revision).toBe(1);
+  expect(result.scopes[0].active[0].awaitingCuration).toBe(false);
 });
 
 test("settings, kill switch and project succession invalidate warmed answers", () => {

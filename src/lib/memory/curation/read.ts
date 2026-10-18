@@ -3,11 +3,11 @@ import { readHistoryProjection, historyAttemptCounts } from "@/lib/state/history
 import { listRoles, roleScaffoldBody, roleFenceBlock } from "@/lib/roles/registry";
 import { defaultRoleParameterValue } from "@/lib/roles/parameters";
 import { canonicalProject } from "@/lib/projects/aliases";
-import { canonicalScope, projectView, roleMemoryCollection, RoleMemoryRefusal } from "../roleStore";
+import { canonicalScope, projectViewAsync, RoleMemoryRefusal } from "../roleStore";
 import { isCrossProjectRoleScope, scopeRole } from "../roleScopes";
 import { scopeChars } from "../roleConsolidate";
 import { ROLE_MEMORY_BOUND } from "../roleTypes";
-import { otherProjectRoleRules } from "../roleViewSource";
+import { otherProjectRoleRules, roleScopeReadMetadata } from "../roleViewSource";
 import type { CuratorPass } from "./store";
 
 const PAGE_BYTES = 24_000;
@@ -18,15 +18,15 @@ export async function readCuration(pass: CuratorPass, scope?: string, cursor?: s
   if (scope) pipelineSelectionSource();
   const attempts = scope ? await readHistoryProjection(db => historyAttemptCounts(db, project, now), { collections: ["pipelines","pipelines_archive"] }) : {};
   const scopes = [...new Set(pass.scopes.map(canonicalScope))];
-  const view = projectView(project, now);
+  const view = await projectViewAsync(project, now);
   if (!scope) return { pass: pass.id, scopes: scopes.map(key => {
     const held = view.scopes.find(s => s.scope === key);
     return { scope: key, revision: held?.revision ?? 0, chars: held?.chars ?? 0, bound: ROLE_MEMORY_BOUND, active: held?.active.length ?? 0, left: held?.left.length ?? 0 };
   }) };
   const resolvedScope = canonicalScope(scope);
   if (!scopes.includes(resolvedScope)) throw new RoleMemoryRefusal("CURATE_SCOPE", "scope does not belong to this pass");
-  const held = roleMemoryCollection()?.get(`s:${resolvedScope}`);
-  const revision = held?.kind === "scope" ? held.revision : 0;
+  const held = roleScopeReadMetadata(resolvedScope, pass.id);
+  const revision = held.revision;
   let offset = 0;
   if (cursor) {
     try {
@@ -39,11 +39,8 @@ export async function readCuration(pass: CuratorPass, scope?: string, cursor?: s
   const definition = role ? listRoles().find(r => r.id === role) : null;
   const scaffold = definition ? roleScaffoldBody(definition, Object.fromEntries(definition.parameters.map(parameter => [parameter.key, defaultRoleParameterValue(parameter)]))) + roleFenceBlock(definition) : null;
   const rules = view.scopes.find(s => s.scope === resolvedScope);
-  const since = held?.kind === "scope" ? held.curatedAt ?? "" : "";
-  const history = held?.kind === "scope" ? held.history : [];
-  const departuresSince = history.some(h => h.pass === pass.id)
-    ? history.filter(h => h.by === "curator" && h.pass !== pass.id).map(h => h.at).sort().at(-1) ?? ""
-    : since;
+  const since = held.curatedAt ?? "";
+  const departuresSince = held.hasPass ? held.departuresSince : since;
   const entries: Record<string, unknown>[] = [
     ...(rules?.active.slice().reverse().map(({ versions, ...rule }) => ({ kind: "active", ...rule, newSincePass: !!rule.awaitingCuration || rule.changedAt > since, versionCount: versions?.length ?? 0, earlierText: versions?.at(-1) })) ?? []),
     ...(rules?.left.filter(rule => rule.reason === "budget" || rule.changedAt > departuresSince).map(({ versions, ...rule }) => ({ kind: "left", ...rule, versionCount: versions?.length ?? 0 })) ?? []),

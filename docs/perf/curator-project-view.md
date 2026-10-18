@@ -26,8 +26,12 @@ keys. Its producers remain lesson insertion/rewrite, operator delete/restore/
 revert, curator apply/undo and the project view. No schema or persisted wire
 shape changes. Caller resolution and `attentionCallerSources` remain for L3.
 
-The operation is labelled `role-memory.view`; its synchronous body records
-`memory.project-view`, including failures.
+The operation is labelled `role-memory.view`; synchronous view work records
+`memory.project-view`, including failures. HTTP and curator reads use the
+cooperative refresh path. SQLite projects only the view fields from each scope
+row, and the history iterator decodes at most 16 entries or 12 ms of synchronous
+work before yielding. The response is assembled after all slices finish, and a
+revision change during refresh refuses the mixed snapshot.
 
 ## Input and procedure
 
@@ -49,9 +53,10 @@ local port. No probe connects to the serving installation.
 
 Run `H8`, `D6-overview` and `D6-scope-read` six times, `role-projects` eight
 times (four projects twice), and `profile-view.ts view` in two fresh processes.
-The H8/D6 readiness factory first runs `roleTarget`, which warms the views.
-`role-projects` explicitly measures first reads too. The cache-miss path still
-reads histories and lineage; its duration is reported below.
+The original H8/D6 readiness factory first runs `roleTarget`, which warms the
+views. `role-projects` explicitly measures first reads too. Those original
+measurements use the synchronous helper. Production HTTP and curator consumers
+now use the yielding refresh measured separately below.
 
 ## Original audit probe
 
@@ -101,7 +106,7 @@ These observations meet the measured H8 50 ms and scope-read 100 ms loop
 budgets and the unchanged-view 1 ms budget. They describe these copied inputs
 and recorded loads. They do not bound scheduler delays on another machine.
 
-## First reads and profiles
+## Previous synchronous candidate: first reads and profiles
 
 | Retained passes | Before first / second view, ms | After first / memo view, ms |
 | --- | ---: | ---: |
@@ -113,7 +118,40 @@ and recorded loads. They do not bound scheduler delays on another machine.
 The two before profiles put thousands of samples in `curationView` and
 `readPass`. Each after profile contains one sample and no
 `curationView` sample: the warm operation is shorter than the 1 ms sampling
-interval, so the profiles cannot resolve its remaining work.
+interval, so the profiles cannot resolve its remaining work. The candidate
+first-read results exposed the refresh gap fixed in this review round; the
+current production consumers use the yielding path measured next.
+
+## Cold and revised production refresh replay
+
+The replay exercises the current async production path in three fresh Bun
+processes with independent isolated state. Each process creates the same
+deterministic fixture: 112 scopes, 200 active rules, 50 retained curator passes
+and 15,245,443 bytes across the scope rows. The fixture's logical input digest
+is `720c7f6a220c35d67560eebdab2a84a1972e9a78619e818b096d4446891d3848`.
+H8 first reads the cold view, then measures an unchanged-revision hit. D6 reads
+the overview and the largest scope. Three real `boundedPatch` scope revision
+bumps then measure H8 refreshes and D6 scope reads at the new revisions. A 10 ms
+timer records its largest delay through an 80 ms settlement after each call;
+reported wall time brackets the application read only. Load averages are
+recorded with each sample; the three runs ranged from 6.19–7.13 (1 min),
+5.96–6.18 (5 min), and 5.87–5.95 (15 min). Bun was 1.4.0.
+
+| Read | Wall time, ms | Largest timer gap, ms |
+| --- | ---: | ---: |
+| H8 cold first read | 73.54–127.53 | 6.21–17.57 |
+| H8 unchanged revision | 0.31–0.62 | 0.10–0.14 |
+| H8 after scope revision | 65.67–127.57 | 8.54–29.27 |
+| D6 overview, warm | 1.89–4.07 | 0.09–1.07 |
+| D6 scope, warm | 14.79–31.57 | 4.80–21.59 |
+| D6 scope after scope revision | 70.39–126.79 | 6.54–22.42 |
+
+All measured timer gaps meet H8's 50 ms limit and D6 scope-read's 100 ms limit.
+Unchanged H8 reads remain below 1 ms. Cold and revised wall times include
+yields between history slices; the loop remains available during that work.
+Per-run timestamps, loads and repetitions are retained in the evidence record.
+These generated-fixture runs measure refresh behavior and use a different
+input from the frozen copy used for the original before/after table.
 
 Queries use the existing `(collection, row_key)` index to restrict native
 selection to scope keys, rule rows or request rows before returning selected

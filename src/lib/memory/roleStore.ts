@@ -14,7 +14,7 @@ import { initializeStateCollections, SqliteStateCollection, stateCollectionsInit
 import { appendRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
 import { roleMemoryEnabled } from "./settings";
 import { curationRevision, curationView } from "./curation/store";
-import { projectViewRows, roleScopeKeys, roleViewVersion } from "./roleViewSource";
+import { projectViewRows, projectViewRowsCooperatively, roleScopeKeys, roleViewVersion } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
 import { renderLearnedRulesSelection } from "./roleRender";
 import {
@@ -503,6 +503,11 @@ export function projectView(project: string, now = Date.now()): RoleMemoryProjec
   return withViewerOperation("role-memory.view", () => performanceSpans.sync("memory.project-view", () => projectViewMemo(project, now)));
 }
 
+/** Production readers yield between bounded history slices on cold and revised views. */
+export async function projectViewAsync(project: string, now = Date.now()): Promise<RoleMemoryProjectView> {
+  return withViewerOperation("role-memory.view", () => projectViewAsyncMemo(project, now));
+}
+
 type ProjectViewMemo = { stamp: string; guard: string; from: number; until: number; bytes: number; value: RoleMemoryProjectView };
 // One LRU across Next server bundles, bounded by both entries and serialized
 // bytes. It owns only rendered views; scope histories never enter this memo.
@@ -522,7 +527,10 @@ function timedProjectView(value: RoleMemoryProjectView, now: number): RoleMemory
   return { ...value, ...(curation ? { curation: { ...curation,
     nextAt: curation.nextAt && Date.parse(curation.nextAt) < now ? new Date(now).toISOString() : curation.nextAt } } : {}) };
 }
-function projectViewMemo(project: string, now: number): RoleMemoryProjectView {
+function projectViewContext(project: string, now: number): {
+  canonical: string; file: string; memoKey: string; guard: string; enabled: boolean;
+  stamp: () => string; hit: RoleMemoryProjectView | null;
+} {
   const canonical = canonicalProject(project);
   const file = statePath("state.sqlite");
   const memoKey = `${file}:${canonical}`;
@@ -539,7 +547,7 @@ function projectViewMemo(project: string, now: number): RoleMemoryProjectView {
   const memo = projectViews.get(memoKey);
   if (memo?.guard === guard && now >= memo.from && now < memo.until) {
     projectViews.delete(memoKey); projectViews.set(memoKey, memo);
-    return timedProjectView(memo.value, now);
+    return { canonical, file, memoKey, guard, enabled: roleMemoryEnabled(), stamp: () => "", hit: timedProjectView(memo.value, now) };
   }
   const enabled = roleMemoryEnabled();
   const stamp = () => `${databaseFileIdentity(file)}:${roleMemoryCollection()?.revision()}:${curationRevision()}:${enabled}:${JSON.stringify(projectAliasSnapshot().aliases)}:${JSON.stringify(effectiveCurationSetting(readSeatTickSettings(canonical)))}`;
@@ -547,12 +555,32 @@ function projectViewMemo(project: string, now: number): RoleMemoryProjectView {
   if (memo?.stamp === revision && now >= memo.from && now < memo.until) {
     memo.guard = guard;
     projectViews.delete(memoKey); projectViews.set(memoKey, memo);
-    return timedProjectView(memo.value, now);
+    return { canonical, file, memoKey, guard, enabled, stamp, hit: timedProjectView(memo.value, now) };
   }
+  return { canonical, file, memoKey, guard, enabled, stamp, hit: null };
+}
+
+function projectViewMemo(project: string, now: number): RoleMemoryProjectView {
+  const context = projectViewContext(project, now);
+  if (context.hit) return context.hit;
   joinMovedScopes();
-  const buildRevision = stamp();
+  const buildRevision = context.stamp();
+  const all = projectViewRows(context.canonical);
+  return buildProjectView(context, now, buildRevision, all);
+}
+
+async function projectViewAsyncMemo(project: string, now: number): Promise<RoleMemoryProjectView> {
+  const context = projectViewContext(project, now);
+  if (context.hit) return context.hit;
+  joinMovedScopes();
+  const buildRevision = context.stamp();
+  const all = await projectViewRowsCooperatively(context.canonical);
+  return performanceSpans.sync("memory.project-view", () => buildProjectView(context, now, buildRevision, all));
+}
+
+function buildProjectView(context: ReturnType<typeof projectViewContext>, now: number, buildRevision: string, all: RoleMemoryRow[]): RoleMemoryProjectView {
+  const { canonical, file, memoKey, guard, enabled, stamp } = context;
   const resolve = scopeResolver();
-  const all = projectViewRows(canonical);
   const rulesById = new Map<string, RoleMemoryRule>();
   const scopesByKey = new Map<string, RoleMemoryScopeRow>();
   const leftByScope = new Map<string, RoleMemoryRule[]>();
@@ -583,7 +611,7 @@ function projectViewMemo(project: string, now: number): RoleMemoryProjectView {
       active: active.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))), left: left.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))),
     };
   });
-  const value = { project: canonical, enabled, scopes, curation: curationView(canonical, now) };
+  const value = { project: canonical, enabled, scopes, curation: curationView(canonical, now, all.flatMap(row => row.kind === "scope" ? [row] : [])) };
   if (stamp() !== buildRevision) throw new StateSnapshotChangedError();
   const bytes = Buffer.byteLength(JSON.stringify(value));
   projectViews.delete(memoKey);
