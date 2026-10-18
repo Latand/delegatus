@@ -13,7 +13,7 @@ import { activeCodexAccountId, listCodexAccounts, type CodexAccount } from "@/li
 import { activeCopilotAccountId, copilotSignedInUser, listCopilotAccounts, type CopilotAccount } from "@/lib/accounts/copilot";
 import { managedCodexRuntime, type CodexQuotaProbe } from "@/lib/accounts/codexRuntime";
 import type { AppServerResetCredits } from "@/lib/accounts/codexAppServer";
-import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, RegistryWriterBusyError, type AgentRegistry } from "@/lib/agent/registry";
 import { logQuotaEvent } from "@/lib/events";
 import { adoptClaudeLimitsSnapshot, readClaudeAccountLimits, readCodexLimits } from "@/lib/limits";
 import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
@@ -318,7 +318,7 @@ export class QuotaController {
     const currentRevision = accountsCollectionRevision();
     const current = new Map(this.probe.list(engine).map((account) => [account.id, account]));
     const active = this.probe.active(engine);
-    const accepted = await withAccountMutationLockAsync(() => {
+    const accepted = await this.registry.accountMutationWrite("quota.commit", () => {
       // A switch (including switch-away-and-back), removal or login mutation
       // invalidates the read. Never let an old probe restore retired state.
       if (currentRevision !== accountsCollectionRevision() || snapshot.revision !== currentRevision
@@ -349,7 +349,7 @@ export class QuotaController {
         const durable = observations.map(observation => durableQuotaObservation({ ...observation, engine }, this.bootId));
         const changed = durable.filter(observation => !isDeepStrictEqual(previousByAccount.get(observation.accountId), observation));
         if (engine === "copilot") {
-          changed.forEach(observation => this.registry.recordQuotaObservation(observation));
+          this.registry.recordQuotaObservations(changed);
           return observations;
         }
         // A cached provider answer carries its original timestamps. Rewriting
@@ -364,8 +364,9 @@ export class QuotaController {
         });
       }
       return observations;
-    }, { holder: "quota commit" });
-    const observations = accepted;
+    });
+    if (!accepted.acquired) throw new RegistryWriterBusyError("quota.commit");
+    const observations = accepted.value;
     const accounts = new Map(snapshot.accounts.map(({ account }) => [account.id, account]));
     observations.forEach((observation) => {
       const account = accounts.get(observation.accountId)!;

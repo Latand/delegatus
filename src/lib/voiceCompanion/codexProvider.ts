@@ -8,7 +8,7 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { accountProjectBindings, type AccountProjectBinding } from "@/lib/accounts/projectBindings";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
-import { recordLiveObservation } from "@/lib/accounts/liveLimits";
+import { recordLiveObservationOffLoop } from "@/lib/accounts/liveLimits";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import type { QuotaObservation } from "@/lib/accounts/migration/quotaPolicy";
 import { mapAppServerRateLimits } from "@/lib/limits";
@@ -283,7 +283,9 @@ export class CodexLiveProvider implements LiveProvider {
     const observation: QuotaObservation = { engine: "codex", accountId: call.account.id, authenticated: true, authCheckedAt: this.now(), observedAt: this.now(),
       limits: mapAppServerRateLimits(rateLimits, Math.floor(this.now() / 1000)), provenance: { source: "live", reason: null, staleSince: null },
       ...(call.reachedMarker === undefined ? {} : { limitReached: call.reachedMarker }) };
-    if (this.options.recordObservation) this.options.recordObservation(observation); else recordLiveObservation(observation, "managed");
+    if (this.options.recordObservation) this.options.recordObservation(observation); else void recordLiveObservationOffLoop(observation, "managed").catch(error => {
+      console.error("[voice] quota observation persistence failed", error);
+    });
     this.emit(call, { type: "codex.plan", plan: call.plan });
     return reached ? { resetsAt } : null;
   }

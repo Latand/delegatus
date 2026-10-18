@@ -219,7 +219,7 @@ export async function applyStructuredReconfigure(
     const successorKey = { engine: latest.engine, sessionId: successor.id } as const;
     await release(successorKey);
     if (!await ownsDurableReconfigure("failed")) throw new StructuredReconfigureSupersededError();
-    registry.terminateStructuredHost(successorKey);
+    (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, successorKey)));
     if (!await ownsDurableReconfigure("failed")) throw new StructuredReconfigureSupersededError();
     const restored = await recover({ path: successor.path, conversationId }, {
       registry,
@@ -237,12 +237,12 @@ export async function applyStructuredReconfigure(
       if (predecessor) {
         const predecessorKey = { engine: conversation.engine, sessionId: predecessor.id } as const;
         await release(predecessorKey);
-        registry.terminateStructuredHost(predecessorKey);
+        (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, predecessorKey)));
       }
       if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
       await release(key);
       if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
-      registry.terminateStructuredHost(key);
+      (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, key)));
       if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
       const recovered = await recover({ path: generation.path, conversationId }, {
         registry,
@@ -308,7 +308,7 @@ export async function applyStructuredReconfigure(
       await release(key);
       const confirmed = committedSuccessorAfterCapturedPredecessor();
       if (!confirmed || confirmed.id !== successor.id || confirmed.path !== successor.path) return;
-      registry.terminateStructuredHost(key);
+      (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, key)));
     };
     let committedSuccessorId: string | null = null;
     try {
@@ -336,7 +336,7 @@ export async function applyStructuredReconfigure(
       }
       committedSuccessorId = current.id;
       await release(key);
-      registry.terminateStructuredHost(key);
+      (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, key)));
       await settle("applied");
       return "applied";
     } catch (error) {
@@ -355,7 +355,7 @@ export async function applyStructuredReconfigure(
     if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
     await release(key);
     if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
-    registry.terminateStructuredHost(key);
+    (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, key)));
     if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
     const recovered = await recover({ path: generation.path, conversationId }, {
       registry,

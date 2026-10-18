@@ -111,13 +111,7 @@ export async function persistCodexHost(
   writerClaimEpoch: number,
 ): Promise<AgentRegistryEntry> {
   const state = await host.health();
-  const persisted = registry.setStructuredHostClaimed(
-    key,
-    codexHostColumns(state, writerClaimEpoch),
-    registryStatus(state),
-    claimOwner,
-    writerClaimEpoch,
-  );
+  const persisted = (await registry.deliveryWriteOrBusy({ label: "registry.setStructuredHostClaimed" }, registry.setStructuredHostClaimed.bind(registry, key, codexHostColumns(state, writerClaimEpoch), registryStatus(state), claimOwner, writerClaimEpoch)));
   if (!persisted) throw new Error("structured host writer claim is stale");
   return persisted;
 }
@@ -654,7 +648,7 @@ async function endRecordedStructuredTree(
   });
   if (outcome.ok) return true;
   if (outcome.terminationStarted && outcome.survivors.length > 0) {
-    registry.recordStructuredTerminationSurvivors(key, root, outcome.survivors);
+    (await registry.deliveryWriteOrBusy({ label: "registry.recordStructuredTerminationSurvivors" }, registry.recordStructuredTerminationSurvivors.bind(registry, key, root, outcome.survivors)));
   }
   return false;
 }
@@ -777,7 +771,7 @@ export async function demoteSkippedStructuredRegistryHosts(
           activeFlags: [],
         }, "dead", claim.claimOwner!, claim.claimEpoch, true));
         if (demoted === undefined) {
-          registry.releaseStructuredHostClaim(entry.key, claim.claimOwner!, claim.claimEpoch);
+          (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claim.claimOwner!, claim.claimEpoch)));
           return;
         }
         if (!demoted) throw new Error("structured host writer claim is stale");
@@ -824,7 +818,7 @@ export async function adoptCodexRegistryHosts(
         if (!current?.structuredHost || !shouldAdopt(current)) return;
         const socketOwner = current.structuredHost.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
           ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process } : undefined;
-        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner }));
+        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner }))));
         if (!claimed && !socketOwner) {
           const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
           const orphan = current?.structuredHost?.kind === "codex-app-server"
@@ -836,12 +830,12 @@ export async function adoptCodexRegistryHosts(
             && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, dependencies.orphanStop)) {
             const retry = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
             if (!retry?.structuredHost || !shouldAdopt(retry)) return;
-            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));
+            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
           }
         }
         if (!claimed?.structuredHost) return;
         if (!shouldAdopt(claimed)) {
-          registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+          (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
           return;
         }
         /* M.4 seam 4: reopening the process is new work for every task the
@@ -851,17 +845,17 @@ export async function adoptCodexRegistryHosts(
         if (refused) {
           console.error(`[linked boards] boot adoption of ${sessionKeyId(entry.key)} refused: ${refused.error}`);
           if (socketOwner) {
-            registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+            (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
             return;
           }
-          registry.setStructuredHostClaimed(entry.key, {
+          (await registry.deliveryWriteOrBusy({ label: "registry.setStructuredHostClaimed" }, registry.setStructuredHostClaimed.bind(registry, entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",
             process: null,
             activeTurnRef: null,
             pendingAttention: [],
             activeFlags: [],
-          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true);
+          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true)));
           return;
         }
         try {
@@ -877,7 +871,7 @@ export async function adoptCodexRegistryHosts(
           const current = fresh.entries[sessionKeyId(entry.key)];
           if (!current || !registry.ownsStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch)
             || !shouldAdopt(current) || (dependencies.admit ?? adoptionRefusal)(current, fresh)) {
-            registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+            (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
             options.releaseCleanup?.();
             return;
           }
@@ -909,17 +903,17 @@ export async function adoptCodexRegistryHosts(
           dependencies.onFailure?.(entry, error);
           console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
           if (socketOwner && !processIdentityProvenDead(socketOwner.process)) {
-            registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+            (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
             return;
           }
-          registry.setStructuredHostClaimed(entry.key, {
+          (await registry.deliveryWriteOrBusy({ label: "registry.setStructuredHostClaimed" }, registry.setStructuredHostClaimed.bind(registry, entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",
             process: null,
             activeTurnRef: null,
             pendingAttention: [],
             activeFlags: [],
-          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true);
+          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true)));
         }
       });
     } catch (error) {
@@ -966,7 +960,7 @@ export async function adoptClaudeRegistryHosts(
       await registry.withOperationLock(entry.key, owner, async () => {
         const eligible = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
         if (!eligible?.structuredHost || !shouldAdopt(eligible)) return;
-        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));
+        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
         if (!claimed) {
           const current = registry.readOnlySnapshot().entries[`claude:${entry.key.sessionId}`];
           const orphan = current?.structuredHost?.kind === "claude-broker"
@@ -978,12 +972,12 @@ export async function adoptClaudeRegistryHosts(
             && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, dependencies.orphanStop)) {
             const retry = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
             if (!retry?.structuredHost || !shouldAdopt(retry)) return;
-            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));
+            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
           }
         }
         if (!claimed?.structuredHost) return;
         if (!shouldAdopt(claimed)) {
-          registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+          (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
           return;
         }
         /* M.4 seam 4: reopening the process is new work for every task the
@@ -992,14 +986,14 @@ export async function adoptClaudeRegistryHosts(
         const refused = (dependencies.admit ?? adoptionRefusal)(claimed, registry.readOnlySnapshot());
         if (refused) {
           console.error(`[linked boards] boot adoption of ${sessionKeyId(entry.key)} refused: ${refused.error}`);
-          registry.setStructuredHostClaimed(entry.key, {
+          (await registry.deliveryWriteOrBusy({ label: "registry.setStructuredHostClaimed" }, registry.setStructuredHostClaimed.bind(registry, entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",
             process: null,
             activeTurnRef: null,
             pendingAttention: [],
             activeFlags: [],
-          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true);
+          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true)));
           return;
         }
         try {
@@ -1013,7 +1007,7 @@ export async function adoptClaudeRegistryHosts(
           const current = fresh.entries[sessionKeyId(entry.key)];
           if (!current || !registry.ownsStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch)
             || !shouldAdopt(current) || (dependencies.admit ?? adoptionRefusal)(current, fresh)) {
-            registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+            (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
             options.releaseCleanup?.();
             return;
           }
@@ -1043,14 +1037,14 @@ export async function adoptClaudeRegistryHosts(
           // A refused cell (work that cannot be contained) or a failed open; the next message relaunches it.
           dependencies.onFailure?.(entry, error);
           console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
-          registry.setStructuredHostClaimed(entry.key, {
+          (await registry.deliveryWriteOrBusy({ label: "registry.setStructuredHostClaimed" }, registry.setStructuredHostClaimed.bind(registry, entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",
             process: null,
             activeTurnRef: null,
             pendingAttention: [],
             activeFlags: [],
-          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true);
+          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true)));
         }
       });
     } catch (error) {
@@ -1076,6 +1070,6 @@ export async function detachCodexHostForViewerRestart(registry: AgentRegistry, k
     || state.processStartIdentity !== entry.structuredHost.process.startIdentity
     || state.endpoint !== entry.structuredHost.endpoint) return false;
   if (!host.detachForViewerRestart()) return false;
-  registry.releaseStructuredHostClaim(key, entry.claimOwner, entry.claimEpoch);
+  (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, key, entry.claimOwner, entry.claimEpoch)));
   return true;
 }

@@ -431,7 +431,7 @@ async function recoverCandidate(
       };
       await ownership.releaseHost(current.key);
       await assertOwnership();
-      registry.terminateStructuredHost(current.key);
+      (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, current.key)));
       await assertOwnership();
       current = candidateFor(registry, request, true, park);
       if (!current) return null;
@@ -597,7 +597,7 @@ async function recoverCandidate(
     } catch (error) {
       if (ownsSuccessor()) {
         await ownership?.releaseHost(current.key);
-        if (ownsSuccessor()) registry.terminateStructuredHost(current.key);
+        if (ownsSuccessor()) (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, current.key)));
       }
       throw error;
     }

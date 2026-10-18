@@ -1,5 +1,6 @@
 import { liveRootSession } from "@/lib/root/adopt";
 import { StateLockDeferredError, waitForStateLock } from "@/lib/state/lockWait";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
@@ -5547,6 +5548,14 @@ export class AgentRegistry {
     operation: () => T,
     correlate?: (value: T) => { label: string; operationId?: string | null } | null,
   ): Promise<{ acquired: true; value: T } | { acquired: false }> {
+    return withViewerOperation("registry.write", () => this.whenWriterAdmitted(correlation, operation, correlate));
+  }
+
+  private async whenWriterAdmitted<T>(
+    correlation: { label: string; operationId?: string | null },
+    operation: () => T,
+    correlate?: (value: T) => { label: string; operationId?: string | null } | null,
+  ): Promise<{ acquired: true; value: T } | { acquired: false }> {
     if (accountMutationHeld()) return this.deliveryWriteNow(correlation, operation);
     if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
       return { acquired: true, value: withWaitCorrelation(correlation, operation) };
@@ -10067,8 +10076,15 @@ export class AgentRegistry {
       changes: the auto-balance sustain window and policy revision are the
       controller's, and an operator looking at one card must not reset them. */
   recordQuotaObservation(observation: DurableQuotaObservation): void {
+    this.recordQuotaObservations([observation]);
+  }
+
+  /** One admitted commit for all observations from the same quota probe. */
+  recordQuotaObservations(observations: readonly DurableQuotaObservation[]): void {
     this.mutate((file) => {
-      file.quotaObservations[observation.engine][observation.accountId] = clone(observation);
+      for (const observation of observations) {
+        file.quotaObservations[observation.engine][observation.accountId] = clone(observation);
+      }
     });
   }
 

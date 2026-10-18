@@ -571,11 +571,11 @@ export async function reconcileMigrationInventory(
     if (options.incrementalInventory) {
       if (observations.length) await registry.deliveryWriteOrBusy({ label: "inventory.reconcile" }, () =>
         registry.reconcileConversations(observations, { snapshot: false }));
-    } else registry.reconcileConversations(observations, { snapshot: false });
+    } else (await registry.deliveryWriteOrBusy({ label: "registry.reconcileConversations" }, registry.reconcileConversations.bind(registry, observations, { snapshot: false })));
     snapshot = options.incrementalInventory
       ? incrementalInventorySnapshot(registry, entries) : registry.readOnlySnapshot();
   } else {
-    snapshot = registry.reconcileConversations(observations);
+    snapshot = (await registry.deliveryWriteOrBusy({ label: "registry.reconcileConversations" }, () => registry.reconcileConversations(observations)));
   }
   if (!options.deferBoardRepair) {
     await repairAdoptedForkBoardPlacements(
@@ -621,7 +621,7 @@ export async function createMigrationIntent(
   // The revision fence below detects controller updates after confirmation.
   // Re-scanning here would add request latency and invalidate its own preview.
   const preview = previewFromSnapshot(engine, targetId, registry);
-  const intent = registry.commitMigrationIntent({
+  const written = await registry.accountMutationWrite("registry.commitMigrationIntent", () => registry.commitMigrationIntent({
     engine,
     targetId,
     origin,
@@ -629,8 +629,9 @@ export async function createMigrationIntent(
     expectedRevision: previewRevision ?? preview.previewRevision,
     evidence,
     scope,
-  });
-  return { intent, preview };
+  }));
+  if (!written.acquired) throw new RegistryWriterBusyError("registry.commitMigrationIntent");
+  return { intent: written.value, preview };
 }
 
 function isCopyOnly(value: SuccessorProviderPort | HistoryCopyPort): value is HistoryCopyPort {

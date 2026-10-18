@@ -1221,7 +1221,7 @@ export async function bindStructuredDeliveryQueue(
       };
       const retainedSurvivors = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.structuredTerminationSurvivors ?? [];
       let terminated = retainedSurvivors.length === 0
-        ? registry.terminateInactiveStructuredHost(conversationId as `conversation_${string}`, expectedKey)
+        ? (await registry.deliveryWriteOrBusy({ label: "registry.terminateInactiveStructuredHost" }, registry.terminateInactiveStructuredHost.bind(registry, conversationId as `conversation_${string}`, expectedKey)))
         : false;
       if (!terminated) {
         // An explicit kill does not depend on idle/severed-turn evidence. A
@@ -1270,7 +1270,7 @@ export async function bindStructuredDeliveryQueue(
         });
         if (!outcome.ok) {
           if (outcome.terminationStarted && outcome.survivors.length > 0) {
-            registry.recordStructuredTerminationSurvivors(expectedKey, ref, outcome.survivors);
+            (await registry.deliveryWriteOrBusy({ label: "registry.recordStructuredTerminationSurvivors" }, registry.recordStructuredTerminationSurvivors.bind(registry, expectedKey, ref, outcome.survivors)));
           }
           throw new Error(outcome.error);
         }
@@ -1916,14 +1916,14 @@ export async function bindStructuredDeliveryQueue(
          identity inside that signal boundary. */
       if (!releaseIfOwned || !await releaseIfOwned.call(current.host, expected)) return false;
       const registered = takeRegistration(id, current.host);
-      registry.terminateStructuredHost(key, expected);
+      (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, key, expected)));
       if (registered) await detachRegistration(id, registered);
       return true;
     }
     const registered = takeRegistration(id, current.host);
     if (!registered) return false;
     await registered.host.release();
-    registry.terminateStructuredHost(key, expected);
+    (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, key, expected)));
     await detachRegistration(id, registered);
     return true;
   };
@@ -2007,7 +2007,7 @@ export async function bindStructuredDeliveryQueue(
          registering hosts so even a registration-triggered drain sees the
          repaired durable state. */
       deferredStartupConversations = new Set(deferredConversationIds);
-      registry.repairCompletedStructuredSpawnMarkers();
+      (await registry.deliveryWriteOrBusy({ label: "registry.repairCompletedStructuredSpawnMarkers" }, registry.repairCompletedStructuredSpawnMarkers.bind(registry)));
       await phase("registering structured delivery hosts");
       for (const item of items) await register(item);
       assertActive();

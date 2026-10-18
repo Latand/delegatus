@@ -313,7 +313,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
      work that cannot be contained is refused here, before anything starts. */
   const memoryCell = structuredHostCell(input.registry, "codex", input.receipt.operationId, input.conversationId as ViewerConversationId | undefined);
   const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
-  const entry = input.registry.upsert({
+  const entry = (await input.registry.deliveryWriteOrBusy({ label: "registry.upsert" }, input.registry.upsert.bind(input.registry, {
     ...(existing ?? {
       key,
       status: "unhosted" as const,
@@ -328,9 +328,9 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     accountId: input.target.accountId,
     launchProfile: input.profile,
     structuredHostOperationId: input.receipt.operationId,
-  });
+  })));
   if (!entry.structuredHost) {
-    input.registry.setStructuredHost(key, {
+    (await input.registry.deliveryWriteOrBusy({ label: "registry.setStructuredHost" }, input.registry.setStructuredHost.bind(input.registry, key, {
       kind: "codex-app-server",
       endpoint: "stdio:pending",
       process: null,
@@ -340,10 +340,10 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
       activeTurnRef: null,
       pendingAttention: [],
       activeFlags: [],
-    }, "unhosted");
+    }, "unhosted")));
   }
   const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
-  const claimed = input.registry.claimStructuredHost(key, owner, { allowUnhosted: true });
+  const claimed = (await input.registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, input.registry.claimStructuredHost.bind(input.registry, key, owner, { allowUnhosted: true })));
   if (!claimed?.claimOwner) throw new Error("successor Codex structured host claim is unavailable");
 
   const approvalPolicy = input.profile.permissionMode
@@ -365,7 +365,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   } catch (error) {
     /* Nothing was started: release the claim and discard the pending identity,
        as on the Claude path, where this step also sits inside the try. */
-    input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+    (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, input.registry.releaseStructuredHostClaim.bind(input.registry, key, claimed.claimOwner, claimed.claimEpoch)));
     identity?.restore();
     throw error;
   }
@@ -422,7 +422,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     if (host) await host.release();
     else access.cleanup();
     stopPersistence();
-    input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+    (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, input.registry.releaseStructuredHostClaim.bind(input.registry, key, claimed.claimOwner, claimed.claimEpoch)));
     identity?.restore();
     throw error;
   }
@@ -456,7 +456,7 @@ async function publishClaudeSuccessorHost(
      work that cannot be contained is refused here, before anything starts. */
   const memoryCell = structuredHostCell(input.registry, "claude", input.receipt.operationId, input.conversationId as ViewerConversationId | undefined);
   const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
-  const entry = input.registry.upsert({
+  const entry = (await input.registry.deliveryWriteOrBusy({ label: "registry.upsert" }, input.registry.upsert.bind(input.registry, {
     ...(existing ?? {
       key,
       status: "unhosted" as const,
@@ -471,9 +471,9 @@ async function publishClaudeSuccessorHost(
     accountId: input.target.accountId,
     launchProfile: input.profile,
     structuredHostOperationId: input.receipt.operationId,
-  });
+  })));
   if (!entry.structuredHost) {
-    input.registry.setStructuredHost(key, {
+    (await input.registry.deliveryWriteOrBusy({ label: "registry.setStructuredHost" }, input.registry.setStructuredHost.bind(input.registry, key, {
       kind: "claude-broker",
       endpoint: "stdio:pending",
       process: null,
@@ -483,10 +483,10 @@ async function publishClaudeSuccessorHost(
       activeTurnRef: null,
       pendingAttention: [],
       activeFlags: [],
-    }, "unhosted");
+    }, "unhosted")));
   }
   const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
-  const claimed = input.registry.claimStructuredHost(key, owner, { allowUnhosted: true });
+  const claimed = (await input.registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, input.registry.claimStructuredHost.bind(input.registry, key, owner, { allowUnhosted: true })));
   if (!claimed?.claimOwner) throw new Error("successor Claude structured host claim is unavailable");
 
   let host: ClaudeStreamBrokerHost | null = null;
@@ -504,7 +504,7 @@ async function publishClaudeSuccessorHost(
     // Retirement awaits external cleanup. The operation and its account grant
     // must still own this successor before any native process can start.
     if (input.ownsOperation && !await input.ownsOperation()) {
-      input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+      (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, input.registry.releaseStructuredHostClaim.bind(input.registry, key, claimed.claimOwner, claimed.claimEpoch)));
       return async () => {};
     }
     identity = successorCapability(input);
@@ -575,7 +575,7 @@ async function publishClaudeSuccessorHost(
     if (host) await host.release();
     else access?.cleanup();
     stopPersistence();
-    input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+    (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, input.registry.releaseStructuredHostClaim.bind(input.registry, key, claimed.claimOwner, claimed.claimEpoch)));
     identity?.restore();
     throw error;
   }
@@ -1556,7 +1556,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     /* Whichever instance releases the host, the identity staged for this
        operation goes with it: an instance that found the host already held
        staged nothing itself, and its release closure knows nothing of it. */
-    (this.dependencies.registry ?? agentRegistry()).discardSpawnCapabilityForOperation(receipt.operationId);
+    (await (this.dependencies.registry ?? agentRegistry()).deliveryWriteOrBusy({ label: "registry.discardSpawnCapabilityForOperation" }, (this.dependencies.registry ?? agentRegistry()).discardSpawnCapabilityForOperation.bind((this.dependencies.registry ?? agentRegistry()), receipt.operationId)));
   }
 
   private async cleanupRecoveredHost(receipt: ProviderReceipt): Promise<void> {

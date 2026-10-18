@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { blockingWaitDiagnostics, resetBlockingWaitsForTests, withWaitCorrelation } from "@/lib/blockingWaits";
 
-import { AgentRegistry, normalizeRegistry } from "./registry";
+import { AgentRegistry, normalizeRegistry, setAgentRegistryForTests } from "./registry";
 import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 
 /*
@@ -316,4 +316,174 @@ test("runtime-switch cancellation reads and releases through real contended regi
     expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
     expect(blockingWaitDiagnostics().sites["registry-revision-retry"]).toBeUndefined();
   } finally { await holder.close(); registry.close(); }
+});
+
+// Exercise an actual Viewer request, rather than an already-admitted store callback.
+test("Viewer policy write lets a 10 ms timer run within 50 ms while a child holds the writer", async () => {
+  const { NextRequest } = await import("next/server");
+  const { PATCH } = await import("@/app/api/accounts/claude/policy/route");
+  const directory = fs.mkdtempSync(path.join(root, "viewer-policy-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const holder = registryLockHolder(path.join(directory, "registry.sqlite"));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const previousOwner = process.env.LLV_STATE_OWNER;
+  process.env.LLV_STATE_OWNER = "viewer";
+  setAgentRegistryForTests(registry);
+  try {
+    await holder.hold(200);
+    let settled = false;
+    const started = performance.now();
+    const tick = new Promise<{ elapsed: number; pending: boolean }>(resolve => {
+      timer = setTimeout(() => resolve({ elapsed: performance.now() - started, pending: !settled }), 10);
+    });
+    const writing = PATCH(new NextRequest("http://localhost/api/accounts/claude/policy", {
+      method: "PATCH", headers: { host: "localhost", "content-type": "application/json" },
+      body: JSON.stringify({ automaticSwitching: true, expectedRevision: 0 }),
+    })).finally(() => { settled = true; });
+    const progress = await tick;
+    const response = await writing;
+    console.info(`[L7 policy timer] ${progress.elapsed.toFixed(2)} ms; pending=${progress.pending}`);
+    expect(progress.elapsed).toBeLessThan(50);
+    expect(progress.pending).toBe(true);
+    expect(response.status).toBe(200);
+    expect(blockingWaitDiagnostics().longest.some(sample => sample.site === "registry-lock-async" && sample.role === "viewer")).toBe(true);
+    expect(registry.autoBalancePolicy("claude")).toMatchObject({ enabled: true, revision: 1 });
+    expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
+    expect(blockingWaitDiagnostics().sites["registry-revision-retry"]).toBeUndefined();
+  } finally {
+    clearTimeout(timer);
+    await holder.close();
+    if (previousOwner === undefined) delete process.env.LLV_STATE_OWNER;
+    else process.env.LLV_STATE_OWNER = previousOwner;
+    setAgentRegistryForTests(null);
+    registry.close();
+  }
+});
+
+for (const engine of ["claude", "codex"] as const) {
+  test(`Viewer ${engine} policy writes recheck revisions after admission and retain the first commit on reopen`, async () => {
+    const { NextRequest } = await import("next/server");
+    const { PATCH } = engine === "claude" ? await import("@/app/api/accounts/claude/policy/route") : await import("@/app/api/accounts/codex/policy/route");
+    const directory = fs.mkdtempSync(path.join(root, `viewer-conflict-${engine}-`));
+    const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    const holder = registryLockHolder(path.join(directory, "registry.sqlite"));
+    setAgentRegistryForTests(registry);
+    try {
+      await holder.hold();
+      const request = () => PATCH(new NextRequest(`http://localhost/api/accounts/${engine}/policy`, {
+        method: "PATCH", headers: { host: "localhost", "content-type": "application/json" },
+        body: JSON.stringify({ automaticSwitching: true, expectedRevision: 0 }),
+      }));
+      const first = request();
+      const second = request();
+      await holder.release();
+      const responses = await Promise.all([first, second]);
+      expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
+      const refused = responses.find(response => response.status === 409)!;
+      expect(await refused.json()).toEqual({ error: "automatic balance policy revision is stale" });
+      registry.close();
+      const reopened = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+      try { expect(reopened.autoBalancePolicy(engine)).toMatchObject({ enabled: true, revision: 1 }); }
+      finally { reopened.close(); }
+    } finally {
+      await holder.close();
+      setAgentRegistryForTests(null);
+      registry.close();
+    }
+  });
+}
+
+test("Viewer policy writer deadline refuses without a commit and the same request succeeds after release", async () => {
+  const { NextRequest } = await import("next/server");
+  const { PATCH } = await import("@/app/api/accounts/claude/policy/route");
+  const directory = fs.mkdtempSync(path.join(root, "viewer-refusal-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteWriterDeadlineMs: 30,
+  });
+  const holder = registryLockHolder(path.join(directory, "registry.sqlite"));
+  const request = () => PATCH(new NextRequest("http://localhost/api/accounts/claude/policy", {
+    method: "PATCH", headers: { host: "localhost", "content-type": "application/json" },
+    body: JSON.stringify({ automaticSwitching: true, expectedRevision: 0 }),
+  }));
+  const before = registry.autoBalancePolicy("claude");
+  setAgentRegistryForTests(registry);
+  try {
+    await holder.hold();
+    const response = await request();
+    expect(response.status).toBe(409);
+    expect(registry.autoBalancePolicy("claude")).toEqual(before);
+    expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
+    await holder.release();
+    expect((await request()).status).toBe(200);
+    expect(registry.autoBalancePolicy("claude")).toMatchObject({ enabled: true, revision: 1 });
+  } finally {
+    await holder.close();
+    setAgentRegistryForTests(null);
+    registry.close();
+  }
+});
+
+test("live quota refresh reads a newer peer observation after writer admission", async () => {
+  const { recordLiveObservationOffLoop } = await import("@/lib/accounts/liveLimits");
+  const directory = fs.mkdtempSync(path.join(root, "live-observation-"));
+  const filename = path.join(directory, "registry.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const holder = registryLockHolder(path.join(directory, "registry.sqlite"));
+  const at = Date.parse("2026-10-18T12:00:00Z");
+  const observation = { engine: "codex" as const, accountId: "fixture-account", authenticated: true,
+    observedAt: at, authCheckedAt: at, limits: null,
+    provenance: { source: "live" as const, reason: null, staleSince: null } };
+  try {
+    const { durableQuotaObservation } = await import("@/lib/accounts/migration/quotaController");
+    // The newer observation exists before the wait. A stale refresh must not
+    // overwrite it when it finally obtains the writer.
+    const newer = durableQuotaObservation({ ...observation, observedAt: at + 1000 }, "fixture-boot");
+    peer.recordQuotaObservation(newer);
+    resetBlockingWaitsForTests(() => {});
+    await holder.hold();
+    const writing = recordLiveObservationOffLoop(observation, "managed", { registry });
+    await holder.release();
+    expect(await writing).toEqual(newer);
+    expect(registry.quotaObservations("codex")).toEqual([newer]);
+    expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
+  } finally {
+    await holder.close();
+    registry.close(); peer.close();
+  }
+});
+
+test("Viewer policy admission reads a bounded number of rows as unrelated conversation history grows", async () => {
+  const { NextRequest } = await import("next/server");
+  const { PATCH } = await import("@/app/api/accounts/claude/policy/route");
+  const reads: number[] = [];
+  for (const count of [0, 2000]) {
+    const directory = fs.mkdtempSync(path.join(root, `policy-history-${count}-`));
+    const filename = path.join(directory, "registry.json");
+    const seed = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+    seed.reconcileConversations(Array.from({ length: count }, (_, index) => ({
+      engine: "codex" as const, path: `/sessions/history-${index}.jsonl`, accountId: "default",
+      observedAt: "2026-10-18T12:00:00.000Z",
+      turn: { state: "idle" as const, source: "empty" as const, terminalAt: null },
+      launchProfile: emptyLaunchProfile({ cwd: "/repo", project: "repo" }),
+    })), { snapshot: false });
+    seed.close();
+    let payloadReads = 0;
+    const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite",
+      onSqliteRowPayloadRead: (_collection, rows) => { payloadReads += rows; },
+    });
+    setAgentRegistryForTests(registry);
+    try {
+      payloadReads = 0;
+      const response = await PATCH(new NextRequest("http://localhost/api/accounts/claude/policy", {
+        method: "PATCH", headers: { host: "localhost", "content-type": "application/json" },
+        body: JSON.stringify({ automaticSwitching: false, expectedRevision: 0 }),
+      }));
+      expect(response.status).toBe(200);
+      reads.push(payloadReads);
+      expect(registry.autoBalancePolicy("claude")).toMatchObject({ enabled: false, revision: 1 });
+    } finally { setAgentRegistryForTests(null); registry.close(); }
+  }
+  expect(reads[1]).toBe(reads[0]!);
+  expect(reads[1]).toBeLessThan(10);
 });

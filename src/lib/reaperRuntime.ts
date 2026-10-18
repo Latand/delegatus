@@ -770,7 +770,7 @@ async function actuateCandidate(
   return registry.withOperationLock(entry.key, owner, async () => {
     const claimOwner = `reaper:${crypto.randomUUID()}`;
     try {
-      registry.claim(entry.key, claimOwner);
+      (await registry.deliveryWriteOrBusy({ label: "registry.claim" }, registry.claim.bind(registry, entry.key, claimOwner)));
       const freshSnapshot: TranscriptHostSnapshot = await observeHosts(true);
       const freshHost = freshSnapshot.hosts.find((host) => hostMatchesCandidate(host, agent, processIdentity));
       if (!freshHost) return false;
@@ -784,11 +784,11 @@ async function actuateCandidate(
       const killed = await killHost(expectedEvidence);
       const registeredHost = registry.readOnlySnapshot().entries[`${entry.key.engine}:${entry.key.sessionId}`]?.host;
       if (killed && registeredHost && sameTmuxEvidence(registeredHost, expectedEvidence)) {
-        registry.markUnhosted(entry.key);
+        (await registry.deliveryWriteOrBusy({ label: "registry.markUnhosted" }, registry.markUnhosted.bind(registry, entry.key)));
       }
       return killed;
     } finally {
-      registry.releaseClaim(entry.key, claimOwner);
+      (await registry.deliveryWriteOrBusy({ label: "registry.releaseClaim" }, registry.releaseClaim.bind(registry, entry.key, claimOwner)));
     }
   });
 }

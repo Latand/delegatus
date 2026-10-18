@@ -265,7 +265,7 @@ export async function reconfigureConversation(
           return "pending" as const;
         }
         if (!await (overrides.killHost ?? killTmuxHostIfMatches)(refreshedHost)) return failure("the registered pane changed or its process did not exit", 409);
-        registry.markUnhosted(refreshed.key);
+        (await registry.deliveryWriteOrBusy({ label: "registry.markUnhosted" }, registry.markUnhosted.bind(registry, refreshed.key)));
         forgetResumePane(filePath);
         return { state: "prepared" as const, spec };
       });
@@ -625,7 +625,7 @@ interface KillConversationOverrides {
   pathAllowed?: typeof pathAllowed;
   listFiles?: typeof listFiles;
   registrySnapshot?: () => ReturnType<ReturnType<typeof agentRegistry>["snapshot"]>;
-  registry?: Pick<AgentRegistry, "readOnlySnapshot" | "withOperationLock" | "markUnhosted">;
+  registry?: Pick<AgentRegistry, "readOnlySnapshot" | "withOperationLock" | "markUnhosted"> & Partial<Pick<AgentRegistry, "deliveryWriteOrBusy">>;
   killHost?: typeof killTmuxHostIfMatches;
 }
 
@@ -696,8 +696,12 @@ export async function killConversation(filePath: string, overrides: KillConversa
       const killed = await (overrides.killHost ?? killTmuxHostIfMatches)(refreshed.host);
       if (!killed) return failure("the registered pane changed or its process did not exit", 409);
       if (overrides.registry || !overrides.registrySnapshot) {
-        const current = registry.readOnlySnapshot().entries[`${refreshed.key.engine}:${refreshed.key.sessionId}`];
-        if (current?.artifactPath === filePath && sameRegisteredHost(current.host, refreshed.host)) registry.markUnhosted(refreshed.key);
+        const write = () => {
+          const current = registry.readOnlySnapshot().entries[`${refreshed.key.engine}:${refreshed.key.sessionId}`];
+          if (current?.artifactPath === filePath && sameRegisteredHost(current.host, refreshed.host!)) registry.markUnhosted(refreshed.key);
+        };
+        if (registry.deliveryWriteOrBusy) await registry.deliveryWriteOrBusy({ label: "registry.markUnhosted" }, write);
+        else write();
       }
       forgetResumePane(filePath);
       return { ok: true, target: refreshed.host.paneId };
