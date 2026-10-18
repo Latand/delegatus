@@ -15,7 +15,11 @@ const diagnosticName = (site: TestSite) => site.kind === "error" ? site.name.rep
 // of the same survivor failure must not depend on the different PIDs allocated
 // to those two isolated runs.
 const key = (site: TestSite) => JSON.stringify([site.file, site.suite,
-  site.kind === "error" ? diagnosticName(site).replace(/(owned runner: surviving owned processes: ).*$/, "$1<run-owned identities>") : diagnosticName(site), site.kind]);
+  site.kind === "error" ? diagnosticName(site)
+    .replace(/(owned runner: surviving owned processes: ).*$/, "$1<run-owned identities>")
+    .replace(/(owned test children survived teardown: )[\d, ]*(; guardian=)/, "$1<run-owned identities>$2")
+    .replace(/(owned test scope children survived teardown: )\d+ \((?:\d+:\d+|null)\)(?:, \d+ \((?:\d+:\d+|null)\))*$/, "$1<run-owned identities>")
+    : diagnosticName(site), site.kind]);
 const occurrenceKey = (site: TestSite) => JSON.stringify([key(site), site.occurrence ?? 0]);
 const comparisonKey = (site: TestSite) => site.kind === "test" && site.occurrence !== undefined ? occurrenceKey(site) : key(site);
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
