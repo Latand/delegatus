@@ -520,7 +520,7 @@ export function DraftAgentPane({
     disabled: Boolean(attempt),
     imageCapability: structuredSpawnImageCapability,
   });
-  const { text, setText, setStatus, busy, setBusy, voiceSending, attachments } = composer;
+  const { textRef, setText, setStatus, busy, setBusy, voiceSending, attachments } = composer;
 
   /* What the engine takes as images, and for a handoff draft the source
      transcript's own cwd, which it inherits over everything else. */
@@ -749,7 +749,7 @@ export function DraftAgentPane({
   const launchEffort = effort && (effortScale(engine, model) ?? []).includes(effort) ? effort : "";
 
   const send = async (overrideText?: string) => {
-    const payloadText = overrideText ?? text;
+    const payloadText = overrideText ?? textRef.current;
     if (busy || voiceSending || attempt || launchingRef.current) return;
     if (signInFirst) {
       openLaunchSignIn(signInFirst);
@@ -895,7 +895,7 @@ export function DraftAgentPane({
         }}
         onKeyDown={(event) => {
           /* Escape on an empty field puts the draft away, as it does for a new task. */
-          if (event.key !== "Escape" || event.defaultPrevented || sent || text || attachments.attachments.length) return;
+          if (event.key !== "Escape" || event.defaultPrevented || sent || textRef.current || attachments.attachments.length) return;
           event.preventDefault();
           onClose();
         }}
