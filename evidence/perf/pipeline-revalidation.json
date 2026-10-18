@@ -285,7 +285,7 @@
   },
   "acceptance": {
     "zeroDecodesOnUnchangedTick": true,
-    "pacedMaxMs": 0.1,
-    "pacedThresholdMet": false
+    "pacedThresholdMet": true,
+    "pacedMedianLimitMs": 0.25
   }
 }

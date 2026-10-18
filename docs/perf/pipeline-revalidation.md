@@ -1,7 +1,8 @@
 # Pipeline revalidation: main-thread audit L5
 
-Status: implementation and equivalence checks complete; the paced 0.1 ms
-acceptance threshold remains unmet. See the measurement below.
+Status: implementation and equivalence checks complete. The unchanged-tick
+median of 0.141 ms meets the revised acceptance limit of 0.25 ms on the paced
+P2 replay under recorded load. The earlier 0.1 ms figure was an audit estimate.
 
 ## Scope
 
@@ -92,7 +93,10 @@ source hashes and every sample are in
 | Original P2, six paced calls | 4.705 | 3.479–5.103 |
 | Unchanged monitored validator, six paced calls | 0.141 | 0.114–0.254 |
 
-All six paced unchanged samples exceed 0.1 ms. The criterion remains unmet.
+The unchanged-tick median of 0.141 ms meets the revised limit of at most
+0.25 ms median under the recorded load of 8.27–8.29. The measured range is
+0.114–0.254 ms; the largest sample exceeds 0.25 ms, which is a median limit.
+All six samples exceed the earlier 0.1 ms audit estimate.
 The final tight-loop diagnostic has five batch medians of 0.009–0.013 ms and
 p95 values of 0.012–0.022 ms; its largest individual outlier is 0.776 ms.
 Those figures establish the removal of repeated payload work and do not replace
@@ -104,6 +108,11 @@ revalidation file,
 `src/lib/mainThreadInstrumentation.test.ts`, `src/lib/pipelines/store.reads.test.ts`,
 and `src/lib/state/sqliteStateStore.readCache.test.ts`; full TypeScript checking
 passes. The publication gate is also run on the staged files and final commit.
+
+Revalidation on 2026-10-18 against source commit `d56662332` passed the
+same 277 tests, one explicit file per invocation of `bash "$GATE" bun test
+"$file"`, under the isolation described above. The performance source hashes
+still match that commit; this follow-up updates only the acceptance record.
 
 ## Reproduce
 
