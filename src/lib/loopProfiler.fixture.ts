@@ -14,7 +14,7 @@ function syntheticThreeSecondBlock() {
 if (process.argv[2] === "native" || process.argv[2] === "native-computed" || process.argv[2] === "native-compiled") {
   const lines: string[] = [];
   const settings = path.join(process.env.LLV_STATE_DIR!, "loop-profiler.json");
-  fs.writeFileSync(settings, JSON.stringify({ enabled: true }));
+  // No settings file at start: the profiler arms by default after the claim.
   let start = startServingLoopProfiler;
   let compiledBlock: (() => number) | undefined;
   if (process.argv[2] === "native-compiled") {
@@ -59,6 +59,12 @@ if (process.argv[2] === "native" || process.argv[2] === "native-computed" || pro
     : setTimeout(compiledBlock ?? syntheticThreeSecondBlock, 100);
   try { await start(monitor, { ...process.env, LLV_STATE_OWNER: "viewer", NODE_ENV: "production", LLV_DIAGNOSTIC_REVISION: "a".repeat(40) }); console.log(JSON.stringify(lines)); }
   finally { clearTimeout(block); clearInterval(ticker); monitor.stop(); }
+} else if (process.argv[2] === "disabled") {
+  const lines: string[] = [];
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "loop-profiler.json"), JSON.stringify({ enabled: false }));
+  const monitor = createViewerLoopMonitor(line => { lines.push(line); });
+  try { await startServingLoopProfiler(monitor, { ...process.env, LLV_STATE_OWNER: "viewer", NODE_ENV: "production", LLV_DIAGNOSTIC_REVISION: "a".repeat(40) }); console.log(JSON.stringify(lines)); }
+  finally { monitor.stop(); }
 } else if (process.argv[2] === "claim") {
   console.log(JSON.stringify(await claimLoopProfilerDeploy(process.argv[3]!, process.argv[4]!, 123456)));
 } else if (process.argv[2] === "host") {

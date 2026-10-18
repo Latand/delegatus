@@ -225,10 +225,12 @@ async function namedSource(prefix: string, count: number) {
 test("fresh processes cannot renew a consumed deploy budget; runtime host never claims it", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-restart-"));
   try {
-    expect(await loopProfilerEnabled(dir)).toBe(false);
-    for (const value of ["not json", JSON.stringify({ enabled: "true" }), " ".repeat(513)]) {
-      await writeFile(path.join(dir, "loop-profiler.json"), value); expect(await loopProfilerEnabled(dir)).toBe(false);
+    expect(await loopProfilerEnabled(dir)).toBe(true);
+    for (const value of ["not json", JSON.stringify({ enabled: "false" }), " ".repeat(513), JSON.stringify({ enabled: true })]) {
+      await writeFile(path.join(dir, "loop-profiler.json"), value); expect(await loopProfilerEnabled(dir)).toBe(true);
     }
+    await writeFile(path.join(dir, "loop-profiler.json"), JSON.stringify({ enabled: false }));
+    expect(await loopProfilerEnabled(dir)).toBe(false);
     await writeFile(path.join(dir, "loop-profiler.json"), JSON.stringify({ enabled: true }));
     expect(await child(["host", dir], dir)).toBe(true);
     expect(await readdir(dir)).not.toContain("loop-profiler-deploy.json");
@@ -244,7 +246,16 @@ test("fresh processes cannot renew a consumed deploy budget; runtime host never 
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test("Bun main-thread three-second block is named on its actual loop-gap record", async () => {
+test("explicit enabled:false is a kill switch: deploy opportunity is consumed and nothing is recorded", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-off-"));
+  try {
+    const lines: string[] = await child(["disabled"], dir);
+    expect(lines.some(line => line.includes('"jsProfile"'))).toBe(false);
+    expect(JSON.parse(await readFile(path.join(dir, "loop-profiler-deploy.json"), "utf8")).revision).toBe("a".repeat(40));
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("with no settings file, Bun main-thread three-second block is named on its actual loop-gap record", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-native-"));
   try {
     const lines: string[] = await child(["native"], dir);

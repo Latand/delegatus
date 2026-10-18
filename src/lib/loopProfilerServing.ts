@@ -16,9 +16,12 @@ async function readSmall(file: string) {
   } finally { await handle.close(); }
 }
 
+/** Armed by default: only a settings file that explicitly holds
+ * {"enabled": false} switches the profiler off. An absent or unreadable file
+ * leaves it on. */
 export async function loopProfilerEnabled(directory: string) {
-  try { return (await readSmall(path.join(directory, "loop-profiler.json")))?.enabled === true; }
-  catch { return false; }
+  try { return (await readSmall(path.join(directory, "loop-profiler.json")))?.enabled !== false; }
+  catch { return true; }
 }
 
 /** Native compiled fixture target; kept beside the serving recorder so the
@@ -30,7 +33,8 @@ export function syntheticThreeSecondBlockForProfilerFixture() {
   return value;
 }
 
-/** First start of a deployed revision consumes its opportunity even if off.
+/** First start of a deployed revision consumes its opportunity even if the
+ * kill switch is set.
  * Same-revision restarts cannot renew the in-memory thirty-minute budget. */
 export async function claimLoopProfilerDeploy(directory: string, revision: string, at: number) {
   if (!/^[a-f0-9]{7,40}$/.test(revision)) return false;

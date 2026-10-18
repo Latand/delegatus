@@ -497,19 +497,20 @@ still prevents a negligible-overhead claim for a serving process.
 
 ### Arming and disabling
 
-The opt-in setting is the small `loop-profiler.json` file in the installation's
-state directory: `{"enabled":true}` enables the next deployed revision's first
-Viewer start. The default is off. Set `enabled` to `false`, remove the file,
-or make it invalid to disable collection. Settings are reread asynchronously at
-every window boundary and before collection following cooldown; a read error
-fails closed. The read itself is limited to 513 bytes; over 512 is invalid.
+The recorder arms by default. The small `loop-profiler.json` file in the
+installation's state directory is only a kill switch: `{"enabled":false}`
+disables collection, and a missing, unreadable, invalid or oversized file leaves
+it armed. Each deployed revision's first Viewer start arms it for thirty minutes.
+Settings are reread asynchronously at every window boundary and before collection
+following cooldown, so writing the kill switch stops the next window. The read
+itself is limited to 513 bytes; over 512 is unreadable and counts as absent.
 No UI, MCP mutation or runtime-host setting was added.
 
 Only a serving Viewer with a validated launcher diagnostic revision or container
 release revision can arm it. Development, builds, unidentified starts and the
 runtime host cannot arm it. The first Viewer start for a new revision consumes
-that revision's opportunity in `loop-profiler-deploy.json`, even when opt-in is
-off. A restart on the same revision stays off; a new deployed revision can arm
+that revision's opportunity in `loop-profiler-deploy.json`, even when the kill
+switch is set. A restart on the same revision stays off; a new deployed revision can arm
 again. A malformed ledger fails closed. The one-row ledger is replaced atomically
 under the existing asynchronous file-transaction lock, so concurrent starts
 cannot both claim it. It contains a revision and startup timestamp only.
@@ -518,14 +519,14 @@ An armed process expires thirty minutes after recorder startup, using a monotoni
 deadline set before startup I/O. No window starts at or after expiry. The final
 window's timer is shortened to the remaining budget. A blocked main thread can
 postpone timer completion and expiry enforcement until it recovers; this is the
-accepted native exposure. Changing the opt-in file to off prevents another
+accepted native exposure. Writing `{"enabled":false}` to the kill-switch file prevents another
 window at the next boundary, including when the change occurs during collection.
-Re-enabling after a disable requires the next deployed revision.
+Removing the switch afterwards does not re-arm the same revision; the next deployed revision does.
 
 ### Collection, correlation and bounds
 
 `src/lib/loopProfilerServing.ts` is loaded only from Viewer instrumentation.
-It loads `bun:jsc` through a runtime import after opt-in and deploy admission.
+It loads `bun:jsc` through a runtime import after deploy admission and the kill-switch check.
 The monitor owns one recorder across compiled bundles, and stopping the monitor
 stops admission of new windows. The runtime host shares monitor code but has no
 recorder startup path; the Bun pin and runtime-host source are unchanged.
