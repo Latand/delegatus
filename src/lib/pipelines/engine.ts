@@ -1,4 +1,4 @@
-import { ensureStagePullRequest } from "./stagePullRequest";
+import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequestResult } from "./stagePullRequest";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, withControllerPipelineScope } from "./controllerScope";
@@ -4191,6 +4191,98 @@ async function retryRefusedPublication(
   return true;
 }
 
+const SUMMARY_REWRITE_LIMIT = 2;
+const SUMMARY_REWRITE_WAIT_MS = 10 * 60_000;
+
+function summaryRewriteWorker(pipeline: Pipeline, owner: PipelineStageAttempt) {
+  const repair = owner.publicationTextRepair;
+  return pipeline.runs.find(run => run.stageId === repair?.stageId)?.attempts
+    .find(attempt => attempt.n === repair?.attempt && !attempt.historical);
+}
+
+/** Only the named producer may replace its summary while its accepted pass
+    remains at the committing cursor. All other settled reports stay closed. */
+function pendingSummaryRewrite(pipeline: Pipeline, worker: PipelineStageAttempt): PipelineStageAttempt | null {
+  const owner = pipeline.cursor?.state === "committing" && currentAttempt(pipeline, pipeline.cursor.stageId);
+  return pipeline.state === "running" && owner && owner.publicationTextRepair?.state === "pending"
+    && owner.publicationTextRepair.part === "body" && owner.publicationTextRepair.sha === pipeline.lastPassedCommit
+    && summaryRewriteWorker(pipeline, owner) === worker ? owner : null;
+}
+
+async function settleSummaryRewrite(pipeline: Pipeline, owner: PipelineStageAttempt, ports: PipelinePorts,
+  persist: () => void | Promise<void>): Promise<boolean> {
+  const repair = owner.publicationTextRepair;
+  if (!repair || repair.state === "exhausted") return true;
+  const worker = summaryRewriteWorker(pipeline, owner);
+  const giveUp = async (cause: string) => {
+    repair.state = "exhausted";
+    owner.error = `${repair.detail}; ${cause}`;
+    await park(pipeline, owner.error);
+    await persist();
+    return false;
+  };
+  // Never adopt a commit or dirty files produced during a summary-only turn.
+  const head = await currentPipelineBranchHead(pipeline, ports.exec);
+  if (!head.ok || head.sha !== repair.sha || pipeline.lastPassedCommit !== repair.sha)
+    return giveUp("summary rewrite requires the unchanged clean accepted head");
+  if (!worker?.conversationId || !worker.agentPath || !ports.resumeSeveredTurn)
+    return giveUp("the producing conversation is unavailable for a summary rewrite");
+  const active = await ports.conversationAgentActive(worker.conversationId);
+  const outstanding = ports.conversationDeliveryOutstanding?.(worker.conversationId) === true;
+  const evidence = await stageRepairEvidence(worker, ports);
+  const finished = active === false && !outstanding && evidence?.turn === "terminal"
+    && liveBackgroundTasks(evidence.backgroundTasks ?? [], unixMs(ports.now())).length === 0;
+  const deadline = unixMs(repair.requestedAt) + SUMMARY_REWRITE_WAIT_MS;
+  if (repair.state === "answered" && finished && repair.answeredAt && unixMs(repair.answeredAt) < deadline) return true;
+  if (unixMs(ports.now()) >= deadline) return giveUp("summary rewrite did not finish within ten minutes");
+  if (!repair.delivered && !outstanding && active !== true) {
+    // The checkpoint and stable key cover acknowledgement loss and restarts.
+    await persist();
+    repair.delivered = await Promise.resolve().then(() => ports.resumeSeveredTurn!({
+      conversationId: worker.conversationId!, transcriptPath: worker.agentPath!,
+      clientMessageId: `stage-summary-rewrite-${pipeline.id}-${repair.stageId}-${repair.attempt}-${repair.rounds}`,
+      text: ["Your accepted stage's pull request text was refused.", repair.detail,
+        `Rewrite only your stage_report summary (round ${repair.rounds} of ${repair.maxRounds}).`,
+        "Call stage_report with verdict pass, no findings and the replacement public summary. Your accepted verdict and provenance stay recorded.",
+        "Use repository-relative paths. Change no files and make no commit, push or new attempt. End your turn after reporting."].join("\n\n"),
+      project: pipeline.project, cwd: pipeline.repoDir,
+      ...(worker.startedAt ? { cohortAt: worker.startedAt } : {}),
+    })).catch(() => false);
+    // Final settlement records the acknowledgement. A report may arrive
+    // during delivery; its newer lane wins the ordinary settlement fence.
+  }
+  ports.scheduleTick?.(1_000);
+  return false;
+}
+
+async function handlePullRequestRefusal(pipeline: Pipeline, attempt: PipelineStageAttempt,
+  result: Extract<StagePullRequestResult, { ok: false }>, ports: PipelinePorts, persist: () => void | Promise<void>, pullRequestHead?: string): Promise<void> {
+  const detail = `publishing the passed stage: ${result.error}`;
+  attempt.error = detail;
+  const privacy = result.privacy;
+  if (!privacy) { await park(pipeline, detail, attempt); return; }
+  const producer = stagePullRequestProducer(pipeline, attempt);
+  const producerStage = pipeline.runs.find(run => run.attempts.includes(producer));
+  const prior = attempt.publicationTextRepair;
+  attempt.publicationTextRepair = {
+    sha: pipeline.lastPassedCommit, pullRequestHead: pullRequestHead ?? prior?.pullRequestHead, stageId: producerStage?.stageId ?? "", attempt: producer.n,
+    rounds: prior?.rounds ?? 0, maxRounds: prior?.maxRounds ?? SUMMARY_REWRITE_LIMIT, detail, part: privacy.part, state: "exhausted",
+    reportSeq: producer.report?.seq ?? null, requestedAt: ports.now(),
+  };
+  const repair = attempt.publicationTextRepair;
+  if (privacy.part !== "body" || repair.rounds >= repair.maxRounds || !producerStage) {
+    await park(pipeline, `${detail}; ${privacy.part === "body" ? "summary rewrite budget exhausted or producer unavailable" : "correct the pipeline task title, then retry-stage"}`);
+    return;
+  }
+  repair.rounds++;
+  repair.state = "pending";
+  pipeline.stateDetail = `${detail}; asking the producer to rewrite its summary (${repair.rounds}/${repair.maxRounds})`;
+  // Feed the ordinary task-note/seat wake surface the same redacted reason.
+  await writeEngineParkedTaskNote(pipeline, pipeline.stateDetail, attempt);
+  await persist();
+  await settleSummaryRewrite(pipeline, attempt, ports, persist);
+}
+
 async function retryTerminalStagePublication(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -4199,6 +4291,35 @@ async function retryTerminalStagePublication(
   persist: () => void | Promise<void>,
 ): Promise<void> {
   if (ports.deferStageGit) return;
+  if (!await settleSummaryRewrite(pipeline, attempt, ports, persist)) return;
+  if (attempt.terminalOutputPublication) {
+    const { localSha, pullRequestHead } = attempt.terminalOutputPublication;
+    const local = await currentPipelineBranchHead(pipeline, ports.exec);
+    if (!local.ok || local.sha !== localSha || pipeline.lastPassedCommit !== pullRequestHead) {
+      await park(pipeline, `legacy terminal-output retry requires unchanged local report ${localSha} and published head ${pullRequestHead}`, attempt);
+      return;
+    }
+    const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () =>
+      ensureStagePullRequest(pipeline, attempt, ports.exec, pullRequestHead)));
+    if (!pr.ok) {
+      if (pr.privacy) {
+        pipeline.lastPassedCommit = localSha;
+        delete attempt.terminalOutputPublication;
+      }
+      await handlePullRequestRefusal(pipeline, attempt, pr, ports, persist, pullRequestHead);
+      return;
+    }
+    delete attempt.terminalOutputPublication;
+    await advancePipeline(pipeline, stage, ports, attempt);
+    return;
+  }
+  if (attempt.publicationTextRepair?.pullRequestHead) {
+    const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () =>
+      ensureStagePullRequest(pipeline, attempt, ports.exec, attempt.publicationTextRepair!.pullRequestHead)));
+    if (!pr.ok) { await handlePullRequestRefusal(pipeline, attempt, pr, ports, persist); return; }
+    await advancePipeline(pipeline, stage, ports, attempt);
+    return;
+  }
   if (attempt.publicationRepair && !await settlePublicationRepair(pipeline, stage, attempt, ports, persist)) return;
   const current = (await currentPipelineBranchHead(pipeline, ports.exec));
   if (current.ok && current.sha !== pipeline.lastPassedCommit && stage.kind === "run" && attempt.effectiveRole.access === "read-write") {
@@ -4256,7 +4377,7 @@ async function retryTerminalStagePublication(
     return;
   }
   const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () => ensureStagePullRequest(pipeline, attempt, ports.exec)));
-  if (!pr.ok) { attempt.error = `publishing the passed stage: ${pr.error}`; await park(pipeline, attempt.error, attempt); return; }
+  if (!pr.ok) { await handlePullRequestRefusal(pipeline, attempt, pr, ports, persist); return; }
   await advancePipeline(pipeline, stage, ports, attempt);
 }
 
@@ -4855,7 +4976,13 @@ async function commitPassedStage(
   if (terminalLocalOutput && publishesRemoteBranch(pipeline)) {
     const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () =>
       ensureStagePullRequest(pipeline, attempt, ports.exec, pipeline.publishedCommit ?? pipeline.lastPassedCommit)));
-    if (!pr.ok) { await parkStage(pr.error); return; }
+    if (!pr.ok) {
+      const publishedHead = pipeline.publishedCommit ?? pipeline.lastPassedCommit;
+      if (pr.privacy) pipeline.lastPassedCommit = result.sha;
+      else attempt.terminalOutputPublication = { localSha: result.sha, pullRequestHead: publishedHead };
+      attempt.state = "passed";
+      await handlePullRequestRefusal(pipeline, attempt, pr, ports, persist, publishedHead); return;
+    }
   }
   pipeline.lastPassedCommit = result.sha;
   if (!publishesRemoteBranch(pipeline) || terminalLocalOutput) {
@@ -4892,7 +5019,7 @@ async function commitPassedStage(
     return;
   }
   const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () => ensureStagePullRequest(pipeline, attempt, ports.exec)));
-  if (!pr.ok) { await parkStage(pr.error); return; }
+  if (!pr.ok) { await handlePullRequestRefusal(pipeline, attempt, pr, ports, persist); return; }
   await advancePipeline(pipeline, stage, ports, attempt);
 }
 
@@ -10338,9 +10465,25 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) { abort.abort(); return; }
         const recorded = currentAttempt(current, candidateStage.id)!;
-        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait) return;
+        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait && !candidateAttempt.publicationTextRepair && !candidateAttempt.terminalOutputPublication) return;
         if (candidateAttempt.stageCommitWait) {
           recorded.stageCommitWait = structuredClone(candidateAttempt.stageCommitWait);
+          if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
+        }
+        if (candidateAttempt.publicationTextRepair) {
+          recorded.publicationTextRepair = structuredClone(candidateAttempt.publicationTextRepair);
+          if (!candidateAttempt.terminalOutputPublication) delete recorded.terminalOutputPublication;
+          recorded.state = candidateAttempt.state;
+          recorded.completedAt = candidateAttempt.completedAt;
+          recorded.error = candidateAttempt.error;
+          current.lastPassedCommit = candidate.lastPassedCommit;
+          if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
+        }
+        if (candidateAttempt.terminalOutputPublication) {
+          recorded.terminalOutputPublication = structuredClone(candidateAttempt.terminalOutputPublication);
+          recorded.state = candidateAttempt.state;
+          recorded.completedAt = candidateAttempt.completedAt;
+          recorded.error = candidateAttempt.error;
           if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
         }
         if (candidateAttempt.branchAdoption) recorded.branchAdoption = structuredClone(candidateAttempt.branchAdoption);
@@ -13531,6 +13674,24 @@ export async function patchPipeline(
         await persist();
       }
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
+      if (stage && attempt?.publicationTextRepair) {
+        const repair = attempt.publicationTextRepair;
+        if (repair.part === "body") {
+          // Keep the cumulative round for idempotency; renew a two-turn window.
+          repair.maxRounds = repair.rounds + SUMMARY_REWRITE_LIMIT;
+          repair.state = "pending";
+          repair.reportSeq = summaryRewriteWorker(pipeline, attempt)?.report?.seq ?? null;
+          repair.requestedAt = ports.now();
+          repair.rounds++;
+          delete repair.delivered; delete repair.answeredAt;
+        } else repair.state = "exhausted";
+        attempt.state = "passed";
+        pipeline.state = "running";
+        pipeline.pausedState = null;
+        pipeline.stateDetail = `${repair.detail}; summary rewrite retry pending`;
+        await persist(); requestPipelineTick();
+        return { pipeline };
+      }
       const commitRetry = await retryPassedStageCommit(pipeline, ports);
       if (commitRetry) {
         if (!commitRetry.error) { await persist(); requestPipelineTick(); }
@@ -14268,7 +14429,7 @@ async function resolveStageCompletionTarget(
     }
   }
   const live = runStages.filter((target) => !unverifiedHandoffSuccessors.has(target)
-    && (REPORTABLE_ATTEMPT_STATES.has(target.attempt.state) || recoverable.has(target)
+    && (REPORTABLE_ATTEMPT_STATES.has(target.attempt.state) || pendingSummaryRewrite(target.pipeline, target.attempt) || recoverable.has(target)
       || forkSuccessors.has(target) || handoffSuccessors.has(target)));
   if (live.length === 0) {
     const settled = runStages.at(-1)!;
@@ -14417,6 +14578,9 @@ export async function reportStageCompletion(
       };
     }
     if (resolved.recoveryPath) reopenDeliveredAttempt(pipeline, attempt, resolved.recoveryPath);
+    const rewriteOwner = pendingSummaryRewrite(pipeline, attempt);
+    if (rewriteOwner && (normalized.verdict.status !== "pass" || normalized.verdict.findings?.length || !normalized.summary))
+      return { error: "a summary rewrite requires pass, no findings and a non-empty summary; the accepted verdict is unchanged", status: 409, code: "STAGE_REPORT_SUMMARY_ONLY" };
     const prior = attempt.report ?? null;
     const entries = pipeline.stageReports ?? [];
     const seq = (entries.at(-1)?.seq ?? 0) + 1;
@@ -14436,6 +14600,16 @@ export async function reportStageCompletion(
       provenanceFence: stageProvenanceFence(pipeline),
       calls: (prior?.calls ?? 0) + 1,
     };
+    if (rewriteOwner) {
+      if (prior) {
+        report.verdict = prior.verdict;
+        report.provenance = prior.provenance;
+        report.provenanceFence = prior.provenanceFence;
+      }
+      const repair = rewriteOwner.publicationTextRepair!;
+      repair.state = "answered";
+      repair.answeredAt = report.at;
+    }
     const replacedPendingSeq = prior?.provenance.state === "pending" ? prior.seq : null;
     attempt.report = report;
     const entry: PipelineStageReportEntry = {
@@ -14447,7 +14621,7 @@ export async function reportStageCompletion(
       status: report.verdict.status,
       findings: report.verdict.findings?.length ?? 0,
       replaces: prior?.seq ?? null,
-      provenanceState: "pending",
+      provenanceState: report.provenance.state ?? "complete",
       summary: report.summary,
     };
     /* A replaced intent no longer has a report to observe. Settle its journal

@@ -71,7 +71,7 @@ test("curator merge joins two tasks into one candidate; Undo restores each task'
   expect(active().map(rule => rule.tasks)).toEqual([1, 1]);
 });
 
-test("split parts inherit the tasks behind a merged rule, with distinct tasks on paged reads", () => {
+test("split parts inherit the tasks behind a merged rule, with distinct tasks on paged reads", async () => {
   const one = leave("first", "task-one");
   const two = leave("second", "task-two", "For translated changes, measure all locales at every supported width before review.");
   const pass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 10 })!;
@@ -81,7 +81,7 @@ test("split parts inherit the tasks behind a merged rule, with distinct tasks on
     { to: scope(), rule: "For translated changes, measure every supported language before review." },
   ] }] }), at(30));
   expect(active().map(rule => rule.tasks)).toEqual([2, 2]);
-  const page = readCuration(pass, scope());
+  const page = await readCuration(pass, scope());
   if (!("rules" in page)) throw Error("scope page expected");
   expect(page.rules.filter(rule => rule.kind === "active").map(rule => rule.tasks)).toEqual([2, 2]);
   const brief = curatorBrief(PROJECT);

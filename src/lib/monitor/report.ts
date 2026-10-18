@@ -1,5 +1,6 @@
 import { autonomyMandate, type AutonomySetting } from "./autonomy";
 import { createHash } from "node:crypto";
+import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import { ORCHESTRATOR_SEAT_TICK_CONTRACT, ORCHESTRATOR_VIEWER_CLOCK_HEADING } from "@/lib/orchestrator/prompt";
 
@@ -232,6 +233,9 @@ function snapshotSection(snapshotAt: string | undefined, compact: boolean): stri
 }
 
 export function seatTickWakeMessage(input: {
+  catchUp?: { key: string; from: string; through: string };
+  compactCatchUpManifest?: boolean;
+  compactCatchUpTimeBase?: string;
   autonomy?: AutonomySetting | null;
   autonomyUnchanged?: boolean;
   issues?: readonly ProposalIssue[];
@@ -274,6 +278,8 @@ export function seatTickWakeMessage(input: {
     "",
     `Wake reasons: ${input.reasons.map(reason => reason.kind).join(", ")}.`,
   ];
+  if (input.catchUp) lines.push("", `Catch-up manifest ${input.catchUp.key}: unreachable window ${input.catchUp.from} through ${input.catchUp.through}.`,
+    `This bounds the delivery gap; host loss may have occurred later. Held backlog: ${input.items.length} items. Times below are original event times in UTC${input.compactCatchUpTimeBase ? ` milliseconds relative to ${input.compactCatchUpTimeBase}` : ""}. Re-read unresolved actions before acting.`);
   /* Directly under the reasons, above the agenda, because it qualifies the
      whole message and because the agenda is the half the length bound eats
      into. A wake that dropped its own blind spot to fit one more item would be
@@ -282,7 +288,9 @@ export function seatTickWakeMessage(input: {
     lines.push("", "Evidence unavailable:", ...input.gaps.map((gap) => `- ${gap.source}: ${gap.detail}.`));
   }
   if (input.issues?.length) lines.push("", "Open issues:", ...input.issues.map(issue => `- #${issue.number} ${issue.title} [${issue.labels.join(", ")}]`));
-  lines.push("", "Items:", ...input.items.map(seatTickBullet));
+  lines.push("", "Items:", ...input.items.map(item => input.compactCatchUpManifest
+    ? item.manifestLine ?? `- ${item.kind[0]} ${item.id} ${item.occurredAt ?? "time-unavailable"}`
+    : seatTickBullet(item)));
   lines.push("", "Why you were woken:", ...input.reasons.map(reason => `- ${reason.kind}: ${reason.detail}`));
   if (input.deferred > 0) {
     lines.push(`(${input.deferred} more item(s) held back for the next wake.)`);
@@ -335,6 +343,10 @@ export function seatTickWakeMessage(input: {
     reserved.splice(reserved.length - seatTickContractLines(input.mandateCarriesContract === true).length - (input.workers ? 2 : 0) - note.length, note.length,
       ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, 100, !!input.workers));
   }
+  // A recovery snapshot carries every compact outcome once. Cutting this
+  // agenda would recreate a series of wakes and fresh report debts. Its size
+  // scales with changed work; child transcript bodies are omitted by the caller.
+  if (input.catchUp) return redactMonitorText([...lines, ...reserved].join("\n")).trim();
   return boundedSeatTickMessage(lines, reserved);
 }
 
@@ -342,6 +354,41 @@ export function seatTickWakeMessage(input: {
  * unpaid. Bind a complete, explicitly marked summary to the same item; its
  * source retains the full details and the landing earns its ordinary credit. */
 export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage>[0]): { text: string; items: readonly SeatTickItem[] } {
+  if (input.catchUp) {
+    // Preserve every agenda identity and source time while shrinking only
+    // descriptive text. Count encoded bytes because catch-up labels may be
+    // multilingual, and leave headroom for the structured envelope.
+    const fullItems = input.items.map(item => ({ ...item, finalMessage: undefined }));
+    const fullText = seatTickWakeMessage({ ...input, items: fullItems });
+    if (Buffer.byteLength(fullText, "utf8") <= MAX_STRUCTURED_TEXT_BYTES - 2_000) return { text: fullText, items: fullItems };
+    const compact = (limit: number): SeatTickItem[] => input.items.map(item => {
+      const raw = item.label.replace(/\s+/g, " ").trim();
+      const withoutTime = item.occurredAt && raw.startsWith(`${item.occurredAt}: `)
+        ? raw.slice(item.occurredAt.length + 2) : raw;
+      const summary = [...withoutTime].slice(0, limit).join("").trimEnd();
+      return { ...item, finalMessage: undefined,
+        label: `${item.occurredAt ? `${item.occurredAt}: ` : ""}${summary}${summary.length < withoutTime.length ? "…" : ""}` };
+    });
+    for (const limit of [160, 80, 40, 20, 10, 0]) {
+      const items = compact(limit);
+      const text = seatTickWakeMessage({ ...input, items });
+      if (Buffer.byteLength(text, "utf8") <= MAX_STRUCTURED_TEXT_BYTES - 2_000) return { text, items };
+    }
+    // The manifest form keeps each item's stable identity and original time,
+    // while dropping repeated labels and punctuation that dominate large
+    // catch-ups. Its size is checked before transport admission.
+    const dated = compact(0).map(item => ({ item, time: item.occurredAt ? Date.parse(item.occurredAt) : Number.NaN }));
+    const validTimes = dated.flatMap(row => Number.isFinite(row.time) ? [row.time] : []);
+    const timeBase = validTimes.length ? Math.min(...validTimes) : null;
+    const timeBaseText = timeBase === null ? undefined : new Date(timeBase).toISOString();
+    const items = dated.map(({ item, time }) => ({ ...item,
+      manifestLine: `- ${item.kind[0]} ${item.id} ${timeBase !== null && Number.isFinite(time) ? `+${time - timeBase}ms` : "time-unavailable"}` }));
+    const text = seatTickWakeMessage({ ...input, items, compactCatchUpManifest: true, compactCatchUpTimeBase: timeBaseText });
+    if (Buffer.byteLength(text, "utf8") > MAX_STRUCTURED_TEXT_BYTES) {
+      throw new Error("catch-up manifest exceeds structured transport budget");
+    }
+    return { text, items };
+  }
   const text = seatTickWakeMessage(input);
   const first = input.items[0];
   if (!first || (input.monitorPrompt && !input.monitorPromptUnchanged)

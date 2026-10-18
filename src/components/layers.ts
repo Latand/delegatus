@@ -13,7 +13,7 @@
  * - The LAYERS below, each above the content range, from the board up to the
  *   pointer feedback drawn over everything. Their order is the contract:
  *
- *     lifted   < sticky < dock < sheet < modal < popover < overlay < toast < tooltip < feedback
+ *     lifted   < sticky < dock < sheet < reader < modal < popover < overlay < toast < tooltip < feedback
  *
  * Two rules keep nested surfaces from losing to their hosts:
  *
@@ -22,7 +22,12 @@
  *    it. A layer only orders siblings of ONE stacking context; an overlay left
  *    inside a pane competes with the pane's neighbours at the pane's own level,
  *    whatever number it carries.
- * 2. Everything opened FROM a modal sits above `modal`: a menu is a `popover`,
+ * 2. Everything a conversation opens draws above the surface that hosts it. The
+ *    kanban agent window, the stages sheet's readers and the phone's reader
+ *    screen host conversations at `reader`; the file preview they open is
+ *    `above("reader")` and the runtime menu is a `popover`, so neither lands
+ *    under the full-screen view whatever the width.
+ * 3. Everything opened FROM a modal sits above `modal`: a menu is a `popover`,
  *    and the image preview and dialogs opened from a sheet or a modal are an
  *    `overlay`. A menu opened inside the accounts dialog, or the picture
  *    preview opened inside the expanded conversation, therefore lands on top
@@ -31,10 +36,10 @@
  * The kanban board's stylesheet and a few components still carry their own
  * numbers until their open pull requests merge (listed in the pull request
  * for #1858 and in `LEGACY_RAW_Z` in `layers.test.ts`). The layers are spaced
- * around them so the order holds meanwhile: the kanban full-window reader (64)
- * and stages sheet (62) sit between `sheet` and `modal`, its menus (70)
- * between `modal` and `popover`, and its receipts (80) between `overlay` and
- * `toast`.
+ * around them so the order holds meanwhile: the kanban stages sheet (62) sits
+ * between `sheet` and `reader`, its menus (70) between `modal` and `popover`,
+ * and its receipts (80) between `overlay` and `toast`. The stylesheet's
+ * full-window reader hosts (64) equal `reader`.
  */
 
 /** The top of the content range: raw values up to this are local ordering. */
@@ -49,6 +54,8 @@ export const LAYER = {
   dock: 40,
   /** A panel that takes over part of the screen: phone sheets, side panels, the artifact preview pane. */
   sheet: 60,
+  /** The full-screen conversation hosts: the kanban agent window, the phone's reader screen. What a conversation opens draws above this. */
+  reader: 64,
   /** A dialog with its backdrop: search, switchboard, accounts, the expanded conversation. */
   modal: 66,
   /** Menus, popovers and dropdowns — always portalled, so above any modal they open from. */
@@ -75,6 +82,7 @@ export const Z = {
   sticky: "z-[30]",
   dock: "z-[40]",
   sheet: "z-[60]",
+  reader: "z-[64]",
   modal: "z-[66]",
   popover: "z-[72]",
   overlay: "z-[76]",

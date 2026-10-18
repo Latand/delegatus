@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,11 +13,14 @@ import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { Flow } from "@/lib/flows/types";
 import type { FileScanSnapshot } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
+import { installHistoryProjection, readHistoryProjection, historyHeadlessFlows } from "@/lib/state/historyProjection";
 
 import { completedGenerationSelection, type CompletedGenerationRead } from "./inventorySelection";
 import {
   agentLivenessSnapshot,
+  activeHeadlessTranscriptPaths,
   evaluateLiveness,
+  headlessRoundProcess,
   HOSTED_RECOVERY_MAX,
   livenessRecordIsLive,
   STARTING_GRACE_MS,
@@ -27,6 +31,47 @@ import { projectLivenessEvents } from "./projector";
 import { readLivenessTranscriptEvidence, type LivenessTranscript, type LivenessTranscriptEvidence } from "./transcript";
 
 const sandboxes: string[] = [];
+
+test("headless round verdicts reuse unchanged dead owners and recheck live identities",()=>{
+  let now=10,probes=0,identity="start-a";
+  const probe=livenessProbe({now:()=>now,pidAlive:()=>{probes++;return true;},processIdentity:()=>identity});
+  const round={reviewerPid:2_147_000_001,reviewerIdentity:"start-a"};
+  expect(headlessRoundProcess(round,probe)).toBe("alive");
+  expect(headlessRoundProcess(round,probe)).toBe("alive");
+  expect(probes).toBe(1);
+  now+=1001;identity="start-b";
+  expect(headlessRoundProcess(round,probe)).toBe("gone");
+  expect(headlessRoundProcess(round,probe)).toBe("gone");
+  expect(probes).toBe(2);
+});
+
+test("a round without a saved identity stays unproven after its pid is reused",()=>{
+  let now=10,alive=false,probes=0;
+  const probe=livenessProbe({now:()=>now,pidAlive:()=>{probes++;return alive;},processIdentity:()=>"new-start"});
+  const round={reviewerPid:2_147_000_002,reviewerIdentity:null};
+  expect(headlessRoundProcess(round,probe)).toBe("gone");
+  expect(headlessRoundProcess(round,probe)).toBe("gone");
+  expect(probes).toBe(1);
+  now+=1001;alive=true;
+  expect(headlessRoundProcess(round,probe)).toBe("unproven");
+  expect(probes).toBe(2);
+});
+
+test("confirmed dead historical rounds are pruned while live and unproven owners remain",()=>{
+  const flows=[{reviewerMode:"headless" as const,rounds:[
+    {reviewerPid:31001,reviewerIdentity:"dead-start",reviewerPath:"/dead.jsonl",reviewerConversationId:null},
+    {reviewerPid:31002,reviewerIdentity:"live-start",reviewerPath:"/live.jsonl",reviewerConversationId:null},
+    {reviewerPid:31003,reviewerIdentity:null,reviewerPath:"/unproven.jsonl",reviewerConversationId:null},
+  ]}];
+  let probes=0;
+  const probe=livenessProbe({now:()=>10,pidAlive:pid=>{probes++;return pid!==31001;},processIdentity:pid=>pid===31002?"live-start":null});
+  const registry={entries:{},conversations:{}} as never;
+  expect([...activeHeadlessTranscriptPaths(flows,registry,probe,true)]).toEqual(["/live.jsonl","/unproven.jsonl"]);
+  expect(flows[0]!.rounds.map(round=>round.reviewerPath)).toEqual(["/live.jsonl","/unproven.jsonl"]);
+  const firstProbes=probes;
+  expect([...activeHeadlessTranscriptPaths(flows,registry,probe,true)]).toEqual(["/live.jsonl","/unproven.jsonl"]);
+  expect(probes).toBe(firstProbes);
+});
 
 afterEach(() => {
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
@@ -792,6 +837,32 @@ test("a headless reviewer needs a readable exact start identity", async () => {
     expect((await snapshotFor(saved, current, alive)).conversations[0]!.host.state)
       .toBe(expected);
   }
+});
+
+test("projected liveness resolves dead headless evidence through rotated transcript aliases",async()=>{
+  const agentPath="/transcripts/dead-reviewer-current.jsonl",previousPath="/transcripts/dead-reviewer-previous.jsonl";
+  const conversationId="conversation_dead_reviewer",previousId="conversation_dead_reviewer_previous";
+  const saved={reviewerPath:previousPath,reviewerConversationId:previousId,reviewerPid:4244,reviewerIdentity:"dead-start"};
+  const flowRecord={id:"flow_dead_reviewer",project:"viewer",template:"implement-review-loop",cwd:"/repo",implementerPath:"/transcripts/implementer.jsonl",baseRef:"a".repeat(40),
+    roles:{implementer:{engine:"codex",model:null,effort:null},reviewer:{engine:"codex",model:null,effort:null}},reviewerMode:"headless",rounds:[saved]} as unknown as Flow;
+  const dbRoot=sandbox(),filename=path.join(dbRoot,"state.sqlite"),db=new Database(filename);
+  db.exec("CREATE TABLE state_rows(collection TEXT,row_key TEXT,value_json TEXT,row_order INTEGER,PRIMARY KEY(collection,row_key))");
+  db.exec("BEGIN IMMEDIATE");installHistoryProjection(db,dbRoot);db.exec("COMMIT");
+  db.query("INSERT INTO state_rows VALUES ('flows',?,?,0)").run(flowRecord.id,JSON.stringify(flowRecord));
+  db.close();
+  const registry={entries:{},conversationAliases:{},conversations:{[conversationId]:{id:conversationId,generations:[{path:agentPath}],continuityPaths:[]}}} as unknown as RegistryFile;
+  const makeSources=()=>sources({
+    pipelines:()=>[],
+    describeTranscript:async()=>({path:agentPath,project:"viewer",title:"review",engine:"codex",mtimeMs:NOW-5_000,conversationId,activity:null,activityReason:null}),
+    registrySnapshot:()=>registry,
+    flows:Object.assign(()=>[flowRecord],{forLiveness:()=>readHistoryProjection(historyHeadlessFlows,{filename,collections:["flows"]})}),
+    transcriptEvidence:async()=>({turn:"busy" as const,lastRecordTs:NOW-5_000}),
+  });
+  const first=await agentLivenessSnapshot({conversationId},makeSources());
+  expect(first.conversations[0]!.host.state).toBe("unknown");
+  registry.conversationAliases={[previousId]:"conversation_dead_reviewer_previous_two", "conversation_dead_reviewer_previous_two":conversationId};
+  const second=await agentLivenessSnapshot({conversationId},makeSources());
+  expect(second.conversations[0]).toMatchObject({host:{state:"gone",kind:"headless",pid:4244},lifecycle:"stalled",reason:"host_gone_turn_open"});
 });
 
 test("a targeted query with an unknown conversation id returns an empty snapshot, never the full inventory", async () => {

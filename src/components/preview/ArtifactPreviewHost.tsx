@@ -1,7 +1,7 @@
 "use client";
 
 import { Download, ExternalLink, FileWarning, X } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { classifyArtifact, type ArtifactKind } from "@/lib/artifact/classify";
@@ -10,7 +10,14 @@ import { parseFileSpelling, resolveLink, type FileLinkTarget } from "@/lib/artif
 import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { useModalLayer } from "../modalLayer";
-import { leftShellInset, useLeftShellInset } from "../shellLayout";
+import {
+  hostedColumnInset,
+  leftShellInset,
+  setHostedSheetLeft,
+  useHostedColumnLeft,
+  useHostedWindowLeft,
+  useLeftShellInset,
+} from "../shellLayout";
 import {
   artifactBasename,
   artifactContentUrl,
@@ -22,9 +29,10 @@ import {
 } from "./artifactResource";
 import { frameSource, HtmlPane, MarkdownPane } from "./DocumentPanes";
 import { ImagePane } from "./ImagePane";
+import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { onArtifactPreview } from "./previewBus";
 import { TextPane } from "./TextPane";
-import { Z } from "@/components/layers";
+import { above } from "@/components/layers";
 
 /* pdf.js is megabytes; its chunk must not exist on the network until the first
    PDF preview actually opens. */
@@ -34,6 +42,9 @@ const WIDTH_KEY = "llvPreviewWidth";
 const MIN_WIDTH = 380;
 /** Keep at least this much conversation visible beside the desktop sheet. */
 const MIN_CONVERSATION = 320;
+/** Over the agent window the sheet may narrow to this to keep the floor of
+    conversation; below it the sheet takes the window instead. */
+const HOSTED_MIN_WIDTH = 360;
 
 /**
  * The sheet is fixed to the right edge, so it covers whatever the shell puts
@@ -47,6 +58,28 @@ const MIN_CONVERSATION = 320;
  */
 export function roomForSheet(viewportWidth: number, inset: number): number {
   return Math.max(MIN_WIDTH, viewportWidth - MIN_CONVERSATION - Math.max(0, inset));
+}
+
+/**
+ * Over the agent window `columnLeft` is the edge of its conversation column.
+ * The widest sheet that leaves the floor of conversation beside it, or null
+ * where even the narrowest useful sheet no longer fits.
+ */
+export function hostedRoom(viewportWidth: number, columnLeft: number): number | null {
+  const room = viewportWidth - MIN_CONVERSATION - Math.max(0, columnLeft);
+  return room >= HOSTED_MIN_WIDTH ? room : null;
+}
+
+/**
+ * The sheet's width over the agent window. Either it leaves at least the floor
+ * of conversation (never wider than the room, however narrow a width was
+ * stored), or it takes the whole window: a strip of conversation too narrow to
+ * read is worse than none, so the list beside it gives way as well.
+ */
+export function hostedSheetWidth(stored: number, viewportWidth: number, columnLeft: number, windowLeft: number): number {
+  const room = hostedRoom(viewportWidth, columnLeft);
+  if (room !== null) return Math.min(stored, room);
+  return Math.max(MIN_WIDTH, viewportWidth - Math.max(0, windowLeft));
 }
 
 interface OpenRequest {
@@ -166,6 +199,20 @@ export function ArtifactPreviewHost({ mobile }: { mobile: boolean }) {
   return <PreviewSheet key="sheet" open={open} mobile={mobile} onClose={close} onReload={setOpen} />;
 }
 
+/** The viewport width, live while `active`; the CSS-only width of the board
+    case cannot express "take the whole column" below the conversation floor. */
+function useViewportWidth(active: boolean): number {
+  const [width, setWidth] = useState(() => (typeof window === "undefined" ? 0 : window.innerWidth));
+  useEffect(() => {
+    if (!active) return;
+    const measure = () => setWidth(window.innerWidth);
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [active]);
+  return width;
+}
+
 function PreviewSheet({
   open,
   mobile,
@@ -189,8 +236,24 @@ function PreviewSheet({
   const meta = current?.meta ?? null;
   const failure = current?.failure ?? null;
   const [width, setWidth] = useState(storedWidth);
-  const inset = useLeftShellInset();
-  useModalLayer({ containerRef, onClose });
+  const shellInset = useLeftShellInset();
+  const hostedLeft = useHostedColumnLeft();
+  const hostedWindowLeft = useHostedWindowLeft();
+  const hosted = !mobile && hostedLeft > 0;
+  /* Over the agent window, the floor is measured from the window's conversation
+     column; the window covers the sidebar and the dock beside it. */
+  const inset = hosted ? hostedLeft : shellInset;
+  const viewportWidth = useViewportWidth(hosted);
+  const hostedWidth = hosted ? hostedSheetWidth(width, viewportWidth, hostedLeft, hostedWindowLeft) : 0;
+  /* The window wraps its conversation at the sheet's edge. */
+  useLayoutEffect(() => {
+    setHostedSheetLeft(hosted ? viewportWidth - hostedWidth : 0);
+  }, [hosted, viewportWidth, hostedWidth]);
+  useLayoutEffect(() => () => setHostedSheetLeft(0), []);
+  const isTopLayer = useModalLayer({ containerRef, onClose });
+  /* Opened over a full-screen conversation, the preview takes Escape before the
+     window under it does — but only while no modal dialog sits above it. */
+  useOverlayEscape(onClose, true, isTopLayer);
 
   /* The meta round-trip is the load this surface exists for, keyed to the
      open request; an aborted (superseded) read settles nothing. */
@@ -216,11 +279,14 @@ function PreviewSheet({
   const resizeFrom = useCallback(
     (down: PointerEvent | { clientX: number }) => {
       const move = (event: PointerEvent) => {
-        const next = Math.min(
-          Math.max(MIN_WIDTH, window.innerWidth - event.clientX),
-          roomForSheet(window.innerWidth, leftShellInset()),
-        );
-        setWidth(next);
+        const wanted = Math.max(MIN_WIDTH, window.innerWidth - event.clientX);
+        if (hostedColumnInset() > 0) {
+          /* Where the sheet takes the window whole there is nothing to drag. */
+          const room = hostedRoom(window.innerWidth, hostedColumnInset());
+          if (room !== null) setWidth(Math.min(wanted, room));
+          return;
+        }
+        setWidth(Math.min(wanted, roomForSheet(window.innerWidth, leftShellInset())));
       };
       const up = () => {
         window.removeEventListener("pointermove", move);
@@ -312,13 +378,17 @@ function PreviewSheet({
       data-artifact-preview
       data-artifact-state={state}
       data-artifact-kind={kind ?? ""}
-      className={`fixed ${Z.sheet} flex flex-col border-border bg-card shadow-1 focus-visible:outline-none ${
+      className={`fixed flex flex-col border-border bg-card shadow-1 focus-visible:outline-none ${
         mobile ? "inset-0" : "inset-y-0 right-0 border-l"
       }`}
       data-artifact-preview-inset={mobile ? undefined : inset}
       /* `max()/min()` in CSS so the viewport term stays live without a resize
          listener; the inset term re-renders with the dock beside it. */
-      style={mobile ? undefined : { width: `max(${MIN_WIDTH}px, min(${width}px, calc(100vw - ${MIN_CONVERSATION + inset}px)))` }}
+      style={mobile
+        ? { zIndex: above("reader") }
+        : hosted
+          ? { zIndex: above("reader"), width: `${hostedWidth}px` }
+          : { zIndex: above("reader"), width: `max(${MIN_WIDTH}px, min(${width}px, calc(100vw - ${MIN_CONVERSATION + inset}px)))` }}
     >
       {mobile ? null : (
         <div
