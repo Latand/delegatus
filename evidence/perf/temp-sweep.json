@@ -1,12 +1,12 @@
 {
   "base": "7591a7916",
-  "measuredAt": "2026-10-18T19:37:07.214759+00:00",
+  "measuredAt": "2026-10-18T20:11:20+00:00",
   "runtime": "Bun 1.4.0",
   "cpuQuotaPercent": 300,
   "sourceSha256": {
-    "scripts/measure-temp-sweep.ts": "9d48ac06211cfe4640f080a42aa207ad7fa79d68de188f4b6c840cdbf0cb1e7d",
-    "src/lib/pipelines/worktreeSweep.fixture.ts": "ac19243275d8d9de00cc42b1acf158ea0680f782c3ce6bad7db0869bed2d5f47",
-    "src/lib/pipelines/worktreeSweepWorker.ts": "ebb24e2fe7f8a7cbe763a26bd309b1bf90d0b4a105ae4e0e2fed45fcd48dbf6c",
+    "scripts/measure-temp-sweep.ts": "535533ebffc9a913d692dfcbb5951afb96407c1a8bced839fa8de2e3fbd0ce9d",
+    "src/lib/pipelines/worktreeSweep.fixture.ts": "2e3310b3f14cefcfeefa8eee9d101bcdee5245e2d42d56f67427db6f26d47b82",
+    "src/lib/pipelines/worktreeSweepWorker.ts": "0771db8722d60c9ae2ce9f953186e26bc2dfee7cd5ebc0b43c4d233dad174ed0",
     "src/lib/worktreeSweep.worker.ts": "7a283d766ed719adfff21765aeac98b5a15b2d7e65e5c61d642e5d139fdb1feb",
     "src/lib/tempSweep.ts": "3cb7b7c2ece2bcdc88d1bd0ef5d224b0d2289d2930e9f8546a92a83b9429f377",
     "src/lib/state/diskPressure.ts": "67ac30b16ccaa5591b0e077cb83b3ddfb1181df65e8ce12835054f36f274d11c",
@@ -21,258 +21,6 @@
     "bash scripts/gate-slot.sh bun scripts/measure-temp-sweep.ts --before",
     "bash scripts/gate-slot.sh bun scripts/measure-temp-sweep.ts --after"
   ],
-  "initialBefore": [
-    {
-      "kind": "T2",
-      "run": 0,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 24.088876,
-      "cpuMs": 31.015,
-      "maxLoopMs": 24.834336000000008,
-      "load": [
-        4.97,
-        5.34,
-        6.62
-      ]
-    },
-    {
-      "kind": "T2",
-      "run": 1,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 14.172251000000017,
-      "cpuMs": 14.834,
-      "maxLoopMs": 15.806882000000002,
-      "load": [
-        4.97,
-        5.34,
-        6.62
-      ]
-    },
-    {
-      "kind": "T2",
-      "run": 2,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 16.29674700000001,
-      "cpuMs": 20.207,
-      "maxLoopMs": 16.827504000000005,
-      "load": [
-        4.97,
-        5.34,
-        6.62
-      ]
-    },
-    {
-      "kind": "T2",
-      "run": 3,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 15.118525000000005,
-      "cpuMs": 16.036,
-      "maxLoopMs": 16.77082200000001,
-      "load": [
-        4.97,
-        5.34,
-        6.62
-      ]
-    },
-    {
-      "kind": "H3",
-      "run": 0,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 19.034969999999987,
-      "cpuMs": 20.902,
-      "maxLoopMs": 19.571213,
-      "load": [
-        4.97,
-        5.34,
-        6.62
-      ]
-    },
-    {
-      "kind": "H3",
-      "run": 1,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 18.19835999999998,
-      "cpuMs": 22.463,
-      "maxLoopMs": 19.811109999999985,
-      "load": [
-        4.97,
-        5.34,
-        6.62
-      ]
-    },
-    {
-      "kind": "H3",
-      "run": 2,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 16.052886,
-      "cpuMs": 16.924,
-      "maxLoopMs": 16.605525,
-      "load": [
-        4.97,
-        5.34,
-        6.62
-      ]
-    },
-    {
-      "kind": "H3",
-      "run": 3,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 17.044605999999987,
-      "cpuMs": 20.351,
-      "maxLoopMs": 17.56971199999998,
-      "load": [
-        4.97,
-        5.34,
-        6.62
-      ]
-    }
-  ],
-  "matchedBefore": [
-    {
-      "mode": "before",
-      "kind": "T2",
-      "run": 0,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 16.833283999999992,
-      "cpuMs": 21.102,
-      "maxLoopMs": 18.32246400000001,
-      "load": [
-        2.56,
-        4.54,
-        5.96
-      ]
-    },
-    {
-      "mode": "before",
-      "kind": "T2",
-      "run": 1,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 16.62596400000001,
-      "cpuMs": 18.005,
-      "maxLoopMs": 18.205828999999994,
-      "load": [
-        2.56,
-        4.54,
-        5.96
-      ]
-    },
-    {
-      "mode": "before",
-      "kind": "T2",
-      "run": 2,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 18.535055,
-      "cpuMs": 20.259,
-      "maxLoopMs": 19.051248999999984,
-      "load": [
-        2.56,
-        4.54,
-        5.96
-      ]
-    },
-    {
-      "mode": "before",
-      "kind": "T2",
-      "run": 3,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 17.355124999999987,
-      "cpuMs": 18.795,
-      "maxLoopMs": 17.876468999999986,
-      "load": [
-        2.56,
-        4.54,
-        5.96
-      ]
-    },
-    {
-      "mode": "before",
-      "kind": "H3",
-      "run": 0,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 21.117565999999954,
-      "cpuMs": 24.526,
-      "maxLoopMs": 22.686976000000016,
-      "load": [
-        2.56,
-        4.54,
-        5.96
-      ]
-    },
-    {
-      "mode": "before",
-      "kind": "H3",
-      "run": 1,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 20.43996599999997,
-      "cpuMs": 23.286,
-      "maxLoopMs": 21.00887700000004,
-      "load": [
-        2.56,
-        4.54,
-        5.96
-      ]
-    },
-    {
-      "mode": "before",
-      "kind": "H3",
-      "run": 2,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 19.26477699999998,
-      "cpuMs": 20.49,
-      "maxLoopMs": 20.85612199999997,
-      "load": [
-        2.56,
-        4.54,
-        5.96
-      ]
-    },
-    {
-      "mode": "before",
-      "kind": "H3",
-      "run": 3,
-      "processes": 340,
-      "paths": 44000,
-      "roots": 932,
-      "wallMs": 20.843677999999954,
-      "cpuMs": 23.964,
-      "maxLoopMs": 21.359166999999957,
-      "load": [
-        2.56,
-        4.54,
-        5.96
-      ]
-    }
-  ],
   "after": [
     {
       "mode": "after",
@@ -281,13 +29,15 @@
       "processes": 340,
       "paths": 44000,
       "roots": 932,
-      "wallMs": 145.39090600000003,
-      "cpuMs": 30.268,
-      "maxLoopMs": 9.96198800000002,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "helper-request",
+      "wallMs": 154.100311,
+      "cpuMs": 34.133,
+      "maxLoopMs": 8.863871999999986,
       "load": [
-        2.56,
-        4.54,
-        5.96
+        3.7,
+        6.26,
+        6.63
       ]
     },
     {
@@ -297,13 +47,15 @@
       "processes": 340,
       "paths": 44000,
       "roots": 932,
-      "wallMs": 25.802299000000005,
-      "cpuMs": 1.139,
-      "maxLoopMs": 1.0888669999999934,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "helper-request",
+      "wallMs": 24.187408000000005,
+      "cpuMs": 1.16,
+      "maxLoopMs": 2.1339089999999996,
       "load": [
-        2.56,
-        4.54,
-        5.96
+        3.7,
+        6.26,
+        6.63
       ]
     },
     {
@@ -313,13 +65,15 @@
       "processes": 340,
       "paths": 44000,
       "roots": 932,
-      "wallMs": 24.169422999999995,
-      "cpuMs": 1.161,
-      "maxLoopMs": 1.734314999999981,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "helper-request",
+      "wallMs": 21.41771,
+      "cpuMs": 1.015,
+      "maxLoopMs": 1.1360030000000165,
       "load": [
-        2.56,
-        4.54,
-        5.96
+        3.7,
+        6.26,
+        6.63
       ]
     },
     {
@@ -329,13 +83,15 @@
       "processes": 340,
       "paths": 44000,
       "roots": 932,
-      "wallMs": 35.77860300000003,
-      "cpuMs": 3.291,
-      "maxLoopMs": 2.131680000000017,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "helper-request",
+      "wallMs": 20.780079999999998,
+      "cpuMs": 1.152,
+      "maxLoopMs": 1.762012000000027,
       "load": [
-        2.56,
-        4.54,
-        5.96
+        3.7,
+        6.26,
+        6.63
       ]
     },
     {
@@ -345,13 +101,15 @@
       "processes": 340,
       "paths": 44000,
       "roots": 932,
-      "wallMs": 18.99130299999996,
-      "cpuMs": 1.02,
-      "maxLoopMs": 1.934898999999973,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "helper-refresh",
+      "wallMs": 21.131527000000006,
+      "cpuMs": 1.699,
+      "maxLoopMs": 2.029359999999997,
       "load": [
-        2.56,
-        4.54,
-        5.96
+        3.7,
+        6.26,
+        6.63
       ]
     },
     {
@@ -361,13 +119,15 @@
       "processes": 340,
       "paths": 44000,
       "roots": 932,
-      "wallMs": 18.661493000000007,
-      "cpuMs": 1.106,
-      "maxLoopMs": 1.2030379999999923,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "viewer-client-cache-hit",
+      "wallMs": 0.11227999999999838,
+      "cpuMs": 0.115,
+      "maxLoopMs": 1.1229890000000182,
       "load": [
-        2.56,
-        4.54,
-        5.96
+        3.7,
+        6.26,
+        6.63
       ]
     },
     {
@@ -377,13 +137,15 @@
       "processes": 340,
       "paths": 44000,
       "roots": 932,
-      "wallMs": 16.832089999999994,
-      "cpuMs": 1.389,
-      "maxLoopMs": 1.7638230000000021,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "viewer-client-cache-hit",
+      "wallMs": 0.09064300000000003,
+      "cpuMs": 0.093,
+      "maxLoopMs": 1.0666080000000306,
       "load": [
-        2.56,
-        4.54,
-        5.96
+        3.7,
+        6.26,
+        6.63
       ]
     },
     {
@@ -393,13 +155,162 @@
       "processes": 340,
       "paths": 44000,
       "roots": 932,
-      "wallMs": 19.340671000000043,
-      "cpuMs": 0.695,
-      "maxLoopMs": 1.739543000000026,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "viewer-client-cache-hit",
+      "wallMs": 0.1365850000000819,
+      "cpuMs": 0.14,
+      "maxLoopMs": 1.754458999999997,
       "load": [
-        2.56,
-        4.54,
-        5.96
+        3.7,
+        6.26,
+        6.63
+      ]
+    }
+  ],
+  "measuredRevision": "d14b98b4edab4ead582fcc85930e374674c54638",
+  "before": [
+    {
+      "mode": "before",
+      "kind": "T2",
+      "run": 0,
+      "processes": 340,
+      "paths": 44000,
+      "roots": 932,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "direct-scan",
+      "wallMs": 19.701527,
+      "cpuMs": 26.707,
+      "maxLoopMs": 21.447491000000014,
+      "load": [
+        3.7,
+        6.26,
+        6.63
+      ]
+    },
+    {
+      "mode": "before",
+      "kind": "T2",
+      "run": 1,
+      "processes": 340,
+      "paths": 44000,
+      "roots": 932,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "direct-scan",
+      "wallMs": 15.416243999999978,
+      "cpuMs": 18.004,
+      "maxLoopMs": 17.081322999999998,
+      "load": [
+        3.7,
+        6.26,
+        6.63
+      ]
+    },
+    {
+      "mode": "before",
+      "kind": "T2",
+      "run": 2,
+      "processes": 340,
+      "paths": 44000,
+      "roots": 932,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "direct-scan",
+      "wallMs": 16.138071999999994,
+      "cpuMs": 18.749,
+      "maxLoopMs": 17.72699399999999,
+      "load": [
+        3.7,
+        6.26,
+        6.63
+      ]
+    },
+    {
+      "mode": "before",
+      "kind": "T2",
+      "run": 3,
+      "processes": 340,
+      "paths": 44000,
+      "roots": 932,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "direct-scan",
+      "wallMs": 15.683661,
+      "cpuMs": 17.248,
+      "maxLoopMs": 17.321121999999974,
+      "load": [
+        3.7,
+        6.26,
+        6.63
+      ]
+    },
+    {
+      "mode": "before",
+      "kind": "H3",
+      "run": 0,
+      "processes": 340,
+      "paths": 44000,
+      "roots": 932,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "direct-scan",
+      "wallMs": 18.89945799999998,
+      "cpuMs": 22.943,
+      "maxLoopMs": 20.575105000000008,
+      "load": [
+        3.7,
+        6.26,
+        6.63
+      ]
+    },
+    {
+      "mode": "before",
+      "kind": "H3",
+      "run": 1,
+      "processes": 340,
+      "paths": 44000,
+      "roots": 932,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "direct-scan",
+      "wallMs": 28.818513999999993,
+      "cpuMs": 33.448,
+      "maxLoopMs": 30.48912299999995,
+      "load": [
+        3.7,
+        6.26,
+        6.63
+      ]
+    },
+    {
+      "mode": "before",
+      "kind": "H3",
+      "run": 2,
+      "processes": 340,
+      "paths": 44000,
+      "roots": 932,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "direct-scan",
+      "wallMs": 19.709619000000032,
+      "cpuMs": 21.339,
+      "maxLoopMs": 20.27046899999999,
+      "load": [
+        3.7,
+        6.26,
+        6.63
+      ]
+    },
+    {
+      "mode": "before",
+      "kind": "H3",
+      "run": 3,
+      "processes": 340,
+      "paths": 44000,
+      "roots": 932,
+      "revision": "d14b98b4edab4ead582fcc85930e374674c54638",
+      "executionPath": "direct-scan",
+      "wallMs": 17.230001000000016,
+      "cpuMs": 18.174,
+      "maxLoopMs": 17.85037200000005,
+      "load": [
+        3.7,
+        6.26,
+        6.63
       ]
     }
   ]
