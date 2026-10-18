@@ -372,10 +372,10 @@ replace this production acceptance window.
 
 The standing requirement dated 2026-10-14 is to eliminate multi-second Viewer
 pauses. A profiler can supply the missing caller evidence; it supplies no
-latency improvement by itself. This spike follows the specification's stop
-condition: no tested API supplies the required hard producer bound on Bun
-1.4.0. Serving capture, its setting, deploy activation, cooldown and correlated
-loop-gap output remain unimplemented pending a suitable producer.
+latency improvement by itself. At the spike checkpoint, no tested API supplied the specification's hard
+producer bound on Bun 1.4.0. Work stopped there for a decision. The subsequent
+decision accepts native collection throughout a blocked interval and authorizes
+the serving recorder described below; the original measurements remain intact.
 
 `scripts/probe-loop-profiler.ts --jsc` now tests `bun:jsc.profile()` in a
 disposable main-thread process. A synthetic three-second CPU block is sampled
@@ -469,7 +469,10 @@ monitor, release pin or deploy path changes in this spike. The exercised
 processes are disposable Bun main-thread controls and their inspector worker;
 neither a serving Viewer nor a runtime-host generation is exercised.
 
-### Options after the stop condition
+### Options recorded at the spike checkpoint
+
+The subsequent decision selected option 2. This list preserves the spike
+checkpoint; the serving contract below governs the implementation.
 
 1. Recommended: authorize a runtime-level follow-up that adds or selects a
    profiler with a fixed native sample/byte/depth budget and a stop deadline
@@ -482,3 +485,148 @@ neither a serving Viewer nor a runtime-host generation is exercised.
 3. Reconsider separately authorized external native sampling with independently
    bounded collection. This changes the no-privileges constraint and requires
    a new scope; existing machine access restrictions remain in force.
+
+
+## Serving JavaScript recorder under the revised contract
+
+The follow-up decision permits native collection throughout a blocked interval
+on the pinned Bun 1.4.0. No runtime or Bun pin changes and no external profiler
+are involved. This adds diagnostic attribution; it claims no reduction in pauses.
+The spike's 240 idle/busy pairs above remain the cost evidence. Their dispersion
+still prevents a negligible-overhead claim for a serving process.
+
+### Arming and disabling
+
+The opt-in setting is the small `loop-profiler.json` file in the installation's
+state directory: `{"enabled":true}` enables the next deployed revision's first
+Viewer start. The default is off. Set `enabled` to `false`, remove the file,
+or make it invalid to disable collection. Settings are reread asynchronously at
+every window boundary and before collection following cooldown; a read error
+fails closed. The read itself is limited to 513 bytes; over 512 is invalid.
+No UI, MCP mutation or runtime-host setting was added.
+
+Only a serving Viewer with a validated launcher diagnostic revision or container
+release revision can arm it. Development, builds, unidentified starts and the
+runtime host cannot arm it. The first Viewer start for a new revision consumes
+that revision's opportunity in `loop-profiler-deploy.json`, even when opt-in is
+off. A restart on the same revision stays off; a new deployed revision can arm
+again. A malformed ledger fails closed. The one-row ledger is replaced atomically
+under the existing asynchronous file-transaction lock, so concurrent starts
+cannot both claim it. It contains a revision and startup timestamp only.
+
+An armed process expires thirty minutes after recorder startup, using a monotonic
+deadline set before startup I/O. No window starts at or after expiry. The final
+window's timer is shortened to the remaining budget. A blocked main thread can
+postpone timer completion and expiry enforcement until it recovers; this is the
+accepted native exposure. Changing the opt-in file to off prevents another
+window at the next boundary, including when the change occurs during collection.
+Re-enabling after a disable requires the next deployed revision.
+
+### Collection, correlation and bounds
+
+`src/lib/loopProfilerServing.ts` is loaded only from Viewer instrumentation.
+It loads `bun:jsc` through a runtime import after opt-in and deploy admission.
+The monitor owns one recorder across compiled bundles, and stopping the monitor
+stops admission of new windows. The runtime host shares monitor code but has no
+recorder startup path; the Bun pin and runtime-host source are unchanged.
+
+Consecutive `profile(async () => sleep(W), 10000)` windows use W = five seconds.
+A window without a loop gap of at least two seconds releases the returned
+profile without accessing or retaining its stacks. A qualifying gap retains its
+existing diagnostic record until the profile boundary, usually at most five
+seconds later; the recorder flushes the monitor's tick before converting the
+profile, so a profile timer that runs first still correlates the gap. Up to four
+pending gap records share one sanitized window summary. Their original sequence,
+timestamps, operations and scheduler evidence remain on the same
+`[viewer loop-gap]` line, with an added `jsProfile` field. Capture/conversion
+failure releases pending records with status `unavailable` and stops collection.
+The existing bounded nonblocking log sink still owns delivery and drop counts.
+
+Native collection continues throughout the blocked interval: at 10 ms this is
+approximately 100 samples per blocked second. Bun also constructs its native
+reports before returning them. There is no hard native sample, depth, memory,
+CPU or stop-time bound. The following limits apply **after** collection:
+
+- Inspect at most 4,096 evenly spaced samples and 32 frames per sample in
+  each of two bounded passes.
+- Keep at most 128 candidate frame counters using Misra-Gries elimination,
+  then count exact weights for the survivors and keep the top 16 rows by
+  self/total samples. Candidate selection can omit rare frames; hot frames
+  arriving late can displace earlier one-off frames. Recursive frames count once per sample for total weight. Weights
+  divide by inspected samples, including samples omitted by privacy filtering.
+- Enforce an 8,192-byte UTF-8 cap on the retained window summary and metadata,
+  dropping the lowest-ranked rows as needed. Raw stacks and Bun's source and
+  bytecode reports never enter logs or durable storage.
+- Log only identifier-shaped function names, numeric lines and paths relative
+  to the repository under `src/`, `scripts/` or `.next/server/`. Reject
+  external paths, dependency paths, URL parameters, native/eval frames and
+  dynamic text names. Compiled production frames can name a generated chunk
+  and its generated line; keep the serving revision to resolve that location.
+- A qualifying gap or a window longer than 5.25 seconds imposes a one-minute
+  cooldown before the next collection, bounded by expiry. Collection, conversion
+  and setting/ledger work use the monitor phases `loop-profiler.collect`,
+  `loop-profiler.trim` and `loop-profiler.settings`.
+
+The bounded conversion limits JavaScript work and retained output; it cannot
+retroactively limit Bun's collection or report conversion. A window covers all
+samples in its interval, so self/total weights describe the whole window rather
+than precisely isolating one gap when other work ran in the same window.
+
+### Verification of the serving path
+
+In a scratch export, isolate HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR,
+unset LLV_STATE_OWNER, and set the Viewer control URL to a closed port. Use the
+installed gate wrapper serially. The focused test command is:
+
+```sh
+bash "$GATE" bun test ./src/lib/loopProfiler.test.ts ./src/lib/viewerLoopMonitor.test.ts
+```
+
+The native fixture starts the real serving recorder, drives a three-second CPU
+block on its Bun main thread and checks its original loop-gap record for the
+function, repository file, line and self/total samples. It disables the real
+setting at the first captured record. Fresh-process tests share only their own
+isolated ledger to prove a restart cannot renew admission and a runtime-host
+caller cannot claim it. Deterministic clock/collector controls cover healthy
+discard, overlapping gaps, timer ordering, expiry, boundary disable, cooldown,
+privacy filtering, output limits and capture/conversion failures.
+
+The final Next production build and its served Viewer rehearsal passed under
+Bun 1.4.0. The compiled-path control is available after building:
+
+```sh
+bash "$GATE" bun src/lib/loopProfiler.fixture.ts native-compiled
+```
+
+Use a fresh isolated state directory for each native fixture run, since it
+consumes the same deploy admission as serving code. The compiled fixture loads
+Next's instrumentation entry and chunk definitions, then invokes the emitted
+serving recorder export. It exercises the actual emitted `import("bun:jsc")`
+and the native profile conversion. Its three-second gap had **295 of 297**
+samples naming `syntheticThreeSecondBlock` in `src/lib/loopProfiler.fixture.ts:10`
+on the same sequence-1 loop-gap record. The retained profile occupied **660
+UTF-8 bytes**. It disabled the real setting at that first record and returned.
+
+The separate runtime-host rehearsal, using `scripts/verify-runtime-host.ts`
+under Bun 1.4.0, passed: two isolated host generations completed succession in
+**506 ms**, with **27/27** listener and **27/27** runtime-socket answers during
+a fifteen-second hold. Both endpoints survived abandoned callers. These were
+disposable host generations, never the operator's stable listener. The record
+and final implementation source hashes are in
+`evidence/loop-profiler-spike/serving.json`. The post-deploy pause audit remains
+the check of whether the production attribution names the observed CPU owner.
+
+The final isolated full touched-tests gate selected four explicit files and
+reported a green head with no new failures; no baseline sample was needed:
+
+```sh
+bash "$GATE" bun scripts/local-gate-tests.ts \
+  --base f69ba98f92fcd84743c9570ca7a2ba011b474742 \
+  ./scripts/probe-loop-profiler.test.ts ./src/lib/loopProfiler.test.ts \
+  ./src/lib/viewerInstrumentation.test.ts ./src/lib/viewerLoopMonitor.test.ts
+bash "$GATE" ./node_modules/.bin/tsc --noEmit
+```
+
+Full typecheck and ESLint on the six changed implementation/fixture/test files
+passed. The checks in `serving.json` record the commands. Viewer verification
+loaded **28/28** compiled server modules and received **HTTP 200** for `GET /`.

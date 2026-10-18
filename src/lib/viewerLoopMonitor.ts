@@ -3,8 +3,10 @@ import { performanceSpans, performanceSites, performanceProcess } from "./perfor
 import { startLoopWatchdog } from "./loopWatchdog";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createLoopHeapSignals } from "./loopHeapSignals";
+import type { createLoopProfiler, LoopGapProfile } from "./loopProfiler";
 
 export type ViewerOperation = "history.prepare" | "history.read" | "history.project-row" | "memory.curation-admission" | "pipelines.repository-initialization" | "tasks.note" | "mcp.receipts" | "mcp.tasks.executor" | "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
+  | "loop-profiler.collect" | "loop-profiler.trim" | "loop-profiler.settings"
   | "transcript.index" | "memory.discovery" | "memory.refresh"
   | "memory.privacy.compile" | "memory.privacy.match" | "memory.privacy.worker"
   | "memory.source-read" | "memory.source-write"
@@ -60,6 +62,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   let sequence = 0, activeDropped = 0, completedDropped = 0;
   let watchdog: ReturnType<typeof startLoopWatchdog> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let profiler: ReturnType<typeof createLoopProfiler> | undefined;
   const tick = () => {
     const at = now();
     // The launcher pins each child to its own release, including checkout
@@ -95,7 +98,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       const first = window[0], final = window.at(-1);
       const rss = window.filter(row => row.rssBytes >= 0 && row.rssUtcMs >= 0);
       const rssFirst = rss[0], rssFinal = rss.at(-1);
-      writeLog(`[viewer loop-gap] ${JSON.stringify({ gapMs: Math.round(gapMs), operations, ...memory,
+      const report = { gapMs: Math.round(gapMs), operations, ...memory,
         role: process.env.LLV_STATE_OWNER === "runtime-host" ? "runtime-host" : "viewer",
         ...performanceProcess, revision, sequence: ++sequence, lastTick: last, tick: at, utc: new Date().toISOString(),
         pendingOperations: active.size, activeDropped, completedDropped, logDropped: sink.dropped(),
@@ -131,7 +134,9 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
             samples: window.filter(row => row.site === site).length,
           })),
         },
-      })}`);
+      };
+      const emit = (jsProfile?: LoopGapProfile) => writeLog(`[viewer loop-gap] ${JSON.stringify({ ...report, ...(jsProfile ? { jsProfile } : {}) })}`);
+      if (!profiler?.correlate(last, at, gapMs, emit)) emit();
     }
     completed = [];
     if (at - lastSummary >= 60_000) {
@@ -146,6 +151,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   };
   return {
     current: () => context.getStore(),
+    setProfiler(next: ReturnType<typeof createLoopProfiler>) { profiler?.stop(); profiler = next; },
     setLogSink(sink: (line: string) => void) {
       const previous = writeLog;
       writeLog = sink;
@@ -189,7 +195,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       timer = setTimeout(poll, 10); timer.unref();
       return watchdog.ready;
     },
-    stop() { if (timer) clearTimeout(timer); timer = undefined; heapSignals.stop(); completed = []; spans.observeSite(); void watchdog?.stop().catch(() => {}); watchdog = undefined; },
+    stop() { profiler?.stop(); profiler = undefined; if (timer) clearTimeout(timer); timer = undefined; heapSignals.stop(); completed = []; spans.observeSite(); void watchdog?.stop().catch(() => {}); watchdog = undefined; },
   };
 }
 export const viewerLoopMonitor = shared.__delegatusLoopMonitor ??= createViewerLoopMonitor();
