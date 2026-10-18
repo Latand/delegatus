@@ -102,7 +102,7 @@ test("the window publishes the left edge of its conversation column and withdraw
 });
 
 test("the conversation wraps at the edge of a sheet standing over the right of the column", async () => {
-  const slotInset = () => dom.document.querySelector<HTMLElement>(".aw-reader")!.style.getPropertyValue("--aw-sheet-inset");
+  const slotInset = () => (dom.document.querySelector(".aw-reader") as unknown as HTMLElement).style.getPropertyValue("--aw-sheet-inset");
   await mount();
   expect(slotInset()).toBe("");
 
