@@ -2047,8 +2047,13 @@ export class RuntimeJournal {
       ).get(Math.min(target.seq, consumed ?? target.seq));
       if (!anchor) { this.db.exec("COMMIT"); return; }
       this.retainLegacyStopAdmissions();
+      // Select the retiring prefix while its event ids still exist. The
+      // checkpoint primary key starts with event_id, so a small append retires
+      // only its checkpoints instead of scanning the entire retained tail.
+      this.db.query(`DELETE FROM consumer_checkpoints
+        WHERE event_id IN (SELECT event_id FROM events WHERE seq <= ?)`)
+        .run(anchor.seq);
       this.db.query("DELETE FROM events WHERE seq <= ?").run(anchor.seq);
-      this.db.exec("DELETE FROM consumer_checkpoints WHERE NOT EXISTS (SELECT 1 FROM events WHERE events.event_id = consumer_checkpoints.event_id)");
       this.db.query("DELETE FROM outbox WHERE state = 'completed' AND event_seq <= ?").run(anchor.seq);
       // Upgrade retained legacy boundaries before their receipts disappear.
       // Kill authorship comes from the admitted fence, never from prose or ids.
