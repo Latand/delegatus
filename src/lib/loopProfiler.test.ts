@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import path from "node:path";
 import { mkdtemp, mkdir, readFile, writeFile, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { createLoopProfiler, LOOP_PROFILE_ARM_MS, LOOP_PROFILE_BYTES, LOOP_PROFILE_COOLDOWN_MS, trimLoopProfile,
+import { createLoopProfiler, LOOP_PROFILE_ARM_MS, LOOP_PROFILE_BYTES, trimLoopProfile,
   type LoopProfile, type LoopGapProfile, type LoopProfilerPorts } from "./loopProfiler";
 import { createViewerLoopMonitor } from "./viewerLoopMonitor";
 import { createPerformanceSpans } from "./performanceSpans";
@@ -15,15 +15,13 @@ function harness(expires = LOOP_PROFILE_ARM_MS) {
   let at = 0, enabled = true, reads = 0, calls = 0;
   let finish: ((result: { stackTraces: unknown }) => void) | undefined;
   const sleeps: number[] = [], phases: string[] = [], emitted: LoopGapProfile[] = [];
-  let afterSleep: (() => void) | undefined;
   const ports: LoopProfilerPorts = { now: () => at, enabled: async () => { reads++; return enabled; },
     collect: () => { calls++; return new Promise(resolve => { finish = resolve; }); },
-    sleep: async ms => { sleeps.push(ms); at += ms; afterSleep?.(); },
+    sleep: async ms => { sleeps.push(ms); at += ms; },
     flushTick: () => {}, root, phase: (phase, work) => { phases.push(phase); return work(); } };
   const recorder = createLoopProfiler(ports, expires);
   return { ports, recorder, emitted, phases, sleeps, get calls() { return calls; }, get reads() { return reads; },
     time: (value: number) => { at = value; }, disable: () => { enabled = false; },
-    afterSleep: (work: () => void) => { afterSleep = work; },
     finish: (value: { stackTraces: unknown } = { stackTraces: sample }) => { if (!finish) throw new Error("not collecting"); finish(value); },
     gap: (from = 0, to = at, ms = 3000) => recorder.correlate(from, to, ms, value => emitted.push(value)),
   };
@@ -42,10 +40,13 @@ test("healthy windows discard returned profiles without reading stacks", async (
 
 test("only overlapping gaps at the exact threshold correlate and retention is bounded", async () => {
   const h = harness(5000); const done = h.recorder.start(); await turn(); h.time(5000);
-  expect(h.gap(-3000, -1)).toBe(false);
-  expect(h.gap(6000, 8000)).toBe(false);
+  expect(h.gap(-3000, -1)).toBe(true);
+  expect(h.gap(6000, 8000)).toBe(true);
+  expect(h.emitted).toEqual(Array.from({ length: 2 }, () => ({ status: "skipped", reason: "outside-window" })));
+  h.emitted.length = 0;
   for (let i = 0; i < 4; i++) expect(h.gap(0, 5000, 2000)).toBe(true);
-  expect(h.gap()).toBe(false);
+  expect(h.gap()).toBe(true);
+  expect(h.emitted.pop()).toEqual({ status: "skipped", reason: "pending-limit" });
   h.finish(); await done;
   expect(h.emitted).toHaveLength(4);
   expect(h.emitted[0]).toMatchObject({ status: "captured", from: 0, to: 5000, intervalUs: 10000,
@@ -70,17 +71,46 @@ test("profile completion before the poll flushes into the same loop-gap sequence
   monitor.stop();
 });
 
-test.each([false, true])("a long window cools down even without a qualifying gap: gap=%s", async gap => {
-  const h = harness(); const done = h.recorder.start(); await turn(); h.time(6000);
-  if (gap) h.gap();
-  h.afterSleep(h.disable); h.finish(); await done;
-  expect(h.sleeps).toEqual([LOOP_PROFILE_COOLDOWN_MS]); expect(h.calls).toBe(1);
+test("three long gaps in consecutive slow windows each carry captured frames on their gap record", async () => {
+  const h = harness(18000), lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), h.ports.now, createPerformanceSpans(h.ports.now));
+  monitor.setProfiler(h.recorder); h.ports.flushTick = monitor.tick;
+  const done = h.recorder.start(); await turn();
+  try {
+    for (let index = 0; index < 3; index++) {
+      expect(h.calls).toBe(index + 1);
+      h.time((index + 1) * 6000);
+      // The collection timer recovers before the polling timer each time.
+      h.finish(); await turn();
+      expect(lines).toHaveLength(index + 1);
+      const gap = JSON.parse(lines[index]!.slice("[viewer loop-gap] ".length));
+      expect(gap).toMatchObject({ sequence: index + 1, gapMs: 5990,
+        jsProfile: { status: "captured", from: index * 6000, to: (index + 1) * 6000, intervalUs: 10000,
+          frames: { rows: [{ function: "syntheticThreeSecondBlock", file: "src/lib/loopProfiler.fixture.ts" }] } } });
+      expect(Buffer.byteLength(JSON.stringify(gap.jsProfile))).toBeLessThanOrEqual(LOOP_PROFILE_BYTES);
+    }
+    await done;
+    expect(h.calls).toBe(3); expect(h.sleeps).toEqual([]);
+  } finally { monitor.stop(); }
 });
 
-test("consecutive healthy windows continue until the kill switch is read at the boundary", async () => {
+test("slow windows without a qualifying gap discard stacks and immediately sample again", async () => {
+  const h = harness(12000); const done = h.recorder.start(); await turn();
+  for (const at of [6000, 12000]) {
+    h.time(at);
+    h.finish({ get stackTraces(): unknown { throw new Error("healthy profile was walked"); } });
+    await turn();
+  }
+  await done;
+  expect(h.calls).toBe(2); expect(h.sleeps).toEqual([]);
+  expect(h.emitted).toEqual([]); expect(h.phases).not.toContain("trim");
+});
+
+test.each([5000, 6000])("consecutive %s ms windows stop when the kill switch is read at the boundary", async duration => {
   const h = harness(); const done = h.recorder.start(); await turn();
-  h.time(5000); h.finish(); await turn(); expect(h.calls).toBe(2);
-  h.disable(); h.time(10000); h.finish(); await done;
+  h.time(duration); if (duration > 5000) h.gap();
+  h.finish(); await turn(); expect(h.calls).toBe(2);
+  h.disable(); h.time(duration * 2); h.finish(); await done;
   expect(h.calls).toBe(2); expect(h.reads).toBe(3); expect(h.sleeps).toEqual([]);
 });
 
@@ -110,9 +140,44 @@ test("collection and conversion failures release pending gap records and stop re
     if (kind === "collect") h.ports.collect = () => new Promise((_, fail) => { reject = fail; });
     const run = h.recorder.start(); await turn(); h.time(3000); expect(h.gap()).toBe(true);
     if (kind === "collect") reject(new Error("private diagnostic failure")); else h.finish({ stackTraces: null });
-    await run; expect(h.emitted).toEqual([{ status: "unavailable" }]);
-    expect(h.gap()).toBe(false);
+    await run; expect(h.emitted).toEqual([{ status: "unavailable", reason: "capture-failed" }]);
+    expect(h.gap()).toBe(true);
+    expect(h.emitted).toEqual(Array.from({ length: 2 }, () => ({ status: "unavailable", reason: "capture-failed" })));
   }
+});
+
+test.each(["no-active-window", "arm-expired", "kill-switch", "stopped"] as const)(
+  "a long gap without a pending capture logs its reason: %s", async reason => {
+    const h = harness(), lines: string[] = [];
+    const monitor = createViewerLoopMonitor(line => lines.push(line), h.ports.now, createPerformanceSpans(h.ports.now));
+    monitor.setProfiler(h.recorder);
+    try {
+      if (reason === "arm-expired") { h.time(LOOP_PROFILE_ARM_MS); await h.recorder.start(); }
+      else if (reason === "kill-switch") { h.disable(); await h.recorder.start(); }
+      else if (reason === "stopped") h.recorder.stop();
+      // No collection exists to retain this report, including at the exact threshold.
+      if (reason !== "arm-expired") h.time(2010);
+      monitor.tick();
+      const gap = JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length));
+      expect(gap.jsProfile).toEqual({ status: reason === "no-active-window" ? "skipped" : "not-armed", reason });
+      expect(h.calls).toBe(0);
+    } finally { monitor.stop(); }
+  });
+
+test("a gap during the next settings read logs the missing window while sampling resumes", async () => {
+  const h = harness(), lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), h.ports.now, createPerformanceSpans(h.ports.now));
+  monitor.setProfiler(h.recorder);
+  const done = h.recorder.start(); await turn();
+  let release!: (value: boolean) => void;
+  h.ports.enabled = () => new Promise(resolve => { release = resolve; });
+  h.time(5000); h.finish(); await turn();
+  h.time(7010); monitor.tick();
+  expect(JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length)).jsProfile).toEqual({ status: "skipped", reason: "no-active-window" });
+  release(true); await turn(); expect(h.calls).toBe(2);
+  h.ports.enabled = async () => false;
+  h.time(12010); h.finish(); await done; monitor.stop();
+  expect(h.calls).toBe(2);
 });
 
 test("privacy filter rejects outside paths, URL payloads, dynamic names and native frames", () => {
