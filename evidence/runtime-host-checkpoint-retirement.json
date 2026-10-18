@@ -1,0 +1,276 @@
+{
+  "measuredAt": "2026-10-18T09:57:04.517608+00:00",
+  "baseCommit": "f69ba98f92fcd84743c9570ca7a2ba011b474742",
+  "sourceFile": "src/runtime-host/journal.ts",
+  "sourceBlobs": {
+    "base": "05d47f00c971ab179228f28859dde500198ddb23",
+    "head": "04b850fe83961783697015b499c5afda526e15f0"
+  },
+  "runtime": "Bun 1.4.0 (34cbb9a40)",
+  "method": {
+    "source": "Verifier cbaaf29a mixed-burst harness, recovered from its tool transcript. The verifier removed its original backup; this is a fresh read-only SQLite backup of the same installation with the same retained-event/checkpoint shape.",
+    "harnessSha256": "69f37ae938f294455e02526f21e7ee75602ead0eaa0a8f2ef09acfe00dcf4569",
+    "adaptations": [
+      "One repetition per invocation, interleaved base/head three times.",
+      "Time keyed statement lookup/preparation, binding and run together, matching the entire original exec call boundary; workload and 400 ms cadence unchanged."
+    ],
+    "isolation": "Scratch clone, private HOME/XDG_CONFIG_HOME/XDG_CACHE_HOME/TMPDIR/LLV_STATE_DIR, closed Viewer control port, private Unix sockets; source opened mode=ro and backed up once.",
+    "command": "bash scripts/gate-slot.sh python3 <scratch>/measure.py; each sample runs bun scripts/stall-audit.ts recovered from the verifier.",
+    "load": {
+      "bursts": 60,
+      "cadenceMs": 400,
+      "appends": 240,
+      "keyed": 60,
+      "operationStatus": 60,
+      "activity": 60,
+      "metadata": 60,
+      "fullSnapshots": 12,
+      "summarySnapshots": 12
+    },
+    "processes": "Real RuntimeJournal, RuntimeHost and socket server in one child; UnixRuntimeHostClient in a separate caller process.",
+    "claim": "Checkpoint DELETE call, including statement lookup/preparation, binding and execution. Other compaction, projection and RPC work is excluded from this component measurement."
+  },
+  "fixture": {
+    "bytes": 609464320,
+    "seconds": 2.509147,
+    "sha256": "2fa5b79ea7eb8de984a2ecb9faac01ec046c479c15162fa0611ae5382e88864b",
+    "events": 20000,
+    "consumer_checkpoints": 20000,
+    "consumer_cursors": 1,
+    "producer_receipts": 20180,
+    "sessions": 6938,
+    "autoVacuum": 0,
+    "orphans": 0
+  },
+  "queryPlans": {
+    "before": [
+      "SCAN consumer_checkpoints",
+      "CORRELATED SCALAR SUBQUERY 1",
+      "SEARCH events USING COVERING INDEX events_event_id (event_id=?)"
+    ],
+    "after": [
+      "SEARCH consumer_checkpoints USING COVERING INDEX sqlite_autoindex_consumer_checkpoints_1 (event_id=?)",
+      "LIST SUBQUERY 1",
+      "SEARCH events USING INTEGER PRIMARY KEY (rowid<?)"
+    ]
+  },
+  "loadContext": {
+    "cpuCount": 24,
+    "tightestCpuQuota": "max 100000",
+    "tightestMemoryBytes": 4294967296,
+    "scope": "Caller cgroup limits; load observations during the aligned campaign.",
+    "observations": [
+      {
+        "at": "2026-10-18T09:55:59.976252+00:00",
+        "loadavg": [
+          "7.65",
+          "7.09",
+          "6.41"
+        ],
+        "completedSamples": 4
+      },
+      {
+        "at": "2026-10-18T09:56:37.858055+00:00",
+        "loadavg": [
+          "7.68",
+          "7.18",
+          "6.47"
+        ],
+        "completedSamples": 6
+      }
+    ]
+  },
+  "results": [
+    {
+      "variant": "base",
+      "round": 1,
+      "cleanupMs": {
+        "n": 240,
+        "p50": 6.586463,
+        "p95": 9.367802,
+        "max": 12.378711,
+        "sum": 1662.564019
+      },
+      "requests": 504,
+      "errors": 0,
+      "clientFailures": 0,
+      "elapsedMs": 23796.086434,
+      "hostGapMaxMs": 615.986365,
+      "appendServiceMs": {
+        "n": 240,
+        "p50": 14.96408,
+        "p95": 22.886559,
+        "max": 333.070165,
+        "sum": 4132.376275
+      }
+    },
+    {
+      "variant": "head",
+      "round": 1,
+      "cleanupMs": {
+        "n": 240,
+        "p50": 0.053649,
+        "p95": 0.124223,
+        "max": 1.914848,
+        "sum": 16.80214
+      },
+      "requests": 504,
+      "errors": 0,
+      "clientFailures": 0,
+      "elapsedMs": 23824.504567,
+      "hostGapMaxMs": 741.01619,
+      "appendServiceMs": {
+        "n": 240,
+        "p50": 10.07837,
+        "p95": 16.683744,
+        "max": 346.399159,
+        "sum": 2932.981847
+      }
+    },
+    {
+      "variant": "base",
+      "round": 2,
+      "cleanupMs": {
+        "n": 240,
+        "p50": 6.795092,
+        "p95": 10.441083,
+        "max": 11.877525,
+        "sum": 1756.067812
+      },
+      "requests": 504,
+      "errors": 0,
+      "clientFailures": 0,
+      "elapsedMs": 23814.636752,
+      "hostGapMaxMs": 639.351933,
+      "appendServiceMs": {
+        "n": 240,
+        "p50": 16.235054,
+        "p95": 25.75724,
+        "max": 268.636047,
+        "sum": 4407.526315
+      }
+    },
+    {
+      "variant": "head",
+      "round": 2,
+      "cleanupMs": {
+        "n": 240,
+        "p50": 0.057448,
+        "p95": 0.11687,
+        "max": 0.207424,
+        "sum": 15.671842
+      },
+      "requests": 504,
+      "errors": 0,
+      "clientFailures": 0,
+      "elapsedMs": 23803.783699,
+      "hostGapMaxMs": 750.043627,
+      "appendServiceMs": {
+        "n": 240,
+        "p50": 10.899248,
+        "p95": 19.116492,
+        "max": 274.58289,
+        "sum": 3204.90143
+      }
+    },
+    {
+      "variant": "base",
+      "round": 3,
+      "cleanupMs": {
+        "n": 240,
+        "p50": 7.402503,
+        "p95": 11.273487,
+        "max": 26.317902,
+        "sum": 1981.768829
+      },
+      "requests": 504,
+      "errors": 0,
+      "clientFailures": 0,
+      "elapsedMs": 23836.451918,
+      "hostGapMaxMs": 750.497639,
+      "appendServiceMs": {
+        "n": 240,
+        "p50": 19.642615,
+        "p95": 28.866767,
+        "max": 288.969317,
+        "sum": 5202.295966
+      }
+    },
+    {
+      "variant": "head",
+      "round": 3,
+      "cleanupMs": {
+        "n": 240,
+        "p50": 0.054811,
+        "p95": 0.11125,
+        "max": 0.189349,
+        "sum": 14.813816
+      },
+      "requests": 504,
+      "errors": 0,
+      "clientFailures": 0,
+      "elapsedMs": 23784.171545,
+      "hostGapMaxMs": 830.114889,
+      "appendServiceMs": {
+        "n": 240,
+        "p50": 10.721679,
+        "p95": 17.011694,
+        "max": 274.952785,
+        "sum": 2990.405428
+      }
+    }
+  ],
+  "sourceHashUnchanged": true,
+  "verification": {
+    "runtimeHost": {
+      "command": "bash scripts/gate-slot.sh bun scripts/verify-runtime-host.ts",
+      "process": "Two runtime-host generations under Bun 1.4.0",
+      "ok": true,
+      "successorTookOverMs": 506,
+      "listener": {
+        "answered": 27,
+        "polls": 27,
+        "abandoned": 13,
+        "windowMs": 15000
+      },
+      "socket": {
+        "answered": 27,
+        "polls": 27,
+        "abandoned": 13
+      }
+    },
+    "touchedTests": {
+      "command": "bash scripts/gate-slot.sh bun scripts/local-gate-tests.ts --base f69ba98f92fcd84743c9570ca7a2ba011b474742 <explicit paths>",
+      "files": [
+        "src/runtime-host/journal.codexCallbacks.test.ts",
+        "src/runtime-host/journal.consumerRetention.test.ts",
+        "src/runtime-host/journal.copilot.test.ts",
+        "src/runtime-host/journal.inject.test.ts",
+        "src/runtime-host/journal.sessionRead.test.ts",
+        "src/runtime-host/journal.test.ts",
+        "src/runtime-host/journalRetention.test.ts"
+      ],
+      "outcome": "green head; no baseline checkout or sample needed",
+      "headElapsedMs": 4501
+    },
+    "typecheck": {
+      "command": "bash scripts/gate-slot.sh node node_modules/typescript/bin/tsc --noEmit",
+      "exitCode": 0
+    },
+    "regressionControl": {
+      "command": "bash scripts/gate-slot.sh bun test ./src/runtime-host/journal.consumerRetention.test.ts --test-name-pattern \"append checkpoint deletion uses indexed\"",
+      "baseSource": "expected failure: checkpoint deletion not submitted as an indexed keyed query",
+      "headSource": "pass in focused test run and touched-tests gate"
+    }
+  },
+  "baseRecheck": {
+    "currentMain": "46a4f21c010cccbf31fc626b2e3fdd93097f227f",
+    "changedPaths": [
+      "evidence/liveness-receipt-seeks.json",
+      "scripts/measure-liveness-receipts.ts",
+      "src/lib/agent/registryArchive.test.ts",
+      "src/lib/agent/sqliteRegistryStore.ts"
+    ],
+    "journalChanged": false
+  }
+}

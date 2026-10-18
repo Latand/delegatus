@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { probeLoopProfiler } from "./probe-loop-profiler";
+import { probeLoopProfiler, probeJscLoopProfiler } from "./probe-loop-profiler";
 
 test("pinned Bun samples local JS/native callers, clears them, and exposes the worker-target limitation", async () => {
   const result = await probeLoopProfiler();
@@ -13,4 +13,21 @@ test("pinned Bun samples local JS/native callers, clears them, and exposes the w
   expect(result.gc.automaticCoverage).toBe("unknown");
   expect(result.producerCap.requested).toBe(1);
   expect(result.producerCap.observed).toBeGreaterThan(1);
+}, 20_000);
+
+
+test("JSC identifies a three-second main-thread block and exposes the delayed stop", async () => {
+  const result = await probeJscLoopProfiler();
+  expect(result.runtime).toBe("1.4.0");
+  expect(result.target.function).toBe("syntheticThreeSecondBlock");
+  expect(result.target.file).toBe("scripts/probe-loop-profiler.ts");
+  expect(result.target.line).toBeGreaterThan(0);
+  expect(result.target.totalSamples).toBeGreaterThan(1);
+  expect(result.target.totalWeight).toBeGreaterThan(0);
+  expect(result.target.selfSamples).toBeLessThanOrEqual(result.target.totalSamples);
+  expect(result.requestedStopAfterMs).toBe(100);
+  expect(result.actualStopAfterMs).toBeGreaterThanOrEqual(3000);
+  expect(result.exceptionPropagated).toBe(true);
+  expect(result.cleared).toBe(true);
+  expect(result.profilerExports).toEqual(["profile", "samplingProfilerStackTraces", "startSamplingProfiler"]);
 }, 20_000);

@@ -321,7 +321,7 @@ function DeadComposerFixture({ file, id }: { file: FileEntry; id: ConversationWi
     killed: true,
     offline: false,
     working: false,
-    hasDraft: composer.text.trim().length > 0 || composer.attachments.images.length > 0,
+    hasDraft: composer.hasText || composer.attachments.images.length > 0,
   });
   const SLOT: Record<ComposerSlotKind, { label: string; text?: string }> = {
     send: { label: t("composer.sendToAgent") },

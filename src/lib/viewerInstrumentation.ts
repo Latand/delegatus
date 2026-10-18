@@ -900,6 +900,8 @@ export async function installSpawnCapabilityResolverAtStartup(): Promise<void> {
 
 export async function registerViewerRuntime(): Promise<void> {
   viewerLoopMonitor.start();
+  // Background diagnostics never hold readiness or reach the runtime host.
+  void import("./loopProfilerServing").then(({ startServingLoopProfiler }) => startServingLoopProfiler(viewerLoopMonitor)).catch(() => {});
   await installServingNextRenderMonitor();
   discardUnsupportedApiCredentials();
 

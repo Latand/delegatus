@@ -64,28 +64,41 @@ function repositoryRefusal(part: "title" | "body", output: string): StagePullReq
 export async function ensureStagePullRequest(pipeline: Pipeline, attempt: PipelineStageAttempt, exec: ExecPort, acceptedHead = pipeline.lastPassedCommit): Promise<StagePullRequestResult> {
   const delivery = pipeline.delivery;
   if (!delivery || delivery.publish !== "enabled" || !delivery.active || delivery.disposition !== "owner"
-    || delivery.ownerId !== pipeline.id || acceptedHead === pipeline.baseRef) return { ok: true };
+    || delivery.ownerId !== pipeline.id || (acceptedHead === pipeline.baseRef && delivery.target.pr === undefined)) return { ok: true };
   const repository = githubRepositoryOfRemote(delivery.target.remote);
   if (!repository) return { ok: false, error: "the delivery remote has no supported pull request service" };
   const branch = delivery.target.branch.replace(/^refs\/heads\//, "");
-  const find = async (): Promise<number | null> => {
-    const read = await exec("gh", ["pr", "list", "--repo", repository, "--head", branch, "--base", pipeline.baseBranch,
-      "--state", "open", "--limit", "2", "--json", "number,headRefName,baseRefName,state,headRefOid,isCrossRepository"], pipeline.worktreeDir,
-      undefined, { timeoutMs: 30_000 });
-    if (read.code !== 0) throw new Error("the delivery pull request lookup failed");
-    const rows = JSON.parse(read.stdout);
-    if (!Array.isArray(rows) || rows.length > 1) throw new Error("the delivery pull request is ambiguous");
-    if (!rows.length) return null;
+  const find = async (): Promise<{ ok: true; number: number | null } | Extract<StagePullRequestResult, { ok: false }>> => {
+    const linked = delivery.target.pr;
+    const fields = "number,headRefName,baseRefName,state,headRefOid,isCrossRepository";
+    const args = linked !== undefined
+      ? ["pr", "view", String(linked), "--repo", repository, "--json", fields]
+      : ["pr", "list", "--repo", repository, "--head", branch, "--base", pipeline.baseBranch,
+        "--state", "open", "--limit", "2", "--json", fields];
+    const read = await exec("gh", args, pipeline.worktreeDir, undefined, { timeoutMs: 30_000 });
+    if (read.code !== 0) return { ok: false, error: "the delivery pull request lookup failed" };
+    const rows = linked !== undefined ? [JSON.parse(read.stdout)] : JSON.parse(read.stdout);
+    if (!Array.isArray(rows) || rows.length > 1) return { ok: false, error: "the delivery pull request is ambiguous" };
+    if (!rows.length) return { ok: true, number: null };
     const pr = rows[0];
-    if (!Number.isSafeInteger(pr.number) || pr.number < 1 || pr.headRefName !== branch || pr.baseRefName !== pipeline.baseBranch
-      || pr.state !== "OPEN" || pr.isCrossRepository !== false || pr.headRefOid !== acceptedHead
-      || (delivery.target.pr !== undefined && delivery.target.pr !== pr.number)) throw new Error("the delivery pull request does not match the accepted branch and head");
-    return pr.number;
+    // A linked PR is addressed in the delivery repository. Its base can differ
+    // from a successor lane's base, which is commonly the PR's own head branch.
+    const mismatches = [
+      !Number.isSafeInteger(pr?.number) || pr.number < 1 || (linked !== undefined && pr.number !== linked) ? "number" : null,
+      pr?.state !== "OPEN" ? `state (expected OPEN, received ${["CLOSED", "MERGED"].includes(pr?.state) ? pr.state : "unknown"})` : null,
+      pr?.headRefName !== branch ? "headRefName" : null,
+      pr?.headRefOid !== acceptedHead ? "headRefOid" : null,
+      pr?.isCrossRepository !== false ? "isCrossRepository (expected same repository)" : null,
+      linked === undefined && pr?.baseRefName !== pipeline.baseBranch ? "baseRefName" : null,
+    ].filter(Boolean);
+    if (mismatches.length) return { ok: false, error: `the delivery pull request differs in ${mismatches.join(", ")}` };
+    return { ok: true, number: pr.number };
   };
   try {
-    let number = await find();
+    const found = await find();
+    if (!found.ok) return found;
+    let number = found.number;
     if (number === null) {
-      if (delivery.target.pr !== undefined) return { ok: false, error: "the linked pull request is not open on the delivery branch" };
       const producer = stagePullRequestProducer(pipeline, attempt);
       const body = producer.report?.summary?.trim() || producer.output?.trim() || "";
       const title = pipeline.task.split("\n").map(line => line.trim()).find(Boolean)?.slice(0, 120) ?? "";
@@ -119,7 +132,9 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
           "--base", pipeline.baseBranch, "--head", branch], pipeline.worktreeDir, engineForgeWriteEnv(), { timeoutMs: 60_000 });
         // A timeout/status is no proof of whether creation landed. Read the
         // branch again before either acceptance or a future create retry.
-        number = await find();
+        const recovered = await find();
+        if (!recovered.ok) return recovered;
+        number = recovered.number;
         if (number === null) return { ok: false, error: created.code === 0
           ? "the forge answered without a linked delivery pull request" : "the delivery pull request could not be opened" };
       } finally { await fs.rm(directory, { recursive: true, force: true }); }

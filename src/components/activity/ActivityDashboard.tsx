@@ -132,7 +132,7 @@ const ENGINE_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex",
 /* Small pieces                                                             */
 /* ------------------------------------------------------------------------ */
 
-function Segmented<T extends string>({ label, value, options, onChange }: {
+export function Segmented<T extends string>({ label, value, options, onChange }: {
   label: string;
   value: T;
   options: ReadonlyArray<{ value: T; label: string }>;

@@ -1229,3 +1229,16 @@ test("voice task, pipeline and conversation filters keep the MCP read schema nam
     expect(voice.parameters.additionalProperties).toBe(false);
   }
 });
+
+
+test("seat_tick_settings advertises and forwards the independent curation timer", async () => {
+  let received: unknown;
+  await withProtocolClient(inertBindings({ seat_tick_settings: async args => { received = args; return { changed: true }; } }), async client => {
+    const tool = (await client.listTools()).tools.find(tool => tool.name === "seat_tick_settings")!;
+    expect(tool.inputSchema.properties).toHaveProperty("curation");
+    const result = await client.callTool({ name: "seat_tick_settings", arguments: { clientRequestId: "curation-parity", curation: { enabled: false, intervalHours: 12 } } });
+    expect(result.isError).not.toBe(true);
+    expect(received).toMatchObject({ curation: { enabled: false, intervalHours: 12 } });
+    expect((await client.callTool({ name: "seat_tick_settings", arguments: { clientRequestId: "curation-invalid", curation: { enabled: "yes" } } })).isError).toBe(true);
+  });
+});
