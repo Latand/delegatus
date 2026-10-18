@@ -2403,9 +2403,6 @@ export async function gatherSeatTickInput(
   const settings = effectiveSeatTickSettings(sources.settings(canonical), now, SEAT_TICK_WAKE_INTERVAL_MS);
   const seat = await seatInput(canonical, policy, sources);
 
-  if (!state.unreachableSince && seat?.activity?.lifecycle === "gone") {
-    state = { ...state, unreachableSince: state.lastWakeAt ?? new Date(now).toISOString() };
-  }
   const catchUp = !!seatTickCatchUp({ state, now, settings, seat });
   const hotLanes = sources.pipelines();
   const openLanes = hotLanes.filter((pipeline) => isOpen(pipeline) && canonicalOrchestratorProject(pipeline.project) === canonical);
