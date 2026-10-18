@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper, unrefLeasedHelper } from "@/lib/helperLease";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import type { TempSweepReport } from "@/lib/tempSweep";
+import type { DiskPressure } from "@/lib/state/diskPressure";
 import type { WorktreeSweepMode, WorktreeSweepReport } from "./worktreeSweep";
 
 export const WORKTREE_SWEEP_DEADLINE_MS = 45 * 60_000;
@@ -18,7 +20,11 @@ export function worktreeSweepWorkerLaunch(cwd = process.cwd()): SweepWorkerLaunc
   return { executable: process.execPath, entry: source };
 }
 
-type Pending = { resolve: (report: WorktreeSweepReport) => void; reject: (error: Error) => void;
+type SweepRequest = { kind: "worktrees"; mode: WorktreeSweepMode }
+  | { kind: "temp"; env: Pick<NodeJS.ProcessEnv, "LLV_TEMP_SWEEP" | "LLV_TEMP_SWEEP_MAX_AGE_HOURS"> }
+  | { kind: "disk-pressure" };
+type SweepResult = WorktreeSweepReport | TempSweepReport | DiskPressure | null;
+type Pending = { request: SweepRequest; resolve: (report: SweepResult) => void; reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>; failure?: Error };
 /** The leased child keeps directory observers between passes. No filesystem
  * inspections, registry snapshots or report writes run on the Viewer loop.
@@ -26,6 +32,9 @@ type Pending = { resolve: (report: WorktreeSweepReport) => void; reject: (error:
  */
 export class WorktreeSweepWorker {
   private child?: ChildProcess;
+  private jobs = new Map<SweepRequest["kind"], Promise<SweepResult>>();
+  private tail: Promise<unknown> = Promise.resolve();
+  private generation = 0;
   private pending?: Pending;
   private output = "";
   private replyBytes = 0;
@@ -50,8 +59,14 @@ export class WorktreeSweepWorker {
       try {
         const response = JSON.parse(this.output.slice(0, newline));
         this.output = this.output.slice(newline + 1);
-        if (!response || response.error || !response.report || !Array.isArray(response.report.kept)
-          || !Array.isArray(response.report.removed) || !Array.isArray(response.report.errors))
+        const report = response?.report;
+        const kind = this.pending.request.kind;
+        const valid = kind === "disk-pressure"
+          ? report && typeof report.at === "string" && Array.isArray(report.volumes) && Array.isArray(report.consumers)
+          : (kind === "temp" && report === null) || (report && Array.isArray(report.removed) && Array.isArray(report.errors)
+            && (kind === "worktrees" ? Array.isArray(report.kept)
+              : report.kept && !Array.isArray(report.kept) && typeof report.kept === "object"));
+        if (!response || response.error || !valid)
           throw new Error(response?.error || "worktree sweep worker returned an invalid report");
         if (this.pending.failure) return;
         const pending = this.pending;
@@ -80,30 +95,60 @@ export class WorktreeSweepWorker {
     if (this.child) endLeasedHelper(this.child);
   }
 
-  run(mode: WorktreeSweepMode): Promise<WorktreeSweepReport> {
-    if (this.pending) return Promise.reject(new Error("worktree sweep is already running"));
-    return withViewerOperation("worktrees.sweep", () => new Promise<WorktreeSweepReport>((resolve, reject) => {
-      if (!this.child) this.start();
-      const child = this.child!;
-      child.ref();
-      for (const stream of child.stdio) (stream as unknown as { ref?: () => void } | null)?.ref?.();
-      this.replyBytes = 0;
-      const timer = setTimeout(() => this.fail(new Error(`worktree sweep exceeded ${this.timeoutMs} ms`)), this.timeoutMs);
-      this.pending = { resolve, reject, timer };
-      leasedHelperInput(child).write(JSON.stringify({ mode }) + "\n");
+  private request(request: SweepRequest): Promise<SweepResult> {
+    const existing = this.jobs.get(request.kind);
+    if (existing) return request.kind === "worktrees"
+      ? Promise.reject(new Error("worktree sweep is already running")) : existing;
+    const generation = this.generation;
+    const deadline = Date.now() + this.timeoutMs;
+    const operation = request.kind === "temp" ? "temp.sweep" : request.kind === "disk-pressure" ? "resources.read" : "worktrees.sweep";
+    // At most one job per kind; polls join rather than retaining an unbounded
+    // queue. The same deadline includes time behind another sweep.
+    const execution = withViewerOperation(operation, () => this.tail.then(() => {
+      if (generation !== this.generation) throw new Error("worktree sweep worker stopped");
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error(`worktree sweep exceeded ${this.timeoutMs} ms`);
+      return new Promise<SweepResult>((resolve, reject) => {
+        if (!this.child) this.start();
+        const child = this.child!;
+        child.ref();
+        for (const stream of child.stdio) (stream as unknown as { ref?: () => void } | null)?.ref?.();
+        this.replyBytes = 0;
+        const timer = setTimeout(() => this.fail(new Error(`worktree sweep exceeded ${this.timeoutMs} ms`)), remaining);
+        this.pending = { request, resolve, reject, timer };
+        leasedHelperInput(child).write(JSON.stringify(request) + "\n");
+      });
     }));
+    const job = execution.finally(() => { if (this.jobs.get(request.kind) === job) this.jobs.delete(request.kind); });
+    this.jobs.set(request.kind, job);
+    this.tail = job.then(() => {}, () => {});
+    return job;
+  }
+
+  run(mode: WorktreeSweepMode): Promise<WorktreeSweepReport> {
+    return this.request({ kind: "worktrees", mode }) as Promise<WorktreeSweepReport>;
+  }
+  temp(env: NodeJS.ProcessEnv = process.env): Promise<TempSweepReport | null> {
+    return this.request({ kind: "temp", env: { LLV_TEMP_SWEEP: env.LLV_TEMP_SWEEP, LLV_TEMP_SWEEP_MAX_AGE_HOURS: env.LLV_TEMP_SWEEP_MAX_AGE_HOURS } }) as Promise<TempSweepReport | null>;
+  }
+  diskPressure(): Promise<DiskPressure> {
+    return this.request({ kind: "disk-pressure" }) as Promise<DiskPressure>;
   }
 
   async close() {
+    this.generation++;
+    const tail = this.tail;
     if (this.child) this.fail(new Error("worktree sweep worker stopped"));
     await this.closed;
+    await tail;
   }
 }
 
 const shared = globalThis as typeof globalThis & { __delegatusWorktreeSweepWorker?: WorktreeSweepWorker };
-export function runWorktreeSweepOffThread(mode: WorktreeSweepMode) {
-  return (shared.__delegatusWorktreeSweepWorker ??= new WorktreeSweepWorker()).run(mode);
-}
+function worker() { return shared.__delegatusWorktreeSweepWorker ??= new WorktreeSweepWorker(); }
+export function runWorktreeSweepOffThread(mode: WorktreeSweepMode) { return worker().run(mode); }
+export function runTempSweepOffThread(env: NodeJS.ProcessEnv) { return worker().temp(env); }
+export function readDiskPressureOffThread() { return worker().diskPressure(); }
 export async function stopWorktreeSweepWorker() {
   const worker = shared.__delegatusWorktreeSweepWorker;
   shared.__delegatusWorktreeSweepWorker = undefined;

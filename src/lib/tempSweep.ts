@@ -791,7 +791,7 @@ async function cleanupWorktrees() {
 }
 
 /** The production sweep: threshold from the environment, worktrees from the pipelines store. */
-export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
+export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
   const maxAgeMs = tempSweepMaxAgeMs(env);
   const mode = tempSweepMode(env);
   if (maxAgeMs === null || mode === null) return null;
@@ -819,6 +819,14 @@ export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: 
     + ` kept ${young} young, ${inUse} in use, ${worktree} worktree, ${deferred} deferred; ${report.errors.length} error(s)`,
   );
   return report;
+}
+
+/** Production calls share the leased sweep helper. Explicit inspection ports
+ * keep the policy tests local without changing any removal decision. */
+export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
+  if (Object.keys(ports).length) return runTempSweepInHelper(env, ports);
+  const { runTempSweepOffThread } = await import("@/lib/pipelines/worktreeSweepWorker");
+  return runTempSweepOffThread(env);
 }
 
 const sweepHost = globalThis as typeof globalThis & {

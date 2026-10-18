@@ -975,3 +975,30 @@ test("an unwritten local episode yields to another writer's changed durable repo
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test.skipIf(process.platform !== "linux")("default Docker admission discovers the host write volumes without a process inventory", () => {
+  const readlink = fs.readlinkSync;
+  const readdir = fs.readdirSync;
+  let scans = 0;
+  const namespace = "mnt:[fixture-host]";
+  const anchor = spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
+    String(file) === "/proc/1/ns/mnt" ? namespace : Reflect.apply(readlink, fs, [file, ...args])) as typeof readlink);
+  const scan = spyOn(fs, "readdirSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) => {
+    if (String(file) === "/proc") scans++;
+    return Reflect.apply(readdir, fs, [file, ...args]);
+  }) as typeof readdir);
+  try {
+    const source = { ...provisionSource, LLV_DOCKER_NSENTER_SHIMS: "1" };
+    const config = agentConfigSandboxRoot({ ...source, TMPDIR: path.join(process.env.LLV_STATE_DIR!, "scratch/tmp") });
+    const paths: string[] = [];
+    expect(worktreeDiskWait("/srv/repo", "/srv/lane", directory => {
+      paths.push(directory);
+      return { volume: directory.startsWith("/proc/1/root") ? "host" : "container",
+        freeBytes: directory === "/proc/1/root" + config ? GiB : 500 * GiB };
+    }, source)).toContain("1.00 GiB free");
+    expect(paths).toContain("/proc/1/root" + config);
+    expect(paths).toContain("/proc/1/root" + source.TMPDIR);
+    expect(scans).toBe(0);
+  } finally { scan.mockRestore(); anchor.mockRestore(); }
+});
