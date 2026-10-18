@@ -1,3 +1,4 @@
+import { shortId } from "@/lib/shortIds";
 import { DELEGATUS_MECHANICS } from "@/lib/roles/defaults";
 import { memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemoryState";
 import type { EffectivePipelineRole, Pipeline, PipelineDecisionAnswer, PipelineStage } from "./types";
@@ -83,7 +84,7 @@ export function renderStagePrompt(
   /* The reviewer's scaffold reviews "the commits since the pipeline's base
      commit" when its brief names no change; this line names that commit. */
   const baseLine = pipeline.baseRef
-    ? [`This pipeline's worktree started from commit ${pipeline.baseRef}${pipeline.baseBranch ? ` on ${pipeline.baseBranch}` : ""}.`]
+    ? [`This pipeline's worktree started from commit ${shortId(pipeline.baseRef)}${pipeline.baseBranch ? ` on ${pipeline.baseBranch}` : ""}.`]
     : [];
   const branchContract = [
     `Pipeline branch: ${pipeline.branch}. Never create or switch branches. This controller instruction overrides any branch instruction in the brief, pinned specification, relayed input or role scaffold.`,

@@ -421,3 +421,13 @@ test("Codex role tier round trips at schema 5 and a full config can clear it", (
     expect(loadRoleOverrides().schemaVersion).toBeLessThan(5);
   } finally { process.env.LLV_STATE_DIR = previous; fs.rmSync(state, { recursive: true, force: true }); }
 });
+
+test("role mapping accepts short and full revisions, refuses stale without a write", async () => {
+  const { changeRoleMapping } = await import("./store");
+  withStateDir("llv-role-short-", () => {
+    const first = loadRoleRegistrySnapshot().revision;
+    expect(changeRoleMapping({ builder: { config: { engine: "codex", model: "gpt-custom-builder", effort: "high" } } }, { expectedRevision: first.slice(0, first.lastIndexOf("-") + 9).toUpperCase(), record: () => {} }).state).toBe("written");
+    expect(changeRoleMapping({}, { expectedRevision: first, record: () => { throw new Error("stale wrote"); } }).state).toBe("stale");
+    expect(changeRoleMapping({}, { expectedRevision: loadRoleRegistrySnapshot().revision, record: () => {} }).state).toBe("written");
+  });
+});

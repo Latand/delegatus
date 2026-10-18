@@ -144,9 +144,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     target = { ref: body.ref };
   } else {
-    if (typeof body.revision !== "string" || !/^[0-9a-f]{40}$/i.test(body.revision)) {
+    if (typeof body.revision !== "string" || !/^[0-9a-f]{7,40}$/i.test(body.revision)) {
       return NextResponse.json(
-        { error: "revision must be a full 40-character commit SHA", reason: "revision_invalid" },
+        { error: "revision must be a commit SHA or prefix of at least 7 characters", reason: "revision_invalid" },
         { status: 400 },
       );
     }

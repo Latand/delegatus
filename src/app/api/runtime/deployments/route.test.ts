@@ -107,11 +107,12 @@ test("a request naming both a revision and a ref is refused rather than silently
   expect(requested).toEqual([]);
 });
 
-test("a revision-less or abbreviated deploy is refused: exact-SHA means one immutable commit", async () => {
+test("a revision-less or non-commit deploy is refused while a short prefix reaches host resolution", async () => {
   expect((await POST(deployRequest({ idempotencyKey: "k1" }))).status).toBe(400);
-  expect((await POST(deployRequest({ revision: SHA.slice(0, 12), idempotencyKey: "k2" }))).status).toBe(400);
   expect((await POST(deployRequest({ revision: "origin/main", idempotencyKey: "k3" }))).status).toBe(400);
   expect(requested).toEqual([]);
+  expect((await POST(deployRequest({ revision: SHA.slice(0, 12), idempotencyKey: "k2" }))).status).toBe(202);
+  expect(requested).toEqual([{ revision: SHA.slice(0, 12), idempotencyKey: "k2" }]);
 });
 
 test("the idempotencyKey requirement still holds", async () => {

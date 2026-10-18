@@ -8,7 +8,7 @@ import { setBridgeReports } from "@/lib/projects/settings";
 
 import { readProjectReportLog, reportCardRefs, type ReportLogCard } from "./reportLog";
 import { bridgeQuestionsForProject } from "./service";
-import { acknowledgeBridgeReports, appendBridgeReports, BRIDGE_REPORT_PAGE_MAX, openBridgeChannel, pageBridgeReports, readBridgeChannel, resolveBridgeAsks } from "./store";
+import { acknowledgeBridgeReports, appendBridgeReports, readBridgeReportLog, BRIDGE_REPORT_PAGE_MAX, openBridgeChannel, pageBridgeReports, readBridgeChannel, resolveBridgeAsks } from "./store";
 import type { BridgeReportInput } from "./types";
 
 /* The operator's report log (#2146): one project's bridge reports, newest
@@ -192,4 +192,13 @@ test("the page carries the project's questions from the needs-you projection, an
   expect(after.unchanged).toBeUndefined();
   expect(after.revision).not.toBe(before.revision);
   expect(after.questions).toEqual({ open: [open!.seq], resolved: [{ seq: resolved!.seq, at: now.toISOString() }] });
+});
+
+test("stored card references link title-only reports while older bodies keep their links", () => {
+  sandbox(); readBridgeReportLog(); readBridgeChannel();
+  appendBridgeReports([report(0, { body: "Finished the export", cards: ["task-a", "unknown-card"] }), report(1, { body: "task-b: legacy report" })]);
+  const page = readProjectReportLog({ project: SCOPE.project }, { knownCards: () => new Map([["task-a", "task" as const], ["task-b", "task" as const]]) });
+  expect(page.entries[0]!.cards).toEqual([{ id: "task-b", kind: "task" }]);
+  expect(page.entries[1]!.cards).toEqual([{ id: "task-a", kind: "task" }]);
+  expect(page.entries[1]!.body).toBe("Finished the export");
 });

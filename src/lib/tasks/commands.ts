@@ -1,3 +1,4 @@
+import { matchesShortId } from "@/lib/shortIds";
 import crypto from "node:crypto";
 import { readFindingKey } from "./finding";
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -526,7 +527,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (input.expectedProject !== task.project) {
       return { ok: false, status: 409, code: "TASK_PROJECT_MISMATCH", field: "expectedProject", error: "expectedProject does not match the current task project; read the task and reconsider the request" };
     }
-    if (input.expectedRevision !== taskRevision(task)) {
+    if (!matchesShortId(taskRevision(task), input.expectedRevision as string)) {
       return { ok: false, status: 409, code: "TASK_REVISION_MISMATCH", field: "expectedRevision", error: "expectedRevision is stale; read the task and reconsider the request" };
     }
   }
