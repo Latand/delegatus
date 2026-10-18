@@ -53,24 +53,25 @@ test("warm cached allocations preserve shared-inode, nested-root and namespace-a
   expect(cache.stats.allocationHits).toBeGreaterThan(0);
 });
 
-test("native external hard-link writes bypass cached allocation inventories",async()=>{
+test("native external hard-link writes invalidate a previously warm allocation inventory",async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),"sweep-hardlink-"));roots.push(root);
   const tree=path.join(root,"tree");fs.mkdirSync(tree);
   const file=path.join(tree,"payload"),peer=path.join(root,"peer"),alias=path.join(peer,"payload");
-  fs.mkdirSync(peer);fs.writeFileSync(file,"seed");fs.linkSync(file,alias);
+  fs.mkdirSync(peer);fs.writeFileSync(file,"seed");
   const cache=new WorktreeSweepCache(path.join(root,"cache.json"));caches.push(cache);
   const observer=fs.watch(peer,{persistent:false});
   try {
     const before=await size(cache,tree);
     expect(before).toBe(await allocatedBytes(tree));
     await size(cache,tree);
-    expect(cache.stats.allocationHits).toBe(0);
+    expect(cache.stats.allocationHits).toBe(1);
 
     const changed=new Promise<void>((resolve,reject)=>{
       const timer=setTimeout(()=>reject(new Error("native peer watch event timed out")),3_000);
       observer.once("change",()=>{clearTimeout(timer);resolve();});
       observer.once("error",error=>{clearTimeout(timer);reject(error);});
     });
+    fs.linkSync(file,alias);
     fs.writeFileSync(alias,"x".repeat(1024*1024));
     await changed;
     await new Promise<void>(resolve=>setTimeout(resolve,0));
@@ -78,8 +79,8 @@ test("native external hard-link writes bypass cached allocation inventories",asy
     const after=await size(cache,tree);
     expect(after).toBe(await allocatedBytes(tree));
     expect(after).toBeGreaterThan(before);
-    expect(cache.stats.allocationHits).toBe(0);
-    expect(cache.stats.allocationMisses).toBe(3);
+    expect(cache.stats.allocationHits).toBe(1);
+    expect(cache.stats.allocationMisses).toBe(2);
 
     const secondTree=path.join(root,"second-tree");fs.mkdirSync(secondTree);
     fs.linkSync(file,path.join(secondTree,"payload"));

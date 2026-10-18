@@ -13,7 +13,7 @@ const MAX_BYTES = 24 * 1024 * 1024;
 /** In walk order: inode identity, allocated bytes, parent row (-1 for root). */
 export type Allocation = [string, number, number];
 type Entry = { key: string; at: number; allocation?: Allocation[]; candidates?: string[]; candidateClock?: string; allocationClock?: string };
-type Watch = { watchers: fs.FSWatcher[]; generation: number; identity: string; directories: number };
+type Watch = { watchers: fs.FSWatcher[]; generation: number; identity: string; directories: number; files: number; invalidate: () => void };
 
 /** One leased worker owns the cache and every directory observer. A new owner
  * invalidates persisted observations: no filesystem change journal spans its
@@ -26,6 +26,7 @@ export class WorktreeSweepCache {
   private readonly watches = new Map<string, Watch>();
   private entries = 0;
   private watchDirectories = 0;
+  private watchFiles = 0;
   private generation = 0;
   readonly stats = { allocationHits: 0, allocationMisses: 0, discoveryHits: 0, discoveryMisses: 0 };
   constructor(private readonly file: string, private readonly now = Date.now,
@@ -53,6 +54,7 @@ export class WorktreeSweepCache {
     const watch = this.watches.get(directory);
     for (const watcher of watch?.watchers ?? []) watcher.close();
     this.watchDirectories -= watch?.directories ?? 0;
+    this.watchFiles -= watch?.files ?? 0;
     this.watches.delete(directory);
   }
 
@@ -67,11 +69,12 @@ export class WorktreeSweepCache {
         while (this.watches.size >= this.bounds.trees) this.forget(this.watches.keys().next().value!);
         const plan = directoryWatchSet(directory, (this.bounds.directories ?? SWEEP_WATCH_DIRECTORIES) - this.watchDirectories);
         if (plan === null) return null;
-        observer = { watchers: [], generation: ++this.generation, identity, directories: plan.length };
+        observer = { watchers: [], generation: ++this.generation, identity, directories: plan.length, files: 0, invalidate: () => {} };
         this.watchDirectories += plan.length;
         this.watches.set(directory, observer);
         const watched = observer;
         const invalidate = () => { if (this.watches.get(directory) === watched) this.forget(directory); };
+        observer.invalidate = invalidate;
         for (const item of plan) {
           const watcher = this.watch(item.directory, { recursive: false, persistent: false }, invalidate);
           observer.watchers.push(watcher);
@@ -124,7 +127,8 @@ export class WorktreeSweepCache {
       allocation = captured.entries;
       // Let pending observer notifications run before publishing a snapshot.
       await new Promise<void>(resolve => setTimeout(resolve, 0));
-      if (captured.cacheable && row && before === this.key(directory) && allocation.length <= this.bounds.entries) {
+      if (captured.cacheable && row && before === this.key(directory) && allocation.length <= this.bounds.entries
+        && this.watchAllocationFiles(directory, captured.files)) {
         while (this.entries - (row.allocation?.length ?? 0) + allocation.length > this.bounds.entries && this.rows.size > 1)
           this.forget(this.rows.keys().next().value!);
         if (this.rows.get(directory) === row) {
@@ -146,6 +150,30 @@ export class WorktreeSweepCache {
     return bytes;
   }
 
+  private watchAllocationFiles(directory: string, files: [string, string, number, number][]): boolean {
+    const observer = this.watches.get(directory);
+    if (!observer || this.watchFiles + files.length > this.bounds.entries) return false;
+    for (const [file, identity, ctimeMs, nlink] of files) {
+      if (this.watches.get(directory) !== observer) return false;
+      try {
+        const watcher = this.watch(file, { persistent: false }, observer.invalidate);
+        watcher.on("error", observer.invalidate);
+        observer.watchers.push(watcher);
+        observer.files++;
+        this.watchFiles++;
+        const stat = fs.lstatSync(file);
+        if (`${stat.dev}:${stat.ino}` !== identity || stat.ctimeMs !== ctimeMs || stat.nlink !== nlink) {
+          observer.invalidate();
+          return false;
+        }
+      } catch {
+        observer.invalidate();
+        return false;
+      }
+    }
+    return true;
+  }
+
   persist() {
     // Per-field entries share a directory observer, but have different clocks.
     let value = { version: 1, owner: this.owner, rows: [...this.rows] };
@@ -164,20 +192,21 @@ export class WorktreeSweepCache {
  * aliases and nested roots in the report's current order. A capped walk uses
  * the original measurement rather than caching an order-dependent bound.
  */
-async function captureAllocation(directory: string, excluded: readonly string[]): Promise<{ entries: Allocation[]; cacheable: boolean } | null> {
+async function captureAllocation(directory: string, excluded: readonly string[]): Promise<{ entries: Allocation[]; files: [string, string, number, number][]; cacheable: boolean } | null> {
   const exclusions = new Set<string>();
   const identity = (stat: fs.Stats) => `${stat.dev}:${stat.ino}`;
   for (const entry of excluded) {
     try { exclusions.add(identity(await fs.promises.stat(entry))); } catch { /* absent */ }
   }
   let root: fs.Stats;
-  try { root = await fs.promises.stat(directory); } catch { return { entries: [], cacheable: false }; }
-  if (exclusions.has(identity(root))) return { entries: [], cacheable: true };
+  try { root = await fs.promises.stat(directory); } catch { return { entries: [], files: [], cacheable: false }; }
+  if (exclusions.has(identity(root))) return { entries: [], files: [], cacheable: true };
   const result: Allocation[] = [[identity(root), 0, -1]];
   const visitedDirectories = new Set([identity(root)]);
   const pending = [{ directory, parent: 0 }];
   let visited = 0;
   let cacheable = true;
+  const files: [string, string, number, number][] = [];
   while (pending.length) {
     const current = pending.pop()!;
     let entries: fs.Dirent[];
@@ -193,6 +222,7 @@ async function captureAllocation(directory: string, excluded: readonly string[])
       // notifying any directory observer below the worktree. Keep the fresh
       // accounting result, but never reuse this inventory on a later sweep.
       if (entry.isFile() && stat.nlink > 1) cacheable = false;
+      if (entry.isFile()) files.push([child, id, stat.ctimeMs, stat.nlink]);
       if (entry.isDirectory() && (exclusions.has(id) || visitedDirectories.has(id))) continue;
       const index = result.length;
       result.push([id, stat.blocks * 512, current.parent]);
@@ -202,9 +232,8 @@ async function captureAllocation(directory: string, excluded: readonly string[])
       }
     }
   }
-  return { entries: result, cacheable };
+  return { entries: result, files, cacheable };
 }
-
 
 /** A fixed set of nonrecursive native observers cannot silently grow beyond
  * its budget. Any event drops the whole view; the next observation installs
