@@ -4111,6 +4111,7 @@ export const en = {
   "mobile2.banner.offlineBody": "Showing the last state received",
   "mobile2.banner.offlineBodyAt": "Showing the last state received · {time}",
   "mobile2.sheet.close": "Close",
+  "mobile2.sheet.expand": "Full height",
   "mobile2.receipt.respawn": "Respawn",
   "mobile2.receipt.reopen": "Reopen",
   "mobile2.receipt.restore": "Restore",
