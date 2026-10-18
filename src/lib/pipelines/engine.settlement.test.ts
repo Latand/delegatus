@@ -1276,7 +1276,7 @@ test("an accepted historical continue-review receipt replays without extending o
   savePipelines([lane]);
   const revision = pipelineRevision(loadPipelines()[0]!);
   const spawned = h.spawnInputs.length;
-  expect((await continueReview(lane, "historical-grant", 1, acceptedRevision)).replayed).toBe(true);
+  expect((await continueReview(lane, "historical-grant", 1, acceptedRevision.slice(0, 8))).replayed).toBe(true);
   expect((await continueReview(lane, "historical-grant", 2, acceptedRevision)).status).toBe(409);
   expect((await continueReview(lane, "another-grant", 1)).status).toBe(409);
   expect(pipelineRevision(loadPipelines()[0]!)).toBe(revision);
@@ -1299,13 +1299,14 @@ test("accept-head completes a stop-after-fix lane along the review stage's null 
   const revision = pipelineRevision(parked);
 
   expect((await patchPipeline(parked.id, { action: "accept-head", expectedRevision: revision }, h.ports)).status).toBe(400);
-  expect((await acceptHead(parked, "accept-stale", "0".repeat(64))).code).toBe("STAGE_CHANGED");
+  expect((await acceptHead(parked, "accept-stale", "0".repeat(8))).code).toBe("STAGE_CHANGED");
   /* Another conversation is not the creator. */
   const stranger = await patchPipeline(parked.id, { action: "accept-head", clientRequestId: "accept-x", expectedRevision: revision }, h.ports, { kind: "agent", conversationId: "not-the-creator" } as never);
   expect(stranger.status).toBe(403);
   expect(loadPipelines()[0]!.state).toBe("needs_review");
 
-  const accepted = await acceptHead(parked, "accept-1", revision);
+  const accepted = await acceptHead(parked, "accept-1", revision.slice(0, 8));
+  expect(accepted.reviewAcceptance?.expectedRevision).toBe(revision);
   expect(accepted.error).toBeUndefined();
   expect(accepted.replayed).toBe(false);
   expect(accepted.reviewAcceptance).toMatchObject({
@@ -2290,7 +2291,7 @@ test.each(["retry-stage", "publish"] as const)("publication recovery keeps the a
   await tickPipelines([], h.ports);
   const waiting = loadPipelines()[0]!;
   expect(waiting.state).toBe("needs_decision");
-  expect(waiting.stateDetail).toContain(`the worktree moved to ${moved}`);
+  expect(waiting.stateDetail).toContain(`the worktree moved to ${moved.slice(0, 8)}`);
   expect(waiting.lastPassedCommit).toBe(box.passedSha);
   box.setLocalHead(box.passedSha);
   box.setPushFails(false);

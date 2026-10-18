@@ -658,7 +658,7 @@ test("a deploy the seat started wakes it once when it settles, with the lanes it
   expect(record!.reasons).toContain("deploy-settled");
   expect(rig.sent).toHaveLength(1);
   const text = rig.sent[0]!.text;
-  expect(text).toContain(`- [deploy] deploy-own — deploy settled: the deployment you started succeeded, sha ${SHA}`);
+  expect(text).toContain(`- [deploy] deploy-own — deploy settled: the deployment you started succeeded, sha ${SHA.slice(0, 8)}`);
   for (const id of ["pipeline_s1", "pipeline_s2", "pipeline_s3"]) {
     expect(text).toContain(`- [pipeline] ${id} — lane ${id} — paused by you; resume it`);
   }

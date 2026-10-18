@@ -9,6 +9,7 @@ import { isTaskNote } from "./note";
 import { statePath } from "@/lib/configDir";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { canonicalProject, projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { assertNotOperatorStateUnderTest } from "@/lib/stateOwnership";
 import {
@@ -264,7 +265,9 @@ function isRecentCreate(value: unknown): value is RecentCreate {
 }
 
 export function loadTasks(filePath = TASKS_FILE): BoardTask[] {
-  return loadTasksFile(filePath).tasks;
+  const tasks = loadTasksFile(filePath).tasks;
+  replaceProjectKeySource(`tasks:${filePath}`, canonicalProjectKeys(tasks.map(task => task.project)));
+  return tasks;
 }
 
 /* ---- SQLite storage (#1870) -------------------------------------------------
@@ -555,7 +558,7 @@ export function taskSelectionSource(filePath = TASKS_FILE) {
 
 const taskListOwner = globalThis as typeof globalThis & { __delegatusTaskListReaders?: {
   rows: WeakMap<object, { aliases: string; task: BoardTask }>;
-  snapshots: WeakMap<object, { aliases: string; tasks: readonly BoardTask[] }>;
+  snapshots: WeakMap<object, { aliases: string; tasks: readonly BoardTask[]; projects: ReadonlySet<string> }>;
 } };
 // Raw collections have one bounded shared owner; weak keys give the derived
 // task views the same lifetime across separately compiled route bundles.
@@ -574,18 +577,26 @@ const listSnapshots = taskListReaders.snapshots;
  * shares with its row leaves no writer holding a frozen object. */
 export function loadTasksForList(filePath = TASKS_FILE): readonly BoardTask[] {
   const collection = taskCollection(filePath, "read");
-  if (!collection) return deepFreeze(readLegacyTasksFile(filePath).tasks);
+  if (!collection) {
+    const tasks = deepFreeze(readLegacyTasksFile(filePath).tasks);
+    replaceProjectKeySource(`tasks:${filePath}`, canonicalProjectKeys(tasks.map(task => task.project)));
+    return tasks;
+  }
   const rows = collection.loadReadonly();
   const aliases = JSON.stringify(projectAliasSnapshot().aliases);
   const cached = listSnapshots.get(rows);
-  if (cached?.aliases === aliases) return cached.tasks;
+  if (cached?.aliases === aliases) {
+    replaceProjectKeySource(`tasks:${filePath}`, cached.projects);
+    return cached.tasks;
+  }
+  const canonical = projectAliasResolver();
   const tasks: BoardTask[] = [];
   for (const row of rows) {
     if (!taskRowKey(row).startsWith("t:")) continue;
     const held = listRows.get(row);
     let task = held?.aliases === aliases ? held.task : undefined;
     if (!task) {
-      task = coerceTask(row) ?? undefined;
+      task = coerceTask(row, canonical) ?? undefined;
       if (!task) throw new Error("invalid persisted task row");
       deepFreeze(task);
       listRows.set(row, { aliases, task });
@@ -597,7 +608,9 @@ export function loadTasksForList(filePath = TASKS_FILE): readonly BoardTask[] {
     return deepFreeze(task);
   });
   Object.freeze(resolved);
-  listSnapshots.set(rows, { aliases, tasks: resolved });
+  const projects = canonicalProjectKeys(resolved.map(task => task.project));
+  listSnapshots.set(rows, { aliases, tasks: resolved, projects });
+  replaceProjectKeySource(`tasks:${filePath}`, projects);
   return resolved;
 }
 
@@ -719,6 +732,7 @@ export function saveTasks(tasks: BoardTask[], filePath = TASKS_FILE): void {
     const rows = committedRows(tasks, snapshotTasks(current), false, syncStep(current, sync));
     return { next: { rows, recentCreates, migrations: migrations ?? {} }, result: undefined };
   });
+  replaceProjectKeySource(`tasks:${filePath}`, canonicalProjectKeys(tasks.map(task => task.project)));
 }
 
 export function saveTasksFile(state: TasksFileState, filePath = TASKS_FILE): void {
@@ -726,6 +740,7 @@ export function saveTasksFile(state: TasksFileState, filePath = TASKS_FILE): voi
     const rows = committedRows(state.tasks, snapshotTasks(persisted.tasks), false, syncStep(persisted.tasks, sync));
     return { next: { rows, recentCreates: state.recentCreates, migrations: state.migrations ?? persisted.migrations ?? {} }, result: undefined };
   });
+  replaceProjectKeySource(`tasks:${filePath}`, canonicalProjectKeys(state.tasks.map(task => task.project)));
 }
 
 /**

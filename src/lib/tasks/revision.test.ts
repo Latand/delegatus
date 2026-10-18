@@ -120,3 +120,11 @@ test("actual reconciliation invalidates a previous placement token", async () =>
   expect(loadTasks(f)[0]!.assignments[0]!.state).toBe("failed");
   expect(patch(f, { pos: { x: 2, y: 3 }, expectedProject: "fixture-project", expectedRevision: token }).ok).toBe(false);
 });
+
+test("short task revision resolves, refuses stale writes and still accepts the full token", () => {
+  const f = file(); saveTasks([row()], f);
+  const token = taskRevision(loadTasks(f)[0]!);
+  expect(patch(f, { text: "short", expectedProject: "fixture-project", expectedRevision: token.slice(0, 16).toUpperCase() }).ok).toBe(true);
+  expect(patch(f, { text: "stale", expectedProject: "fixture-project", expectedRevision: token.slice(0, 16) })).toMatchObject({ ok: false, code: "TASK_REVISION_MISMATCH" });
+  expect(patch(f, { text: "full", expectedProject: "fixture-project", expectedRevision: taskRevision(loadTasks(f)[0]!) }).ok).toBe(true);
+});

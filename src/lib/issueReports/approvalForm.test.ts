@@ -77,3 +77,12 @@ test("only a person's explicit choice of the approving option approves", () => {
   expect(issueReportDecisionApproves(decision({}, [0], { customText: "yes but later" }))).toBe(false);
   expect(issueReportDecisionApproves(decision({ answers: [{ questionId: "another", options: [0] }] }))).toBe(false);
 });
+
+test("consent for one preview never approves another sharing its display prefix", () => {
+  const other = { ...PREVIEW, digest: PREVIEW.digest.slice(0, 8) + "cd".repeat(28) };
+  for (const language of ["en", "uk"] as const) {
+    const form = issueReportApprovalForm(PREVIEW, language);
+    expect(issueReportFormLanguage(round(form), other)).toBeNull();
+    expect(issueReportFormLanguage(round(form), PREVIEW)).toBe(language);
+  }
+});

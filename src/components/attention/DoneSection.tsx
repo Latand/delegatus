@@ -194,6 +194,7 @@ export function DoneSection({ items, current, projectNames, surface, place, band
   const [open, setOpen] = useState<ReadonlySet<GroupId>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const [viewer, setViewer] = useState<DoneItemV1 | null>(null);
+  const [broken, setBroken] = useState<ReadonlySet<string>>(() => new Set());
 
   const all = useMemo(() => {
     const keys = new Set(items.map((item) => item.key));
@@ -284,19 +285,21 @@ export function DoneSection({ items, current, projectNames, surface, place, band
     if (accepted(item)) return receipt(item.key, receiptName(doneSentence(t, item)), () => run([item], true), { "data-done-receipt": item.key }, receiptPr(t, item));
     const sentence = doneSentence(t, item);
     if (item.look === "visible" && item.frame) {
+      const missing = item.frame.unavailable || broken.has(item.frame.src);
+      const thumbClass = `relative shrink-0 overflow-hidden rounded-[6px] border border-border bg-canvas ${phone ? "h-[96px] w-[128px]" : "h-[68px] w-[104px]"}`;
       return (
         <div key={item.key} className={`flex min-w-0 items-start gap-3 ${rowPad}`} data-done-row={item.key} data-done-look={item.look}>
-          <button
+          {missing ? <div data-done-frame-missing={item.key} className={`${thumbClass} flex items-center justify-center px-2 text-center text-xs leading-4 text-muted`}>{t("done.framesMissing")}</div> : <button
             type="button"
-            className={`relative shrink-0 overflow-hidden rounded-[6px] border border-border bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${phone ? "h-[96px] w-[128px]" : "h-[68px] w-[104px]"}`}
+            className={`${thumbClass} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
             data-done-thumb={item.key}
             aria-label={t("done.thumbOpen", { title: sentence })}
             onClick={() => setViewer(item)}
           >
             {/* eslint-disable-next-line @next/next/no-img-element -- a same-origin route serves the frame; the image optimizer has nothing to add. */}
-            <img src={item.frame.src} alt="" loading="lazy" className="h-full w-full object-cover object-top" />
+            <img src={item.frame.src} alt="" loading="lazy" className="h-full w-full object-cover object-top" onError={() => setBroken(held => new Set([...held, item.frame!.src]))} />
             <span aria-hidden className="absolute bottom-1 right-1 inline-flex h-5 w-5 items-center justify-center rounded-[4px] bg-black/65 text-white"><Expand className="h-3 w-3" /></span>
-          </button>
+          </button>}
           <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
             <span className={`line-clamp-3 ${sentenceClass}`} data-done-sentence="">{sentence}</span>
             <span className={metaClass} data-done-meta="">{meta(item)}</span>

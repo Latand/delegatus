@@ -1,0 +1,349 @@
+{
+  "failures": [],
+  "readings": [
+    {
+      "width": 390,
+      "height": 844,
+      "scheme": "light",
+      "failures": [],
+      "motion": {
+        "target": true,
+        "properties": [
+          "transform"
+        ],
+        "duration": 3400,
+        "iterations": null,
+        "direction": "normal",
+        "playState": "running",
+        "turned": true,
+        "ringOutset": {
+          "left": 2,
+          "top": 2,
+          "right": 2,
+          "bottom": 2
+        },
+        "ringSize": {
+          "width": 394,
+          "height": 796
+        },
+        "overflowX": 0,
+        "colour": "#8a5f00"
+      },
+      "comparisons": [
+        {
+          "angle": 0,
+          "ringPixels": 2416,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 2
+        },
+        {
+          "angle": 45,
+          "ringPixels": 2290,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 4
+        },
+        {
+          "angle": 135,
+          "ringPixels": 2230,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 2
+        },
+        {
+          "angle": 225,
+          "ringPixels": 2291,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 4
+        },
+        {
+          "angle": 300,
+          "ringPixels": 2259,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 2
+        }
+      ],
+      "halo": {
+        "running": "running",
+        "ring": "running",
+        "glyph": "running",
+        "dot": "running",
+        "field": true,
+        "focused": "paused",
+        "ringFocused": "paused",
+        "glyphFocused": "paused",
+        "dotFocused": "paused",
+        "rootMarked": true,
+        "blurred": "running",
+        "ringBlurred": "running",
+        "glyphBlurred": "running",
+        "dotBlurred": "running"
+      },
+      "reduced": {
+        "animations": 0,
+        "transform": "none"
+      }
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "scheme": "dark",
+      "failures": [],
+      "motion": {
+        "target": true,
+        "properties": [
+          "transform"
+        ],
+        "duration": 3400,
+        "iterations": null,
+        "direction": "normal",
+        "playState": "running",
+        "turned": true,
+        "ringOutset": {
+          "left": 2,
+          "top": 2,
+          "right": 2,
+          "bottom": 2
+        },
+        "ringSize": {
+          "width": 394,
+          "height": 796
+        },
+        "overflowX": 0,
+        "colour": "#e0ae45"
+      },
+      "comparisons": [
+        {
+          "angle": 0,
+          "ringPixels": 2396,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 2
+        },
+        {
+          "angle": 45,
+          "ringPixels": 2271,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 3
+        },
+        {
+          "angle": 135,
+          "ringPixels": 2214,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 2
+        },
+        {
+          "angle": 225,
+          "ringPixels": 2270,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 3
+        },
+        {
+          "angle": 300,
+          "ringPixels": 2237,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 2
+        }
+      ],
+      "halo": {
+        "running": "running",
+        "ring": "running",
+        "glyph": "running",
+        "dot": "running",
+        "field": true,
+        "focused": "paused",
+        "ringFocused": "paused",
+        "glyphFocused": "paused",
+        "dotFocused": "paused",
+        "rootMarked": true,
+        "blurred": "running",
+        "ringBlurred": "running",
+        "glyphBlurred": "running",
+        "dotBlurred": "running"
+      },
+      "reduced": {
+        "animations": 0,
+        "transform": "none"
+      }
+    },
+    {
+      "width": 430,
+      "height": 844,
+      "scheme": "light",
+      "failures": [],
+      "motion": {
+        "target": true,
+        "properties": [
+          "transform"
+        ],
+        "duration": 3400,
+        "iterations": null,
+        "direction": "normal",
+        "playState": "running",
+        "turned": true,
+        "ringOutset": {
+          "left": 2,
+          "top": 2,
+          "right": 2,
+          "bottom": 2
+        },
+        "ringSize": {
+          "width": 434,
+          "height": 796
+        },
+        "overflowX": 0,
+        "colour": "#8a5f00"
+      },
+      "comparisons": [
+        {
+          "angle": 0,
+          "ringPixels": 2581,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 2
+        },
+        {
+          "angle": 45,
+          "ringPixels": 2389,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 3
+        },
+        {
+          "angle": 135,
+          "ringPixels": 2362,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 10
+        },
+        {
+          "angle": 225,
+          "ringPixels": 2388,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 3
+        },
+        {
+          "angle": 300,
+          "ringPixels": 2366,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 11
+        }
+      ],
+      "halo": {
+        "running": "running",
+        "ring": "running",
+        "glyph": "running",
+        "dot": "running",
+        "field": true,
+        "focused": "paused",
+        "ringFocused": "paused",
+        "glyphFocused": "paused",
+        "dotFocused": "paused",
+        "rootMarked": true,
+        "blurred": "running",
+        "ringBlurred": "running",
+        "glyphBlurred": "running",
+        "dotBlurred": "running"
+      },
+      "reduced": {
+        "animations": 0,
+        "transform": "none"
+      }
+    },
+    {
+      "width": 430,
+      "height": 844,
+      "scheme": "dark",
+      "failures": [],
+      "motion": {
+        "target": true,
+        "properties": [
+          "transform"
+        ],
+        "duration": 3400,
+        "iterations": null,
+        "direction": "normal",
+        "playState": "running",
+        "turned": true,
+        "ringOutset": {
+          "left": 2,
+          "top": 2,
+          "right": 2,
+          "bottom": 2
+        },
+        "ringSize": {
+          "width": 434,
+          "height": 796
+        },
+        "overflowX": 0,
+        "colour": "#e0ae45"
+      },
+      "comparisons": [
+        {
+          "angle": 0,
+          "ringPixels": 2559,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 2
+        },
+        {
+          "angle": 45,
+          "ringPixels": 2369,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 2
+        },
+        {
+          "angle": 135,
+          "ringPixels": 2345,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 7
+        },
+        {
+          "angle": 225,
+          "ringPixels": 2370,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 2
+        },
+        {
+          "angle": 300,
+          "ringPixels": 2345,
+          "differing": 0,
+          "share": 0,
+          "maxChannelDifference": 8
+        }
+      ],
+      "halo": {
+        "running": "running",
+        "ring": "running",
+        "glyph": "running",
+        "dot": "running",
+        "field": true,
+        "focused": "paused",
+        "ringFocused": "paused",
+        "glyphFocused": "paused",
+        "dotFocused": "paused",
+        "rootMarked": true,
+        "blurred": "running",
+        "ringBlurred": "running",
+        "glyphBlurred": "running",
+        "dotBlurred": "running"
+      },
+      "reduced": {
+        "animations": 0,
+        "transform": "none"
+      }
+    }
+  ]
+}

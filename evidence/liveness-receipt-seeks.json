@@ -1,0 +1,408 @@
+{
+  "measuredAt": "2026-10-18T08:44:51.325Z",
+  "runtime": "1.4.0",
+  "loadAverage": [
+    3.89,
+    4.43,
+    5.19
+  ],
+  "copyBytes": 539844608,
+  "queryDigest": "cdd4e0a5bb8d48218de9724f1ef28263e91493cd7adfefd4deb6e79676836aa6",
+  "counts": [
+    {
+      "collection": "conversations",
+      "rows": 8097
+    },
+    {
+      "collection": "deliveryOperationOwners",
+      "rows": 11890
+    },
+    {
+      "collection": "entries",
+      "rows": 6954
+    },
+    {
+      "collection": "heldDeliveries",
+      "rows": 6716
+    },
+    {
+      "collection": "lineageEdges",
+      "rows": 6863
+    },
+    {
+      "collection": "memberships",
+      "rows": 5736
+    },
+    {
+      "collection": "migrationIntents",
+      "rows": 56
+    },
+    {
+      "collection": "pendingSupersedence",
+      "rows": 4
+    },
+    {
+      "collection": "receipts",
+      "rows": 7215
+    }
+  ],
+  "coldRows": {
+    "rows": 52821
+  },
+  "probes": [
+    {
+      "shape": "singleton",
+      "selectedKeys": 1,
+      "resultCount": 0,
+      "resultDigest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "plans": {
+        "before": [
+          "SEARCH e USING COVERING INDEX sqlite_autoindex_registry_liveness_entries_1 (row_key=?)",
+          "SCAN r USING INDEX registry_liveness_receipt_session",
+          "CORRELATED SCALAR SUBQUERY 1",
+          "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)"
+        ],
+        "after": [
+          "SEARCH r USING INDEX registry_liveness_receipt_session (<expr>=?)",
+          "CORRELATED SCALAR SUBQUERY 1",
+          "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+          "SEARCH e USING COVERING INDEX sqlite_autoindex_registry_liveness_entries_1 (row_key=?)"
+        ]
+      },
+      "samples": [
+        {
+          "repeat": 1,
+          "name": "before",
+          "ms": 0.2561959999999317,
+          "cpuMs": 0.26,
+          "readBytes": 140,
+          "count": 0
+        },
+        {
+          "repeat": 1,
+          "name": "after",
+          "ms": 0.0028170000000500295,
+          "cpuMs": 0.003,
+          "readBytes": 124,
+          "count": 0
+        },
+        {
+          "repeat": 2,
+          "name": "before",
+          "ms": 0.22519799999997758,
+          "cpuMs": 0.226,
+          "readBytes": 124,
+          "count": 0
+        },
+        {
+          "repeat": 2,
+          "name": "after",
+          "ms": 0.0008940000000166037,
+          "cpuMs": 0.001,
+          "readBytes": 124,
+          "count": 0
+        },
+        {
+          "repeat": 3,
+          "name": "before",
+          "ms": 0.21677299999998922,
+          "cpuMs": 0.217,
+          "readBytes": 124,
+          "count": 0
+        },
+        {
+          "repeat": 3,
+          "name": "after",
+          "ms": 0.0008569999999963329,
+          "cpuMs": 0.001,
+          "readBytes": 124,
+          "count": 0
+        }
+      ]
+    },
+    {
+      "shape": "multiple",
+      "selectedKeys": 2,
+      "resultCount": 0,
+      "resultDigest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "plans": {
+        "before": [
+          "SCAN r USING INDEX registry_liveness_receipt_session",
+          "CORRELATED SCALAR SUBQUERY 1",
+          "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+          "SEARCH e USING COVERING INDEX sqlite_autoindex_registry_liveness_entries_1 (row_key=?)"
+        ],
+        "after": [
+          "SEARCH r USING INDEX registry_liveness_receipt_session (<expr>=?)",
+          "CORRELATED SCALAR SUBQUERY 1",
+          "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+          "SEARCH e USING COVERING INDEX sqlite_autoindex_registry_liveness_entries_1 (row_key=?)"
+        ]
+      },
+      "samples": [
+        {
+          "repeat": 1,
+          "name": "before",
+          "ms": 33.87658799999997,
+          "cpuMs": 33.879,
+          "readBytes": 62735075,
+          "count": 0
+        },
+        {
+          "repeat": 1,
+          "name": "after",
+          "ms": 0.017602000000010776,
+          "cpuMs": 0.017,
+          "readBytes": 8316,
+          "count": 0
+        },
+        {
+          "repeat": 2,
+          "name": "before",
+          "ms": 34.00226400000008,
+          "cpuMs": 34.135,
+          "readBytes": 62735075,
+          "count": 0
+        },
+        {
+          "repeat": 2,
+          "name": "after",
+          "ms": 0.016247000000021217,
+          "cpuMs": 0.016,
+          "readBytes": 8316,
+          "count": 0
+        },
+        {
+          "repeat": 3,
+          "name": "before",
+          "ms": 39.14272699999992,
+          "cpuMs": 39.107,
+          "readBytes": 62735075,
+          "count": 0
+        },
+        {
+          "repeat": 3,
+          "name": "after",
+          "ms": 0.022820000000024265,
+          "cpuMs": 0.023,
+          "readBytes": 8316,
+          "count": 0
+        }
+      ]
+    },
+    {
+      "shape": "duplicate",
+      "selectedKeys": 2,
+      "resultCount": 0,
+      "resultDigest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "plans": {
+        "before": [
+          "SCAN r USING INDEX registry_liveness_receipt_session",
+          "CORRELATED SCALAR SUBQUERY 1",
+          "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+          "SEARCH e USING COVERING INDEX sqlite_autoindex_registry_liveness_entries_1 (row_key=?)"
+        ],
+        "after": [
+          "SEARCH r USING INDEX registry_liveness_receipt_session (<expr>=?)",
+          "CORRELATED SCALAR SUBQUERY 1",
+          "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+          "SEARCH e USING COVERING INDEX sqlite_autoindex_registry_liveness_entries_1 (row_key=?)"
+        ]
+      },
+      "samples": [
+        {
+          "repeat": 1,
+          "name": "before",
+          "ms": 65.35404699999992,
+          "cpuMs": 65.457,
+          "readBytes": 62735075,
+          "count": 0
+        },
+        {
+          "repeat": 1,
+          "name": "after",
+          "ms": 0.043491000000017266,
+          "cpuMs": 0.045,
+          "readBytes": 8316,
+          "count": 0
+        },
+        {
+          "repeat": 2,
+          "name": "before",
+          "ms": 57.48593499999993,
+          "cpuMs": 57.583,
+          "readBytes": 62735075,
+          "count": 0
+        },
+        {
+          "repeat": 2,
+          "name": "after",
+          "ms": 0.026185000000168657,
+          "cpuMs": 0.026,
+          "readBytes": 8317,
+          "count": 0
+        },
+        {
+          "repeat": 3,
+          "name": "before",
+          "ms": 37.496847000000116,
+          "cpuMs": 37.499,
+          "readBytes": 62735076,
+          "count": 0
+        },
+        {
+          "repeat": 3,
+          "name": "after",
+          "ms": 0.03253199999994649,
+          "cpuMs": 0.034,
+          "readBytes": 8317,
+          "count": 0
+        }
+      ]
+    },
+    {
+      "shape": "missing",
+      "selectedKeys": 1,
+      "resultCount": 0,
+      "resultDigest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "plans": {
+        "before": [
+          "SEARCH e USING COVERING INDEX sqlite_autoindex_registry_liveness_entries_1 (row_key=?)",
+          "SCAN r USING INDEX registry_liveness_receipt_session",
+          "CORRELATED SCALAR SUBQUERY 1",
+          "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)"
+        ],
+        "after": [
+          "SEARCH r USING INDEX registry_liveness_receipt_session (<expr>=?)",
+          "CORRELATED SCALAR SUBQUERY 1",
+          "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+          "SEARCH e USING COVERING INDEX sqlite_autoindex_registry_liveness_entries_1 (row_key=?)"
+        ]
+      },
+      "samples": [
+        {
+          "repeat": 1,
+          "name": "before",
+          "ms": 0.002637999999933527,
+          "cpuMs": 0.004,
+          "readBytes": 125,
+          "count": 0
+        },
+        {
+          "repeat": 1,
+          "name": "after",
+          "ms": 0.005332999999836829,
+          "cpuMs": 0.076,
+          "readBytes": 125,
+          "count": 0
+        },
+        {
+          "repeat": 2,
+          "name": "before",
+          "ms": 0.003533999999945081,
+          "cpuMs": 0.004,
+          "readBytes": 125,
+          "count": 0
+        },
+        {
+          "repeat": 2,
+          "name": "after",
+          "ms": 0.0009669999999459833,
+          "cpuMs": 0.001,
+          "readBytes": 125,
+          "count": 0
+        },
+        {
+          "repeat": 3,
+          "name": "before",
+          "ms": 0.0006049999999504507,
+          "cpuMs": 0,
+          "readBytes": 125,
+          "count": 0
+        },
+        {
+          "repeat": 3,
+          "name": "after",
+          "ms": 0.0007210000001123262,
+          "cpuMs": 0.002,
+          "readBytes": 125,
+          "count": 0
+        }
+      ]
+    },
+    {
+      "shape": "selected",
+      "selectedKeys": 74,
+      "resultCount": 0,
+      "resultDigest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "plans": {
+        "before": [
+          "SCAN r USING INDEX registry_liveness_receipt_session",
+          "CORRELATED SCALAR SUBQUERY 1",
+          "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+          "SEARCH e USING COVERING INDEX sqlite_autoindex_registry_liveness_entries_1 (row_key=?)"
+        ],
+        "after": [
+          "SEARCH r USING INDEX registry_liveness_receipt_session (<expr>=?)",
+          "CORRELATED SCALAR SUBQUERY 1",
+          "SEARCH c USING COVERING INDEX sqlite_autoindex_registry_cold_1 (collection=? AND row_key=?)",
+          "SEARCH e USING COVERING INDEX sqlite_autoindex_registry_liveness_entries_1 (row_key=?)"
+        ]
+      },
+      "samples": [
+        {
+          "repeat": 1,
+          "name": "before",
+          "ms": 37.902450000000044,
+          "cpuMs": 38.102,
+          "readBytes": 62690020,
+          "count": 0
+        },
+        {
+          "repeat": 1,
+          "name": "after",
+          "ms": 0.39751699999987977,
+          "cpuMs": 0.398,
+          "readBytes": 614469,
+          "count": 0
+        },
+        {
+          "repeat": 2,
+          "name": "before",
+          "ms": 36.10671000000002,
+          "cpuMs": 36.109,
+          "readBytes": 62690020,
+          "count": 0
+        },
+        {
+          "repeat": 2,
+          "name": "after",
+          "ms": 0.36283000000003085,
+          "cpuMs": 0.364,
+          "readBytes": 614469,
+          "count": 0
+        },
+        {
+          "repeat": 3,
+          "name": "before",
+          "ms": 36.74156400000015,
+          "cpuMs": 36.828,
+          "readBytes": 62690020,
+          "count": 0
+        },
+        {
+          "repeat": 3,
+          "name": "after",
+          "ms": 0.3761850000000777,
+          "cpuMs": 0.377,
+          "readBytes": 614469,
+          "count": 0
+        }
+      ]
+    }
+  ],
+  "sourceBase": "f5a9ccc08e3ab6c1d5a4195fa74ad4ee7c62cd74",
+  "procedure": "scripts/measure-liveness-receipts.ts",
+  "readBytesMeaning": "Linux thread rchar: bytes returned by read/pread, including the small accounting read; not heap usage or physical disk reads",
+  "conditions": "One read-only VACUUM INTO copy; warmed prepared queries; before/after interleaved three times per shape; no concurrent writers to the copy"
+}

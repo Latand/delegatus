@@ -40,7 +40,7 @@ export function useAutosizePinned(
     if (!active) return;
     const el = ref.current;
     if (!el) return;
-    fit(el, maxPx, minPx, pinned);
+    fit(el, maxPx, minPx, pinned, true);
   }, [ref, value, maxPx, minPx, pinned, active, field]);
 
   /* An empty field is as tall as its placeholder, and the placeholder changes
@@ -56,7 +56,7 @@ export function useAutosizePinned(
     const el = ref.current;
     if (!el) return;
     const placeholder = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => {
-      if (!el.value) fit(el, maxPx, minPx, pinned);
+      if (!el.value) fit(el, maxPx, minPx, pinned, false);
     });
     placeholder?.observe(el, { attributes: true, attributeFilter: ["placeholder"] });
     let width = el.getBoundingClientRect().width;
@@ -66,7 +66,7 @@ export function useAutosizePinned(
       if (next === width) return;
       width = next;
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => fit(el, maxPx, minPx, pinned));
+      frame = requestAnimationFrame(() => fit(el, maxPx, minPx, pinned, false));
     });
     resize?.observe(el);
     return () => {
@@ -78,12 +78,56 @@ export function useAutosizePinned(
   }, [ref, maxPx, minPx, pinned, active, field]);
 }
 
-function fit(el: HTMLTextAreaElement, maxPx: number, minPx: number, pinned: boolean): void {
+/* What the last measurement of a field saw. A field whose text only grew at the
+   end since then can only have gained lines, so it is measured without
+   collapsing it first. */
+interface Fitted { value: string; maxPx: number; minPx: number; width: number }
+const fitted = new WeakMap<HTMLTextAreaElement, Fitted>();
+
+/**
+ * `fromValue` is true when the call follows a change of the text and false for
+ * a re-measure forced by anything else (width, placeholder), which must
+ * collapse: only a value change can be proven to have added lines.
+ *
+ * Greedy wrapping never loses a line when text is appended, so after a plain
+ * append the field needs `scrollHeight` read once and a taller height written
+ * only when the content outgrew the box. The collapse to 0px below costs a
+ * second layout of the whole composer subtree per keystroke; it stays for every
+ * edit that can shorten the text (deletion, replacement, a restored draft) and
+ * for any change of the field's width, ceiling or floor.
+ */
+function fit(el: HTMLTextAreaElement, maxPx: number, minPx: number, pinned: boolean, fromValue: boolean): void {
+  const prevTop = el.scrollTop;
+  const atEnd = caretAtEnd(el.selectionStart, el.selectionEnd, el.value.length);
+  const last = fitted.get(el);
+  /* The first character replaces the placeholder, whose wrapped rows the old
+     height may still hold: that transition is always measured afresh. */
+  const appended = fromValue && last !== undefined && last.value !== ""
+    && last.maxPx === maxPx && last.minPx === minPx
+    && el.value.length >= last.value.length && el.value.startsWith(last.value)
+    && el.style.height !== "" && el.clientWidth === last.width;
+  if (appended) {
+    /* The box keeps 2px of slack over its content, so content taller than the
+       box means a line was added; at the ceiling the height is already right. */
+    if (el.scrollHeight > el.clientHeight) {
+      const wanted = clampHeight(el.scrollHeight, maxPx, minPx) + "px";
+      if (el.style.height !== wanted) el.style.height = wanted;
+    }
+  } else {
+    measureCollapsed(el, maxPx, minPx);
+  }
+  fitted.set(el, { value: el.value, maxPx, minPx, width: el.clientWidth });
+  if (shouldPin({ pinned, caretAtEnd: atEnd })) {
+    el.scrollTop = el.scrollHeight;
+  } else {
+    el.scrollTop = prevTop;
+  }
+}
+
+function measureCollapsed(el: HTMLTextAreaElement, maxPx: number, minPx: number): void {
   /* Collapsing to 0 before measuring lets the field shrink back when text is
      deleted; it also resets scrollTop, so a mid-text edit's position is
      captured first and restored after. */
-  const prevTop = el.scrollTop;
-  const atEnd = caretAtEnd(el.selectionStart, el.selectionEnd, el.value.length);
   /* The box the field sits in keeps its height through the measurement.
      Reading `scrollHeight` lays the page out with the field at 0px, and
      without this everything above the composer was laid out that much
@@ -97,9 +141,4 @@ function fit(el: HTMLTextAreaElement, maxPx: number, minPx: number, pinned: bool
   el.style.height = "0px";
   el.style.height = clampHeight(el.scrollHeight, maxPx, minPx) + "px";
   if (holder) holder.style.minHeight = heldMinHeight;
-  if (shouldPin({ pinned, caretAtEnd: atEnd })) {
-    el.scrollTop = el.scrollHeight;
-  } else {
-    el.scrollTop = prevTop;
-  }
 }

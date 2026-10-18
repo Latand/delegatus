@@ -133,7 +133,7 @@ test("issue 533: a repair review parks when its remote branch is behind the capt
     } as unknown as Flow;
 
     await expect(captureReviewHead(flow, newRound(flow, "marker", null)))
-      .rejects.toThrow(`review remote head mismatch before launch: local ${repairSha}, origin/main ${remoteSha}`);
+      .rejects.toThrow(`review remote head mismatch before launch: local ${repairSha.slice(0, 8)}, origin/main ${remoteSha.slice(0, 8)}`);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -288,11 +288,11 @@ test("a review round parks when clean HEAD advances past its synchronized target
     } as unknown as Flow;
     const round = newRound(flow, "button", null);
 
-    await expect(captureReviewHead(flow, round)).rejects.toThrow(`review target changed before launch: expected ${targetSha}, found ${advancedSha}`);
+    await expect(captureReviewHead(flow, round)).rejects.toThrow(`review target changed before launch: expected ${targetSha.slice(0, 8)}, found ${advancedSha.slice(0, 8)}`);
     expect(round.reviewHeadSha).toBeNull();
     expect(flow).toMatchObject({
       state: "needs_decision",
-      stateDetail: `review target changed before launch: expected ${targetSha}, found ${advancedSha}`,
+      stateDetail: `review target changed before launch: expected ${targetSha.slice(0, 8)}, found ${advancedSha.slice(0, 8)}`,
     });
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -418,7 +418,7 @@ test("launch-time drift parks before reviewer process actuation (#522)", async (
 
     const parked = loadFlows()[0]!;
     expect(parked.state).toBe("needs_decision");
-    expect(parked.stateDetail).toBe(`review target changed before launch: expected ${targetSha}, found ${driftedSha}`);
+    expect(parked.stateDetail).toBe(`review target changed before launch: expected ${targetSha.slice(0, 8)}, found ${driftedSha.slice(0, 8)}`);
     expect(parked.rounds[0]).toMatchObject({
       launchId: null,
       reviewerConversationId: null,
