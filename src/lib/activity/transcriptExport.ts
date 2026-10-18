@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import { UsageLineReader, type UsageAttribution, type UsageFacts } from "./tokenUsage";
 
 import {
   candidateFor,
@@ -56,6 +57,7 @@ export interface ConversationResolution {
   deliveryOrigin?: TranscriptContext["deliveryOrigin"];
   /** The registry's role and pipeline stage for the agent axis. */
   agent?: { role: string; pipelineId: string | null; stageId: string | null };
+  usageAttribution?(at: number): UsageAttribution;
 }
 
 export interface ExportRequest {
@@ -140,6 +142,9 @@ export interface TranscriptFactsState {
   sessionMeta: unknown;
   /** The agent turn still open at the last line read, when turns are kept. */
   turn?: AgentTurn | null;
+  usage?: UsageFacts;
+  /** Retry a line spanning a piece with a larger bounded read after restart. */
+  readBytesHint?: number;
 }
 
 /** One agent turn: from what started it to the last record of work in it. */
@@ -188,15 +193,18 @@ export class TranscriptLineReader {
   readonly records: UserRecord[] = [];
   /** Turns that ended in the lines read; the open one stays in `state.turn`. */
   readonly turns: AgentTurn[] = [];
+  readonly usage: UsageLineReader | null;
 
   /** `keepTurns` reads every line, since any record can extend a turn. */
-  constructor(state?: TranscriptFactsState, private readonly keepTurns = false) {
+  constructor(state?: TranscriptFactsState, private readonly keepTurns = false, private readonly usageOnly = false, keepUsage = keepTurns) {
     this.state = state ? { ...state } : { engine: null, cwd: null, entrypoint: null, sessionMeta: null };
+    this.usage = keepUsage || usageOnly ? new UsageLineReader(state?.usage) : null;
+    if (this.usage) this.state.usage = this.usage.state;
     if (keepTurns) this.state.turn ??= null;
   }
 
   wants(line: string | Buffer): boolean {
-    if (this.keepTurns) return true;
+    if (this.keepTurns || this.usage) return true;
     if (typeof line === "string") {
       return this.state.engine === null || line.includes("\"user\"") || line.includes("session_meta") || (this.state.cwd === null && line.includes("\"cwd\""));
     }
@@ -210,15 +218,16 @@ export class TranscriptLineReader {
    * decoded or parsed whole. Anything else goes through `accept`.
    */
   acceptBytes(line: Buffer): void {
-    if (this.keepTurns && this.state.engine === "codex") {
+    if ((this.keepTurns || this.usage) && this.state.engine === "codex") {
       const prefix = CODEX_PREFIX.exec(line.subarray(0, CODEX_PREFIX_BYTES).toString("utf8"));
       if (prefix) {
         const [, timestamp, type, payloadType, role] = prefix;
-        const needed = type === "session_meta" || (type === "turn_context" && this.state.cwd === null)
+        const needed = type === "session_meta" || (type === "turn_context" && (this.state.cwd === null || !!this.usage))
+          || (!!this.usage && (type === "token_usage_record" || (type === "event_msg" && payloadType === "token_count" && !this.usage.state.recordsSeen)))
           /* A message whose role is not first after its type is read whole. */
-          || (type === "response_item" && payloadType === "message" && role !== "assistant" && role !== "developer");
+          || (!this.usageOnly && type === "response_item" && payloadType === "message" && role !== "assistant" && role !== "developer");
         if (!needed) {
-          this.observeTurn("codex", { timestamp, type, payload: { type: payloadType, role } });
+          if (this.keepTurns) this.observeTurn("codex", { timestamp, type, payload: { type: payloadType, role } });
           return;
         }
       }
@@ -236,7 +245,8 @@ export class TranscriptLineReader {
     }
     if (!parsed) return;
     const state = this.state;
-    if (state.engine === null) state.engine = parsed.type === "session_meta" || parsed.type === "response_item" || parsed.type === "turn_context" ? "codex" : "claude";
+    if (state.engine === null) state.engine = parsed.type === "session_meta" || parsed.type === "response_item" || parsed.type === "turn_context" || parsed.type === "token_usage_record" || parsed.type === "event_msg" ? "codex" : "claude";
+    this.usage?.accept(state.engine, parsed);
     if (this.keepTurns) this.observeTurn(state.engine, parsed);
     if (state.engine === "codex") {
       const payload = record(parsed.payload);
@@ -248,13 +258,13 @@ export class TranscriptLineReader {
       }
       if (parsed.type === "turn_context" && state.cwd === null && typeof payload?.cwd === "string") state.cwd = payload.cwd;
       const user = parseCodexUserRecord(parsed);
-      if (user) this.records.push(user);
+      if (user && !this.usageOnly) this.records.push(user);
     } else {
       if (state.cwd === null && typeof parsed.cwd === "string") state.cwd = parsed.cwd;
       const user = parseClaudeUserRecord(parsed);
       if (user) {
         if (state.entrypoint === null && typeof parsed.entrypoint === "string") state.entrypoint = parsed.entrypoint;
-        this.records.push(user);
+        if (!this.usageOnly) this.records.push(user);
       }
     }
   }
