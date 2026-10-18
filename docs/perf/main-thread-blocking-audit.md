@@ -2481,7 +2481,7 @@ checks retain their protection.
 
 The helper counts allocated bytes without following symlinks or counting
 multiply linked files. An unreadable tree, an incomplete byte walk, an
-unreadable same-user process, malformed or partial replies, helper exit and
+unreadable process, malformed or partial replies, helper exit and
 request timeout refuse cleanup. An inspection refusal aborts the remaining
 pass. A refusal after a trash rename restores the original path; interrupted
 removals keep their durable recovery journal. The helper has one outstanding

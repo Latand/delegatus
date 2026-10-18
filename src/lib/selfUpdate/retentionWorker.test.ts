@@ -65,7 +65,7 @@ test.skipIf(process.platform !== "linux").each(["missing-namespace", "unreadable
   expect(() => retentionProcessScan(directory, directory)).toThrow();
 });
 
-test.skipIf(process.platform !== "linux")("a complete proc fixture retains physical aliases, argv, environment and mapped paths", () => {
+test.skipIf(process.platform !== "linux").each(["same-uid", "foreign-uid"])("a complete proc fixture retains physical aliases, argv, environment and mapped paths: %s", owner => {
   const directory = root(); const proc = path.join(directory, "proc"); const release = path.join(directory, "release");
   fs.mkdirSync(release); fs.symlinkSync(release, path.join(directory, "alias"));
   fs.mkdirSync(path.join(proc, "self/ns"), { recursive: true }); fs.symlinkSync("mnt:[fixture]", path.join(proc, "self/ns/mnt"));
@@ -77,7 +77,14 @@ test.skipIf(process.platform !== "linux")("a complete proc fixture retains physi
   fs.writeFileSync(path.join(base, "environ"), `CUSTOM=prefix:${release}/vendor:suffix\0`);
   fs.writeFileSync(path.join(base, "maps"), `0-1 r--p 0 0 0 ${release}/mapped.so\n`);
   fs.symlinkSync(release, path.join(base, "fd/1"));
-  const scan = retentionProcessScan(release, proc);
+  const originalStat = fs.statSync;
+  const stat = spyOn(fs, "statSync").mockImplementation(((entry: fs.PathLike, ...args: unknown[]) => {
+    const value = Reflect.apply(originalStat, fs, [entry, ...args]);
+    if (owner === "foreign-uid" && String(entry) === base) value.uid++;
+    return value;
+  }) as typeof originalStat);
+  let scan;
+  try { scan = retentionProcessScan(release, proc); } finally { stat.mockRestore(); }
   expect(scan.complete).toBeTrue(); expect(scan.processes).toHaveLength(1);
   expect(scan.processes[0]!.paths).toContain(path.join(directory, "alias/future.ts"));
   expect(scan.processes[0]!.paths).toContain(path.join(release, "mapped.so"));

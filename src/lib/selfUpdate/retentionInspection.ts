@@ -4,8 +4,8 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { resolvePhysicalPath, type ProcessScan } from "@/lib/tempSweep";
 
 export type RetentionScan = ProcessScan & { complete: true };
-/** A partial observation cannot authorize removal. Only vanished processes and
- * processes belonging to another uid may be omitted from a private release root. */
+/** A partial observation cannot authorize removal. Only processes proven to
+ * have exited may be omitted, regardless of the process owner. */
 export function retentionProcessScan(root: string, procRoot = "/proc"): RetentionScan {
   const processes: ProcessScan["processes"] = [];
   const ownNamespace = fs.readlinkSync(path.join(procRoot, "self/ns/mnt"));
@@ -21,7 +21,6 @@ export function retentionProcessScan(root: string, procRoot = "/proc"): Retentio
     if (!/^\d+$/.test(name)) continue;
     const base = path.join(procRoot, name);
     try {
-      if (fs.statSync(base).uid !== process.getuid?.()) continue;
       const before = fs.readFileSync(path.join(base, "stat"), "utf8");
       const fields = (stat: string) => stat.slice(stat.lastIndexOf(")") + 2).split(" ");
       if (["Z", "X"].includes(fields(before)[0]!)) continue;
