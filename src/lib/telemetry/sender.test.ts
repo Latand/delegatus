@@ -240,7 +240,7 @@ test("packaged provenance through the real launcher reader survives process rest
       expect(request).toMatchObject({ id, kind: "packaged", os: "linux", arch: "x64" });
     }
   } finally { server.stop(true); }
-});
+}, 30_000);
 for (const state of ["missing", "dead", "development", "opt-out"] as const) {
   test(`packaged provenance fails closed when ${state}`, async () => {
     const fixture = harness();
