@@ -4042,6 +4042,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "mobile2.banner.offlineBody": "Показано останній отриманий стан",
   "mobile2.banner.offlineBodyAt": "Показано останній отриманий стан · {time}",
   "mobile2.sheet.close": "Закрити",
+  "mobile2.sheet.expand": "На повну висоту",
   "mobile2.receipt.respawn": "Перезапустити",
   "mobile2.receipt.reopen": "Відкрити знову",
   "mobile2.receipt.restore": "Відновити",

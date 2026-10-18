@@ -99,13 +99,19 @@ export interface LivenessProbe {
   now(): number;
   pidAlive(pid: number): boolean;
   processIdentity(pid: number): string | null;
+  /** Stable identity only when the production process probes are in use. */
+  cacheKey?: object;
 }
 
+const productionLivenessProbeKey = {};
+
 export function livenessProbe(options: AccountLivenessOptions = {}): LivenessProbe {
+  const production = !options.now && !options.pidAlive && !options.processIdentity;
   return {
     now: options.now ?? (() => Date.now()),
     pidAlive: options.pidAlive ?? ((pid) => procBackend.pidAlive(pid)),
     processIdentity: options.processIdentity ?? ((pid) => procBackend.processIdentity(pid)),
+    ...(production ? { cacheKey: productionLivenessProbeKey } : {}),
   };
 }
 

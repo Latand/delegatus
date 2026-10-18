@@ -369,6 +369,12 @@ the first read of a head, then blocks with "checks did not finish in 90 min".
 
 ### 4.4 How the merge runs
 
+The global controller clears the signalling lane's async scope before running
+its cycle, including retained wakes. Each sweep retries admission for completed
+eligible lanes still missing a merge record, rechecks admission under the write
+lock, and logs the reason when a lane is not admitted. A missed or failed write
+leaves the lane available for admission on the next sweep.
+
 Through GitHub, with `gh`. A local `git merge` plus a push to the base branch is
 refused by this repository's protection (`enforce_admins: true`, required
 checks `privacy-publication` and `privacy-tracker-audit`, `strict: true`, as
@@ -491,6 +497,9 @@ shows the reason in warning ink and two answers:
 
 - **Try the merge again** / **Спробувати мердж ще раз** → new action
   `retry-merge`: sets `queued`, keeps the head chain, and counts attempts;
+  if a completed eligible lane has no merge record, it first creates one under
+  the same admission checks as the sweep. A missing implementation PR records
+  the existing visible block. An ineligible lane receives its admission reason.
 - **Leave the PR open** / **Залишити PR відкритим** → `dismiss`, as any lane
   need is cleared today; the record stays `blocked`.
 

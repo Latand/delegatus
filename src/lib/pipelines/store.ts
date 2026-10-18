@@ -12,6 +12,7 @@ import { pipelineHasPullRequest } from "@/lib/forge/resolve";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot, projectAliasResolver } from "@/lib/projects/aliases";
+import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
 import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
@@ -882,6 +883,12 @@ function isPipeline(value: unknown): value is Pipeline {
   catch { return false; }
 }
 
+/** Shared total validator for persisted projections that must match the
+ * authoritative pipeline reader's admission contract. */
+export function isStoredPipeline(value: unknown): value is Pipeline {
+  return isPipeline(value);
+}
+
 function isPipelineShape(value: unknown): value is Pipeline {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
@@ -1698,8 +1705,17 @@ export function withDeliveryPublicationDetail(pipeline: Pipeline): Pipeline {
  * Anything that mutates a pipeline goes through `withPipelineMutation`, and
  * anything that overlays one takes `loadPipelinesForProjection`.
  */
+const pipelineProjectKeys = new WeakMap<readonly Pipeline[], { aliases: string; projects: ReadonlySet<string> }>();
 export function loadPipelinesForList(): readonly Pipeline[] {
-  return cachedPipelines();
+  const pipelines = cachedPipelines();
+  const aliases = JSON.stringify(projectAliasSnapshot().aliases);
+  let membership = pipelineProjectKeys.get(pipelines);
+  if (membership?.aliases !== aliases) {
+    membership = { aliases, projects: canonicalProjectKeys(pipelines.map(pipeline => pipeline.project)) };
+    pipelineProjectKeys.set(pipelines, membership);
+  }
+  replaceProjectKeySource("pipelines", membership.projects);
+  return pipelines;
 }
 
 /** How long a pipeline mutation waits for the registry lease before it refuses
@@ -1930,6 +1946,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
 
 export function savePipelines(pipelines: Pipeline[]): void {
   pipelineStore().replaceSync(pipelines);
+  replaceProjectKeySource("pipelines", canonicalProjectKeys(pipelines.map(pipeline => pipeline.project)));
 }
 
 /** Settled records leave the hot registry after this long; the archive keeps

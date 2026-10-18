@@ -166,6 +166,8 @@ export function bridgeReportOriginLabel(origin: BridgeReportOrigin | undefined):
 export type CanonicalSeatConversationId = (conversationId: string) => string;
 
 export interface BridgeReportV1 {
+  /** Server-derived task links; absent on older rows. */
+  cards?: string[];
   /** Monotonic, never reused — THE cursor unit. */
   seq: number;
   /** Derived from the caller's stable `key`; a re-append is a no-op. */
@@ -250,6 +252,8 @@ export interface BridgeReportTelegram {
 }
 
 export interface BridgeReportInput {
+  /** Server-derived task links; never accepted from MCP callers. */
+  cards?: string[];
   /** Stable identity of the report. The same key always yields the same id,
       which is what makes a manager retry idempotent. */
   key: string;

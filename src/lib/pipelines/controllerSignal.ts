@@ -1,5 +1,6 @@
 import { internalServiceHeaders } from "@/lib/agent/callerClaims";
 import { viewerControlOrigin, viewerControlToken } from "@/lib/mcp/controlEndpoint";
+import { withoutControllerPipelineScope } from "./controllerScope";
 
 export const PIPELINE_TICK_REQUEST_MS = 45_000;
 
@@ -79,7 +80,7 @@ export function requestPipelineTick(): void {
   if (signal.tick === null) return;
   if (signal.scheduled) { signal.trailing = true; return; }
   signal.scheduled = true;
-  queueMicrotask(() => {
+  withoutControllerPipelineScope(() => queueMicrotask(() => {
     // Wakes before dispatch are part of this tick. Wakes during it ask for
     // exactly one later dispatch, without adding observers to its promise.
     signal.trailing = false;
@@ -90,5 +91,5 @@ export function requestPipelineTick(): void {
       signal.scheduled = false;
       if (signal.trailing) requestPipelineTick();
     });
-  });
+  }));
 }
