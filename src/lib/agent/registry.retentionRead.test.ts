@@ -21,8 +21,11 @@ function fixture(history: number) {
   };
   const conversation = (name: string, status = "idle", superseded = false) => {
     const id = `conversation_${name}`;
-    conversations[id] = { id, engine: "codex", generations: [{ id: `${name}-old`, path: `/sessions/${name}-old.jsonl` },
-      { id: name, path: `/sessions/${name}.jsonl` }],
+    conversations[id] = { id, engine: "codex", ...(name === "current" ? { delegationDepth: 0 } : {}),
+      generations: [{ id: `${name}-old`, path: `/sessions/${name}-old.jsonl` },
+        { id: name, path: `/sessions/${name}.jsonl`, ...(name === "current" ? {
+          launchProfile: { mcpServers: ["viewer", "telegram"], parentConversationId: null, title: "retention grant" },
+        } : {}) }],
       supersededBy: superseded ? { conversationId: "conversation_current", at, reason: "manual" } : null };
     entries[`codex:${name}-old`] = { key: { engine: "codex", sessionId: `${name}-old` }, status: "dead" };
     entries[`codex:${name}`] = { key: { engine: "codex", sessionId: name }, status };
@@ -33,6 +36,7 @@ function fixture(history: number) {
   conversation("current"); conversation("dead", "dead"); conversation("superseded", "dead", true);
   conversation("revived", "dead"); conversation("own_row", "dead"); conversation("shadowed");
   receipt("failed-current", "conversation_current", "failed");
+  receipt("pending-current", "conversation_current", "starting");
   receipt("failed-dead", "conversation_dead", "failed");
   receipt("completed-dead", "conversation_dead", "completed", "materialized");
   receipt("pending-superseded", "conversation_superseded", "starting");
@@ -70,6 +74,8 @@ test.each(["off", "sqlite"] as const)("targeted %s retention agrees with the ful
     expect(full.get("conversation_revived")).toBe("current");
     expect(full.get("conversation_superseded")).toBe("superseded");
     expect(full.get("conversation_cycle_tail")).toBe("current");
+    expect(registry.conversationRetentionSnapshot("conversation_current").conversations.conversation_current?.generations.at(-1)?.launchProfile.mcpServers)
+      .toEqual(["viewer", "telegram"]);
     for (const id of pendingIds) {
       expect(registryConversationRetentionStates(registry.conversationRetentionSnapshot(id)).get(id)).toBe(full.get(id));
     }
@@ -78,18 +84,19 @@ test.each(["off", "sqlite"] as const)("targeted %s retention agrees with the ful
 
 test("production selectors decode the same rows with ten times the history, cold and warm after process restart", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-retention-history-"));
+  let measurement = 0;
   const measure = (history: number) => {
-    const filename = path.join(directory, `history-${history}.sqlite`);
+    const filename = path.join(directory, `history-${history}-${measurement++}.sqlite`);
     const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: fixture(history), normalize: normalizeRegistry });
     store.close();
     const script = `
-      import { AgentRegistry } from ${JSON.stringify(path.join(import.meta.dir, "registry.ts"))};
+      import { AgentRegistry, normalizeRegistry } from ${JSON.stringify(path.join(import.meta.dir, "registry.ts"))};
       import { maintainRuntimeJournal } from ${JSON.stringify(path.resolve(import.meta.dir, "../../runtime-host/journalRetention.ts"))};
       import { RuntimeJournal } from ${JSON.stringify(path.resolve(import.meta.dir, "../../runtime-host/journal.ts"))};
       let reads = 0, parses = 0;
       const registry = new AgentRegistry(process.argv[1] + ".json", undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: process.argv[1], now: () => ${Date.parse(at)},
         onSqliteRowPayloadRead: (_, n) => { reads += n; }, onSqliteRowPayloadParse: () => { parses++; } });
-      const ids = JSON.parse(process.argv[2]);
+      const ids = ["conversation_current"];
       const journal = new RuntimeJournal(process.argv[1] + ".events", { structuredHosts: true, now: () => ${Date.parse(at)} });
       for (const [index, id] of [...ids, ids[0]].entries()) journal.executeOperation({ kind: "spawn", conversationId: id,
         operationId: "operation_" + index, idempotencyKey: "spawn-" + index, engine: "codex", cwd: "/repo", prompt: "start" });
@@ -103,9 +110,15 @@ test("production selectors decode the same rows with ten times the history, cold
       const empty = new RuntimeJournal(process.argv[1] + ".empty", { structuredHosts: true, now: () => ${Date.parse(at)} });
       const emptyTick = maintainRuntimeJournal(empty, () => registry);
       result.push({ reads, parses, tick: emptyTick });
+      const peer = new (await import(${JSON.stringify(path.join(import.meta.dir, "sqliteRegistryStore.ts"))})).SqliteAgentRegistryStore(process.argv[1], { normalize: normalizeRegistry });
+      peer.mutate(file => { file.conversations.conversation_current!.generations.at(-1)!.launchProfile.title = "peer profile update"; }, false);
+      reads = 0; parses = 0;
+      const peerTick = maintainRuntimeJournal(journal, () => registry);
+      result.push({ reads, parses, tick: peerTick });
+      peer.close();
       empty.close(); journal.close(); registry.close(); console.log(JSON.stringify(result));`;
     const child = Bun.spawnSync([process.execPath, "-e", script, filename, JSON.stringify(pendingIds)], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
-    expect(child.exitCode).toBe(0);
+    if (child.exitCode !== 0) throw new Error(child.stderr.toString());
     return JSON.parse(child.stdout.toString()) as Array<{ reads: number; parses: number; tick: { scanned: number; settled: number } }>;
   };
   try {
@@ -114,8 +127,9 @@ test("production selectors decode the same rows with ten times the history, cold
     expect(small[0]!.reads).toBeGreaterThan(0);
     expect(small[0]!.reads).toBeLessThan(600);
     expect(small[1]!.tick).toEqual(small[0]!.tick);
-    expect(small[0]!.tick).toEqual({ scanned: pendingIds.length + 1, settled: 0 });
+    expect(small[0]!.tick).toEqual({ scanned: 2, settled: 0 });
     expect(small[2]).toEqual({ reads: 0, parses: 0, tick: { scanned: 0, settled: 0 } });
+    expect(large[3]).toEqual(small[3]);
     expect(measure(20)).toEqual(small);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

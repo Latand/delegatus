@@ -12,6 +12,7 @@ import { deepFreeze } from "@/lib/deepFreeze";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { databaseFileIdentity, DatabaseReplacedError, openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { recordBlockingWait, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
@@ -2675,6 +2676,81 @@ export class SqliteAgentRegistryStore {
       return result;
     } catch (error) {
       try { if (!admitted) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      throw error;
+    }
+  }
+
+  /** Retention only needs the rows named by one pending effect and its alias
+      component. Keep this projection out of the generic lazy reader: an MCP
+      grant on a selected row otherwise triggers its whole-registry fallback. */
+  conversationRetentionSnapshot(conversationId: string): Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> {
+    this.db.exec("BEGIN");
+    try {
+      if (this.changesReady) this.refreshColdKeys();
+      const result: Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> = {
+        conversations: {}, entries: {}, receipts: {}, conversationAliases: {},
+      };
+      const read = <C extends "conversations" | "entries" | "receipts" | "conversationAliases">(
+        collection: C,
+        key: string,
+      ): RegistryFile[C][string] | undefined => {
+        const stored = this.db.query<{ value_json: string }, [string, string]>(
+          `SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`,
+        ).get(collection, key);
+        this.onRowPayloadRead?.(collection, stored ? 1 : 0);
+        if (!stored) return undefined;
+        const parsed = this.parseRow(collection, key, stored.value_json, true);
+        const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {}, [collection]: { [key]: parsed } };
+        let row = (this.normalizePartial(input)[collection] as Record<string, unknown>)[key] as RegistryFile[C][string] | undefined;
+        if (row && READER_GRANT_COLLECTIONS.has(collection) && rowClaimsBeyondBaselineGrant(row)) {
+          row = this.decideStoredRow(collection, key, row) as RegistryFile[C][string];
+        }
+        return row;
+      };
+      const aliases = result.conversationAliases;
+      const conversations = result.conversations;
+      const entries = result.entries;
+      const receipts = result.receipts;
+      const seen = new Set<string>();
+      let canonical = conversationId as ViewerConversationId;
+      while (true) {
+        const next = read("conversationAliases", canonical);
+        if (typeof next !== "string") break;
+        aliases[canonical] = next;
+        if (seen.has(canonical)) { this.db.exec("COMMIT"); return result; }
+        seen.add(canonical);
+        canonical = next;
+      }
+      for (const id of new Set([conversationId, canonical])) {
+        const conversation = read("conversations", id);
+        if (!conversation) continue;
+        conversations[id] = conversation;
+        const generation = conversation.generations.at(-1);
+        if (!generation) continue;
+        const entryKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
+        const entry = read("entries", entryKey);
+        if (entry) entries[entryKey] = entry;
+      }
+      const identities = new Set([canonical]);
+      const pending = [canonical];
+      while (pending.length) {
+        const target = pending.pop()!;
+        for (const alias of this.matchingRowKeys("conversationAliases", "alias", [target])) {
+          const aliasId = alias as ViewerConversationId;
+          if (identities.has(aliasId)) continue;
+          identities.add(aliasId);
+          aliases[alias] = target;
+          pending.push(aliasId);
+        }
+      }
+      for (const key of this.matchingRowKeys("receipts", "conversationId", [...identities])) {
+        const receipt = read("receipts", key);
+        if (receipt) receipts[key] = receipt;
+      }
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* closed */ }
       throw error;
     }
   }
