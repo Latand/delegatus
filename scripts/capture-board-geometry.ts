@@ -8324,7 +8324,7 @@ async function activityTokensMain(): Promise<void> {
       } else must(reading.popover === null, `${name}: the range fields are open`);
       if (figured && state !== "range-open") {
         /* A range that reaches back before counting is a lower bound wherever the page draws it. */
-        const partly = state === "range-applied" || state === "project" || state === "empty-range";
+        const partly = state === "range-applied" || state === "project";
         must(reading.coverage === (partly ? "lower" : "ok") || (state === "coverage" && reading.coverage === "lower"), `${name}: coverage ${reading.coverage}`);
         must((reading.hero ?? "").startsWith("≥") === (partly || state === "coverage"), `${name}: figure ${reading.hero}`);
       }
