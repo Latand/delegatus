@@ -8069,7 +8069,7 @@ function readTokenFrame() {
     empty: document.querySelector("[data-token-empty]")?.textContent ?? null,
     weekColumns: document.querySelectorAll("[data-activity-pair]").length,
     cappedColumns: Array.from(document.querySelectorAll("[data-activity-pair] text")).map((text) => (text.textContent ?? "").trim()).filter((text) => text !== ""),
-    tokensSelected: document.querySelector('[data-activity-tabs] [data-activity-option="tokens"], [aria-label="View"] [data-activity-option="tokens"]')?.getAttribute("aria-selected") === "true",
+    tokensSelected: document.querySelector('[data-activity-option="tokens"][aria-selected="true"]')?.getAttribute("aria-selected") === "true",
     tab: document.querySelector("[data-activity-tab]")?.getAttribute("data-activity-tab") ?? (document.querySelector("[data-token-tab]") ? "tokens" : "time"),
     layout: page.dataset.activityLayout ?? "phone",
     width: window.innerWidth,
@@ -8132,6 +8132,7 @@ async function activityTokensMain(): Promise<void> {
   const historyRepo = path.join(HOME, "Projects", "orchard-client");
   const historyFolder = path.join(HOME, ".claude/projects", projectSlug(historyRepo));
   fs.mkdirSync(historyFolder, { recursive: true });
+  const HISTORY_INPUT_DAYS = 85;
   let historyInputs = 0;
   let historyRuns = 0;
   for (const [index, day] of history.entries()) {
@@ -8141,9 +8142,11 @@ async function activityTokensMain(): Promise<void> {
     for (const [hour, minutes] of [[9, 120], [13, 150]] as const) {
       const start = day.start + hour * 3_600_000;
       turns.push({ start, minutes });
+      /* The request ledger keeps 90 days, so older days carry agent runs and no read input. */
+      if (index < history.length - HISTORY_INPUT_DAYS) continue;
       for (let offset = 0; offset <= minutes - 10; offset += 6) {
         const at = start + offset * 60_000;
-        fs.appendFileSync(path.join(activityDir, `requests-${new Date(at).toISOString().slice(0, 10)}.jsonl`), JSON.stringify({ v: 1, key: ledgerRowKey(`history-${index}-${offset}-${hour}`), at, kind: "message", surface: "desktop", project: "orchard-client" }) + "\n", { mode: 0o600 });
+        fs.appendFileSync(path.join(activityDir, `requests-${new Date(at).toISOString().slice(0, 10)}.jsonl`), JSON.stringify({ v: 2, key: ledgerRowKey(`history-${index}-${offset}-${hour}`), at, kind: "message", surface: "desktop", project: "orchard-client", author: TEAM_MEMBERS[0]!.id }) + "\n", { mode: 0o600 });
         historyInputs += 1;
       }
     }
@@ -8160,7 +8163,7 @@ async function activityTokensMain(): Promise<void> {
   }
   const localHistory = path.join(activityDir, "hosts", "workstation");
   fs.mkdirSync(localHistory, { recursive: true });
-  fs.writeFileSync(path.join(localHistory, "human-input.jsonl"), exportLines({ host: "workstation", coveredFrom: history[0]!.start - 86_400_000, coveredUntil: history.at(-1)!.end, exportedAt: now, records: 0, excluded: {} }, []));
+  fs.writeFileSync(path.join(localHistory, "human-input.jsonl"), exportLines({ host: "workstation", coveredFrom: history[history.length - HISTORY_INPUT_DAYS]!.start, coveredUntil: history.at(-1)!.end, exportedAt: now, records: 0, excluded: {} }, []));
   fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [] }));
   const failures: string[] = [];
   const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
