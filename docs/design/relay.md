@@ -1,5 +1,7 @@
 # External relay: an outside service asks, this install answers
 
+Rich answers, URL buttons and lease-bound media output: [install-side v2](relay-v2-rich-media-out.md).
+
 Status: Phase 1 implemented, backend and the settings UI of §B.9.
 This specification was written by the architect stage of the Phase 1 lane on
 2026-09-28. Baseline code claims were checked at `7a679e42` on `main`.
@@ -2232,7 +2234,7 @@ environment scrub, and keep separate flag sets.
 | No apps, plugins or connectors | `--disable apps --disable plugins` | `--strict-mcp-config` with no `--mcp-config` | [phase 0]: without them both engines expose the signed-in account's hosted apps or connectors |
 | **[rc]** The native web search, and no other web tool | `-c web_search=live` | `--tools WebSearch --allowedTools WebSearch` (no `WebFetch`) | E9 |
 | No sub-agent tools | per-run catalog without `multi_agent_version`; `--disable multi_agent` alone does not remove them | **[rc]** `--tools WebSearch --allowedTools WebSearch` (no agent tool); init tripwire | E2; E6; E8 |
-| No other acting tools | `--disable view_image`, catalog without `apply_patch_tool_type`, `--disable image_generation --disable goals --disable memories --disable browser_use --disable computer_use --disable sleep_tool` | **[rc]** `--tools WebSearch --allowedTools WebSearch`, `--restricted` | E3; E6; E8 |
+| No other acting tools; [negotiated image exception](relay-v2-rich-media-out.md#9-codex-native-image-generation) | `--disable view_image`, catalog without `apply_patch_tool_type`, `--disable image_generation --disable goals --disable memories --disable browser_use --disable computer_use --disable sleep_tool` | **[rc]** `--tools WebSearch --allowedTools WebSearch`, `--restricted` | E3; E6; E8 |
 | No personal instruction files | a dedicated answer `CODEX_HOME` with no `AGENTS.md`; `-c project_doc_max_bytes=0` blocks project files from the cwd and its ancestors | `--restricted --safe-mode`; cwd outside `$HOME` | E1; E6; test 7 |
 | No hooks | the answer home has no config, where Codex hooks live | `--safe-mode`; no `--settings` | Claude: E7. Codex: follows from the empty home (E1, E4) |
 | No MCP servers | `--ignore-user-config`; the answer home has no config | `--strict-mcp-config` | E4; E6 |
