@@ -13,7 +13,7 @@ import { ROLE_MEMORY_BOUND, CURATION_INTERVAL_MS, type RoleMemoryRule, type Rule
 import { scopeChars } from "../roleConsolidate";
 import { canonicalScope, leaveLessons, newRuleId, projectView, recordLessonRequest, learnedRulesBlock, roleMemoryCollection, roleScope, projectScope, restoreRule, deleteRule, storedLessonTexts } from "../roleStore";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
-import { claimPass, currentPass, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
+import { claimPass, currentPass, curationPanelRuns, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
 import { curatorCallerOf } from "./guard";
 import { readCuration } from "./read";
 import { productionCurationController } from "./run";
@@ -99,6 +99,32 @@ test("current curation selection and history ordering never copy the role archiv
     patchPass(live.id, { state: "succeeded", endedAt: at(9 * CURATION_INTERVAL_MS) });
     expect(currentPass(PROJECT)).toBeNull();
   } finally { copied.mockRestore(); }
+});
+
+test("the panel keeps the most recent completed pass beside a newer live pass", () => {
+  fixture();
+  const completed = pass();
+  patchPass(completed.id, { state: "succeeded", endedAt: at(1000), conversationId: "conversation_previous" });
+  const live = pass(NOW + CURATION_INTERVAL_MS + 2000);
+  patchPass(live.id, { state: "running", conversationId: "conversation_live" });
+
+  expect(curationPanelRuns(PROJECT)).toMatchObject({
+    live: { id: live.id, state: "running", conversationId: "conversation_live" },
+    last: { id: completed.id, state: "succeeded", conversationId: "conversation_previous" },
+  });
+});
+
+test("a successful no-op pass leaves pressure as the trigger but cannot claim again before the interval", () => {
+  const scope = roleScope(PROJECT, "builder");
+  Array.from({ length: 30 }, (_, i) => fixture(scope, {
+    rule: `Preserve the complete operational guidance for category ${i} before changing shared state. ${"additional guidance ".repeat(25)}`.slice(0, 300),
+  }));
+  const initial = pass();
+  ended(initial);
+
+  expect(curationStatus(PROJECT, NOW + 31 * 60_000)).toMatchObject({ due: false, trigger: "pressure", pressure: true, newLessons: 0 });
+  expect(pass(NOW + 31 * 60_000)).toBeNull();
+  expect(curationStatus(PROJECT, NOW + CURATION_INTERVAL_MS + 1001)).toMatchObject({ due: true, trigger: "pressure", pressure: true, newLessons: 0 });
 });
 function hostingFixture() {
   const registry = new AgentRegistry(path.join(dir, "registry.json"));
@@ -291,7 +317,7 @@ function refusal(p: CuratorPass, edit: CurationApply, code: string) {
   expect(JSON.stringify(roleMemoryCollection()!.snapshot())).toBe(before);
 }
 
-test("first pass, timed quiet pass, early ten lessons and failed-pass cooldown", () => {
+test("first pass, timed quiet pass, ten lessons and failed passes share the interval", () => {
   expect(curationStatus(PROJECT, NOW).due).toBe(false);
   fixture(); const p = pass(); expect(p).not.toBeNull(); expect(pass()).toBeNull();
   ended(p);
@@ -301,13 +327,13 @@ test("first pass, timed quiet pass, early ten lessons and failed-pass cooldown",
     const source: RuleSource = { project: PROJECT, pipelineId: "early", stageId: "build", attempt: n, roleId: "builder", fixRound: false, conversationId: ["conversation", "early"].join("_") };
     recordLessonRequest({ ...source, at: at(2000 + n) });
     leaveLessons({ request: source, source, lessons: [{ scope: "role", rule: `Inspect scope guidance before changing stored item ${n}.`, why }], none: null, now: at(2000 + n) });
-    expect(curationStatus(PROJECT, NOW + 3000).due).toBe(n === 9);
+    expect(curationStatus(PROJECT, NOW + 3000).due).toBe(false);
   }
   expect(pass(NOW + 3000)).toBeNull();
-  const early = pass(NOW + 31 * 60_000); expect(early).not.toBeNull();
-  patchPass(early.id, { state: "failed", endedAt: at(32 * 60_000), failure: "no-account" });
+  const early = pass(NOW + CURATION_INTERVAL_MS + 1000); expect(early).not.toBeNull();
+  patchPass(early.id, { state: "failed", endedAt: at(CURATION_INTERVAL_MS + 2000), failure: "no-account" });
   expect(curationStatus(PROJECT, NOW + 33 * 60_000).due).toBe(false);
-  expect(curationStatus(PROJECT, NOW + 32 * 60_000 + CURATION_INTERVAL_MS).due).toBe(true);
+  expect(curationStatus(PROJECT, NOW + 2 * CURATION_INTERVAL_MS + 2000).due).toBe(true);
 });
 test("claims serialize projects sharing a machine, with no live rules there is no pass", () => {
   fixture(); const first = pass();
@@ -329,11 +355,11 @@ test.each(["succeeded", "failed"] as const)("a %s pass counts later lessons and 
       ...(n % 2 ? { rewrite: { id: one, rule: `Inspect the current scope before applying condition ${n}.`, why } } : {}), none: null, now: at() });
     const status = curationStatus(PROJECT, NOW + 2000);
     expect(status.newLessons).toBe(n + 1);
-    expect(status.due).toBe(n === 9);
+    expect(status.due).toBe(false);
   }
   expect(pass(NOW + 2000)).toBeNull();
-  expect(pass(NOW + 31 * 60_000)).not.toBeNull();
-  expect(curationStatus(PROJECT, NOW + 31 * 60_000).newLessons).toBe(0);
+  expect(pass(NOW + CURATION_INTERVAL_MS + 1000)).not.toBeNull();
+  expect(curationStatus(PROJECT, NOW + CURATION_INTERVAL_MS + 1000).newLessons).toBe(0);
 });
 test("curator reads and the window distinguish rewrites across the same clock instant", async () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
@@ -581,7 +607,7 @@ test("project succession keeps completed pass history, undo and the next-run coo
     recordLessonRequest({ ...source, at: at(100) });
     leaveLessons({ request: source, source, lessons: [{ scope: "role", rule: `Check stored guidance before changing condition ${attempt}.`, why }], none: null, now: at(100) });
   }
-  expect(curationStatus("curation-renamed", NOW + 20 * 60_000).due).toBe(true);
+  expect(curationStatus("curation-renamed", NOW + 20 * 60_000).due).toBe(false);
   expect(claimPass({ project: "curation-renamed", repoDir: dir, now: NOW + 20 * 60_000 })).toBeNull();
   expect(revertCuratorPass(p.id, at(2000))).toEqual({ skipped: [] });
 });
@@ -645,7 +671,7 @@ test("project succession counts destination lessons against their own claim hist
 
   const status = curationStatus(targetProject, NOW + 31 * 60_000);
   expect(status.newLessons).toBe(10);
-  expect(status.due).toBe(true);
+  expect(status.due).toBe(false);
 });
 test("post-succession same-time curator rankings remain a later undo guard", () => {
   const sourceScope = roleScope(PROJECT, "builder"), targetProject = "curation-renamed";
@@ -838,7 +864,7 @@ test("stubbed launch, restart reconcile and settle keep no board card", async ()
   expect(projectView(PROJECT).curation?.passes[0].state).toBe("succeeded");
 });
 
-test("ninety percent schedules early curation, a full scope keeps unseen lessons through a failed pass", async () => {
+test("pressure survives a failed pass, and the durable interval bounds retries after restart", async () => {
   const scope = roleScope(PROJECT, "builder");
   const ids = Array.from({ length: 26 }, (_, i) => fixture(scope, { rule: `Check ownership category ${i} before publication. ${"guidance ".repeat(29)}`.slice(0, 300), curatedAt: at() }));
   const initial = pass(); ended(initial);
@@ -851,29 +877,29 @@ test("ninety percent schedules early curation, a full scope keeps unseen lessons
     added.push(lesson.id);
     expect(lesson.archived.some(id => added.includes(id))).toBe(false);
     if (i === 0) expect(curationStatus(PROJECT, NOW + 31 * 60_000).due).toBe(false);
-    if (i === 1) expect(curationStatus(PROJECT, NOW + 31 * 60_000).due).toBe(true);
+    if (i === 1) expect(curationStatus(PROJECT, NOW + 31 * 60_000)).toMatchObject({ due: false, pressure: true });
   }
   // Real write paths must never archive a never-curated rule for budget.
   expect(roleMemoryCollection()!.snapshot().filter(row => row.kind === "rule" && row.reason === "budget" && !row.curatedAt)).toEqual([]);
-  const early = pass(NOW + 31 * 60_000);
+  const early = pass(NOW + CURATION_INTERVAL_MS + 1000);
   expect(early).not.toBeNull();
-  patchPass(early.id, { state: "failed", endedAt: at(32 * 60_000), failure: "fixture failure" });
+  patchPass(early.id, { state: "failed", endedAt: at(CURATION_INTERVAL_MS + 2000), failure: "fixture failure" });
   for (const id of added) expect(row(id).state).toBe("active");
-  expect(pass(NOW + 33 * 60_000)).toBeNull();
-  const script = `import { curationStatus, claimPass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify({ due: curationStatus(${JSON.stringify(PROJECT)}, ${NOW + 33 * 60_000}).due, claimed: !!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + 33 * 60_000} }) }));`;
+  expect(pass(NOW + CURATION_INTERVAL_MS + 33 * 60_000)).toBeNull();
+  const script = `import { curationStatus, claimPass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify({ due: curationStatus(${JSON.stringify(PROJECT)}, ${NOW + CURATION_INTERVAL_MS + 33 * 60_000}).due, claimed: !!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + CURATION_INTERVAL_MS + 33 * 60_000} }) }));`;
   const restarted = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
   const [exit, output, error] = await Promise.all([restarted.exited, new Response(restarted.stdout).text(), new Response(restarted.stderr).text()]);
   expect(exit).toBe(0); expect(error).toBe("");
-  expect(JSON.parse(output)).toEqual({ due: true, claimed: false });
-  const retried = pass(NOW + 62 * 60_000);
+  expect(JSON.parse(output)).toEqual({ due: false, claimed: false });
+  const retried = pass(NOW + 2 * CURATION_INTERVAL_MS + 2000);
   expect(retried).not.toBeNull();
   const active = [...ids, ...added].filter(id => row(id).state === "active");
-  applyCuration(retried, input({ [scope]: active }));
+  applyCuration(retried, input({ [scope]: active }), at(2 * CURATION_INTERVAL_MS + 3000));
   for (const id of added) expect(row(id).curatedAt).toBeTruthy();
-  expect(curationStatus(PROJECT, NOW + 63 * 60_000).due).toBe(false);
+  expect(curationStatus(PROJECT, NOW + 2 * CURATION_INTERVAL_MS + 63 * 60_000).due).toBe(false);
 });
 
-test("aliased physical scopes share the early curation pressure threshold", () => {
+test("aliased physical scopes share the pressure threshold within the interval", () => {
   const oldScope = roleScope(PROJECT, "builder");
   const currentProject = "curation-pressure-renamed";
   const currentScope = roleScope(currentProject, "builder");
@@ -902,7 +928,7 @@ test("aliased physical scopes share the early curation pressure threshold", () =
   expect(scopeChars(merged.map(id => row(id)))).toBeGreaterThanOrEqual(ROLE_MEMORY_BOUND * 0.9);
   expect(oldRules.every(id => row(id).state === "active")).toBe(true);
   expect(currentRules.every(id => row(id).state === "active")).toBe(true);
-  expect(curationStatus(currentProject, NOW + 31 * 60_000)).toMatchObject({ due: true, newLessons: 1 });
+  expect(curationStatus(currentProject, NOW + 31 * 60_000)).toMatchObject({ due: false, pressure: true, newLessons: 1 });
 });
 
 test("a scope containing only unseen lessons may exceed budget until a bounded curator partition commits", () => {
@@ -943,13 +969,13 @@ test("warm curation status skips payload reads and invalidates after a durable s
 });
 
 
-test("early pressure is dispatched even when a quieter project has a newer wake", async () => {
+test("an interval-due pressured project is dispatched while a newer quiet project waits", async () => {
   const quiet = "quiet-fixture";
   fixture(roleScope(quiet, "builder"), { curatedAt: at() });
   ended(pass(NOW - 2 * 60 * 60_000, quiet), -60 * 60_000);
   const scope = roleScope(PROJECT, "builder");
   for (let i = 0; i < 26; i++) fixture(scope, { rule: `Inspect ownership category ${i}. ${"guidance ".repeat(35)}`.slice(0, 300), curatedAt: at() });
-  ended(pass(NOW - 2 * 60 * 60_000), -60 * 60_000);
+  ended(pass(NOW - 8 * 60 * 60_000), -7 * 60 * 60_000);
   for (let i = 0; i < 2; i++) fixture(scope, { rule: `Inspect pending category ${i}. ${"guidance ".repeat(35)}`.slice(0, 300) });
   expect(curationStatus(quiet, NOW).due).toBe(false);
   expect(curationStatus(PROJECT, NOW)).toMatchObject({ due: true, newLessons: 0 });
@@ -958,6 +984,80 @@ test("early pressure is dispatched even when a quieter project has a newer wake"
   expect(f.bodies).toHaveLength(1); expect(f.bodies[0].project).toBe(PROJECT);
 });
 
+
+test("a successful no-op leaves pressure but cannot relaunch at the old cooldown", async () => {
+  const scope = roleScope(PROJECT, "builder");
+  for (let i = 0; i < 32; i++) fixture(scope, { rule: `Inspect retained category ${i}. ${"guidance ".repeat(35)}`.slice(0, 300) });
+  const first = pass(); ended(first);
+  // Ending a turn does not rank scopes: only applyCuration stamps curatedAt.
+  expect(curationStatus(PROJECT, NOW + 31 * 60_000)).toMatchObject({ pressure: true, due: false });
+  expect(pass(NOW + 31 * 60_000)).toBeNull();
+  const script = `import { curationStatus, claimPass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify({ before: !!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + CURATION_INTERVAL_MS} }), at: !!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + CURATION_INTERVAL_MS + 1000} }) }));`;
+  const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [exit, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(exit).toBe(0); expect(error).toBe(""); expect(JSON.parse(output)).toEqual({ before: false, at: true });
+});
+
+test("curator off survives restart and is independent of board maintenance", async () => {
+  const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  fixture();
+  writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), curation: { enabled: false, intervalHours: 12, updatedAt: at(), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } } });
+  const f = hostingFixture(); f.seat();
+  expect(await f.controller.launchIfDue(f.tick)).toContain("curator off");
+  expect(f.bodies).toHaveLength(0); expect(pass()).toBeNull();
+  const script = `import { claimPass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify(!!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + 24 * 3600000} })));`;
+  const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [exit, output] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+  expect(exit).toBe(0); expect(JSON.parse(output)).toBe(false);
+});
+
+test("turning curator off while liveness is pending refuses deferred launch", async () => {
+  const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  fixture(); const f = hostingFixture(); f.seat();
+  const original = f.sources.liveness;
+  f.sources.liveness = async input => {
+    const records = await original(input);
+    writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), curation: { enabled: false, intervalHours: 6, updatedAt: at(), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } } });
+    return records;
+  };
+  expect(await f.controller.launchIfDue(f.tick)).toContain("curator off"); expect(f.bodies).toHaveLength(0);
+});
+
+
+test("the configured twelve-hour interval survives a fresh process", async () => {
+  const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  fixture(); const first = pass(); ended(first);
+  writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), curation: { enabled: true, intervalHours: 12, updatedAt: at(), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } } });
+  const script = `import { claimPass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify({ six: !!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + CURATION_INTERVAL_MS + 1000} }), twelve: !!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + 2 * CURATION_INTERVAL_MS + 1000} }) }));`;
+  const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [exit, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(exit).toBe(0); expect(error).toBe(""); expect(JSON.parse(output)).toEqual({ six: false, twelve: true });
+});
+
+
+test("the panel reads persisted conversation, counts, last result and next eligibility", async () => {
+  const { curationAnswer } = await import("./answer");
+  const { defaultSeatTickSettings, effectiveSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  const id = fixture(); const p = pass();
+  applyCuration(p, input({ [roleScope(PROJECT, "builder")]: [id] }), at(500));
+  patchPass(p.id, { conversationId: "conversation_curator_result" }); ended(p);
+  const settings = effectiveSeatTickSettings(defaultSeatTickSettings(PROJECT), NOW + 2000, 3600000);
+  expect(curationAnswer(PROJECT, settings, NOW + 2000)).toMatchObject({ enabled: true, intervalHours: 6, live: null,
+    lastRun: { id: p.id, state: "succeeded", conversationId: "conversation_curator_result", endedAt: at(1000), counts: { calls: 1 } },
+    nextRunAt: at(1000 + CURATION_INTERVAL_MS), waitingOn: null });
+  expect(curationAnswer(PROJECT, { ...settings, enabled: false }, NOW + 2000)).toMatchObject({ waitingOn: "wakes-off", nextRunAt: null });
+});
+
+test("an unreadable curation store keeps its timer controls and reports an error", async () => {
+  const { curationAnswer } = await import("./answer");
+  const store = await import("./store");
+  const { defaultSeatTickSettings, effectiveSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  const broken = spyOn(store, "curationPanelRuns").mockImplementation(() => { throw Error("fixture curation store unavailable"); });
+  try {
+    expect(curationAnswer(PROJECT, effectiveSeatTickSettings(defaultSeatTickSettings(PROJECT), NOW, 3600000), NOW)).toMatchObject({
+      enabled: true, intervalHours: 6, nextRunAt: null, runsError: "fixture curation store unavailable" });
+  } finally { broken.mockRestore(); }
+});
 
 test.each(["off","sqlite"] as const)("curator authority is equivalent through the keyed %s registry view", mode => {
   fixture(); const p = pass();

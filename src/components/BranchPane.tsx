@@ -299,9 +299,10 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
        unclipped wrapper — inside the section they would stack against the
        colored engine marker and get cut by its overflow-hidden. */
     <div
-      className={`relative flex min-h-0 min-w-0 flex-1 ${tone.glow ? "pane-attention" : ""}`}
+      className="relative flex min-h-0 min-w-0 flex-1"
       style={tone.glow ? ({ "--pane-glow": tone.glow } as React.CSSProperties) : undefined}
     >
+      {tone.glow ? <span aria-hidden className="pane-attention-ring"><span className="pane-attention-comets" /></span> : null}
       {/* The favorited-state crown perched on the top edge (issue #224); lives on
           this unclipped wrapper so it can overhang the card frame from above. */}
       {showFavorite ? <FavoriteCrownMarker id={cardId} touch={isMobile} /> : null}

@@ -28,7 +28,7 @@ import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceC
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
 import { roleAvatarDarkCss } from "@/components/brand/roleAvatarDarkCss";
-import { browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
+import { browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureAttentionRing, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -33361,6 +33361,37 @@ describe("independent panel scroll", () => {
 });
 
 
+describe("attention cues stay off the main thread beside the composer", () => {
+  /*
+   * Typing in a conversation that waits for the operator lagged: its ring
+   * repainted every frame on the main thread, the thread that answers the key
+   * (input-to-paint 56 ms with the ring, 16 ms without). The ring now turns by
+   * transform on the compositor. Over the fixture's waiting conversation, at
+   * 1440 and 900 px in both themes: the animation is `transform` alone on the
+   * 3.4s lap and the comets turn; the ring matches the previous drawing at five
+   * angles; reduced motion stills it; the ring, the shadow-growing halos, a running
+   * agent's glyph and the pulsing dots hold while the composer has the focus.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "attention cues stay off the main thread"
+   *
+   * Readings go to `evidence/attention-ring/desktop.json`; frames to
+   * `.artifacts/attention-ring/desktop/`.
+   */
+  browserTest("the ring turns on the compositor and matches the previous drawing", async () => {
+    const out = path.resolve(".artifacts/attention-ring/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      const result = await captureAttentionRing(browser, server.base, out, false);
+      fs.mkdirSync("evidence/attention-ring", { recursive: true });
+      fs.writeFileSync("evidence/attention-ring/desktop.json", JSON.stringify(result, null, 2) + "\n");
+      expect(result.failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
 describe("cold board summary", () => {
   browserTest("saved and refined boards match through an empty store and document reload", async () => {
     const out = path.resolve(".artifacts/cold-board-summary");
@@ -34266,6 +34297,104 @@ describe("overlays opened from a conversation draw above the full-screen view th
       fs.writeFileSync("evidence/reader-overlays/preview-geometry.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
     } finally { await browser.close(); browserServer.close(); server.stop(); }
   }, 1_500_000);
+});
+
+describe("role memory curator in the seat tick panel", () => {
+  browserTest("curation status and controls fit desktop and 390px in every state, theme and language", async () => {
+    const out = path.resolve(".artifacts/role-memory-curator/panel");
+    fs.mkdirSync(out, { recursive: true });
+    const tick = {
+      project: "atlas", changed: false, at: "2026-10-01T12:00:00Z",
+      settings: { project: "atlas", enabled: true, wakeIntervalMinutes: null, reason: null, monitorPrompt: null, until: null, updatedAt: null, setBy: null },
+      effective: { enabled: true, wakeIntervalMinutes: 60, reason: null, monitorPrompt: null, until: null, isDefault: true, configured: false, lapsed: false, updatedAt: null },
+      defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
+      state: null, stateError: null, lastRun: null, lastDelivery: null, journalError: null,
+      maintenance: { enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
+        live: null, lastRun: null, nextEligibleAt: null, nextRunAt: null, waitingOn: "disabled", pauseReason: null, runsError: null },
+    };
+    const counts = { calls: 3, changed: 8, rewritten: 2, merged: 1, moved: 0, split: 0, archived: 5, restored: 0 };
+    const zeroCounts = { calls: 0, changed: 0, rewritten: 0, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 };
+    const completed = { id: "curate_fixture", state: "succeeded", claimedAt: "2026-10-17T10:00:00Z", endedAt: "2026-10-17T10:15:00Z",
+      conversationId: "conversation_curator_fixture", failure: null, counts };
+    const states = ["on", "off", "starting", "running", "failed", "never"] as const;
+    const curationFor = (state: typeof states[number]) => {
+      const base = { enabled: state !== "off", intervalHours: 12, intervalMs: 43200000, defaultIntervalHours: 6, minIntervalHours: 1, maxIntervalHours: 168, updatedAt: null,
+        live: null, lastRun: null, nextRunAt: "2026-10-17T22:15:00Z", waitingOn: null as string | null, runsError: null };
+      if (state === "off") return { ...base, waitingOn: "off" };
+      if (state === "starting") return { ...base, live: { ...completed, id: "curate_starting", state: "launching", endedAt: null, conversationId: "conversation_curator_starting", counts: zeroCounts }, waitingOn: "live-run" };
+      if (state === "running") return { ...base, live: { ...completed, id: "curate_live", state: "running", endedAt: null, conversationId: "conversation_curator_live", counts: zeroCounts }, lastRun: completed, waitingOn: "live-run" };
+      if (state === "failed") return { ...base, lastRun: { ...completed, id: "curate_failed", state: "failed", endedAt: "2026-10-17T10:15:00Z", conversationId: "conversation_curator_failed", failure: "fixture failure", counts: zeroCounts } };
+      if (state === "never") return { ...base, nextRunAt: null, waitingOn: "no-rules" };
+      return { ...base, lastRun: completed };
+    };
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const readings: unknown[] = [];
+    try {
+      for (const state of states) {
+        const server = await serveEvidenceFixture(out, undefined, {
+          "/api/monitor/seat-tick/settings": { ...tick, curation: curationFor(state) },
+          "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
+          "/api/board/maintenance/worktrees": () => { throw new Error("Maintenance UI called the recovery diagnostic"); },
+        });
+        try {
+          for (const width of [1440, 1000, 390]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+            const phone = width === 390;
+            const height = phone ? 844 : width === 1000 ? 700 : 900;
+            const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`, { width, height }, theme, lang, "reduce", phone);
+            try {
+              await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+              if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+              else {
+                await page.locator("[data-kanban-seat]").waitFor();
+                if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+              }
+              const seat = page.locator(phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat]");
+              await seat.locator("[data-seat-tick-thumb]").click();
+              const panel = page.locator("[data-seat-tick-curation]:visible").first();
+              await panel.waitFor();
+              await panel.scrollIntoViewIfNeeded();
+              expect(await panel.locator("[data-seat-tick-curation-interval]").count()).toBe(state === "off" ? 0 : 1);
+              const last = panel.locator('[data-seat-tick-curation-row="last"]');
+              const next = panel.locator('[data-seat-tick-curation-row="next"]');
+              if (state === "on") {
+                expect(await panel.locator("[data-seat-tick-curation-conversation]").getAttribute("href")).toBe("#c=conversation_curator_fixture");
+                expect(await panel.locator("[data-seat-tick-curation-counts]").innerText()).toBe(lang === "en" ? "3 calls · 8 changed · 2 rewritten · 1 merged · 5 archived" : "3 виклики · 8 змінено · 2 переписано · 1 об’єднано · 5 заархівовано");
+                expect(await last.innerText()).toContain(lang === "en" ? "done" : "готово");
+                expect(await next.innerText()).toContain(lang === "en" ? "about" : "близько");
+              } else if (state === "off") {
+                expect(await next.innerText()).toContain(lang === "en" ? "none while curator is off" : "немає, поки куратор вимкнений");
+                expect(await last.innerText()).toContain(lang === "en" ? "never" : "ще не було");
+              } else if (state === "running") {
+                expect(await panel.locator('[data-seat-tick-curation-row="running"]').innerText()).toContain(lang === "en" ? "Running since" : "Працює з");
+                expect(await panel.locator("[data-seat-tick-curation-live-conversation]").getAttribute("href")).toBe("#c=conversation_curator_live");
+                expect(await last.innerText()).toContain(lang === "en" ? "done" : "готово");
+                expect(await panel.locator("[data-seat-tick-curation-conversation]").getAttribute("href")).toBe("#c=conversation_curator_fixture");
+                expect(await next.innerText()).toContain(lang === "en" ? "after the current run" : "після поточного запуску");
+              } else if (state === "starting") {
+                expect(await panel.locator('[data-seat-tick-curation-row="running"]').innerText()).toContain(lang === "en" ? "Starting since" : "Запускається з");
+                expect(await panel.locator("[data-seat-tick-curation-live-conversation]").getAttribute("href")).toBe("#c=conversation_curator_starting");
+                expect(await last.innerText()).toContain(lang === "en" ? "never" : "ще не було");
+                expect(await next.innerText()).toContain(lang === "en" ? "after the current run" : "після поточного запуску");
+              } else if (state === "failed") {
+                expect(await last.innerText()).toContain(lang === "en" ? "failed" : "не вдалося");
+                expect(await last.locator("[data-seat-tick-curation-counts]").count()).toBe(0);
+              } else {
+                expect(await last.innerText()).toContain(lang === "en" ? "never" : "ще не було");
+                expect(await next.innerText()).toContain(lang === "en" ? "waiting for role memory rules" : "очікує на правила пам’яті ролей");
+              }
+              const fits = await panel.evaluate(element => element.scrollWidth <= element.clientWidth);
+              expect(fits).toBe(true);
+              expect(pageErrors).toEqual([]);
+              await panel.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${state}-curation.png`) });
+              readings.push({ width, lang, theme, state, reachable: true, intervalHours: 12, fits, pageErrors });
+            } finally { await context.close(); }
+          }
+        } finally { server.stop(); }
+      }
+      fs.mkdirSync("evidence/role-memory-curator", { recursive: true });
+      fs.writeFileSync("evidence/role-memory-curator/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); }
+  }, 120_000);
 });
 
 describe("relay reply-chain conversation list", () => {

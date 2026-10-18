@@ -1,3 +1,4 @@
+import { curationAnswer, type CurationAnswer } from "@/lib/memory/curation/answer";
 import { autonomyActive, type AutonomySetting } from "./autonomy";
 import { viewerOwnProjectKeys } from "./seatTickSources";
 import { releaseStatus, type ReleaseStatus } from "@/lib/release/answer";
@@ -95,6 +96,7 @@ export interface SeatTickSettingsAnswer {
     windowKnown: boolean | null; lastAttempt: (AutoRotationAttempt & { nextAttemptAt: string }) | null;
     setBy: SeatTickSettingsActor | null; updatedAt: string | null; why: string | null };
   maintenance: BoardMaintenanceAnswer;
+  curation?: CurationAnswer;
   project: string;
   /** Whether this request wrote the record. A read, and a change with no
       fields, answer false — as the tool's does. */
@@ -272,6 +274,7 @@ export function seatTickSettingsAnswer(
       windowKnown: active ? contextWindowPolicyFor(conversation?.engine ?? active.engine ?? null, conversation?.generations.at(-1)?.launchProfile?.model ?? active.model ?? null) !== null : null,
       lastAttempt: autoAttempt?.state === "failed" ? { ...autoAttempt, nextAttemptAt: autoRotationRetryAt(autoAttempt) } : null,
       setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null },
+    curation: curationAnswer(project, effective, now),
     maintenance: boardMaintenanceAnswer(project, effective, { now, lastCheckAt: state?.lastCheckAt ?? null, checkIntervalMs: policy?.checkIntervalMs ?? null }),
     project,
     changed,

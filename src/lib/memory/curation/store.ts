@@ -1,3 +1,4 @@
+import { effectiveCurationSetting, readSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
@@ -8,7 +9,7 @@ import { canonicalScope, projectScope, roleMemoryCollection, roleScope } from ".
 import { crossProjectRoleScope, MACHINE_SCOPE } from "../roleScopes";
 import { scopeChars } from "../roleConsolidate";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { ROLE_MEMORY_BOUND, type RoleMemoryRule, type RoleMemoryScopeRow, CURATION_CLAIM_COOLDOWN_MS, CURATION_INTERVAL_MS, CURATION_NEW_LESSONS, type CuratorPassView } from "../roleTypes";
+import { ROLE_MEMORY_BOUND, type RoleMemoryRule, type RoleMemoryScopeRow, CURATION_NEW_LESSONS, type CuratorPassView } from "../roleTypes";
 
 export interface CuratorPass extends CuratorPassView {
   kind: "pass";
@@ -119,11 +120,11 @@ function databaseIdentity() {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing"; throw error; }
 }
 function collectionRevision() { const held = collection(); return held ? `${held.signature()}:${held.revision()}` : "missing"; }
-type CurationSummary = { active: boolean; pressure: boolean; newLessons: number; lastAt: string | null };
+type CurationSummary = { active: boolean; pressure: boolean; newLessons: number; lastAt: string | null; lastClaimAt: string | null };
 // Compiled Viewer bundles share one LRU owner; only 32 tiny summaries survive.
 const shared = globalThis as typeof globalThis & { __llvCurationSummaries?: Map<string, { stamp: string; summary: CurationSummary }> };
 const summaries = shared.__llvCurationSummaries ??= new Map();
-export function curationStatus(project: string, now = Date.now()) {
+export function curationStatus(project: string, now = Date.now(), setting = effectiveCurationSetting(readSeatTickSettings(canonicalProject(project)))) {
   return withViewerOperation("memory.curation-status", () => {
     const collection = roleMemoryCollection();
     const key = `${statePath("state.sqlite")}:${canonicalProject(project)}`;
@@ -155,25 +156,32 @@ export function curationStatus(project: string, now = Date.now()) {
         }
       }
       // Aliased physical rows represent one scope in the launch snapshot. Apply
-      // the early trigger to their deduplicated canonical rule set as a whole.
+      // pressure to their deduplicated canonical rule set as a whole.
       for (const rules of activeByCanonicalScope.values()) {
         const scopeRules = [...rules.values()];
         // A full, already-curated scope does not cause an endless sequence of passes.
         pressure ||= scopeRules.some(rule => !rule.curatedAt) && scopeChars(scopeRules) >= ROLE_MEMORY_BOUND * 0.9;
       }
-      summary = { active, pressure, newLessons, lastAt: held?.lastAt ?? null };
+      summary = { active, pressure, newLessons, lastAt: held?.lastAt ?? null, lastClaimAt: held?.lastClaimAt ?? null };
       summaries.delete(key); summaries.set(key, { stamp, summary });
       while (summaries.size > 32) summaries.delete(summaries.keys().next().value!);
     }
-    const { active, pressure, newLessons, lastAt } = summary;
-    const due = active && (!lastAt || pressure || newLessons >= CURATION_NEW_LESSONS || now - Date.parse(lastAt) >= CURATION_INTERVAL_MS);
-    return { active, due, newLessons, lastAt, nextAt: active ? new Date(due ? now : Date.parse(lastAt!) + CURATION_INTERVAL_MS).toISOString() : null };
+    const { active, pressure, newLessons, lastAt, lastClaimAt } = summary;
+    // Every trigger spends the same durable interval, including failed/no-op
+    // passes that leave unseen rules above the pressure threshold.
+    const anchor = [lastAt, lastClaimAt].filter((at): at is string => !!at).sort().at(-1);
+    const eligibleAt = anchor ? Date.parse(anchor) + setting.intervalMs : now;
+    const due = setting.enabled && active && now >= eligibleAt;
+    const trigger = !anchor ? "initial" : pressure ? "pressure" : newLessons >= CURATION_NEW_LESSONS ? "new-lessons" : "interval";
+    return { active, due, pressure, trigger, newLessons, lastAt, lastClaimAt, nextAt: setting.enabled && active ? new Date(Math.max(now, eligibleAt)).toISOString() : null };
+
   });
 }
-export function claimPass(input: { project: string; repoDir: string | null; now: number }): CuratorPass | null {
+export function claimPass(input: { project: string; repoDir: string | null; now: number; setting?: ReturnType<typeof effectiveCurationSetting> }): CuratorPass | null {
   const project = canonicalProject(input.project);
   const prior = projectRow(project);
-  const status = curationStatus(project, input.now);
+  const setting = input.setting ?? effectiveCurationSetting(readSeatTickSettings(project));
+  const status = curationStatus(project, input.now, setting);
   if (!status.due) return null;
   const scopes = passScopes(project);
   const claimRevisions: Record<string, number> = Object.fromEntries(scopes.map(scope => [scope, 0]));
@@ -186,7 +194,7 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
     if (machine?.kind === "machine" && machine.current) { const pass = tx.get(`r:${machine.current}`); if (pass?.kind === "pass" && passIsLive(pass)) return null; }
     const stored = tx.get(`p:${project}`);
     const held = combineProjectRows(project, [...(prior ? [prior] : []), ...(stored?.kind === "project" ? [stored] : [])]);
-    if (held && input.now - Date.parse(held.lastClaimAt) < CURATION_CLAIM_COOLDOWN_MS) return null;
+    if (held && input.now < Math.max(Date.parse(held.lastClaimAt), held.lastAt ? Date.parse(held.lastAt) : 0) + setting.intervalMs) return null;
     const claimedAt = new Date(input.now).toISOString();
     const id = `curate_${createHash("sha256").update(`${project}:${claimedAt}`).digest("hex").slice(0, 24)}`;
     if (tx.get(`r:${id}`)) return null;
@@ -224,4 +232,24 @@ export function curationView(project: string, now = Date.now()) {
     return [{ id, state, claimedAt, endedAt, failure, counts, ...(revertedAt ? { revertedAt } : {}), ...(skipped ? { skipped } : {}) }];
   });
   return { lastAt, nextAt, newLessons, passes };
+}
+
+/** Panel polling reads two pass records, independent of retained history size. */
+export function curationPanelRuns(project: string) {
+  const rows = projectRows(project);
+  let latestCompleted: CuratorPass | null = null;
+  for (const row of rows) {
+    // Pass ids are appended in claim order. The newest entry can be the live
+    // pass, so walk back only to this row's newest completed pass; never
+    // materialize the retained history for a panel read.
+    for (let index = row.passes.length - 1; index >= 0; index--) {
+      const pass = passMetadata(row.passes[index]!);
+      if (!pass) continue;
+      if (passIsLive(pass)) continue;
+      if (!latestCompleted || pass.claimedAt > latestCompleted.claimedAt) latestCompleted = pass;
+      break;
+    }
+  }
+  const current = rows.map(row => row.current ? passMetadata(row.current) : null).find(passIsLive) ?? null;
+  return { live: current ? readPass(current.id) : null, last: latestCompleted ? readPass(latestCompleted.id) : null };
 }
