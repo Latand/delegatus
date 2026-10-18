@@ -1,4 +1,5 @@
-import { loadPipelines, loadArchivedPipelines } from "@/lib/pipelines/store";
+import { pipelineSelectionSource } from "@/lib/pipelines/store";
+import { readHistoryProjection, historyAttemptCounts } from "@/lib/state/historyProjection";
 import { listRoles, roleScaffoldBody, roleFenceBlock } from "@/lib/roles/registry";
 import { defaultRoleParameterValue } from "@/lib/roles/parameters";
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -10,8 +11,11 @@ import type { CuratorPass } from "./store";
 
 const PAGE_BYTES = 24_000;
 /** Local evidence stays local; cursors are bound to the scope's revision. */
-export function readCuration(pass: CuratorPass, scope?: string, cursor?: string, now = Date.now()) {
+export async function readCuration(pass: CuratorPass, scope?: string, cursor?: string, now = Date.now()) {
+  if (scope && !pass.scopes.some(key => canonicalScope(key) === canonicalScope(scope))) throw new RoleMemoryRefusal("CURATE_SCOPE", "scope does not belong to this pass");
   const project = canonicalProject(pass.project);
+  if (scope) pipelineSelectionSource();
+  const attempts = scope ? await readHistoryProjection(db => historyAttemptCounts(db, project, now), { collections: ["pipelines","pipelines_archive"] }) : {};
   const scopes = [...new Set(pass.scopes.map(canonicalScope))];
   const view = projectView(project, now);
   const all = roleMemoryCollection()?.snapshot() ?? [];
@@ -45,17 +49,6 @@ export function readCuration(pass: CuratorPass, scope?: string, cursor?: string,
     ...(rules?.left.filter(rule => rule.reason === "budget" || rule.changedAt > departuresSince).map(({ versions, ...rule }) => ({ kind: "left", ...rule, versionCount: versions?.length ?? 0 })) ?? []),
   ];
   if (role && !isCrossProjectRoleScope(resolvedScope)) entries.push(...all.flatMap(row => row.kind === "rule" && row.state === "active" && !row.versionOf && canonicalScope(row.scope) !== resolvedScope && scopeRole(row.scope) === role && !isCrossProjectRoleScope(row.scope) ? [{ kind: "other-project", id: row.id, scope: canonicalScope(row.scope), rule: row.rule, why: row.why, readOnly: true }] : []));
-  const attempts: Record<string, number> = {};
-  for (const pipeline of [...loadPipelines(), ...loadArchivedPipelines()]) if (canonicalProject(pipeline.project) === project) {
-    for (const run of pipeline.runs) {
-      const roleId = pipeline.stages.find(s => s.id === run.stageId)?.role?.roleId ?? "unassigned";
-      attempts[roleId] ??= 0;
-      for (const attempt of run.attempts) if (attempt.startedAt && Date.parse(attempt.startedAt) <= now && now - Date.parse(attempt.startedAt) <= 30 * 24 * 60 * 60_000) {
-        const actualRole = attempt.effectiveRole?.roleId ?? roleId;
-        attempts[actualRole] = (attempts[actualRole] ?? 0) + 1;
-      }
-    }
-  }
   const meta = { pass: pass.id, scope: resolvedScope, revision, chars: rules?.chars ?? scopeChars([]), bound: ROLE_MEMORY_BOUND, attempts, scaffold };
   const page: Record<string, unknown>[] = [];
   let bytes = Buffer.byteLength(JSON.stringify(meta)) + 512;
