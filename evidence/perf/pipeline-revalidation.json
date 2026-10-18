@@ -1,0 +1,291 @@
+{
+  "procedure": "docs/perf/pipeline-revalidation.md#reproduce",
+  "initialBefore": {
+    "case": "P2",
+    "at": "2026-10-18T19:29:11.897Z",
+    "bun": "1.4.0",
+    "rowBytes": 583727,
+    "firstMs": 31.93393999999998,
+    "runs": [
+      {
+        "load": [
+          5.32,
+          5.42,
+          6.66
+        ],
+        "medianMs": 2.393464999999992,
+        "p95Ms": 4.424463000000003,
+        "maxMs": 8.865780999999998
+      },
+      {
+        "load": [
+          5.32,
+          5.42,
+          6.66
+        ],
+        "medianMs": 2.214466000000016,
+        "p95Ms": 3.9026830000000245,
+        "maxMs": 5.142830000000004
+      },
+      {
+        "load": [
+          5.32,
+          5.42,
+          6.66
+        ],
+        "medianMs": 2.0783400000000256,
+        "p95Ms": 3.4207839999999123,
+        "maxMs": 4.154890000000023
+      },
+      {
+        "load": [
+          5.14,
+          5.38,
+          6.64
+        ],
+        "medianMs": 2.05575500000009,
+        "p95Ms": 3.4397750000002816,
+        "maxMs": 4.642753000000084
+      },
+      {
+        "load": [
+          5.14,
+          5.38,
+          6.64
+        ],
+        "medianMs": 2.1125059999999394,
+        "p95Ms": 3.5350870000002033,
+        "maxMs": 5.155935000000227
+      }
+    ]
+  },
+  "pacedComparison": {
+    "cpuMax": "60000 20000",
+    "sourceBase": "c8e748731896f50a59349d4829b4d8cb97a6d916",
+    "case": "P2-paced",
+    "at": "2026-10-18T19:47:34.642Z",
+    "bun": "1.4.0",
+    "rowBytes": 583727,
+    "rowSha256": "573e06802cf40a15fa3e375a14eef77e93444703f48502f92687a067c154867d",
+    "hotRows": 247,
+    "pairs": [
+      {
+        "before": {
+          "wallMs": 4.979016000000001,
+          "maxLoopGapMs": 0.7628869999999779,
+          "cpuMs": 5.336,
+          "load": [
+            8.29,
+            6.76,
+            6.12
+          ],
+          "result": 516271
+        },
+        "after": {
+          "wallMs": 0.25381800000013754,
+          "maxLoopGapMs": 0.08101699999997436,
+          "cpuMs": 0.325,
+          "load": [
+            8.29,
+            6.76,
+            6.12
+          ],
+          "result": 516271
+        }
+      },
+      {
+        "before": {
+          "wallMs": 4.104751000000078,
+          "maxLoopGapMs": 0.06787899999994806,
+          "cpuMs": 4.622,
+          "load": [
+            8.29,
+            6.76,
+            6.12
+          ],
+          "result": 516271
+        },
+        "after": {
+          "wallMs": 0.11421699999982593,
+          "maxLoopGapMs": 0.06968200000005709,
+          "cpuMs": 0.117,
+          "load": [
+            8.27,
+            6.78,
+            6.13
+          ],
+          "result": 516271
+        }
+      },
+      {
+        "before": {
+          "wallMs": 3.4786009999997987,
+          "maxLoopGapMs": 0.0821099999998296,
+          "cpuMs": 4.319,
+          "load": [
+            8.27,
+            6.78,
+            6.13
+          ],
+          "result": 516271
+        },
+        "after": {
+          "wallMs": 0.13794999999981883,
+          "maxLoopGapMs": 0.0658610000000408,
+          "cpuMs": 0.141,
+          "load": [
+            8.27,
+            6.78,
+            6.13
+          ],
+          "result": 516271
+        }
+      },
+      {
+        "before": {
+          "wallMs": 5.030907999999727,
+          "maxLoopGapMs": 0.08032300000013493,
+          "cpuMs": 5.041,
+          "load": [
+            8.27,
+            6.78,
+            6.13
+          ],
+          "result": 516271
+        },
+        "after": {
+          "wallMs": 0.1396140000001651,
+          "maxLoopGapMs": 0.08354000000008455,
+          "cpuMs": 0.144,
+          "load": [
+            8.27,
+            6.78,
+            6.13
+          ],
+          "result": 516271
+        }
+      },
+      {
+        "before": {
+          "wallMs": 4.431432999999743,
+          "maxLoopGapMs": 0.07707499999969514,
+          "cpuMs": 4.431,
+          "load": [
+            8.27,
+            6.78,
+            6.13
+          ],
+          "result": 516271
+        },
+        "after": {
+          "wallMs": 0.1717899999994188,
+          "maxLoopGapMs": 0.06448099999943224,
+          "cpuMs": 0.177,
+          "load": [
+            8.27,
+            6.78,
+            6.13
+          ],
+          "result": 516271
+        }
+      },
+      {
+        "before": {
+          "wallMs": 5.103221000000303,
+          "maxLoopGapMs": 0.07655200000044715,
+          "cpuMs": 5.135,
+          "load": [
+            8.27,
+            6.78,
+            6.13
+          ],
+          "result": 516271
+        },
+        "after": {
+          "wallMs": 0.14216799999940122,
+          "maxLoopGapMs": 0.4428109999998924,
+          "cpuMs": 0.146,
+          "load": [
+            8.27,
+            6.78,
+            6.13
+          ],
+          "result": 516271
+        }
+      }
+    ]
+  },
+  "tightLoopAfter": {
+    "case": "P2",
+    "mode": "after",
+    "at": "2026-10-18T19:47:34.994Z",
+    "bun": "1.4.0",
+    "rowBytes": 583727,
+    "firstMs": 6.468051000000003,
+    "runs": [
+      {
+        "load": [
+          8.27,
+          6.78,
+          6.13
+        ],
+        "medianMs": 0.013009999999994193,
+        "p95Ms": 0.022373999999999228,
+        "maxMs": 0.07573100000000466
+      },
+      {
+        "load": [
+          8.27,
+          6.78,
+          6.13
+        ],
+        "medianMs": 0.010878999999988537,
+        "p95Ms": 0.015478000000001657,
+        "maxMs": 0.020725999999996247
+      },
+      {
+        "load": [
+          8.27,
+          6.78,
+          6.13
+        ],
+        "medianMs": 0.010159999999999059,
+        "p95Ms": 0.013587999999998601,
+        "maxMs": 0.02017800000000136
+      },
+      {
+        "load": [
+          8.27,
+          6.78,
+          6.13
+        ],
+        "medianMs": 0.009436000000007994,
+        "p95Ms": 0.012007999999994468,
+        "maxMs": 0.18904400000000976
+      },
+      {
+        "load": [
+          8.27,
+          6.78,
+          6.13
+        ],
+        "medianMs": 0.008689000000003944,
+        "p95Ms": 0.012312999999991803,
+        "maxMs": 0.7763639999999867
+      }
+    ]
+  },
+  "sourceSha256": {
+    "src/lib/pipelines/engine.ts": "42496d2897c25453cc2a9677301e1aa3d62570df51a7f7ac1f5a40bbc7390758",
+    "src/lib/pipelines/store.ts": "94ad71cd8a3f86be72dee9ef17a6327cc515cf0411ffc2218e3a00c3a8931607",
+    "src/lib/state/sqliteStateStore.ts": "c61b9d6cc57b9682d747f32d446bb175b3fc21bfbb81e7c7221d4deb9ee34931",
+    "src/lib/pipelines/revalidation.ts": "55c1edca65e9e9e1ff0399214e8c315c3a09c6f6d4231e867f7a5f4206d4116e",
+    "src/lib/pipelines/revalidation.test.ts": "6122a28ce61cd707a32ee6d55794bcf507e19ead6690a6c9e97d428873224bc8",
+    "src/lib/mainThreadInstrumentation.test.ts": "81a20367698346066c92d2085cc82f09c9fe6943c04a93f35b373194e5a2087c"
+  },
+  "acceptance": {
+    "zeroDecodesOnUnchangedTick": true,
+    "pacedMaxMs": 0.1,
+    "pacedThresholdMet": false
+  }
+}

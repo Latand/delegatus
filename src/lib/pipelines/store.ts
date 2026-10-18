@@ -2017,6 +2017,28 @@ export function pipelineSelectionSource() {
   return { filename: stateDatabaseFile(), read: (id: string) => collection.get(id) };
 }
 
+/** Bind one in-flight operation to its store, avoiding state-path resolution
+ * on every tick. Replacement at the same path is guarded by the connection. */
+export function pipelineRecordReader(pipelineId: string) {
+  const { active, archive } = stores();
+  const aliasesFile = statePath("project-aliases.json");
+  // The decoder reads this file and worktree_recovery. Revision metadata for
+  // the latter travels in the same SQL query; no alias graph is copied here.
+  const authority = () => {
+    try {
+      const stat = fs.statSync(aliasesFile, { bigint: true });
+      return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.size}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+      throw error;
+    }
+  };
+  return {
+    version: active.pipelineRecordVersionReader(pipelineId, authority),
+    read: () => active.get(pipelineId) ?? archive.get(pipelineId),
+  };
+}
+
 /** Full-record read by id: the hot registry first, then the archive. */
 export function findPipelineRecord(pipelineId: string): Pipeline | null {
   return pipelineStore().get(pipelineId) ?? archiveStore().get(pipelineId);

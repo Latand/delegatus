@@ -199,18 +199,24 @@ test.each([false, true])("release byte counting records synchronous success and 
 
 test("every revalidation timer labels its synchronous row read and refusal", () => {
   const callbacks = expressions("src/lib/pipelines/engine.ts", "revalidate");
-  expect(callbacks).toHaveLength(7);
+  // Seven timers; provisioning also owns one validator per admitted job.
+  expect(callbacks).toHaveLength(8);
   for (const callback of callbacks) for (const failed of [false, true]) {
     const h = harness();
     const abort = new AbortController();
     const record = { id: "fixture", state: "provisioning" };
     const read = () => { h.slow(); if (failed) throw new Error("fixture refusal"); return record; };
+    const revalidator = bind(expressions("src/lib/pipelines/revalidation.ts", "pipelineRecordRevalidator")[0]!, {
+      withViewerOperation: h.operation, pipelineRecordReader: () => ({ version: () => "fixture", read }),
+    });
     const tick = bind(callback, {
+      pipelineRecordRevalidator: revalidator,
       withViewerOperation: h.operation, findPipelineRecord: read, matches: () => true,
       pipeline: record, preview: record, attempt: { activation: true }, expected: JSON.stringify(record), abort,
-      jobs: [{ pipeline: record, fence: "{}", abort }], provisionFence: () => ({}),
+      jobs: [{ pipeline: record, abort, revalidate: revalidator("fixture", () => {}) }], provisionFence: () => ({}),
       admission: null, budgetRefusal: () => null, receiptMatches: () => true,
-      reviewIngressFence: () => "fixture", fence: "fixture",
+      reviewIngressFence: () => "fixture", fence: "fixture", fingerprint: JSON.stringify(record),
+      flowId: "fixture", flowFingerprint: "null", ports: { getFlow: () => null },
     });
     try { tick(); } catch (error) { expect(failed).toBe(true); expect(String(error)).toContain("fixture refusal"); }
     h.check("pipelines.revalidate");
