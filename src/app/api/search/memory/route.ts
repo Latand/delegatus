@@ -2,6 +2,7 @@ import { searchUnavailable } from "@/lib/search/unavailable";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { MEMORY_KINDS, type MemoryKind } from "@/lib/memory/parsers";
 import { memoryIndex } from "@/lib/memory/service";
+import { MemoryIdAmbiguousError } from "@/lib/memory/index";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,7 +34,7 @@ export async function GET(request: Request): Promise<Response> {
 export async function POST(request: Request): Promise<Response> {
   let body;
   try { body = await request.json(); } catch { return Response.json({ error: "invalid JSON" }, { status: 400 }); }
-  if (!body || typeof body !== "object" || typeof body.id !== "string" || !/^m_[a-zA-Z0-9_]{1,62}$/.test(body.id)
+  if (!body || typeof body !== "object" || typeof body.id !== "string" || !/^m_[a-f0-9]{7,24}$/i.test(body.id)
     || typeof body.requestId !== "string" || !body.requestId.trim() || body.requestId.length > 256
     || (body.maxBytes !== undefined && (!Number.isInteger(body.maxBytes) || body.maxBytes < 256 || body.maxBytes > 16_000))
     || (body.project !== undefined && (typeof body.project !== "string" || !body.project.trim() || body.project.length > 256))
@@ -44,6 +45,7 @@ export async function POST(request: Request): Promise<Response> {
     const item = await memoryIndex().open(body.id, body.requestId, body.conversationId ?? null, body.project ? canonicalProject(body.project.trim()) : undefined, body.maxBytes ?? 16_000);
     return item ? Response.json({ item }) : Response.json({ error: "memory entry not found" }, { status: 404 });
   } catch (error) {
+    if (error instanceof MemoryIdAmbiguousError) return Response.json({ error: error.message, code: "short_id_ambiguous" }, { status: 409 });
     return searchUnavailable("memory", error);
   }
 }

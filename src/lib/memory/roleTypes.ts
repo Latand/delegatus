@@ -11,7 +11,6 @@ export type RulePrivacyHint = StaticFindingClass | "email_address";
 export const ROLE_MEMORY_BOUND = 10_000;
 export const CURATION_NEW_LESSONS = 10;
 export const CURATION_INTERVAL_MS = 6 * 60 * 60_000;
-export const CURATION_CLAIM_COOLDOWN_MS = 30 * 60_000;
 export const RULE_MAX_CHARS = 300;
 export const WHY_MAX_CHARS = 160;
 export const PROBLEM_MAX_CHARS = 300;

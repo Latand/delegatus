@@ -165,7 +165,7 @@ export function readProjectReportLog(
       /* Legacy confirmation rows never reach a page. */
       class: report.class as BridgeReportClass,
       body: report.body,
-      cards: reportCardRefs(report.body, known),
+      cards: [...new Map([...(report.cards ?? []).flatMap(id => known.has(id) ? [{ id, kind: known.get(id)! }] : []), ...reportCardRefs(report.body, known)].map(card => [card.id, card])).values()],
     })),
     nextBefore: page.nextBefore,
     asks,

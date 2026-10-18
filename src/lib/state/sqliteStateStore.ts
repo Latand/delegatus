@@ -1010,6 +1010,24 @@ export function readStateCollectionRows(filename: string, collection: string): u
   return readStateCollectionsRows(filename, [collection]).get(collection) ?? null;
 }
 
+/** Return project membership without decoding or materializing persisted rows. */
+export function readStateProjectKeys(filename: string): string[] {
+  if (!fs.existsSync(filename)) return [];
+  const db = connectReadonlyDatabase(filename);
+  try {
+    return db.query<{ project: string | null }, []>(`
+      SELECT DISTINCT json_extract(value_json, '$.project') AS project
+      FROM state_rows
+      WHERE collection IN ('tasks', 'pipelines', 'flows')
+        AND json_valid(value_json)
+        AND json_type(value_json, '$.project') = 'text'
+    `).all().flatMap(row => row.project ? [row.project] : []);
+  } catch (error) {
+    if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return [];
+    throw error;
+  } finally { db.close(); }
+}
+
 /** Read several authoritative collections through one snapshot connection. */
 export function readStateCollectionsRows(
   filename: string,

@@ -1,3 +1,4 @@
+import { shortId } from "@/lib/shortIds";
 /* Pure derivations for the Update surface (#2007): which copy each state
    takes, in the operator's language. The component renders what these
    answer; the DOM tests read the same answers through the rendered page. */
@@ -151,7 +152,7 @@ export function processErrorText(error: ProcessError | null, role: "web" | "runt
     case "port-in-use": return t("selfUpdate.error.port", { port: error.port });
     case "gone": return t("selfUpdate.error.gone", { pid: error.pid });
     case "no-answer": return t("selfUpdate.error.noAnswer");
-    case "fell-back": return t("selfUpdate.error.fellBack", { sha: error.revision ?? "?", detail: error.detail });
+    case "fell-back": return t("selfUpdate.error.fellBack", { sha: shortId(error.revision ?? "?"), detail: error.detail });
     case "message": return error.text;
   }
 }

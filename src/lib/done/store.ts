@@ -210,8 +210,9 @@ export interface DoneWrite {
  * episodes and retention are written in the same transaction. Answers how
  * many rows changed.
  */
-export function writeDoneProjection(write: DoneWrite, now: number): { inserted: number; updated: number; deleted: number } {
+export function writeDoneProjection(write: DoneWrite, now: number): { inserted: number; updated: number; deleted: number; removedKeys: string[] } {
   const store = collection("write")!;
+  let removedKeys: string[] = [];
   let counts = { inserted: 0, updated: 0, deleted: 0 };
   store.patchSync(() => {
     const snapshot = store.snapshot();
@@ -234,13 +235,17 @@ export function writeDoneProjection(write: DoneWrite, now: number): { inserted: 
         continue;
       }
       if (held.acknowledgedAt) continue;
+      const storedFrame = held.frame?.unavailable || held.frame?.src.startsWith("/api/image?done=");
+      const mayPromote = Boolean(held.frame?.src.startsWith("/api/image?done=") && !held.frameCheckedAt && next.frameCheckedAt
+        && (!next.frame || Date.parse(next.frameCheckedAt) >= Date.parse(held.at)));
+      const retainedFrame = storedFrame && !mayPromote;
       const refreshed: DoneItemV1 = {
         ...held,
         title: next.title,
         look: next.look,
         refs: next.refs,
-        frame: next.frame,
-        frameCheckedAt: next.frameCheckedAt,
+        frame: retainedFrame ? held.frame : next.frame,
+        frameCheckedAt: retainedFrame ? held.frameCheckedAt : next.frameCheckedAt,
       };
       if (JSON.stringify(refreshed) === JSON.stringify(held)) continue;
       records.push(refreshed);
@@ -254,6 +259,7 @@ export function writeDoneProjection(write: DoneWrite, now: number): { inserted: 
     }
     /* Every removed key leaves a settled row in the same transaction. */
     const gone = retained([...rows.values()], now);
+    removedKeys = gone.map(row => row.key);
     counts.deleted = gone.length;
     for (const row of gone) {
       deleteKeys.push(row.key);
@@ -269,7 +275,7 @@ export function writeDoneProjection(write: DoneWrite, now: number): { inserted: 
     }
     return { records, deleteKeys };
   });
-  return counts;
+  return { ...counts, removedKeys };
 }
 
 /** The episodes this projection computed, plus any another writer recorded

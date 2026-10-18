@@ -281,3 +281,12 @@ describe("tool call context tokens copy", () => {
     expect(translate("uk", "tools.contextTokens.measured", { n: 5, count: 5 })).not.toContain("приблизно");
   });
 });
+
+test("curator call counts use English and Ukrainian plural forms", () => {
+  expect(translate("en", "seatTick.curation.count.calls", { count: 1 })).toBe("1 call");
+  expect(translate("en", "seatTick.curation.count.calls", { count: 3 })).toBe("3 calls");
+  expect(translate("uk", "seatTick.curation.count.calls", { count: 1 })).toBe("1 виклик");
+  expect(translate("uk", "seatTick.curation.count.calls", { count: 3 })).toBe("3 виклики");
+  expect(translate("uk", "seatTick.curation.count.calls", { count: 5 })).toBe("5 викликів");
+  expect(translate("uk", "seatTick.curation.count.calls", { count: 21 })).toBe("21 виклик");
+});

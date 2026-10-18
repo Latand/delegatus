@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import type { ConversationCatalogEntry } from "./conversationCatalog";
-import { catalogEntryToFileEntry, ExpiredConversationCatalogCursorError, loadConversationCatalogPage, paginateConversationCatalog } from "./conversationCatalog";
+import { catalogEntryToFileEntry, conversationCatalogGeneration, conversationCatalogProjectsSnapshot, ExpiredConversationCatalogCursorError, loadConversationCatalogPage, paginateConversationCatalog, replaceConversationCatalog } from "./conversationCatalog";
 import { schemeWindowConfig, selectSchemeWindow } from "./schemeWindow";
 
 function entry(index: number, project = "viewer"): ConversationCatalogEntry {
@@ -19,6 +19,18 @@ function entry(index: number, project = "viewer"): ConversationCatalogEntry {
     size: index * 100,
   };
 }
+
+test("project membership is indexed once per catalog generation, independent of conversation count", () => {
+  const generation = conversationCatalogGeneration();
+  replaceConversationCatalog(Array.from({ length: 53_299 }, (_, index) => entry(index, index === 53_298 ? "other" : "history")));
+  const first = conversationCatalogProjectsSnapshot();
+  expect([...first].sort()).toEqual(["history", "other"]);
+  expect(conversationCatalogProjectsSnapshot()).toBe(first);
+  expect(conversationCatalogGeneration()).toBe(generation + 1);
+  replaceConversationCatalog([entry(1, "fresh")]);
+  expect([...conversationCatalogProjectsSnapshot()]).toEqual(["fresh"]);
+  expect(conversationCatalogGeneration()).toBe(generation + 2);
+});
 
 test("conversation listing paginates every catalog conversation without a scheme cap", () => {
   const catalog = Array.from({ length: 7 }, (_, index) => entry(index + 1));

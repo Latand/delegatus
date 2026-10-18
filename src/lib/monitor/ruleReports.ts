@@ -1,3 +1,4 @@
+import { reportCardRefs } from "@/lib/bridge/reportCardRefs";
 import type { HeldDelivery } from "@/lib/accounts/migration/contracts";
 import type { AttentionDismissalV1 } from "@/lib/attention/dismissals";
 import { maintenanceDecision } from "@/lib/boardMaintenance/decision";
@@ -28,33 +29,34 @@ export function ruleReports(input: RuleReportInput): BridgeReportInput[] {
   const { project, locale } = input;
   const uk = locale === "uk";
   const reports: BridgeReportInput[] = [];
-  const title = (id: string) => input.tasks.find(t => t.id === id)?.text.split("\n")[0] ?? id;
+  const title = (id: string) => input.tasks.find(t => t.id === id)?.text.split("\n")[0] ?? (uk ? "Задача" : "Task");
   const withConversationCards = (conversationId: string | null | undefined, body: string) => {
-    const ids = conversationId ? input.tasks.filter(task => task.project === project &&
-      task.assignments.some(assignment => assignment.conversationId === conversationId)).map(task => task.id) : [];
-    return ids.length ? `${ids.join(" ")}: ${body}` : body;
+    const tasks = input.tasks.filter(task => task.project === project);
+    const ids = [...new Set([...(conversationId ? tasks.filter(task => task.assignments.some(assignment => assignment.conversationId === conversationId)).map(task => task.id) : []),
+      ...reportCardRefs(body, new Map(tasks.map(task => [task.id, "task" as const]))).map(card => card.id)])];
+    return { body: ids.length ? `${ids.map(id => `«${title(id)}»`).join(", ")}: ${body}` : body, cards: ids };
   };
-  const add = (key: string, at: string, body: string) => reports.push({ key, at, body, class: "completed", project,
+  const add = (key: string, at: string, value: string | { body: string; cards: string[] }, cards: string[] = []) => reports.push({ key, at, body: typeof value === "string" ? value : value.body, cards: (typeof value === "string" ? cards : value.cards).slice(0, 16), class: "completed", project,
     origin: { kind: "manager", conversationId: input.seatConversationId, role: "orchestrator" }, targetSeatConversationId: input.seatConversationId });
   for (const lane of input.pipelines) {
     if (lane.project !== project) continue;
     if (lane.dismissedAt && lane.dismissedBy?.kind === "manager") {
       add(`rule:lane-hidden:${lane.id}:${lane.dismissedAt}`, lane.dismissedAt, uk
-        ? `${lane.taskIds.join(" ")} ${lane.id}: оркестратор прибрав вирішене очікування зі списку.`
-        : `${lane.taskIds.join(" ")} ${lane.id}: the orchestrator cleared the resolved wait.`);
+        ? `«${(lane.task ?? (uk ? "Робота" : "Work")).split("\n")[0]}»: оркестратор прибрав вирішене очікування зі списку.`
+        : `«${(lane.task ?? (uk ? "Робота" : "Work")).split("\n")[0]}»: the orchestrator cleared the resolved wait.`, lane.taskIds);
     }
     if (!pipelineCompletedUnreviewed(lane)) continue;
     if (lane.merge?.state !== "merged") {
       add(`rule:budget-ready:${lane.id}`, lane.closedAt ?? lane.createdAt, uk
-        ? `${lane.taskIds.join(" ")} «${lane.task.split("\n")[0]}»: бюджет рев’ю вичерпано; останні зауваження виправлено, PR готовий до злиття.`
-        : `${lane.taskIds.join(" ")} “${lane.task.split("\n")[0]}”: review budget completed; final findings fixed, PR ready to merge.`);
+        ? `«${(lane.task ?? (uk ? "Робота" : "Work")).split("\n")[0]}»: бюджет рев’ю вичерпано; останні зауваження виправлено, PR готовий до злиття.`
+        : `“${(lane.task ?? (uk ? "Робота" : "Work")).split("\n")[0]}”: review budget completed; final findings fixed, PR ready to merge.`, lane.taskIds);
       continue;
     }
     const at = lane.merge.mergedAt ?? lane.merge.updatedAt;
-    const cards = lane.taskIds.join(" ");
+    const cards = lane.taskIds;
     add(`rule:budget-fixed:${lane.id}`, at, uk
-      ? `${cards} «${lane.task.split("\n")[0]}»: бюджет рев’ю вичерпано; останні зауваження виправлено, злито (#${lane.merge.prNumber}).`
-      : `${cards} “${lane.task.split("\n")[0]}”: review budget completed; final findings fixed, merged (#${lane.merge.prNumber}).`);
+      ? `«${(lane.task ?? (uk ? "Робота" : "Work")).split("\n")[0]}»: бюджет рев’ю вичерпано; останні зауваження виправлено, злито (#${lane.merge.prNumber}).`
+      : `“${(lane.task ?? (uk ? "Робота" : "Work")).split("\n")[0]}”: review budget completed; final findings fixed, merged (#${lane.merge.prNumber}).`, cards);
   }
   for (const delivery of input.deliveries) {
     if (delivery.command.origin?.kind !== "agent" || delivery.state !== "failed" || input.deliveryProject(delivery) !== project) continue;
@@ -62,16 +64,16 @@ export function ruleReports(input: RuleReportInput): BridgeReportInput[] {
     // non-execution is a final non-delivery outcome.
     if (!input.deliveryLost(delivery)) continue;
     add(`rule:delivery-unsent:${delivery.id}`, input.at, withConversationCards(delivery.conversationId, uk
-      ? `Повідомлення агента не доставлено: ${delivery.error ?? delivery.id}`
-      : `Agent message was not delivered: ${delivery.error ?? delivery.id}`));
+      ? `Повідомлення агента не доставлено: ${delivery.error ?? (uk ? "невідома причина" : "unknown reason")}`
+      : `Agent message was not delivered: ${delivery.error ?? (uk ? "невідома причина" : "unknown reason")}`));
   }
   for (const run of input.maintenance) {
     if (run.project !== project || run.state !== "succeeded" || !run.endedAt) continue;
-    const routine = [...run.log.leftAlone.map(row => `${row.taskId}: ${row.reason}`),
-      ...run.log.attention.filter(row => !maintenanceDecision(row)).map(row => `${row.taskId}: ${row.text}`)];
+    const routine = [...run.log.leftAlone.map(row => `«${title(row.taskId)}»: ${row.reason}`),
+      ...run.log.attention.filter(row => !maintenanceDecision(row)).map(row => `«${title(row.taskId)}»: ${row.text}`)];
     add(`rule:maintenance:${run.runId}`, run.endedAt, uk
-      ? `${run.taskId ?? ""} Обслуговування дошки завершено: змінено ${run.counts.tasks} задач.${routine.length ? `\n${routine.join("\n")}` : ""}`
-      : `${run.taskId ?? ""} Board maintenance completed: ${run.counts.tasks} tasks changed.${routine.length ? `\n${routine.join("\n")}` : ""}`);
+      ? `${run.taskId ? `«${title(run.taskId)}» ` : ""}Обслуговування дошки завершено: змінено ${run.counts.tasks} задач.${routine.length ? `\n${routine.join("\n")}` : ""}`
+      : `${run.taskId ? `«${title(run.taskId)}» ` : ""}Board maintenance completed: ${run.counts.tasks} tasks changed.${routine.length ? `\n${routine.join("\n")}` : ""}`, [...(run.taskId ? [run.taskId] : []), ...run.log.leftAlone.map(row => row.taskId), ...run.log.attention.filter(row => !maintenanceDecision(row)).map(row => row.taskId)]);
   }
   for (const record of input.dismissals) {
     if (record.by.kind !== "manager") continue;
@@ -79,14 +81,14 @@ export function ruleReports(input: RuleReportInput): BridgeReportInput[] {
       const cards = input.tasks.filter(task => task.project === project && task.assignments.some(assignment =>
         record.conversationId ? assignment.conversationId === record.conversationId : assignment.path === record.path));
       if (cards.length) add(`rule:wait-cleared:${record.subject}:${record.at}`, record.at, uk
-        ? `${cards.map(task => task.id).join(" ")}: оркестратор прибрав вирішене очікування.${record.note ? ` ${record.note}` : ""}`
-        : `${cards.map(task => task.id).join(" ")}: the orchestrator cleared the resolved wait.${record.note ? ` ${record.note}` : ""}`);
+        ? `${cards.map(task => `«${title(task.id)}»`).join(", ")}: оркестратор прибрав вирішене очікування.${record.note ? ` ${record.note}` : ""}`
+        : `${cards.map(task => `«${title(task.id)}»`).join(", ")}: the orchestrator cleared the resolved wait.${record.note ? ` ${record.note}` : ""}`, cards.map(task => task.id));
       continue;
     }
     if (!record.taskId || !input.tasks.some(task => task.id === record.taskId && task.project === project)) continue;
     add(`rule:prototype-hidden:${record.subject}:${record.at}`, record.at, uk
-      ? `${record.taskId} «${title(record.taskId)}»: оркестратор сховав огляд зі списку очікувань.${record.note ? ` ${record.note}` : ""}`
-      : `${record.taskId} “${title(record.taskId)}”: the orchestrator hid the review from waiting.${record.note ? ` ${record.note}` : ""}`);
+      ? `«${title(record.taskId)}»: оркестратор сховав огляд зі списку очікувань.${record.note ? ` ${record.note}` : ""}`
+      : `“${title(record.taskId)}”: the orchestrator hid the review from waiting.${record.note ? ` ${record.note}` : ""}`, [record.taskId]);
   }
   for (const resolved of input.bridgeLog?.resolvedAsks ?? []) {
     if (resolved.by.kind !== "manager") continue;

@@ -9,6 +9,7 @@ import { SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 import { prototypeMediaGET } from "@/lib/prototypeReview/media";
+import { doneMediaGET } from "@/lib/done/media";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,6 +38,10 @@ export async function GET(req: NextRequest): Promise<NextResponse<ApiError> | Ne
   // pull local image bytes off this loopback service.
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
+
+  if (req.nextUrl.searchParams.has("done")) {
+    return doneMediaGET(req, req.nextUrl.searchParams.get("done") ?? "", req.nextUrl.searchParams.get("media") ?? "");
+  }
 
   if (req.nextUrl.searchParams.has("prototype")) {
     return prototypeMediaGET(req,req.nextUrl.searchParams.get("taskId") ?? "",req.nextUrl.searchParams.get("prototype") ?? "",req.nextUrl.searchParams.get("media") ?? "","image");

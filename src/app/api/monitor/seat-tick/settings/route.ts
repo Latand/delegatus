@@ -120,6 +120,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
   if (body.release !== undefined) change.release = body.release as SeatTickSettingsChange["release"];
   if (body.autoRotate !== undefined) change.autoRotate = body.autoRotate as SeatTickSettingsChange["autoRotate"];
   if (body.maintenance !== undefined) change.maintenance = body.maintenance as SeatTickSettingsChange["maintenance"];
+  if (body.curation !== undefined) change.curation = body.curation as SeatTickSettingsChange["curation"];
   if (body.enabled !== undefined) change.enabled = body.enabled as boolean;
   if (body.wakeIntervalMinutes !== undefined) change.wakeIntervalMinutes = body.wakeIntervalMinutes as number | null;
   if (body.reason !== undefined) change.reason = body.reason as string | null;

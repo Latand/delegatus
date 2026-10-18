@@ -1,3 +1,4 @@
+import { shortenHashesInText } from "@/lib/shortIds";
 import path from "node:path";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
@@ -34,7 +35,7 @@ export function reviewPollPayload(review: Pick<ReviewPollInput, "id">, question:
     options: question.options.map((option, i) => {
       const label = `${index + 1}${String.fromCharCode(97 + i)}) `;
       const mark = option.recommended ? " ✅" : "";
-      return { text: label + shorten(option.label, 100 - label.length - mark.length) + mark };
+      return { text: label + shorten(shortenHashesInText(option.label), 100 - label.length - mark.length) + mark };
     }),
     type: "regular", is_anonymous: true, allows_multiple_answers: question.multiple === true,
     shuffle_options: false,

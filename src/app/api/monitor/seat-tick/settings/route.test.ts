@@ -443,3 +443,33 @@ test("the browser can enable automatic rotation without a why and records gatewa
   expect(answer.autoRotate).toMatchObject({ enabled: true, thresholdPercent: 60, defaultPercent: 50, minPercent: 50, maxPercent: 90, why: null, setBy: { kind: "gateway" } });
   expect(readSeatTickSettings(PROJECT).autoRotate).toMatchObject({ enabled: true, thresholdPercent: 60, why: null, setBy: { kind: "gateway" } });
 });
+
+
+test("curation has its own bounded timer, HTTP/MCP parity and no maintenance cascade", async () => {
+  const project = "fixture-curation-route";
+  const initial = await (await get(`?project=${project}`)).json();
+  expect(initial.curation).toMatchObject({ enabled: true, intervalHours: 6, lastRun: null });
+  const written = await put({ project, curation: { enabled: false, intervalHours: "200" } });
+  expect(written.status).toBe(200);
+  const http = await written.json();
+  expect(http.curation).toMatchObject({ enabled: false, intervalHours: 168, nextRunAt: null, waitingOn: "off" });
+  expect(http.maintenance).toMatchObject({ enabled: false, intervalHours: 3 });
+  const api = viewerMcpBindings(undefined, undefined, { callerProject: () => project, callerAttribution: () => ({ kind: "gateway", conversationId: null }), authorizedSeats: () => [] } as never);
+  const tool = await api.seat_tick_settings({ clientRequestId: "curation-read", verbose: true });
+  expect(tool.curation).toEqual(http.curation);
+  await api.seat_tick_settings({ clientRequestId: "curation-change", curation: { enabled: true, intervalHours: null } });
+  expect((await (await get(`?project=${project}`)).json()).curation).toMatchObject({ enabled: true, intervalHours: 6 });
+  await put({ project, curation: { intervalHours: -2 } });
+  expect(readSeatTickSettings(project).curation?.intervalHours).toBe(1);
+  const before = readSeatTickSettings(project);
+  expect((await put({ project, curation: { enabled: "yes" } })).status).toBe(400);
+  expect(readSeatTickSettings(project)).toEqual(before);
+  await put({ project, curation: { intervalHours: "1e400" } });
+  expect(readSeatTickSettings(project).curation?.intervalHours).toBe(1);
+  await put({ project, enabled: false, reason: "fixture", untilMinutes: 1 });
+  const { effectiveSeatTickSettings, seatTickSettingsAfterLapse } = await import("@/lib/monitor/seatTickSettings");
+  const stored = readSeatTickSettings(project);
+  const effective = effectiveSeatTickSettings(stored, Date.parse(stored.until!) + 1, 3600000);
+  expect(effective.curation).toMatchObject({ enabled: true, intervalHours: 1 });
+  expect(seatTickSettingsAfterLapse(project, effective).curation).toEqual(stored.curation);
+});

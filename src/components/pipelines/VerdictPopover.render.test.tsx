@@ -231,3 +231,11 @@ test("one logical round exposes every durable reviewer binding with the current 
   expect(priorAt).toBeGreaterThan(-1);
   expect(currentAt).toBeGreaterThan(priorAt);
 });
+
+test("review head is short in text and whole in the explicit hover", () => {
+  const head = "12345678" + "a".repeat(32);
+  const current = attempt(1, { reviewHeadSha: head });
+  const html = renderToStaticMarkup(<VerdictPopover pipeline={pipeline([current])} stage={stage} attempt={current} onClose={() => {}} />);
+  expect(html).toContain(`title="${head}">12345678</code>`);
+  expect(html).not.toContain(`>${head}<`);
+});
