@@ -189,7 +189,70 @@ for (const checkout of [null, "/srv/example-checkout"]) {
     const fixture = harness(); fixture.ports.mode.env = { LLV_SELF_UPDATE_RECORD: "record" };
     fixture.ports.mode.readRecord = () => ({ checkout } as LauncherRecord);
     await sendInstallPing(fixture.ports);
+    expect(fixture.requests).toHaveLength(1);
     expect(JSON.parse(fixture.requests[0]!.init.body as string).kind).toBe(checkout ? "checkout" : "packaged");
+  });
+}
+test("packaged provenance through the real launcher reader survives process restarts", async () => {
+  const requests: unknown[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    requests.push(await request.json());
+    expect(request.headers.get("cookie")).toBeNull();
+    expect(request.headers.get("authorization")).toBeNull();
+    return new Response(null, { status: 204 });
+  } });
+  const id = ["0".repeat(8), "0000", "4000", "8000", "0".repeat(11) + "1"].join("-");
+  fs.mkdirSync(telemetryFile("."), { recursive: true });
+  fs.writeFileSync(telemetryFile("id"), id);
+  const code = `
+    import fs from "node:fs";
+    import path from "node:path";
+    import { sendInstallPing } from "./src/lib/telemetry/sender";
+    import { productionModePorts } from "./src/lib/selfUpdate/mode";
+    import { readStartIdentity } from "./src/lib/selfUpdate/pid";
+    const entry = { state: "healthy", pid: process.pid, startIdentity: readStartIdentity(process.pid),
+      startedAt: null, revision: null, error: null, requestId: null };
+    const file = path.join(process.env.LLV_STATE_DIR, "launcher.json");
+    fs.writeFileSync(file, JSON.stringify({ version: 1, launcher: entry, checkout: null,
+      releasesDir: "", releasePointer: "", requestFile: "", port: 0, socket: "",
+      web: entry, runtimeHost: entry, updatedAt: "" }));
+    const env = { LLV_STATE_OWNER: "viewer", NODE_ENV: "production", LLV_SELF_UPDATE_RECORD: file };
+    await sendInstallPing({ env, mode: productionModePorts(null, env),
+      now: () => new Date(process.argv[1]), os: "linux", arch: "x64",
+      fetch: (url, init) => {
+        if (url !== "https://delegatus.org/api/ping") throw new Error("Unexpected endpoint");
+        if (init.credentials !== "omit" || init.redirect !== "error") throw new Error("Privacy options changed");
+        return fetch(process.env.PING_TEST_URL, init);
+      } });
+  `;
+  try {
+    for (const [day, count] of [["2026-09-30T23:59:00Z", 1], ["2026-09-30T23:59:30Z", 1], ["2026-10-01T00:00:00Z", 2]] as const) {
+      const child = Bun.spawn([process.execPath, "-e", code, day], {
+        cwd: process.cwd(), env: { ...process.env, PING_TEST_URL: `http://127.0.0.1:${server.port}/api/ping` },
+        stdout: "pipe", stderr: "pipe",
+      });
+      const error = new Response(child.stderr).text();
+      expect(await child.exited, await error).toBe(0);
+      expect(requests).toHaveLength(count);
+    }
+    for (const request of requests) {
+      expect(Object.keys(request as object).sort()).toEqual(["arch", "id", "kind", "os", "v"]);
+      expect(request).toMatchObject({ id, kind: "packaged", os: "linux", arch: "x64" });
+    }
+  } finally { server.stop(true); }
+}, 30_000);
+for (const state of ["missing", "dead", "development", "opt-out"] as const) {
+  test(`packaged provenance fails closed when ${state}`, async () => {
+    const fixture = harness();
+    fixture.ports.mode.env = { LLV_SELF_UPDATE_RECORD: "record" };
+    fixture.ports.mode.readRecord = () => state === "missing" ? null : ({ checkout: null } as LauncherRecord);
+    fixture.ports.mode.alive = () => state !== "dead";
+    fixture.ports.mode.deploymentsEnabled = async () => false;
+    if (state === "development") fixture.ports.env = { ...fixture.ports.env, NODE_ENV: "development" };
+    if (state === "opt-out") updatePreferences({ enabled: false });
+    await sendInstallPing(fixture.ports);
+    expect(fixture.requests).toHaveLength(0);
+    expect(fs.existsSync(telemetryFile("id"))).toBe(false);
   });
 }
 test("unknown mode and corrupt settings or identity fail closed", async () => {

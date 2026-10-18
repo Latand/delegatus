@@ -25,7 +25,7 @@ export async function sendInstallPing(ports: PingPorts): Promise<void> {
   const mode = await detectMode(ports.mode);
   // A choice made during the mode probe must win.
   if (!maySend(ports.env) || !preferences().enabled) return;
-  const kind = mode.mode === "managed" ? "docker" : mode.mode === "checkout" ? "checkout" : mode.reason === "not-a-checkout" ? "packaged" : null;
+  const kind = mode.mode === "managed" ? "docker" : mode.mode === "checkout" ? "checkout" : mode.mode === "package" ? "packaged" : null;
   if (!kind) return;
   const id = installPingId();
   if (!claimDay(ports.now().toISOString().slice(0, 10))) return;
