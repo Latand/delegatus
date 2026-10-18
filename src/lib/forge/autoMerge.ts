@@ -827,12 +827,13 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
  * to GitHub even if the PR has since reopened. */
 async function reconcileBatchLanding(read: Pipeline, pr: { repository: string; number: number }, ports: AutoMergePorts, stopClosedRefresh = false): Promise<void> {
   const now = ports.now();
+  const merge = { ...read.merge!, chain: [...read.merge!.chain] };
   let view: PullRequestView | null = null;
   try {
     view = parsePullRequestView(await ports.run(["pr", "view", String(pr.number), "--repo", pr.repository, "--json", PR_FIELDS]));
     if (!view) throw new Error("gh returned no parsable pull request");
-    if (view.state === "CLOSED") admitLocalOutputHead(read, read.merge!, view.headRefOid);
-    if (view.state === "CLOSED" && read.merge!.chain.includes(view.headRefOid)) {
+    if (view.state === "CLOSED") admitLocalOutputHead(read, merge, view.headRefOid);
+    if (view.state === "CLOSED" && merge.chain.includes(view.headRefOid)) {
       const landed = await readBatchLanding(pr.repository, pr.number, view.baseRefName || read.baseBranch, { head: view.headRefOid, repoDir: read.repoDir }, ports.run);
       if (landed) view = { ...view, state: "MERGED", mergeCommit: landed.commit, mergedAt: landed.mergedAt };
     }
@@ -845,7 +846,7 @@ async function reconcileBatchLanding(read: Pipeline, pr: { repository: string; n
     live.nextReadAt = iso(now + MERGE_POLL_MS);
     if (stopClosedRefresh && view?.state === "CLOSED") block(live, MERGE_REASONS.closed, now);
     if (view?.state !== "MERGED") return;
-    live.chain = read.merge!.chain;
+    live.chain = merge.chain;
     live.repository = pr.repository;
     live.prNumber = pr.number;
     live.state = "merged";
