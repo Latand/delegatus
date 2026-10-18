@@ -268,6 +268,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     ...(typeof raw.diskPressureShown === "string" ? { diskPressureShown: raw.diskPressureShown } : {}),
     seatEpoch: typeof raw.seatEpoch === "number" && Number.isSafeInteger(raw.seatEpoch) ? raw.seatEpoch : null,
     unreachableSince: isoOrNull(raw.unreachableSince),
+    unreachableBacklogSince: isoOrNull(raw.unreachableBacklogSince),
     lastCheckAt: isoOrNull(raw.lastCheckAt),
     lastWakeAt: isoOrNull(raw.lastWakeAt),
     lastWakeReasons: (Array.isArray(raw.lastWakeReasons) ? raw.lastWakeReasons : [])

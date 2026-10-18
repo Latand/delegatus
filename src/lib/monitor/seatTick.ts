@@ -1638,7 +1638,7 @@ function boardFingerprint(fingerprint: string): string {
 }
 
 export function seatTickCatchUp(input: Pick<SeatTickCheckInput, "state" | "now" | "settings" | "seat">) {
-  const from = input.state.unreachableSince;
+  const from = input.state.unreachableSince ? input.state.unreachableBacklogSince ?? input.state.unreachableSince : null;
   if (!from || input.now - Date.parse(from) <= input.settings.wakeIntervalMs) return null;
   const through = new Date(input.now).toISOString();
   return { key: `catch-up:${input.seat?.seatEpoch ?? 0}:${from}`, from, through,
@@ -2170,7 +2170,7 @@ export function seatTickWakeCommit(
       state.reportsOwedDropped ?? 0, commit.reportsOwed, received)
     : null;
   const clearsOutage = !!commit.catchUp || !state.unreachableSince
-    || (commit.wakeIntervalMs !== undefined && Date.parse(received) - Date.parse(state.unreachableSince) <= commit.wakeIntervalMs);
+    || (commit.wakeIntervalMs !== undefined && Date.parse(received) - Date.parse(state.unreachableBacklogSince ?? state.unreachableSince) <= commit.wakeIntervalMs);
   const eventsThrough = Math.max(state.eventsThrough ?? 0, commit.eventsThrough);
   /* What the seat now holds of its own note (#2030); a plan that predates the
      field leaves the record as it was. */
@@ -2180,6 +2180,7 @@ export function seatTickWakeCommit(
       ...state,
       ...note,
       unreachableSince: clearsOutage ? null : state.unreachableSince,
+      unreachableBacklogSince: clearsOutage ? null : state.unreachableBacklogSince,
       lastWakeAt: received,
       lastProposalAt: at,
       lastWakeReasons: [],
@@ -2208,6 +2209,7 @@ export function seatTickWakeCommit(
     ...state,
     ...note,
     unreachableSince: clearsOutage ? null : state.unreachableSince,
+    unreachableBacklogSince: clearsOutage ? null : state.unreachableBacklogSince,
     lastWakeAt: received,
     lastWakeReasons: carried,
     lastWakeFingerprint: commit.fingerprint,

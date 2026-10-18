@@ -14,6 +14,8 @@ import { hostCommandArgs, openHostTempRoots, stageHostNamespace } from "@/lib/st
 import { inspectTree, mountPointsUnder, removeTreeViaTrash, finishTreeTrash, isOwnedTempName, ownTempRoots, resolvePhysicalPath, scanProcesses, sweepRoots, type ProcessScan, type TempSweepRoot } from "@/lib/tempSweep";
 import type { ExecResult } from "@/lib/workflows/provision";
 
+import type { WorktreeSweepCache } from "./worktreeSweepCache";
+
 import { pipelineActivitySettled, type Pipeline } from "./types";
 import { pipelineLiteralGitEnv } from "./git";
 
@@ -201,6 +203,8 @@ export type SweptPipeline = Pick<Pipeline, "id" | "state" | "repoDir" | "worktre
 
 export type WorktreeSweepPorts = {
   mode: WorktreeSweepMode;
+  /** Advisory inventories owned by the off-thread production worker. */
+  cache?: WorktreeSweepCache;
   inspect?: typeof inspectTree;
   mountPoints?: (directory: string) => string[];
   removeTree?: (directory: string) => Promise<void>;
@@ -1239,31 +1243,36 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
           }
         } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") report.errors.push(String(error)); }
       }
-      const candidates: string[] = [];
-      try {
-        for (const child of fs.readdirSync(accessible(worktree), { withFileTypes: true })) {
-          if (child.isDirectory() && rebuildableDirectory(child.name)
-            && disposableIgnored(accessible(worktree), child.name)) candidates.push(path.join(worktree, child.name));
-        }
-      } catch { /* Unreadable output trees stay. */ }
-      // Inside artifacts, only fixture bundles carry a regeneration proof.
-      const pending = [path.join(worktree, ".artifacts")];
-      let visited = 0;
-      while (pending.length && visited < MEASURE_ENTRY_LIMIT) {
-        const current = pending.pop()!;
+      const discover = () => {
+        const candidates: string[] = [];
         try {
-          if (!fs.lstatSync(accessible(current)).isDirectory()) continue;
-          if (fs.existsSync(path.join(accessible(current), ".git"))) continue;
-          for (const child of fs.readdirSync(accessible(current), { withFileTypes: true })) {
-            visited += 1;
-            if (!child.isDirectory() || child.name === ".git") continue;
-            const directory = path.join(current, child.name);
-            if (child.name === "node_modules" || child.name === ".next") continue;
-            if (child.name === "bundle" && fixtureBundle(accessible(directory))) candidates.push(directory);
-            else pending.push(directory);
+          for (const child of fs.readdirSync(accessible(worktree), { withFileTypes: true })) {
+            if (child.isDirectory() && rebuildableDirectory(child.name)
+              && disposableIgnored(accessible(worktree), child.name)) candidates.push(path.join(worktree, child.name));
           }
-        } catch { /* Missing or unreadable artifacts stay. */ }
-      }
+        } catch { /* Unreadable output trees stay. */ }
+        // Inside artifacts, only fixture bundles carry a regeneration proof.
+        const pending = [path.join(worktree, ".artifacts")];
+        let visited = 0;
+        while (pending.length && visited < MEASURE_ENTRY_LIMIT) {
+          const current = pending.pop()!;
+          try {
+            if (!fs.lstatSync(accessible(current)).isDirectory()) continue;
+            if (fs.existsSync(path.join(accessible(current), ".git"))) continue;
+            for (const child of fs.readdirSync(accessible(current), { withFileTypes: true })) {
+              visited += 1;
+              if (!child.isDirectory() || child.name === ".git") continue;
+              const directory = path.join(current, child.name);
+              if (child.name === "node_modules" || child.name === ".next") continue;
+              if (child.name === "bundle" && fixtureBundle(accessible(directory))) candidates.push(directory);
+              else pending.push(directory);
+            }
+          } catch { /* Missing or unreadable artifacts stay. */ }
+        }
+        return candidates;
+      };
+      const clock = `${entry.head}:${entry.branch}:${owner.id}:${owner.state}:${latestTerminalTime(owners)}:${previouslyKept.get(worktree)?.firstSettledAt ?? ""}`;
+      const candidates = ports.cache?.candidates(accessible(worktree), clock, discover) ?? discover();
       for (const next of candidates) {
         const relative = path.relative(worktree, next);
         const artifact = relative.split(path.sep).includes(".artifacts");
@@ -1351,7 +1360,11 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         if (!seenKept.has(`${stat.dev}:${stat.ino}`)) rootBytes = stat.blocks * 512;
       } catch { /* Unavailable directories contribute no measured blocks. */ }
     }
-    kept.bytes = kept.reason === "mount-boundary" ? 0 : rootBytes + await allocatedBytes(reached, nested.map(row => accessible(row.path)), seenKept);
+    const excluded = nested.map(row => accessible(row.path));
+    const measureKept = () => allocatedBytes(reached, excluded, seenKept);
+    const clock = `${kept.reason}:${kept.firstSettledAt ?? ""}:${nested.map(row => row.path).join("\0")}`;
+    kept.bytes = kept.reason === "mount-boundary" ? 0 : rootBytes + (ports.cache
+      ? await ports.cache.allocation(reached, clock, excluded, seenKept, measureKept) : await measureKept());
     report.keptBytes[kept.reason] = (report.keptBytes[kept.reason] ?? 0) + kept.bytes;
   }
   return report;
@@ -1581,10 +1594,14 @@ export function recordWorktreeSweep(report: WorktreeSweepReport): void {
 /** The production sweep: mode from the environment, report to the state directory. */
 export async function runWorktreeSweep(
   env: Readonly<Record<string, string | undefined>> = process.env,
-  portsFor: (mode: WorktreeSweepMode) => Promise<WorktreeSweepPorts> = productionWorktreeSweepPorts,
+  portsFor?: (mode: WorktreeSweepMode) => Promise<WorktreeSweepPorts>,
 ): Promise<WorktreeSweepReport | null> {
   const mode = worktreeSweepMode(env);
   if (mode === null) return null;
+  if (!portsFor) {
+    const { runWorktreeSweepOffThread } = await import("./worktreeSweepWorker");
+    return runWorktreeSweepOffThread(mode);
+  }
   let ports: WorktreeSweepPorts;
   try {
     ports = await portsFor(mode);

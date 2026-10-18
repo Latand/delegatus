@@ -17,22 +17,22 @@ test("a stall on the twelfth of twelve running children is reported within two s
 
   const first = childRig(fixture, { childActivity: activity });
   expect(await runSeatTickCheck(fixture.project, first.deps)).toMatchObject({ verdict: "wake", reasons: ["interval"] });
-  expect(first.liveness.map((read) => read.conversationId)).toEqual(ids.slice(0, 8));
+  expect(first.liveness.map((read) => read.conversationId)).toEqual([fixture.seat.conversationId, ...ids.slice(0, 8)]);
   expect(fixture.row().stalledSeen).toEqual([]);
 
   const second = childRig(fixture, { childActivity: activity, now: fixture.now + 61 * MINUTE });
   expect(await runSeatTickCheck(fixture.project, second.deps)).toMatchObject({ verdict: "wake", reasons: ["interval"] });
-  expect(second.liveness.map((read) => read.conversationId)).toEqual(ids.slice(4, 12));
+  expect(second.liveness.map((read) => read.conversationId)).toEqual([fixture.seat.conversationId, ...ids.slice(4, 12)]);
   expect(fixture.row().stalledSeen).toEqual([`child:${twelfth.id}`]);
 
   const third = childRig(fixture, { childActivity: activity, now: fixture.now + 122 * MINUTE });
   const stalled = await runSeatTickCheck(fixture.project, third.deps);
-  expect(third.liveness.map((read) => read.conversationId)).toEqual([...ids.slice(8, 12), ...ids.slice(0, 4)]);
+  expect(third.liveness.map((read) => read.conversationId)).toEqual([fixture.seat.conversationId, ...ids.slice(8, 12), ...ids.slice(0, 4)]);
   expect(stalled).toMatchObject({ verdict: "wake", reasons: ["stalled"] });
   expect(stalled!.detail).toContain(`child ${twelfth.id} runs a turn the registry reports stalled (host_alive_transcript_silent)`);
   expect(third.sent[0]!.text).toContain(`[child] ${twelfth.id}`);
-  /* Every check observed a bounded window and asked liveness for it alone. */
-  for (const rig of [first, second, third]) expect(rig.liveness).toHaveLength(8);
+  /* Each check has one seat probe and the unchanged eight-child window. */
+  for (const rig of [first, second, third]) expect(rig.liveness).toHaveLength(9);
 });
 
 /* A registry without an indexed lineage projection reads the seat and names
@@ -158,6 +158,7 @@ test("a dead-host original-key retry refreshes its snapshot and recovers without
   fixture.seed();
   await runSeatTickCheck(fixture.project, childRig(fixture, { realWakeState: true, deliverWith: refuseBeforeReservation(503) }).deps);
   const pending = fixture.row().outstandingWake!;
+  const backlogSince = fixture.row().lastWakeAt!;
   const recovered = childRig(fixture, { realWakeState: true, now: fixture.now + 5 * MINUTE,
     seatActivity: { conversationId: fixture.seat.conversationId, host: { state: "gone", kind: "structured", pid: null }, reason: "host_gone_turn_settled", lifecycle: "gone" },
     deliverWith: async message => {
@@ -169,10 +170,22 @@ test("a dead-host original-key retry refreshes its snapshot and recovers without
   recovered.deps.mcpHealth = () => ({ status: "dead", detail: "old MCP absent" });
   await runSeatTickCheck(fixture.project, recovered.deps);
   expect(recovered.sent).toHaveLength(1);
-  expect(recovered.sent[0]!.text).toBe(pending.text!.replace(pending.preparedAt!, new Date(fixture.now + 5 * MINUTE).toISOString()));
+  const text = recovered.sent[0]!.text;
+  const refreshedAt = new Date(fixture.now + 5 * MINUTE).toISOString();
+  expect(text).toContain(`Snapshot at ${refreshedAt}.`);
+  expect(text).not.toContain(`Snapshot at ${pending.preparedAt}.`);
+  expect(text).toContain(`Catch-up manifest catch-up:7:${backlogSince}: backlog window ${backlogSince} through ${refreshedAt}.`);
+  expect(text).toContain(`[child] ${child.id}`);
+  expect(text).toContain("owed worker");
   expect(fixture.acknowledged()).toEqual([child.id]);
   expect(fixture.row().outstandingWake).toBeNull();
   expect(fixture.row().hostRecovery?.state).toBe("revived");
+  expect(fixture.row().unreachableSince).toBeNull();
+  expect(fixture.row().unreachableBacklogSince).toBeNull();
+  const next = childRig(fixture, { realWakeState: true, now: fixture.now + 10 * MINUTE });
+  await runSeatTickCheck(fixture.project, next.deps);
+  expect(next.sent).toHaveLength(0);
+  expect(fixture.acknowledged()).toEqual([child.id]);
 });
 
 test.each(["retained", "uncertain", "unknown", "unreadable"] as const)("a failed revival with a %s operation never rotates or loses its key", async wakeState => {

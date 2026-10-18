@@ -10,6 +10,7 @@ import { afterEach, expect, test } from "bun:test";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { createTailscaleStub, hermeticTailscaleEnvironment, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
+import { telemetryNotice } from "./telemetry-notice.mjs";
 
 const fixtures = new Set<string>();
 const children = new Set<ReturnType<typeof spawn>>();
@@ -150,6 +151,13 @@ function unevaluableProbeModule(address: string): string {
    startup diagnostic and a real error on stderr, and which quiet choice the
    launcher handed down. */
 const STARTUP_CHATTER = `
+import { existsSync, writeFileSync as noticeWritten } from "node:fs";
+import { telemetryNotice } from "../../bin/telemetry-notice.mjs";
+const notice = process.env.LLV_STATE_DIR + "/notice-output";
+if (!existsSync(notice)) {
+  console.log(telemetryNotice[process.env.LLV_LANG || "en"]);
+  noticeWritten(notice, "1");
+}
 console.log("\\u001b[1m▲ Next.js 16.3.3\\u001b[22m");
 console.log("- Local:         http://127.0.0.1:" + process.env.PORT);
 console.log("- Network:       http://127.0.0.1:" + process.env.PORT);
@@ -634,6 +642,8 @@ test("a start prints the banner first, hides Next's startup lines and still prin
   const text = output.text();
   expect(text).toContain("DELEGATUS_TELEMETRY=0");
   expect(text).toContain("DO_NOT_TRACK=1");
+  expect(text.split(telemetryNotice.en)).toHaveLength(2);
+  expect(text).not.toContain("Reads logs from");
   expect(text.indexOf("Delegatus v")).toBeGreaterThanOrEqual(0);
   expect(text.indexOf("Delegatus v")).toBeLessThan(text.indexOf("Error: fixture failure"));
   expect(text).toContain(`  Open http://127.0.0.1:${port}/ in your browser.`);
@@ -643,6 +653,25 @@ test("a start prints the banner first, hides Next's startup lines and still prin
   expect(text).not.toContain("Next.js");
   expect(text).not.toContain("- Local:");
   expect(text).not.toContain("Ready in");
+});
+
+test.each(["en", "uk"] as const)("the %s notice is printed once on first start and stays settled after restart", async lang => {
+  const fixture = await checkoutFixture({ startupChatter: true });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const port = await availablePort();
+  for (const first of [true, false]) {
+    const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+      cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: lang },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.add(child);
+    const output = captureOutput(child);
+    await output.waitFor("fixture failure that must reach the terminal", 10_000);
+    expect(output.text().split(telemetryNotice[lang])).toHaveLength(first ? 2 : 1);
+    child.kill("SIGINT");
+    await waitForExit(child, 10_000);
+    expect(child.exitCode).toBe(0);
+  }
 });
 
 test("DELEGATUS_DEBUG=1 keeps Next's startup lines and lets the children print their diagnostics", async () => {
@@ -663,6 +692,7 @@ test("DELEGATUS_DEBUG=1 keeps Next's startup lines and lets the children print t
   expect(text).toContain("▲ Next.js 16.3.3");
   expect(text).toContain(`- Local:         http://127.0.0.1:${port}`);
   expect(text).toContain("child quiet diagnostics: unset");
+  expect(text).toContain("Reads logs from");
   expect(text).not.toContain("DELEGATUS_DEBUG=1 —");
 });
 

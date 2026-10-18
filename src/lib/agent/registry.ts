@@ -5679,7 +5679,15 @@ export class AgentRegistry {
     return this.scopedConversationSnapshot({ path: artifactPath }, true);
   }
 
-  private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean): RegistryFile {
+  /** Liveness needs every generation and artifact-path owner for one
+      conversation, plus its aliases and launch receipts. Keep that read keyed
+      so a targeted poll does not hydrate unrelated host rows from retained
+      registry history. */
+  livenessConversationSnapshot(conversationId: string): RegistryFile {
+    return this.scopedConversationSnapshot({ conversationId }, true, true);
+  }
+
+  private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean, liveness = false): RegistryFile {
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
       const id = target.conversationId ? resolveConversationAlias(file, target.conversationId as ViewerConversationId)
@@ -5696,6 +5704,21 @@ export class AgentRegistry {
         if (generation) {
           const key = `${conversation.engine}:${generation.id}`;
           if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+        }
+        if (liveness) {
+          const paths = new Set([
+            ...conversation.generations.map(candidate => candidate.path),
+            ...conversation.continuityPaths,
+          ]);
+          for (const candidate of conversation.generations) {
+            const key = `${conversation.engine}:${candidate.id}`;
+            if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+          }
+          for (const pathname of paths) {
+            for (const entry of registryRowsMatching(file, "entries", "artifactPath", pathname)) {
+              result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = clone(entry);
+            }
+          }
         }
       }
       if (activity) {
@@ -6796,7 +6819,10 @@ export class AgentRegistry {
     const result = applyIdentityWaveMigration(prepared, { ...input, commitExternalPathRekeys: value => { rekeys = value; } });
     return withAccountMutationLock(() => this.mutate((file) => {
       validatePreparedState?.();
-      if (!isDeepStrictEqual(file, observed)) throw new Error("identity migration state changed while reading evidence; retry at startup");
+      // Materialize the lazy mutation view before comparison. Bun inspects
+      // constructors during deep comparison, which can dirty a synthetic row
+      // (or reject an unchanged proxy) before the migration writes anything.
+      if (!isDeepStrictEqual(clone(file), observed)) throw new Error("identity migration state changed while reading evidence; retry at startup");
       if (rekeys.length) input.commitExternalPathRekeys?.(rekeys);
       Object.assign(file, prepared);
       return result;

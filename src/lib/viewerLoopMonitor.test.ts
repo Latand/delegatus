@@ -1,7 +1,48 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createViewerLoopMonitor } from "./viewerLoopMonitor";
 import { performanceProcess, createPerformanceSpans } from "./performanceSpans";
 import { createLoopHeapSignals } from "./loopHeapSignals";
+
+test("the default loop sink keeps gap and summary diagnostics behind the CLI debug choice", async () => {
+  const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+  const lines: string[] = [];
+  const write = spyOn(process.stderr, "write").mockImplementation(((line: string, done: () => void) => {
+    lines.push(String(line)); done(); return true;
+  }) as typeof process.stderr.write);
+  let at = 0;
+  const monitor = createViewerLoopMonitor(undefined, () => at, createPerformanceSpans(() => at));
+  const drain = async () => { for (let i = 0; i < 4; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
+  try {
+    process.env.LLV_QUIET_DIAGNOSTICS = "1";
+    at = 61_000; monitor.tick(); await drain();
+    expect(lines).toEqual([]);
+    delete process.env.LLV_QUIET_DIAGNOSTICS;
+    at = 122_000; monitor.tick(); await drain();
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toStartWith("[viewer loop-gap] ");
+    expect(lines[1]).toStartWith("[performance summary] ");
+  } finally {
+    monitor.stop(); write.mockRestore();
+    if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
+    else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+  }
+});
+
+test("long gaps without a recorder always explain their profiling status", () => {
+  let at = 0;
+  const lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, createPerformanceSpans(() => at));
+  try {
+    at = 2009; monitor.tick();
+    at += 2009.6; monitor.tick();
+    at += 2010; monitor.tick();
+    at += 3010; monitor.tick();
+    const gaps = lines.map(line => JSON.parse(line.slice("[viewer loop-gap] ".length)));
+    expect(gaps.map(gap => gap.gapMs)).toEqual([1999, 2000, 2000, 3000]);
+    expect(gaps[0]).not.toHaveProperty("jsProfile");
+    for (const gap of gaps.slice(1)) expect(gap.jsProfile).toEqual({ status: "not-armed", reason: "profiler-not-started" });
+  } finally { monitor.stop(); }
+});
 
 test("every loop-gap carries memory signals; ordinary ticks advance the heap baseline", () => {
   let at = 0, heap = 1000;

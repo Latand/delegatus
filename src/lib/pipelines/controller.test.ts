@@ -17,6 +17,35 @@ import {
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-pipeline-controller-"));
 
+test("an incomplete catalog defers flows quietly under the CLI and still reports actual failures", async () => {
+  const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+  const info = spyOn(console, "info").mockImplementation(() => {});
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  let fail = false, flows = 0;
+  const controller = new FlowPipelineController({
+    tickPipelines: async () => { if (fail) throw new Error("fixture pipeline failure"); return { changed: false }; },
+    tickFlows: async () => { flows++; return { changed: false }; },
+    scan: async () => ({ files: [], complete: false }),
+  }, { maxPasses: 1 });
+  try {
+    process.env.LLV_QUIET_DIAGNOSTICS = "1";
+    await controller.tick();
+    expect(flows).toBe(0);
+    expect(info).not.toHaveBeenCalled();
+    delete process.env.LLV_QUIET_DIAGNOSTICS;
+    await controller.tick();
+    expect(info).toHaveBeenCalledWith(expect.stringContaining("still scanning"));
+    process.env.LLV_QUIET_DIAGNOSTICS = "1";
+    fail = true;
+    await expect(controller.tick()).rejects.toThrow("fixture pipeline failure");
+    expect(error).toHaveBeenCalledWith("[flow pipeline controller] pipelines phase failed", expect.any(Error));
+  } finally {
+    info.mockRestore(); error.mockRestore();
+    if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
+    else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+  }
+});
+
 test("an automatic handoff holds a new controller cycle until the next tick", async () => {
   let held = true;
   let stages = 0;
