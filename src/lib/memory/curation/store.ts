@@ -92,7 +92,7 @@ export function currentPass(project: string) {
 export function machinePass() { const row = collection()?.get("machine"); return row?.kind === "machine" && row.current ? readPass(row.current) : null; }
 export function passForConversation(id: string): CuratorPass | null { const row = collection()?.get(`c:${id}`); return row?.kind === "conversation" ? readPass(row.pass) : null; }
 /** Scope-key reads exclude requests, versions and the cold rule archive. */
-function curationScopes(project: string): RoleMemoryScopeRow[] {
+export function curationScopes(project: string): RoleMemoryScopeRow[] {
   const p = canonicalProject(project), held = roleMemoryCollection();
   if (!held) return [];
   const projects = [...new Set([p, ...Object.keys(projectAliasSnapshot().aliases).filter(key => canonicalProject(key) === p)])];
@@ -119,16 +119,16 @@ function databaseIdentity() {
   try { const stat = fs.statSync(statePath("state.sqlite"), { bigint: true }); return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing"; throw error; }
 }
-function collectionRevision() { const held = collection(); return held ? `${held.signature()}:${held.revision()}` : "missing"; }
+export function curationRevision() { const held = collection(); return held ? `${held.signature()}:${held.revision()}` : "missing"; }
 type CurationSummary = { active: boolean; pressure: boolean; newLessons: number; lastAt: string | null; lastClaimAt: string | null };
 // Compiled Viewer bundles share one LRU owner; only 32 tiny summaries survive.
 const shared = globalThis as typeof globalThis & { __llvCurationSummaries?: Map<string, { stamp: string; summary: CurationSummary }> };
 const summaries = shared.__llvCurationSummaries ??= new Map();
-export function curationStatus(project: string, now = Date.now(), setting = effectiveCurationSetting(readSeatTickSettings(canonicalProject(project)))) {
+export function curationStatus(project: string, now = Date.now(), setting = effectiveCurationSetting(readSeatTickSettings(canonicalProject(project))), scopeRows?: readonly RoleMemoryScopeRow[]) {
   return withViewerOperation("memory.curation-status", () => {
     const collection = roleMemoryCollection();
     const key = `${statePath("state.sqlite")}:${canonicalProject(project)}`;
-    const stamp = `${databaseIdentity()}:${collection?.revision()}:${collectionRevision()}:${JSON.stringify(projectAliasSnapshot().aliases)}`;
+    const stamp = `${databaseIdentity()}:${collection?.revision()}:${curationRevision()}:${JSON.stringify(projectAliasSnapshot().aliases)}`;
     const cached = summaries.get(key);
     if (cached) { summaries.delete(key); summaries.set(key, cached); }
     let summary = cached?.stamp === stamp ? cached.summary : null;
@@ -136,7 +136,7 @@ export function curationStatus(project: string, now = Date.now(), setting = effe
       const held = projectRow(project);
       let active = false, pressure = false, newLessons = 0;
       const activeByCanonicalScope = new Map<string, Map<string, RoleMemoryRule>>();
-      for (const row of curationScopes(project)) {
+      for (const row of scopeRows ?? curationScopes(project)) {
         const rules = row.active.flatMap(id => { const rule = collection?.get(`r:${id}`); return rule?.kind === "rule" && rule.state === "active" && !rule.versionOf ? [rule] : []; });
         active ||= rules.length > 0;
         const canonical = canonicalScope(row.scope);
@@ -225,11 +225,25 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
   });
 }
 export function curationView(project: string, now = Date.now()) {
-  const { lastAt, nextAt, newLessons } = curationStatus(project, now);
+  const scopeRows = curationScopes(project);
+  const { lastAt, nextAt, newLessons } = curationStatus(project, now, undefined, scopeRows);
+  // A call touching several scopes leaves the same receipt in each history.
+  // Preserve readPass's last-scope-wins deduplication by (pass, timestamp).
+  const calls = new Map<string, Map<string, CuratorPass["counts"]>>();
+  for (const scope of scopeRows) for (const h of scope.history) if (h.pass && h.counts) {
+    let pass = calls.get(h.pass);
+    if (!pass) calls.set(h.pass, pass = new Map());
+    pass.set(h.at, h.counts);
+  }
   const passes = (projectRow(project)?.passes ?? []).slice().reverse().flatMap(id => {
-    const pass = readPass(id); if (!pass) return [];
+    const pass = passMetadata(id); if (!pass) return [];
     const { state, claimedAt, endedAt, failure, counts, revertedAt, skipped } = pass;
-    return [{ id, state, claimedAt, endedAt, failure, counts, ...(revertedAt ? { revertedAt } : {}), ...(skipped ? { skipped } : {}) }];
+    const receipts = calls.get(id);
+    const summed = { ...counts };
+    if (receipts?.size) for (const field of Object.keys(summed) as (keyof typeof counts)[]) {
+      summed[field] = [...receipts.values()].reduce((n, call) => n + call[field], 0);
+    }
+    return [{ id, state, claimedAt, endedAt, failure, counts: summed, ...(revertedAt ? { revertedAt } : {}), ...(skipped ? { skipped } : {}) }];
   });
   return { lastAt, nextAt, newLessons, passes };
 }

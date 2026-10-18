@@ -12,7 +12,7 @@ export type ViewerOperation = "worktrees.sweep" | "history.prepare" | "history.r
   | "memory.source-read" | "memory.source-write"
   | "tasks.system-run" | "telegram.report-task-settle" | "memory.curation-cleanup"
   | "delivery.inbox-batch"
-  | "http.render" | "links.task-export"
+  | "http.render" | "links.task-export" | "role-memory.view"
   | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"

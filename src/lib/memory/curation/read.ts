@@ -7,6 +7,7 @@ import { canonicalScope, projectView, roleMemoryCollection, RoleMemoryRefusal } 
 import { isCrossProjectRoleScope, scopeRole } from "../roleScopes";
 import { scopeChars } from "../roleConsolidate";
 import { ROLE_MEMORY_BOUND } from "../roleTypes";
+import { otherProjectRoleRules } from "../roleViewSource";
 import type { CuratorPass } from "./store";
 
 const PAGE_BYTES = 24_000;
@@ -18,14 +19,13 @@ export async function readCuration(pass: CuratorPass, scope?: string, cursor?: s
   const attempts = scope ? await readHistoryProjection(db => historyAttemptCounts(db, project, now), { collections: ["pipelines","pipelines_archive"] }) : {};
   const scopes = [...new Set(pass.scopes.map(canonicalScope))];
   const view = projectView(project, now);
-  const all = roleMemoryCollection()?.snapshot() ?? [];
   if (!scope) return { pass: pass.id, scopes: scopes.map(key => {
     const held = view.scopes.find(s => s.scope === key);
     return { scope: key, revision: held?.revision ?? 0, chars: held?.chars ?? 0, bound: ROLE_MEMORY_BOUND, active: held?.active.length ?? 0, left: held?.left.length ?? 0 };
   }) };
   const resolvedScope = canonicalScope(scope);
   if (!scopes.includes(resolvedScope)) throw new RoleMemoryRefusal("CURATE_SCOPE", "scope does not belong to this pass");
-  const held = all.find(r => r.kind === "scope" && canonicalScope(r.scope) === resolvedScope);
+  const held = roleMemoryCollection()?.get(`s:${resolvedScope}`);
   const revision = held?.kind === "scope" ? held.revision : 0;
   let offset = 0;
   if (cursor) {
@@ -48,7 +48,7 @@ export async function readCuration(pass: CuratorPass, scope?: string, cursor?: s
     ...(rules?.active.slice().reverse().map(({ versions, ...rule }) => ({ kind: "active", ...rule, newSincePass: !!rule.awaitingCuration || rule.changedAt > since, versionCount: versions?.length ?? 0, earlierText: versions?.at(-1) })) ?? []),
     ...(rules?.left.filter(rule => rule.reason === "budget" || rule.changedAt > departuresSince).map(({ versions, ...rule }) => ({ kind: "left", ...rule, versionCount: versions?.length ?? 0 })) ?? []),
   ];
-  if (role && !isCrossProjectRoleScope(resolvedScope)) entries.push(...all.flatMap(row => row.kind === "rule" && row.state === "active" && !row.versionOf && canonicalScope(row.scope) !== resolvedScope && scopeRole(row.scope) === role && !isCrossProjectRoleScope(row.scope) ? [{ kind: "other-project", id: row.id, scope: canonicalScope(row.scope), rule: row.rule, why: row.why, readOnly: true }] : []));
+  if (role && !isCrossProjectRoleScope(resolvedScope)) entries.push(...otherProjectRoleRules(resolvedScope).map(row => ({ kind: "other-project", id: row.id, scope: canonicalScope(row.scope), rule: row.rule, why: row.why, readOnly: true })));
   const meta = { pass: pass.id, scope: resolvedScope, revision, chars: rules?.chars ?? scopeChars([]), bound: ROLE_MEMORY_BOUND, attempts, scaffold };
   const page: Record<string, unknown>[] = [];
   let bytes = Buffer.byteLength(JSON.stringify(meta)) + 512;

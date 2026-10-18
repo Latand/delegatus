@@ -1,0 +1,2682 @@
+{
+  "schemaVersion": 1,
+  "baseRevision": "7ef6d95aa4e94d7e66bae87de7e8dcf24580d72a",
+  "sourceFiles": [
+    {
+      "path": "src/lib/memory/curation/read.ts",
+      "sha256": "59220ff7513ca32eb62bbc9c0a88f34f072a790637041bc4050293d0cbc34c53"
+    },
+    {
+      "path": "src/lib/memory/curation/store.ts",
+      "sha256": "dd1f0ca3ff1276d6e93958229c741d51784c367125e718ea886e7e5a31701cc4"
+    },
+    {
+      "path": "src/lib/memory/roleStore.ts",
+      "sha256": "8ae4b8b7825f80988a3cd092b72783e77d66faa88e1d9b85b4ec1c605cd59426"
+    },
+    {
+      "path": "src/lib/memory/roleViewSource.ts",
+      "sha256": "0dab89b1d0be385adf51c6181da60197abb2c1a87e8b827e12f19ba8e1fb6e10"
+    },
+    {
+      "path": "src/lib/performanceSpans.ts",
+      "sha256": "bc110f29b5cb830b32ba1ea832fae4b5832129f597f57a11c6835ba60058040a"
+    },
+    {
+      "path": "src/lib/viewerLoopMonitor.ts",
+      "sha256": "5f6deddf6179556885114738c586042b2a9cfba4a04db8ed63c8dc98d85c387d"
+    }
+  ],
+  "input": {
+    "stateSqliteSha256": "12c01446b854bbdef7ae1579025f297481bfe61b4357afac122c6e745a67e2bf",
+    "stateBytes": 220938240,
+    "roleMemoryRows": 3947,
+    "roleMemoryBytes": 16474850,
+    "scopeRows": 112,
+    "scopeBytes": 13180030,
+    "hotProjectPassCounts": [
+      17,
+      50,
+      12,
+      23
+    ],
+    "targetActiveRules": 200,
+    "targetScopeActiveRules": 42
+  },
+  "compatibility": {
+    "projectViews": 4,
+    "curationPages": 24,
+    "frozenNow": "2026-10-18T18:49:00.000Z",
+    "baseline": "original modules from baseRevision; frozen-clock project views and complete largest-scope pagination compared with isDeepStrictEqual"
+  },
+  "rawAuditReplay": [
+    {
+      "phase": "before",
+      "case": "H8",
+      "runs": [
+        {
+          "event": "start",
+          "name": "H8",
+          "utc": "2026-10-18T19:02:51.761Z",
+          "readiness": {
+            "rules": 200,
+            "scopes": 28
+          },
+          "load": [
+            7.7,
+            7.31,
+            5.75
+          ],
+          "bun": "1.4.0"
+        },
+        {
+          "name": "H8",
+          "index": 0,
+          "utc": "2026-10-18T19:02:56.779Z",
+          "wallMs": 4572.118951999999,
+          "cpuMs": 4922.819,
+          "maxLoopGapMs": 4636.9253100000005,
+          "heapDeltaBytes": 46209022,
+          "rssDeltaBytes": 127696896,
+          "rchar": 597589340,
+          "result": 28,
+          "load": [
+            7.56,
+            7.28,
+            5.75
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 1,
+          "utc": "2026-10-18T19:03:01.714Z",
+          "wallMs": 4485.125848999998,
+          "cpuMs": 4775.04,
+          "maxLoopGapMs": 4553.839188000002,
+          "heapDeltaBytes": 72382147,
+          "rssDeltaBytes": 215408640,
+          "rchar": 597588902,
+          "result": 28,
+          "load": [
+            7.6,
+            7.3,
+            5.76
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 2,
+          "utc": "2026-10-18T19:03:07.143Z",
+          "wallMs": 4996.792701999999,
+          "cpuMs": 5370.51,
+          "maxLoopGapMs": 5048.653031999998,
+          "heapDeltaBytes": 22802964,
+          "rssDeltaBytes": 212586496,
+          "rchar": 597594325,
+          "result": 28,
+          "load": [
+            7.63,
+            7.31,
+            5.78
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 3,
+          "utc": "2026-10-18T19:03:12.228Z",
+          "wallMs": 4647.971199,
+          "cpuMs": 4944.752,
+          "maxLoopGapMs": 4694.694025000001,
+          "heapDeltaBytes": 55354632,
+          "rssDeltaBytes": 286642176,
+          "rchar": 597590325,
+          "result": 28,
+          "load": [
+            7.82,
+            7.35,
+            5.8
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 4,
+          "utc": "2026-10-18T19:03:17.973Z",
+          "wallMs": 5319.663805999997,
+          "cpuMs": 5716.288,
+          "maxLoopGapMs": 5354.432479000003,
+          "heapDeltaBytes": 21430764,
+          "rssDeltaBytes": 157536256,
+          "rchar": 597598487,
+          "result": 28,
+          "load": [
+            7.68,
+            7.33,
+            5.8
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 5,
+          "utc": "2026-10-18T19:03:22.809Z",
+          "wallMs": 4377.223183999995,
+          "cpuMs": 4644.856,
+          "maxLoopGapMs": 4455.3968749999985,
+          "heapDeltaBytes": 14591213,
+          "rssDeltaBytes": 210759680,
+          "rchar": 597587433,
+          "result": 28,
+          "load": [
+            7.94,
+            7.39,
+            5.83
+          ]
+        },
+        {
+          "event": "end",
+          "name": "H8",
+          "utc": "2026-10-18T19:03:22.809Z"
+        }
+      ]
+    },
+    {
+      "phase": "before",
+      "case": "D6-overview",
+      "runs": [
+        {
+          "event": "start",
+          "name": "D6-overview",
+          "utc": "2026-10-18T19:03:31.814Z",
+          "readiness": {
+            "rules": 200,
+            "scopes": 28
+          },
+          "load": [
+            7.97,
+            7.41,
+            5.85
+          ],
+          "bun": "1.4.0"
+        },
+        {
+          "name": "D6-overview",
+          "index": 0,
+          "utc": "2026-10-18T19:03:36.379Z",
+          "wallMs": 4112.1893469999995,
+          "cpuMs": 4366.261,
+          "maxLoopGapMs": 4185.601731000001,
+          "heapDeltaBytes": 16835035,
+          "rssDeltaBytes": 46686208,
+          "rchar": 597585192,
+          "result": 28,
+          "load": [
+            7.89,
+            7.41,
+            5.86
+          ]
+        },
+        {
+          "name": "D6-overview",
+          "index": 1,
+          "utc": "2026-10-18T19:03:40.862Z",
+          "wallMs": 4053.672891,
+          "cpuMs": 4304.142,
+          "maxLoopGapMs": 4102.510082999999,
+          "heapDeltaBytes": 21068076,
+          "rssDeltaBytes": 304025600,
+          "rchar": 597583923,
+          "result": 28,
+          "load": [
+            7.89,
+            7.41,
+            5.86
+          ]
+        },
+        {
+          "name": "D6-overview",
+          "index": 2,
+          "utc": "2026-10-18T19:03:45.595Z",
+          "wallMs": 4286.357436999999,
+          "cpuMs": 4514.113,
+          "maxLoopGapMs": 4350.728277999999,
+          "heapDeltaBytes": 100312185,
+          "rssDeltaBytes": 213688320,
+          "rchar": 597587135,
+          "result": 28,
+          "load": [
+            7.66,
+            7.37,
+            5.85
+          ]
+        },
+        {
+          "name": "D6-overview",
+          "index": 3,
+          "utc": "2026-10-18T19:03:50.043Z",
+          "wallMs": 4025.785146000002,
+          "cpuMs": 4298.73,
+          "maxLoopGapMs": 4067.284334,
+          "heapDeltaBytes": 25775157,
+          "rssDeltaBytes": 336846848,
+          "rchar": 597583677,
+          "result": 28,
+          "load": [
+            7.29,
+            7.29,
+            5.84
+          ]
+        },
+        {
+          "name": "D6-overview",
+          "index": 4,
+          "utc": "2026-10-18T19:03:54.600Z",
+          "wallMs": 4124.164035999998,
+          "cpuMs": 4361.016,
+          "maxLoopGapMs": 4166.050543000001,
+          "heapDeltaBytes": 55719348,
+          "rssDeltaBytes": 309260288,
+          "rchar": 597585317,
+          "result": 28,
+          "load": [
+            7.19,
+            7.27,
+            5.84
+          ]
+        },
+        {
+          "name": "D6-overview",
+          "index": 5,
+          "utc": "2026-10-18T19:03:59.408Z",
+          "wallMs": 4352.120021000002,
+          "cpuMs": 4642.329,
+          "maxLoopGapMs": 4427.616632000005,
+          "heapDeltaBytes": 4942460,
+          "rssDeltaBytes": 202620928,
+          "rchar": 597588615,
+          "result": 28,
+          "load": [
+            7.41,
+            7.32,
+            5.86
+          ]
+        },
+        {
+          "event": "end",
+          "name": "D6-overview",
+          "utc": "2026-10-18T19:03:59.408Z"
+        }
+      ]
+    },
+    {
+      "phase": "before",
+      "case": "D6-scope-read",
+      "runs": [
+        {
+          "event": "start",
+          "name": "D6-scope-read",
+          "utc": "2026-10-18T19:04:07.527Z",
+          "readiness": {
+            "rules": 200,
+            "scopeRules": 42
+          },
+          "load": [
+            7.33,
+            7.31,
+            5.87
+          ],
+          "bun": "1.4.0"
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 0,
+          "utc": "2026-10-18T19:04:12.130Z",
+          "wallMs": 4171.55624,
+          "cpuMs": 4487.851,
+          "maxLoopGapMs": 4176.095771999999,
+          "heapDeltaBytes": 32019197,
+          "rssDeltaBytes": 118472704,
+          "rchar": 608210072,
+          "result": 7,
+          "load": [
+            7.71,
+            7.38,
+            5.91
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 1,
+          "utc": "2026-10-18T19:04:17.055Z",
+          "wallMs": 4484.136455999998,
+          "cpuMs": 4773.456,
+          "maxLoopGapMs": 4534.219419000001,
+          "heapDeltaBytes": 57484744,
+          "rssDeltaBytes": 239935488,
+          "rchar": 597605292,
+          "result": 7,
+          "load": [
+            7.81,
+            7.41,
+            5.92
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 2,
+          "utc": "2026-10-18T19:04:21.682Z",
+          "wallMs": 4167.296211000001,
+          "cpuMs": 4435.87,
+          "maxLoopGapMs": 4237.048658,
+          "heapDeltaBytes": -21120174,
+          "rssDeltaBytes": 168673280,
+          "rchar": 597585470,
+          "result": 7,
+          "load": [
+            7.5,
+            7.36,
+            5.91
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 3,
+          "utc": "2026-10-18T19:04:26.738Z",
+          "wallMs": 4600.754735999999,
+          "cpuMs": 4862.517,
+          "maxLoopGapMs": 4669.460633999999,
+          "heapDeltaBytes": -8273644,
+          "rssDeltaBytes": 96129024,
+          "rchar": 597590513,
+          "result": 7,
+          "load": [
+            7.55,
+            7.37,
+            5.92
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 4,
+          "utc": "2026-10-18T19:04:31.532Z",
+          "wallMs": 4341.446014999998,
+          "cpuMs": 4613.601,
+          "maxLoopGapMs": 4413.266604999997,
+          "heapDeltaBytes": -58712843,
+          "rssDeltaBytes": 161259520,
+          "rchar": 597587589,
+          "result": 7,
+          "load": [
+            7.5,
+            7.36,
+            5.93
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 5,
+          "utc": "2026-10-18T19:04:35.979Z",
+          "wallMs": 4010.289396,
+          "cpuMs": 4237.311,
+          "maxLoopGapMs": 4055.998948999997,
+          "heapDeltaBytes": -362172,
+          "rssDeltaBytes": 240746496,
+          "rchar": 597584443,
+          "result": 7,
+          "load": [
+            7.5,
+            7.36,
+            5.93
+          ]
+        },
+        {
+          "event": "end",
+          "name": "D6-scope-read",
+          "utc": "2026-10-18T19:04:35.979Z"
+        }
+      ]
+    },
+    {
+      "phase": "before",
+      "case": "role-projects",
+      "runs": [
+        {
+          "event": "start",
+          "name": "role-projects",
+          "utc": "2026-10-18T19:04:36.521Z",
+          "readiness": null,
+          "load": [
+            7.3,
+            7.32,
+            5.92
+          ],
+          "bun": "1.4.0"
+        },
+        {
+          "name": "role-projects",
+          "index": 0,
+          "utc": "2026-10-18T19:04:38.247Z",
+          "wallMs": 1312.8789239999999,
+          "cpuMs": 1447.076,
+          "maxLoopGapMs": 1335.089197,
+          "heapDeltaBytes": 115717861,
+          "rssDeltaBytes": 349245440,
+          "rchar": 186031774,
+          "result": {
+            "project": 0,
+            "ms": 1313,
+            "rules": 182,
+            "scopes": 28,
+            "retainedPasses": 17
+          },
+          "load": [
+            7.3,
+            7.32,
+            5.92
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 1,
+          "utc": "2026-10-18T19:04:42.570Z",
+          "wallMs": 3878.6301529999996,
+          "cpuMs": 4100.468,
+          "maxLoopGapMs": 3938.523432,
+          "heapDeltaBytes": 27871364,
+          "rssDeltaBytes": 215752704,
+          "rchar": 610394200,
+          "result": {
+            "project": 1,
+            "ms": 3879,
+            "rules": 200,
+            "scopes": 28,
+            "retainedPasses": 50
+          },
+          "load": [
+            7.04,
+            7.27,
+            5.91
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 2,
+          "utc": "2026-10-18T19:04:43.890Z",
+          "wallMs": 905.972334,
+          "cpuMs": 1012.757,
+          "maxLoopGapMs": 930.0619450000004,
+          "heapDeltaBytes": 36249065,
+          "rssDeltaBytes": 172281856,
+          "rchar": 113597531,
+          "result": {
+            "project": 2,
+            "ms": 906,
+            "rules": 161,
+            "scopes": 28,
+            "retainedPasses": 12
+          },
+          "load": [
+            7.04,
+            7.27,
+            5.91
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 3,
+          "utc": "2026-10-18T19:04:45.800Z",
+          "wallMs": 1470.1506470000004,
+          "cpuMs": 1527.323,
+          "maxLoopGapMs": 1520.6815150000002,
+          "heapDeltaBytes": 92077532,
+          "rssDeltaBytes": 232935424,
+          "rchar": 212109308,
+          "result": {
+            "project": 3,
+            "ms": 1470,
+            "rules": 162,
+            "scopes": 28,
+            "retainedPasses": 23
+          },
+          "load": [
+            7.04,
+            7.27,
+            5.91
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 4,
+          "utc": "2026-10-18T19:04:47.335Z",
+          "wallMs": 1118.1904990000003,
+          "cpuMs": 1169.8,
+          "maxLoopGapMs": 1145.7020069999999,
+          "heapDeltaBytes": 79664718,
+          "rssDeltaBytes": 183644160,
+          "rchar": 154908952,
+          "result": {
+            "project": 0,
+            "ms": 1118,
+            "rules": 182,
+            "scopes": 28,
+            "retainedPasses": 17
+          },
+          "load": [
+            7.11,
+            7.28,
+            5.93
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 5,
+          "utc": "2026-10-18T19:04:51.810Z",
+          "wallMs": 4051.1049399999993,
+          "cpuMs": 4262.085,
+          "maxLoopGapMs": 4084.058556,
+          "heapDeltaBytes": 145392643,
+          "rssDeltaBytes": 349192192,
+          "rchar": 597582635,
+          "result": {
+            "project": 1,
+            "ms": 4051,
+            "rules": 200,
+            "scopes": 28,
+            "retainedPasses": 50
+          },
+          "load": [
+            6.95,
+            7.24,
+            5.92
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 6,
+          "utc": "2026-10-18T19:04:53.038Z",
+          "wallMs": 816.2466660000009,
+          "cpuMs": 853.929,
+          "maxLoopGapMs": 837.7324499999977,
+          "heapDeltaBytes": 79946248,
+          "rssDeltaBytes": 159133696,
+          "rchar": 104611306,
+          "result": {
+            "project": 2,
+            "ms": 816,
+            "rules": 161,
+            "scopes": 28,
+            "retainedPasses": 12
+          },
+          "load": [
+            6.95,
+            7.24,
+            5.92
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 7,
+          "utc": "2026-10-18T19:04:54.930Z",
+          "wallMs": 1472.7969630000007,
+          "cpuMs": 1565.903,
+          "maxLoopGapMs": 1503.0365710000005,
+          "heapDeltaBytes": 56956301,
+          "rssDeltaBytes": 204673024,
+          "rchar": 202889820,
+          "result": {
+            "project": 3,
+            "ms": 1473,
+            "rules": 162,
+            "scopes": 28,
+            "retainedPasses": 23
+          },
+          "load": [
+            6.95,
+            7.24,
+            5.92
+          ]
+        },
+        {
+          "event": "end",
+          "name": "role-projects",
+          "utc": "2026-10-18T19:04:54.930Z"
+        }
+      ]
+    },
+    {
+      "phase": "before",
+      "case": "profile-view",
+      "runs": [
+        {
+          "target": "view",
+          "retainedPasses": 50,
+          "samples": 3529,
+          "top": [
+            [
+              "src/lib/memory/roleStore.ts projectView",
+              3528
+            ],
+            [
+              "src/lib/memory/curation/store.ts ",
+              3373
+            ],
+            [
+              "src/lib/memory/curation/store.ts curationView",
+              3373
+            ],
+            [
+              "src/lib/memory/curation/store.ts readPass",
+              3370
+            ],
+            [
+              "src/lib/memory/curation/store.ts curationScopes",
+              3360
+            ],
+            [
+              "src/lib/state/sqliteStateStore.ts keyRange",
+              2731
+            ],
+            [
+              "src/lib/state/sqliteStateStore.ts ",
+              2497
+            ],
+            [
+              "src/lib/readAttribution.ts sync",
+              1003
+            ],
+            [
+              "src/lib/state/sqliteStateStore.ts decodeRow",
+              776
+            ],
+            [
+              "src/lib/state/sqliteStateStore.ts keyRangeEntries",
+              234
+            ]
+          ]
+        },
+        {
+          "target": "view",
+          "retainedPasses": 50,
+          "samples": 3547,
+          "top": [
+            [
+              "src/lib/memory/roleStore.ts projectView",
+              3546
+            ],
+            [
+              "src/lib/memory/curation/store.ts ",
+              3386
+            ],
+            [
+              "src/lib/memory/curation/store.ts curationView",
+              3386
+            ],
+            [
+              "src/lib/memory/curation/store.ts readPass",
+              3382
+            ],
+            [
+              "src/lib/memory/curation/store.ts curationScopes",
+              3367
+            ],
+            [
+              "src/lib/state/sqliteStateStore.ts keyRange",
+              2729
+            ],
+            [
+              "src/lib/state/sqliteStateStore.ts ",
+              2481
+            ],
+            [
+              "src/lib/readAttribution.ts sync",
+              1052
+            ],
+            [
+              "src/lib/state/sqliteStateStore.ts decodeRow",
+              804
+            ],
+            [
+              "src/lib/state/sqliteStateStore.ts keyRangeEntries",
+              248
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "phase": "after",
+      "case": "H8",
+      "runs": [
+        {
+          "event": "start",
+          "name": "H8",
+          "utc": "2026-10-18T19:19:08.043Z",
+          "readiness": {
+            "rules": 200,
+            "scopes": 28
+          },
+          "load": [
+            5.51,
+            7.93,
+            8.12
+          ],
+          "bun": "1.4.0"
+        },
+        {
+          "name": "H8",
+          "index": 0,
+          "utc": "2026-10-18T19:19:08.441Z",
+          "wallMs": 0.2697410000000673,
+          "cpuMs": 0.472,
+          "maxLoopGapMs": 7.906063000000131,
+          "heapDeltaBytes": 452,
+          "rssDeltaBytes": 0,
+          "rchar": 162,
+          "result": 28,
+          "load": [
+            5.51,
+            7.93,
+            8.12
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 1,
+          "utc": "2026-10-18T19:19:08.839Z",
+          "wallMs": 0.2655050000000756,
+          "cpuMs": 0.354,
+          "maxLoopGapMs": 8.103254000000106,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 124,
+          "result": 28,
+          "load": [
+            5.51,
+            7.93,
+            8.12
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 2,
+          "utc": "2026-10-18T19:19:09.238Z",
+          "wallMs": 0.2684169999997721,
+          "cpuMs": 0.482,
+          "maxLoopGapMs": 8.172497999999905,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 124,
+          "result": 28,
+          "load": [
+            5.51,
+            7.93,
+            8.12
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 3,
+          "utc": "2026-10-18T19:19:09.636Z",
+          "wallMs": 0.26194000000032247,
+          "cpuMs": 0.289,
+          "maxLoopGapMs": 8.428478999999697,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 244,
+          "result": 28,
+          "load": [
+            5.51,
+            7.93,
+            8.12
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 4,
+          "utc": "2026-10-18T19:19:10.041Z",
+          "wallMs": 0.24614199999996345,
+          "cpuMs": 0.329,
+          "maxLoopGapMs": 14.621962000000167,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 124,
+          "result": 28,
+          "load": [
+            5.51,
+            7.93,
+            8.12
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 5,
+          "utc": "2026-10-18T19:19:10.447Z",
+          "wallMs": 0.25187599999981103,
+          "cpuMs": 0.285,
+          "maxLoopGapMs": 15.763578000000052,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 124,
+          "result": 28,
+          "load": [
+            5.51,
+            7.93,
+            8.12
+          ]
+        },
+        {
+          "event": "end",
+          "name": "H8",
+          "utc": "2026-10-18T19:19:10.447Z"
+        }
+      ]
+    },
+    {
+      "phase": "after",
+      "case": "D6-overview",
+      "runs": [
+        {
+          "event": "start",
+          "name": "D6-overview",
+          "utc": "2026-10-18T19:19:11.885Z",
+          "readiness": {
+            "rules": 200,
+            "scopes": 28
+          },
+          "load": [
+            5.31,
+            7.84,
+            8.1
+          ],
+          "bun": "1.4.0"
+        },
+        {
+          "name": "D6-overview",
+          "index": 0,
+          "utc": "2026-10-18T19:19:12.312Z",
+          "wallMs": 1.1105569999999716,
+          "cpuMs": 1.39,
+          "maxLoopGapMs": 35.99548899999991,
+          "heapDeltaBytes": 479,
+          "rssDeltaBytes": 0,
+          "rchar": 162,
+          "result": 28,
+          "load": [
+            5.31,
+            7.84,
+            8.1
+          ]
+        },
+        {
+          "name": "D6-overview",
+          "index": 1,
+          "utc": "2026-10-18T19:19:12.731Z",
+          "wallMs": 0.6634070000000065,
+          "cpuMs": 0.783,
+          "maxLoopGapMs": 29.115072000000055,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 124,
+          "result": 28,
+          "load": [
+            5.31,
+            7.84,
+            8.1
+          ]
+        },
+        {
+          "name": "D6-overview",
+          "index": 2,
+          "utc": "2026-10-18T19:19:13.129Z",
+          "wallMs": 1.4281120000000556,
+          "cpuMs": 2.138,
+          "maxLoopGapMs": 7.635866999999962,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 162,
+          "result": 28,
+          "load": [
+            5.31,
+            7.84,
+            8.1
+          ]
+        },
+        {
+          "name": "D6-overview",
+          "index": 3,
+          "utc": "2026-10-18T19:19:13.527Z",
+          "wallMs": 1.0036000000000058,
+          "cpuMs": 1.034,
+          "maxLoopGapMs": 7.955673999999817,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 162,
+          "result": 28,
+          "load": [
+            5.31,
+            7.84,
+            8.1
+          ]
+        },
+        {
+          "name": "D6-overview",
+          "index": 4,
+          "utc": "2026-10-18T19:19:13.927Z",
+          "wallMs": 1.4633209999997234,
+          "cpuMs": 1.801,
+          "maxLoopGapMs": 9.31974100000025,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 162,
+          "result": 28,
+          "load": [
+            5.31,
+            7.84,
+            8.1
+          ]
+        },
+        {
+          "name": "D6-overview",
+          "index": 5,
+          "utc": "2026-10-18T19:19:14.325Z",
+          "wallMs": 0.7707900000000336,
+          "cpuMs": 0.907,
+          "maxLoopGapMs": 8.20915500000001,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 162,
+          "result": 28,
+          "load": [
+            5.31,
+            7.84,
+            8.1
+          ]
+        },
+        {
+          "event": "end",
+          "name": "D6-overview",
+          "utc": "2026-10-18T19:19:14.325Z"
+        }
+      ]
+    },
+    {
+      "phase": "after",
+      "case": "D6-scope-read",
+      "runs": [
+        {
+          "event": "start",
+          "name": "D6-scope-read",
+          "utc": "2026-10-18T19:19:15.805Z",
+          "readiness": {
+            "rules": 200,
+            "scopeRules": 42
+          },
+          "load": [
+            5.31,
+            7.84,
+            8.1
+          ],
+          "bun": "1.4.0"
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 0,
+          "utc": "2026-10-18T19:19:16.355Z",
+          "wallMs": 78.74333000000001,
+          "cpuMs": 79.794,
+          "maxLoopGapMs": 94.59524699999997,
+          "heapDeltaBytes": 10332,
+          "rssDeltaBytes": 10362880,
+          "rchar": 13379535,
+          "result": 7,
+          "load": [
+            5.12,
+            7.76,
+            8.07
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 1,
+          "utc": "2026-10-18T19:19:16.805Z",
+          "wallMs": 29.393281000000115,
+          "cpuMs": 30.288,
+          "maxLoopGapMs": 60.33344500000021,
+          "heapDeltaBytes": 148,
+          "rssDeltaBytes": 18677760,
+          "rchar": 3131164,
+          "result": 7,
+          "load": [
+            5.12,
+            7.76,
+            8.07
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 2,
+          "utc": "2026-10-18T19:19:17.250Z",
+          "wallMs": 24.099790000000212,
+          "cpuMs": 24.626,
+          "maxLoopGapMs": 54.141709999999875,
+          "heapDeltaBytes": 148,
+          "rssDeltaBytes": 13705216,
+          "rchar": 3114733,
+          "result": 7,
+          "load": [
+            5.12,
+            7.76,
+            8.07
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 3,
+          "utc": "2026-10-18T19:19:17.703Z",
+          "wallMs": 28.013393999999607,
+          "cpuMs": 30.829,
+          "maxLoopGapMs": 62.87785099999974,
+          "heapDeltaBytes": 148,
+          "rssDeltaBytes": 15532032,
+          "rchar": 3114860,
+          "result": 7,
+          "load": [
+            5.12,
+            7.76,
+            8.07
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 4,
+          "utc": "2026-10-18T19:19:18.150Z",
+          "wallMs": 24.92117300000018,
+          "cpuMs": 25.781,
+          "maxLoopGapMs": 57.437887000000046,
+          "heapDeltaBytes": 148,
+          "rssDeltaBytes": 13213696,
+          "rchar": 3114860,
+          "result": 7,
+          "load": [
+            5.12,
+            7.76,
+            8.07
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 5,
+          "utc": "2026-10-18T19:19:18.602Z",
+          "wallMs": 25.5634399999999,
+          "cpuMs": 26.083,
+          "maxLoopGapMs": 61.10678100000041,
+          "heapDeltaBytes": 148,
+          "rssDeltaBytes": 18677760,
+          "rchar": 3114660,
+          "result": 7,
+          "load": [
+            5.12,
+            7.76,
+            8.07
+          ]
+        },
+        {
+          "event": "end",
+          "name": "D6-scope-read",
+          "utc": "2026-10-18T19:19:18.602Z"
+        }
+      ]
+    },
+    {
+      "phase": "after",
+      "case": "role-projects",
+      "runs": [
+        {
+          "event": "start",
+          "name": "role-projects",
+          "utc": "2026-10-18T19:19:19.091Z",
+          "readiness": null,
+          "load": [
+            5.12,
+            7.76,
+            8.07
+          ],
+          "bun": "1.4.0"
+        },
+        {
+          "name": "role-projects",
+          "index": 0,
+          "utc": "2026-10-18T19:19:19.724Z",
+          "wallMs": 236.18282,
+          "cpuMs": 290.669,
+          "maxLoopGapMs": 246.20700499999998,
+          "heapDeltaBytes": 11078289,
+          "rssDeltaBytes": 102424576,
+          "rchar": 86303882,
+          "result": {
+            "project": 0,
+            "ms": 236,
+            "rules": 182,
+            "scopes": 28,
+            "retainedPasses": 17
+          },
+          "load": [
+            5.12,
+            7.76,
+            8.07
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 1,
+          "utc": "2026-10-18T19:19:20.449Z",
+          "wallMs": 323.34782199999995,
+          "cpuMs": 376.01,
+          "maxLoopGapMs": 334.57071700000006,
+          "heapDeltaBytes": 17639086,
+          "rssDeltaBytes": 123076608,
+          "rchar": 92324251,
+          "result": {
+            "project": 1,
+            "ms": 323,
+            "rules": 200,
+            "scopes": 28,
+            "retainedPasses": 50
+          },
+          "load": [
+            5.12,
+            7.76,
+            8.07
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 2,
+          "utc": "2026-10-18T19:19:21.086Z",
+          "wallMs": 220.28667499999983,
+          "cpuMs": 233.009,
+          "maxLoopGapMs": 247.3897609999999,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 112185344,
+          "rchar": 83612430,
+          "result": {
+            "project": 2,
+            "ms": 220,
+            "rules": 161,
+            "scopes": 28,
+            "retainedPasses": 12
+          },
+          "load": [
+            5.12,
+            7.76,
+            8.07
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 3,
+          "utc": "2026-10-18T19:19:21.728Z",
+          "wallMs": 217.7820670000001,
+          "cpuMs": 240.812,
+          "maxLoopGapMs": 251.59888300000011,
+          "heapDeltaBytes": 4388977,
+          "rssDeltaBytes": 15433728,
+          "rchar": 83930002,
+          "result": {
+            "project": 3,
+            "ms": 218,
+            "rules": 162,
+            "scopes": 28,
+            "retainedPasses": 23
+          },
+          "load": [
+            5.59,
+            7.82,
+            8.09
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 4,
+          "utc": "2026-10-18T19:19:22.165Z",
+          "wallMs": 0.27238500000021304,
+          "cpuMs": 0.305,
+          "maxLoopGapMs": 46.526343,
+          "heapDeltaBytes": 485,
+          "rssDeltaBytes": 0,
+          "rchar": 120,
+          "result": {
+            "project": 0,
+            "ms": 0,
+            "rules": 182,
+            "scopes": 28,
+            "retainedPasses": 17
+          },
+          "load": [
+            5.59,
+            7.82,
+            8.09
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 5,
+          "utc": "2026-10-18T19:19:22.571Z",
+          "wallMs": 0.2690139999999701,
+          "cpuMs": 0.368,
+          "maxLoopGapMs": 16.15433699999994,
+          "heapDeltaBytes": 485,
+          "rssDeltaBytes": 0,
+          "rchar": 120,
+          "result": {
+            "project": 1,
+            "ms": 0,
+            "rules": 200,
+            "scopes": 28,
+            "retainedPasses": 50
+          },
+          "load": [
+            5.59,
+            7.82,
+            8.09
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 6,
+          "utc": "2026-10-18T19:19:22.982Z",
+          "wallMs": 0.2826649999997244,
+          "cpuMs": 0.397,
+          "maxLoopGapMs": 19.827390999999807,
+          "heapDeltaBytes": 485,
+          "rssDeltaBytes": 0,
+          "rchar": 120,
+          "result": {
+            "project": 2,
+            "ms": 0,
+            "rules": 161,
+            "scopes": 28,
+            "retainedPasses": 12
+          },
+          "load": [
+            5.59,
+            7.82,
+            8.09
+          ]
+        },
+        {
+          "name": "role-projects",
+          "index": 7,
+          "utc": "2026-10-18T19:19:23.400Z",
+          "wallMs": 0.2685320000000502,
+          "cpuMs": 0.297,
+          "maxLoopGapMs": 28.227641999999832,
+          "heapDeltaBytes": 485,
+          "rssDeltaBytes": 0,
+          "rchar": 158,
+          "result": {
+            "project": 3,
+            "ms": 0,
+            "rules": 162,
+            "scopes": 28,
+            "retainedPasses": 23
+          },
+          "load": [
+            5.59,
+            7.82,
+            8.09
+          ]
+        },
+        {
+          "event": "end",
+          "name": "role-projects",
+          "utc": "2026-10-18T19:19:23.400Z"
+        }
+      ]
+    },
+    {
+      "phase": "after",
+      "case": "profile-view",
+      "runs": [
+        {
+          "target": "view",
+          "retainedPasses": 50,
+          "samples": 1,
+          "top": [
+            [
+              "src/lib/state/currentDatabase.ts databaseSwapInProgress",
+              1
+            ],
+            [
+              "src/lib/state/currentDatabase.ts isCurrent",
+              1
+            ],
+            [
+              "src/lib/state/currentDatabase.ts ensureCurrent",
+              1
+            ],
+            [
+              "src/lib/state/currentDatabase.ts get",
+              1
+            ],
+            [
+              "src/lib/memory/roleViewSource.ts roleViewVersion",
+              1
+            ],
+            [
+              "src/lib/memory/roleStore.ts projectViewMemo",
+              1
+            ],
+            [
+              "src/lib/readAttribution.ts sync",
+              1
+            ],
+            [
+              "src/lib/performanceSpans.ts sync",
+              1
+            ],
+            [
+              "src/lib/viewerLoopMonitor.ts ",
+              1
+            ]
+          ]
+        },
+        {
+          "target": "view",
+          "retainedPasses": 50,
+          "samples": 1,
+          "top": [
+            [
+              "src/lib/projects/aliases.ts readLegacySnapshot",
+              1
+            ],
+            [
+              "src/lib/projects/aliases.ts readSnapshot",
+              1
+            ],
+            [
+              "src/lib/projects/aliases.ts canonicalProject",
+              1
+            ],
+            [
+              "src/lib/memory/roleStore.ts projectViewMemo",
+              1
+            ],
+            [
+              "src/lib/readAttribution.ts sync",
+              1
+            ],
+            [
+              "src/lib/performanceSpans.ts sync",
+              1
+            ],
+            [
+              "src/lib/viewerLoopMonitor.ts ",
+              1
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "occupancyReplay": [
+    {
+      "phase": "before",
+      "case": "H8",
+      "runs": [
+        {
+          "event": "start",
+          "name": "H8",
+          "utc": "2026-10-18T19:10:54.112Z",
+          "readiness": {
+            "rules": 200,
+            "scopes": 28
+          },
+          "load": [
+            12.75,
+            12.48,
+            8.72
+          ],
+          "bun": "1.4.0"
+        },
+        {
+          "name": "H8",
+          "index": 0,
+          "helperBeforeMs": 48.24516799999947,
+          "helperAfterMs": 36.70431000000099,
+          "utc": "2026-10-18T19:10:58.835Z",
+          "wallMs": 4257.120423,
+          "cpuMs": 4508.849,
+          "maxLoopGapMs": 4247.233238000001,
+          "heapDeltaBytes": 23946704,
+          "rssDeltaBytes": 185499648,
+          "rchar": 597585931,
+          "result": 28,
+          "load": [
+            12.29,
+            12.39,
+            8.71
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 1,
+          "helperBeforeMs": 27.045240000001286,
+          "helperAfterMs": 38.43119099999967,
+          "utc": "2026-10-18T19:11:04.876Z",
+          "wallMs": 5595.502197,
+          "cpuMs": 5746.177,
+          "maxLoopGapMs": 5585.687468999999,
+          "heapDeltaBytes": -122918892,
+          "rssDeltaBytes": 193990656,
+          "rchar": 597601381,
+          "result": 28,
+          "load": [
+            11.79,
+            12.28,
+            8.7
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 2,
+          "helperBeforeMs": 40.28526000000056,
+          "helperAfterMs": 38.87908900000184,
+          "utc": "2026-10-18T19:11:11.712Z",
+          "wallMs": 6376.329485999999,
+          "cpuMs": 6805.65,
+          "maxLoopGapMs": 6376.575936999998,
+          "heapDeltaBytes": 43401177,
+          "rssDeltaBytes": 35799040,
+          "rchar": 597610717,
+          "result": 28,
+          "load": [
+            12.63,
+            12.44,
+            8.79
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 3,
+          "helperBeforeMs": 39.392987000002904,
+          "helperAfterMs": 71.19101500000397,
+          "utc": "2026-10-18T19:11:18.587Z",
+          "wallMs": 6383.6797739999965,
+          "cpuMs": 6687.915,
+          "maxLoopGapMs": 6373.988871000001,
+          "heapDeltaBytes": 39024556,
+          "rssDeltaBytes": 199364608,
+          "rchar": 597610229,
+          "result": 28,
+          "load": [
+            12.74,
+            12.46,
+            8.81
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 4,
+          "helperBeforeMs": 41.19405700000061,
+          "helperAfterMs": 39.789880000003905,
+          "utc": "2026-10-18T19:11:23.678Z",
+          "wallMs": 4629.171456999997,
+          "cpuMs": 4937.144,
+          "maxLoopGapMs": 4619.24684,
+          "heapDeltaBytes": -82301427,
+          "rssDeltaBytes": 173297664,
+          "rchar": 597590452,
+          "result": 28,
+          "load": [
+            12.61,
+            12.44,
+            8.83
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 5,
+          "helperBeforeMs": 12.35394699999597,
+          "helperAfterMs": 24.353044000003138,
+          "utc": "2026-10-18T19:11:28.282Z",
+          "wallMs": 4186.781923000002,
+          "cpuMs": 4466.532,
+          "maxLoopGapMs": 4184.193245000002,
+          "heapDeltaBytes": 53120661,
+          "rssDeltaBytes": 203845632,
+          "rchar": 597584638,
+          "result": 28,
+          "load": [
+            12.24,
+            12.36,
+            8.82
+          ]
+        },
+        {
+          "event": "end",
+          "name": "H8",
+          "utc": "2026-10-18T19:11:28.282Z"
+        }
+      ]
+    },
+    {
+      "phase": "before",
+      "case": "D6-scope-read",
+      "runs": [
+        {
+          "event": "start",
+          "name": "D6-scope-read",
+          "utc": "2026-10-18T19:11:37.106Z",
+          "readiness": {
+            "rules": 200,
+            "scopeRules": 42
+          },
+          "load": [
+            11.43,
+            12.19,
+            8.8
+          ],
+          "bun": "1.4.0"
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 0,
+          "helperBeforeMs": 41.157273999999234,
+          "helperAfterMs": 39.32538000000022,
+          "utc": "2026-10-18T19:11:42.162Z",
+          "wallMs": 4594.616882,
+          "cpuMs": 4858.221,
+          "maxLoopGapMs": 4560.901825999999,
+          "heapDeltaBytes": 30558025,
+          "rssDeltaBytes": 74104832,
+          "rchar": 608216927,
+          "result": 7,
+          "load": [
+            11.56,
+            12.2,
+            8.82
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 1,
+          "helperBeforeMs": 18.73091099999874,
+          "helperAfterMs": 45.272924000000785,
+          "utc": "2026-10-18T19:11:47.332Z",
+          "wallMs": 4724.098457000002,
+          "cpuMs": 5038.278,
+          "maxLoopGapMs": 4718.924239000002,
+          "heapDeltaBytes": 122639046,
+          "rssDeltaBytes": 11071488,
+          "rchar": 597610303,
+          "result": 7,
+          "load": [
+            11.43,
+            12.16,
+            8.83
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 2,
+          "helperBeforeMs": 52.6823779999977,
+          "helperAfterMs": 45.88176199999725,
+          "utc": "2026-10-18T19:11:52.342Z",
+          "wallMs": 4531.57949,
+          "cpuMs": 4849.453,
+          "maxLoopGapMs": 4521.695229000001,
+          "heapDeltaBytes": -25649071,
+          "rssDeltaBytes": 165261312,
+          "rchar": 597591700,
+          "result": 7,
+          "load": [
+            11.64,
+            12.2,
+            8.86
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 3,
+          "helperBeforeMs": 29.81104300000152,
+          "helperAfterMs": 64.8298360000008,
+          "utc": "2026-10-18T19:11:57.168Z",
+          "wallMs": 4350.346236000001,
+          "cpuMs": 4628.532,
+          "maxLoopGapMs": 4348.671086999999,
+          "heapDeltaBytes": 40965912,
+          "rssDeltaBytes": 88952832,
+          "rchar": 597589099,
+          "result": 7,
+          "load": [
+            11.27,
+            12.11,
+            8.85
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 4,
+          "helperBeforeMs": 44.52405400000134,
+          "helperAfterMs": 27.958802000001015,
+          "utc": "2026-10-18T19:12:02.793Z",
+          "wallMs": 5171.762875999997,
+          "cpuMs": 5562.945,
+          "maxLoopGapMs": 5171.844053999997,
+          "heapDeltaBytes": 28006286,
+          "rssDeltaBytes": 83755008,
+          "rchar": 597599512,
+          "result": 7,
+          "load": [
+            11.09,
+            12.06,
+            8.85
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 5,
+          "helperBeforeMs": 25.975133999992977,
+          "helperAfterMs": 40.36466500000097,
+          "utc": "2026-10-18T19:12:07.765Z",
+          "wallMs": 4525.826451000001,
+          "cpuMs": 4842.414,
+          "maxLoopGapMs": 4521.145581000004,
+          "heapDeltaBytes": 84798492,
+          "rssDeltaBytes": 173760512,
+          "rchar": 597591866,
+          "result": 7,
+          "load": [
+            10.92,
+            12.01,
+            8.85
+          ]
+        },
+        {
+          "event": "end",
+          "name": "D6-scope-read",
+          "utc": "2026-10-18T19:12:07.765Z"
+        }
+      ]
+    },
+    {
+      "phase": "after",
+      "case": "H8",
+      "runs": [
+        {
+          "event": "start",
+          "name": "H8",
+          "utc": "2026-10-18T19:20:07.197Z",
+          "readiness": {
+            "rules": 200,
+            "scopes": 28
+          },
+          "load": [
+            3.92,
+            7.09,
+            7.83
+          ],
+          "bun": "1.4.0"
+        },
+        {
+          "name": "H8",
+          "index": 0,
+          "helperBeforeMs": 32.78144999999995,
+          "helperAfterMs": 32.92984300000012,
+          "utc": "2026-10-18T19:20:07.644Z",
+          "wallMs": 0.28248200000007273,
+          "cpuMs": 0.47,
+          "maxLoopGapMs": 0.08093899999994392,
+          "heapDeltaBytes": 464,
+          "rssDeltaBytes": -29343744,
+          "rchar": 162,
+          "result": 28,
+          "load": [
+            3.92,
+            7.09,
+            7.83
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 1,
+          "helperBeforeMs": 28.988470000000007,
+          "helperAfterMs": 27.250979000000143,
+          "utc": "2026-10-18T19:20:08.081Z",
+          "wallMs": 0.25321099999996477,
+          "cpuMs": 0.381,
+          "maxLoopGapMs": 0.16293800000016745,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 0,
+          "rchar": 124,
+          "result": 28,
+          "load": [
+            3.92,
+            7.09,
+            7.83
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 2,
+          "helperBeforeMs": 21.59832299999971,
+          "helperAfterMs": 30.075800999999956,
+          "utc": "2026-10-18T19:20:08.513Z",
+          "wallMs": 0.2744880000000194,
+          "cpuMs": 0.494,
+          "maxLoopGapMs": 0.15430600000036065,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 124,
+          "result": 28,
+          "load": [
+            3.92,
+            7.09,
+            7.83
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 3,
+          "helperBeforeMs": 17.449704999999994,
+          "helperAfterMs": 30.05842399999983,
+          "utc": "2026-10-18T19:20:08.941Z",
+          "wallMs": 0.27484999999978754,
+          "cpuMs": 0.303,
+          "maxLoopGapMs": 0.15932299999985844,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 124,
+          "result": 28,
+          "load": [
+            3.92,
+            7.09,
+            7.83
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 4,
+          "helperBeforeMs": 40.541279999999915,
+          "helperAfterMs": 25.270104000000174,
+          "utc": "2026-10-18T19:20:09.387Z",
+          "wallMs": 0.260921000000053,
+          "cpuMs": 0.356,
+          "maxLoopGapMs": 0.07672499999989668,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": -200704,
+          "rchar": 124,
+          "result": 28,
+          "load": [
+            3.92,
+            7.09,
+            7.83
+          ]
+        },
+        {
+          "name": "H8",
+          "index": 5,
+          "helperBeforeMs": 19.08071999999993,
+          "helperAfterMs": 17.214332000000013,
+          "utc": "2026-10-18T19:20:09.804Z",
+          "wallMs": 0.23691099999996368,
+          "cpuMs": 0.265,
+          "maxLoopGapMs": 0.15295800000012605,
+          "heapDeltaBytes": 0,
+          "rssDeltaBytes": 196608,
+          "rchar": 162,
+          "result": 28,
+          "load": [
+            3.92,
+            7.09,
+            7.83
+          ]
+        },
+        {
+          "event": "end",
+          "name": "H8",
+          "utc": "2026-10-18T19:20:09.804Z"
+        }
+      ]
+    },
+    {
+      "phase": "after",
+      "case": "D6-scope-read",
+      "runs": [
+        {
+          "event": "start",
+          "name": "D6-scope-read",
+          "utc": "2026-10-18T19:20:11.077Z",
+          "readiness": {
+            "rules": 200,
+            "scopeRules": 42
+          },
+          "load": [
+            3.92,
+            7.09,
+            7.83
+          ],
+          "bun": "1.4.0"
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 0,
+          "helperBeforeMs": 16.65597600000001,
+          "helperAfterMs": 16.815472999999884,
+          "utc": "2026-10-18T19:20:11.540Z",
+          "wallMs": 49.33345299999996,
+          "cpuMs": 47.908,
+          "maxLoopGapMs": 19.822211000000152,
+          "heapDeltaBytes": 10344,
+          "rssDeltaBytes": 692224,
+          "rchar": 13379281,
+          "result": 7,
+          "load": [
+            3.68,
+            6.99,
+            7.79
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 1,
+          "helperBeforeMs": 19.037417000000005,
+          "helperAfterMs": 17.36110000000008,
+          "utc": "2026-10-18T19:20:11.979Z",
+          "wallMs": 21.883323999999902,
+          "cpuMs": 24.78,
+          "maxLoopGapMs": 11.925669999999855,
+          "heapDeltaBytes": 148,
+          "rssDeltaBytes": 11386880,
+          "rchar": 3131038,
+          "result": 7,
+          "load": [
+            3.68,
+            6.99,
+            7.79
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 2,
+          "helperBeforeMs": 6.887178999999833,
+          "helperAfterMs": 7.746047999999973,
+          "utc": "2026-10-18T19:20:12.394Z",
+          "wallMs": 20.4847749999999,
+          "cpuMs": 21.05,
+          "maxLoopGapMs": 10.53509699999995,
+          "heapDeltaBytes": 148,
+          "rssDeltaBytes": -40353792,
+          "rchar": 3114654,
+          "result": 7,
+          "load": [
+            3.68,
+            6.99,
+            7.79
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 3,
+          "helperBeforeMs": 7.097891000000345,
+          "helperAfterMs": 28.274565000000166,
+          "utc": "2026-10-18T19:20:12.831Z",
+          "wallMs": 21.0043169999999,
+          "cpuMs": 24.341,
+          "maxLoopGapMs": 11.045145999999932,
+          "heapDeltaBytes": 148,
+          "rssDeltaBytes": 12087296,
+          "rchar": 3114618,
+          "result": 7,
+          "load": [
+            3.68,
+            6.99,
+            7.79
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 4,
+          "helperBeforeMs": 12.802564999999959,
+          "helperAfterMs": 7.062490999999682,
+          "utc": "2026-10-18T19:20:13.256Z",
+          "wallMs": 25.308382000000165,
+          "cpuMs": 25.89,
+          "maxLoopGapMs": 15.352718000000095,
+          "heapDeltaBytes": 148,
+          "rssDeltaBytes": -11882496,
+          "rchar": 3114780,
+          "result": 7,
+          "load": [
+            3.68,
+            6.99,
+            7.79
+          ]
+        },
+        {
+          "name": "D6-scope-read",
+          "index": 5,
+          "helperBeforeMs": 11.582077000000027,
+          "helperAfterMs": 7.130616999999802,
+          "utc": "2026-10-18T19:20:13.677Z",
+          "wallMs": 21.41936799999985,
+          "cpuMs": 22.223,
+          "maxLoopGapMs": 11.461178999999902,
+          "heapDeltaBytes": 148,
+          "rssDeltaBytes": 10059776,
+          "rchar": 3114657,
+          "result": 7,
+          "load": [
+            3.68,
+            6.99,
+            7.79
+          ]
+        },
+        {
+          "event": "end",
+          "name": "D6-scope-read",
+          "utc": "2026-10-18T19:20:13.677Z"
+        }
+      ]
+    }
+  ],
+  "queryPlans": [
+    {
+      "query": "scopes",
+      "plan": [
+        "SEARCH state_rows USING INDEX sqlite_autoindex_state_rows_1 (collection=? AND row_key>? AND row_key<?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "query": "scope-rules",
+      "plan": [
+        "SEARCH state_rows USING INDEX sqlite_autoindex_state_rows_1 (collection=? AND row_key>? AND row_key<?)",
+        "LIST SUBQUERY 1",
+        "SCAN json_each VIRTUAL TABLE INDEX 1:",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "query": "scope-rules-multi",
+      "plan": [
+        "SEARCH state_rows USING INDEX sqlite_autoindex_state_rows_1 (collection=? AND row_key>? AND row_key<?)",
+        "LIST SUBQUERY 1",
+        "SCAN json_each VIRTUAL TABLE INDEX 1:",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "query": "lineage",
+      "plan": [
+        "SEARCH state_rows USING INDEX sqlite_autoindex_state_rows_1 (collection=? AND row_key>? AND row_key<?)",
+        "LIST SUBQUERY 1",
+        "SCAN json_each VIRTUAL TABLE INDEX 1:",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "query": "requests",
+      "plan": [
+        "SEARCH state_rows USING INDEX sqlite_autoindex_state_rows_1 (collection=? AND row_key>? AND row_key<?)",
+        "LIST SUBQUERY 1",
+        "SCAN json_each VIRTUAL TABLE INDEX 1:",
+        "CORRELATED SCALAR SUBQUERY 3",
+        "SCAN json_each VIRTUAL TABLE INDEX 3:",
+        "LIST SUBQUERY 2",
+        "SCAN json_each VIRTUAL TABLE INDEX 1:",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    },
+    {
+      "query": "other-role",
+      "plan": [
+        "SEARCH state_rows USING INDEX sqlite_autoindex_state_rows_1 (collection=? AND row_key>? AND row_key<?)",
+        "USE TEMP B-TREE FOR ORDER BY"
+      ]
+    }
+  ],
+  "notes": [
+    "All inputs copied once with read-only VACUUM INTO, then copied afresh per case and phase. Every Bun case runs in a new process with private HOME, XDG_CONFIG_HOME, LLV_STATE_DIR, TMPDIR and CODEX_HOME; the Viewer control URL points at a closed port.",
+    "The raw audit timer includes heapStats before and after the call. The occupancy replay moves only the timer reset after pre-call inspection and the captured timer result before post-call inspection; helperBeforeMs and helperAfterMs expose their costs.",
+    "H8 and D6 readiness runs roleTarget first, warming project views. role-projects includes first reads and memo hits separately. Baseline and candidate use the same dependency graph and Bun 1.4.0.",
+    "Each original scalar case has six repetitions; role-projects has eight (four projects twice); profile-view has two independent processes. Occupancy has six repetitions per case and phase.",
+    "A warm profile shorter than the 1 ms sampling interval cannot identify the remaining sub-millisecond work. The timed view and its synchronous span provide that evidence."
+  ],
+  "cache": {
+    "entries": 16,
+    "serializedBytes": 8388608,
+    "owner": "globalThis shared rendered-view LRU and shared connection-relative version tokens"
+  },
+  "exploratoryReplay": {
+    "candidate": "Superseded candidate before sharing the metadata-version connection; these observations are retained for probe diagnostics and are not the final implementation measurements.",
+    "usedForAcceptance": false,
+    "after": [
+      {
+        "case": "H8",
+        "runs": [
+          {
+            "event": "start",
+            "name": "H8",
+            "utc": "2026-10-18T19:07:49.830Z",
+            "readiness": {
+              "rules": 200,
+              "scopes": 28
+            },
+            "load": [
+              17.62,
+              10.39,
+              7.23
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "H8",
+            "index": 0,
+            "utc": "2026-10-18T19:07:50.265Z",
+            "wallMs": 0.36954900000000634,
+            "cpuMs": 0.621,
+            "maxLoopGapMs": 44.467195000000174,
+            "heapDeltaBytes": 429,
+            "rssDeltaBytes": 0,
+            "rchar": 161,
+            "result": 28,
+            "load": [
+              17.62,
+              10.39,
+              7.23
+            ]
+          },
+          {
+            "name": "H8",
+            "index": 1,
+            "utc": "2026-10-18T19:07:50.713Z",
+            "wallMs": 0.48408199999994395,
+            "cpuMs": 0.564,
+            "maxLoopGapMs": 56.97296400000005,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 123,
+            "result": 28,
+            "load": [
+              17.62,
+              10.39,
+              7.23
+            ]
+          },
+          {
+            "name": "H8",
+            "index": 2,
+            "utc": "2026-10-18T19:07:51.197Z",
+            "wallMs": 0.7885339999997996,
+            "cpuMs": 1.237,
+            "maxLoopGapMs": 94.16673200000014,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 123,
+            "result": 28,
+            "load": [
+              18.85,
+              10.76,
+              7.37
+            ]
+          },
+          {
+            "name": "H8",
+            "index": 3,
+            "utc": "2026-10-18T19:07:51.643Z",
+            "wallMs": 0.49208800000042174,
+            "cpuMs": 0.542,
+            "maxLoopGapMs": 55.336245999999846,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 123,
+            "result": 28,
+            "load": [
+              18.85,
+              10.76,
+              7.37
+            ]
+          },
+          {
+            "name": "H8",
+            "index": 4,
+            "utc": "2026-10-18T19:07:52.124Z",
+            "wallMs": 0.8798509999996895,
+            "cpuMs": 1.079,
+            "maxLoopGapMs": 91.66185099999984,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 123,
+            "result": 28,
+            "load": [
+              18.85,
+              10.76,
+              7.37
+            ]
+          },
+          {
+            "name": "H8",
+            "index": 5,
+            "utc": "2026-10-18T19:07:52.605Z",
+            "wallMs": 0.6010759999999209,
+            "cpuMs": 0.764,
+            "maxLoopGapMs": 89.9867349999995,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 161,
+            "result": 28,
+            "load": [
+              18.85,
+              10.76,
+              7.37
+            ]
+          },
+          {
+            "event": "end",
+            "name": "H8",
+            "utc": "2026-10-18T19:07:52.605Z"
+          }
+        ]
+      },
+      {
+        "case": "D6-overview",
+        "runs": [
+          {
+            "event": "start",
+            "name": "D6-overview",
+            "utc": "2026-10-18T19:07:54.995Z",
+            "readiness": {
+              "rules": 200,
+              "scopes": 28
+            },
+            "load": [
+              18.85,
+              10.76,
+              7.37
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "D6-overview",
+            "index": 0,
+            "utc": "2026-10-18T19:07:55.466Z",
+            "wallMs": 1.8757800000003044,
+            "cpuMs": 2.379,
+            "maxLoopGapMs": 81.01228300000002,
+            "heapDeltaBytes": 456,
+            "rssDeltaBytes": -7020544,
+            "rchar": 162,
+            "result": 28,
+            "load": [
+              18.85,
+              10.76,
+              7.37
+            ]
+          },
+          {
+            "name": "D6-overview",
+            "index": 1,
+            "utc": "2026-10-18T19:07:55.900Z",
+            "wallMs": 1.079801999999745,
+            "cpuMs": 1.131,
+            "maxLoopGapMs": 43.69076899999982,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 124,
+            "result": 28,
+            "load": [
+              18.85,
+              10.76,
+              7.37
+            ]
+          },
+          {
+            "name": "D6-overview",
+            "index": 2,
+            "utc": "2026-10-18T19:07:56.328Z",
+            "wallMs": 0.8836009999999987,
+            "cpuMs": 1.746,
+            "maxLoopGapMs": 37.792609000000084,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 162,
+            "result": 28,
+            "load": [
+              18.46,
+              10.82,
+              7.4
+            ]
+          },
+          {
+            "name": "D6-overview",
+            "index": 3,
+            "utc": "2026-10-18T19:07:56.762Z",
+            "wallMs": 0.9515389999996842,
+            "cpuMs": 1.059,
+            "maxLoopGapMs": 42.859060999999656,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 162,
+            "result": 28,
+            "load": [
+              18.46,
+              10.82,
+              7.4
+            ]
+          },
+          {
+            "name": "D6-overview",
+            "index": 4,
+            "utc": "2026-10-18T19:07:57.227Z",
+            "wallMs": 1.4934489999996003,
+            "cpuMs": 2.065,
+            "maxLoopGapMs": 75.72892799999954,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 0,
+            "rchar": 282,
+            "result": 28,
+            "load": [
+              18.46,
+              10.82,
+              7.4
+            ]
+          },
+          {
+            "name": "D6-overview",
+            "index": 5,
+            "utc": "2026-10-18T19:07:57.668Z",
+            "wallMs": 1.3679130000000441,
+            "cpuMs": 1.418,
+            "maxLoopGapMs": 50.6960280000003,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 196608,
+            "rchar": 124,
+            "result": 28,
+            "load": [
+              18.46,
+              10.82,
+              7.4
+            ]
+          },
+          {
+            "event": "end",
+            "name": "D6-overview",
+            "utc": "2026-10-18T19:07:57.669Z"
+          }
+        ]
+      },
+      {
+        "case": "D6-scope-read",
+        "runs": [
+          {
+            "event": "start",
+            "name": "D6-scope-read",
+            "utc": "2026-10-18T19:08:00.027Z",
+            "readiness": {
+              "rules": 200,
+              "scopeRules": 42
+            },
+            "load": [
+              18.46,
+              10.82,
+              7.4
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "D6-scope-read",
+            "index": 0,
+            "utc": "2026-10-18T19:08:00.687Z",
+            "wallMs": 162.89082000000008,
+            "cpuMs": 150.959,
+            "maxLoopGapMs": 124.32513800000015,
+            "heapDeltaBytes": 10309,
+            "rssDeltaBytes": -2289664,
+            "rchar": 13380457,
+            "result": 7,
+            "load": [
+              18.46,
+              10.82,
+              7.4
+            ]
+          },
+          {
+            "name": "D6-scope-read",
+            "index": 1,
+            "utc": "2026-10-18T19:08:01.200Z",
+            "wallMs": 42.27648100000033,
+            "cpuMs": 44.822,
+            "maxLoopGapMs": 121.38635599999998,
+            "heapDeltaBytes": 148,
+            "rssDeltaBytes": 12857344,
+            "rchar": 3131366,
+            "result": 7,
+            "load": [
+              19.15,
+              11.09,
+              7.51
+            ]
+          },
+          {
+            "name": "D6-scope-read",
+            "index": 2,
+            "utc": "2026-10-18T19:08:01.742Z",
+            "wallMs": 61.416339999999764,
+            "cpuMs": 59.71,
+            "maxLoopGapMs": 150.11980800000038,
+            "heapDeltaBytes": 148,
+            "rssDeltaBytes": 11513856,
+            "rchar": 3115181,
+            "result": 7,
+            "load": [
+              19.15,
+              11.09,
+              7.51
+            ]
+          },
+          {
+            "name": "D6-scope-read",
+            "index": 3,
+            "utc": "2026-10-18T19:08:02.277Z",
+            "wallMs": 44.794441999999435,
+            "cpuMs": 52.334,
+            "maxLoopGapMs": 144.95074100000056,
+            "heapDeltaBytes": 148,
+            "rssDeltaBytes": 14823424,
+            "rchar": 3114865,
+            "result": 7,
+            "load": [
+              19.15,
+              11.09,
+              7.51
+            ]
+          },
+          {
+            "name": "D6-scope-read",
+            "index": 4,
+            "utc": "2026-10-18T19:08:02.757Z",
+            "wallMs": 42.46852200000012,
+            "cpuMs": 44.352,
+            "maxLoopGapMs": 89.38175200000023,
+            "heapDeltaBytes": 148,
+            "rssDeltaBytes": 12591104,
+            "rchar": 3114903,
+            "result": 7,
+            "load": [
+              19.15,
+              11.09,
+              7.51
+            ]
+          },
+          {
+            "name": "D6-scope-read",
+            "index": 5,
+            "utc": "2026-10-18T19:08:03.233Z",
+            "wallMs": 48.77662799999962,
+            "cpuMs": 49.865,
+            "maxLoopGapMs": 85.488789,
+            "heapDeltaBytes": 148,
+            "rssDeltaBytes": 12398592,
+            "rchar": 3114950,
+            "result": 7,
+            "load": [
+              19.15,
+              11.09,
+              7.51
+            ]
+          },
+          {
+            "event": "end",
+            "name": "D6-scope-read",
+            "utc": "2026-10-18T19:08:03.233Z"
+          }
+        ]
+      },
+      {
+        "case": "role-projects",
+        "runs": [
+          {
+            "event": "start",
+            "name": "role-projects",
+            "utc": "2026-10-18T19:08:04.155Z",
+            "readiness": null,
+            "load": [
+              19.15,
+              11.09,
+              7.51
+            ],
+            "bun": "1.4.0"
+          },
+          {
+            "name": "role-projects",
+            "index": 0,
+            "utc": "2026-10-18T19:08:05.089Z",
+            "wallMs": 514.4587510000001,
+            "cpuMs": 620.539,
+            "maxLoopGapMs": 552.757214,
+            "heapDeltaBytes": 11168392,
+            "rssDeltaBytes": 105435136,
+            "rchar": 86315415,
+            "result": {
+              "project": 0,
+              "ms": 514,
+              "rules": 182,
+              "scopes": 28,
+              "retainedPasses": 17
+            },
+            "load": [
+              19.15,
+              11.09,
+              7.51
+            ]
+          },
+          {
+            "name": "role-projects",
+            "index": 1,
+            "utc": "2026-10-18T19:08:06.274Z",
+            "wallMs": 742.1493249999999,
+            "cpuMs": 888.299,
+            "maxLoopGapMs": 804.362603,
+            "heapDeltaBytes": 18981693,
+            "rssDeltaBytes": 102838272,
+            "rchar": 92329101,
+            "result": {
+              "project": 1,
+              "ms": 742,
+              "rules": 200,
+              "scopes": 28,
+              "retainedPasses": 50
+            },
+            "load": [
+              19.54,
+              11.3,
+              7.6
+            ]
+          },
+          {
+            "name": "role-projects",
+            "index": 2,
+            "utc": "2026-10-18T19:08:07.152Z",
+            "wallMs": 429.35552199999984,
+            "cpuMs": 460.939,
+            "maxLoopGapMs": 488.2294750000001,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 70496256,
+            "rchar": 83615076,
+            "result": {
+              "project": 2,
+              "ms": 429,
+              "rules": 161,
+              "scopes": 28,
+              "retainedPasses": 12
+            },
+            "load": [
+              19.54,
+              11.3,
+              7.6
+            ]
+          },
+          {
+            "name": "role-projects",
+            "index": 3,
+            "utc": "2026-10-18T19:08:08.155Z",
+            "wallMs": 535.3246509999999,
+            "cpuMs": 576.681,
+            "maxLoopGapMs": 612.2173889999999,
+            "heapDeltaBytes": 0,
+            "rssDeltaBytes": 39124992,
+            "rchar": 83933770,
+            "result": {
+              "project": 3,
+              "ms": 535,
+              "rules": 162,
+              "scopes": 28,
+              "retainedPasses": 23
+            },
+            "load": [
+              19.54,
+              11.3,
+              7.6
+            ]
+          },
+          {
+            "name": "role-projects",
+            "index": 4,
+            "utc": "2026-10-18T19:08:08.607Z",
+            "wallMs": 0.8118129999993471,
+            "cpuMs": 0.907,
+            "maxLoopGapMs": 66.55929800000013,
+            "heapDeltaBytes": 462,
+            "rssDeltaBytes": -25477120,
+            "rchar": 124,
+            "result": {
+              "project": 0,
+              "ms": 1,
+              "rules": 182,
+              "scopes": 28,
+              "retainedPasses": 17
+            },
+            "load": [
+              19.54,
+              11.3,
+              7.6
+            ]
+          },
+          {
+            "name": "role-projects",
+            "index": 5,
+            "utc": "2026-10-18T19:08:09.056Z",
+            "wallMs": 0.7113450000006196,
+            "cpuMs": 0.785,
+            "maxLoopGapMs": 58.84736100000009,
+            "heapDeltaBytes": 462,
+            "rssDeltaBytes": 0,
+            "rchar": 124,
+            "result": {
+              "project": 1,
+              "ms": 1,
+              "rules": 200,
+              "scopes": 28,
+              "retainedPasses": 50
+            },
+            "load": [
+              19.54,
+              11.3,
+              7.6
+            ]
+          },
+          {
+            "name": "role-projects",
+            "index": 6,
+            "utc": "2026-10-18T19:08:09.499Z",
+            "wallMs": 0.8134059999993042,
+            "cpuMs": 1.185,
+            "maxLoopGapMs": 52.22943100000066,
+            "heapDeltaBytes": 462,
+            "rssDeltaBytes": 0,
+            "rchar": 124,
+            "result": {
+              "project": 2,
+              "ms": 1,
+              "rules": 161,
+              "scopes": 28,
+              "retainedPasses": 12
+            },
+            "load": [
+              19.54,
+              11.3,
+              7.6
+            ]
+          },
+          {
+            "name": "role-projects",
+            "index": 7,
+            "utc": "2026-10-18T19:08:09.937Z",
+            "wallMs": 0.6993149999998423,
+            "cpuMs": 0.796,
+            "maxLoopGapMs": 47.402852000000166,
+            "heapDeltaBytes": 462,
+            "rssDeltaBytes": 0,
+            "rchar": 124,
+            "result": {
+              "project": 3,
+              "ms": 1,
+              "rules": 162,
+              "scopes": 28,
+              "retainedPasses": 23
+            },
+            "load": [
+              19.54,
+              11.3,
+              7.6
+            ]
+          },
+          {
+            "event": "end",
+            "name": "role-projects",
+            "utc": "2026-10-18T19:08:09.937Z"
+          }
+        ]
+      },
+      {
+        "case": "profile-view",
+        "runs": [
+          {
+            "target": "view",
+            "retainedPasses": 50,
+            "samples": 1,
+            "top": []
+          },
+          {
+            "target": "view",
+            "retainedPasses": 50,
+            "samples": 1,
+            "top": []
+          }
+        ]
+      }
+    ]
+  },
+  "verification": [
+    {
+      "command": "bun test src/lib/memory/roleView.test.ts src/lib/memory/roleStore.test.ts src/lib/memory/curation/curation.test.ts",
+      "passed": 116,
+      "failed": 0
+    },
+    {
+      "command": "bun test src/lib/performanceSpans.test.ts src/lib/viewerLoopMonitor.test.ts",
+      "passed": 18,
+      "failed": 0
+    },
+    {
+      "command": "node --max-old-space-size=6144 node_modules/typescript/bin/tsc --noEmit --incremental false",
+      "exitCode": 0
+    }
+  ],
+  "verificationFiles": [
+    {
+      "path": "src/lib/memory/roleView.test.ts",
+      "sha256": "fe549b0ce7bd69c4630ee34f348043c0f28ae3b6eb4558e168163e7272a23b4b"
+    }
+  ]
+}
