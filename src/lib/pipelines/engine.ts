@@ -153,7 +153,7 @@ import { mergeOnReviewEnabled } from "@/lib/projects/settings";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
 import { assignmentHoldsIdentity } from "@/lib/tasks/membership";
 import { MAX_DECISION_ANSWER_CHARS } from "./types";
-import { nudgeAutoMerge } from "@/lib/forge/autoMerge";
+import { mergeAdmission, nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep } from "@/lib/forge/cache";
 import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
 import { editStoredWorkLinks, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
@@ -14188,8 +14188,15 @@ export async function patchPipeline(
  * runner would cancel it again at once.
  */
 function retryMerge(pipeline: Pipeline, now: string): PipelinePatchResult | null {
+  if (!pipeline.merge) {
+    const admission = mergeAdmission(pipeline, Date.parse(now));
+    if ("reason" in admission) return { error: admission.reason, status: 409 };
+    pipeline.merge = admission.merge;
+    nudgeAutoMerge();
+    return null;
+  }
   const merge = pipeline.merge;
-  if (pipeline.state !== "completed" || !merge) return { error: "only a completed pipeline with a merge record can retry its merge", status: 409 };
+  if (pipeline.state !== "completed") return { error: "only a completed pipeline can retry its merge", status: 409 };
   if (merge.state !== "blocked" && merge.state !== "cancelled") return { error: `the merge is ${merge.state}; only a stopped merge can be tried again`, status: 409 };
   if (!mergeOnReviewEnabled(pipeline.project)) return { error: "the project's \"merge when the review passes\" setting is off", status: 409 };
   merge.state = "queued";

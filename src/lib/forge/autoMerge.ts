@@ -663,19 +663,50 @@ async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void
 
 /* ── The sweep ──────────────────────────────────────────────────────────── */
 
+type MergeAdmissionPorts = Pick<AutoMergePorts, "setting" | "pullRequestOf" | "hasPublishedPrototype">;
+
+/** Shared by the sweep and retry-merge. Call again against the live lane under
+ * its write lock: a pre-lock observation grants no admission authority. */
+export function mergeAdmission(pipeline: Pipeline, now: number, ports: MergeAdmissionPorts = {
+  setting: mergeOnReviewSetting, pullRequestOf: lanePullRequest, hasPublishedPrototype,
+}): { merge: PipelineMerge } | { reason: string } {
+  if (pipeline.state !== "completed") return { reason: "only a completed pipeline can queue its merge" };
+  if (pipeline.hiddenAt) return { reason: "lane is hidden" };
+  if (pipeline.merge) return { reason: "lane already has a merge record" };
+  const setting = ports.setting(pipeline.project);
+  if (!setting.enabled) return { reason: 'the project\'s "merge when the review passes" setting is off' };
+  if (!setting.changedAt || !(Date.parse(pipeline.closedAt ?? "") >= Date.parse(setting.changedAt)))
+    return { reason: "lane did not complete after the merge setting was enabled" };
+  if (!pipeline.lastPassedCommit) return { reason: "lane has no passed commit" };
+  if (!mergeEligible(pipeline)) return { reason: "lane has not met the review merge bar" };
+  const pr = ports.pullRequestOf(pipeline);
+  if (!pr && laneNeedsNoPr(pipeline, ports)) return { reason: "no pull request is required" };
+  if (!pr && pipeline.delivery?.disposition === "comparison") return { reason: "comparison lane does not own publication" };
+  const repository = pr?.repository ?? pipelineRepository(pipeline);
+  if (!repository) return { reason: "lane has no resolved repository" };
+  const merge = newMerge(pipeline, { repository, number: pr?.number ?? null }, setting, now);
+  if (!pr) block(merge, MERGE_REASONS.noPr, now);
+  return { merge };
+}
+
 /**
- * One pass: queue the lanes that just became eligible, cancel what only waits
+ * One pass: queue every eligible lane still missing a record, cancel what only waits
  * under a setting turned off, note merges someone else made, and take one step
  * on the head of each repository's queue whose next read is due.
  */
 export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   const now = ports.now();
   for (const pipeline of ports.loadPipelines()) {
-    if (pipeline.state !== "completed" || pipeline.hiddenAt) continue;
+    if (pipeline.state !== "completed") continue;
+    if (pipeline.hiddenAt) {
+      if (!pipeline.merge) ports.log?.(`[auto merge] ${pipeline.id}: not admitted: lane is hidden`);
+      continue;
+    }
     const setting = ports.setting(pipeline.project);
     const merge = pipeline.merge;
     const linkedPr = ports.pullRequestOf(pipeline);
     if (!linkedPr && !merge?.prNumber && laneNeedsNoPr(pipeline, ports)) {
+      if (!merge) ports.log?.(`[auto merge] ${pipeline.id}: not admitted: no pull request is required`);
       // Retire an old false stop as well as refusing admission for new lanes.
       if (merge && merge.reason === MERGE_REASONS.noPr) await ports.mutate(pipeline.id, (live) => {
         if (live.state !== "completed" || live.merge?.updatedAt !== merge.updatedAt || live.merge.prNumber
@@ -686,19 +717,24 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       continue;
     }
     if (!merge) {
-      /* Only lanes that complete after the setting went on (§4.1). */
-      if (!setting.enabled || !setting.changedAt || !(Date.parse(pipeline.closedAt ?? "") >= Date.parse(setting.changedAt))) continue;
-      if (!pipeline.lastPassedCommit || !mergeEligible(pipeline)) continue;
-      const pr = linkedPr;
-      if (!pr && pipeline.delivery?.disposition === "comparison") continue;
-      const repository = pr?.repository ?? pipelineRepository(pipeline);
-      if (!repository) continue;
-      await ports.mutate(pipeline.id, (live) => {
-        if (live.state !== "completed" || live.merge || (!pr && laneNeedsNoPr(live, ports))) return false;
-        live.merge = newMerge(live, { repository, number: pr?.number ?? null }, setting, now);
-        if (!pr) block(live.merge, MERGE_REASONS.noPr, now);
-        return true;
-      });
+      const admission = mergeAdmission(pipeline, now, ports);
+      if ("reason" in admission) {
+        ports.log?.(`[auto merge] ${pipeline.id}: not admitted: ${admission.reason}`);
+        continue;
+      }
+      let reason = "lane was missing or unavailable at admission";
+      try {
+        const admitted = await ports.mutate(pipeline.id, (live) => {
+          const current = mergeAdmission(live, ports.now(), ports);
+          if ("reason" in current) { reason = current.reason; return false; }
+          live.merge = current.merge;
+          if (live.merge.reason) ports.log?.(`[auto merge] ${pipeline.id}: admission blocked: ${live.merge.reason}`);
+          return true;
+        });
+        if (!admitted) ports.log?.(`[auto merge] ${pipeline.id}: not admitted: ${reason}`);
+      } catch (error) {
+        ports.log?.(`[auto merge] ${pipeline.id}: admission failed; will retry next sweep`, error);
+      }
       continue;
     }
     if ((PIPELINE_MERGE_LIVE_STATES.has(merge.state) || merge.state === "refreshing") && merge.state !== "merging" && !setting.enabled) {
