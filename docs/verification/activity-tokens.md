@@ -203,8 +203,12 @@ replaces §9.2's "the custom range belongs to «Токени» only".
   page is visible, and draws the total with its coverage dot, the kind meter,
   one stacked column chart and «Розбити за». The chart stacks by the list's
   choice; «Тип» stacks by kind. The seven largest entries take a colour and
-  the rest fold into «Інші», so a list row and its column share one colour.
-  On the phone a range over 31 days draws Monday weeks.
+  the rest fold into «Інші», a slate in the light theme and a taupe in the dark
+  one, both above 3:1 on the card, so a list row and its column share one
+  colour. Days not counted yet are one hatched band over the whole plot,
+  never a column with a height, and the legend names it. A share that is not
+  zero but rounds to nothing reads «<1%». On the phone a range over 31 days
+  draws Monday weeks, and a failed read offers a 44 px Retry as on desktop.
 - A row filters the page: a project scopes both tabs, a member sets the
   page's member, and a role, model or account adds a chip that clears it.
   Member and account breakdowns are offered only when the answer says
@@ -227,7 +231,10 @@ replaces §9.2's "the custom range belongs to «Токени» only".
   that apply once both are valid and keep at most 366 days. The address
   carries `range` or `from`/`to`, `view` and the breakdown. The Time tab
   reads the same range; past 92 days its chart draws one pair per Monday week,
-  and a range of one date draws hours.
+  and a range of one date draws hours. Past 92 days the weeks before the
+  request ledger begins are one hatched span with one label («Ваш час до … не
+  прочитано») instead of a «?» per week, Rhythm keeps the newest 92 days and
+  says so, and the phone lists the newest 14 days and says so.
 - The drawer opened from the Tokens tab holds the tokens section: coverage,
   what one count is, which engines report, the zone notes, and the price
   table's date and sources.
@@ -239,16 +246,19 @@ written through the ingest's own commit) and is recorded in
 open and applied, one project, by member, by account, by kind, the coverage
 popover, the drawer, a range wholly before counting, loading, a failed read,
 nothing counted yet, and the Time tab on the free range) at 1440, 1024 and
-390 px, light and dark, Ukrainian and English, 168 frames with no failed check,
-made from the commit the record names. A range that starts before the first
+390 px, light and dark, Ukrainian and English, plus the Time tab over 366 days
+at 1440 and 390 px, 172 frames with no failed check, made from the commit the
+record names. A range that starts before the first
 counted moment reads as a lower bound (amber dot, a leading ≥), and one wholly
 before it says it is not counted. The frames stay outside the repository.
 
 The Time tab over 366 days, measured in the same run on that revision
 (production build, one Chromium, through `scripts/gate-slot.sh`) over a store
 with 142 workdays of human input and agent runs: five reads of
-`GET /api/activity` took 90.0 to 99.8 ms over HTTP for a 1,718,684-byte
-answer, and the page drew 53 week columns, 12,199 elements and two long tasks
-(123 and 104 ms), loaded 580 ms after navigation. The weeks before the ledger's
-retained 90 days draw as not read. The populated read in isolation is the
-controlled rehearsal above (51.2 ms median, 172.1 ms maximum).
+`GET /api/activity` took 91.8 to 106.0 ms over HTTP for a 1,718,684-byte
+answer, and the page drew 53 week columns and 5,276 elements with no long task,
+loaded 332 ms after navigation. The page is 1,525 px tall at 1440 (it was
+8,782 px while the screen-reader table stretched the scroll area) and 3,956 to
+4,323 px at 390. The weeks before the ledger's retained 90 days are one
+labelled span. The populated read in isolation is the controlled rehearsal
+above (51.2 ms median, 172.1 ms maximum).
