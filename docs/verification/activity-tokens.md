@@ -86,7 +86,7 @@ one-hour cache write, output, reasoning and requests. One-hour writes and
 reasoning are subsets. `costBasis` preserves every model, tier, engine and
 kind for the global API price estimate, including unknown models. Cache share
 is cache reads divided by all input; reasoning share is reasoning divided by
-output. The next stage handles zero denominators and missing prices.
+output; a share whose denominator is 0 reads «—» in the interface.
 
 Host totals are available under the existing Activity authority. Every explicit
 member/account filter and either private dimension requires owner/solo
@@ -215,10 +215,13 @@ replaces §9.2's "the custom range belongs to «Токени» only".
   answer still holds one row of the rest beyond it.
 - `src/lib/activity/tokenPrices.ts` is the dated price table (read
   2026-10-18 from the providers' pricing pages), per model and tier, with
-  five-minute and one-hour cache writes priced apart. A model or tier with no
-  published price reads «—» and stays out of the sum; the estimate's tooltip
+  five-minute and one-hour cache writes priced apart. It lists every model the
+  two pages print, retired Claude models and older OpenAI ones included. A
+  model or tier neither page lists reads «—» and stays out of the sum; the estimate's tooltip
   and the drawer name those models. The figure is labelled an estimate at API
-  prices and never called spending.
+  prices and never called spending. A range wholly before counting replaces the figure,
+  the extras and the kind meter with the words that the period is not counted;
+  no «≥ 0», «≈ $0» or share is printed for it.
 - `src/components/activity/ActivityRangeControl.tsx` is the page's one range
   control: Today, 7, 30 and 90 days and «Період…», two native date fields
   that apply once both are valid and keep at most 366 days. The address

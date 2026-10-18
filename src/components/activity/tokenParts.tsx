@@ -311,7 +311,7 @@ export function KindMeter({ counts, ctx, stacked = false }: { counts: TokenCount
   const drawnSum = drawn.reduce((sum, kind) => sum + counts[kind], 0);
   const title = (kind: TokenKind) => (kind === "cacheWrite" && cacheWriteUnreported(ctx, counts)
     ? t("activity.tokens.kind.notReported")
-    : `${exact(counts[kind], locale)} · ${percent(total ? counts[kind] / total : 0, locale)}`);
+    : `${exact(counts[kind], locale)} · ${total ? percent(counts[kind] / total, locale) : "—"}`);
   return (
     <div data-token-meter="">
       <div className="flex items-baseline gap-x-1.5 text-[12px]" title={title("cacheRead")} data-token-kind="cacheRead">
@@ -603,7 +603,7 @@ export function RankedList({ rows, by, named, total, selected, onSelect, ctx }: 
                 <span className="flex shrink-0 items-baseline gap-2 text-[12px] tabular-nums">
                   {row.cost !== undefined ? <span className="text-muted" data-token-row-cost="">{row.cost}</span> : null}
                   <span className="font-semibold text-primary" title={exact(value, locale)}>{compact(value, locale)}</span>
-                  <span className="w-[38px] text-right text-muted">{percent(total ? value / total : 0, locale)}</span>
+                  <span className="w-[38px] text-right text-muted">{total ? percent(value / total, locale) : "—"}</span>
                 </span>
               </div>
               {by === "kind" ? null : (

@@ -31,6 +31,8 @@ export function evidenceUncountedRange(now: number): { from: string; to: string 
 const MODELS: ReadonlyArray<[string, "claude" | "codex", number]> = [
   ["claude-opus-5-5", "claude", 0.4], ["gpt-6.1-sol", "codex", 0.18], ["claude-sonnet-5-5", "claude", 0.12], ["gpt-6-astra", "codex", 0.1],
   ["claude-fable-5-1", "claude", 0.1], ["gpt-6-luna", "codex", 0.06], ["claude-haiku-5-5", "claude", 0.03], ["claude-opus-4-1", "claude", 0.01],
+  /* A model neither price page lists, so its row reads «—». */
+  ["gpt-5.3-codex-spark", "codex", 0.01],
 ];
 const ROLES: ReadonlyArray<[string, number]> = [
   ["builder", 0.34], ["orchestrator", 0.18], ["reviewer", 0.14], ["none", 0.1], ["unregistered", 0.06], ["visual-critic", 0.06],

@@ -673,10 +673,19 @@ describe("the Tokens tab", () => {
     await unmount();
     await open("/activity?view=tokens&from=2026-08-01&to=2026-08-10&stack=model&list=model");
     expect($("[data-token-coverage]")!.getAttribute("data-token-coverage")).toBe("lower");
-    expect($("[data-token-hero]")!.textContent).toBe("≥ 0");
-    expect($("[data-token-empty]")!.textContent).toBe(t("activity.tokens.emptyUncounted"));
-    expect($("[data-token-empty]")!.textContent).not.toContain(t("activity.tokens.empty"));
+    /* The card states that the period is not counted: no figure, share, cost or meter stands for it. */
+    expect($("[data-token-uncounted]")!.textContent).toBe(t("activity.tokens.emptyUncounted"));
+    const card = $('[data-token-card="main"]')!.textContent!;
+    for (const text of ["≥", "≈ $", "0%", "0 %"]) expect(card).not.toContain(text);
+    expect($("[data-token-hero]")).toBeNull();
+    expect($("[data-token-extras]")).toBeNull();
+    expect($("[data-token-meter]")).toBeNull();
+    expect($("[data-token-empty]")).toBeNull();
     expect($("[data-token-none]")).toBeNull();
+    await unmount();
+    /* A counted range with input but no output has nothing to divide reasoning by. */
+    await open("/activity?view=tokens&from=2026-09-04&to=2026-09-04&stack=model&list=model");
+    expect($("[data-token-extra=\"reasoning\"]")!.textContent).toContain(t("activity.tokens.extra.reasoning", { share: "—" }));
     /* An all-zero chart draws its zero line alone, and no scale repeats a label. */
     expect(axisFractions(0)).toEqual([0]);
     for (const peak of [1, 2, 3, 4, 9, 1e6]) {

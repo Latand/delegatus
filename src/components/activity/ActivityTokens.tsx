@@ -285,7 +285,7 @@ export function ActivityTokensBody({ answer, by, onBy, project, onProject, membe
   const rows: ListEntry[] = by === "kind" ? kindRows(answer, locale)
     : by === "model" ? modelRows(answer, locale) : answer.list.map((row) => ({ key: row.key, counts: row.counts }));
   const estimate = estimateCost(answer.costBasis);
-  const costValue = estimate.usd > 0 || tokenTotal(estimate.unpriced) === 0 ? money(estimate.usd, locale) : "—";
+  const costValue = estimate.usd > 0 ? money(estimate.usd, locale) : "—";
   const costTitle = [
     t("activity.tokens.extra.costNote", { date: PRICE_TABLE_DATE }),
     estimate.unpricedModels.length ? t("activity.tokens.extra.costUnpriced", { models: estimate.unpricedModels.map((model) => entityName("model", model, ctx)).join(", ") }) : null,
@@ -309,6 +309,8 @@ export function ActivityTokensBody({ answer, by, onBy, project, onProject, membe
       </div>
       {trust === "none" ? (
         <p className="mt-2 text-[13px] text-secondary" data-token-none="">{t("activity.tokens.emptyNone")}</p>
+      ) : counted === "none" ? (
+        <p className="mt-2 text-[13px] text-secondary" data-token-uncounted="">{t("activity.tokens.emptyUncounted")}</p>
       ) : (
         <>
           <div className="mt-1 flex items-baseline gap-2 whitespace-nowrap">
@@ -318,8 +320,8 @@ export function ActivityTokensBody({ answer, by, onBy, project, onProject, membe
             <span className="text-[13px] font-medium text-muted">{t("activity.tokens.unit", { count: total < 1e3 ? Math.round(total) : 1e3 })}</span>
           </div>
           <div className={`mt-2 flex flex-wrap items-baseline gap-y-1 text-[12px] text-secondary ${phone ? "flex-col gap-x-0" : "gap-x-4"}`} data-token-extras="">
-            <span className="whitespace-nowrap" data-token-extra="cache"><Optional t={t} />{t("activity.tokens.extra.cache", { share: percent(input ? answer.totals.cacheRead / input : 0, locale) })}</span>
-            <span className="whitespace-nowrap" data-token-extra="reasoning"><Optional t={t} />{t("activity.tokens.extra.reasoning", { share: percent(answer.totals.output ? answer.totals.reasoning / answer.totals.output : 0, locale) })}</span>
+            <span className="whitespace-nowrap" data-token-extra="cache"><Optional t={t} />{t("activity.tokens.extra.cache", { share: input ? percent(answer.totals.cacheRead / input, locale) : "—" })}</span>
+            <span className="whitespace-nowrap" data-token-extra="reasoning"><Optional t={t} />{t("activity.tokens.extra.reasoning", { share: answer.totals.output ? percent(answer.totals.reasoning / answer.totals.output, locale) : "—" })}</span>
             <span className="whitespace-nowrap" title={costTitle} data-token-extra="cost"><Optional t={t} />{t("activity.tokens.extra.cost", { value: costValue })}</span>
           </div>
           <div className="mt-4"><KindMeter counts={answer.totals} ctx={ctx} stacked={phone} /></div>
@@ -339,7 +341,7 @@ export function ActivityTokensBody({ answer, by, onBy, project, onProject, membe
     </div>
   );
   const list = trust === "none" ? null : empty ? (
-    <p className="px-4 py-6 text-center text-[12px] text-muted" data-token-empty="">{t(counted === "all" ? "activity.tokens.empty" : counted === "none" ? "activity.tokens.emptyUncounted" : "activity.tokens.emptyPartly")}</p>
+    <p className="px-4 py-6 text-center text-[12px] text-muted" data-token-empty="">{t(counted === "all" ? "activity.tokens.empty" : "activity.tokens.emptyPartly")}</p>
   ) : (
     <>
       {priced ? (
@@ -353,7 +355,7 @@ export function ActivityTokensBody({ answer, by, onBy, project, onProject, membe
   const dim = `transition-opacity ${loading ? "opacity-60" : ""}`;
 
   /* Until anything is counted there is nothing to break down. */
-  const anything = trust !== "none";
+  const anything = trust !== "none" && counted !== "none";
   if (!phone) {
     return (
       <div className={`grid grid-cols-[minmax(0,1fr)_420px] items-start gap-4 ${dim}`} data-token-tab="desktop" data-activity-loaded="tokens">

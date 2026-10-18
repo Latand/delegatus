@@ -8085,6 +8085,9 @@ function readTokenFrame() {
     rows: Array.from(document.querySelectorAll<HTMLElement>("[data-token-row]")).map((el) => el.dataset.tokenRow ?? ""),
     rowNames: Array.from(document.querySelectorAll<HTMLElement>("[data-token-row]")).map((el) => (el.querySelector("button")?.textContent ?? "").split(/\d/)[0]!.trim()),
     rowCosts: Array.from(document.querySelectorAll<HTMLElement>("[data-token-row-cost]")).map((el) => el.textContent ?? ""),
+    rowCostByKey: Object.fromEntries(Array.from(document.querySelectorAll<HTMLElement>("[data-token-row]")).map((el) => [el.dataset.tokenRow ?? "", el.querySelector("[data-token-row-cost]")?.textContent ?? null])),
+    uncounted: document.querySelector("[data-token-uncounted]")?.textContent ?? null,
+    cardText: document.querySelector('[data-token-card="main"]')?.textContent ?? "",
     by: document.querySelector("[data-token-by] [aria-selected=true]")?.getAttribute("data-activity-option") ?? null,
     chips: Array.from(document.querySelectorAll("[data-activity-scope-chip]")).map((chip) => chip.textContent ?? ""),
     popover: inView(popoverEl),
@@ -8262,7 +8265,7 @@ async function activityTokensMain(): Promise<void> {
       if (state === "loading") await page.route("**/api/activity/tokens**", () => new Promise(() => undefined));
       if (state === "error") await page.route("**/api/activity/tokens**", (route) => route.fulfill({ status: 500, contentType: "application/json", body: "{\"error\":\"fixture\"}" }));
       await page.goto(`${baseUrl}/activity?${queries[state]}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
-      await page.waitForSelector(state === "time-range" ? "[data-activity-layout], [data-activity-days]" : state === "nothing" ? "[data-token-none]" : state === "loading" ? "[data-activity-skeleton]" : state === "error" ? "[role=alert]" : "[data-token-hero]", { timeout: 120_000 });
+      await page.waitForSelector(state === "time-range" ? "[data-activity-layout], [data-activity-days]" : state === "nothing" ? "[data-token-none]" : state === "empty-range" ? "[data-token-uncounted]" : state === "loading" ? "[data-activity-skeleton]" : state === "error" ? "[role=alert]" : "[data-token-hero]", { timeout: 120_000 });
       if (state === "time-range") await page.waitForSelector("[data-activity-loaded]", { timeout: 120_000 });
       await page.waitForTimeout(400);
       if (state === "range-open") {
@@ -8293,7 +8296,7 @@ async function activityTokensMain(): Promise<void> {
       shots.push(file);
       frames[name] = reading;
       const tokensTab = state !== "time-range";
-      const figured = tokensTab && state !== "nothing" && state !== "loading" && state !== "error";
+      const figured = tokensTab && state !== "nothing" && state !== "loading" && state !== "error" && state !== "empty-range";
       must(reading.layout === (size.phone ? "phone" : "desktop"), `${name}: the ${reading.layout} layout at ${size.width}px`);
       must(reading.tab === (tokensTab ? "tokens" : "time") || (tokensTab && (state === "loading" || state === "error") && reading.tokensSelected), `${name}: the ${reading.tab} tab`);
       must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
@@ -8326,9 +8329,12 @@ async function activityTokensMain(): Promise<void> {
         must((reading.hero ?? "").startsWith("≥") === (partly || state === "coverage"), `${name}: figure ${reading.hero}`);
       }
       if (state === "empty-range") {
-        must(reading.hero === "≥ 0" && reading.unread >= 4, `${name}: figure ${reading.hero}, ${reading.unread} uncounted days drawn`);
-        must(reading.empty === (lang === "uk" ? "Цей період ще не пораховано." : "This range is not counted yet."), `${name}: the empty line reads ${reading.empty}`);
-        must(!/немає|No tokens in this range/.test(`${reading.empty} ${reading.hero}`), `${name}: claims there are no tokens`);
+        /* The main card states that the period is not counted; no figure, share, cost or meter stands beside it. */
+        must(reading.hero === null && reading.unread >= 4 && reading.coverage === "lower", `${name}: figure ${reading.hero}, coverage ${reading.coverage}, ${reading.unread} uncounted days drawn`);
+        must(reading.uncounted === (lang === "uk" ? "Цей період ще не пораховано." : "This range is not counted yet."), `${name}: the main card reads ${reading.uncounted}`);
+        must(reading.empty === null && reading.extras.length === 0 && reading.meterValues.length === 0, `${name}: the card still draws ${JSON.stringify({ empty: reading.empty, extras: reading.extras.length, meter: reading.meterValues.length })}`);
+        must(!/≥|≈ \$|\b0\s?%/.test(reading.cardText), `${name}: the card prints a number for nothing: ${reading.cardText}`);
+        must(!/немає|No tokens in this range/.test(`${reading.uncounted}`), `${name}: claims there are no tokens`);
         must(new Set(reading.scaleLabels).size === reading.scaleLabels.length && reading.scaleLabels.length > 0, `${name}: axis labels ${JSON.stringify(reading.scaleLabels)}`);
       }
       if (state === "loading") must(reading.loading && reading.hero === null && reading.alert === null, `${name}: loading ${reading.loading}, figure ${reading.hero}, alert ${reading.alert}`);
@@ -8344,7 +8350,10 @@ async function activityTokensMain(): Promise<void> {
       if (state === "project") must(reading.chips.some((chip) => chip.includes("orchard-client")), `${name}: no orchard-client chip (${JSON.stringify(reading.chips)})`);
       if (state === "by-member") must(reading.by === "member" && reading.rows.includes(TEAM_MEMBERS[0]!.id), `${name}: by ${reading.by}, rows ${JSON.stringify(reading.rows)}`);
       if (state === "by-kind") must(reading.by === "kind" && reading.rowCosts.length === 4, `${name}: by ${reading.by}, costs ${JSON.stringify(reading.rowCosts)}`);
-      if (state === "7d") must(reading.rowCosts.includes("—"), `${name}: the unpriced model has no «—» (${JSON.stringify(reading.rowCosts)})`);
+      if (state === "7d") {
+        must(reading.rowCostByKey["gpt-5.3-codex-spark"] === "—", `${name}: the unpriced model reads ${reading.rowCostByKey["gpt-5.3-codex-spark"]}`);
+        must(/^≈ \$/.test(reading.rowCostByKey["claude-opus-4-1"] ?? ""), `${name}: Opus 4.1 has a published price but reads ${reading.rowCostByKey["claude-opus-4-1"]}`);
+      }
       if (state === "coverage") {
         must(reading.coverage === "lower" && (reading.hero ?? "").startsWith("≥"), `${name}: coverage ${reading.coverage}, figure ${reading.hero}`);
         must(reading.tooltip !== null && reading.tooltip.inside && /2[,.]1/.test(reading.tooltipText ?? ""), `${name}: the coverage popover ${JSON.stringify(reading.tooltip)} reads ${reading.tooltipText}`);

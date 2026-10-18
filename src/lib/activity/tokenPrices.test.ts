@@ -78,3 +78,17 @@ test("per-kind costs add up to the estimate and leave a kind with no priced toke
   expect(sum).toBeCloseTo(estimateCost(rows).usd, 9);
   expect(costByKind([{ model: "gpt-6-luna", tier: "standard", counts: million({ output: 1e6 }) }])).toMatchObject({ input: null, cacheRead: null, cacheWrite: null });
 });
+
+test("models the providers publish are priced, retired Claude and older OpenAI rows included", () => {
+  // Opus 4.5 $5/$25; Opus 4.1 and Opus 4 $15/$75; GPT-5.5 $5 input, $0.50 cached, $30 output.
+  expect(tokenCost("claude-opus-4-5-20251101", "standard", million({ input: 1e6, output: 1e6 }))).toBe(30);
+  expect(tokenCost("claude-opus-4-1-20250805", "standard", million({ input: 1e6, cacheRead: 1e6, output: 1e6 }))).toBeCloseTo(15 + 1.5 + 75, 9);
+  expect(tokenCost("claude-opus-4", "standard", million({ input: 1e6 }))).toBe(15);
+  expect(tokenCost("claude-sonnet-4-20250514", "standard", million({ input: 1e6, output: 1e6 }))).toBe(18);
+  expect(tokenCost("claude-3-5-haiku-20241022", "standard", million({ input: 1e6, output: 1e6 }))).toBeCloseTo(4.8, 9);
+  expect(tokenCost("gpt-5.5", "standard", million({ input: 1e6, cacheRead: 1e6, output: 1e6 }))).toBeCloseTo(5 + 0.5 + 30, 9);
+  expect(tokenCost("gpt-5.5", "priority", million({ output: 1e6 }))).toBe(75);
+  expect(tokenCost("gpt-5.4-nano", "priority", million({ input: 1e6 }))).toBeNull();
+  expect(tokenCost("gpt-5-mini", "flex", million({ input: 1e6 }))).toBe(0.125);
+  expect(tokenCost("gpt-5.3-codex", "flex", million({ input: 1e6 }))).toBeNull();
+});
