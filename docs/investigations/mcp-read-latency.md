@@ -81,7 +81,7 @@ not establish a speedup. Neither experiment attributes the reported 26 seconds.
 ## Permanent timing
 
 Calls lasting at least 2,000 ms emit one `[mcp slow]` line with the registered
-tool name and numeric `callerMs`, `httpMs`, `claimMs`, `bindingMs`,
+tool name, the emitting process's `pid` and `role`, and numeric `callerMs`, `httpMs`, `claimMs`, `bindingMs`,
 `completionMs`, `serializationMs`, `serviceTotalMs`, and `replayMs` fields.
 Arguments, request keys, conversation identities, responses and error text are
 excluded. Fast calls remain quiet. The existing numeric aggregates also expose

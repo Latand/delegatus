@@ -5063,7 +5063,7 @@ export async function preparePipelineReviewRepair(flowId: string, ports: Pipelin
   } catch (error) { return { ok: false, retryable: false, detail: error instanceof Error ? error.message : "Pipeline locking unavailable" }; }
   if (descriptor === null) return { ok: false, retryable: true, detail: "review repair is waiting for its owned Git lock" };
   const abort = new AbortController();
-  const revalidate = () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); };
+  const revalidate = () => withViewerOperation("pipelines.revalidate", () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); });
   const watch = setInterval(revalidate, 50);
   const exec: ExecPort = async (command, args, cwd, env, options) => {
     revalidate();
@@ -6343,9 +6343,9 @@ async function spawnRunStage(
       if (restartStagePrompt(renderStagePrompt(pipeline, bound, attempt.effectiveRole, previousOutput, effectiveWorkerLimit(pipeline.project).value, resolveStageTestGuidance()), attempt) !== spawnInput.prompt) throw new ActivationSuperseded();
       const expected = JSON.stringify(pipeline);
       const abort = new AbortController();
-      const revalidate = () => {
+      const revalidate = () => withViewerOperation("pipelines.revalidate", () => {
         if (attempt.activation && JSON.stringify(findPipelineRecord(pipeline.id)) !== expected) abort.abort();
-      };
+      });
       const watch = setInterval(revalidate, 50);
       const exec: ExecPort = async (command, args, cwd, env, options) => {
         revalidate();
@@ -8285,7 +8285,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
   const exec = ports.provisionExec ?? (ports.exec === realExec ? realProvisionExec
     : async (command, args, cwd) => (await ports.exec(command, args, cwd)));
   const jobs = pending.map((pipeline) => ({ pipeline, fence: JSON.stringify(provisionFence(pipeline)), abort: new AbortController() }));
-  const revalidate = () => {
+  const revalidate = () => withViewerOperation("pipelines.revalidate", () => {
     try {
       const current = new Map(jobs.flatMap(job => { const current = findPipelineRecord(job.pipeline.id); return current ? [[current.id, current] as const] : []; }));
       for (const job of jobs) {
@@ -8297,7 +8297,7 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
       // An unreadable registry cannot authorize more provisioning work.
       for (const job of jobs) job.abort.abort();
     }
-  };
+  });
   // Close/delete may originate in another process. Projection reads are cached
   // by collection revision; polling needs no lease and no close-path hook.
   const watch = setInterval(revalidate, 50);
@@ -10121,10 +10121,10 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
 async function admitExistingPipelineDelivery(pipeline: Pipeline, ports: PipelinePorts): Promise<Pipeline | null> {
   const admission = pipeline.publicationAdmission?.state === "pending" ? pipeline.publicationAdmission : null;
   const abort = new AbortController();
-  const revalidate = () => {
+  const revalidate = () => withViewerOperation("pipelines.revalidate", () => {
     const current = findPipelineRecord(pipeline.id);
     if (admission && (!current || current.publicationAdmission?.id !== admission.id || remoteActionFence(current) !== admission.fence)) abort.abort();
-  };
+  });
   const watch = setInterval(revalidate, 50);
   let remote: Awaited<ReturnType<ExecPort>>;
   try {
@@ -10252,10 +10252,10 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       if (state !== action.retryReceipt.state) return false;
       return true;
     };
-    const revalidate = () => {
+    const revalidate = () => withViewerOperation("pipelines.revalidate", () => {
       const current = findPipelineRecord(preview.id);
       if (!matches(current) || budgetRefusal(current) || !receiptMatches()) abort.abort();
-    };
+    });
     const watch = setInterval(revalidate, 50);
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();
@@ -10377,10 +10377,10 @@ async function collectReviewIngressHeads(ports: PipelinePorts, candidates?: Pipe
     if (!requiresReviewIngress(pipeline)) continue;
     const fence = reviewIngressFence(pipeline);
     const abort = new AbortController();
-    const revalidate = () => {
+    const revalidate = () => withViewerOperation("pipelines.revalidate", () => {
       const current = findPipelineRecord(pipeline.id);
       if (!current || current.state !== pipeline.state || reviewIngressFence(current) !== fence) abort.abort();
-    };
+    });
     const watch = setInterval(revalidate, 50);
     const exec: ExecPort = async (command, args, cwd, env) => {
       revalidate();
@@ -10443,7 +10443,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     }
     if (descriptor === null) { ports.scheduleTick?.(250); continue; }
     const abort = new AbortController();
-    const revalidate = () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); };
+    const revalidate = () => withViewerOperation("pipelines.revalidate", () => { if (!matches(findPipelineRecord(preview.id))) abort.abort(); });
     const watch = setInterval(revalidate, 50);
     const exec: ExecPort = async (command, args, cwd, env, options) => {
       revalidate();

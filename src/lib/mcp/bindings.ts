@@ -1,3 +1,4 @@
+import { performanceSpans } from "@/lib/performanceSpans";
 import { curationAnswer } from "@/lib/memory/curation/answer";
 import { resolvePrototypeReviewId as resolveStoredReviewId } from "@/lib/prototypeReview/store";
 import { resolveIssueReportDigest } from "@/lib/issueReports/store";
@@ -1188,6 +1189,7 @@ export function hostedConversationsFromSnapshot(
   snapshot: Pick<RegistrySnapshot, "conversations" | "entries">,
   probe?: ProcessIdentityProbe,
 ): { conversationId: string; role: string | null; pids: number[] }[] {
+  return performanceSpans.sync("mcp.caller-enumeration", () => {
   const owners = new Map<string, { id: string; role: string | null }>();
   const hosted = new Map<string, { conversationId: string; role: string | null; pids: number[] }>();
   for (const conversation of Object.values(snapshot.conversations)) {
@@ -1209,6 +1211,7 @@ export function hostedConversationsFromSnapshot(
     hosted.get(owner.id)!.pids.push(...pids);
   }
   return [...hosted.values()];
+  });
 }
 
 /** The value of the launch-injected spawn capability, resolved to the

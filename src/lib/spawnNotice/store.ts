@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { FailedLaunchTaskMove } from "@/lib/tasks/membership";
 import { statePath } from "@/lib/configDir";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
@@ -205,6 +206,7 @@ export function settleSpawnNotices(child: string, turnIds: readonly string[], se
 /** Delete settled turn rows settled before `before`, at most `limit` per call,
     reading one bounded key page at a time. Pending rows are never touched. */
 export function pruneSpawnNotices(before: string, limit = 256): number {
+  return withViewerOperation("spawn-notice.prune", () => {
   const store = collection(false);
   if (!store) return 0;
   const stale: string[] = [];
@@ -228,6 +230,7 @@ export function pruneSpawnNotices(before: string, limit = 256): number {
     }
   });
   return doomed.length;
+  });
 }
 
 export async function reopenRevokedSpawnNotice(child: string, operationId: string): Promise<void> {
