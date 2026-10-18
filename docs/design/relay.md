@@ -7,6 +7,11 @@ Part A is the wire protocol and is normative for both
 sides, so the relay service and this install can be built against it
 independently. Part B is how Delegatus implements its side.
 
+Revision of 2026-10-17: reply-chain conversations supersede the earlier
+per-chat design (§B.14). They default on locally, carry no new wire feature,
+and scope every pin to the requester and authority. Reply-targeted compact
+requires a separate partner change; current compact requests touch no chain.
+
 Revision of 2026-09-29, written by the architect stage of the contract-delta
 lane: service branding, one-tap pairing, one conversation per chat and a
 per-chat answer switch. It is **specified and not yet implemented**. Every
@@ -1638,17 +1643,18 @@ opaque, stable and scoped to one target:
 A request that carries a key holds only that chat's messages in
 `input.conversation`. A chat's requests and its row in the listing of §A.4
 row 12 carry the same key. A request without `chat` is answered one-shot, as
-in Phase 1. So is every request to an install that does not list
-`chat_conversations`.
+in Phase 1. The install can reuse a reply-chain conversation without
+listing a conversation feature; the legacy `chat_conversations` feature
+controls the service's per-chat hold and compact admission only.
 
-**[delta] Conversation turns.** An install that lists `chat_conversations`
-answers every request with the same (pairing, target, chat key) in one
-persistent conversation, one turn per request (§B.14). The service keeps
-sending the full `Input` of every request, as it would to a one-shot
-install, and the install decides which parts the conversation has already
-seen. A turn's prompt has the structure below. The sections and when each
-appears are normative; the wording of the two frame paragraphs belongs to
-the install.
+**Conversation turns.** The install pins a conversation per explicit reply
+chain, scoped to pairing, target, chat key, requester, authority and engine
+(§B.14). A request without a reply or a known pin starts fresh. The service
+keeps sending the full input; the install sends the engine only unseen
+messages and the triggering message. Static instruction sections return only
+when their digest changes or after engine compaction. The frame below is
+for engine sessions. Owner-tier turns use `<owner_request>` and the original
+owner rules, with the same unseen-message and digest policy.
 
 ```
 [frame, every turn: you answer the messages of one chat, turn by turn;
@@ -1668,10 +1674,10 @@ the install.
  in the one-shot frame above]
 ```
 
-- "Changed" compares a digest of the three instruction sections with the
+- "Changed" compares a digest of the instruction sections, documents, memory, tools and tool guidance with the
   last turn that carried them. "Seen" is by message `id`. The message named
   by `respond_to` is always included.
-- After a compaction (§B.14), the next turn carries the three sections and
+- After a compaction (§B.14), the next turn carries the static sections and
   the whole of `Input.conversation` again, because a summary may have lost
   them.
 - The answer schema and its checks are unchanged. `reply_to` is checked
@@ -1800,7 +1806,7 @@ to version 1. The path, the header and `Descriptor.versions` stay at 1.
 | One-tap pairing (§A.3 rules 3, 7, 8) | Service obligations behind `one_tap_pairing`, and the optional `PairingStatus.redeemed`. No new endpoint; `confirm` is unchanged | v1, additive | The operator clicks, as today, and ignores `redeemed`. The owner confirms once in the service, as today. | Without the feature the install keeps the click. Without `redeemed`, the refresh relies on its one poll (§B.13). |
 | Defaults on completion (§A.3 rule 9) | None: the install uses row 7 as today | install only | — | Applies to every service. |
 | Target attachment (§A.3 rule 10) | A service behaviour, plus the optional `Target.answered_elsewhere` | v1, additive: no body changes shape, and a longer target list is still a `Targets`. Refusing a `fallback` change from a pairing that sees `answered_elsewhere` affects only a second pairing of the same owner, which v1 never had | Receives every active target at completion. It never reads row 6 (O8), so later targets reach it only once the separate refresh fix lands. It ignores `answered_elsewhere`, so it shows a target another install answers as switched off, and switching it on moves the target to it. That is the owner's explicit act. | A Phase 1 service that lists only attached targets still works; late targets appear when attached. |
-| Chat conversations (§A.6 F7, §A.8) | Optional `Request.chat` and the `chat_conversations` claim feature | v1, additive | Ignores `chat` (rule A.2.6) and does not list the feature, so the service does not hold (F7) and the install answers one-shot. | No `chat`: answers one-shot. |
+| Chat conversations (§A.6 F7, §A.8) | Optional `Request.chat` and the `chat_conversations` claim feature | v1, additive | Ignores `chat` (rule A.2.6) and does not list the feature, so the service does not hold (F7) and earlier installs answer one-shot. Current installs can reuse reply chains without that feature (§B.14). | No `chat`: answers one-shot. |
 | Chat management (§A.4 rows 12, 13) | Two new endpoints behind `chat_list`, and the new error code `cursor_expired` | v1, additive (new endpoints the install discovers) | Never calls them. The routing rule leaves every chat on, so this install answers the chats the owner did not switch off. | Hides the chat list. |
 
 **[rc] The revision of 2026-10-06.** Additive to version 1 as well.
@@ -1921,9 +1927,9 @@ member limit. No new state file or child credential is introduced.
 | `<state>/external-relay/runs.json` | 0600 | In-flight runs only: request id, lease id, relay id, target id, child pid and process identity, owning Viewer pid and identity, run directory, start time. No chat text. |
 | `<state>/external-relay/codex-homes/<account id>/` | 0700 | The Codex answer home of §B.6.2. |
 | `<os temp root>/llv-external-relay-XXXXXX/` | 0700 (`mkdtemp`) | One run: `cwd/`, `schema.json`, `catalog.json` (Codex), `stdout.log`, `stderr.txt`, `answer.json` (Codex). Removed when the run settles, on every path. |
-| **[rc]** `<state>/external-relay/answers/<relay id>/<target id>/<start ms>_<request id>.json` | 0600 in 0700 directories | One record per claimed request whose ids are valid (`src/lib/externalRelay/answers.ts`): `Request.input` exactly as received (unknown fields included), the chat key, the requester (the six service fields: `key`, `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin`, `is_owner`), whether the run was admitted, the answer profile it ran with, engine and model, claim, start and end times, duration, `state` (`running` or `finished`), the outcome (`answered`, `declined:<reason>`, `failed:<reason>` or `lease_lost`; hand-off is `declined:handoff`), the answer or hand-off, and whether the service acknowledged the completion (`accepted`, `refused` or `unconfirmed`). No credential, no lease id. Written `running` when the agent launches and `finished` with the local decision before completion is sent, including early declines. Delivery starts `unconfirmed` and is updated after the receipt; a transport failure can change the outcome, while the locally generated answer or hand-off is preserved. Kept `RELAY_ANSWER_RETENTION_DAYS` (30) after it finished; readers hide an expired record at once and the controller removes it within the hour. |
+| **[rc]** `<state>/external-relay/answers/<relay id>/<target id>/<start ms>_<request id>.json` | 0600 in 0700 directories | One record per claimed request whose ids are valid (`src/lib/externalRelay/answers.ts`): `Request.input` exactly as received (unknown fields included), the chat key, the requester (the six service fields: `key`, `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin`, `is_owner`), whether the run was admitted, the answer profile it ran with, engine and model, claim, start and end times, duration, `state` (`running` or `finished`), the outcome (`answered`, `declined:<reason>`, `failed:<reason>` or `lease_lost`; hand-off is `declined:handoff`), the answer or hand-off, and whether the service acknowledged the completion (`accepted`, `refused` or `unconfirmed`). Optional `chain: { continued, promptBytes }` records session reuse and total prompt bytes for latency comparisons. No credential, no lease id. Written `running` when the agent launches and `finished` with the local decision before completion is sent, including early declines. Delivery starts `unconfirmed` and is updated after the receipt; a transport failure can change the outcome, while the locally generated answer or hand-off is preserved. Kept `RELAY_ANSWER_RETENTION_DAYS` (30) after it finished; readers hide an expired record at once and the controller removes it within the hour. |
 | **[delta]** `relays.json`, new optional fields | as above | Per relay: `features`, `verify_channel`, `icon` (`{type, sha256, source, fetchedAt}`) and `connected` (`{at, via: "auto" \| "click", acknowledged}`). Per pending pairing: `startedAt` (when the operator clicked Connect, carried across refreshes), `engine` (the setup guide's choice, `claude` or `codex`, absent when the pairing started in settings, carried across refreshes) and the watcher's last status. At the top level, per origin and kept after unpair: `knownOwners` (`{origin, namespace, id, display_name, addedAt}`, at most 20 per origin); `previousOwners` (`{origin, namespace, id, display_name, at}`, one per origin, overwritten by each completion); and `rejectedOwners` (`{origin, namespace, id, display_name, rejectedAt}`, at most 20 per origin, the oldest dropped first). Together they are the stranger check of §A.3 rule 3. Readers accept the file without these fields, so `v` stays 1. |
-| **[delta]** `<state>/external-relay/conversations.json` | 0600 | The chat conversation map (§B.14). Per conversation: id, relay id, target id, chat key, engine, engine session id, the account last used, cwd, turns, created and last-turn times, the ids of messages seen since the last compaction (at most 1 000), the frame digest, the last prompt size, compactions, and `state` (`idle`, `running` with its request id, or `broken`). It holds no chat text. |
+| **[delta]** `<state>/external-relay/conversations.json` | 0600 | Version 2 reply-chain map (§B.14). Per conversation: requester key, authority, at most 200 message anchors, optional owner-tier Delegatus conversation id, id, relay id, target id, chat key, engine, engine session id, the account last used, cwd, turns, created and last-turn times, the ids of messages seen since the last compaction (at most 200), the frame digest, the last prompt size, compactions, and `state` (`idle`, `running` with its request id, or `broken`). It holds no chat text. |
 | **[delta]** `<state>/external-relay/conversations/<conversation id>/codex/` | 0700 | A Codex conversation's own `CODEX_HOME`: the `auth.json` link of the account that runs the turn, and the conversation's rollout and CLI state. |
 | **[delta]** `<Claude transcript store>/<encoded cwd>/` | the CLI's | A Claude conversation's transcript, in the account's transcript store, under the reserved project directory that the scanner skips (§B.14). |
 | **[delta]** `<os temp root>/llv-relay-conv-<conversation id>/` | 0700 | The empty, stable working directory of one conversation. Its path is recorded, and it is recreated and touched at the start of every turn. |
@@ -1984,8 +1990,8 @@ configured target. When a run ends and frees a slot, the loop aborts its open
 poll and opens a new one with fresh slots, so the relay service never goes on
 believing a target is busy. **[rc]** It also sends `features:
 ["requester_context", "relay_tool_calls"]` (`CLAIM_FEATURES` in `src/lib/externalRelay/poller.ts`).
-**[delta]** The chat conversations of §B.14 add `chat_conversations` to that
-list once they are implemented; no install sends it today.
+Current chain conversations (§B.14) add no claim feature. The former
+`chat_conversations` feature remains the service's legacy scheduling gate.
 
 **[delta] What else the controller runs**, all in the release that owns
 traffic and never in staging:
@@ -2465,19 +2471,13 @@ web search and does not inspect or redact its queries.
   member that arrive in the same instant can both pass. The setting is the
   target's and applies to every chat of it; a chat of its own can get one
   once the install lists chats (§B.15).
-- **[delta] One turn at a time per conversation.** A conversation runs at
-  most one turn, across Viewer generations too. Reserving a turn sets the
-  conversation to `running` inside the `conversations.json` lock. That lock
-  is always taken after the `runs.json` lock, never before, so the two
-  cannot deadlock. A request for a running conversation is declined `busy`
-  with `detail: "chat busy"`. With a service that holds (§A.6 F7), this
-  happens only during a release succession. A turn takes one of its target's
-  slots like any run, so `free` in the claim is unchanged: chats of one
-  target run in parallel up to `concurrency`, and each chat runs in turn.
-  At the default concurrency of 1, the poll open during a turn lists
-  `free: 0`. The chat's next request is held by the service and is claimed
-  by the poll the install opens after the turn frees its slot (§A.6 L7,
-  §B.4 step 10).
+- **One turn at a time per reply-chain conversation.** Reservation is under
+  the conversation-file lock, after reserving run capacity. A request for
+  that conversation holds until it is idle, then resumes it; at the shared
+  admission bound it declines `busy` with `detail: "chat busy"`.
+  Different chains in the same chat use separate target slots and can run
+  concurrently. Claims list no conversation feature, so the service's
+  legacy chat-wide hold does not apply.
 
 ## B.9 Routes and UI
 
@@ -2500,7 +2500,7 @@ and 409 in staging (`isStagingMode`):
 | `DELETE /api/external-relay/relays/[id]` | Unpairs: `DELETE {api}/pairing`, then removes the relay locally; when the service is unreachable it removes it anyway and says the service could not be told, as linked installs do. **[delta]** It also deletes the relay's conversations (§B.14). |
 | **[rc]** `GET /api/external-relay/relays/[id]/targets/[targetId]/answers` | The target's answer records, newest first, at most 50: times, duration, outcome, delivery, and the first 160 characters of the message and of the answer. Reads local files only; never calls the service. |
 | **[rc]** `GET /api/external-relay/relays/[id]/targets/[targetId]/answers/[requestId]` | One record in full, the received input included; 404 once it expired. |
-| `GET /api/external-relay/conversations` | The chats' conversations (§B.14 "Seen by the operator"): one row per conversation record with its relay, target, chat key, context, turns and times, and its transcript as a conversation entry once a turn wrote one. No chat text from those and no secrets. Beside them each relay's kept single answers (Recent answers, §B.9) as the list route's rows with their relay and target, and the days they are kept. |
+| `GET /api/external-relay/conversations` | The chats' conversations (§B.14 "Seen by the operator"): one row per conversation record with its relay, target, chat key, requester authority, turns and times, and its transcript as a conversation entry once a turn wrote one. No chat text from those and no secrets. Beside them each relay's kept single answers (Recent answers, §B.9) as the list route's rows with their relay and target, and the days they are kept. |
 | **[delta]** `GET /api/external-relay/icons/[id]` | The stored icon of a relay or a pending pairing (§B.12). |
 | **[delta]** `POST /api/external-relay/pairings/[id]/refresh` | Replaces a pending pairing's code (§B.13). |
 | **[delta]** `PATCH /api/external-relay/relays/[id]` `{acknowledged: true}` | "That's me" on an automatic completion; records a known owner (§B.13). |
@@ -2542,7 +2542,7 @@ conversations, and be readable there. `GET /api/external-relay/conversations`
 returns each paired relay's kept answers beside its chats' conversations
 (newest first, at most 50 a relay, across its targets, a target the service
 no longer lists included), so the relay's sidebar entry appears once it has
-either, on an install whose per-chat conversations are off too. Its leaf
+either, on an install whose reply chains hold no conversation. Its leaf
 lists, under "Single answers" / "Разові відповіді", one row per exchange: the
 outcome's dot, the beginning of the message, the outcome and the target, and
 the time. A row opens the exchange in the same agent window, read only:
@@ -2950,152 +2950,78 @@ push, and only for a question (`:171-223`).
 
 Without a subscription, the dot and the banner are the whole notice.
 
-## B.14 [delta] Chat conversations
+## B.14 Reply-chain conversations
 
-**[slice 3, dark]** Chat conversations are implemented behind the
-`chat_conversations` switch, which defaults off. The slice 3 design in
-`relay-slice3.md` defines separate member and owner records, with non-owner
-administrators continuing one-shot. With the switch off every request still
-uses the slice 2b session-less profile and claim bytes. `/compact` has its own
-default-off switch and requires conversations.
+The install's `chain_conversations` switch defaults on. A stored false makes
+all requests one-shot, including a new Delegatus conversation per owner-tier
+request. The old `chat_conversations` switch is ignored. No conversation
+feature is advertised in claims: the service therefore keeps its existing
+answer scheduling, without a chat-wide hold.
 
-**Identity and map.** A (relay id, target id, chat key) maps to one record in
-`conversations.json` (§B.2), created by the first request with that key. The
-record's id is a random UUID and names its directories. The engine is fixed
-when the record is created, from the target's engine. The model and effort
-follow the target on every turn. When a target's engine changes, its chats
-get fresh conversations. Paths are resolved inside each call (§B.10).
+**Identity.** A version 2 record in `conversations.json` belongs to one
+(relay, target, chat key, requester key, authority, engine). Authority is
+`owner-tier`, `owner`, `admin` or `member`. A role or engine change cannot
+resume the previous authority's session. Requests without a requester or
+chat key, and prototype decisions, pin nothing. Telegram reply links stay
+inside the same chat and topic; message ids are opaque, target/chat-scoped
+and stable across windows.
 
-**A turn:**
+**Resolve and reserve.** Under the conversation-file lock, first learn bot
+message ids whose reply parent is pinned. Starting at the trigger, follow
+explicit reply links through the input window, checking the last id even
+when its message has left the window. Accept only a pin with the whole
+scope above. Skip pins for other requesters and authorities and keep walking;
+cycles stop at a visited id. Continue that record or create a new one, and
+pin the trigger before work starts. Only a running resolved conversation
+holds the request; different chains in a chat run concurrently up to the
+target's capacity. A hold ends at the shared request deadline with
+`busy` / `chat busy`.
 
-1. **Reserve.** Under the locks of §B.8, find or create the record. If it is
-   `running`, decline `busy` / `chat busy`. If it is `broken`, reset it (a
-   new session, with the seen ids and the frame digest cleared) and go on.
-2. **Account.** Call `resolveHeadlessSpawn(engine, record.accountId, [],
-   target.project, model)`. The last account is only a tie-break: the
-   selection takes the account with the most confirmed headroom first, and
-   the preference decides only between accounts of equal headroom, or among
-   accounts whose quota is unknown
-   (`src/lib/accounts/headlessSelection.ts:92-96` [code]). With two or more
-   signed-in accounts of the engine, consecutive turns will often land on
-   different accounts, and a Claude transcript then moves between stores
-   (step 3). That move is a rename, or a copy and unlink across file
-   systems, and the conversation continues as before.
-3. **Session:**
-   - **Claude.** `start` with a UUID the install mints, or `resume` with the
-     recorded one. The transcript is at `<transcript store>/<encoded
-     cwd>/<uuid>.jsonl` in one of the Claude accounts' stores
-     (`claudeProjectRoots()`). When it is not in the chosen account's store,
-     it moves there first (rename, else copy and unlink). Accounts that use
-     the shared store (`src/lib/accounts/claude.ts:57-76` [code]) need no
-     move. When the transcript is in no store, the turn starts fresh.
-   - **Codex.** `codexHome` is the conversation's `codex/` directory. Its
-     `auth.json` link points at the chosen account's file, as in §B.6.2
-     (E5). `start` reads the thread id from `thread.started`; `resume` uses
-     it.
-   - **The cwd** is the recorded `<os temp root>/llv-relay-conv-<id>`,
-     recreated with its mtime set at the start of every turn, so the
-     24-hour temp sweep (`src/lib/tempSweep.ts:43`, `:59-65` [code]) never
-     removes one in use.
-4. **Prompt.** The turn prompt of §A.8.
-5. **Record.** After the turn, record the session id, the account,
-   `promptTokens`, `compacted`, the ids seen (plus `respond_to`), the frame
-   digest, `lastTurnAt` and the turn count. If `compacted` is true, or
-   `promptTokens` is lower than the previous turn's (only a compaction
-   shrinks a resumed context), clear the seen ids and the frame digest. The
-   next turn then carries the frame and the whole window again (§A.8).
-6. **Failure.** Any of these marks the record `broken`: a resume that fails
-   before the engine reports its session (no Claude `init` event, no Codex
-   `thread.started`), a `profile_violation`, or an engine error saying the
-   context is full. The request completes as in Phase 1 (`failed` /
-   `agent_error` or `profile_violation`) and falls back. The chat's next
-   request starts fresh.
+**Engine sessions.** Member, admin and non-tier owner chains each own a
+reserved cwd and transcript. They start or resume the recorded session id
+with the existing tool-free profile. Account selection prefers the prior
+account as a tie-break; a Claude transcript moves between account stores
+when necessary. Broken or missing sessions start fresh in the same chain
+record and retain its anchors. Engine auto-compaction clears the seen ids
+and static digest for the next turn.
 
-**Compaction and context limits.** The engines compact on their own. Claude
-does so under `--autocompact auto`. Codex uses the `auto_compact_token_limit`
-its catalog entry already carries, because §B.6.2 removes only two keys from
-the entry. When the entry has none, the builder passes `-c
-model_auto_compact_token_limit=<90% of the entry's context_window>`. The
-install summarizes nothing itself. The first turn is bounded by the limits
-on `Input`, like a one-shot run, and later turns are smaller. Compaction
-bounds the context and leaves the transcript file growing, so a
-conversation whose file exceeds 32 MiB is retired before its next turn,
-which starts fresh.
+**Owner tier.** New chains launch an ordinary Delegatus conversation. A
+continuation validates that conversation's current transcript, engine and
+signed-in account, then uses structured idle-only delivery with the stable
+request key. Busy hosts hold. Only a proven refusal before execution can
+fall back to one new launch; accepted or uncertain sends never relaunch.
+The run ledger binds the conversation to the current verified owner text
+before sending, and removes that authority when the request settles.
+Observation requires a delivered receipt, a settled host and an assistant
+message after the delivered user message. A continuation's stop retires
+its own queued operation and interrupts the turn; it never kills the shared
+host, including during revocation and restart recovery.
 
-**What a conversation sees.** It sees only the input of requests with its
-own (relay, target, chat key). Each conversation has its own session, its
-own cwd and, for Codex, its own home. It has no tools. So no text of another
-chat or another target can reach it. The service's half of this isolation
-is in §A.8: a key's requests carry only that chat's messages.
+**Bounds and recovery.** Each record keeps the newest 200 anchors and 200
+seen ids. Idle records expire after 72 hours; at 300 records per relay, the
+oldest idle record is evicted. A selected engine session above 32 MiB starts
+fresh. Admission checks expiry and orphaned reservations without walking
+transcript directories; startup and hourly sweeps also check sizes. A
+running row with no matching run returns to idle. Version 1 per-chat rows
+expire under the store lock. Owner-tier records own no transcript files:
+expiry and eviction remove only their map rows. Existing owner conversations
+and board cards remain intact; the seat can retire old cards after deploy.
 
-**Hidden from Delegatus.** Codex conversation homes lie outside every
-scanner root, which are only the accounts' own `sessions` directories
-(`src/lib/scanner/roots.ts:80-90` [code]). Claude transcripts do land in a
-scanner root. Claude names a project directory by encoding its cwd: each
-path segment becomes `-` followed by the segment with every character
-outside `[A-Za-z0-9]` replaced by `-` (as `src/lib/scanner/describe.ts:269`
-[code] decodes it). The cwd `/tmp/llv-relay-conv-<uuid>` is therefore stored
-as `-tmp-llv-relay-conv-<uuid>`, and a different temp root gives a
-different prefix. One predicate, `isRelayConversationDir(name)` in
-`conversations.ts`, decides which project directories are reserved, and
-both discovery and the retention sweep of §B.10 call it. A name is
-reserved when either holds:
+**Operator view.** Reserved engine-session transcripts remain excluded from
+the ordinary scanner and agent tools. The guarded relay conversation/feed
+routes let only the operator read them, without a composer or delete action.
+The relay's list shows a row per chain with its member, admin or owner label
+in English and Ukrainian. Owner-tier rows are omitted because those
+conversations already appear on the board.
 
-- it equals the encoding of a cwd recorded in `conversations.json`;
-- it ends in `-llv-relay-conv-` followed by a lowercase UUID, the pattern
-  `-llv-relay-conv-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`.
-  This covers orphans that have no record and a temp root that changed.
-
-Discovery skips every reserved directory, and `pathAllowed` refuses paths
-under one. The sweep deletes a reserved directory only when its UUID names
-a deleted conversation or no record at all. A
-conversation therefore never appears in the scanner's catalog, in
-`search_transcripts` or `conversation_messages`, or to a composer or a
-flow, and nothing can resume it with tools.
-
-**Seen by the operator.** The operator reads these conversations without
-the scanner. `GET /api/external-relay/conversations` (§B.9) lists the
-records with each one's transcript, found from the record itself: a Claude
-session's `<sessionId>.jsonl` under the reserved project directory of any
-Claude store, a Codex session's rollout under its conversation's
-`CODEX_HOME`. The feed routes (`/api/log`, `/api/logs`, `/api/logs/stream`)
-serve such a transcript only to a request that passes the relay routes'
-guards, so a caller with an agent's capability, a cross-origin page and a
-staging Viewer are refused it, and only when a record names that exact file;
-deleting it through `/api/log` stays refused. In the browser each paired
-service whose chats hold a conversation is an entry of the sidebar (the
-phone's project sheet) under its name; its leaf lists one row per chat and
-context ("Chat QmF6x9 · members · Support bot"), and a row opens the
-conversation in the agent window with no composer and no agent controls,
-marked "Read only". Only the relay writes in these sessions. The same leaf
-lists the relay's kept single answers (§B.9 Recent answers), and a service
-with only those is an entry too.
-
-**Restart.** A turn is a run. The sweep of §B.3 ends an orphaned turn with
-`install_restarted` and sets its conversation back to `idle`. It also sets
-back to `idle` any `running` conversation that no entry in `runs.json`
-names, which a crash between the two files' writes can leave. The next turn
-resumes the transcript as the interrupted turn left it.
-
-**Retention and deletion.** The install deletes a conversation (its record,
-its Codex home, its Claude reserved directory in every store, and its cwd)
-when:
-
-- the relay is unpaired, by Disconnect or by "Not me";
-- its target leaves the pairing's target list (§B.3);
-- its target's engine changes;
-- the owner presses "Start fresh" on the chat's row (§B.15);
-- a complete listing of the target's chats no longer contains the key. A
-  listing is complete when every page was read in one pass, by the daily
-  refresh of §B.3 or by the dialog. This assumes what row 12 promises: a
-  chat the target had for the whole pass appears on one of its pages;
-- it has had no turn for 30 days.
-
-Switching the chat or the target to the service keeps the conversation, so
-switching back continues where it stopped. A relay parked in
-`credential_rejected` keeps its conversations until the operator
-disconnects or 30 days pass. Pairing again gives a new relay id, so
-conversations do not carry across a re-pairing (see Deferred).
+**Compact.** The current compact request carries no reply-chain identity.
+The install preserves its requester, configuration, drain and lease checks,
+then completes `compacted` with reason `nothing_to_compact` without reading
+or writing the conversation map. It never chooses a chain by chat alone.
+The default-off compact switch requires local chain pinning. Because claims
+list no conversation feature, the service currently ignores `/compact`.
+Reply-targeted compaction needs the partner's agreed protocol change;
+`relay-reply-chain-conversations.md` §9.3 and §17 describe that follow-up.
 
 ## B.15 [delta] Managing chats in the install
 
@@ -3399,3 +3325,11 @@ order and advertised free slots exclude them. On expiry it sends `declined`
 with reason `busy`, retaining detail `chat busy` for a chat hold. Demotion
 wakes holds and attempts that completion once before its bounded exit.
 Heartbeats follow a fixed grid through admission and completion delivery.
+
+
+The install announces the service's existing `relay_tools_on_demand` feature
+when its descriptor offers it, and fills those claims once with bounded
+`describe` lookups for both relay paths. Owner agents receive a compact index
+and use request-bound `relay_service_tools` to describe and call tools through
+the same tool loop as restricted agents. The relay wire protocol is unchanged.
+See [owner service tools](relay-owner-service-tools.md).

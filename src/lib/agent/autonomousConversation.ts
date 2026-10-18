@@ -3,12 +3,15 @@ import type { NextRequest } from "next/server";
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { spawnNoticeFinalMessage } from "@/lib/spawnNotice/production";
 import { reportSpawnHeaders, startDeferredSpawnWork, type ReportSpawnResult } from "@/lib/telegram/reportSpawn";
+import { withSystemRunTask } from "@/lib/tasks/systemRun";
 
 /** The normal spawn lane, outside Next's request-scoped after(). */
 export async function launchAutonomousConversation(body: Record<string, unknown>, authorize?: () => void, options: { structured?: boolean } = {}): Promise<ReportSpawnResult> {
   const [{ executeSpawnRequest, productionSpawnCommandDependencies }, { ensureOperatorSpawnCapability }, { VIEWER_SPAWN_CAPABILITY_HEADER }] = await Promise.all([
     import("@/lib/agent/spawnCommand"), import("@/lib/agent/operatorCapability"), import("@/lib/agent/spawnPolicy"),
   ]);
+  authorize?.();
+  body = await withSystemRunTask(body);
   authorize?.();
   const request = { headers: reportSpawnHeaders(ensureOperatorSpawnCapability(), VIEWER_SPAWN_CAPABILITY_HEADER), json: async () => body } as unknown as NextRequest;
   // Loading the spawn lane is asynchronous; existing receipts keep their custody.

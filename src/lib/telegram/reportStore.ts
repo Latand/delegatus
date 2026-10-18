@@ -62,6 +62,13 @@ export type ActiveTelegramReportRun = {
       failure armed (#1133). It is what keeps the retry single: a re-queued run
       that fails the same way arms nothing. */
   retry?: boolean;
+  /** The chosen result survives a consumed inbox while its task is retired. */
+  pendingSettlement?: {
+    status: Exclude<TelegramReportRow["status"], "running">;
+    errorCode: TelegramReportRow["errorCode"];
+    hasReport: boolean;
+    requeue?: boolean;
+  };
 };
 
 /** A run that failed purely because the shared connector was not up yet,
@@ -206,6 +213,16 @@ function sanitizeActive(value: unknown): ActiveTelegramReportRun | null {
   const runId = text(row.runId);
   const startedAt = text(row.startedAt);
   if (!runId || !startedAt) return null;
+  const settlement = row.pendingSettlement;
+  const pendingSettlement = settlement && typeof settlement === "object"
+    && (settlement.status === "ok" || settlement.status === "quiet" || settlement.status === "failed" || settlement.status === "account-mismatch")
+    ? {
+      status: settlement.status,
+      errorCode: typeof settlement.errorCode === "string" ? settlement.errorCode as TelegramReportRow["errorCode"] : null,
+      hasReport: settlement.hasReport === true,
+      ...(settlement.requeue === true ? { requeue: true } : {}),
+    }
+    : undefined;
   return {
     runId,
     trigger: row.trigger === "manual" ? "manual" : "scheduled",
@@ -216,6 +233,7 @@ function sanitizeActive(value: unknown): ActiveTelegramReportRun | null {
     promptVersion: text(row.promptVersion) ?? "unknown",
     ...(row.retry === true ? { retry: true as const } : {}),
     ...(row.admissionDeferred === true && row.trigger !== "manual" ? { admissionDeferred: true } : {}),
+    ...(pendingSettlement ? { pendingSettlement } : {}),
   };
 }
 
@@ -313,16 +331,17 @@ export function writeReportSources(runId: string, plan: unknown): string {
 }
 
 /**
- * Ingests the file the RUN wrote.
+ * Reads the file the RUN wrote. It remains until the chosen outcome has been
+ * durably recorded on the active run.
  *
  * The agent's own umask decides that file's mode, so this is the one read in
  * the telegram directory that cannot demand 0600 — it demands a regular,
  * non-symlinked file owned by this uid and a bounded size, which is what
  * actually distinguishes our run's output from somebody else's plant. The
- * bytes are then re-written owner-only by {@link saveReportText}, and the
- * inbox file is removed whatever the outcome.
+ * bytes are then re-written owner-only by {@link saveReportText}. The caller
+ * consumes this path only after persisting the outcome that was read.
  */
-export function ingestReportInbox(runId: string): string | null {
+export function readReportInbox(runId: string): string | null {
   const pathname = reportInboxPath(runId);
   try {
     if (ensureTelegramStateDir(false) === null) return null;
@@ -333,9 +352,12 @@ export function ingestReportInbox(runId: string): string | null {
     return fs.readFileSync(pathname, "utf8");
   } catch {
     return null;
-  } finally {
-    try { fs.rmSync(pathname, { force: true }); } catch { /* best effort */ }
   }
+}
+
+/** Removes an inbox after its report outcome has become durable. */
+export function consumeReportInbox(runId: string): void {
+  try { fs.rmSync(reportInboxPath(runId), { force: true }); } catch { /* best effort */ }
 }
 
 /** Removes a finished run's working files. The source plan names the

@@ -181,3 +181,12 @@ Set `LLV_RELAY_WIRE_OUTPUT_HISTORY=1` when running
 `src/lib/externalRelay/ownerHistory.test.ts` to regenerate it. The recording test
 validates scenario statuses and credential redaction before writing, even when
 selected by name. The build report names the commit containing these bytes.
+
+
+On-demand discovery fixtures, copied byte for byte from service revision `c3dcbb66b3`:
+
+| File | SHA-256 |
+|---|---|
+| `claimed_tools_on_demand_owner.json` | `2718a2057a2fcc23376c9919597508e20576ac1cb5ac1e4a94d7d25a26f0f2d9` |
+| `lookup_bodies.json` | `9a4d0939395368c537af193127ca985fcb78b16c8de6b821eac50efb0aef15f9` |
+| `lookup_results.json` | `965de49cc36a455c141b789e03d36a0738e27df29c461f7c355b7be3b1483160` |

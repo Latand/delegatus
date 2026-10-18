@@ -9,7 +9,8 @@ process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 
 const {
   clearTelegramReports,
-  ingestReportInbox,
+  consumeReportInbox,
+  readReportInbox,
   readReportText,
   readTelegramReports,
   reportInboxPath,
@@ -107,19 +108,33 @@ test("history is capped and evicted rows take their report bodies with them", ()
   for (const id of ids.slice(TELEGRAM_REPORT_HISTORY_LIMIT)) expect(readReportText(id)).toBeNull();
 });
 
-test("the run's inbox file is ingested once, re-stored owner-only, and unlinked", () => {
+test("the run's inbox is read before its caller explicitly consumes it", () => {
   const id = "report-fixture-0005";
   writeReportSources(id, { privateDialogs: [] });
   const inbox = reportInboxPath(id);
   /* The agent writes with its own umask; the Viewer must still accept it. */
   fs.writeFileSync(inbox, "#daily_report\nQUIET\n", { mode: 0o644 });
-  const ingested = ingestReportInbox(id);
+  const ingested = readReportInbox(id);
   expect(ingested).toContain("QUIET");
+  expect(fs.existsSync(inbox)).toBe(true);
+  consumeReportInbox(id);
   expect(fs.existsSync(inbox)).toBe(false);
-  expect(ingestReportInbox(id)).toBeNull();
+  expect(readReportInbox(id)).toBeNull();
 
   saveReportText(id, ingested!);
   expect(fs.statSync(reportTextPath(id)).mode & 0o077).toBe(0);
+});
+
+test("a report inbox remains available until its outcome can be persisted", () => {
+  const id = "report-fixture-pending-settlement";
+  reportWorkspaceDir();
+  const inbox = reportInboxPath(id);
+  fs.writeFileSync(inbox, "#daily_report\nQUIET\n", { mode: 0o644 });
+
+  expect(readReportInbox(id)).toContain("QUIET");
+  expect(fs.existsSync(inbox)).toBe(true);
+  consumeReportInbox(id);
+  expect(fs.existsSync(inbox)).toBe(false);
 });
 
 test("an oversized or symlinked inbox file is refused and removed", () => {
@@ -127,13 +142,17 @@ test("an oversized or symlinked inbox file is refused and removed", () => {
   const inbox = reportInboxPath(id);
   reportWorkspaceDir();
   fs.writeFileSync(inbox, "x".repeat(512 * 1024));
-  expect(ingestReportInbox(id)).toBeNull();
+  expect(readReportInbox(id)).toBeNull();
+  expect(fs.existsSync(inbox)).toBe(true);
+  consumeReportInbox(id);
   expect(fs.existsSync(inbox)).toBe(false);
 
   const elsewhere = path.join(SANDBOX, "outside.md");
   fs.writeFileSync(elsewhere, "#daily_report\nplanted\n");
   fs.symlinkSync(elsewhere, inbox);
-  expect(ingestReportInbox(id)).toBeNull();
+  expect(readReportInbox(id)).toBeNull();
+  expect(fs.existsSync(inbox)).toBe(true);
+  consumeReportInbox(id);
   expect(fs.existsSync(inbox)).toBe(false);
   /* The symlink target itself is left alone; only our path was removed. */
   expect(fs.existsSync(elsewhere)).toBe(true);

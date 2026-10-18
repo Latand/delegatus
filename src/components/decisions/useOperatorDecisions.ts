@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { forgetDecisionDraft, reconcileSeatDrafts } from "@/components/prototypeReview/decisionDrafts";
 import { fireTasksChanged, TASKS_CHANGED_EVENT } from "@/components/tasks/taskApi";
 import type { DecidePrototypeInput, OperatorDecisionView, OperatorDecisionsRead } from "@/lib/prototypeReview/types";
 
@@ -14,23 +15,10 @@ export function decisionsUrl(project: string, review?: string): string {
 
 export type DecisionAnswer = Omit<DecidePrototypeInput, "reviewId">;
 
-/* What the operator chose and wrote, by round, from the press of «Відповісти»
-   until the server keeps it. The form leaves the list while its answer is on
-   the way; when the server refuses, the form that comes back starts from this
-   draft, so a second press sends the same answer. */
-const drafts = new Map<string, DecisionAnswer>();
-export function decisionDraft(reviewId: string): DecisionAnswer | undefined {
-  return drafts.get(reviewId);
-}
-/** Tests only: forget every held draft. */
-export function resetDecisionDraftsForTests(): void {
-  drafts.clear();
-}
-
 /**
  * A project's open decisions while the column shows them: read at once, then
  * every few seconds. An answer leaves the list the moment it is pressed and
- * comes back, with the server's reason and the operator's draft, only if the
+ * comes back, with the server's reason and the operator's stored draft, only if the
  * server refused it (docs/design/operator-decision-forms.md §2.4).
  *
  * A record already decided stays where it is: Retry draws its message as on
@@ -54,7 +42,10 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
       const response = await fetch(decisionsUrl(project), { signal, cache: "no-store" });
       const body = await response.json() as OperatorDecisionsRead & { error?: string };
       if (!response.ok) throw new Error(body.error ?? "decisions unavailable");
-      if (seq === sequence.current && !signal?.aborted) setState({ project, decisions: body.decisions, failed: false });
+      if (seq === sequence.current && !signal?.aborted) {
+        setState({ project, decisions: body.decisions, failed: false });
+        reconcileSeatDrafts(body.project, body.decisions);
+      }
     } catch {
       if (seq === sequence.current && !signal?.aborted) setState((held) => ({ project, decisions: held.project === project ? held.decisions : null, failed: true }));
     }
@@ -77,7 +68,6 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
     inflight.current.add(reviewId);
     setError(null);
     const decided = record?.decision ? recordAfter(record, body) : null;
-    if (!("retry" in body) && !decided) drafts.set(reviewId, body);
     if (decided) setPredicted((held) => new Map(held).set(reviewId, decided));
     else setAnswering((held) => new Set([...held, reviewId]));
     ++sequence.current;
@@ -89,7 +79,8 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
       const result = await response.json() as OperatorDecisionsRead & { error?: string };
       if (!response.ok) throw new Error(result.error ?? "the answer could not be saved");
       ++sequence.current;
-      drafts.delete(reviewId);
+      /* Saved: the draft the form kept as the operator typed goes. A refusal leaves it for the form that comes back. */
+      if (!("retry" in body) && !decided) forgetDecisionDraft(reviewId);
       setState({ project, decisions: result.decisions, failed: false });
       fireTasksChanged();
       return true;

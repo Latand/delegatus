@@ -1,17 +1,19 @@
+import { hydrateToolIndex } from "./toolIndex";
+import { openOwnerServiceTools } from "./ownerServiceTools";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
 import { relayRequestDeadline } from "./deadline";
-import { ownerRelayAuthorized } from "./ownerAuthority";
+import { ownerRelayAuthorized, ownerRelayAuthorizedAsync } from "./ownerAuthority";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
 import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
-import { runOwnerAgent, type OwnerRunPorts } from "./ownerRun";
+import { runOwnerAgent, OwnerContinuationRefused, ownerContinuationPrompt, ownerInitialCursor, ownerRunPrompt, type OwnerRunPorts } from "./ownerRun";
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
 import { runCompactRequest } from "./compact";
-import { conversationContext, reserveConversationsAsync, releaseConversationAsync, prepareConversationAccount, conversationCodexHome, sweepConversationsAsync, readConversations, type RelayConversation } from "./conversations";
+import { conversationAuthority, lookupChainConversationAsync, resolveChainConversationAsync, reserveChainConversationAsync, releaseConversationAsync, prepareConversationAccount, conversationCodexHome, sweepConversationsAsync, type RelayConversation } from "./conversations";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import fs from "node:fs";
 import os from "node:os";
@@ -37,7 +39,7 @@ import {
   type ExternalRelayCompletion,
   type ExternalRelayProgress,
 } from "./protocol";
-import { callableTools, createToolLoop, toolSleep, type ToolLoopRuntime } from "./toolLoop";
+import { callableTools, RELAY_TOOL_ROUNDS, createToolLoop, toolSleep, type ToolLoopRuntime } from "./toolLoop";
 import { answerPrompt, toolRoundPrompt, conversationTurnPrompt, conversationRoundPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
 import { createRelaySteps } from "./progressSteps";
@@ -264,13 +266,16 @@ export async function runClaimedRequest(
   let admissionHeld = false;
   const admissionCutoff = () => admissionHeld ? deadline.declineAt : deadline.at;
   let rounds = 0;
+  let ownerTools: ReturnType<typeof openOwnerServiceTools> | null = null;
   let loop: ReturnType<typeof createToolLoop> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let cadenceTimer: ReturnType<typeof setTimeout> | null = null;
   let heartbeatStopped = false;
   let pendingBeat: Promise<void> | null = null;
   let finishing: Promise<ExternalRelayCompletion> | null = null;
-  const loopRecord = () => loop ? { rounds, toolCalls: loop.records } : {};
+  let chain: { continued: boolean; promptBytes: number } | undefined;
+  let resultDelivered = false;
+  const loopRecord = () => ({ ...(loop ? { rounds, toolCalls: loop.records } : ownerTools?.records.length ? { toolCalls: ownerTools.records } : {}), ...(chain ? { chain } : {}) });
   const finish = (body: ExternalRelayCompletion): Promise<ExternalRelayCompletion> => {
     if (finishing) return finishing;
     finishing = (async () => {
@@ -497,10 +502,19 @@ export async function runClaimedRequest(
       catch { owner.bridgeReport = null; }
     }
     if (owner) allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
-    const context = conversationContext(request.input.requester);
-    const usesConversation = !owner && readRelaySwitches().chat_conversations && request.chat && context;
+    const authority = conversationAuthority(request.input.requester, !!owner);
+    const usesConversation = !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
+    let preResolvedConversation: RelayConversation | null = null;
+    let preResolutionPending = false;
+    if (usesConversation) {
+      try { preResolvedConversation = await resolveChainConversationAsync(relay, target, request, authority!, admissionCutoff()); preResolutionPending = true; }
+      catch (error) {
+        if (!(error instanceof RelayStoreBusy)) throw error;
+        preResolvedConversation = await lookupChainConversationAsync(relay, target, request, authority!);
+      }
+    }
     const selectAccount = () => prototype ? null : accountManager.resolveHeadlessSpawn(target.engine!,
-      conversation?.accountId ?? (usesConversation ? readConversations().find(r => r.relayId === relay.id && r.targetId === target.id && r.chatKey === request.chat!.key && r.context === context)?.accountId : null) ?? null,
+      conversation?.accountId ?? preResolvedConversation?.accountId ?? null,
       [], target.project, target.model);
     let selection = selectAccount();
     const selectedAccount = () => {
@@ -545,11 +559,22 @@ export async function runClaimedRequest(
           admissionDecline = declined(leaseId, "busy", null, lastCause === "chat" ? "chat busy" : null);
           return false;
         }
-        if (usesConversation)
-          await sweepConversationsAsync([relay], Date.now(), admissionCutoff(), relay.id);
-        const liveRuns = usesConversation ? readRunLedger().runs : [];
-        let cause: RelayHoldCause | null = activeDrain() ? "drain" : usesConversation && readConversations().some(r =>
-          r.relayId === relay.id && r.targetId === target.id && r.chatKey === request.chat!.key && r.state === "running" && liveRuns.some(run => run.requestId === r.runningRequestId)) ? "chat" :
+        let resolved: RelayConversation | null = null;
+        let cause: RelayHoldCause | null = activeDrain() ? "drain" : null;
+        if (usesConversation) {
+          try {
+            if (preResolutionPending) {
+              resolved = preResolvedConversation;
+              preResolvedConversation = null;
+              preResolutionPending = false;
+            } else resolved = await resolveChainConversationAsync(relay, target, request, authority!, Math.min(admissionCutoff(), deadline.declineAt));
+          }
+          catch (error) {
+            if (!(error instanceof RelayStoreBusy)) throw error;
+            cause ??= "capacity"; admissionHeld = true;
+          }
+        }
+        cause ??= resolved?.state === "running" ? "chat" :
           olderCapacityWaiter(relay.id, target.id, requestId, deadline) ? "capacity" : null;
         if (releaseRequested || releasingRelayHolds()) { admissionDecline = declined(leaseId, "busy", null, cause === "chat" ? "chat busy" : null); releaseRequested = true; return false; }
         if (!cause) {
@@ -561,9 +586,9 @@ export async function runClaimedRequest(
               recorded = true; markActive(relay, target);
               if (usesConversation) {
                 await sweepConversationsAsync([relay], Date.now(), admissionCutoff(), relay.id);
-                const reserved = await reserveConversationsAsync(relay, target, request.chat!.key, requestId, [context!], admissionCutoff());
+                const reserved = await reserveChainConversationAsync(relay, target, request, authority!, admissionCutoff());
                 if (!reserved) { await releaseAdmission(); cause = "chat"; }
-                else conversation = reserved[0]!;
+                else conversation = reserved;
               }
               if (Date.now() >= admissionCutoff()) {
                 await releaseAdmission();
@@ -588,7 +613,7 @@ export async function runClaimedRequest(
           if (admissionDecline) return false;
           selection = selectAccount(); admissionDecline = capacityDecline();
           if (admissionDecline) return false;
-          if (conversation && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
+          if (conversation && !owner && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
           return true;
         }
         lastCause = cause;
@@ -611,7 +636,7 @@ export async function runClaimedRequest(
       return await finish(declined(leaseId, "busy"));
     }
     const lose = () => { leaseUnavailable = true; run?.cancel(); callAbort.abort(); };
-    if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, {
+    const lease = {
       signal: callAbort.signal, lose,
       ack: async () => {
         while (!acked && !leaseUnavailable) {
@@ -622,7 +647,13 @@ export async function runClaimedRequest(
         }
         return acked && !leaseUnavailable;
       },
-    }, runtime, (tool, done, failed) => {
+    };
+    const hydrated = await hydrateToolIndex(relay, request, lease, runtime, deadline.at);
+    request.input = hydrated.request.input;
+    callAbort.signal.throwIfAborted();
+    if (owner && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {},
+      () => ownerRelayAuthorizedAsync(relay.id, target.id, requestId));
+    if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, lease, runtime, (tool, done, failed) => {
       if (!steps && request.answer.progress === "notes") {
         newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
           status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
@@ -635,9 +666,9 @@ export async function runClaimedRequest(
     } : undefined);
     let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
     let completion: ExternalRelayDecision | null = null;
-    for (rounds = 1; rounds <= (loop ? 8 : 1); rounds++) {
+    for (rounds = 1; rounds <= (loop ? RELAY_TOOL_ROUNDS : 1); rounds++) {
       if (Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
-      const final = rounds === 8 || !!loop && loop.callsLeft() === 0;
+      const final = rounds === RELAY_TOOL_ROUNDS || !!loop && loop.callsLeft() === 0;
       runFinished = false;
       try {
         if (rounds === 1 && activeDrain()) {
@@ -646,31 +677,53 @@ export async function runClaimedRequest(
         }
         const roundPrompt = loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }) : answerPrompt(request);
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
-        if (conversation && rounds === 1) turn = conversationTurnPrompt(request, conversation, frame);
+        if (conversation && rounds === 1) turn = owner ? ownerContinuationPrompt(request, owner, target.hardCapMinutes, conversation) : conversationTurnPrompt(request, conversation, frame);
         const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt;
+        if (conversation) {
+          const promptBytes = Buffer.byteLength(owner ? conversation.conversationId ? turn!.prompt : ownerRunPrompt(request, owner, target.hardCapMinutes) : persistentPrompt);
+          chain = rounds === 1 ? { continued: owner ? !!conversation.conversationId : !!conversation.sessionId, promptBytes }
+            : { continued: chain!.continued, promptBytes: chain!.promptBytes + promptBytes };
+        }
+        if (conversation && owner && rounds === 1 && conversation.conversationId && turn) {
+          await releaseConversationAsync(conversation.id, { state: "running", runningRequestId: requestId,
+            pendingCursor: { operationId: `relay-owner-${requestId}`, seen: turn.seen, staticDigest: turn.digest } }, Date.now() + 5000);
+        }
         steps?.observe({});
         stepLog = path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "stdout.log");
         run = prototype ? runPrototypeAnswer(prototype, owner!.messageId, () => {
           if (leaseUnavailable || callAbort.signal.aborted || !allowOwnerReply!()) throw new Error("owner relay authorization revoked");
         }, { telegramUserId: relay.owner.namespace === "telegram" ? relay.owner.id : undefined }) : owner ? runOwnerAgent({
-          authorize: () => { if (!allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
+          ...(conversation?.conversationId ? { continuation: { conversationId: conversation.conversationId, prompt: turn!.prompt } } : {}),
+          authorize: () => { if (leaseUnavailable || callAbort.signal.aborted || !allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
           credentials: [relay.credential],
           request, owner, target, deadline, accountId: selectedAccount().accountId,
           hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
-          onConversation: async (conversationId) => {
+          onConversation: async (conversationId, initialPrompt) => {
             await changeRunAsync(requestId, current => ({ ...current, conversationId }), Date.now() + 5000);
+            if (conversation) {
+              conversation.conversationId = conversationId;
+              const cursor = initialPrompt ? ownerInitialCursor(request, owner!, target.hardCapMinutes) : null;
+              if (cursor) turn = { prompt: "", ...cursor };
+              const patch = { conversationId, state: "running" as const, runningRequestId: requestId,
+                ...(initialPrompt && cursor ? { pendingCursor: { operationId: initialPrompt.operationId, seen: cursor.seen, staticDigest: cursor.digest } } : {}) };
+              await releaseConversationAsync(conversation.id, patch, Date.now() + 5000);
+              if (cursor) Object.assign(conversation, patch);
+            }
+            ownerTools?.bindConversation(conversationId);
             recorder?.bindConversation(conversationId);
           },
           ...(steps ? { onProgress: steps.observe } : {}),
         }) : runEphemeralAgent({
-          ...(conversation ? { session: { mode: conversation.sessionId ? "resume" as const : "start" as const, id: conversation.sessionId ?? (target.engine === "claude" ? crypto.randomUUID() : null), cwd: conversation.cwd, codexHome: conversationCodexHome(conversation) } } : {}),
+          ...(conversation ? { session: { mode: conversation.sessionId ? "resume" as const : "start" as const, id: conversation.sessionId ?? (target.engine === "claude" ? crypto.randomUUID() : null), cwd: conversation.cwd!, codexHome: conversationCodexHome(conversation) } } : {}),
           key: loop ? `external-relay:${requestId}:${rounds}` : `external-relay:${requestId}`,
           engine: target.engine,
           model: target.model,
           effort: target.effort,
           account: selectedAccount(),
           ["prompt"]: conversation ? persistentPrompt : roundPrompt,
-          schema: loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent })) : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
+          schema: loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent }))
+            : ownerTools ? (ownerTools.sawUnknown ? replyAnswerSchema : ownerTools.actionSent ? answerSchema : offersHandoff(request) ? handoffAnswerSchema : answerSchema)
+              : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
           runDir: loop ? path.join(runDir, `round-${rounds}`) : runDir,
           hardCapMs: target.hardCapMinutes * 60_000,
           webSearch: profile.webSearch,
@@ -716,18 +769,46 @@ export async function runClaimedRequest(
       if (leaseUnavailable) launchedRun.cancel();
       // The request deadline bounds admission and delivery retries. A run
       // already launched remains protected by its lease and configured cap.
-      result = await launchedRun.done;
-      if (conversation) {
+      try { result = await launchedRun.done; }
+      catch (error) {
+        if (!(error instanceof OwnerContinuationRefused) || !conversation || !owner) throw error;
+        run = null;
+        if (error.reason === "unavailable") {
+          if (conversation.conversationId) ownerTools?.unbindConversation(conversation.conversationId);
+          Object.assign(conversation, { conversationId: null, seen: [], staticDigest: null });
+          await releaseConversationAsync(conversation.id, { conversationId: null, seen: [], staticDigest: null, state: "running", runningRequestId: requestId }, Date.now() + 5000);
+          await changeRunAsync(requestId, current => ({ ...current, conversationId: undefined,
+            ownerTurn: { ...current.ownerTurn!, continuation: undefined, admissionComplete: false } }), Date.now() + 5000);
+        } else {
+          admissionHeld = true;
+          await releaseAdmission();
+          enterRelayHold({ requestId, relayId: relay.id, targetId: target.id, cause: "chat", deadline,
+            release: () => { releaseRequested = true; wakeHold?.(); return released; } });
+          await new Promise<void>(resolve => {
+            const timer = setTimeout(resolve, Math.max(0, Math.min(1000, deadline.declineAt - Date.now())));
+            wakeHold = () => { clearTimeout(timer); resolve(); };
+          });
+          wakeHold = null;
+          if (Date.now() >= deadline.declineAt) return await finish(declined(leaseId, "busy", null, "chat busy"));
+          if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
+        }
+        rounds--; continue;
+      }
+      await ownerTools?.close(result.status);
+      if (conversation && !owner) {
         if (result.sessionId) conversation.sessionId = result.sessionId;
         else { conversationBroken = true; if (result.status === "done") result = { ...result, status: "failed" }; }
         if (result.status === "violation" || result.status === "failed") conversationBroken = true;
         conversationEvidence = { sessionId: conversation.sessionId, promptTokens: result.promptTokens ?? conversationEvidence.promptTokens, compacted: conversationEvidence.compacted || result.compacted };
       }
+      if (owner && conversation && result.status !== "done") conversationBroken = true;
+      resultDelivered = result.status === "done";
       if (pendingBeat) await pendingBeat;
       cancelStalledRun();
       if (leaseUnavailable) return null;
       const decision = result?.status === "done"
-        ? loop && !final ? checkedRound(result.answer, request, { handoff: !loop.actionSent, ignore: !loop.sawUnknown }) : checkedAnswer(result.answer, request, { handoff: !loop?.actionSent, ignore: !loop?.sawUnknown })
+        ? loop && !final ? checkedRound(result.answer, request, { handoff: !loop.actionSent, ignore: !loop.sawUnknown })
+          : checkedAnswer(result.answer, request, { handoff: !loop?.actionSent && !ownerTools?.actionSent, ignore: !loop?.sawUnknown && !ownerTools?.sawUnknown })
         : null;
       if (steps && decision && !("kind" in decision)) {
         steps.observe({ writingAnswer: true });
@@ -783,12 +864,20 @@ export async function runClaimedRequest(
     if (cadenceTimer) clearTimeout(cadenceTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     callAbort.abort();
-    if (conversation) {
+    await ownerTools?.dispose();
+    let releasePin = true;
+    if (conversation && owner) {
+      try {
+        const custody = readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn;
+        releasePin = !(custody?.cancel && !custody.confirmed);
+      } catch { releasePin = false; } // Unreadable custody cannot admit a peer turn.
+    }
+    if (conversation && releasePin) {
       const compacted = conversationEvidence.compacted;
       await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
-        ...(conversationEvidence.sessionId ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
+        ...(conversationEvidence.sessionId || owner && conversation.conversationId && resultDelivered ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
           lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,
-          lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0) } : {}) }, Date.now() + 5000);
+          lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0), pendingCursor: undefined } : {}) }, Date.now() + 5000);
     }
     for (const timer of identityTimers) clearTimeout(timer);
     // The only way out without a completion is a lost lease.

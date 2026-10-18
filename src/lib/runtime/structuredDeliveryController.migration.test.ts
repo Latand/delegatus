@@ -311,6 +311,39 @@ test(`production journal queue refuses a revoked owner's first prompt without a 
   }
 });
 
+test("production journal dispatch refuses a queued owner continuation after its authority is revoked", async () => {
+  const f = fixture();
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "owner-continuation-state");
+  const { reserveRun, updateRelayStore, dropRun } = await import("@/lib/externalRelay/store");
+  const { procBackend } = await import("@/lib/proc");
+  const requestId = "queued-continuation-revocation";
+  const operationId = `relay-owner-${requestId}`;
+  updateRelayStore(store => ({ ...store, relays: [{ id: "relay_fixture", paused: false,
+    credential: crypto.randomUUID(), targets: [{ id: "target_fixture", enabled: true, ownerTier: true }] } as typeof store.relays[number]] }));
+  reserveRun({ requestId, leaseId: "lease_fixture", relayId: "relay_fixture", targetId: "target_fixture",
+    conversationId: f.conversation.id, ownerTurn: { clientAttemptId: operationId, continuation: { operationId } },
+    ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null,
+    runDir: "", startedAt: new Date().toISOString() }, 1);
+  f.registry.holdDelivery(f.conversation.id, "continued owner request", operationId, "text", [], null,
+    { operationId, kind: "send", policy: "queue", turnId: null });
+  const send = spyOn(f.host, "send");
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host: f.host }], { registry: f.registry, client: f.client });
+    const admitted = f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
+      conversationId: f.conversation.id, text: "continued owner request", policy: "queue" });
+    expect(admitted.receipt.status).toBe("queued");
+    updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({ ...relay,
+      targets: relay.targets.map(target => ({ ...target, ownerTier: false })) })) }));
+    await kickStructuredDeliveryQueue();
+    expect(send).not.toHaveBeenCalled();
+    expect(f.journal.operationResult(operationId)?.receipt.status).not.toBe("delivered");
+  } finally {
+    send.mockRestore(); dropRun(requestId); await f.cleanup();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
+});
+
 test("background owner first-prompt journal failures scrub logs outside the original spawn scope", async () => {
   const f = fixture();
   const previousState = process.env.LLV_STATE_DIR, previousToken = process.env.LLV_TOKEN;

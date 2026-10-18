@@ -15,7 +15,8 @@ import { loadTasks, loadTasksFile, mutateTasksFile, mutateTasks, mutateLinkedTas
 import { BOARD_TASKS_PER_PROJECT_LIMIT } from "@/lib/tasks/commands";
 import { countBoardTasks, DONE_TASK_BOARD_RETENTION_MS } from "@/lib/tasks/boardVisibility";
 import { type BoardTask } from "@/lib/tasks/types";
-import { readStateCollectionRevision } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, readStateCollectionRevision, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { HOT_STATE_BACKEND, HOT_STATE_RELEASE_REVISION_ENV, hotStateSqliteWriterReady, publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 
 import { updateRemoteProjects } from "./boardLinks";
 import { linkedContext, runsElsewhere } from "./linked";
@@ -214,6 +215,104 @@ test("the stamp step stamps linked tasks only, per changed group, and leaves eve
     return { tasks, result: tasks[index]! };
   }, file);
   expect(assigned.sync!.s).toEqual(moved.sync!.s);
+});
+
+test("a pre-task-index database upgrades on reopen before a linked task write", () => {
+  setSystemTime(new Date("2026-10-17T00:00:00.000Z"));
+  const { file, db: filename } = linkedInstall();
+  const db = new Database(filename);
+  try {
+    const taskIndexes = () => db.query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name GLOB 'state_rows_task_*' ORDER BY name",
+    ).all().map(row => row.name);
+    const expected = taskIndexes();
+    expect(expected).toHaveLength(9);
+    for (const name of expected) db.exec(`DROP INDEX "${name}"`);
+    // A read-only connection leaves schema repair to the writable open path.
+    expect(readStateCollectionRevision(filename, "tasks")).not.toBeNull();
+    expect(taskIndexes()).toEqual([]);
+    const source = `import { mutateTasks, loadTasks } from "./src/lib/tasks/store";
+      import { patchTask } from "./src/lib/tasks/commands";
+      Date.now = () => 1792195200000;
+      const file = process.argv[1], project = process.argv[2];
+      const at = "2026-10-17T00:00:00.000Z";
+      mutateTasks(tasks => ({ tasks: [...tasks, { id: "upgrade-task", project,
+        text: "Created after upgrade", status: "inbox", placement: "unplaced",
+        assignments: [], createdAt: at, updatedAt: at }], result: null }), file);
+      mutateTasks(tasks => {
+        const outcome = patchTask(tasks, "upgrade-task", { details: "Saved after upgrade" }, at, { explicit: true });
+        if (!outcome.ok) throw new Error(outcome.error);
+        return { tasks: outcome.tasks, result: null };
+      }, file);
+      console.log(JSON.stringify(loadTasks(file).find(task => task.id === "upgrade-task")));`;
+    // A real restart drops the task collection cache held by the old writer.
+    const child = spawnSync(process.execPath, ["-e", source, file, key], {
+      cwd: path.resolve(import.meta.dir, "../../.."), env: { ...process.env,
+        LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, encoding: "utf8", timeout: 30_000,
+    });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toMatchObject({ id: "upgrade-task", details: "Saved after upgrade",
+      sync: { s: { text: expect.stringMatching(STAMP_PATTERN) } } });
+    expect(taskIndexes()).toEqual(expected);
+  } finally { db.close(); }
+});
+
+test("a retired release cannot repair task indexes before authorization", () => {
+  const { file, db: filename, state } = linkedInstall();
+  const fixtureSeed = [{ collection: "fixture", schemaVersion: 1, migrationId: "fixture",
+    key: (row: { id: string }) => row.id, loadRecords: () => [] }];
+  initializeStateCollections(filename, fixtureSeed);
+  const oldRevision = process.env[HOT_STATE_RELEASE_REVISION_ENV];
+  const acceptedRevision = "a".repeat(40);
+  const retiredRevision = "b".repeat(40);
+  const database = new Database(filename);
+  try {
+    const taskIndexes = () => database.query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name GLOB 'state_rows_task_*' ORDER BY name",
+    ).all().map(row => row.name);
+    const expected = taskIndexes();
+    expect(expected).toHaveLength(9);
+    for (const name of expected) database.exec(`DROP INDEX "${name}"`);
+    const schemaAfterDrop = database.query<{ type: string; name: string; tableName: string }, []>(
+      "SELECT type, name, tbl_name AS tableName FROM sqlite_master WHERE type IN ('table','index','trigger') ORDER BY type, name",
+    ).all();
+    fs.writeFileSync(path.join(state, "viewer-release.json"), JSON.stringify({
+      endpoint: "http://127.0.0.1:19101", revision: acceptedRevision, hotStateBackend: HOT_STATE_BACKEND,
+    }));
+    publishHotStateAuthority(state, "sqlite", acceptedRevision);
+    process.env[HOT_STATE_RELEASE_REVISION_ENV] = retiredRevision;
+    expect(hotStateSqliteWriterReady(state)).toBe(false);
+
+    expect(() => new SqliteStateCollection(filename, {
+      collection: "fixture", schemaVersion: 1, busyMessage: "fixture is busy",
+      key: (row: { id: string }) => row.id, decode: row => row as { id: string }, clone: row => ({ ...row }),
+    })).toThrow("waiting for release promotion");
+    expect(() => initializeStateCollections(filename, fixtureSeed)).toThrow("waiting for release promotion");
+    expect(taskIndexes()).toEqual([]);
+    expect(database.query<{ type: string; name: string; tableName: string }, []>(
+      "SELECT type, name, tbl_name AS tableName FROM sqlite_master WHERE type IN ('table','index','trigger') ORDER BY type, name",
+    ).all()).toEqual(schemaAfterDrop);
+
+    const source = `import { mutateTasks, loadTasks } from "./src/lib/tasks/store";
+      const file = process.argv[1], project = process.argv[2];
+      const at = "2026-10-17T00:00:00.000Z";
+      mutateTasks(tasks => ({ tasks: [...tasks, { id: "authorized-upgrade-task", project,
+        text: "Created after authorized upgrade", status: "inbox", placement: "unplaced",
+        assignments: [], createdAt: at, updatedAt: at }], result: null }), file);
+      console.log(JSON.stringify(loadTasks(file).find(task => task.id === "authorized-upgrade-task")));`;
+    process.env[HOT_STATE_RELEASE_REVISION_ENV] = acceptedRevision;
+    expect(hotStateSqliteWriterReady(state)).toBe(true);
+    const child = spawnSync(process.execPath, ["-e", source, file, key], {
+      cwd: path.resolve(import.meta.dir, "../../.."), env: { ...process.env }, encoding: "utf8", timeout: 30_000,
+    });
+    expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toMatchObject({ id: "authorized-upgrade-task", project: key });
+    expect(taskIndexes()).toEqual(expected);
+  } finally {
+    database.close();
+    if (oldRevision === undefined) delete process.env[HOT_STATE_RELEASE_REVISION_ENV];
+    else process.env[HOT_STATE_RELEASE_REVISION_ENV] = oldRevision;
+  }
 });
 
 test("a linked prototype semantic write stamps one row with the indexed project watermark", () => {
