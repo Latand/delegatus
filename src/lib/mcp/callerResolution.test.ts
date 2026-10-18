@@ -144,7 +144,7 @@ test("recovery refuses a native generation change after the production send bind
   let claims = 0, dispatches = 0;
   const receipts = new MemoryMcpReceiptStore();
   const claim = receipts.claim.bind(receipts);
-  receipts.claim = async (...args) => { claims++; return claim(...args); };
+  receipts.claim = (...args) => { claims++; return claim(...args); };
   const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(tool => [tool, async () => ({})])) as unknown as McpToolBindings;
   bindings.send_message = async () => { dispatches++; return { operationId: "op_stale" }; };
   const service = createMcpToolService(bindings, receipts, undefined, { recovery });
@@ -167,8 +167,8 @@ test("recovery discloses no receipt when native generation changes during receip
   const args = { clientRequestId: "native-generation-receipt", conversationId: id, text: "fixture" };
   expect(await runAsMcpHttpCaller({ capability }, () => service.callTool("send_message", args))).toMatchObject({ ok: true });
   const lookup = receipts.lookup.bind(receipts);
-  receipts.lookup = async key => {
-    const row = await lookup(key);
+  receipts.lookup = key => {
+    const row = lookup(key);
     authority = { ...authority, nativeProof: "generation-b" };
     return row;
   };

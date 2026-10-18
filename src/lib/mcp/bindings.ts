@@ -7412,7 +7412,7 @@ function recoveryCaller(
   /* Caller attribution is shared for the whole tool call, while a native
      session proof is a live fence: generation changes must be visible at each
      recovery check even when the original authority is memoized. */
-  if (revalidateNative && authority.nativeProof && dependencies.attentionAuthority) {
+  if (revalidateNative && authority.kind !== "unidentified" && authority.nativeProof && dependencies.attentionAuthority) {
     try {
       authority = dependencies.attentionAuthority();
     } catch {
