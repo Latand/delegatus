@@ -185,3 +185,20 @@ test("the active, archive and task working set fits together without repeated de
   for (const reader of readers) reader.loadReadonly();
   expect(decodes).toBe(3);
 }));
+
+test("ordered key selection seeks metadata only, deduplicates and observes peer deletes", () => fixture(filename => {
+  let decodes = 0;
+  const opts = options(value => { decodes++; return value as Row; });
+  const store = new SqliteStateCollection(filename, opts);
+  const peer = new SqliteStateCollection(filename, opts);
+  expect(store.keysInOrder(["missing", "b", "a", "a"], 8)).toEqual(["a", "b"]);
+  expect(store.keysInOrder(["b", "a"], 1)).toEqual(["a"]);
+  expect(store.keysInOrder([], 8)).toEqual([]);
+  expect(store.keysInOrder(["a"], 0)).toEqual([]);
+  expect(store.keysInOrder(["missing"], 8)).toEqual([]);
+  expect(decodes).toBe(0);
+  peer.boundedPatch(1, tx => { tx.delete("a"); });
+  const afterWrite = decodes;
+  expect(store.keysInOrder(["a", "b"], 8)).toEqual(["b"]);
+  expect(decodes).toBe(afterWrite);
+}));

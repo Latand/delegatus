@@ -8,7 +8,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { tickFlows } from "@/lib/flows/engine";
 import { scheduleAutoMerge } from "@/lib/forge/autoMerge";
 import { scheduleForgeSweep } from "@/lib/forge/sweep";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasksForList } from "@/lib/tasks/store";
 import { completedFileScan } from "@/lib/scanner/scanCache";
 import { FILE_SCAN_RETRY_SECONDS, isFileScanIncompleteError } from "@/lib/scanner/incompleteScan";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
@@ -19,7 +19,7 @@ import { PIPELINE_REMOTE_ACTIONS } from "./controllerCapabilities";
 import { withoutControllerPipelineScope } from "./controllerScope";
 import { procBackend } from "@/lib/proc";
 import { tickPipelinesController } from "./controllerPass";
-import { archiveSettledPipelines, loadPipelines } from "./store";
+import { archiveSettledPipelines, loadPipelinesForList } from "./store";
 
 export type FlowPipelineControllerPhase = "pipelines" | "scan" | "flows" | "idle";
 export type FlowPipelineControllerHeartbeatState =
@@ -122,8 +122,8 @@ function productionPorts(): FlowPipelineControllerPorts {
     tickFlows,
     handoffHeld: autoHandoffHeld,
     publishHeartbeat: writeFlowPipelineControllerHeartbeat,
-    sweepForgeLinks: () => scheduleForgeSweep({ loadPipelines, loadTasks }),
-    sweepAutoMerge: () => scheduleAutoMerge({ loadPipelines }),
+    sweepForgeLinks: () => scheduleForgeSweep({ loadPipelines: loadPipelinesForList, loadTasks: loadTasksForList }),
+    sweepAutoMerge: () => scheduleAutoMerge({ loadPipelines: loadPipelinesForList }),
     /* Loaded on first use: the sweep reaches the delivery layer, which this
        module's own import graph has no business carrying. */
     sweepSpawnNotices: () => {

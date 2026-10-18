@@ -394,6 +394,11 @@ const stateSchema = [
   `CREATE INDEX IF NOT EXISTS state_rows_task_project
     ON state_rows(json_extract(value_json,'$.project'), row_key)
     WHERE collection='tasks' AND json_valid(value_json)`,
+  `CREATE INDEX IF NOT EXISTS state_rows_task_finding
+    ON state_rows(json_extract(value_json,'$.project'), json_extract(value_json,'$.findingKey'), row_order, row_key)
+    WHERE collection='tasks' AND json_valid(value_json)
+      AND json_type(value_json,'$.findingKey')='text' AND json_type(value_json,'$.status')='text'
+      AND json_extract(value_json,'$.status') <> 'done'`,
   ...["text", "status", "look", "place", "links", "machine", "handover"].map(field => `CREATE INDEX IF NOT EXISTS state_rows_task_stamp_${field}
       ON state_rows(json_extract(value_json,'$.project'), json_extract(value_json,'$.sync.s.${field}') DESC)
       WHERE collection='tasks' AND json_valid(value_json) AND json_type(value_json,'$.sync.s.${field}')='text'`),
@@ -1428,6 +1433,30 @@ export class SqliteStateCollection<T> {
 
   snapshotForController(): T[] {
     return this.loadControllerReadonly().map((record) => this.options.clone(record));
+  }
+
+  /** Seek the supplied keys before sorting their metadata. No payload is read
+      or decoded here; callers retain collection order for a bounded selection. */
+  keysInOrder(rowKeys: readonly string[], limit: number): string[] {
+    if (!rowKeys.length || limit <= 0) return [];
+    return this.readDb.query<{ row_key: string }, [string, string, number]>(`
+      SELECT DISTINCT r.row_key, r.row_order FROM json_each(?) AS wanted CROSS JOIN state_rows AS r
+      WHERE r.collection = ? AND r.row_key = wanted.value
+      ORDER BY r.row_order, r.row_key LIMIT ?
+    `).all(JSON.stringify(rowKeys), this.options.collection, limit).map(row => row.row_key);
+  }
+
+  /** Open finding rows for one project/key pair, using the task finding index
+      to avoid decoding unrelated collection history. */
+  findingTaskKeys(project: string, findingKey: string): string[] {
+    return this.readDb.query<{ row_key: string }, [string, string]>(`
+      SELECT row_key FROM state_rows INDEXED BY state_rows_task_finding
+      WHERE collection='tasks' AND json_valid(value_json)
+        AND json_type(value_json,'$.findingKey')='text' AND json_type(value_json,'$.status')='text'
+        AND json_extract(value_json,'$.status') <> 'done'
+        AND json_extract(value_json,'$.project')=? AND json_extract(value_json,'$.findingKey')=?
+      ORDER BY row_order, row_key
+    `).all(project, findingKey).map(row => row.row_key);
   }
 
   get(rowKey: string): T | null {

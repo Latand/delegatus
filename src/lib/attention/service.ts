@@ -1,7 +1,7 @@
 import { agentRegistry, type ConversationLookup } from "@/lib/agent/registry";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { rootIdentity } from "@/lib/root/store";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasksByIds } from "@/lib/tasks/store";
 import { freshness, listPresence } from "@/lib/view/presenceStore";
 import type { StoredViewSession } from "@/lib/view/types";
 
@@ -79,7 +79,7 @@ function byAge(left: AttentionRequestV1, right: AttentionRequestV1): number {
     the task file; a test passes its own rows. */
 const productionRecordSources: AttentionRecordSources = {
   pipelines: () => loadPipelinesForList(),
-  tasks: () => loadTasks(),
+  tasks: (ids, limit) => loadTasksByIds(ids, undefined, limit),
 };
 
 export function attentionForDevice(

@@ -15,7 +15,7 @@ import { runsElsewhere } from "@/lib/links/linked";
 import { applyAssignmentPatches } from "@/lib/tasks/commands";
 import { isoNow, taskDeliveryText } from "@/lib/tasks/helpers";
 import { assembleSendResults, type TaskSendTargetOutcome } from "@/lib/tasks/send";
-import { loadTasks, mutateTasks } from "@/lib/tasks/store";
+import { loadTasksForList, mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { ApiError } from "@/lib/types";
 
@@ -43,7 +43,7 @@ function pathsFromBody(body: unknown): string[] | null {
 }
 
 interface TaskSendDependencies {
-  loadTasks: typeof loadTasks;
+  loadTasks: typeof loadTasksForList;
   listFiles: typeof listFiles;
   deliverConversationMessage: typeof deliverConversationMessage;
   mutateTasks: typeof mutateTasks;
@@ -53,7 +53,7 @@ interface TaskSendDependencies {
 }
 
 const productionDependencies: TaskSendDependencies = {
-  loadTasks,
+  loadTasks: loadTasksForList,
   listFiles,
   deliverConversationMessage,
   mutateTasks,

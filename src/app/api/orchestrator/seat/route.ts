@@ -12,7 +12,7 @@ import { seatDeputyView, type SeatDeputyView } from "@/lib/orchestrator/deputyVi
 import { allSeatConversationsIn, orchestratorSeatIn, previousOrchestratorSeatsIn, readOrchestratorSeatFileOrNull, seatTaskLookup, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatConversations, type SeatNotesTask } from "@/lib/orchestrator/seats";
 import { currentSeatFailure, type SeatHostObservation } from "@/lib/orchestrator/seatFailure";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasksForList } from "@/lib/tasks/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -121,9 +121,9 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
   const retired = previousOrchestratorSeatsIn(record, project);
   /* The task store is read only when there is a seat to find notes for. A
      failed read leaves the rows without notes; the seat answer still stands. */
-  let tasks: ReturnType<typeof loadTasks> = [];
+  let tasks: ReturnType<typeof loadTasksForList> = [];
   if (retired.length || active) {
-    try { tasks = loadTasks(); } catch { tasks = []; }
+    try { tasks = loadTasksForList(); } catch { tasks = []; }
   }
   const seatDeputies = active?.conversationId && deputies
     ? deputiesForSeatIn(deputies, active.conversationId).map(seatDeputyView)

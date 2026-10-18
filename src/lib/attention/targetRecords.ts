@@ -61,7 +61,8 @@ export type WithdrawalReason = "never-materialized";
     so the stores are touched only when a live request actually names one. */
 export interface AttentionRecordSources {
   pipelines(): readonly Pipeline[];
-  tasks(): readonly BoardTask[];
+  /** Select these ids in store order; production decodes only the returned rows. */
+  tasks(ids: ReadonlySet<string>, limit: number): readonly BoardTask[];
 }
 
 /**
@@ -167,7 +168,7 @@ export function attentionTargetRecords(
   recentlyAdmitted.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
   for (const pipeline of recentlyAdmitted) addPipeline(pipeline);
 
-  const tasks = taskIds.size === 0 ? [] : sources.tasks()
+  const tasks = taskIds.size === 0 ? [] : sources.tasks(taskIds, MAX_RECORDS_PER_KIND)
     .filter((task) => taskIds.has(task.id))
     .slice(0, MAX_RECORDS_PER_KIND);
 
