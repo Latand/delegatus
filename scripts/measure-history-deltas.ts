@@ -7,7 +7,7 @@ import { decodeFlow } from "@/lib/reviewHistory/decode";
 import type { Flow } from "@/lib/reviewHistory/types";
 import { isStoredPipeline } from "@/lib/pipelines/store";
 import { readAttribution } from "@/lib/readAttribution";
-import { installHistoryProjection, readHistoryProjection, historyAttemptCounts, historyHeadlessFlows } from "@/lib/state/historyProjection";
+import { installHistoryProjection, readHistoryProjection, historyAttemptCounts, historyHeadlessFlows, historyHeadlessDeadRounds } from "@/lib/state/historyProjection";
 import { activeHeadlessTranscriptPaths } from "@/lib/lifecycle/liveness";
 import { livenessProbe } from "@/lib/agent/accountLiveness";
 
@@ -122,8 +122,9 @@ if(operation==="liveness") {
   const before=await measure(()=>{
     const flows=readLegacyRows(["flows"],(value): value is Flow => decodeFlow(value)!==null).filter(flow=>flow.reviewerMode==="headless");
     const roundRows=flows.reduce((sum,flow)=>sum+flow.rounds.length,0);
-    const paths=activeHeadlessTranscriptPaths(flows,registry,probe,true);
-    return {roundRows,paths:paths.size};
+    const paths=activeHeadlessTranscriptPaths(flows,registry,probe);
+    const deadProofs=flows.reduce((sum,flow)=>sum+flow.rounds.filter(round=>round.reviewerPath==="history-measure-0").length,0);
+    return {roundRows,paths:paths.size,deadProofs};
   });
   Object.assign(before,{pidProbes:probeCalls.pid,identityProbes:probeCalls.identity});
   probeCalls.pid=0;probeCalls.identity=0;
@@ -131,7 +132,8 @@ if(operation==="liveness") {
     const flows=await readHistoryProjection(historyHeadlessFlows,{filename,collections:["flows"]});
     const roundRows=flows.reduce((sum,flow)=>sum+flow.rounds.length,0);
     const paths=activeHeadlessTranscriptPaths(flows,registry,probe,true);
-    return {roundRows,paths:paths.size};
+    const deadProofs=historyHeadlessDeadRounds(flows,"history-measure-0",[]).length;
+    return {roundRows,paths:paths.size,deadProofs};
   });
   Object.assign(firstAfter,{pidProbes:probeCalls.pid,identityProbes:probeCalls.identity});
   probeCalls.pid=0;probeCalls.identity=0;
@@ -139,10 +141,12 @@ if(operation==="liveness") {
     const flows=await readHistoryProjection(historyHeadlessFlows,{filename,collections:["flows"]});
     const roundRows=flows.reduce((sum,flow)=>sum+flow.rounds.length,0);
     const paths=activeHeadlessTranscriptPaths(flows,registry,probe,true);
-    return {roundRows,paths:paths.size};
+    const deadProofs=historyHeadlessDeadRounds(flows,"history-measure-0",[]).length;
+    return {roundRows,paths:paths.size,deadProofs};
   });
   Object.assign(after,{pidProbes:probeCalls.pid,identityProbes:probeCalls.identity});
   if(before.result.paths!==firstAfter.result.paths||firstAfter.result.paths!==after.result.paths) throw new Error("liveness path results differ across legacy and projected reads");
+  if(before.result.deadProofs!==firstAfter.result.deadProofs||firstAfter.result.deadProofs!==after.result.deadProofs) throw new Error("targeted dead-owner evidence differs across legacy and projected reads");
   summaries.before=before;summaries.afterFirst=firstAfter;summaries.after=after;
 } else {
   const legacy=await measure(()=>{

@@ -11,7 +11,7 @@ import { isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { pipelineSelectionSource, loadPipelines } from "@/lib/pipelines/store";
 import { flowSelectionSource, loadFlows } from "@/lib/flows/store";
-import { readHistoryProjection, historyPipelineRef, historyHeadlessFlows } from "@/lib/state/historyProjection";
+import { readHistoryProjection, historyPipelineRef, historyHeadlessFlows, pruneHistoryHeadlessRounds, canPruneHistoryHeadlessRounds, historyHeadlessDeadRounds } from "@/lib/state/historyProjection";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { Flow } from "@/lib/flows/types";
 import { completedFileScan } from "@/lib/scanner/scanCache";
@@ -523,9 +523,15 @@ function headlessHostEvidence(
 ): { state: AgentHostState; kind: "headless"; pid: number } | null {
   const canonicalId = conversationId ? canonicalConversationId(registry, conversationId) : null;
   let fallback: { state: AgentHostState; kind: "headless"; pid: number } | null = null;
-  for (const flow of flows) {
-    if (flow.reviewerMode !== "headless") continue;
-    for (const round of flow.rounds) {
+  const deadRounds=historyHeadlessDeadRounds(flows,transcriptPath,[conversationId,canonicalId].filter((value):value is string=>value!==null));
+  const candidates=[...flows.flatMap(flow=>flow.reviewerMode==="headless"?flow.rounds:[]),...deadRounds];
+  candidates.sort((left,right)=>{
+    const a=left as typeof left & {row_order?:number;row_key?:string;round?:number};
+    const b=right as typeof right & {row_order?:number;row_key?:string;round?:number};
+    if(a.row_order===undefined||b.row_order===undefined||a.row_key===undefined||b.row_key===undefined)return 0;
+    return a.row_order-b.row_order||a.row_key.localeCompare(b.row_key)||(a.round??0)-(b.round??0);
+  });
+  for (const round of candidates) {
       if (!Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0
         || (!transcriptPath || round.reviewerPath !== transcriptPath)
         && (!canonicalId || !round.reviewerConversationId || canonicalConversationId(registry, round.reviewerConversationId) !== canonicalId)) continue;
@@ -533,7 +539,6 @@ function headlessHostEvidence(
       const host = { state: verdict === "unproven" ? "unknown" as const : verdict, kind: "headless" as const, pid: round.reviewerPid! };
       if (verdict === "alive") return host;
       if (!fallback || verdict === "unproven") fallback = host;
-    }
   }
   return fallback;
 }
@@ -565,7 +570,7 @@ export function headlessRoundProcess(
   const verdict=headlessRoundVerdict(round,probe);
   const until=verdict==="gone" && round.reviewerIdentity ? Infinity : now+1000;
   cache.delete(key);cache.set(key,{verdict,until});
-  while(cache.size>2048)cache.delete(cache.keys().next().value!);
+  while(cache.size>8192)cache.delete(cache.keys().next().value!);
   return verdict;
 }
 
@@ -849,6 +854,7 @@ export function activeHeadlessTranscriptPaths(
   pruneConfirmedGone = false,
 ): Set<string> {
   const paths = new Set<string>();
+  const prunedRounds:object[]=[];
   for (let flowIndex=0;flowIndex<flows.length;flowIndex++) {
     const flow=flows[flowIndex]!;
     if (flow.reviewerMode !== "headless") continue;
@@ -856,7 +862,7 @@ export function activeHeadlessTranscriptPaths(
       const round=flow.rounds[roundIndex]!;
       if (!Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0) { roundIndex++; continue; }
       const verdict=headlessRoundProcess(round,probe);
-      if (pruneConfirmedGone && verdict==="gone" && round.reviewerIdentity) { flow.rounds.splice(roundIndex,1); continue; }
+      if (pruneConfirmedGone && verdict==="gone" && round.reviewerIdentity) { prunedRounds.push(round); flow.rounds.splice(roundIndex,1); continue; }
       const path = round.reviewerPath
         ?? (round.reviewerConversationId ? canonicalConversation(registry, round.reviewerConversationId)?.generations.at(-1)?.path : null);
       // Selection must retain every owner the final liveOnly predicate protects.
@@ -866,6 +872,7 @@ export function activeHeadlessTranscriptPaths(
     }
     if(pruneConfirmedGone&&flow.rounds.length===0)flows.splice(flowIndex--,1);
   }
+  if(prunedRounds.length)pruneHistoryHeadlessRounds(flows,prunedRounds);
   return paths;
 }
 
@@ -1105,7 +1112,7 @@ async function livenessSnapshotWithin(
   const flows = await (sources.flows?.forLiveness ? sources.flows.forLiveness(projectionOptions) : sources.flows?.() ?? []);
   const hostedPaths = new Set([
     ...hostedTranscriptPaths(registry, sources.probe),
-    ...activeHeadlessTranscriptPaths(flows, registry, sources.probe, Boolean(sources.flows?.forLiveness)),
+    ...activeHeadlessTranscriptPaths(flows, registry, sources.probe, Boolean(sources.flows?.forLiveness && canPruneHistoryHeadlessRounds(flows))),
   ]);
   const indexProjectionMs = phaseClock() - projectionStartedAt;
 

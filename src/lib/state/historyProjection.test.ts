@@ -5,7 +5,7 @@ import { Database, type SQLQueryBindings } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { installHistoryProjection, readHistoryProjection, historyAttemptCounts, historyPipelineRef, historyHeadlessFlows, historyFleetLimitWaits } from "./historyProjection";
+import { installHistoryProjection, readHistoryProjection, historyAttemptCounts, historyPipelineRef, historyHeadlessFlows, historyHeadlessDeadRounds, historyFleetLimitWaits } from "./historyProjection";
 import { fleetLimitWaits } from "@/lib/mcp/agentFleet";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { buildPipeline } from "@/lib/pipelines/store";
@@ -183,6 +183,102 @@ test("crossing the count window expires only rows that passed its boundary",asyn
   } finally {f.db.close();}
 });
 
+test("count refresh handles an attempt entering and then leaving after a clock jump",async()=>{
+  const f=fixture();
+  try {
+    const row=pipeline("clock_jump");
+    row.runs[0]!.attempts[0]!.startedAt=new Date(NOW+30*24*60*60_000).toISOString();
+    f.put(row);
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:0,reviewer:0});
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW+90*24*60*60_000))).toEqual({builder:0,reviewer:0});
+  } finally {f.db.close();}
+});
+
+test("count refresh removes an absent effective role while retaining the run role",async()=>{
+  const f=fixture();
+  try {
+    const row=pipeline("role_removal");
+    row.stages=row.stages.slice(0,1);row.runs=row.runs.slice(0,1);
+    row.runs[0]!.attempts[0]!.effectiveRole!.roleId="reviewer";
+    row.runs[0]!.attempts[0]!.startedAt=new Date(NOW).toISOString();
+    f.put(row);
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:0,reviewer:1});
+    row.runs[0]!.attempts=[];
+    f.put(row);
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:0});
+
+    const expiring=pipeline("role_expiry");
+    expiring.stages=expiring.stages.slice(0,1);expiring.runs=expiring.runs.slice(0,1);
+    expiring.runs[0]!.attempts[0]!.effectiveRole!.roleId="reviewer";
+    expiring.runs[0]!.attempts[0]!.startedAt=new Date(NOW-WINDOW).toISOString();
+    f.put(expiring);
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:0,reviewer:1});
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW+1))).toEqual({builder:0});
+  } finally {f.db.close();}
+});
+
+test("count refresh keeps the inclusive millisecond window boundary",async()=>{
+  const f=fixture();
+  const now=Date.parse("2026-10-17T12:00:00.999Z");
+  const row=pipeline("millisecond_boundary");
+  row.runs[0]!.attempts[0]!.startedAt=new Date(now-WINDOW).toISOString();
+  try {
+    f.put(row);
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",now))).toEqual({builder:1,reviewer:0});
+  } finally {f.db.close();}
+});
+
+test("count cache misses read aggregate roles and the indexed time slice",async()=>{
+  const f=fixture();
+  try{
+    for(let n=0;n<250;n++){
+      const row=pipeline(`archive_${n}`);row.runs[0]!.attempts[0]!.startedAt=new Date(NOW-100*24*60*60_000).toISOString();
+      f.put(row,"pipelines_archive",n);
+    }
+    const recent=pipeline("recent_archive");recent.runs[0]!.attempts[0]!.startedAt="October 17, 2026 12:00:00 GMT";f.put(recent,"pipelines_archive",251);
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:1,reviewer:0});
+    await f.read(db=>{
+      for(let n=0;n<65;n++)historyAttemptCounts(db,`evicted_${n}`,NOW);
+      const query=spyOn(Database.prototype,"query");
+      try{
+        expect(historyAttemptCounts(db,"fixture",NOW+1)).toEqual({builder:1,reviewer:0});
+        const sql=query.mock.calls.map(([statement])=>String(statement));
+        expect(sql.some(statement=>statement.includes("FROM history_count_roles"))).toBe(true);
+        expect(sql.some(statement=>statement.includes("FROM history_runs")&&statement.includes("GROUP BY r.role"))).toBe(false);
+        expect(sql.some(statement=>statement.includes("a.startedMs BETWEEN")&&statement.includes("GROUP BY COALESCE(a.role,r.role)"))).toBe(true);
+      }finally{query.mockRestore();}
+    });
+  }finally{f.db.close();}
+});
+
+test("a refused projection commit cannot publish speculative count state",async()=>{
+  const f=fixture();
+  try {
+    const row=pipeline("commit_refusal"); f.put(row);
+    expect((await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).builder).toBe(1);
+    row.runs[0]!.attempts.push({...row.runs[0]!.attempts[0]!,n:2,startedAt:new Date(NOW).toISOString()}); f.put(row);
+    const original=Database.prototype.exec; const exec=spyOn(Database.prototype,"exec"); let refused=false;
+    exec.mockImplementation(function(this:Database,sql:string) {
+      if(!refused&&sql==="COMMIT"){refused=true;throw new Error("commit refused");}
+      return Reflect.apply(original,this,[sql]);
+    } as never);
+    try { await expect(f.read(db=>historyAttemptCounts(db,"fixture",NOW))).rejects.toThrow("commit refused"); }
+    finally {exec.mockRestore();}
+    expect((await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).builder).toBe(2);
+  } finally {f.db.close();}
+});
+
+test("flow changes do not remove confirmed dead owner evidence before liveness assembly",async()=>{
+  const f=fixture();
+  try {
+    f.put(flow({rounds:[{reviewerPid:4244,reviewerIdentity:"dead-start",reviewerPath:"reviewer.jsonl"}]}),"flows");
+    const projected=await f.read(historyHeadlessFlows);
+    const probe=livenessProbe({now:()=>NOW,pidAlive:()=>false,processIdentity:()=>null});
+    expect([...activeHeadlessTranscriptPaths(projected,{entries:{},conversations:{}},probe)]).toEqual([]);
+    expect(projected.flatMap(item=>item.rounds)).toHaveLength(1);
+  } finally {f.db.close();}
+});
+
 test("unrecognized and malformed saved records remain stored but never poison projections or startup",async () => {
   const f=fixture();
   const rejected={...pipeline("future_state"),state:"teleported"};
@@ -243,20 +339,59 @@ test("unchanged headless history reuses the bounded shared round projection",asy
   } finally {f.db.close();}
 });
 
-test("a repeated liveness snapshot stops visiting confirmed-dead cached rounds",async()=>{
+test("large headless history reuses its cached rows and applies one changed flow",async()=>{
+  const f=fixture();
+  try {
+    const rounds=Array.from({length:3000},(_,n)=>({reviewerPid:20000+n,reviewerPath:`reviewer-${n}`,reviewerIdentity:`start-${n}`}));
+    const saved=flow({rounds});f.put(saved,"flows",1);
+    expect((await f.read(historyHeadlessFlows)).flatMap(item=>item.rounds)).toHaveLength(3000);
+    await f.read(db=>{
+      const query=spyOn(Database.prototype,"query");
+      try {
+        expect(historyHeadlessFlows(db)).toHaveLength(3000);
+        expect(query.mock.calls.some(([sql])=>sql.includes("SELECT r.*,p.row_order FROM history_rounds r JOIN history_inputs"))).toBe(false);
+      } finally {query.mockRestore();}
+    });
+    const changed=flow({rounds:rounds.slice(1)});f.put(changed,"flows",1);
+    await f.read(db=>{
+      const query=spyOn(Database.prototype,"query");
+      try {
+        expect(historyHeadlessFlows(db).flatMap(item=>item.rounds)).toHaveLength(2999);
+        expect(query.mock.calls.some(([sql])=>sql.includes("WHERE r.row_key=?"))).toBe(true);
+        expect(query.mock.calls.some(([sql])=>sql.includes("SELECT r.*,p.row_order FROM history_rounds r JOIN history_inputs p ON p.collection='flows' AND p.row_key=r.row_key ORDER BY"))).toBe(false);
+      } finally {query.mockRestore();}
+    });
+  } finally {f.db.close();}
+});
+
+test("dead headless rounds leave the active walk but remain indexed across unrelated flow updates",async()=>{
   const f=fixture();
   let probes=0;
   const probe=livenessProbe({now:()=>NOW,pidAlive:()=>{probes++;return false;},processIdentity:()=>null});
   const registry={entries:{},conversations:{}};
   try {
-    f.put(flow({rounds:Array.from({length:100},(_,n)=>({reviewerPid:10000+n,reviewerPath:`dead-${n}`,reviewerIdentity:`start-${n}`}))}),"flows");
+    f.put(flow({rounds:Array.from({length:3000},(_,n)=>({reviewerPid:10000+n,reviewerPath:`dead-${n}`,reviewerIdentity:`start-${n}`}))}),"flows");
     const first=await f.read(historyHeadlessFlows);
     expect([...activeHeadlessTranscriptPaths(first,registry,probe,true)]).toEqual([]);
-    expect(probes).toBe(100);
-    const second=await f.read(historyHeadlessFlows);
-    expect(second).toHaveLength(0);
-    expect([...activeHeadlessTranscriptPaths(second,registry,probe,true)]).toEqual([]);
-    expect(probes).toBe(100);
+    expect(probes).toBe(3000);
+    expect(first).toHaveLength(0);
+    expect(historyHeadlessDeadRounds(first,"dead-0",[])).toHaveLength(1);
+    const unchanged=await f.read(historyHeadlessFlows);
+    expect(unchanged).toHaveLength(0);
+    expect([...activeHeadlessTranscriptPaths(unchanged,registry,probe,true)]).toEqual([]);
+    expect(probes).toBe(3000);
+    f.put(flow({id:"flow_two",rounds:[]}),"flows",2);
+    await f.read(db=>{
+      const query=spyOn(Database.prototype,"query");
+      try{
+        const updated=historyHeadlessFlows(db);
+        expect(updated).toHaveLength(0);
+        expect(historyHeadlessDeadRounds(updated,"dead-0",[])).toHaveLength(1);
+        const sql=query.mock.calls.map(([statement])=>String(statement));
+        expect(sql.some(statement=>statement.includes("SELECT r.*,p.row_order FROM history_rounds r JOIN history_inputs p ON p.collection='flows' AND p.row_key=r.row_key ORDER BY"))).toBe(false);
+      }finally{query.mockRestore();}
+    });
+    expect(probes).toBe(3000);
   } finally { f.db.close(); }
 });
 
@@ -287,7 +422,8 @@ test("count cache is shared across module copies and evicts after 64 projects",a
         for (let n=0;n<65;n++) other.historyAttemptCounts(db,`project_${n}`,NOW);
         query.mockClear();
         expect(historyAttemptCounts(db,"fixture",NOW)).toEqual({builder:1,reviewer:0});
-        expect(query.mock.calls.some(([sql]) => sql.includes("SELECT a.startedAt"))).toBe(true);
+        expect(query.mock.calls.some(([sql]) => sql.includes("FROM history_count_roles"))).toBe(true);
+        expect(query.mock.calls.some(([sql]) => sql.includes("GROUP BY r.role"))).toBe(false);
       } finally { query.mockRestore(); }
     });
   } finally { f.db.close(); }
@@ -459,6 +595,29 @@ test("a warmed count follows project succession even when its caller holds the e
     if(previous===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=previous;
     resetProjectAliasesForTests();f.db.close();
   }
+});
+
+test("alias change plus a record update rebuilds the complete canonical count",async()=>{
+  const f=fixture();const previous=process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR=path.dirname(f.filename);resetProjectAliasesForTests();
+  try{
+    f.put(pipeline("alias_source"));const renamed=pipeline("alias_target",{project:"renamed"});f.put(renamed,"pipelines",1);
+    expect((await f.read(db=>historyAttemptCounts(db,"renamed",NOW))).builder).toBe(1);
+    expect(persistProjectAliases([{source:"fixture",target:"renamed",displayName:"renamed"}])).toBe(true);
+    renamed.runs[0]!.attempts.push({...renamed.runs[0]!.attempts[0]!,n:2});f.put(renamed,"pipelines",1);
+    expect((await f.read(db=>historyAttemptCounts(db,"renamed",NOW))).builder).toBe(3);
+  }finally{if(previous===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=previous;resetProjectAliasesForTests();f.db.close();}
+});
+
+test("warm count removal drops an unbacked effective role key",async()=>{
+  const f=fixture();
+  try{
+    const row=pipeline("effective_role");row.stages=row.stages.slice(0,1);row.runs=row.runs.slice(0,1);
+    row.runs[0]!.attempts[0]!.effectiveRole!.roleId="reviewer";f.put(row);
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:0,reviewer:1});
+    row.runs[0]!.attempts=[];f.put(row);
+    expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:0});
+  }finally{f.db.close();}
 });
 
 

@@ -5,6 +5,8 @@ import { statePath } from "@/lib/configDir";
 import { loadPipelines, loadArchivedPipelines, pipelineStateCollectionSeeds } from "@/lib/pipelines/store";
 import { flowStateCollectionSeed, loadFlows } from "@/lib/flows/store";
 import { readHistoryProjection, historyAttemptCounts, historyPipelineRef, historyHeadlessFlows } from "@/lib/state/historyProjection";
+import { activeHeadlessTranscriptPaths } from "@/lib/lifecycle/liveness";
+import { livenessProbe } from "@/lib/agent/accountLiveness";
 import { readAttribution } from "@/lib/readAttribution";
 import { Database } from "bun:sqlite";
 
@@ -33,6 +35,8 @@ if (admission) {
   raw.close();
 }
 const now = Date.parse("2026-10-17T12:00:00.000Z");
+const livenessRegistry={entries:{},conversations:{}};
+const livenessProbeForMeasurement=livenessProbe({now:()=>now,pidAlive:()=>false,processIdentity:()=>null});
 function threadCounters() {
   if (process.platform !== "linux") throw new Error("measurement requires Linux per-thread counters");
   const io = fs.readFileSync(`/proc/self/task/${process.pid}/io`,"utf8");
@@ -40,12 +44,23 @@ function threadCounters() {
   return {bytes:Number(/^rchar: (\d+)/m.exec(io)![1]),runNs:Number(sched.split(" ")[0])};
 }
 const measurements = [];
+/* Viewer startup prepares the persisted projection before serving. Measure the
+   first request against that ready artifact without warming its JS count LRU. */
+let startupPreparation: {elapsedMs:number;mainThreadMs:number;readBytes:number;decodedJsonBytes:number}|null=null;
+if (!registry && mode === "projection") {
+  readAttribution.clear();
+  const before=threadCounters(),started=performance.now();
+  await readHistoryProjection(() => null,{filename,collections:["pipelines","pipelines_archive","flows"]});
+  const after=threadCounters();
+  startupPreparation={elapsedMs:performance.now()-started,mainThreadMs:(after.runNs-before.runNs)/1e6,readBytes:after.bytes-before.bytes,decodedJsonBytes:readAttribution.snapshot(performance.now()-started).decodedJsonBytes};
+}
 for (let repeat=0;repeat<4;repeat++) {
   readAttribution.clear();
   let lastTick = performance.now(), maxTimerGapMs = 0;
   const timer = setInterval(() => { const at=performance.now(); maxTimerGapMs=Math.max(maxTimerGapMs,at-lastTick-10); lastTick=at; },10);
   const before = threadCounters(), start = performance.now();
   let count = 0;
+  let headlessRounds=0,headlessPaths=0;
   if (registry) {
     const snapshot = mode === "legacy" ? registry.readOnlySnapshot() : registry.curatorConversationSnapshot(registryTarget);
     count = snapshot.conversations[registryTarget as `conversation_${string}`] ? 1 : 0;
@@ -58,20 +73,24 @@ for (let repeat=0;repeat<4;repeat++) {
       if (a.startedAt && Date.parse(a.startedAt)<=now && now-Date.parse(a.startedAt)<=30*24*60*60_000) count++;
     }
     for (const p of pipelines) for (const run of p.runs) for (const a of run.attempts) if (!a.historical && (a.conversationId===target.id || a.agentPath===target.path)) void a.state;
-    void flows.length;
+    headlessRounds=flows.reduce((sum,flow)=>sum+(flow.reviewerMode==="headless"?flow.rounds.length:0),0);
+    headlessPaths=activeHeadlessTranscriptPaths(flows.filter(flow=>flow.reviewerMode==="headless"),livenessRegistry,livenessProbeForMeasurement).size;
   } else {
     const result = await readHistoryProjection(database => {
       const counts = historyAttemptCounts(database,project,now);
       void historyPipelineRef(database,target.id,target.path ?? "");
-      void historyHeadlessFlows(database);
-      return counts;
+      const flows=historyHeadlessFlows(database);
+      const rounds=flows.reduce((sum,flow)=>sum+flow.rounds.length,0);
+      const paths=activeHeadlessTranscriptPaths(flows,livenessRegistry,livenessProbeForMeasurement,true).size;
+      return {counts,rounds,paths};
     });
-    count = Object.values(result).reduce((sum,n) => sum+n,0);
+    count = Object.values(result.counts).reduce((sum,n) => sum+n,0);
+    headlessRounds=result.rounds;headlessPaths=result.paths;
   }
   const elapsedMs = performance.now()-start, after = threadCounters();
   await new Promise<void>(resolve=>setTimeout(resolve,15));
   clearInterval(timer);
   measurements.push({repeat,cold:repeat===0,elapsedMs,maxTimerGapMs,mainThreadMs:(after.runNs-before.runNs)/1e6,
-    readBytes:after.bytes-before.bytes,decodedJsonBytes:readAttribution.snapshot(elapsedMs).decodedJsonBytes,count});
+    readBytes:after.bytes-before.bytes,decodedJsonBytes:readAttribution.snapshot(elapsedMs).decodedJsonBytes,count,headlessRounds,headlessPaths});
 }
-console.log(JSON.stringify({mode,operation:admission ? "curator-registry-admission" : "curator-counts-and-liveness-history",sourceRows:admission ? registryRows : rows.n,sourceBytes:admission ? registryBytes : rows.bytes,now,measurements},null,2));
+console.log(JSON.stringify({mode,operation:admission ? "curator-registry-admission" : "curator-counts-and-liveness-history",sourceRows:admission ? registryRows : rows.n,sourceBytes:admission ? registryBytes : rows.bytes,now,startupPreparation,measurements},null,2));
