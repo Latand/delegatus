@@ -991,6 +991,78 @@
         }
       ],
       "logSha256": "a6407eda28d84d08cdd95c35aa8a8d782919de2013f3c04982b83bb8e6de33eb"
+    },
+    "latestPrePush": {
+      "hook": "bash .githooks/pre-push",
+      "head": "ff914ec23dc61e3aac6d650ff2649cca928c2653",
+      "base": "e4a86ff27da40a747b801f8f20cfd175ca638668",
+      "isolated": {
+        "HOME": true,
+        "XDG_CONFIG_HOME": true,
+        "LLV_STATE_DIR": true,
+        "TMPDIR": true
+      },
+      "touchedTests": {
+        "fileCount": 32,
+        "headElapsedMs": 50448,
+        "baselineElapsedMs": 12868,
+        "flakyConfirmationElapsedMs": 62686,
+        "newFailures": 0,
+        "preExistingFailures": 5,
+        "fixed": 0,
+        "removedOrSkipped": 0,
+        "flaky": 3,
+        "result": "passed"
+      },
+      "otherLanes": {
+        "privacy": "passed",
+        "typecheck": "passed",
+        "eslint": "passed",
+        "linuxBackend": "passed",
+        "linuxTests": "passed"
+      },
+      "knownOutcomes": [
+        {
+          "classification": "FLAKY",
+          "file": "src/lib/agent/registry.sqlite.test.ts",
+          "test": "production-sized read burn-in checkpoints the current cached snapshot without reloading history (base 3 pass/1 fail; head 1 pass/3 fail)"
+        },
+        {
+          "classification": "FLAKY",
+          "file": "src/lib/agent/registry.sqlite.test.ts",
+          "test": "production-sized SQLite registry admits every ten-lane write beside a concurrent reader, with no JSON rewrite (base 4 pass/0 fail; head 2 pass/2 fail)"
+        },
+        {
+          "classification": "FLAKY",
+          "file": "src/lib/mcp/bindings.test.ts",
+          "test": "task placement bindings require atomic guards and classify field refusals as non-retryable (base 3 pass/1 fail; head 1 pass/3 fail)"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/agent/registry.spawnCapabilityHandover.test.ts",
+          "test": "off: rollback publication without a pending capability revokes predecessor HTTP identity only at commit"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/agent/registry.spawnCapabilityHandover.test.ts",
+          "test": "sqlite: rollback publication without a pending capability revokes predecessor HTTP identity only at commit"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/mcp/bindings.test.ts",
+          "test": "MCP task writes normalize holds, preserve step operator reasons and server provenance"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/state/hotStateStores.sqlite.test.ts",
+          "test": "bounded change retention forces a stale reader through a full reload"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/state/pipelineEvidenceIndex.test.ts",
+          "test": "a contended synchronous initialization refuses promptly, records its wait, and retries intact"
+        }
+      ]
     }
   },
   "mainRecheck": {
