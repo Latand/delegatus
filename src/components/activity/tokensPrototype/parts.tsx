@@ -178,49 +178,73 @@ export function CoverageDot({ complete, pendingGb, ctx }: { complete: boolean; p
 
 export const kindColor = (kind: TokenKind) => `var(--mark-kind-${TOKEN_KINDS.indexOf(kind) + 1})`;
 
-/** One bar in four parts, each labelled under it with its number: a bar
-    alone would show output as a sliver (§2). */
-export function KindMeter({ counts, ctx, compactLabels = false, withReasoning = true }: { counts: TokenCounts; ctx: Ctx; compactLabels?: boolean; withReasoning?: boolean }) {
+/** A value an engine does not report reads «—», never 0 (Codex reports no
+    cache writes). */
+export function kindValue(counts: TokenCounts, kind: TokenKind, locale: Locale): string {
+  return kind === "cacheWrite" && counts.cacheWrite === 0 ? "—" : compact(counts[kind], locale);
+}
+
+/** The kinds the meter's bar draws: cache reads are most of every total and
+    would leave the other three as slivers, so they are stated on their own
+    line and the bar splits the rest (§2). */
+const REST_KINDS: readonly TokenKind[] = ["input", "cacheWrite", "output"];
+/** Narrower than this a segment is a sliver; it is left out of the bar and
+    keeps its printed value. */
+const MIN_SEGMENT_PX = 6;
+
+/** Cache reads on one line with their value, then one bar over the other
+    three kinds with each kind's value printed under it. */
+export function KindMeter({ counts, ctx, compactLabels = false }: { counts: TokenCounts; ctx: Ctx; compactLabels?: boolean }) {
   const { locale, pt } = ctx;
   const total = totalOf(counts);
+  const [box, width] = useWidth<HTMLDivElement>();
+  const rest = REST_KINDS.reduce((sum, kind) => sum + counts[kind], 0);
+  const gaps = 2 * (REST_KINDS.length - 1);
+  const drawn = REST_KINDS.filter((kind) => rest > 0 && (counts[kind] / rest) * (width - gaps) >= MIN_SEGMENT_PX);
+  const drawnSum = drawn.reduce((sum, kind) => sum + counts[kind], 0);
+  const title = (kind: TokenKind) => (kind === "cacheWrite" && counts.cacheWrite === 0 ? pt("kind.notReported") : `${exact(counts[kind], locale)} · ${percent(total ? counts[kind] / total : 0, locale, 1)}`);
+  const reasoning = pt("kind.reasoning", { share: percent(counts.output ? counts.reasoning / counts.output : 0, locale) });
   return (
     <div data-token-meter="">
-      <div className="flex h-2 w-full gap-[2px]" aria-hidden>
-        {TOKEN_KINDS.map((kind, index) => (
+      <div className="flex items-baseline gap-x-1.5 text-[12px]" title={title("cacheRead")} data-token-kind="cacheRead">
+        <span className="whitespace-nowrap text-secondary">{pt("kind.cacheRead")}</span>
+        <span className="whitespace-nowrap font-semibold tabular-nums text-primary">{compact(counts.cacheRead, locale)}</span>
+      </div>
+      <div ref={box} className="mt-2 flex h-2 w-full gap-[2px]" aria-hidden data-token-meter-bar="">
+        {drawn.map((kind, index) => (
           <span
             key={kind}
-            className={`h-full ${index === 0 ? "rounded-l-[3px]" : index === TOKEN_KINDS.length - 1 ? "rounded-r-[3px]" : ""}`}
-            style={{ flex: `${total ? counts[kind] / total : 0} 0 3px`, background: kindColor(kind) }}
+            className={`h-full ${index === 0 ? "rounded-l-[3px]" : ""} ${index === drawn.length - 1 ? "rounded-r-[3px]" : ""}`}
+            style={{ flex: `${drawnSum ? counts[kind] / drawnSum : 0} 0 0`, background: kindColor(kind) }}
+            data-token-segment={kind}
           />
         ))}
       </div>
-      <ul className={`mt-2 text-[12px] ${compactLabels ? "grid grid-cols-2 gap-x-3 gap-y-1" : "flex flex-wrap gap-x-4 gap-y-1"}`}>
-        {TOKEN_KINDS.map((kind) => (
-          <li key={kind} className="flex min-w-0 flex-wrap items-baseline gap-x-1.5" title={`${exact(counts[kind], locale)} · ${percent(total ? counts[kind] / total : 0, locale, 1)}`} data-token-kind={kind}>
+      <ul className={`mt-2 text-[12px] ${compactLabels ? "grid gap-y-1" : "flex flex-wrap gap-x-4 gap-y-1"}`}>
+        {REST_KINDS.map((kind) => (
+          <li key={kind} className={`flex min-w-0 items-baseline gap-x-1.5 ${compactLabels ? "justify-between" : "flex-wrap"}`} title={title(kind)} data-token-kind={kind}>
             <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-secondary">
-              <SeriesSwatch color={kindColor(kind)} />
+              <SeriesSwatch color={drawn.includes(kind) ? kindColor(kind) : "transparent"} />
               {pt(KIND_KEYS[kind])}
             </span>
-            <span className="whitespace-nowrap font-semibold tabular-nums text-primary">{compact(counts[kind], locale)}</span>
-            {kind === "output" && withReasoning ? (
-              <span className="whitespace-nowrap text-muted">· {pt("kind.reasoning", { share: percent(counts.output ? counts.reasoning / counts.output : 0, locale) })}</span>
-            ) : null}
+            <span className="flex items-baseline gap-x-1.5 whitespace-nowrap">
+              <span className="font-semibold tabular-nums text-primary">{kindValue(counts, kind, locale)}</span>
+              {kind === "output" && !compactLabels ? <span className="text-muted">· {reasoning}</span> : null}
+            </span>
           </li>
         ))}
+        {compactLabels ? <li className="text-right text-muted" data-token-kind="reasoning">{reasoning}</li> : null}
       </ul>
     </div>
   );
 }
 
-/** The thin four-kind bar of a list row, as long as the row's share of the
-    longest row. */
-export function KindBar({ counts, max, height = 4 }: { counts: TokenCounts; max: number; height?: number }) {
-  const total = totalOf(counts);
+/** The thin magnitude bar of a list row, as long as the row's share of the
+    longest row, in one colour: the kinds of a row are printed elsewhere. */
+export function KindBar({ value, max, color, height = 4 }: { value: number; max: number; color: string; height?: number }) {
   return (
     <div className="w-full" aria-hidden>
-      <div className="flex gap-px overflow-hidden rounded-[2px]" style={{ width: `${max ? Math.max(2, (total / max) * 100) : 0}%`, height }}>
-        {TOKEN_KINDS.map((kind) => (counts[kind] > 0 ? <span key={kind} className="h-full" style={{ flex: `${counts[kind]} 0 1px`, background: kindColor(kind) }} /> : null))}
-      </div>
+      <div className="rounded-[2px]" style={{ width: `${max ? Math.max(2, (value / max) * 100) : 0}%`, height, background: color }} data-token-rowbar="" />
     </div>
   );
 }
@@ -306,7 +330,7 @@ export function ColumnChart({ series, dimension, height, ctx, bucket, otherCount
             );
           })}
           {series.map((entry, index) => (index % every === 0 ? (
-            <text key={`l${entry.start}${entry.label}`} x={left + index * band + band / 2} y={height - 5} textAnchor="middle" fontSize={10} fill="var(--color-muted)" className="tabular-nums">
+            <text key={`l${entry.start}${entry.label}`} x={left + index * band + band / 2} y={height - 5} textAnchor="middle" fontSize={10} fill="var(--color-muted)" className="tabular-nums" data-token-tick="">
               {tickLabel(entry, index, series, locale, hour)}
             </text>
           ) : null))}
@@ -378,7 +402,9 @@ export function Legend({ dimension, keys, ctx, otherCount = 0 }: { dimension: To
 /* Ranked list                                                              */
 /* ------------------------------------------------------------------------ */
 
-export function RankedList({ rows, dimension, total, selected, onSelect, ctx, otherCount, dense = false }: {
+/** A neutral list (beside charts whose colours mean models) draws no swatch
+    and no bar, so no colour means two things; its share stays printed. */
+export function RankedList({ rows, dimension, total, selected, onSelect, ctx, otherCount, dense = false, neutral = false }: {
   rows: ListRow[];
   dimension: TokenDimension;
   total: number;
@@ -387,9 +413,12 @@ export function RankedList({ rows, dimension, total, selected, onSelect, ctx, ot
   ctx: Ctx;
   otherCount: number;
   dense?: boolean;
+  neutral?: boolean;
 }) {
   const { locale } = ctx;
   const max = Math.max(0, ...rows.map((row) => totalOf(row.counts)));
+  const color = (key: string) => (dimension === "kind" ? kindColor(key as TokenKind) : seriesColor(dimension, key));
+  const grid = neutral ? "grid-cols-[minmax(0,1fr)]" : "grid-cols-[10px_minmax(0,1fr)] gap-x-2.5";
   return (
     <ul className="flex flex-col" data-token-list={dimension}>
       {rows.map((row) => {
@@ -398,7 +427,7 @@ export function RankedList({ rows, dimension, total, selected, onSelect, ctx, ot
         const clickable = row.key !== "other";
         const body = (
           <>
-            <SeriesSwatch color={dimension === "kind" ? kindColor(row.key as TokenKind) : seriesColor(dimension, row.key)} className="mt-[3px] self-start" />
+            {neutral ? null : <SeriesSwatch color={color(row.key)} className="mt-[3px] self-start" />}
             <div className="min-w-0">
               <div className="flex items-baseline justify-between gap-3">
                 <span className="truncate text-[13px] font-semibold text-primary" title={entityName(dimension, row.key, ctx, otherCount)}>{entityName(dimension, row.key, ctx, otherCount)}</span>
@@ -407,7 +436,8 @@ export function RankedList({ rows, dimension, total, selected, onSelect, ctx, ot
                   <span className="w-[38px] text-right text-muted">{percent(total ? value / total : 0, locale)}</span>
                 </span>
               </div>
-              <div className="mt-1.5"><KindBar counts={row.counts} max={max} /></div>
+              {/* Only a row with its own series colour draws a size bar: a grey one would read as a token kind. */}
+              {neutral || dimension === "kind" ? null : <div className="mt-1.5"><KindBar value={value} max={max} color={color(row.key)} /></div>}
             </div>
           </>
         );
@@ -418,11 +448,11 @@ export function RankedList({ rows, dimension, total, selected, onSelect, ctx, ot
                 type="button"
                 aria-pressed={pressed}
                 onClick={() => onSelect(row.key)}
-                className={`grid w-full grid-cols-[10px_minmax(0,1fr)] gap-x-2.5 px-[18px] text-left hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 max-sm:px-3 ${dense ? "py-2" : "py-2.5"} ${pressed ? "bg-sunken shadow-[inset_3px_0_0_var(--color-accent)]" : ""}`}
+                className={`grid w-full ${grid} px-[18px] text-left hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 max-sm:px-3 ${dense ? "py-2" : "py-2.5"} ${pressed ? "bg-sunken shadow-[inset_3px_0_0_var(--color-accent)]" : ""}`}
               >
                 {body}
               </button>
-            ) : <div className={`grid grid-cols-[10px_minmax(0,1fr)] gap-x-2.5 px-[18px] max-sm:px-3 ${dense ? "py-2" : "py-2.5"}`}>{body}</div>}
+            ) : <div className={`grid ${grid} px-[18px] max-sm:px-3 ${dense ? "py-2" : "py-2.5"}`}>{body}</div>}
           </li>
         );
       })}
@@ -517,7 +547,7 @@ export function RangeControl({ choice, from, to, open, onOpen, onPreset, onRange
           id={dialogId}
           role="dialog"
           aria-label={pt("range.dialog")}
-          className={`absolute top-full ${Z.popover} mt-1 rounded-[10px] border border-border bg-raised p-3 shadow-2 ${phone ? "left-0 right-0" : "right-0 w-[300px]"}`}
+          className={phone ? "mt-2 rounded-[10px] border border-border bg-raised p-3" : `absolute top-full right-0 ${Z.popover} mt-1 w-[300px] rounded-[10px] border border-border bg-raised p-3 shadow-2`}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.preventDefault();

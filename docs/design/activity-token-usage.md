@@ -212,7 +212,10 @@ and is counted as a malformed record.
 
 Cache reads dominate: 97.9 % of recorded input in the model analysis
 (`docs/design/model-analysis-2026-10.md:56`). Every variant therefore prints
-each kind as a number; a bar alone would show output as a sliver.
+each kind as a number; a bar alone would show output as a sliver. The kind
+meter states cache reads on their own line and draws its bar over the other
+three kinds only; a segment narrower than 6 px is left out and keeps its
+number. A value an engine does not report (Codex cache writes) reads «—».
 
 ## 3. Attribution model
 
@@ -668,7 +671,8 @@ Sizes: XS under half a day, S about a day, M two to three days, L a week.
   the counting drawer (gains a tokens section), `MarkPatterns` (texture means
   "not read": days before `countedFrom`).
 - Range presets: «Сьогодні · 7 днів · 30 днів · 90 днів · Період…». «Період…»
-  opens a popover with two native date inputs, «Від» and «До», the platform
+  opens a popover with two native date inputs, «Від» and «До» (on the phone
+  it opens inline under the presets and pushes the page down), the platform
   control the task forms already use (`datetime-local` at
   `src/components/kanban/TaskHoldEditor.tsx:24`), and the hint «Не більше
   року». The range applies as soon as both dates are valid; the chart dims
@@ -693,16 +697,16 @@ Sizes: XS under half a day, S about a day, M two to three days, L a week.
 - Where: a «Час | Токени» switch beside the title; «Час» is today's page,
   unchanged. The custom range belongs to «Токени» only.
 - Desktop: the left card holds the figure «1,8 млрд токенів» with its
-  coverage dot, one meter in four labelled parts (Нові вхідні, Читання з кешу,
-  Запис у кеш, Вихідні «з них міркування 37 %»), then a stacked column chart
+  coverage dot, the kind meter (Читання з кешу on its line, then a bar over
+  Нові вхідні, Запис у кеш, Вихідні «з них міркування 37 %»), then a stacked column chart
   per bucket. The right column (420 px, where Projects sits today) holds
   «Розбити за: Модель · Роль · Проєкт · Учасник · Акаунт» and a ranked list:
-  name, total, a thin four-kind bar, share. The list's choice also stacks the
+  name, total, a thin one-colour bar of the row's size, share. The list's choice also stacks the
   chart; «Тип» stacks by kind. A row click filters the page and shows a chip.
 - Phone: «Токени» joins the phone's existing view switch («Дні · Проєкти ·
   Токени», `Segmented` at `ActivityDashboard.tsx:135`); the range control and
   the filters stack at full width; the figure and meter; the chart (weeks above
-  31 days); «Розбити за» as a scrollable segmented row; the list.
+  31 days); «Розбити за» as a segmented row inside the page margins; the list.
 - Extras shown: E2 (as «Кеш: 96 % вхідних» under the figure), E6 («+12 % до
   попередніх 7 днів»), E7.
 - Build beyond the core: XS.
@@ -715,13 +719,14 @@ Sizes: XS under half a day, S about a day, M two to three days, L a week.
 
 - Where: no new view. One range control serves the whole page and gains
   «Період…», so your time and agent time also take a free range.
-- Desktop: a third figure «Токени» beside «Ви» and «Агенти»; a thin row of
-  token columns under the day chart, on the same day axis; the Projects list
+- Desktop: a third figure «Токени» beside «Ви» and «Агенти», with the kind
+  meter under it; a thin one-colour row of token columns under the day chart,
+  on the same day axis, its scale printed inside the plot; the Projects list
   gains a «Токени» column, and an opened project row shows its split by role
   and by model. Grouping by model across projects lives in the drawer.
 - Phone: a «Токени» tile beside the existing tiles; the token row under the
   day list; the tokens column in project rows.
-- Extras shown: E1 («≈ $…» under the tokens figure and per project).
+- Extras shown: E1 («≈ $…» once, under the tokens figure).
 - Build beyond the core: M. The activity method takes only `today | 7d | 30d`
   (`src/lib/activity/method.ts:68`); a free range for human and agent time
   means `from`/`to` through `rangeDays` and the report, and a cost check of the
@@ -733,12 +738,13 @@ Sizes: XS under half a day, S about a day, M two to three days, L a week.
 - Desktop: a short area chart across the range (about 120 px) with a draggable
   selection that narrows the range; the date inputs mirror it. Below, a table:
   rows by «Моделі» (switch: Ролі, Проєкти, Учасники, Акаунти), columns Нові
-  вхідні · Читання з кешу · Запис у кеш · Вихідні · з них міркування ·
+  вхідні · Читання з кешу · Запис у кеш · Вихідні · Міркування ·
   Запити · Кеш % · ≈ Вартість, and a sparkline per row; columns sort on click.
   Under it, two folding tables: «Найбільші розмови» and «За лейнами й
-  задачами».
-- Phone: the table becomes one card per row (name, total, four-kind bar, the
-  kinds as a 2×2 grid); the date inputs replace the drag selection.
+  задачами». The hatched start of the area is labelled «До 11 вересня не
+  пораховано».
+- Phone: the table becomes one card per row (name, total, a one-colour bar of
+  the row's size, the kinds as a 2×2 grid with «З кешу» for cache reads); the date inputs replace the drag selection.
 - Extras shown: E1, E4, E5.
 - Build beyond the core: M. The drag selection is a new control; the critic
   judges whether it earns its place.
@@ -748,8 +754,10 @@ Sizes: XS under half a day, S about a day, M two to three days, L a week.
 - Where: the «Токени» view, organised by account first.
 - Desktop: one card per provider account, side by side: tokens per day stacked
   by model, with the account's 5-hour and weekly window usage as a line over
-  the same days. Under the cards, tabs «Учасники · Ролі · Проєкти» with ranked
-  lists. The project filter applies to every card.
+  the same days, the latest weekly share printed right of the line's end.
+  Each card prints its four kinds as the kind meter. Under the cards, tabs
+  «Учасники · Ролі · Проєкти» with ranked lists that carry no colour swatch
+  or bar, only the total and share, since the cards' colours mean models. The project filter applies to every card.
 - Phone: the account cards stack; the tabs follow.
 - For a member who is not the owner, accounts are hidden (§6.3) and the view
   falls back to variant 1's layout.
@@ -782,7 +790,10 @@ Sizes: XS under half a day, S about a day, M two to three days, L a week.
   the operator has chosen. Frames stay outside the repository.
 - The critic measures: the five-segment range control at 390 px with no cut
   text; the date popover and every tooltip inside the viewport; every number
-  labelled once; text contrast in both themes.
+  labelled once; text contrast in both themes. The driver also measures chart
+  text against its own drawing, 4 px between axis labels, no line through a
+  value label, no text under the open phone range, no kind segment under 6 px,
+  and the four kinds printed in every variant but the table.
 
 ## 10. Tests
 

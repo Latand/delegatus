@@ -5,15 +5,15 @@ import { useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Segmented } from "../ActivityDashboard";
 import { roleName } from "../format";
-import { Items } from "../marks";
+import { Items, Swatch } from "../marks";
 import type { ProtoKey } from "./copy";
 import {
   ACCOUNTS, addDays, cacheShare, dimensionOrder, timeFor, costOf, COUNTED_FROM, daysBetween, dayMs, FIRST_DATE, fixtureRows, laneRows, matches, NOW_DATE, PROJECTS,
   rowsIn, TOKEN_KINDS, tokensAnswer, topConversations, totalOf, windowPeaks, zeroCounts, addCounts,
-  type ListDimension, type ListRow, type TokenCounts, type TokenKind, type TokenDimension, type TokensAnswer,
+  type ListDimension, type ListRow, type TokenCounts, type TokenDimension, type TokensAnswer,
 } from "./fixture";
 import {
-  Card, compact, CoverageDot, ColumnChart, dateText, daysPhrase, entityName, exact, KindBar, kindColor, KindMeter, Legend, money, Optional, percent,
+  Card, compact, CoverageDot, ColumnChart, dateText, daysPhrase, entityName, exact, KindBar, KindMeter, kindValue, Legend, money, Optional, percent,
   rangeLabel, RankedList, seriesColor, SeriesSwatch, Sparkline, useWidth, type Ctx,
 } from "./parts";
 
@@ -94,10 +94,8 @@ function Hero({ answer, ctx, size = 44 }: { answer: TokensAnswer; ctx: Ctx; size
 function ByControl({ props, options = BY_OPTIONS }: { props: VariantProps; options?: ReadonlyArray<{ value: TokenDimension; label: ProtoKey }> }) {
   const { ctx, by, onBy, desktop } = props;
   return (
-    <div className={desktop ? "" : "-mx-3 overflow-x-auto px-3 [scrollbar-width:none]"} data-token-by="">
-      <div className={desktop ? "" : "w-max min-w-full"}>
-        <Segmented label={ctx.pt("by.title")} value={by} onChange={onBy} options={options.map((option) => ({ value: option.value, label: ctx.pt(option.label) }))} />
-      </div>
+    <div className={desktop ? "" : "[&_[role=tab]]:px-2"} data-token-by="">
+      <Segmented label={ctx.pt("by.title")} value={by} onChange={onBy} options={options.map((option) => ({ value: option.value, label: ctx.pt(option.label) }))} />
     </div>
   );
 }
@@ -174,6 +172,8 @@ function TimeAndTokensChart({ answer, ctx, height }: { answer: TokensAnswer; ctx
   const innerW = Math.max(0, width - left - 4);
   const band = days.length ? innerW / days.length : 0;
   const barW = Math.max(2, Math.min(11, band * 0.3));
+  /* Thinned like the token chart's axis: a label every day only where a day is wide enough. */
+  const every = band >= 30 ? 1 : band >= 16 ? 2 : band >= 9 ? 4 : 7;
   const hoursMax = Math.max(1, ...days.flatMap((day) => [day.humanHours, day.agentHours]));
   const niceHours = Math.ceil(hoursMax / 10) * 10;
   const tokenMax = Math.max(1, ...tokenTotals);
@@ -190,29 +190,25 @@ function TimeAndTokensChart({ answer, ctx, height }: { answer: TokensAnswer; ctx
           ))}
           {days.map((day, index) => {
             const x = left + index * band + band / 2;
+            const date = new Date(dayMs(day.date)).getUTCDate();
+            const label = index === 0 || date === 1 ? dateText(day.date, locale, { day: "numeric", month: "short" }) : String(date);
             return (
               <g key={day.date}>
                 {day.humanHours > 0 ? <rect x={x - barW - 1} y={yH(day.humanHours)} width={barW} height={topH - yH(day.humanHours)} rx={2} fill="var(--mark-you)" /> : null}
                 {day.agentHours > 0 ? <rect x={x + 1} y={yH(day.agentHours)} width={barW} height={topH - yH(day.agentHours)} rx={2} fill="var(--mark-supervised)" /> : null}
-                <text x={x} y={topH + 14} fontSize={10} textAnchor="middle" fill="var(--color-muted)">{index === 0 || new Date(dayMs(day.date)).getUTCDate() === 1 ? dateText(day.date, locale, { day: "numeric", month: "short" }) : new Date(dayMs(day.date)).getUTCDate()}</text>
+                {/* The first label starts at the plot's edge, so it never runs under the hour axis. */}
+                {index % every === 0 ? <text x={index === 0 ? left : x} y={topH + 14} fontSize={10} textAnchor={index === 0 ? "start" : "middle"} fill="var(--color-muted)" data-token-tick="">{label}</text> : null}
               </g>
             );
           })}
           <text x={left} y={tokenTop - 10} fontSize={10.5} fontWeight={600} fill="var(--color-secondary)">{pt("time.tokensRow")}</text>
-          <text x={left - 6} y={tokenTop + 8} fontSize={10} textAnchor="end" fill="var(--color-muted)">{compact(tokenMax, locale)}</text>
+          {/* The strip's scale, its tallest day, sits inside the plot at the right end of its top line. */}
+          <text x={width - 4} y={tokenTop - 4} fontSize={10} textAnchor="end" fill="var(--color-muted)" className="tabular-nums" data-token-strip-max="">{compact(tokenMax, locale)}</text>
+          <line x1={left} x2={width} y1={tokenTop} y2={tokenTop} stroke="var(--color-border)" strokeDasharray="2 3" shapeRendering="crispEdges" />
           <line x1={left} x2={width} y1={tokenTop + tokenH} y2={tokenTop + tokenH} stroke="var(--color-border)" shapeRendering="crispEdges" />
           {answer.series.map((bucket, index) => {
-            const x = left + index * band + band / 2 - barW;
-            let base = tokenTop + tokenH;
-            return (
-              <g key={bucket.start}>
-                {bucket.parts.map((part) => {
-                  const h = (totalOf(part.counts) / tokenMax) * tokenH;
-                  base -= h;
-                  return h > 0 ? <rect key={part.key} x={x} y={base} width={barW * 2} height={h} fill={kindColor(part.key as TokenKind)} /> : null;
-                })}
-              </g>
-            );
+            const h = (tokenTotals[index]! / tokenMax) * tokenH;
+            return h > 0 ? <rect key={bucket.start} x={left + index * band + band / 2 - barW} y={tokenTop + tokenH - h} width={barW * 2} height={h} rx={2} fill="var(--color-muted)" /> : null;
           })}
         </svg>
       ) : null}
@@ -258,10 +254,12 @@ export function Variant2(props: VariantProps) {
     const time = timeFor(answer.query.from, answer.query.to, { project: key }, filters);
     return { human: time.humanHours, agents: Math.round(time.agentHours) };
   };
+  const hoursText = (value: number) => pt("time.hours", { value: value.toLocaleString(locale === "uk" ? "uk-UA" : "en-GB") });
   const tokensFigure = (
     <div data-token-figure="tokens">
       <Hero answer={answer} ctx={ctx} size={desktop ? 32 : 26} />
-      <div className="mt-2 text-[12px] text-secondary"><Optional ctx={ctx} />{pt("extra.cost", { value: money(cost, locale) })}</div>
+      <div className="mt-3"><KindMeter counts={answer.totals} ctx={ctx} compactLabels /></div>
+      <div className="mt-2.5 text-[12px] text-secondary"><Optional ctx={ctx} />{pt("extra.cost", { value: money(cost, locale) })}</div>
       <div className="mt-0.5 text-[11px] text-muted">{pt("extra.costNote")}</div>
     </div>
   );
@@ -274,7 +272,7 @@ export function Variant2(props: VariantProps) {
       <div className="mt-1 flex items-baseline gap-2 whitespace-nowrap">
         <span className={`font-semibold leading-none tracking-[-0.02em] text-primary ${key === "you" ? (desktop ? "text-[44px]" : "text-[26px]") : desktop ? "text-[32px]" : "text-[26px]"}`}>
           {key === "agents" ? <span className="mr-1 align-[0.18em] text-[0.62em] font-medium text-muted">≈</span> : null}
-          {pt("time.hours", { value: (key === "you" ? answer.time.humanHours : Math.round(answer.time.agentHours)).toLocaleString(locale === "uk" ? "uk-UA" : "en-GB") })}
+          {hoursText(key === "you" ? answer.time.humanHours : Math.round(answer.time.agentHours))}
         </span>
       </div>
       <div className="mt-2 text-[12px] text-muted">{pt(key === "you" ? "time.reported" : "time.agentNote")}</div>
@@ -297,15 +295,14 @@ export function Variant2(props: VariantProps) {
               className={`grid w-full grid-cols-[minmax(0,1fr)_56px_64px_68px] items-baseline gap-x-2 px-[18px] py-2.5 text-left text-[12px] tabular-nums hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 max-sm:px-3 ${open ? "bg-sunken shadow-[inset_3px_0_0_var(--color-accent)]" : ""}`}
             >
               <span className="truncate text-[13px] font-semibold text-primary">{entityName("project", key, ctx)}</span>
-              <span className="text-right text-primary">{hours.human ? pt("time.hours", { value: hours.human }) : "–"}</span>
-              <span className="text-right text-primary">≈ {pt("time.hours", { value: hours.agents })}</span>
+              <span className="text-right text-primary">{hours.human ? hoursText(hours.human) : "–"}</span>
+              <span className="text-right text-primary">≈ {hoursText(hours.agents)}</span>
               <span className="text-right font-semibold text-primary" title={exact(totalOf(data.counts), locale)}>{compact(totalOf(data.counts), locale)}</span>
             </button>
             {open && entry.key ? (
               <div className="grid gap-[5px] bg-sunken px-[18px] pb-3 pt-0.5 text-[12px] leading-[1.45] text-muted max-sm:px-3" data-token-project-detail="">
                 <DetailLine label={pt("by.role")}><Items items={splitBy(answer, entry.key, "role").slice(0, 5).map(([role, value]) => <>{roleName(role, ctx.t)} <b className="font-semibold tabular-nums text-primary">{compact(value, locale)}</b></>)} /></DetailLine>
                 <DetailLine label={pt("by.model")}><Items items={splitBy(answer, entry.key, "model").slice(0, 5).map(([model, value]) => <>{entityName("model", model, ctx)} <b className="font-semibold tabular-nums text-primary">{compact(value, locale)}</b></>)} /></DetailLine>
-                <DetailLine label=""><span><Optional ctx={ctx} />{pt("extra.cost", { value: money(data.cost, locale) })}</span></DetailLine>
               </div>
             ) : null}
           </li>
@@ -332,7 +329,6 @@ export function Variant2(props: VariantProps) {
             {tokensFigure}
           </div>
           <div className="mt-[18px] border-t border-border pt-3">
-            <div className="mb-2"><Legend dimension="kind" keys={[...TOKEN_KINDS]} ctx={ctx} /></div>
             <TimeAndTokensChart answer={answer} ctx={ctx} height={300} />
           </div>
         </Card>
@@ -349,13 +345,9 @@ export function Variant2(props: VariantProps) {
       <div className="grid grid-cols-2 gap-2">
         <Card className="px-4 py-3">{timeFigure("you")}</Card>
         <Card className="px-4 py-3">{timeFigure("agents")}</Card>
-        <Card className="col-span-2 px-4 py-3">
-          {tokensFigure}
-          <div className="mt-3"><KindMeter counts={answer.totals} ctx={ctx} compactLabels /></div>
-        </Card>
+        <Card className="col-span-2 px-4 py-3">{tokensFigure}</Card>
       </div>
       <Card className="px-3 pb-2 pt-3" testId="days">
-        <div className="mb-2"><Legend dimension="kind" keys={[...TOKEN_KINDS]} ctx={ctx} /></div>
         <TimeAndTokensChart answer={answer} ctx={ctx} height={250} />
       </Card>
       <Card className="overflow-hidden" testId="projects">
@@ -391,6 +383,7 @@ const ROW_OPTIONS: ReadonlyArray<{ value: TokenDimension; label: ProtoKey }> = [
     a drag across it chooses a new range. */
 function OverviewBrush({ answer, ctx, onRange, interactive }: { answer: TokensAnswer; ctx: Ctx; onRange?(from: string, to: string): void; interactive: boolean }) {
   const { locale, pt } = ctx;
+  const notCounted = pt("brush.notCounted", { date: dateText(COUNTED_FROM, locale) });
   const [box, width] = useWidth<HTMLDivElement>();
   const [drag, setDrag] = useState<{ a: number; b: number } | null>(null);
   const svg = useRef<SVGSVGElement | null>(null);
@@ -431,7 +424,7 @@ function OverviewBrush({ answer, ctx, onRange, interactive }: { answer: TokensAn
           onPointerMove={interactive ? (event) => { if (drag) setDrag({ ...drag, b: at(event.clientX) }); } : undefined}
           onPointerUp={interactive ? () => { if (drag && onRange) onRange(days[Math.min(drag.a, drag.b)]!.date, days[Math.max(drag.a, drag.b)]!.date); setDrag(null); } : undefined}
         >
-          <rect x={x(0)} y={y(max) - 2} width={Math.max(0, x(counted) - x(0))} height={y(0) - y(max) + 2} fill="url(#activity-hatch-unread)" />
+          <rect x={x(0)} y={y(max) - 2} width={Math.max(0, x(counted) - x(0))} height={y(0) - y(max) + 2} fill="url(#activity-hatch-unread)"><title>{notCounted}</title></rect>
           <path d={area} fill="var(--mark-series-1)" fillOpacity={0.18} stroke="none" />
           <path d={days.slice(counted).map((day, index) => `${index ? "L" : "M"}${x(index + counted)},${y(day.total)}`).join(" ")} fill="none" stroke="var(--mark-series-1)" strokeWidth={2} strokeLinejoin="round" />
           <line x1={left} x2={width - left} y1={y(0)} y2={y(0)} stroke="var(--color-strong)" shapeRendering="crispEdges" />
@@ -447,6 +440,7 @@ function OverviewBrush({ answer, ctx, onRange, interactive }: { answer: TokensAn
           })}
         </svg>
       ) : null}
+      <div className="mt-1 flex items-center gap-1.5 text-[11.5px] text-muted" data-token-brush-hatch=""><Swatch kind="unread" />{notCounted}</div>
     </div>
   );
 }
@@ -494,6 +488,7 @@ export function Variant3(props: VariantProps) {
   const cell = (row: ListRow, key: SortKey) => {
     if (key === "cacheShare") return percent(cacheShare(row.counts), locale);
     if (key === "cost") return row.key === "other" ? "—" : money(costOfRow(row), locale);
+    if (key === "cacheWrite") return kindValue(row.counts, "cacheWrite", locale);
     return compact(row.counts[key as keyof TokenCounts], locale);
   };
   const header = (
@@ -534,7 +529,7 @@ export function Variant3(props: VariantProps) {
                         <span className="truncate">{entityName(dimension, row.key, ctx, otherCount)}</span>
                       </button>
                     </th>
-                    {columns.map((column) => <td key={column.key} className={`px-3 py-2 text-right ${column.key === "cacheRead" ? "font-semibold text-primary" : "text-secondary"}`} title={column.key === "cost" || column.key === "cacheShare" ? undefined : exact(row.counts[column.key as keyof TokenCounts], locale)}>{cell(row, column.key)}</td>)}
+                    {columns.map((column) => <td key={column.key} className={`px-3 py-2 text-right ${column.key === "cacheRead" ? "font-semibold text-primary" : "text-secondary"}`} title={column.key === "cost" || column.key === "cacheShare" ? undefined : column.key === "cacheWrite" && row.counts.cacheWrite === 0 ? pt("kind.notReported") : exact(row.counts[column.key as keyof TokenCounts], locale)}>{cell(row, column.key)}</td>)}
                     <td className="py-1 pl-3 pr-[18px] max-xl:hidden"><div className="flex justify-end"><Sparkline values={row.trend} color={seriesColor(dimension, row.key)} /></div></td>
                   </tr>
                 ))}
@@ -573,12 +568,12 @@ export function Variant3(props: VariantProps) {
                 </span>
                 <span className="text-[13px] font-semibold tabular-nums text-primary">{compact(totalOf(row.counts), locale)}</span>
               </div>
-              <div className="mt-2"><KindBar counts={row.counts} max={max} height={5} /></div>
+              <div className="mt-2"><KindBar value={totalOf(row.counts)} max={max} color={seriesColor(dimension, row.key)} height={5} /></div>
               <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-0.5 text-[12px]">
                 {TOKEN_KINDS.map((kind) => (
-                  <div key={kind} className="flex items-baseline justify-between gap-2">
-                    <dt className="flex items-center gap-1.5 text-secondary"><SeriesSwatch color={kindColor(kind)} className="h-2 w-2" />{pt(`kind.${kind}` as ProtoKey)}</dt>
-                    <dd className="font-semibold tabular-nums text-primary">{compact(row.counts[kind], locale)}</dd>
+                  <div key={kind} className="flex items-baseline justify-between gap-2" data-token-card-kind={kind}>
+                    <dt className="whitespace-nowrap text-secondary">{pt(kind === "cacheRead" ? "kind.cacheReadShort" : `kind.${kind}` as ProtoKey)}</dt>
+                    <dd className="whitespace-nowrap font-semibold tabular-nums text-primary" title={kind === "cacheWrite" && row.counts.cacheWrite === 0 ? pt("kind.notReported") : undefined}>{kindValue(row.counts, kind, locale)}</dd>
                   </div>
                 ))}
               </dl>
@@ -679,9 +674,12 @@ function WindowChart({ account, answer, ctx, height = 84 }: { account: string; a
   const [box, width] = useWidth<HTMLDivElement>();
   const peaks = windowPeaks(account, answer.query.from, answer.query.to);
   const left = 46;
-  const innerW = Math.max(0, width - left - 4);
+  /* Room right of the plot for the end value, clear of every line. */
+  const labelRoom = 34;
+  const innerW = Math.max(0, width - left - labelRoom);
   const band = peaks.length ? innerW / peaks.length : 0;
   const y = (value: number) => 6 + (height - 24) * (1 - value / 100);
+  const endX = left + (peaks.length - 1) * band + band / 2;
   const line = (key: "fiveHour" | "weekly") => peaks.map((peak, index) => `${index ? "L" : "M"}${left + index * band + band / 2},${y(peak[key])}`).join(" ");
   return (
     <div>
@@ -695,14 +693,18 @@ function WindowChart({ account, answer, ctx, height = 84 }: { account: string; a
           <svg width={width} height={height} className="block" aria-hidden>
             {[0, 50, 100].map((value) => (
               <g key={value}>
-                <line x1={left} x2={width} y1={y(value)} y2={y(value)} stroke="var(--color-border)" shapeRendering="crispEdges" />
+                <line x1={left} x2={left + innerW} y1={y(value)} y2={y(value)} stroke="var(--color-border)" shapeRendering="crispEdges" />
                 <text x={left - 6} y={y(value) + 3.5} textAnchor="end" fontSize={10} fill="var(--color-muted)">{percent(value / 100, locale)}</text>
               </g>
             ))}
             <path d={line("fiveHour")} fill="none" stroke="var(--color-muted)" strokeWidth={1.5} strokeDasharray="3 2" />
             <path d={line("weekly")} fill="none" stroke="var(--color-primary)" strokeWidth={2} strokeLinejoin="round" />
-            {peaks.length ? <circle cx={left + (peaks.length - 1) * band + band / 2} cy={y(peaks.at(-1)!.weekly)} r={3} fill="var(--color-primary)" /> : null}
-            {peaks.length ? <text x={left + (peaks.length - 1) * band + band / 2 - 7} y={y(peaks.at(-1)!.weekly) - 7} textAnchor="end" fontSize={10} fontWeight={600} fill="var(--color-primary)">{percent(peaks.at(-1)!.weekly / 100, locale)}</text> : null}
+            {peaks.length ? <circle cx={endX} cy={y(peaks.at(-1)!.weekly)} r={3} fill="var(--color-primary)" /> : null}
+            {peaks.length ? (
+              <text x={endX + 7} y={y(peaks.at(-1)!.weekly) + 3.5} textAnchor="start" fontSize={10} fontWeight={600} fill="var(--color-primary)" stroke="var(--color-card)" strokeWidth={3} paintOrder="stroke" strokeLinejoin="round" data-token-window-end="">
+                {percent(peaks.at(-1)!.weekly / 100, locale)}
+              </text>
+            ) : null}
           </svg>
         ) : null}
       </div>
@@ -738,7 +740,8 @@ export function Variant4(props: VariantProps) {
           <span className="text-[12px] text-muted">{pt("tokens")}</span>
         </div>
         <div className="mt-1 text-[11.5px] text-secondary"><Optional ctx={ctx} />{pt("extra.cache", { share: percent(cacheShare(accountAnswer.totals), locale) })}</div>
-        <div className="mt-3 text-[11.5px] font-semibold text-secondary">{pt("account.byModel")}</div>
+        <div className="mt-3"><KindMeter counts={accountAnswer.totals} ctx={ctx} compactLabels /></div>
+        <div className="mt-3 border-t border-border pt-2 text-[11.5px] font-semibold text-secondary">{pt("account.byModel")}</div>
         <div className="mt-1"><Legend dimension="model" keys={keys} ctx={ctx} /></div>
         <div className="mt-1"><ColumnChart series={accountAnswer.series} dimension="model" height={130} ctx={ctx} bucket={accountAnswer.bucket} testId={`account-${account.id}`} /></div>
         <div className="mt-2 border-t border-border pt-2"><WindowChart account={account.id} answer={accountAnswer} ctx={ctx} /></div>
@@ -756,7 +759,7 @@ export function Variant4(props: VariantProps) {
         </div>
       </div>
       <div className="border-t border-border">
-        <RankedList rows={tabAnswer.list} dimension={tab} total={totalOf(tabAnswer.totals)} selected={selectedOf(props, tab)} onSelect={(key) => props.onFilter(tab as ListDimension, key)} ctx={ctx} otherCount={otherCount} dense={!desktop} />
+        <RankedList rows={tabAnswer.list} dimension={tab} total={totalOf(tabAnswer.totals)} selected={selectedOf(props, tab)} onSelect={(key) => props.onFilter(tab as ListDimension, key)} ctx={ctx} otherCount={otherCount} dense={!desktop} neutral />
       </div>
     </Card>
   );

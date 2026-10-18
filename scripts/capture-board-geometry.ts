@@ -7954,8 +7954,10 @@ async function registryHistoryMain(): Promise<void> {
    390 × 844, light and dark, in Ukrainian; English at 1440 light. Frames are
    full-page (the viewport grows to the page's scroll height) and named
    variant-N-<width>-<theme>-<state>[-en].png. Each frame is measured from the
-   DOM: no sideways overflow, no cut text, the popover inside the viewport,
-   every range segment whole, the variant number printed. */
+   DOM: no sideways overflow, no cut text (chart text included), the popover
+   inside the viewport and over no text, every range segment whole, axis
+   labels 4 px apart, no line through a value label, no kind segment under
+   6 px, the four kinds printed, the variant number printed. */
 const TOKEN_VARIANTS = [1, 2, 3, 4] as const;
 const TOKEN_SIZES: ReadonlyArray<{ width: number; height: number; phone: boolean }> = [
   { width: 1440, height: 900, phone: false },
@@ -7984,7 +7986,63 @@ function readTokenFrame() {
     width: Math.round(button.getBoundingClientRect().width),
   }));
   const header = document.querySelector("[data-token-header]")?.getBoundingClientRect();
+  /* SVG text is outside the box checks above: a label whose glyphs leave its
+     own drawing is cut (a max label once read 63,7 for 663,7). */
+  const svgCut: string[] = [];
+  const tickGaps: Array<{ chart: string; gap: number; between: string }> = [];
+  const crossed: string[] = [];
+  for (const svg of Array.from(page.querySelectorAll<SVGSVGElement>("svg"))) {
+    const box = svg.getBoundingClientRect();
+    if (box.width < 1 || box.height < 1) continue;
+    for (const text of Array.from(svg.querySelectorAll("text"))) {
+      const r = text.getBoundingClientRect();
+      if (r.width && (r.left < box.left - 0.5 || r.right > box.right + 0.5 || r.top < box.top - 0.5 || r.bottom > box.bottom + 0.5)) svgCut.push((text.textContent ?? "").trim());
+    }
+    const ticks = Array.from(svg.querySelectorAll("text[data-token-tick]")).map((text) => ({ text: text.textContent ?? "", rect: text.getBoundingClientRect() })).sort((a, b) => a.rect.left - b.rect.left);
+    for (let index = 1; index < ticks.length; index++) {
+      const gap = ticks[index]!.rect.left - ticks[index - 1]!.rect.right;
+      if (gap < 4) tickGaps.push({ chart: svg.closest("[data-token-chart]")?.getAttribute("data-token-chart") ?? "", gap: Math.round(gap * 10) / 10, between: `${ticks[index - 1]!.text}|${ticks[index]!.text}` });
+    }
+    /* A value label beside lines: no line or gridline may pass through its glyph box. */
+    for (const label of Array.from(svg.querySelectorAll<SVGTextElement>("text[data-token-window-end], text[data-token-strip-max]"))) {
+      const bbox = label.getBBox();
+      const strokes = Array.from(svg.querySelectorAll<SVGGeometryElement>("path, line"));
+      let hit = false;
+      for (let px = bbox.x; px <= bbox.x + bbox.width && !hit; px += 1) {
+        for (let py = bbox.y + 1; py <= bbox.y + bbox.height - 1 && !hit; py += 1) {
+          const point = new DOMPoint(px, py);
+          if (strokes.some((stroke) => stroke.isPointInStroke(point))) hit = true;
+        }
+      }
+      if (hit) crossed.push((label.textContent ?? "").trim());
+    }
+  }
+  /* The phone range opens inline: nothing it is drawn over may hold text. */
+  const popoverEl = document.querySelector("[data-token-range-popover]");
+  const covered: string[] = [];
+  if (popoverEl) {
+    const p = popoverEl.getBoundingClientRect();
+    const walker = document.createTreeWalker(page, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!(node.textContent ?? "").trim() || popoverEl.contains(node)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const r of Array.from(range.getClientRects())) {
+        if (r.width && r.right > p.left && r.left < p.right && r.bottom > p.top && r.top < p.bottom) { covered.push((node.textContent ?? "").trim()); break; }
+      }
+    }
+  }
+  const segments6 = Array.from(document.querySelectorAll<HTMLElement>("[data-token-segment]")).map((el) => el.getBoundingClientRect().width).filter((width) => width < 6).map((width) => Math.round(width * 10) / 10);
+  const meterValues = Array.from(document.querySelectorAll<HTMLElement>("[data-token-meter] [data-token-kind]")).map((el) => ({ kind: el.dataset.tokenKind ?? "", text: (el.textContent ?? "").replace(/\s+/g, " ").trim() }));
   return {
+    svgCut,
+    tickGaps,
+    crossed,
+    covered,
+    narrowSegments: segments6,
+    meterValues,
+    legends: document.querySelectorAll("[data-token-legend]").length,
+    stripMax: document.querySelector("[data-token-strip-max]")?.textContent ?? null,
     width: window.innerWidth,
     scrollWidth: Math.max(document.documentElement.scrollWidth, page.scrollWidth),
     scrollHeight: page.scrollHeight,
@@ -8057,6 +8115,19 @@ async function activityTokensMain(): Promise<void> {
       must(reading.banner.includes(lang === "uk" ? `Варіант ${variant} з 4` : `Variant ${variant} of 4`), `${name}: the banner reads ${JSON.stringify(reading.banner)}`);
       must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
       must(reading.cut.length === 0, `${name}: text cut by its box: ${JSON.stringify(reading.cut)}`);
+      must(reading.svgCut.length === 0, `${name}: chart text cut by its drawing: ${JSON.stringify(reading.svgCut)}`);
+      must(reading.tickGaps.length === 0, `${name}: axis labels closer than 4px: ${JSON.stringify(reading.tickGaps)}`);
+      must(reading.crossed.length === 0, `${name}: a line crosses the labels ${JSON.stringify(reading.crossed)}`);
+      /* On the phone the range opens inline; a desktop popover floats over the page on its own surface. */
+      if (size.phone) must(reading.covered.length === 0, `${name}: the range popover covers ${JSON.stringify(reading.covered)}`);
+      must(reading.narrowSegments.length === 0, `${name}: kind segments under 6px: ${JSON.stringify(reading.narrowSegments)}`);
+      /* Every variant but the table prints the four kinds as values; the table prints them in its columns. */
+      if (variant !== 3) {
+        for (const kind of ["cacheRead", "input", "cacheWrite", "output"]) {
+          must(reading.meterValues.some((entry) => entry.kind === kind && /(\d|—)/.test(entry.text)), `${name}: no printed ${kind} value in ${JSON.stringify(reading.meterValues)}`);
+        }
+      }
+      if (variant === 2) must(reading.legends === 0 && /^663[,.]7/.test(reading.stripMax ?? ""), `${name}: ${reading.legends} legends; the strip's scale reads ${JSON.stringify(reading.stripMax)}`);
       must(reading.segments.length === 5 && reading.segments.every((segment) => segment.whole), `${name}: range segments ${JSON.stringify(reading.segments)}`);
       must(reading.chips.some((chip) => chip.includes("orchard-client")), `${name}: no orchard-client filter chip (${JSON.stringify(reading.chips)})`);
       if (state === "open") {
