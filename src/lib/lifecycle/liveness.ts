@@ -1194,10 +1194,19 @@ async function livenessSnapshotWithin(
     async (paths, readSignal) => {
       const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
       const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
-      const currentWriterPaths = new Set((targeted ? [] : registryEntries())
-        .filter(entry => hostEvidence(entry, sources.probe).state === "alive")
-        .map(entry => entry.artifactPath)
-        .filter((path): path is string => Boolean(path && paths.has(path))));
+      const currentWriterPaths = new Set<string>();
+      if (targeted) {
+        for (const path of paths) {
+          const entry = entryForPath(registry, path, sources.probe);
+          if (entry && hostEvidence(entry, sources.probe).state === "alive") currentWriterPaths.add(path);
+        }
+      } else {
+        for (const entry of registryEntries()) {
+          if (hostEvidence(entry, sources.probe).state === "alive" && entry.artifactPath && paths.has(entry.artifactPath)) {
+            currentWriterPaths.add(entry.artifactPath);
+          }
+        }
+      }
       for (const path of currentWriterPaths) {
         if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationForPath(path) ?? path);
       }
@@ -1332,10 +1341,19 @@ async function livenessSnapshotWithin(
   await Promise.all([...unhostedGenerations.values()].map(async paths => {
     const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
     const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
-    const currentWriterPaths = new Set((targeted ? [] : registryEntries())
-      .filter(entry => hostEvidence(entry, sources.probe).state === "alive")
-      .map(entry => entry.artifactPath)
-      .filter((path): path is string => Boolean(path && paths.has(path))));
+    const currentWriterPaths = new Set<string>();
+    if (targeted) {
+      for (const path of paths) {
+        const entry = entryForPath(registry, path, sources.probe);
+        if (entry && hostEvidence(entry, sources.probe).state === "alive") currentWriterPaths.add(path);
+      }
+    } else {
+      for (const entry of registryEntries()) {
+        if (hostEvidence(entry, sources.probe).state === "alive" && entry.artifactPath && paths.has(entry.artifactPath)) {
+          currentWriterPaths.add(entry.artifactPath);
+        }
+      }
+    }
     for (const path of currentWriterPaths) {
       if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationForPath(path) ?? path);
     }
