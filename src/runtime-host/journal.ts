@@ -362,7 +362,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
 const cooperativeOpen = Symbol("cooperative journal open");
 
 export interface RuntimeJournalStartupProgress {
-  subphase: "schema" | "receipt-backfill" | "integrity-check" | "hash-chain";
+  subphase: "schema" | "checkpoint-reconciliation" | "receipt-backfill" | "integrity-check" | "hash-chain";
   done: number;
   total: number;
   committedBatches: number;
@@ -518,7 +518,6 @@ export class RuntimeJournal {
       this.metaSetDefault("host_epoch", "1");
       this.metaSetDefault("health", "ready");
       this.metaSetDefault("files_revision", "0");
-      this.reconcileCheckpointOrphans();
       this.sessionHostMetadata = new SessionHostMetadata(this.db);
       this.initialization = this.initialize();
     } catch (error) {
@@ -534,6 +533,7 @@ export class RuntimeJournal {
   private *initialize(): Generator<void> {
     this.startupProgress("schema", 1, 1);
     yield;
+    yield* this.reconcileCheckpointOrphans();
     yield* this.backfillProducerReceipts();
     yield* this.verify();
     if (!this.fault) {
@@ -546,18 +546,49 @@ export class RuntimeJournal {
     this.startupOptions.onStartupProgress?.({ subphase, done, total, committedBatches });
   }
 
-  private reconcileCheckpointOrphans(): void {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      // Older releases could checkpoint a completion after its event retired.
-      // Reconcile that legacy residue on open, keeping every append's cleanup
-      // bounded to the event ids retired by that append.
-      this.db.exec(`DELETE FROM consumer_checkpoints WHERE NOT EXISTS (
-        SELECT 1 FROM events WHERE events.event_id = consumer_checkpoints.event_id)`);
-      this.db.exec("COMMIT");
-    } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
-      throw error;
+  private *reconcileCheckpointOrphans(): Generator<void> {
+    // Older releases could checkpoint a completion after its event retired.
+    // Walk the checkpoint primary key in bounded slices so a large clean
+    // journal never pays for a synchronous whole-table anti-join during open.
+    const batchSize = this.startupOptions.startupBatchRows ?? 512;
+    const firstRows = this.db.query<{ event_id: string; consumer: string }, [string, string, number]>(
+      `SELECT event_id, consumer FROM consumer_checkpoints
+       WHERE (event_id, consumer) >= (?, ?) ORDER BY event_id, consumer LIMIT ?`,
+    );
+    const laterRows = this.db.query<{ event_id: string; consumer: string }, [string, string, number]>(
+      `SELECT event_id, consumer FROM consumer_checkpoints
+       WHERE (event_id, consumer) > (?, ?) ORDER BY event_id, consumer LIMIT ?`,
+    );
+    const eventExists = this.db.query<{ present: number }, [string]>(
+      "SELECT 1 AS present FROM events WHERE event_id = ?",
+    );
+    const remove = this.db.query("DELETE FROM consumer_checkpoints WHERE event_id = ? AND consumer = ?");
+    let cursor: [string, string] = ["", ""];
+    let firstBatch = true;
+    let done = 0;
+    let batches = 0;
+    this.startupProgress("checkpoint-reconciliation", 0, 0);
+    for (;;) {
+      this.db.exec("BEGIN IMMEDIATE");
+      let batch: Array<{ event_id: string; consumer: string }>;
+      try {
+        batch = (firstBatch ? firstRows : laterRows).all(...cursor, batchSize);
+        for (const checkpoint of batch) {
+          if (!eventExists.get(checkpoint.event_id)) remove.run(checkpoint.event_id, checkpoint.consumer);
+        }
+        this.db.exec("COMMIT");
+      } catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+        throw error;
+      }
+      if (!batch.length) break;
+      const last = batch[batch.length - 1]!;
+      cursor = [last.event_id, last.consumer];
+      firstBatch = false;
+      done += batch.length;
+      batches++;
+      this.startupProgress("checkpoint-reconciliation", done, 0, batches);
+      yield;
     }
   }
 
