@@ -1,6 +1,7 @@
 import { assertCpuReadGuardSurvivesSpyRestoration, startAutoAndSettle } from "./engineEnvironment.fixture";
 import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, accountManager, realExec, engineModule, defaultPipelinePorts, pipelineClaudePermissionMode, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, tickFlow, saveFlows, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, successorOnPullRequestBranch, create, publishHarness, PUBLISH_STAGES } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, PipelinePorts } from "./engine.fixture";
+import { shortId } from "@/lib/shortIds";
 
 
 test("default pane liveness keeps failed or unreadable tmux observations alive", async () => {
@@ -1350,7 +1351,7 @@ test("rewritten builder history parks with the dropped accepted commit and prese
     const parked = loadPipelines().find((item) => item.id === id)!;
     expect(parked.state).toBe("needs_decision");
     expect(parked.stateDetail).toContain("dropped accepted commits");
-    expect(parked.stateDetail).toContain(dropped);
+    expect(parked.stateDetail).toContain(shortId(dropped));
     expect(parked.stateDetail).not.toContain(`dropped accepted commits: ${accepted}`);
     expect(parked.lastPassedCommit).toBe(accepted);
     expect((await git(worktree, "rev-parse", "HEAD"))).toBe(rewritten);

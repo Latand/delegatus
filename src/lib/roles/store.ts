@@ -1,3 +1,4 @@
+import { matchesShortId } from "@/lib/shortIds";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -350,7 +351,7 @@ export function changeRoleMapping(
 ): RoleMappingChange {
   return withRoleRegistryLock(() => {
     const before = loadRoleRegistrySnapshot();
-    if (options.expectedRevision !== undefined && options.expectedRevision !== before.revision) return { state: "stale", current: before };
+    if (options.expectedRevision !== undefined && !matchesShortId(before.revision, options.expectedRevision)) return { state: "stale", current: before };
     const file = overridesFile();
     let previous: Buffer | null = null;
     try {

@@ -42,11 +42,14 @@ export type EphemeralAgentRequest = {
   hardCapMs: number;
   /** The engine's own native web search, the one tool a relay answer may use (relay.md §B.6). */
   webSearch?: boolean;
+  imageGeneration?: { readableRoot: string };
   onEvent?: (event: EphemeralAgentEvent) => void;
   /** A test runtime may shorten the timer without weakening the configured cap. */
   runtime?: HeadlessReviewRuntime & { timeoutMs?: number };
 };
 export type EphemeralAgentResult = {
+  threadId?: string | null;
+  imageHome?: string;
   sessionId?: string | null;
   promptTokens?: number | null;
   compacted?: boolean;
@@ -196,7 +199,7 @@ export function buildEphemeralCommand(
       reviewerPath: null,
     };
   }
-  const home = answerHome(request.account, request.session?.codexHome);
+  const home = answerHome(request.account, request.session?.codexHome ?? (request.imageGeneration ? path.join(request.runDir, "codex-home") : undefined));
   const catalog = writeCatalog(
     request.account,
     home,
@@ -219,8 +222,7 @@ export function buildEphemeralCommand(
     "plugins",
     "--disable",
     "goals",
-    "--disable",
-    "image_generation",
+    ...(request.imageGeneration ? [] : ["--disable", "image_generation"]),
     "--disable",
     "memories",
     "--disable",
@@ -241,7 +243,7 @@ export function buildEphemeralCommand(
     schemaPath,
     "--output-last-message",
     output,
-    ...(request.session?.mode === "resume" ? ["-c", 'sandbox_mode="read-only"'] : ["-s", "read-only"]),
+    ...(request.imageGeneration ? ["-c", 'default_permissions="relay"', "-c", `permissions.relay.filesystem={${JSON.stringify(request.imageGeneration.readableRoot)}="read"}`] : request.session?.mode === "resume" ? ["-c", 'sandbox_mode="read-only"'] : ["-s", "read-only"]),
     "-c",
     "cli_auth_credentials_store=file",
     "-c",
@@ -342,8 +344,8 @@ export function runEphemeralAgent(
       try {
         const item = JSON.parse(line);
         if (item?.type === "result") resultEvent = item;
+        if ((request.session || request.imageGeneration) && item?.type === "thread.started" && typeof item.thread_id === "string" && (!request.imageGeneration || /^[A-Za-z0-9_-]{1,128}$/.test(item.thread_id))) sessionId = item.thread_id;
         if (request.session) {
-          if (item?.type === "thread.started" && typeof item.thread_id === "string") sessionId = item.thread_id;
           if (item?.type === "system" && item.subtype === "init" && typeof item.session_id === "string") sessionId = item.session_id;
           if (item?.type === "system" && item.subtype === "compact_boundary" || item?.item?.type === "context_compaction") compacted = true;
           const tokens = item?.usage?.input_tokens;
@@ -354,7 +356,7 @@ export function runEphemeralAgent(
       } catch {
         /* mapper ignores malformed lines */
       }
-      for (const event of mapAgentLine(request.engine, line, { webSearch: request.webSearch === true, session: !!request.session })) {
+      for (const event of mapAgentLine(request.engine, line, { webSearch: request.webSearch === true, session: !!request.session, imageGeneration: request.imageGeneration !== undefined })) {
         request.onEvent?.(event);
         if (event.type === "violation") {
           violation = true;
@@ -414,6 +416,7 @@ export function runEphemeralAgent(
                 ? "done"
                 : "failed";
       finish({
+        ...(request.imageGeneration && request.engine === "codex" ? { threadId: sessionId, imageHome: built.env.CODEX_HOME } : {}),
         ...(request.session ? { sessionId, promptTokens, compacted } : {}),
         status,
         answer,

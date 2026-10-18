@@ -123,7 +123,28 @@ const toolSchema = z.object({
   parameters: z.record(z.string(), z.unknown()).refine((value) => Buffer.byteLength(JSON.stringify(value)) <= 8192).optional(),
   audience: z.enum(["admin", "owner"]).optional(),
 });
+export const relayAnswerSchema = z.object({
+  format: z.enum(["plain","rich_markdown"]).optional(),
+  buttons: z.array(z.array(z.object({text:boundedString(64).refine(v => v.length > 0),url:boundedString(2048).refine(v => v.length > 0)})).min(1).max(3)).max(2).optional(),
+  attachments: z.array(z.object({path:z.string().min(1).max(4096),kind:z.enum(["photo","document","audio","video"]),caption:z.string().max(1024).optional(),filename:boundedString(128).refine(v => v.length > 0).optional()})).max(4).optional(),
+});
+
+export const mediaKindSchema = z.enum(["photo", "document", "audio", "video"]);
+export type RelayMediaKind = z.infer<typeof mediaKindSchema>;
+export const relayFormatSchema = z.object({
+  version: z.string().min(1).max(64),
+  formats: z.object({ plain: z.number().int().positive(), rich_markdown: z.number().int().positive() }).passthrough(),
+  guide: boundedString(4000), markdown_subset: z.array(boundedString(64)).max(64),
+  max_blocks: z.number().int().positive(), max_depth: z.number().int().positive(), max_table_columns: z.number().int().positive(),
+  buttons: z.object({ allowed: z.boolean(), max_rows: z.number().int().min(0), max_per_row: z.number().int().min(0), max_total: z.number().int().min(0) }).passthrough(),
+  forbidden: z.array(boundedString(64)).max(64),
+}).passthrough();
+export const uploadedAttachmentSchema = z.object({ attachment_id: id, mime_type: boundedString(100), filename: boundedString(128).refine(v => v.length > 0),
+  byte_size: z.number().int().min(1).max(20971520), sha256: z.string().regex(/^[a-f0-9]{64}$/), expires_at: time });
+export const relayAttachmentLimitsSchema = z.object({ max_items: z.number().int().min(1).max(4),
+  max_total_bytes: z.number().int().positive().max(67108864), kinds: z.array(mediaKindSchema).min(1).max(4) });
 export const inputSchema = z.object({
+  format: relayFormatSchema.optional().catch(undefined),
   instructions: boundedString(32000),
   owner_instructions: boundedString(16000).nullable(),
   documents: z
@@ -156,6 +177,7 @@ export const inputSchema = z.object({
 });
 const chatKey = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
 export const requestSchema = z.object({
+  features: z.array(boundedString(64)).max(32).refine(v => new Set(v).size === v.length).optional().catch(undefined),
   request_id: id,
   lease_id: leaseId,
   kind: z.literal("answer"),
@@ -167,6 +189,7 @@ export const requestSchema = z.object({
   chat: z.object({ key: chatKey }).optional().catch(undefined),
   input: inputSchema,
   answer: z.object({
+    attachments: relayAttachmentLimitsSchema.optional().catch(undefined),
     max_chars: z.number().int().min(1).max(32000),
     progress: z.enum(["notes", "none"]),
   }),
@@ -267,7 +290,12 @@ export const replyAnswerSchema = {
 /** Hand-off is offered only for a request whose service listed its tools. */
 export const offersHandoff = (request: ExternalRelayRequest) =>
   (request.input.tools?.length ?? 0) > 0;
+export type RelayUrlButton = { text: string; url: string };
+export type RelayAttachment = { attachment_id: string; kind: RelayMediaKind; caption?: string };
 export type ExternalRelayAnswer = {
+  format?: "plain" | "rich_markdown";
+  buttons?: RelayUrlButton[][];
+  attachments?: RelayAttachment[];
   action: "reply" | "ignore";
   text: string;
   reply_to: string | null;

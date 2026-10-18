@@ -1,4 +1,4 @@
-import { ensureStagePullRequest } from "./stagePullRequest";
+import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequestResult } from "./stagePullRequest";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, withControllerPipelineScope } from "./controllerScope";
@@ -140,7 +140,8 @@ import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { settlePendingStageProvenance, stageProvenanceFence } from "./stageProvenance";
 import { commitAndAdoptStageBranch, observeStageBranchProtection, stageBranchOwnershipFence, type StageBranchProtection } from "./stageBranch";
-import { graphDigest, isStageDigest, stageDigest } from "./stageDigest";
+import { graphDigest, stageDigest } from "./stageDigest";
+import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
@@ -152,7 +153,7 @@ import { mergeOnReviewEnabled } from "@/lib/projects/settings";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
 import { assignmentHoldsIdentity } from "@/lib/tasks/membership";
 import { MAX_DECISION_ANSWER_CHARS } from "./types";
-import { nudgeAutoMerge } from "@/lib/forge/autoMerge";
+import { mergeAdmission, nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep } from "@/lib/forge/cache";
 import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
 import { editStoredWorkLinks, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
@@ -4000,7 +4001,7 @@ function terminalBudgetDecisionRefusal(
 }
 
 function reviewPendingDetail(pending: NonNullable<Pipeline["reviewPending"]>): string {
-  const short = (sha: string | null) => sha ? sha.slice(0, 12) : "unknown";
+  const short = (sha: string | null) => shortId(sha ?? "unknown");
   if (pending.terminalRecheck) return `budget spent: ${pending.findings} findings left (${pending.stageId}), head ${short(pending.currentHead)} failed terminal re-check. review budget is fixed; resolve the retained review or close the lane`;
   return `review budget spent (onExhausted: stop-after-fix): last review failed (${pending.verdict}, ${pending.findings} finding${pending.findings === 1 ? "" : "s"}), head ${short(pending.currentHead)} unreviewed; reviewed ${short(pending.reviewedHead)}. review budget is fixed; accept the head or close the lane`;
 }
@@ -4190,6 +4191,98 @@ async function retryRefusedPublication(
   return true;
 }
 
+const SUMMARY_REWRITE_LIMIT = 2;
+const SUMMARY_REWRITE_WAIT_MS = 10 * 60_000;
+
+function summaryRewriteWorker(pipeline: Pipeline, owner: PipelineStageAttempt) {
+  const repair = owner.publicationTextRepair;
+  return pipeline.runs.find(run => run.stageId === repair?.stageId)?.attempts
+    .find(attempt => attempt.n === repair?.attempt && !attempt.historical);
+}
+
+/** Only the named producer may replace its summary while its accepted pass
+    remains at the committing cursor. All other settled reports stay closed. */
+function pendingSummaryRewrite(pipeline: Pipeline, worker: PipelineStageAttempt): PipelineStageAttempt | null {
+  const owner = pipeline.cursor?.state === "committing" && currentAttempt(pipeline, pipeline.cursor.stageId);
+  return pipeline.state === "running" && owner && owner.publicationTextRepair?.state === "pending"
+    && owner.publicationTextRepair.part === "body" && owner.publicationTextRepair.sha === pipeline.lastPassedCommit
+    && summaryRewriteWorker(pipeline, owner) === worker ? owner : null;
+}
+
+async function settleSummaryRewrite(pipeline: Pipeline, owner: PipelineStageAttempt, ports: PipelinePorts,
+  persist: () => void | Promise<void>): Promise<boolean> {
+  const repair = owner.publicationTextRepair;
+  if (!repair || repair.state === "exhausted") return true;
+  const worker = summaryRewriteWorker(pipeline, owner);
+  const giveUp = async (cause: string) => {
+    repair.state = "exhausted";
+    owner.error = `${repair.detail}; ${cause}`;
+    await park(pipeline, owner.error);
+    await persist();
+    return false;
+  };
+  // Never adopt a commit or dirty files produced during a summary-only turn.
+  const head = await currentPipelineBranchHead(pipeline, ports.exec);
+  if (!head.ok || head.sha !== repair.sha || pipeline.lastPassedCommit !== repair.sha)
+    return giveUp("summary rewrite requires the unchanged clean accepted head");
+  if (!worker?.conversationId || !worker.agentPath || !ports.resumeSeveredTurn)
+    return giveUp("the producing conversation is unavailable for a summary rewrite");
+  const active = await ports.conversationAgentActive(worker.conversationId);
+  const outstanding = ports.conversationDeliveryOutstanding?.(worker.conversationId) === true;
+  const evidence = await stageRepairEvidence(worker, ports);
+  const finished = active === false && !outstanding && evidence?.turn === "terminal"
+    && liveBackgroundTasks(evidence.backgroundTasks ?? [], unixMs(ports.now())).length === 0;
+  const deadline = unixMs(repair.requestedAt) + SUMMARY_REWRITE_WAIT_MS;
+  if (repair.state === "answered" && finished && repair.answeredAt && unixMs(repair.answeredAt) < deadline) return true;
+  if (unixMs(ports.now()) >= deadline) return giveUp("summary rewrite did not finish within ten minutes");
+  if (!repair.delivered && !outstanding && active !== true) {
+    // The checkpoint and stable key cover acknowledgement loss and restarts.
+    await persist();
+    repair.delivered = await Promise.resolve().then(() => ports.resumeSeveredTurn!({
+      conversationId: worker.conversationId!, transcriptPath: worker.agentPath!,
+      clientMessageId: `stage-summary-rewrite-${pipeline.id}-${repair.stageId}-${repair.attempt}-${repair.rounds}`,
+      text: ["Your accepted stage's pull request text was refused.", repair.detail,
+        `Rewrite only your stage_report summary (round ${repair.rounds} of ${repair.maxRounds}).`,
+        "Call stage_report with verdict pass, no findings and the replacement public summary. Your accepted verdict and provenance stay recorded.",
+        "Use repository-relative paths. Change no files and make no commit, push or new attempt. End your turn after reporting."].join("\n\n"),
+      project: pipeline.project, cwd: pipeline.repoDir,
+      ...(worker.startedAt ? { cohortAt: worker.startedAt } : {}),
+    })).catch(() => false);
+    // Final settlement records the acknowledgement. A report may arrive
+    // during delivery; its newer lane wins the ordinary settlement fence.
+  }
+  ports.scheduleTick?.(1_000);
+  return false;
+}
+
+async function handlePullRequestRefusal(pipeline: Pipeline, attempt: PipelineStageAttempt,
+  result: Extract<StagePullRequestResult, { ok: false }>, ports: PipelinePorts, persist: () => void | Promise<void>, pullRequestHead?: string): Promise<void> {
+  const detail = `publishing the passed stage: ${result.error}`;
+  attempt.error = detail;
+  const privacy = result.privacy;
+  if (!privacy) { await park(pipeline, detail, attempt); return; }
+  const producer = stagePullRequestProducer(pipeline, attempt);
+  const producerStage = pipeline.runs.find(run => run.attempts.includes(producer));
+  const prior = attempt.publicationTextRepair;
+  attempt.publicationTextRepair = {
+    sha: pipeline.lastPassedCommit, pullRequestHead: pullRequestHead ?? prior?.pullRequestHead, stageId: producerStage?.stageId ?? "", attempt: producer.n,
+    rounds: prior?.rounds ?? 0, maxRounds: prior?.maxRounds ?? SUMMARY_REWRITE_LIMIT, detail, part: privacy.part, state: "exhausted",
+    reportSeq: producer.report?.seq ?? null, requestedAt: ports.now(),
+  };
+  const repair = attempt.publicationTextRepair;
+  if (privacy.part !== "body" || repair.rounds >= repair.maxRounds || !producerStage) {
+    await park(pipeline, `${detail}; ${privacy.part === "body" ? "summary rewrite budget exhausted or producer unavailable" : "correct the pipeline task title, then retry-stage"}`);
+    return;
+  }
+  repair.rounds++;
+  repair.state = "pending";
+  pipeline.stateDetail = `${detail}; asking the producer to rewrite its summary (${repair.rounds}/${repair.maxRounds})`;
+  // Feed the ordinary task-note/seat wake surface the same redacted reason.
+  await writeEngineParkedTaskNote(pipeline, pipeline.stateDetail, attempt);
+  await persist();
+  await settleSummaryRewrite(pipeline, attempt, ports, persist);
+}
+
 async function retryTerminalStagePublication(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -4198,6 +4291,35 @@ async function retryTerminalStagePublication(
   persist: () => void | Promise<void>,
 ): Promise<void> {
   if (ports.deferStageGit) return;
+  if (!await settleSummaryRewrite(pipeline, attempt, ports, persist)) return;
+  if (attempt.terminalOutputPublication) {
+    const { localSha, pullRequestHead } = attempt.terminalOutputPublication;
+    const local = await currentPipelineBranchHead(pipeline, ports.exec);
+    if (!local.ok || local.sha !== localSha || pipeline.lastPassedCommit !== pullRequestHead) {
+      await park(pipeline, `legacy terminal-output retry requires unchanged local report ${localSha} and published head ${pullRequestHead}`, attempt);
+      return;
+    }
+    const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () =>
+      ensureStagePullRequest(pipeline, attempt, ports.exec, pullRequestHead)));
+    if (!pr.ok) {
+      if (pr.privacy) {
+        pipeline.lastPassedCommit = localSha;
+        delete attempt.terminalOutputPublication;
+      }
+      await handlePullRequestRefusal(pipeline, attempt, pr, ports, persist, pullRequestHead);
+      return;
+    }
+    delete attempt.terminalOutputPublication;
+    await advancePipeline(pipeline, stage, ports, attempt);
+    return;
+  }
+  if (attempt.publicationTextRepair?.pullRequestHead) {
+    const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () =>
+      ensureStagePullRequest(pipeline, attempt, ports.exec, attempt.publicationTextRepair!.pullRequestHead)));
+    if (!pr.ok) { await handlePullRequestRefusal(pipeline, attempt, pr, ports, persist); return; }
+    await advancePipeline(pipeline, stage, ports, attempt);
+    return;
+  }
   if (attempt.publicationRepair && !await settlePublicationRepair(pipeline, stage, attempt, ports, persist)) return;
   const current = (await currentPipelineBranchHead(pipeline, ports.exec));
   if (current.ok && current.sha !== pipeline.lastPassedCommit && stage.kind === "run" && attempt.effectiveRole.access === "read-write") {
@@ -4212,7 +4334,7 @@ async function retryTerminalStagePublication(
   }
   if (!current.ok || current.sha !== pipeline.lastPassedCommit) {
     const detail = afterCommitRepair(attempt, current.ok
-      ? `the worktree moved to ${current.sha} after accepting ${pipeline.lastPassedCommit}; commit and publish the current head before completing this stage`
+      ? `the worktree moved to ${shortId(current.sha)} after accepting ${shortId(pipeline.lastPassedCommit)}; commit and publish the current head before completing this stage`
       : `the accepted head cannot be verified before completion: ${current.error}`);
     // Head verification can be retried without discarding the accepted pass.
     attempt.error = detail;
@@ -4255,7 +4377,7 @@ async function retryTerminalStagePublication(
     return;
   }
   const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () => ensureStagePullRequest(pipeline, attempt, ports.exec)));
-  if (!pr.ok) { attempt.error = `publishing the passed stage: ${pr.error}`; await park(pipeline, attempt.error, attempt); return; }
+  if (!pr.ok) { await handlePullRequestRefusal(pipeline, attempt, pr, ports, persist); return; }
   await advancePipeline(pipeline, stage, ports, attempt);
 }
 
@@ -4516,11 +4638,11 @@ function publicationRepairWorker(pipeline: Pipeline, attempt: PipelineStageAttem
 function stagePublicationRepairText(stage: PipelineStage, attempt: PipelineStageAttempt, repair: NonNullable<PipelineStageAttempt["publicationRepair"]>): string {
   const readOnly = attempt.effectiveRole.access !== "read-write";
   return [
-    `Your work was accepted at ${repair.sha}, and its publication was refused. Repair that refusal on this pipeline's current branch.`,
+    `Your work was accepted at ${shortId(repair.sha)}, and its publication was refused. Repair that refusal on this pipeline's current branch.`,
     `What the publication attempt printed:\n${hookOutputForRepair(repair.detail)}`,
     readOnly
       ? `Change only your declared outputs (${(attemptStage(stage, attempt).outputs ?? []).join(", ")}); leave them uncommitted for the controller. Do not stage, commit or push.`
-      : `Fix the files or your own unpublished commit metadata named by the refusal. Preserve all work through ${repair.baseSha}; stay on this branch. Leave the repair uncommitted or commit it here. The controller will publish it.`,
+      : `Fix the files or your own unpublished commit metadata named by the refusal. Preserve all work through ${shortId(repair.baseSha)}; stay on this branch. Leave the repair uncommitted or commit it here. The controller will publish it.`,
     "The original pass stays recorded. Changed content that already passed review returns to its review gate under the lane's existing budget rules.",
     "Never bypass the hook: no --no-verify, skip variable, hook path change or disabled check. This is the only publication repair turn; a second refusal parks with its cause.",
     "If you cannot repair it within your scope, end with the reason in this fenced block. stage_report is closed for the accepted stage:",
@@ -4823,13 +4945,13 @@ async function commitPassedStage(
     delete attempt.stageCommitWait;
   }
   if (stage.kind === "review-loop" && result.sha !== attempt.reviewHeadSha) {
-    await parkStage(`approved review flow head mismatch during settlement: reviewed ${attempt.reviewHeadSha ?? "no exact head"}, settled ${result.sha}`);
+    await parkStage(`approved review flow head mismatch during settlement: reviewed ${shortId(attempt.reviewHeadSha ?? "no exact head")}, settled ${shortId(result.sha)}`);
     return;
   }
   if (pipeline.lastPassedCommit && result.sha !== pipeline.lastPassedCommit) {
     const ancestor = (await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, result.sha], pipeline.worktreeDir));
     if (ancestor.code !== 0 && (ancestor.code !== 1 || !allowCommit)) {
-      await parkStage(`stage head ${result.sha} does not descend from accepted head ${pipeline.lastPassedCommit}; ${ancestor.stderr.trim() || "reconciliation requires a writable builder stage"}`);
+      await parkStage(`stage head ${shortId(result.sha)} does not descend from accepted head ${shortId(pipeline.lastPassedCommit)}; ${ancestor.stderr.trim() || "reconciliation requires a writable builder stage"}`);
       return;
     }
     if (ancestor.code === 1) {
@@ -4854,7 +4976,13 @@ async function commitPassedStage(
   if (terminalLocalOutput && publishesRemoteBranch(pipeline)) {
     const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () =>
       ensureStagePullRequest(pipeline, attempt, ports.exec, pipeline.publishedCommit ?? pipeline.lastPassedCommit)));
-    if (!pr.ok) { await parkStage(pr.error); return; }
+    if (!pr.ok) {
+      const publishedHead = pipeline.publishedCommit ?? pipeline.lastPassedCommit;
+      if (pr.privacy) pipeline.lastPassedCommit = result.sha;
+      else attempt.terminalOutputPublication = { localSha: result.sha, pullRequestHead: publishedHead };
+      attempt.state = "passed";
+      await handlePullRequestRefusal(pipeline, attempt, pr, ports, persist, publishedHead); return;
+    }
   }
   pipeline.lastPassedCommit = result.sha;
   if (!publishesRemoteBranch(pipeline) || terminalLocalOutput) {
@@ -4891,7 +5019,7 @@ async function commitPassedStage(
     return;
   }
   const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () => ensureStagePullRequest(pipeline, attempt, ports.exec)));
-  if (!pr.ok) { await parkStage(pr.error); return; }
+  if (!pr.ok) { await handlePullRequestRefusal(pipeline, attempt, pr, ports, persist); return; }
   await advancePipeline(pipeline, stage, ports, attempt);
 }
 
@@ -7755,7 +7883,7 @@ async function publishReviewIngressHead(
     return {
       ok: false,
       retryable: false,
-      detail: `review stage head mismatch: the accepted review head is ${expected}, but the pipeline worktree is at ${local.sha}; nothing was published`,
+      detail: `review stage head mismatch: the accepted review head is ${shortId(expected)}, but the pipeline worktree is at ${shortId(local.sha)}; nothing was published`,
     };
   }
   /* An internal pipeline reviews the clean local revision it accepted. */
@@ -7765,7 +7893,7 @@ async function publishReviewIngressHead(
      rather than trusting a durable record that may be stale or migrated. */
   const published = queuePipelinePublication(pipeline, ports.exec, { acceptedSha: expected });
   if (!published.ok) {
-    return { ok: false, retryable: false, detail: `review stage could not publish the accepted head ${expected}: ${published.error}` };
+    return { ok: false, retryable: false, detail: `review stage could not publish the accepted head ${shortId(expected)}: ${published.error}` };
   }
   if (published.remote === "unreachable") {
     return { ok: false, retryable: true, detail: `passed but unpublished: ${published.detail}` };
@@ -7774,7 +7902,7 @@ async function publishReviewIngressHead(
     return {
       ok: false,
       retryable: false,
-      detail: `review stage requires a published pipeline branch at ${expected}: ${MISSING_DELIVERY_REMOTE}`,
+      detail: `review stage requires a published pipeline branch at ${shortId(expected)}: ${MISSING_DELIVERY_REMOTE}`,
     };
   }
   pipeline.publishedCommit = published.sha;
@@ -8361,18 +8489,18 @@ const APPROVED_REMOTE_HEAD_WAIT_PREFIX = "approved review flow waiting for the r
     about the head either way. */
 async function reviewHeadFence(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<{ park: string } | { retry: string } | null> {
   if (!attempt.reviewHeadSha || attempt.expectedReviewHeadSha !== attempt.reviewHeadSha) {
-    return { park: `approved review flow envelope mismatch: expected ${attempt.expectedReviewHeadSha ?? "no exact head"}, reviewed ${attempt.reviewHeadSha ?? "no exact head"}` };
+    return { park: `approved review flow envelope mismatch: expected ${shortId(attempt.expectedReviewHeadSha ?? "no exact head")}, reviewed ${shortId(attempt.reviewHeadSha ?? "no exact head")}` };
   }
   const currentHead = (await currentPipelineBranchHead(pipeline, ports.exec));
   if (!currentHead.ok) return { park: `approved review flow could not verify the current pipeline head: ${currentHead.error}` };
   if (attempt.reviewHeadSha !== currentHead.sha) {
-    return { park: `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, current pipeline head is ${currentHead.sha}` };
+    return { park: `approved review flow head mismatch: reviewed ${shortId(attempt.reviewHeadSha)}, current pipeline head is ${shortId(currentHead.sha)}` };
   }
   if (!publishesRemoteBranch(pipeline)) return null;
   const remoteHead = (await currentPipelineRemoteBranchHead(pipeline, ports.exec));
   if (!remoteHead.ok) return remoteHead.transient ? { retry: remoteHead.error } : { park: `${APPROVED_REMOTE_HEAD_UNVERIFIED}: ${remoteHead.error}` };
   if (attempt.reviewHeadSha !== remoteHead.sha) {
-    return { park: `approved review flow head mismatch: reviewed ${attempt.reviewHeadSha}, remote pipeline head is ${remoteHead.sha}` };
+    return { park: `approved review flow head mismatch: reviewed ${shortId(attempt.reviewHeadSha)}, remote pipeline head is ${shortId(remoteHead.sha)}` };
   }
   return null;
 }
@@ -10052,7 +10180,7 @@ async function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attem
   attempt.state = "skipped";
   attempt.completedAt = ports.now();
   attempt.output = sha !== previousHead
-    ? `Skipped by operator; current head ${sha} was accepted as its result.`
+    ? `Skipped by operator; current head ${shortId(sha)} was accepted as its result.`
     : "Skipped by operator.";
   if (publishesRemoteBranch(pipeline) && pipeline.publishedCommit !== sha) {
     pipeline.state = "running";
@@ -10337,9 +10465,25 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) { abort.abort(); return; }
         const recorded = currentAttempt(current, candidateStage.id)!;
-        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait) return;
+        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait && !candidateAttempt.publicationTextRepair && !candidateAttempt.terminalOutputPublication) return;
         if (candidateAttempt.stageCommitWait) {
           recorded.stageCommitWait = structuredClone(candidateAttempt.stageCommitWait);
+          if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
+        }
+        if (candidateAttempt.publicationTextRepair) {
+          recorded.publicationTextRepair = structuredClone(candidateAttempt.publicationTextRepair);
+          if (!candidateAttempt.terminalOutputPublication) delete recorded.terminalOutputPublication;
+          recorded.state = candidateAttempt.state;
+          recorded.completedAt = candidateAttempt.completedAt;
+          recorded.error = candidateAttempt.error;
+          current.lastPassedCommit = candidate.lastPassedCommit;
+          if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
+        }
+        if (candidateAttempt.terminalOutputPublication) {
+          recorded.terminalOutputPublication = structuredClone(candidateAttempt.terminalOutputPublication);
+          recorded.state = candidateAttempt.state;
+          recorded.completedAt = candidateAttempt.completedAt;
+          recorded.error = candidateAttempt.error;
           if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
         }
         if (candidateAttempt.branchAdoption) recorded.branchAdoption = structuredClone(candidateAttempt.branchAdoption);
@@ -11215,13 +11359,13 @@ const STAGE_CHANGED_ERROR = "the stage changed since it was read; read it again 
 
 /** `expectedStageDigest` on an edit of one stage: that stage's digest, edges included. */
 function stageDigestRefusal(stage: PipelineStage, req: PatchPipelineRequest): PipelinePatchResult | null {
-  if (req.expectedStageDigest === undefined || stageDigest(stage) === req.expectedStageDigest) return null;
+  if (req.expectedStageDigest === undefined || matchesShortId(stageDigest(stage), req.expectedStageDigest)) return null;
   return { error: STAGE_CHANGED_ERROR, status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" };
 }
 
 /** `expectedStageDigest` on a structural edit: the digest of the whole ordered plan. */
 function graphDigestRefusal(pipeline: Pipeline, req: PatchPipelineRequest): PipelinePatchResult | null {
-  if (req.expectedStageDigest === undefined || graphDigest(pipeline.stages) === req.expectedStageDigest) return null;
+  if (req.expectedStageDigest === undefined || matchesShortId(graphDigest(pipeline.stages), req.expectedStageDigest)) return null;
   return { error: "the pipeline's stages changed since they were read; read the pipeline again before editing its graph", status: 409, code: "STAGE_CHANGED", field: "expectedStageDigest" };
 }
 
@@ -11332,7 +11476,7 @@ function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | 
   const stageBound = req.action === "retry-stage" || req.action === "skip-stage" || req.action === "resolve-decision";
   if (stated("expectedStageDigest")) {
     if (!GRAPH_EDIT_ACTIONS.has(req.action)) return { error: `expectedStageDigest applies only to graph edits (${[...GRAPH_EDIT_ACTIONS].join(", ")})`, status: 400, field: "expectedStageDigest" };
-    if (!isStageDigest(req.expectedStageDigest)) return { error: "expectedStageDigest must be a 64-character lowercase hex SHA-256 digest", status: 400, field: "expectedStageDigest" };
+    if ((typeof req.expectedStageDigest !== "string" || !/^[0-9a-f]{7,64}$/i.test(req.expectedStageDigest))) return { error: "expectedStageDigest must be the digest returned by get_pipeline", status: 400, field: "expectedStageDigest" };
   }
   if (stated("expectedStageId")) {
     if (!stageBound) return { error: "expectedStageId applies only to retry-stage, skip-stage and resolve-decision", status: 400, field: "expectedStageId" };
@@ -11711,8 +11855,17 @@ export async function createPipelineFromRequest(
     || pipelineBaseBranchError(targetInput.branch.slice("refs/heads/".length))
     || (targetInput.pr !== undefined && (!Number.isSafeInteger(targetInput.pr) || targetInput.pr < 1))
     || (targetInput.comparison !== undefined && typeof targetInput.comparison !== "boolean")
-    || (targetInput.rejectedHead !== undefined && !/^[0-9a-f]{40}$/i.test(targetInput.rejectedHead)))) {
-    return { error: "delivery requires a full refs/heads branch, positive PR number and exact rejected head", status: 400 };
+    || (targetInput.rejectedHead !== undefined && !/^[0-9a-f]{7,40}$/i.test(targetInput.rejectedHead)))) {
+    return { error: "delivery requires a full refs/heads branch, positive PR number and a commit SHA or unique prefix", status: 400 };
+  }
+  let rejectedHead = targetInput?.rejectedHead;
+  if (rejectedHead && rejectedHead.length < 40) {
+    const resolvedHead = await ports.exec("git", ["rev-parse", "--verify", "--end-of-options", `${rejectedHead}^{commit}`], repoDir);
+    if (resolvedHead.code !== 0 || !/^[0-9a-f]{40}$/i.test(resolvedHead.stdout.trim())) {
+      const ambiguous = /ambiguous|disambiguate/i.test(`${resolvedHead.stderr}\n${resolvedHead.stdout}`);
+      return { error: ambiguous ? "rejectedHead is ambiguous; pass more characters" : "rejectedHead does not identify a local commit", status: ambiguous ? 409 : 400 };
+    }
+    rejectedHead = resolvedHead.stdout.trim().toLowerCase();
   }
   const resolvedRemote = await resolveDeliveryRemote(repoDir, targetInput?.remote, ports.exec, { allowLiteral: true });
   if (!resolvedRemote.ok) return { error: resolvedRemote.error, status: resolvedRemote.status };
@@ -11734,7 +11887,7 @@ export async function createPipelineFromRequest(
     }
   }
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
-    ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(targetInput?.rejectedHead ? { rejectedHead: targetInput.rejectedHead } : {}) };
+    ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(rejectedHead ? { rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
   if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
   if (!options.ensureTask) {
@@ -12425,7 +12578,7 @@ async function resolveDecision(
     || typeof req.answer !== "string" || !req.answer.trim() || req.answer.length > MAX_DECISION_ANSWER_CHARS
     || typeof req.expectedStageId !== "string" || !req.expectedStageId.trim()
     || !Number.isSafeInteger(req.expectedAttempt) || req.expectedAttempt! < 1
-    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
+    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{7,64}$/i.test(req.expectedRevision)) {
     return { error: `resolve-decision requires clientRequestId (up to 200 characters), answer (up to ${MAX_DECISION_ANSWER_CHARS} characters), expectedStageId, positive expectedAttempt and expectedRevision from get_pipeline`, status: 400 };
   }
   const guardShape = stageGuardShapeError(req);
@@ -12433,14 +12586,14 @@ async function resolveDecision(
   const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === req.clientRequestId);
   if (prior) {
     if (prior.answer !== req.answer || prior.stageId !== req.expectedStageId
-      || prior.attempt !== req.expectedAttempt || prior.expectedRevision !== req.expectedRevision) {
+      || prior.attempt !== req.expectedAttempt || !matchesShortId(prior.expectedRevision, req.expectedRevision!)) {
       return { error: "clientRequestId already belongs to a different decision answer", status: 409 };
     }
     return { pipeline, decisionAnswer: prior, replayed: true };
   }
   // Rollback disables admission; durable answers and pending attempts remain readable/drainable.
   if (process.env.LLV_PIPELINE_RESOLVE_DECISION === "0") return { error: "resolve-decision is disabled", status: 409 };
-  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+  if (!matchesShortId(pipelineRevision(pipeline), req.expectedRevision!)) {
     return { error: "the pipeline changed since it was read; read it again before answering", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
   }
   const expectation = expectedStageRefusal(pipeline, req);
@@ -12490,7 +12643,7 @@ async function resolveDecision(
     }
   }
   const decision: PipelineDecisionAnswer = {
-    clientRequestId: req.clientRequestId, expectedRevision: req.expectedRevision,
+    clientRequestId: req.clientRequestId, expectedRevision: pipelineRevision(pipeline),
     stageId: stage.id, attempt: attempt.n, nextAttempt: runFor(pipeline, stage.id)!.attempts.length + 1,
     question: publicationDecision ? pipeline.stateDetail! : attempt.output ?? attempt.report?.summary ?? "", answer: req.answer,
     actor: structuredClone(actor!), at: ports.now(),
@@ -12528,14 +12681,14 @@ function continueReview(
   if (!actor) return { error: "continue-review needs an actor", status: 403 };
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
     || !Number.isSafeInteger(req.addRounds) || req.addRounds! < 1 || req.addRounds! > MAX_FAIL_EDGE_ROUNDS
-    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
+    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{7,64}$/i.test(req.expectedRevision)) {
     return { error: `continue-review requires clientRequestId (up to 200 characters), addRounds (1 to ${MAX_FAIL_EDGE_ROUNDS}) and expectedRevision from get_pipeline`, status: 400 };
   }
   const guardShape = stageGuardShapeError(req);
   if (guardShape) return guardShape;
   const prior = pipeline.reviewGrants?.find((grant) => grant.clientRequestId === req.clientRequestId);
   if (prior) {
-    if (prior.rounds !== req.addRounds || prior.expectedRevision !== req.expectedRevision
+    if (prior.rounds !== req.addRounds || !matchesShortId(prior.expectedRevision, req.expectedRevision!)
       || prior.actor.kind !== actor.kind || (prior.actor.kind === "agent" && actor.kind === "agent" && prior.actor.conversationId !== actor.conversationId)) {
       return { error: "clientRequestId already belongs to a different continue-review", status: 409 };
     }
@@ -12559,14 +12712,14 @@ async function acceptHead(
   if (refusal) return { ...refusal, error: "only the pipeline creator conversation, the project's current designated seat for a lane an agent created, or a direct user action can accept this head" };
   if (!actor) return { error: "accept-head needs an actor", status: 403 };
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
-    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
+    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{7,64}$/i.test(req.expectedRevision)) {
     return { error: "accept-head requires clientRequestId (up to 200 characters) and expectedRevision from get_pipeline", status: 400 };
   }
   const guardShape = stageGuardShapeError(req);
   if (guardShape) return guardShape;
   const prior = pipeline.reviewAcceptances?.find((entry) => entry.clientRequestId === req.clientRequestId);
   if (prior) {
-    if (prior.expectedRevision !== req.expectedRevision || prior.actor.kind !== actor.kind
+    if (!matchesShortId(prior.expectedRevision, req.expectedRevision!) || prior.actor.kind !== actor.kind
       || (prior.actor.kind === "agent" && actor.kind === "agent" && prior.actor.conversationId !== actor.conversationId)) {
       return { error: "clientRequestId already belongs to a different accept-head", status: 409 };
     }
@@ -12576,7 +12729,7 @@ async function acceptHead(
   if (pipeline.state !== "needs_review" || !pending) {
     return { error: `accept-head requires a pipeline in needs_review; this one is ${pipeline.state}`, status: 409 };
   }
-  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+  if (!matchesShortId(pipelineRevision(pipeline), req.expectedRevision!)) {
     return { error: "the pipeline changed since it was read; read it again before accepting its head", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
   }
   const review = pipeline.stages.find((stage) => stage.id === pending.stageId);
@@ -12586,11 +12739,11 @@ async function acceptHead(
     return { error: "the review stage or the fix it handed off to is no longer in this pipeline", status: 409 };
   }
   if (pipeline.lastPassedCommit !== pending.currentHead) {
-    return { error: `the pipeline head moved from ${pending.currentHead} to ${pipeline.lastPassedCommit}; read it again`, status: 409, code: "STAGE_CHANGED" };
+    return { error: `the pipeline head moved from ${shortId(pending.currentHead)} to ${shortId(pipeline.lastPassedCommit)}; read it again`, status: 409, code: "STAGE_CHANGED" };
   }
   const acceptance: PipelineReviewAcceptance = {
     clientRequestId: req.clientRequestId,
-    expectedRevision: req.expectedRevision,
+    expectedRevision: pipelineRevision(pipeline),
     stageId: pending.stageId,
     attempt: pending.attempt,
     fixStageId: pending.fixStageId,
@@ -12678,7 +12831,7 @@ function previewLegacyReview(pipeline: Pipeline, req: PatchPipelineRequest, port
 
 function legacyReviewRequestShapeError(req: PatchPipelineRequest, revert: boolean): PipelinePatchResult | null {
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
-    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)
+    || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{7,64}$/i.test(req.expectedRevision)
     || (req.stageId !== undefined && (typeof req.stageId !== "string" || !req.stageId))
     || (revert && typeof req.stageId !== "string")
     || (req.reviewLimit !== undefined && !Number.isSafeInteger(req.reviewLimit))
@@ -12706,7 +12859,7 @@ function convertLegacyReview(
   if (shape) return shape;
   const prior = pipeline.legacyReviewConversions?.find((item) => item.clientRequestId === req.clientRequestId);
   if (prior) {
-    if (prior.expectedRevision !== req.expectedRevision || (req.stageId !== undefined && req.stageId !== prior.stageId)
+    if (!matchesShortId(prior.expectedRevision, req.expectedRevision!) || (req.stageId !== undefined && req.stageId !== prior.stageId)
       || (req.reviewLimit !== undefined && req.reviewLimit !== prior.reviewLimit)
       || (req.implementerStageId !== undefined && req.implementerStageId !== prior.implementerStageId)) {
       return { error: "clientRequestId already belongs to a different legacy review conversion", status: 409 };
@@ -12715,7 +12868,7 @@ function convertLegacyReview(
   }
   // Rollback disables admission; converted records and their originals stay readable.
   if (process.env.LLV_PIPELINE_LEGACY_REVIEW_CONVERSION === "0") return { error: "convert-legacy-review is disabled", status: 409 };
-  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+  if (!matchesShortId(pipelineRevision(pipeline), req.expectedRevision!)) {
     return { error: "the pipeline changed since it was read; read it again and preview before converting", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
   }
   if ((pipeline.legacyReviewConversions?.length ?? 0) >= legacyReview.MAX_LEGACY_REVIEW_CONVERSIONS) {
@@ -12726,7 +12879,7 @@ function convertLegacyReview(
     return { error: `legacy review conversion refused: ${preview.refusals.map((item) => `${item.code}: ${item.message}`).join("; ")}`, status: 409, legacyReviewPreview: preview };
   }
   const conversion = legacyReview.applyLegacyReviewConversion(pipeline, preview, {
-    clientRequestId: req.clientRequestId!, expectedRevision: req.expectedRevision!, actor: actor!, at: ports.now(),
+    clientRequestId: req.clientRequestId!, expectedRevision: pipelineRevision(pipeline), actor: actor!, at: ports.now(),
   });
   return { pipeline, legacyReviewConversion: conversion, replayed: false };
 }
@@ -12743,7 +12896,7 @@ function revertLegacyReview(
     if (prior.stageId !== req.stageId) return { error: "clientRequestId already belongs to a different legacy review revert", status: 409 };
     return { pipeline, legacyReviewConversion: prior, replayed: true };
   }
-  if (pipelineRevision(pipeline) !== req.expectedRevision) {
+  if (!matchesShortId(pipelineRevision(pipeline), req.expectedRevision!)) {
     return { error: "the pipeline changed since it was read; read it again before reverting", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
   }
   const receipt = { clientRequestId: req.clientRequestId!, actor: actor!, at: ports.now() };
@@ -12873,7 +13026,16 @@ export async function patchPipeline(
     if (pipeline.delivery && !pipeline.delivery.target.remote) return { error: LOCAL_DELIVERY_PUBLISH_REFUSAL, status: 409 };
     const deliveryError = pipeline.delivery && deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery.target, active: true }));
     if (deliveryError) return { error: deliveryError, status: 409 };
-    const accepted = req.acceptedSha ?? pipeline.lastPassedCommit;
+    let accepted = pipeline.lastPassedCommit;
+    if (req.acceptedSha !== undefined && req.acceptedSha.toLowerCase() !== pipeline.lastPassedCommit.toLowerCase()) {
+      if (!/^[0-9a-f]{7,40}$/i.test(req.acceptedSha)) return { error: "publication requires an accepted SHA from get_pipeline or git", status: 400 };
+      const head = await currentPipelineBranchHead(pipeline, ports.exec);
+      if (!head.ok) return { error: head.error, status: 409 };
+      const resolved = resolveShortId([pipeline.lastPassedCommit, head.sha], req.acceptedSha);
+      if (resolved.kind === "ambiguous") return { error: `acceptedSha is ambiguous (${resolved.candidates.join(", ")}); pass more characters`, code: "short_id_ambiguous", field: "acceptedSha", status: 409 };
+      if (resolved.kind === "none") return { error: `acceptedSha matches neither passed ${shortId(pipeline.lastPassedCommit)} nor HEAD ${shortId(head.sha)}`, status: 409 };
+      accepted = resolved.value;
+    }
     const moved = accepted !== pipeline.lastPassedCommit;
     const publicationFence = remoteActionFence(pipeline);
     const publicationEvidence = passedPublicationEvidence(pipeline);
@@ -12885,7 +13047,7 @@ export async function patchPipeline(
       if (!/^[0-9a-f]{40}$/i.test(accepted)) return { error: "publication requires an exact accepted SHA", status: 400 };
       const head = await currentPipelineBranchHead(pipeline, ports.exec);
       if (!head.ok) return { error: head.error, status: 409 };
-      if (head.sha !== accepted) return { error: `worktree HEAD ${head.sha} does not equal acceptedSha ${accepted}`, status: 409 };
+      if (head.sha !== accepted) return { error: `worktree HEAD ${shortId(head.sha)} does not equal acceptedSha ${shortId(accepted)}`, status: 409 };
       const ancestor = await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, accepted], pipeline.worktreeDir, pipelineLiteralGitEnv());
       if (ancestor.code !== 0) return { error: ancestor.code === 1
         ? "the previously passed commit is not an ancestor of acceptedSha"
@@ -12906,7 +13068,7 @@ export async function patchPipeline(
       if (!current || current.delivery?.epoch !== pipeline.delivery?.epoch) return { error: "delivery changed before publication admission", status: 409 };
       if (current.delivery && !current.delivery.target.remote) return { error: LOCAL_DELIVERY_PUBLISH_REFUSAL, status: 409 };
       if (current.state === "closed" || current.closedAt || current.hiddenAt) return { error: "a closed lane cannot publish", status: 409 };
-      if (moved && (remoteActionFence(current) !== publicationFence || passedPublicationEvidence(current) !== publicationEvidence)) {
+      if ((moved || req.acceptedSha !== undefined) && (remoteActionFence(current) !== publicationFence || passedPublicationEvidence(current) !== publicationEvidence)) {
         return { error: "the lane changed during accepted-head verification; read it again", status: 409 };
       }
       if (moved && current.delivery?.operation?.state === "running") return { error: "publisher is still in flight; reconcile before accepting a moved head", status: 409 };
@@ -12921,7 +13083,7 @@ export async function patchPipeline(
         currentAttempt(current, current.cursor!.stageId)!.publicationIntegration = integration;
       }
       const resumesPass = moved || resumablePassedPublication(current);
-      const acceptedSha = req.acceptedSha ?? current.lastPassedCommit;
+      const acceptedSha = req.acceptedSha === undefined ? current.lastPassedCommit : accepted;
       if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) return { error: "publication requires an exact accepted SHA", status: 400 };
       if (!current.delivery) {
         if (current.state === "completed") return { error: "a completed legacy lane has no delivery claim", status: 409 };
@@ -13512,6 +13674,24 @@ export async function patchPipeline(
         await persist();
       }
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
+      if (stage && attempt?.publicationTextRepair) {
+        const repair = attempt.publicationTextRepair;
+        if (repair.part === "body") {
+          // Keep the cumulative round for idempotency; renew a two-turn window.
+          repair.maxRounds = repair.rounds + SUMMARY_REWRITE_LIMIT;
+          repair.state = "pending";
+          repair.reportSeq = summaryRewriteWorker(pipeline, attempt)?.report?.seq ?? null;
+          repair.requestedAt = ports.now();
+          repair.rounds++;
+          delete repair.delivered; delete repair.answeredAt;
+        } else repair.state = "exhausted";
+        attempt.state = "passed";
+        pipeline.state = "running";
+        pipeline.pausedState = null;
+        pipeline.stateDetail = `${repair.detail}; summary rewrite retry pending`;
+        await persist(); requestPipelineTick();
+        return { pipeline };
+      }
       const commitRetry = await retryPassedStageCommit(pipeline, ports);
       if (commitRetry) {
         if (!commitRetry.error) { await persist(); requestPipelineTick(); }
@@ -14008,8 +14188,15 @@ export async function patchPipeline(
  * runner would cancel it again at once.
  */
 function retryMerge(pipeline: Pipeline, now: string): PipelinePatchResult | null {
+  if (!pipeline.merge) {
+    const admission = mergeAdmission(pipeline, Date.parse(now));
+    if ("reason" in admission) return { error: admission.reason, status: 409 };
+    pipeline.merge = admission.merge;
+    nudgeAutoMerge();
+    return null;
+  }
   const merge = pipeline.merge;
-  if (pipeline.state !== "completed" || !merge) return { error: "only a completed pipeline with a merge record can retry its merge", status: 409 };
+  if (pipeline.state !== "completed") return { error: "only a completed pipeline can retry its merge", status: 409 };
   if (merge.state !== "blocked" && merge.state !== "cancelled") return { error: `the merge is ${merge.state}; only a stopped merge can be tried again`, status: 409 };
   if (!mergeOnReviewEnabled(pipeline.project)) return { error: "the project's \"merge when the review passes\" setting is off", status: 409 };
   merge.state = "queued";
@@ -14249,7 +14436,7 @@ async function resolveStageCompletionTarget(
     }
   }
   const live = runStages.filter((target) => !unverifiedHandoffSuccessors.has(target)
-    && (REPORTABLE_ATTEMPT_STATES.has(target.attempt.state) || recoverable.has(target)
+    && (REPORTABLE_ATTEMPT_STATES.has(target.attempt.state) || pendingSummaryRewrite(target.pipeline, target.attempt) || recoverable.has(target)
       || forkSuccessors.has(target) || handoffSuccessors.has(target)));
   if (live.length === 0) {
     const settled = runStages.at(-1)!;
@@ -14398,6 +14585,9 @@ export async function reportStageCompletion(
       };
     }
     if (resolved.recoveryPath) reopenDeliveredAttempt(pipeline, attempt, resolved.recoveryPath);
+    const rewriteOwner = pendingSummaryRewrite(pipeline, attempt);
+    if (rewriteOwner && (normalized.verdict.status !== "pass" || normalized.verdict.findings?.length || !normalized.summary))
+      return { error: "a summary rewrite requires pass, no findings and a non-empty summary; the accepted verdict is unchanged", status: 409, code: "STAGE_REPORT_SUMMARY_ONLY" };
     const prior = attempt.report ?? null;
     const entries = pipeline.stageReports ?? [];
     const seq = (entries.at(-1)?.seq ?? 0) + 1;
@@ -14417,6 +14607,16 @@ export async function reportStageCompletion(
       provenanceFence: stageProvenanceFence(pipeline),
       calls: (prior?.calls ?? 0) + 1,
     };
+    if (rewriteOwner) {
+      if (prior) {
+        report.verdict = prior.verdict;
+        report.provenance = prior.provenance;
+        report.provenanceFence = prior.provenanceFence;
+      }
+      const repair = rewriteOwner.publicationTextRepair!;
+      repair.state = "answered";
+      repair.answeredAt = report.at;
+    }
     const replacedPendingSeq = prior?.provenance.state === "pending" ? prior.seq : null;
     attempt.report = report;
     const entry: PipelineStageReportEntry = {
@@ -14428,7 +14628,7 @@ export async function reportStageCompletion(
       status: report.verdict.status,
       findings: report.verdict.findings?.length ?? 0,
       replaces: prior?.seq ?? null,
-      provenanceState: "pending",
+      provenanceState: report.provenance.state ?? "complete",
       summary: report.summary,
     };
     /* A replaced intent no longer has a report to observe. Settle its journal

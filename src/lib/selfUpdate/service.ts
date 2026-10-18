@@ -1,3 +1,4 @@
+import { resolveTrackedRevision } from "./git";
 import { prepareLauncherCredentials, releaseLauncherCredentials } from "../../../bin/launcher-credentials.mjs";
 import { cliRuntimeHostConfig } from "../../../bin/server-runtime.mjs";
 /* The self-update service (#2007): one per web process, behind the Update
@@ -1800,6 +1801,10 @@ export class SelfUpdateService {
       const active = rows.find(row => !row.terminal);
       if (snapshot.busy || active) return { state: "busy" as const, deploymentId: active?.deploymentId ?? this.apply.current?.deploymentId ?? "checkout-update", revision: active?.revision ?? snapshot.update.target ?? "" };
       let target = request.revision ?? "";
+      if (/^[a-f0-9]{7,39}$/i.test(target)) {
+        if (!record.checkout) throw new Error("pass the full SHA or a ref");
+        target = await resolveTrackedRevision(record.checkout, this.deps.remote, this.deps.branch, target);
+      }
       if (request.ref) {
         const resolved = await runGit(["ls-remote", this.deps.remote, request.ref], record.checkout ?? this.deps.dir);
         target = resolved.stdout.trim().split(/\s/)[0] ?? "";
@@ -1829,7 +1834,7 @@ export class SelfUpdateService {
         && runtimeHostMatches(serving.runtimeHost, health, this.deps.processAlive, this.deps.processIdentity);
       const deploymentId = `checkout-${randomUUID()}`;
       const at = new Date(this.deps.now()).toISOString();
-      saveCheckoutDeployment(this.deps.dir, { deploymentId, idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? target, revision: target,
+      saveCheckoutDeployment(this.deps.dir, { deploymentId, idempotencyKey: request.idempotencyKey, requestedRevision: request.ref ?? request.revision ?? target, revision: target,
         phase: alreadyServing ? "succeeded" : "admitted", terminal: alreadyServing, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
         health: [], error: null, owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity }, createdAt: at, updatedAt: at, revisionNumber: 1 });
       try { if (!alreadyServing) {

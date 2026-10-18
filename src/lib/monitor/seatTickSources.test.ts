@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { shortId } from "@/lib/shortIds";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-tick-sources-"));
 const RESTORE = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
@@ -880,7 +881,7 @@ test.each([CONVERSATION, ["conversation", "5b7729fbc9e0f4c2"].join("_")])("a mer
   expect(decision.verdict.items[0]).toMatchObject({ kind: "event", id: "pipeline_z9" });
   expect(decision.verdict.items[0]!.label).toContain("publish the merge queue");
   expect(decision.verdict.items[0]!.label).toContain("#17");
-  expect(decision.verdict.items[0]!.label).toContain(head);
+  expect(decision.verdict.items[0]!.label).toContain(shortId(head));
   const landed = seatTickWakeCommit(decision.state, seatTickWakeCommitPlan(decision.verdict, {
     fingerprint: after.changeFingerprint, eventsThrough: 2,
   })!, mergedAt);

@@ -41,6 +41,24 @@ test("keyed reads retain multi-hop alias and old reservation evidence after reop
   registry.close();
 });
 
+test("an operation snapshot resolves its delivery by the owner index without unrelated history", () => {
+  const { registry: seedRegistry, delivery } = seed("operation-scope");
+  const state = seedRegistry.snapshot();
+  for (let i = 0; i < 500; i++) {
+    const id = `unrelated-operation-${i}`;
+    state.heldDeliveries[id] = { ...structuredClone(delivery), id, conversationId: `conversation_unrelated_${i}`,
+      command: { ...delivery.command, operationId: `unrelated-operation-key-${i}` } };
+  }
+  fs.writeFileSync(seedRegistry.filename, JSON.stringify(state));
+  const registry = new AgentRegistry(seedRegistry.filename, undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    const snapshot = registry.deliverySnapshotForOperation(delivery.command.operationId);
+    const owner = snapshot.deliveryOperationOwners[delivery.command.operationId]!;
+    expect(snapshot.heldDeliveries[owner.deliveryId]?.command.operationId).toBe(delivery.command.operationId);
+    expect(Object.keys(snapshot.heldDeliveries)).toEqual([owner.deliveryId]);
+  } finally { registry.close(); seedRegistry.close(); }
+});
+
 test("indexed selections observe in-transaction inserts, changes and deletions", () => {
   const { registry, conversation, delivery } = seed("transaction");
   const store = new SqliteAgentRegistryStore(path.join(root, "transaction.sqlite"), { initialSnapshot: registry.snapshot(), normalize: normalizeRegistry });

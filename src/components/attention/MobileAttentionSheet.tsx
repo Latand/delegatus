@@ -203,6 +203,7 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
       name="attention"
       title={title}
       onClose={onClose}
+      expandable
       /* Pinned above the sheet's scroller, its rows in their own band: the
          sheet is at most 88 % of the screen, so a 40 dvh band leaves the
          decisions under it about half of a full sheet. */

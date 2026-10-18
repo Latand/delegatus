@@ -1288,6 +1288,26 @@ test("creation validates the 1–8 stage conversation graph and optional roles",
   ] as never }, ports)).error).toContain("role only accepts roleId");
 });
 
+test("delivery rejectedHead accepts a unique commit prefix and refuses unknown or ambiguous prefixes", async () => {
+  const h = harness();
+  const request = { task: "Rejected head prefix", repoDir: "/repo", autoStart: false, publication: "internal", stages: [],
+    delivery: { branch: "refs/heads/main", rejectedHead: ORIGIN_MAIN_SHA.slice(0, 8) } };
+  const unique = await createPipelineFromRequest(request as never, h.ports, { allowOperatorDraftWithoutLineage: true });
+  expect(unique.pipeline?.delivery?.target.rejectedHead).toBe(ORIGIN_MAIN_SHA);
+  expect(h.calls.some(call => call.includes(`${ORIGIN_MAIN_SHA.slice(0, 8)}^{commit}`))).toBe(true);
+
+  const ambiguousPorts = { ...h.ports, exec: async (command: string, args: string[]) => args.includes(`${ORIGIN_MAIN_SHA.slice(0, 8)}^{commit}`)
+    ? { code: 1, stdout: "", stderr: "short object ID is ambiguous" } : h.ports.exec(command, args, "/repo") } as never;
+  const ambiguous = await createPipelineFromRequest(request as never, ambiguousPorts, { allowOperatorDraftWithoutLineage: true });
+  expect(ambiguous.pipeline).toBeUndefined();
+  expect(ambiguous.status).toBe(409);
+  const unknownPorts = { ...h.ports, exec: async (command: string, args: string[]) => args.includes(`${ORIGIN_MAIN_SHA.slice(0, 8)}^{commit}`)
+    ? { code: 1, stdout: "", stderr: "unknown revision" } : h.ports.exec(command, args, "/repo") } as never;
+  const unknown = await createPipelineFromRequest(request as never, unknownPorts, { allowOperatorDraftWithoutLineage: true });
+  expect(unknown.pipeline).toBeUndefined();
+  expect(unknown.status).toBe(400);
+});
+
 test("a merger stage resolves through production role lookup during pipeline normalization", async () => {
   const h = harness();
   savePipelines([]);

@@ -1,3 +1,4 @@
+import os from "node:os";
 import { POST as updatePost } from "@/app/api/self-update/update/route";
 import { POST as deployPost } from "@/app/api/runtime/deployments/route";
 import { ledgerDeployment } from "@/lib/runtime/deploymentLedger";
@@ -42,7 +43,7 @@ import type { LauncherRecord } from "./launcher";
  *   by the launcher's own request watcher.
  */
 
-const root = mkdtempSync("/var/tmp/self-update-routes-");
+const root = mkdtempSync(join(os.tmpdir(), "self-update-routes-"));
 const remote = join(root, "remote.git");
 const work = join(root, "work");
 const checkout = join(root, "checkout");
@@ -304,6 +305,13 @@ describe("managed install: an update is one Viewer deployment", () => {
       hostHealth: async () => ({ pid: 4242, startIdentity: "1", hostEpoch: 3, generation: { revision: hostRevision } }),
     }));
   }
+
+  test("managed installs refuse short revisions before runtime admission", async () => {
+    setSelfUpdateServiceForTests(managedService());
+    const response = await deployPost(post("/runtime/deployments", { revision: tipSha.slice(0, 9), idempotencyKey: "managed-short" }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "pass the full SHA or a ref" });
+  });
 
   test("check, deploy the exact revision, follow the phases to success", async () => {
     const service = managedService();
@@ -825,14 +833,14 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     } finally { h.service.stop(); }
   });
 
-  test("a checkout exact deploy is idempotent, applies once and settles its seat receipt", async () => {
+  test.each([40, 9])("a checkout exact deploy is idempotent, applies once and settles its seat receipt (%s characters)", async length => {
     const h = harness();
     const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
     record.launcher.relaunch = 1;
     writeFileSync(h.recordFile, JSON.stringify(record));
     h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
     h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
-    const body = { revision: tipSha, idempotencyKey: "checkout-exact-press" };
+    const body = { revision: tipSha.slice(0, length), idempotencyKey: "checkout-exact-press" };
     const response = await deployPost(post("/runtime/deployments", body));
     expect(response.status).toBe(202);
     const receipt = await response.json();

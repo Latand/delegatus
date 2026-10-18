@@ -2,9 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { appendBridgeReports, readBridgeReportLog, resolveBridgeAsks } from "@/lib/bridge/store";
+import { appendBridgeReports, readBridgeReportLog, readBridgeChannel, resolveBridgeAsks } from "@/lib/bridge/store";
 import { openBridgeAsks } from "@/lib/bridge/asks";
-import { reportCardRefs } from "@/lib/bridge/reportCardRefs";
 import { readProjectReportLog } from "@/lib/bridge/reportLog";
 import { bridgeQuestionsForProject } from "@/lib/bridge/service";
 import { parseMaintenanceReport } from "@/lib/boardMaintenance/text";
@@ -19,6 +18,8 @@ let stateRoot: string;
 beforeEach(() => {
   stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rule-reports-"));
   process.env.LLV_STATE_DIR = path.join(stateRoot, "state");
+  // Admit each collection before the synchronous report transaction starts.
+  readBridgeReportLog(); readBridgeChannel();
 });
 afterEach(() => {
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -41,11 +42,12 @@ test("rule 1: a resolved rule writes one completed row with card links and never
   expect(reports).toHaveLength(1);
   expect(reports[0]!.class).toBe("completed");
   expect(reports[0]!.body).toContain("#42");
-  expect(reportCardRefs(reports[0]!.body!, new Map([["aabbccdd", "task"]]))).toEqual([{ id: "aabbccdd", kind: "task" }]);
+  expect(reports[0]!.cards).toEqual(["aabbccdd"]);
+  expect(reports[0]!.body).not.toContain("aabbccdd");
   const ready = ruleReports({ ...base, pipelines: [{ ...lane, merge: undefined, closedAt: at }] });
   expect(ready).toHaveLength(1);
   expect(ready[0]).toMatchObject({ key: "rule:budget-ready:pipeline-fixed", class: "completed", at });
-  expect(reportCardRefs(ready[0]!.body!, new Map([["aabbccdd", "task"]]))).toEqual([{ id: "aabbccdd", kind: "task" }]);
+  expect(ready[0]!.cards).toEqual(["aabbccdd"]);
   appendBridgeReports(ready);
   expect(appendBridgeReports(ready).skipped).toBe(1);
   appendBridgeReports(reports);
@@ -110,7 +112,7 @@ for (const locale of ["uk", "en"] as const) {
     expect(page.questions.resolved).toEqual([{ seq: question.seq, at }]);
     expect(openBridgeAsks(readBridgeReportLog(), { now: new Date(at), canonicalConversationId: id => id }).size).toBe(0);
     const legacy = { ...question, origin: undefined };
-    expect(ruleReports({ ...input, bridgeLog: { ...input.bridgeLog, reports: [legacy] } })[0]!.body).toContain("aabbccdd");
+    expect(ruleReports({ ...input, bridgeLog: { ...input.bridgeLog, reports: [legacy] } })[0]!.cards).toEqual(["aabbccdd"]);
   });
 }
 
@@ -130,7 +132,7 @@ test("rule 5: routine maintenance goes to the report; a blocking choice retains 
   expect(log.leftAlone).toEqual([{ taskId: "aabbccdd", reason: "Daily digest completed" }]);
   expect(log.attention).toEqual([{ taskId: "ddeeffaa", text: "Choose a release window", options: ["weekend", "Monday"], nextStep: "schedule deployment" }]);
   const run = { runId: "maintenance-run", project: base.project, taskId: "maintenance-card", state: "succeeded", endedAt: at, log, counts: { tasks: 1 } } as MaintenanceRun;
-  expect(ruleReports({ ...base, maintenance: [run] })[0]).toMatchObject({ class: "completed", body: expect.stringContaining("aabbccdd: Daily digest completed") });
+  expect(ruleReports({ ...base, maintenance: [run] })[0]).toMatchObject({ class: "completed", body: expect.stringContaining("«Задача»: Daily digest completed") });
 });
 
 test("rule 1: seat-cleared waits are completed reports linked to their cards", () => {
@@ -145,6 +147,14 @@ test("rule 1: seat-cleared waits are completed reports linked to their cards", (
     bridgeLog: { reports: [{ seq: 7, project: base.project, body: "aabbccdd: select the release window" } as never],
       resolvedAsks: [{ seq: 7, at, by }, { seq: 8, at, by: { kind: "operator" } }] } });
   expect(reports).toHaveLength(4);
-  expect(reports.every(row => row.class === "completed" && row.body?.includes("aabbccdd"))).toBe(true);
+  expect(reports.every(row => row.class === "completed" && row.cards?.includes("aabbccdd"))).toBe(true);
   expect(ruleReports({ ...base, tasks: [task], dismissals: dismissals.map(row => ({ ...row, by: { kind: "operator", surface: "desktop" } })) })).toEqual([]);
+});
+
+test.each(["en", "uk"] as const)("rule reports speak titles and retain UUID card links separately (%s)", locale => {
+  const id = ["00000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const reports = ruleReports({ ...base, locale, tasks: [assignedTask(id, "conversation_worker")], deliveries: [{ ...delivery("failed"), conversationId: "conversation_worker" } as HeldDelivery] });
+  expect(reports[0]!.body).toContain("Assigned work");
+  expect(reports[0]!.body).not.toMatch(/[a-f0-9]{8}-[a-f0-9-]{27}/i);
+  expect(reports[0]!.cards).toEqual([id]);
 });

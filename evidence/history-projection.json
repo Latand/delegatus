@@ -1,0 +1,1583 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-18T05:12:04Z",
+  "baseCommit": "e4a86ff27da40a747b801f8f20cfd175ca638668",
+  "measuredSourceSha256": "a4f37b12e9c979c69b14a667b62c8f09110b526817a91e32eee8c4eb47059f7e",
+  "sourceFileSha256": {
+    "scripts/measure-history-deltas.ts": "43740fd064d0733db10f3b7d354bebbae96f92e62ae25a4ab99026d437b7febe",
+    "scripts/measure-history-projection.ts": "48be895d6e9726e05b91a831cd4d5515fe7b662cd555c8d1b2d967fa25dcd9b2",
+    "src/lib/agent/registry.ts": "ced51ad76cf6d8e80182acede5777b2a696d65f92b055dd5fc434a5bfcd5ed32",
+    "src/lib/lifecycle/liveness.test.ts": "485d1921dde93334d3105c270c495b9101fb2eb95940d150add753521e592c9f",
+    "src/lib/lifecycle/liveness.ts": "c0d9492262d0de7713914e5f170da4bcc022d0ddc8688a78db88f9ea99b81dd6",
+    "src/lib/mcp/bindings.ts": "8e84ec048a0ac1850fef83a668a50b88a023f6c1da1cc15b11b04ef85e3147a0",
+    "src/lib/mcp/curateRules.test.ts": "97b2dceff282396da8bc0d3f24d2d9b3919f51911de3966df2ed7a5910c9b739",
+    "src/lib/memory/curation/admission.ts": "74b9ae4a35b76b088a900a311e2c020704c36062f33b50b3d4456a84bd8164a0",
+    "src/lib/memory/curation/curation.test.ts": "b75a8e34821ce0390f3f01108fece115b7348326e008d4e3da68556b793195c4",
+    "src/lib/memory/curation/evalServer.fixture.ts": "45c1087520ce820aefa710c45a6fc22831abad214ebe111caa3b41eafbe65082",
+    "src/lib/memory/curation/read.ts": "ccd355c588504843c23a59d32f600e4fdb371f7e464bd2841853f2ea2f8526af",
+    "src/lib/memory/curation/reviewLessons.test.ts": "40a1b315e5d7ea1cbaa8f683b847f76ade70305d234a7ad6f476fcae9ddb7320",
+    "src/lib/state/historyProjection.test.ts": "9c69772f678e9fb142cf10582a82d2f990d7b04b8f8de3783cc17afbee429071",
+    "src/lib/state/historyProjection.ts": "24b6e078859acf9ee43e119b5adc45fb70c9a41442903780470f6eed9bc8f258",
+    "src/lib/state/hotStateStores.sqlite.test.ts": "7fc03817862035c24d6efe986291ef97ed1cb786491e98a58c20fe7545c5a215",
+    "src/lib/state/pipelineEvidenceIndex.ts": "adfecb6309684ad3e235aef6549e78d7ce4e857867c46ea0913648d8a9eaec2c",
+    "src/lib/viewerInstrumentation.ts": "a6380b54e9645ab5a1943829e4b8200561196f0755d021ad978342e8e0edca6d",
+    "src/lib/viewerLoopMonitor.ts": "3b2de4b962261816de70dbbf0ff6f23a14aff48fc62c6aa2738ee8648230523d",
+    "src/lib/flows/store.ts": "8cceab027095f37284e70a6cf475311f78a67f449c99beccce74bc71378aa764"
+  },
+  "runtime": {
+    "bun": "1.4.0",
+    "platform": "linux"
+  },
+  "data": {
+    "capturedAt": "2026-10-18T04:48:05.321Z",
+    "stateSha256": "c80c46b57b4bd9a5d3d4bb980c08fe7107224e469e749559e7a483076e7078a8",
+    "registrySha256": "62f03737666e934f11ebcd2f3fee3822e8cf2e279211df006ed3fce9dbcb9447"
+  },
+  "method": {
+    "freshProcessPairsPerOperation": 3,
+    "coldCallsPerProcess": 1,
+    "warmCallsPerProcess": 3,
+    "timerIntervalMs": 10,
+    "timeWindowNow": "2026-10-17T12:00:00.000Z",
+    "readBytes": "main-thread Linux rchar delta including counter-read overhead",
+    "mainThreadMs": "main-thread schedstat run counter delta; sub-millisecond calls can fall below update resolution",
+    "sourceSetup": "Each side and repetition starts from the same page-streamed read-only SQLite backups copied to a fresh private LLV_STATE_DIR.",
+    "livenessProbe": "Deterministic synthetic dead-owner probe for identical legacy/projected walk cost.",
+    "sourceFingerprint": "8c717586db21f9703382c097956f7fea6bf9e226bcaa1b7622aad056ca4a096f"
+  },
+  "statistics": {
+    "history": {
+      "legacy": {
+        "cold": {
+          "elapsedMs": {
+            "min": 1114.077911,
+            "median": 1198.472621,
+            "max": 1571.153352
+          },
+          "mainThreadMs": {
+            "min": 1110.300575,
+            "median": 1194.258049,
+            "max": 1564.584336
+          },
+          "readBytes": {
+            "min": 163151690,
+            "median": 163151766,
+            "max": 163151766
+          },
+          "decodedJsonBytes": {
+            "min": 155853818,
+            "median": 155853818,
+            "max": 155853818
+          },
+          "maxTimerGapMs": {
+            "min": 1107.0855999999999,
+            "median": 1191.353136,
+            "max": 1564.40059
+          }
+        },
+        "warm": {
+          "elapsedMs": {
+            "min": 934.8765160000003,
+            "median": 1145.9158980000002,
+            "max": 1691.147516
+          },
+          "mainThreadMs": {
+            "min": 930.027603,
+            "median": 1144.342875,
+            "max": 1657.809554
+          },
+          "readBytes": {
+            "min": 162578251,
+            "median": 162579226,
+            "max": 162579461
+          },
+          "decodedJsonBytes": {
+            "min": 155853818,
+            "median": 155853818,
+            "max": 155853818
+          },
+          "maxTimerGapMs": {
+            "min": 927.8577619999996,
+            "median": 1138.673465,
+            "max": 1687.0330460000005
+          }
+        }
+      },
+      "projection": {
+        "cold": {
+          "elapsedMs": {
+            "min": 11.85678900000039,
+            "median": 16.847875999999815,
+            "max": 18.896037999999862
+          },
+          "mainThreadMs": {
+            "min": 11.999845,
+            "median": 16.0403,
+            "max": 18.965146
+          },
+          "readBytes": {
+            "min": 6156294,
+            "median": 6156294,
+            "max": 6156294
+          },
+          "decodedJsonBytes": {
+            "min": 0,
+            "median": 0,
+            "max": 0
+          },
+          "maxTimerGapMs": {
+            "min": 1.9508930000001783,
+            "median": 7.006776000000173,
+            "max": 9.067971999999827
+          }
+        },
+        "warm": {
+          "elapsedMs": {
+            "min": 0.3993609999997716,
+            "median": 0.6395560000000842,
+            "max": 1.0698769999999058
+          },
+          "mainThreadMs": {
+            "min": 0,
+            "median": 0,
+            "max": 1.001819
+          },
+          "readBytes": {
+            "min": 156,
+            "median": 156,
+            "max": 12444
+          },
+          "decodedJsonBytes": {
+            "min": 0,
+            "median": 0,
+            "max": 0
+          },
+          "maxTimerGapMs": {
+            "min": 0.08586300000024494,
+            "median": 0.09551599999940663,
+            "max": 0.12065999999958876
+          }
+        },
+        "startupPreparation": {
+          "elapsedMs": {
+            "min": 4992.049535,
+            "median": 5191.208562,
+            "max": 5679.0972950000005
+          },
+          "mainThreadMs": {
+            "min": 3990.598244,
+            "median": 4138.27279,
+            "max": 4593.01902
+          },
+          "readBytes": {
+            "min": 502884695,
+            "median": 502884811,
+            "max": 502885113
+          },
+          "decodedJsonBytes": {
+            "min": 0,
+            "median": 0,
+            "max": 0
+          }
+        }
+      }
+    },
+    "admission": {
+      "legacy": {
+        "cold": {
+          "elapsedMs": {
+            "min": 680.0863490000002,
+            "median": 812.6129529999998,
+            "max": 816.2943270000001
+          },
+          "mainThreadMs": {
+            "min": 675.264876,
+            "median": 809.206248,
+            "max": 810.348769
+          },
+          "readBytes": {
+            "min": 805797302,
+            "median": 805797339,
+            "max": 805797340
+          },
+          "decodedJsonBytes": {
+            "min": 4714374,
+            "median": 4714374,
+            "max": 4714374
+          },
+          "maxTimerGapMs": {
+            "min": 673.6974,
+            "median": 803.3060919999999,
+            "max": 807.2984899999999
+          }
+        },
+        "warm": {
+          "elapsedMs": {
+            "min": 0.13730099999997947,
+            "median": 0.1738550000000032,
+            "max": 0.2415690000000268
+          },
+          "mainThreadMs": {
+            "min": 0,
+            "median": 0,
+            "max": 1.00051
+          },
+          "readBytes": {
+            "min": 152,
+            "median": 152,
+            "max": 152
+          },
+          "decodedJsonBytes": {
+            "min": 0,
+            "median": 0,
+            "max": 0
+          },
+          "maxTimerGapMs": {
+            "min": 0.07456200000001445,
+            "median": 0.08256100000016886,
+            "max": 0.16314600000009705
+          }
+        }
+      },
+      "projection": {
+        "cold": {
+          "elapsedMs": {
+            "min": 4.823060999999996,
+            "median": 5.551850999999999,
+            "max": 6.692350000000033
+          },
+          "mainThreadMs": {
+            "min": 4.998261,
+            "median": 5.999082,
+            "max": 7.00075
+          },
+          "readBytes": {
+            "min": 176388,
+            "median": 176388,
+            "max": 176389
+          },
+          "decodedJsonBytes": {
+            "min": 7960,
+            "median": 7960,
+            "max": 7960
+          },
+          "maxTimerGapMs": {
+            "min": 0.13446000000004688,
+            "median": 0.14386899999999514,
+            "max": 0.20697000000001253
+          }
+        },
+        "warm": {
+          "elapsedMs": {
+            "min": 1.522689000000014,
+            "median": 1.7742170000000215,
+            "max": 2.8496039999999994
+          },
+          "mainThreadMs": {
+            "min": 0.999935,
+            "median": 1.349503,
+            "max": 2.494249
+          },
+          "readBytes": {
+            "min": 4242,
+            "median": 4280,
+            "max": 4281
+          },
+          "decodedJsonBytes": {
+            "min": 1969,
+            "median": 1969,
+            "max": 1969
+          },
+          "maxTimerGapMs": {
+            "min": 0.07877100000001747,
+            "median": 0.08388600000000679,
+            "max": 0.10141299999997955
+          }
+        }
+      }
+    }
+  },
+  "measurements": {
+    "history": {
+      "legacy": [
+        {
+          "mode": "legacy",
+          "operation": "curator-counts-and-liveness-history",
+          "sourceRows": 1171,
+          "sourceBytes": 155853818,
+          "now": 1792238400000,
+          "startupPreparation": null,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 1198.472621,
+              "maxTimerGapMs": 1191.353136,
+              "mainThreadMs": 1194.258049,
+              "readBytes": 163151766,
+              "decodedJsonBytes": 155853818,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 1079.4935709999997,
+              "maxTimerGapMs": 1072.0012789999998,
+              "mainThreadMs": 1078.705134,
+              "readBytes": 162579187,
+              "decodedJsonBytes": 155853818,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 934.8765160000003,
+              "maxTimerGapMs": 927.8577619999996,
+              "mainThreadMs": 930.027603,
+              "readBytes": 162579382,
+              "decodedJsonBytes": 155853818,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 1161.8519150000002,
+              "maxTimerGapMs": 1159.5784800000001,
+              "mainThreadMs": 1160.898625,
+              "readBytes": 162578251,
+              "decodedJsonBytes": 155853818,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            }
+          ]
+        },
+        {
+          "mode": "legacy",
+          "operation": "curator-counts-and-liveness-history",
+          "sourceRows": 1171,
+          "sourceBytes": 155853818,
+          "now": 1792238400000,
+          "startupPreparation": null,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 1571.153352,
+              "maxTimerGapMs": 1564.40059,
+              "mainThreadMs": 1564.584336,
+              "readBytes": 163151690,
+              "decodedJsonBytes": 155853818,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 1127.184199,
+              "maxTimerGapMs": 1120.071225,
+              "mainThreadMs": 1124.224325,
+              "readBytes": 162579031,
+              "decodedJsonBytes": 155853818,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 1301.5681229999996,
+              "maxTimerGapMs": 1295.3082429999995,
+              "mainThreadMs": 1290.043034,
+              "readBytes": 162579304,
+              "decodedJsonBytes": 155853818,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 1691.147516,
+              "maxTimerGapMs": 1687.0330460000005,
+              "mainThreadMs": 1657.809554,
+              "readBytes": 162579461,
+              "decodedJsonBytes": 155853818,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            }
+          ]
+        },
+        {
+          "mode": "legacy",
+          "operation": "curator-counts-and-liveness-history",
+          "sourceRows": 1171,
+          "sourceBytes": 155853818,
+          "now": 1792238400000,
+          "startupPreparation": null,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 1114.077911,
+              "maxTimerGapMs": 1107.0855999999999,
+              "mainThreadMs": 1110.300575,
+              "readBytes": 163151766,
+              "decodedJsonBytes": 155853818,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 1145.9158980000002,
+              "maxTimerGapMs": 1138.673465,
+              "mainThreadMs": 1144.342875,
+              "readBytes": 162579226,
+              "decodedJsonBytes": 155853818,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 958.6041399999999,
+              "maxTimerGapMs": 951.6879279999998,
+              "mainThreadMs": 956.031133,
+              "readBytes": 162579304,
+              "decodedJsonBytes": 155853818,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 1200.0796040000005,
+              "maxTimerGapMs": 1199.481351,
+              "mainThreadMs": 1198.462383,
+              "readBytes": 162578251,
+              "decodedJsonBytes": 155853818,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            }
+          ]
+        }
+      ],
+      "projection": [
+        {
+          "mode": "projection",
+          "operation": "curator-counts-and-liveness-history",
+          "sourceRows": 1171,
+          "sourceBytes": 155853818,
+          "now": 1792238400000,
+          "startupPreparation": {
+            "elapsedMs": 5679.0972950000005,
+            "mainThreadMs": 4593.01902,
+            "readBytes": 502885113,
+            "decodedJsonBytes": 0
+          },
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 18.896037999999862,
+              "maxTimerGapMs": 9.067971999999827,
+              "mainThreadMs": 18.965146,
+              "readBytes": 6156294,
+              "decodedJsonBytes": 0,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 1.0698769999999058,
+              "maxTimerGapMs": 0.09631199999967066,
+              "mainThreadMs": 1.001819,
+              "readBytes": 12444,
+              "decodedJsonBytes": 0,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 0.7246450000002369,
+              "maxTimerGapMs": 0.09455100000013772,
+              "mainThreadMs": 0.18301,
+              "readBytes": 156,
+              "decodedJsonBytes": 0,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 0.6395560000000842,
+              "maxTimerGapMs": 0.09862000000066473,
+              "mainThreadMs": 0,
+              "readBytes": 156,
+              "decodedJsonBytes": 0,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            }
+          ]
+        },
+        {
+          "mode": "projection",
+          "operation": "curator-counts-and-liveness-history",
+          "sourceRows": 1171,
+          "sourceBytes": 155853818,
+          "now": 1792238400000,
+          "startupPreparation": {
+            "elapsedMs": 5191.208562,
+            "mainThreadMs": 4138.27279,
+            "readBytes": 502884811,
+            "decodedJsonBytes": 0
+          },
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 11.85678900000039,
+              "maxTimerGapMs": 1.9508930000001783,
+              "mainThreadMs": 11.999845,
+              "readBytes": 6156294,
+              "decodedJsonBytes": 0,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 0.4977710000002844,
+              "maxTimerGapMs": 0.10492100000010396,
+              "mainThreadMs": 0.480064,
+              "readBytes": 12444,
+              "decodedJsonBytes": 0,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 0.3993609999997716,
+              "maxTimerGapMs": 0.08656599999994796,
+              "mainThreadMs": 0,
+              "readBytes": 156,
+              "decodedJsonBytes": 0,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 0.6501390000003084,
+              "maxTimerGapMs": 0.12065999999958876,
+              "mainThreadMs": 0,
+              "readBytes": 156,
+              "decodedJsonBytes": 0,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            }
+          ]
+        },
+        {
+          "mode": "projection",
+          "operation": "curator-counts-and-liveness-history",
+          "sourceRows": 1171,
+          "sourceBytes": 155853818,
+          "now": 1792238400000,
+          "startupPreparation": {
+            "elapsedMs": 4992.049535,
+            "mainThreadMs": 3990.598244,
+            "readBytes": 502884695,
+            "decodedJsonBytes": 0
+          },
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 16.847875999999815,
+              "maxTimerGapMs": 7.006776000000173,
+              "mainThreadMs": 16.0403,
+              "readBytes": 6156294,
+              "decodedJsonBytes": 0,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 0.8048790000002555,
+              "maxTimerGapMs": 0.08586300000024494,
+              "mainThreadMs": 0.998092,
+              "readBytes": 12444,
+              "decodedJsonBytes": 0,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 0.4056299999992916,
+              "maxTimerGapMs": 0.09551599999940663,
+              "mainThreadMs": 0,
+              "readBytes": 156,
+              "decodedJsonBytes": 0,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 0.5745230000002266,
+              "maxTimerGapMs": 0.08847700000023906,
+              "mainThreadMs": 0,
+              "readBytes": 156,
+              "decodedJsonBytes": 0,
+              "count": 4113,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            }
+          ]
+        }
+      ]
+    },
+    "admission": {
+      "legacy": [
+        {
+          "mode": "legacy",
+          "operation": "curator-registry-admission",
+          "sourceRows": 53270,
+          "sourceBytes": 191385527,
+          "now": 1792238400000,
+          "startupPreparation": null,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 816.2943270000001,
+              "maxTimerGapMs": 807.2984899999999,
+              "mainThreadMs": 810.348769,
+              "readBytes": 805797340,
+              "decodedJsonBytes": 4714374,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 0.19487599999979466,
+              "maxTimerGapMs": 0.08500800000001618,
+              "mainThreadMs": 0,
+              "readBytes": 152,
+              "decodedJsonBytes": 0,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 0.1503860000000259,
+              "maxTimerGapMs": 0.16314600000009705,
+              "mainThreadMs": 0,
+              "readBytes": 152,
+              "decodedJsonBytes": 0,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 0.1373799999998937,
+              "maxTimerGapMs": 0.07678099999998267,
+              "mainThreadMs": 0,
+              "readBytes": 152,
+              "decodedJsonBytes": 0,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            }
+          ]
+        },
+        {
+          "mode": "legacy",
+          "operation": "curator-registry-admission",
+          "sourceRows": 53270,
+          "sourceBytes": 191385527,
+          "now": 1792238400000,
+          "startupPreparation": null,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 680.0863490000002,
+              "maxTimerGapMs": 673.6974,
+              "mainThreadMs": 675.264876,
+              "readBytes": 805797339,
+              "decodedJsonBytes": 4714374,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 0.20644500000003063,
+              "maxTimerGapMs": 0.08256100000016886,
+              "mainThreadMs": 0,
+              "readBytes": 152,
+              "decodedJsonBytes": 0,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 0.2415690000000268,
+              "maxTimerGapMs": 0.12248299999987466,
+              "mainThreadMs": 0,
+              "readBytes": 152,
+              "decodedJsonBytes": 0,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 0.1738550000000032,
+              "maxTimerGapMs": 0.08134800000016185,
+              "mainThreadMs": 0.288438,
+              "readBytes": 152,
+              "decodedJsonBytes": 0,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            }
+          ]
+        },
+        {
+          "mode": "legacy",
+          "operation": "curator-registry-admission",
+          "sourceRows": 53270,
+          "sourceBytes": 191385527,
+          "now": 1792238400000,
+          "startupPreparation": null,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 812.6129529999998,
+              "maxTimerGapMs": 803.3060919999999,
+              "mainThreadMs": 809.206248,
+              "readBytes": 805797302,
+              "decodedJsonBytes": 4714374,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 0.22798200000011093,
+              "maxTimerGapMs": 0.07456200000001445,
+              "mainThreadMs": 1.00051,
+              "readBytes": 152,
+              "decodedJsonBytes": 0,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 0.13730099999997947,
+              "maxTimerGapMs": 0.08739599999989878,
+              "mainThreadMs": 0,
+              "readBytes": 152,
+              "decodedJsonBytes": 0,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 0.15320999999994456,
+              "maxTimerGapMs": 0.08066299999995863,
+              "mainThreadMs": 0,
+              "readBytes": 152,
+              "decodedJsonBytes": 0,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            }
+          ]
+        }
+      ],
+      "projection": [
+        {
+          "mode": "projection",
+          "operation": "curator-registry-admission",
+          "sourceRows": 53270,
+          "sourceBytes": 191385527,
+          "now": 1792238400000,
+          "startupPreparation": null,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 4.823060999999996,
+              "maxTimerGapMs": 0.14386899999999514,
+              "mainThreadMs": 4.998261,
+              "readBytes": 176388,
+              "decodedJsonBytes": 7960,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 1.7742170000000215,
+              "maxTimerGapMs": 0.08388600000000679,
+              "mainThreadMs": 1.349503,
+              "readBytes": 4280,
+              "decodedJsonBytes": 1969,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 1.6660640000000058,
+              "maxTimerGapMs": 0.09608199999996714,
+              "mainThreadMs": 1.000646,
+              "readBytes": 4242,
+              "decodedJsonBytes": 1969,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 2.0417509999999766,
+              "maxTimerGapMs": 0.09237699999999904,
+              "mainThreadMs": 1.893314,
+              "readBytes": 4280,
+              "decodedJsonBytes": 1969,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            }
+          ]
+        },
+        {
+          "mode": "projection",
+          "operation": "curator-registry-admission",
+          "sourceRows": 53270,
+          "sourceBytes": 191385527,
+          "now": 1792238400000,
+          "startupPreparation": null,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 6.692350000000033,
+              "maxTimerGapMs": 0.13446000000004688,
+              "mainThreadMs": 7.00075,
+              "readBytes": 176389,
+              "decodedJsonBytes": 7960,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 1.9697390000000041,
+              "maxTimerGapMs": 0.08308499999998276,
+              "mainThreadMs": 2.000554,
+              "readBytes": 4281,
+              "decodedJsonBytes": 1969,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 2.4864310000000387,
+              "maxTimerGapMs": 0.08605499999998756,
+              "mainThreadMs": 2.319921,
+              "readBytes": 4243,
+              "decodedJsonBytes": 1969,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 2.8496039999999994,
+              "maxTimerGapMs": 0.10141299999997955,
+              "mainThreadMs": 2.494249,
+              "readBytes": 4281,
+              "decodedJsonBytes": 1969,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            }
+          ]
+        },
+        {
+          "mode": "projection",
+          "operation": "curator-registry-admission",
+          "sourceRows": 53270,
+          "sourceBytes": 191385527,
+          "now": 1792238400000,
+          "startupPreparation": null,
+          "measurements": [
+            {
+              "repeat": 0,
+              "cold": true,
+              "elapsedMs": 5.551850999999999,
+              "maxTimerGapMs": 0.20697000000001253,
+              "mainThreadMs": 5.999082,
+              "readBytes": 176388,
+              "decodedJsonBytes": 7960,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 1,
+              "cold": false,
+              "elapsedMs": 1.522689000000014,
+              "maxTimerGapMs": 0.07982000000004064,
+              "mainThreadMs": 1.000732,
+              "readBytes": 4280,
+              "decodedJsonBytes": 1969,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 2,
+              "cold": false,
+              "elapsedMs": 1.6305919999999787,
+              "maxTimerGapMs": 0.07877100000001747,
+              "mainThreadMs": 0.999935,
+              "readBytes": 4242,
+              "decodedJsonBytes": 1969,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            },
+            {
+              "repeat": 3,
+              "cold": false,
+              "elapsedMs": 1.597566000000029,
+              "maxTimerGapMs": 0.0837099999999964,
+              "mainThreadMs": 1.228057,
+              "readBytes": 4280,
+              "decodedJsonBytes": 1969,
+              "count": 1,
+              "headlessRounds": 0,
+              "headlessPaths": 0
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "validation": {
+    "typecheck": {
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit"
+      ],
+      "runner": "bash scripts/gate-slot.sh",
+      "isolated": [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "LLV_STATE_DIR",
+        "TMPDIR"
+      ],
+      "exitCode": 0
+    },
+    "eslint": {
+      "command": [
+        "bun",
+        "scripts/eslint-changes.ts",
+        "--base",
+        "origin/main"
+      ],
+      "introducedErrors": 0
+    },
+    "touchedTests": {
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "5b6e82b5ce95ccd614b0d31aae28479190e9f423",
+        "./src/lib/mcp/curateRules.test.ts",
+        "./src/lib/memory/curation/curation.test.ts",
+        "./src/lib/memory/curation/reviewLessons.test.ts",
+        "./src/lib/state/historyProjection.test.ts",
+        "./src/lib/state/hotStateStores.sqlite.test.ts",
+        "./src/lib/agent/registry.backendResolution.test.ts",
+        "./src/lib/agent/registry.sqlite.test.ts",
+        "./src/lib/agent/registry.targetedHistory.test.ts",
+        "./src/lib/agent/registry.projectOwnership.test.ts",
+        "./src/lib/agent/registry.reseat.test.ts",
+        "./src/lib/agent/registry.deliveryCompaction.test.ts",
+        "./src/lib/agent/registry.writerWait.test.ts",
+        "./src/lib/agent/registry.engineNative.test.ts",
+        "./src/lib/agent/registry.sqliteOnly.test.ts",
+        "./src/lib/agent/registry.migrationBinding.test.ts",
+        "./src/lib/agent/registry.spawnCapabilityHandover.test.ts",
+        "./src/lib/agent/registry.test.ts",
+        "./src/lib/agent/registry.deliveryRead.test.ts",
+        "./src/lib/agent/registry.admission.test.ts",
+        "./src/lib/lifecycle/liveness.activity.test.ts",
+        "./src/lib/lifecycle/liveness.test.ts",
+        "./src/lib/mcp/bindings.test.ts",
+        "./src/lib/state/pipelineEvidenceIndex.test.ts",
+        "./src/lib/viewerInstrumentation.test.ts",
+        "./src/lib/viewerLoopMonitor.test.ts",
+        "./src/instrumentation.test.ts",
+        "./src/lib/state/legacyCollections.test.ts",
+        "./src/lib/mcp/agentFleet.binding.test.ts",
+        "./src/lib/mcp/relayServiceTools.test.ts",
+        "./src/lib/mcp/callCost.test.ts",
+        "./src/lib/mcp/schemaParity.test.ts",
+        "./src/lib/mcp/server.test.ts"
+      ],
+      "runner": "bash scripts/gate-slot.sh",
+      "isolated": [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "LLV_STATE_DIR",
+        "TMPDIR"
+      ],
+      "fileCount": 32,
+      "headElapsedMs": 53031,
+      "baselineElapsedMs": 7876,
+      "flakyConfirmationElapsedMs": 7855,
+      "newFailures": 0,
+      "preExistingFailures": 6,
+      "fixed": 0,
+      "removedOrSkipped": 0,
+      "flaky": 1,
+      "result": "passed",
+      "knownOutcomes": [
+        {
+          "classification": "FLAKY",
+          "file": "src/lib/mcp/bindings.test.ts",
+          "test": "task placement bindings require atomic guards and classify field refusals as non-retryable (base 4 pass/0 fail; head 3 pass/1 fail)"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/agent/registry.spawnCapabilityHandover.test.ts",
+          "test": "off: rollback publication without a pending capability revokes predecessor HTTP identity only at commit"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/agent/registry.spawnCapabilityHandover.test.ts",
+          "test": "sqlite: rollback publication without a pending capability revokes predecessor HTTP identity only at commit"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/agent/registry.sqlite.test.ts",
+          "test": "production-sized read burn-in checkpoints the current cached snapshot without reloading history"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/mcp/agentFleet.binding.test.ts",
+          "test": "fleet reads do not materialize archived registry history on initial or repeated reads"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/mcp/agentFleet.binding.test.ts",
+          "test": "partial inventory and pending evidence are declared and an injected source cannot widen a project"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/state/hotStateStores.sqlite.test.ts",
+          "test": "bounded change retention forces a stale reader through a full reload"
+        },
+        {
+          "classification": "PRE-EXISTING",
+          "file": "src/lib/state/pipelineEvidenceIndex.test.ts",
+          "test": "a contended synchronous initialization refuses promptly, records its wait, and retries intact"
+        }
+      ],
+      "baseCommit": "5b6e82b5ce95ccd614b0d31aae28479190e9f423",
+      "reviewedHead": "f96c504b5eee21b4ab073b20de617b2736025676 (working tree)"
+    }
+  },
+  "mainRecheck": {
+    "commit": "6ee376c28b7682ac604b0fb3b20eb887db31d4c6",
+    "change": "relay tools integrated; subsequent task-index readiness diff reviewed; other main changes concern form delivery; no task readiness/index changes made by this branch"
+  },
+  "refreshMeasurements": {
+    "generatedAt": "2026-10-18T05:50:24Z",
+    "sourceBackup": {
+      "backupBytes": 210534400,
+      "backupSha256": "c80c46b57b4bd9a5d3d4bb980c08fe7107224e469e749559e7a483076e7078a8",
+      "registryBackupBytes": 568418304,
+      "registryBackupSha256": "62f03737666e934f11ebcd2f3fee3822e8cf2e279211df006ed3fce9dbcb9447"
+    },
+    "preparedTemplateSha256": "6ee92279256c9930ef0bd382045bffb251814e01affed700d01c71613578ecb8",
+    "method": {
+      "freshProcessPairsPerOperation": 3,
+      "isolatedCopyPerProcess": true,
+      "readBytes": "Linux main-thread rchar delta",
+      "mainThreadMs": "Linux main-thread schedstat run delta",
+      "windowNow": "2026-10-17T12:00:00.000Z",
+      "livenessFixture": "1000 synthetic accepted headless rounds in the private template; projected liveness removes dead rounds from the active walk and retains path-indexed proof.",
+      "sourceFingerprint": "75a0efb65ca7fda8548e7d00511976972c91bd9b80deb464503d9e182df3bfbe"
+    },
+    "source": {
+      "rows": 1171,
+      "jsonBytes": 155853818
+    },
+    "template": {
+      "rows": 1172,
+      "jsonBytes": 155989951,
+      "sha256": "6ee92279256c9930ef0bd382045bffb251814e01affed700d01c71613578ecb8"
+    },
+    "operations": {
+      "update": {
+        "sourceRows": 1172,
+        "sourceJsonBytes": 155989951,
+        "sourceSha256": "6ee92279256c9930ef0bd382045bffb251814e01affed700d01c71613578ecb8",
+        "samples": [
+          {
+            "repetition": 1,
+            "before": {
+              "result": 4113,
+              "elapsedMs": 1254.107425,
+              "mainThreadMs": 1189.672171,
+              "readBytes": 469247888,
+              "decodedJsonBytes": 155853795,
+              "maxTimerGapMs": 1255.7622000000001
+            },
+            "now": "2026-10-17T12:00:00.000Z",
+            "after": {
+              "result": 4113,
+              "elapsedMs": 28.956815000000006,
+              "mainThreadMs": 20.688614,
+              "readBytes": 540934,
+              "decodedJsonBytes": 0,
+              "maxTimerGapMs": 16.91192500000011
+            },
+            "resultCount": 4113,
+            "transitionedRows": 1
+          },
+          {
+            "repetition": 2,
+            "before": {
+              "result": 4113,
+              "elapsedMs": 1167.8767,
+              "mainThreadMs": 1155.222895,
+              "readBytes": 469247937,
+              "decodedJsonBytes": 155853795,
+              "maxTimerGapMs": 1162.330618
+            },
+            "now": "2026-10-17T12:00:00.000Z",
+            "after": {
+              "result": 4113,
+              "elapsedMs": 16.107893999999987,
+              "mainThreadMs": 14.91819,
+              "readBytes": 540818,
+              "decodedJsonBytes": 0,
+              "maxTimerGapMs": 3.6294789999999466
+            },
+            "resultCount": 4113,
+            "transitionedRows": 1
+          },
+          {
+            "repetition": 3,
+            "before": {
+              "result": 4113,
+              "elapsedMs": 1083.331026,
+              "mainThreadMs": 1063.837481,
+              "readBytes": 469247892,
+              "decodedJsonBytes": 155853795,
+              "maxTimerGapMs": 1077.3032640000001
+            },
+            "now": "2026-10-17T12:00:00.000Z",
+            "after": {
+              "result": 4113,
+              "elapsedMs": 35.360410999999885,
+              "mainThreadMs": 13.087032,
+              "readBytes": 540816,
+              "decodedJsonBytes": 0,
+              "maxTimerGapMs": 22.932497000000012
+            },
+            "resultCount": 4113,
+            "transitionedRows": 1
+          }
+        ]
+      },
+      "expiry": {
+        "sourceRows": 1172,
+        "sourceJsonBytes": 155989951,
+        "sourceSha256": "6ee92279256c9930ef0bd382045bffb251814e01affed700d01c71613578ecb8",
+        "samples": [
+          {
+            "repetition": 1,
+            "before": {
+              "result": 4214,
+              "elapsedMs": 925.8333590000001,
+              "mainThreadMs": 918.703785,
+              "readBytes": 469493718,
+              "decodedJsonBytes": 155853818,
+              "maxTimerGapMs": 918.9028699999999
+            },
+            "now": "2026-10-31T18:43:36.822Z",
+            "after": {
+              "result": 4214,
+              "elapsedMs": 1.4358190000000377,
+              "mainThreadMs": 0.999577,
+              "readBytes": 250049,
+              "decodedJsonBytes": 0,
+              "maxTimerGapMs": 0.09048600000005536
+            },
+            "resultCount": 4214,
+            "transitionedRows": 1
+          },
+          {
+            "repetition": 2,
+            "before": {
+              "result": 4214,
+              "elapsedMs": 791.29073,
+              "mainThreadMs": 789.972654,
+              "readBytes": 469493689,
+              "decodedJsonBytes": 155853818,
+              "maxTimerGapMs": 785.390156
+            },
+            "now": "2026-10-31T18:43:36.822Z",
+            "after": {
+              "result": 4214,
+              "elapsedMs": 3.1834939999998824,
+              "mainThreadMs": 2.893912,
+              "readBytes": 250088,
+              "decodedJsonBytes": 0,
+              "maxTimerGapMs": 0.08750899999995454
+            },
+            "resultCount": 4214,
+            "transitionedRows": 1
+          },
+          {
+            "repetition": 3,
+            "before": {
+              "result": 4214,
+              "elapsedMs": 1058.351786,
+              "mainThreadMs": 1029.091108,
+              "readBytes": 469493766,
+              "decodedJsonBytes": 155853818,
+              "maxTimerGapMs": 1051.634384
+            },
+            "now": "2026-10-31T18:43:36.822Z",
+            "after": {
+              "result": 4214,
+              "elapsedMs": 2.3790959999998904,
+              "mainThreadMs": 3.002023,
+              "readBytes": 250049,
+              "decodedJsonBytes": 0,
+              "maxTimerGapMs": 0.08707099999992352
+            },
+            "resultCount": 4214,
+            "transitionedRows": 1
+          }
+        ]
+      },
+      "liveness": {
+        "sourceRows": 1172,
+        "sourceJsonBytes": 155989951,
+        "sourceSha256": "6ee92279256c9930ef0bd382045bffb251814e01affed700d01c71613578ecb8",
+        "samples": [
+          {
+            "repetition": 1,
+            "before": {
+              "result": {
+                "roundRows": 1000,
+                "paths": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 3.7298809999999776,
+              "mainThreadMs": 4.291177,
+              "readBytes": 143926,
+              "decodedJsonBytes": 136133,
+              "maxTimerGapMs": 0.1664599999999723,
+              "pidProbes": 1000,
+              "identityProbes": 0
+            },
+            "now": "2026-10-17T12:00:00.000Z",
+            "afterFirst": {
+              "result": {
+                "roundRows": 1000,
+                "paths": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 2.898282999999992,
+              "mainThreadMs": 2.952001,
+              "readBytes": 186,
+              "decodedJsonBytes": 0,
+              "maxTimerGapMs": 1.4830100000000357,
+              "pidProbes": 0,
+              "identityProbes": 0
+            },
+            "after": {
+              "result": {
+                "roundRows": 0,
+                "paths": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 0.8207590000000096,
+              "mainThreadMs": 1.001317,
+              "readBytes": 148,
+              "decodedJsonBytes": 0,
+              "maxTimerGapMs": 0.07666500000004817,
+              "pidProbes": 0,
+              "identityProbes": 0
+            },
+            "beforeRounds": 1000,
+            "beforePidProbes": 1000,
+            "firstAfterRounds": 1000,
+            "firstAfterPidProbes": 0,
+            "afterRounds": 0,
+            "afterPidProbes": 0,
+            "targetedDeadProofs": 1,
+            "pathCount": 0
+          },
+          {
+            "repetition": 2,
+            "before": {
+              "result": {
+                "roundRows": 1000,
+                "paths": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 8.223951999999997,
+              "mainThreadMs": 8.635842,
+              "readBytes": 143927,
+              "decodedJsonBytes": 136133,
+              "maxTimerGapMs": 2.11289000000005,
+              "pidProbes": 1000,
+              "identityProbes": 0
+            },
+            "now": "2026-10-17T12:00:00.000Z",
+            "afterFirst": {
+              "result": {
+                "roundRows": 1000,
+                "paths": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 4.447386999999935,
+              "mainThreadMs": 5.001785,
+              "readBytes": 187,
+              "decodedJsonBytes": 0,
+              "maxTimerGapMs": 0.08126700000002529,
+              "pidProbes": 0,
+              "identityProbes": 0
+            },
+            "after": {
+              "result": {
+                "roundRows": 0,
+                "paths": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 0.965043000000037,
+              "mainThreadMs": 0.782779,
+              "readBytes": 149,
+              "decodedJsonBytes": 0,
+              "maxTimerGapMs": 0.08700099999998656,
+              "pidProbes": 0,
+              "identityProbes": 0
+            },
+            "beforeRounds": 1000,
+            "beforePidProbes": 1000,
+            "firstAfterRounds": 1000,
+            "firstAfterPidProbes": 0,
+            "afterRounds": 0,
+            "afterPidProbes": 0,
+            "targetedDeadProofs": 1,
+            "pathCount": 0
+          },
+          {
+            "repetition": 3,
+            "before": {
+              "result": {
+                "roundRows": 1000,
+                "paths": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 4.683669000000009,
+              "mainThreadMs": 4.998704,
+              "readBytes": 143927,
+              "decodedJsonBytes": 136133,
+              "maxTimerGapMs": 0.14977400000003627,
+              "pidProbes": 1000,
+              "identityProbes": 0
+            },
+            "now": "2026-10-17T12:00:00.000Z",
+            "afterFirst": {
+              "result": {
+                "roundRows": 1000,
+                "paths": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 2.7429650000000265,
+              "mainThreadMs": 2.845744,
+              "readBytes": 187,
+              "decodedJsonBytes": 0,
+              "maxTimerGapMs": 0.08043299999997089,
+              "pidProbes": 0,
+              "identityProbes": 0
+            },
+            "after": {
+              "result": {
+                "roundRows": 0,
+                "paths": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 1.009416999999985,
+              "mainThreadMs": 0.9998,
+              "readBytes": 149,
+              "decodedJsonBytes": 0,
+              "maxTimerGapMs": 0.08207400000003418,
+              "pidProbes": 0,
+              "identityProbes": 0
+            },
+            "beforeRounds": 1000,
+            "beforePidProbes": 1000,
+            "firstAfterRounds": 1000,
+            "firstAfterPidProbes": 0,
+            "afterRounds": 0,
+            "afterPidProbes": 0,
+            "targetedDeadProofs": 1,
+            "pathCount": 0
+          }
+        ]
+      },
+      "flow-refresh": {
+        "sourceRows": 1,
+        "sourceJsonBytes": 1175,
+        "sourceSha256": "d9f0e724e2f371fc06fd419157d18e5a98015d0000edbb0621ee810bef120ccd",
+        "syntheticDeadRounds": 3000,
+        "method": "Three sequential matched pairs in one fresh process and one isolated on-disk SQLite copy. Before emulates the former whole dead-owner filter/index/serialization path; after calls the production reader. One empty unrelated flow is added for each pair.",
+        "samples": [
+          {
+            "repetition": 1,
+            "before": {
+              "result": {
+                "rounds": 0,
+                "deadProofs": 1,
+                "indexedPaths": 3000,
+                "bytes": 608673
+              },
+              "elapsedMs": 1.854723000000007,
+              "mainThreadMs": 2.000278,
+              "readBytes": 4267
+            },
+            "after": {
+              "result": {
+                "rounds": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 2.9228410000000054,
+              "mainThreadMs": 1.863512,
+              "readBytes": 65708
+            }
+          },
+          {
+            "repetition": 2,
+            "before": {
+              "result": {
+                "rounds": 0,
+                "deadProofs": 1,
+                "indexedPaths": 3000,
+                "bytes": 608673
+              },
+              "elapsedMs": 1.559490000000011,
+              "mainThreadMs": 0.910044,
+              "readBytes": 4230
+            },
+            "after": {
+              "result": {
+                "rounds": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 1.3248210000000142,
+              "mainThreadMs": 0.956156,
+              "readBytes": 65708
+            }
+          },
+          {
+            "repetition": 3,
+            "before": {
+              "result": {
+                "rounds": 0,
+                "deadProofs": 1,
+                "indexedPaths": 3000,
+                "bytes": 608673
+              },
+              "elapsedMs": 1.2018830000000094,
+              "mainThreadMs": 1.000343,
+              "readBytes": 4230
+            },
+            "after": {
+              "result": {
+                "rounds": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 1.7927869999999757,
+              "mainThreadMs": 1.38136,
+              "readBytes": 65708
+            }
+          }
+        ],
+        "result": {
+          "rounds": 0,
+          "deadProofs": 1
+        }
+      }
+    }
+  }
+}

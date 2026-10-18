@@ -1,0 +1,535 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-10-17T11:22:56.295729+00:00",
+  "base": "8bcb1e41632533a7d568d9a11a5c9a03c333504f",
+  "sourceFiles": [
+    "docs/design/relay.md",
+    "scripts/relay-switch.ts",
+    "src/app/api/external-relay/conversations/route.test.ts",
+    "src/components/externalRelay/RelayChats.dom.test.tsx",
+    "src/components/externalRelay/RelayChats.tsx",
+    "src/components/kanban/issue1695Evidence.fixture.tsx",
+    "src/components/kanban/kanbanBoard.browser.test.tsx",
+    "src/components/mobile/issue1671Evidence.browser.test.tsx",
+    "src/components/mobile/issue1671Evidence.fixture.tsx",
+    "src/lib/externalRelay/answers.ts",
+    "src/lib/externalRelay/compact.ts",
+    "src/lib/externalRelay/conversationView.ts",
+    "src/lib/externalRelay/conversations.test.ts",
+    "src/lib/externalRelay/conversations.ts",
+    "src/lib/externalRelay/hold.runner.test.ts",
+    "src/lib/externalRelay/ownerRun.ts",
+    "src/lib/externalRelay/ownerTier.test.ts",
+    "src/lib/externalRelay/poller.test.ts",
+    "src/lib/externalRelay/poller.ts",
+    "src/lib/externalRelay/prompt.test.ts",
+    "src/lib/externalRelay/prompt.ts",
+    "src/lib/externalRelay/relayChats.ts",
+    "src/lib/externalRelay/runner.test.ts",
+    "src/lib/externalRelay/runner.ts",
+    "src/lib/externalRelay/slice3Runner.test.ts",
+    "src/lib/externalRelay/store.ts",
+    "src/lib/externalRelay/switches.test.ts",
+    "src/lib/externalRelay/switches.ts",
+    "src/lib/i18n/en.ts",
+    "src/lib/i18n/uk.ts",
+    "src/lib/stateOwnership.entryPoints.test.ts",
+    "src/lib/viewerLoopMonitor.ts"
+  ],
+  "sourceDigestSha256": "31efe75893266a7aeb5d0cab1587446122659c6f918ddfe8261c959c25675608",
+  "runtime": "Bun 1.4.0",
+  "procedure": {
+    "isolation": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "controlUrl": "http://127.0.0.1:1",
+    "admission": "scripts/gate-slot.sh",
+    "latencyTests": [
+      "bun test src/lib/externalRelay/runner.test.ts --test-name-pattern \"continued owner latency\"",
+      "bun test src/lib/externalRelay/slice3Runner.test.ts --test-name-pattern \"engine-session latency\""
+    ],
+    "metric": "Runner invocation through accepted answer completion on identical synthetic input. Alternating fresh/continued order, five samples each. Immediate fake and identical per-byte SHA256 work; no real-model speed claim.",
+    "mapTest": "bun test src/lib/externalRelay/conversations.test.ts --test-name-pattern \"measure conversation map\""
+  },
+  "latency": [
+    {
+      "engine": "SHA256 0 passes per prompt; alternating pair order",
+      "load": [
+        7.42,
+        7.31,
+        8.27
+      ],
+      "samples": [
+        {
+          "mode": "fresh",
+          "promptBytes": 19176,
+          "deliveredMs": 1.7044049999967683,
+          "answerMs": 4.751259999989998
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1142,
+          "deliveredMs": 4.9253350000071805,
+          "answerMs": 9.329089999984717
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1142,
+          "deliveredMs": 5.079815000004601,
+          "answerMs": 9.764173000003211
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 19176,
+          "deliveredMs": 2.6979879999998957,
+          "answerMs": 6.77467099999194
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 19176,
+          "deliveredMs": 2.721653000015067,
+          "answerMs": 6.669206999999005
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1142,
+          "deliveredMs": 5.014309999998659,
+          "answerMs": 9.712446000019554
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1142,
+          "deliveredMs": 5.212862999993376,
+          "answerMs": 9.716084999992745
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 19176,
+          "deliveredMs": 2.5507890000008047,
+          "answerMs": 6.274550000001909
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 19176,
+          "deliveredMs": 2.6277100000006612,
+          "answerMs": 6.658594000007724
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1142,
+          "deliveredMs": 5.147885000013048,
+          "answerMs": 9.65724600001704
+        }
+      ],
+      "medians": {
+        "freshMs": 6.658594000007724,
+        "continuedMs": 9.712446000019554
+      },
+      "runsPerMode": 5,
+      "interquartileRangesMs": {
+        "fresh": 0.39465699999709614,
+        "continued": 0.05883899997570552
+      }
+    },
+    {
+      "engine": "SHA256 10000 passes per prompt; alternating pair order",
+      "load": [
+        7.23,
+        7.27,
+        8.25
+      ],
+      "samples": [
+        {
+          "mode": "fresh",
+          "promptBytes": 19176,
+          "deliveredMs": 142.1465250000183,
+          "answerMs": 148.26264100000844
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1142,
+          "deliveredMs": 12.537321000010706,
+          "answerMs": 15.87322999999742
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1142,
+          "deliveredMs": 15.875065000000177,
+          "answerMs": 18.681494999997085
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 19176,
+          "deliveredMs": 133.48455500000273,
+          "answerMs": 136.60782400000608
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 19176,
+          "deliveredMs": 120.30281900000409,
+          "answerMs": 123.25330500002019
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1142,
+          "deliveredMs": 14.584823999990476,
+          "answerMs": 17.758854999992764
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1142,
+          "deliveredMs": 15.446595000015805,
+          "answerMs": 18.389495000010356
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 19176,
+          "deliveredMs": 133.75282799999695,
+          "answerMs": 137.63901099999202
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 19176,
+          "deliveredMs": 150.04768500002683,
+          "answerMs": 152.88453600002686
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1142,
+          "deliveredMs": 14.040561000001617,
+          "answerMs": 17.0881759999902
+        }
+      ],
+      "medians": {
+        "freshMs": 137.63901099999202,
+        "continuedMs": 17.758854999992764
+      },
+      "runsPerMode": 5,
+      "interquartileRangesMs": {
+        "fresh": 11.654817000002367,
+        "continued": 1.3013190000201575
+      }
+    },
+    {
+      "engine": "Claude CLI fixture; SHA256 0 passes per prompt; alternating pair order",
+      "load": [
+        7.23,
+        7.27,
+        8.25
+      ],
+      "samples": [
+        {
+          "mode": "fresh",
+          "promptBytes": 16781,
+          "answerMs": 38.10882000000015
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1506,
+          "answerMs": 43.536219000000074
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1506,
+          "answerMs": 39.57063700000003
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 16781,
+          "answerMs": 39.01074199999994
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 16781,
+          "answerMs": 39.323156000000154
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1506,
+          "answerMs": 33.66930400000001
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1506,
+          "answerMs": 36.96229399999993
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 16781,
+          "answerMs": 38.62451200000032
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 16781,
+          "answerMs": 42.50539099999969
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1506,
+          "answerMs": 34.505257000000256
+        }
+      ],
+      "medians": {
+        "freshMs": 39.01074199999994,
+        "continuedMs": 36.96229399999993
+      },
+      "runsPerMode": 5,
+      "interquartileRangesMs": {
+        "fresh": 0.6986439999998311,
+        "continued": 5.065379999999777
+      }
+    },
+    {
+      "engine": "Claude CLI fixture; SHA256 10000 passes per prompt; alternating pair order",
+      "load": [
+        7.29,
+        7.28,
+        8.25
+      ],
+      "samples": [
+        {
+          "mode": "fresh",
+          "promptBytes": 16781,
+          "answerMs": 143.3132169999999
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1506,
+          "answerMs": 58.25346300000001
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1506,
+          "answerMs": 59.40287799999987
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 16781,
+          "answerMs": 139.04143999999997
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 16781,
+          "answerMs": 141.4759939999999
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1506,
+          "answerMs": 53.93264999999974
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1506,
+          "answerMs": 72.21818200000007
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 16781,
+          "answerMs": 152.37631200000033
+        },
+        {
+          "mode": "fresh",
+          "promptBytes": 16781,
+          "answerMs": 139.99561300000005
+        },
+        {
+          "mode": "continued",
+          "promptBytes": 1506,
+          "answerMs": 62.06793400000015
+        }
+      ],
+      "medians": {
+        "freshMs": 141.4759939999999,
+        "continuedMs": 59.40287799999987
+      },
+      "runsPerMode": 5,
+      "interquartileRangesMs": {
+        "fresh": 3.3176039999998466,
+        "continued": 3.8144710000001396
+      }
+    }
+  ],
+  "mapParsing": [
+    {
+      "records": 70,
+      "bytes": 845065,
+      "readParseValidateMs": [
+        1.8781529999999975,
+        1.909798999999964,
+        5.418222999999955,
+        1.658331999999973,
+        1.1966249999999832
+      ]
+    },
+    {
+      "records": 300,
+      "bytes": 3621625,
+      "readParseValidateMs": [
+        4.713184999999953,
+        7.70553000000001,
+        5.5014659999999935,
+        9.533268000000021,
+        7.130380000000002
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "check": "src/app/api/external-relay/conversations/route.test.ts",
+      "exitCode": 0,
+      "elapsedSeconds": 0.67
+    },
+    {
+      "check": "src/components/externalRelay/RelayChats.dom.test.tsx",
+      "exitCode": 0,
+      "elapsedSeconds": 6.63
+    },
+    {
+      "check": "src/lib/externalRelay/conversations.test.ts",
+      "exitCode": 0,
+      "elapsedSeconds": 2.77
+    },
+    {
+      "check": "src/lib/externalRelay/hold.runner.test.ts",
+      "exitCode": 0,
+      "elapsedSeconds": 67.45
+    },
+    {
+      "check": "src/lib/externalRelay/ownerTier.test.ts",
+      "exitCode": 1,
+      "elapsedSeconds": 2.4
+    },
+    {
+      "check": "src/lib/externalRelay/poller.test.ts",
+      "exitCode": 0,
+      "elapsedSeconds": 6.25
+    },
+    {
+      "check": "src/lib/externalRelay/prompt.test.ts",
+      "exitCode": 0,
+      "elapsedSeconds": 0.47
+    },
+    {
+      "check": "src/lib/externalRelay/runner.test.ts",
+      "exitCode": 1,
+      "elapsedSeconds": 135.97
+    },
+    {
+      "check": "src/lib/externalRelay/slice3Runner.test.ts",
+      "exitCode": 0,
+      "elapsedSeconds": 4.25
+    },
+    {
+      "check": "src/lib/externalRelay/switches.test.ts",
+      "exitCode": 0,
+      "elapsedSeconds": 0.25
+    },
+    {
+      "check": "base-runner",
+      "exitCode": 1,
+      "elapsedSeconds": 0.88
+    },
+    {
+      "check": "base-owner",
+      "exitCode": 1,
+      "elapsedSeconds": 2.57
+    },
+    {
+      "check": "browser-board",
+      "exitCode": 0,
+      "elapsedSeconds": 6.28
+    },
+    {
+      "check": "base-switch-entry",
+      "exitCode": 1,
+      "elapsedSeconds": 0.56
+    },
+    {
+      "check": "head-switch-entry",
+      "exitCode": 0,
+      "elapsedSeconds": 5.64
+    },
+    {
+      "check": "src/lib/externalRelay/answers.test.ts",
+      "exitCode": 0,
+      "elapsedSeconds": 2.4
+    },
+    {
+      "check": "src/lib/externalRelay/store.test.ts",
+      "exitCode": 0,
+      "elapsedSeconds": 4.71
+    },
+    {
+      "check": "src/lib/viewerLoopMonitor.test.ts",
+      "exitCode": 0,
+      "elapsedSeconds": 0.27
+    },
+    {
+      "check": "types-final",
+      "exitCode": 0,
+      "elapsedSeconds": 15.0
+    },
+    {
+      "check": "lint-final",
+      "exitCode": 0,
+      "elapsedSeconds": 11.61
+    },
+    {
+      "check": "browser-phone-final",
+      "exitCode": 0,
+      "elapsedSeconds": 36.08
+    },
+    {
+      "check": "bun run privacy:check",
+      "exitCode": 0
+    }
+  ],
+  "baseRed": [
+    "owner chain reuse and current authority",
+    "owner continuation busy/unavailable/accepted failure",
+    "owner scope through a member subthread",
+    "unadmitted continuation revocation",
+    "relay switch entry-point output"
+  ],
+  "preExistingFailures": [
+    "src/lib/externalRelay/runner.test.ts: owner report custody restricts handoff only with an explicit reply (false)",
+    "src/lib/externalRelay/runner.test.ts: owner report custody restricts handoff only with an explicit reply (true)",
+    "src/lib/externalRelay/ownerTier.test.ts: owner final answers refuse truncated JSON credentials"
+  ],
+  "rendered": {
+    "boardDriver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+    "phoneDriver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+    "locales": [
+      "en",
+      "uk"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "widths": [
+      390,
+      1100,
+      1440
+    ],
+    "authorityLabels": [
+      "member",
+      "admin",
+      "owner"
+    ],
+    "visualInspection": "Authority labels, list geometry and read-only readers inspected. Synthetic fixtures only."
+  },
+  "deferred": [
+    "Reply-targeted compact requires the partner protocol change from the pinned design. Current requests touch no conversation.",
+    "Existing owner conversations and board cards are preserved; card retirement remains an operator action after deploy.",
+    "Hosted checks run after publication by the seat."
+  ],
+  "testTotals": {
+    "pass": 423,
+    "preExistingFailures": 3,
+    "skipped": 4
+  }
+}

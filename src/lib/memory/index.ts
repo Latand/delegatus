@@ -18,6 +18,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { parseMemory, type MemoryKind, type MemorySource } from "./parsers";
 import { nativeHookCursor, nativeOccurrenceAfter } from "./native";
 import { nativeMatch, queryFor, type Candidate } from "./selection";
+import { resolveShortId } from "@/lib/shortIds";
 
 interface MemoryItem {
   id: string;
@@ -37,6 +38,10 @@ interface MemoryItem {
 type InjectionName = Pick<Candidate, "id" | "title"> & { score: number };
 
 export const MEMORY_RESPONSE_BYTES = 16_000;
+
+export class MemoryIdAmbiguousError extends Error {
+  constructor() { super("memory id is ambiguous; pass more characters"); }
+}
 
 function byteBound(text: string, limit: number): string {
   const bytes = Buffer.from(text);
@@ -284,13 +289,23 @@ export class MemoryIndex {
     const db = this.database();
     this.normalizeProjects(db);
     const scope = project ? JSON.stringify([...this.scopeKeys(project)]) : null;
-    const item = db.query<MemoryItem, [string, string | null, string | null]>("SELECT * FROM memory_entries WHERE id = ? AND (? IS NULL OR project IN (SELECT value FROM json_each(?)) OR scope = 'global')").get(id, scope, scope);
+    let resolvedId = id;
+    if (/^m_[a-f0-9]{7,24}$/i.test(id)) {
+      const candidates = db.query<{ id: string }, [number, string, string | null, string | null]>(
+        "SELECT id FROM memory_entries WHERE substr(id, 1, ?) = ? AND (? IS NULL OR project IN (SELECT value FROM json_each(?)) OR scope = 'global') LIMIT 2",
+      ).all(id.length, id.toLowerCase(), scope, scope).map(row => row.id);
+      const resolution = resolveShortId(candidates, id);
+      if (resolution.kind === "ambiguous") throw new MemoryIdAmbiguousError();
+      if (resolution.kind === "none") return null;
+      resolvedId = resolution.value;
+    }
+    const item = db.query<MemoryItem, [string, string | null, string | null]>("SELECT * FROM memory_entries WHERE id = ? AND (? IS NULL OR project IN (SELECT value FROM json_each(?)) OR scope = 'global')").get(resolvedId, scope, scope);
     if (!item) return null;
     const ledgerKey = crypto.createHash("sha256").update(`${conversationId ?? ""}\0${requestId}`).digest("hex");
     const recordOpened = () => {
       const at = new Date().toISOString();
-      db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'search', NULL, 'opened', ?)").run(id, ledgerKey, conversationId, at, at);
-      db.query("UPDATE memory_offers SET outcome = 'opened', outcome_at = ? WHERE memory_id = ? AND conversation_id = ? AND channel = 'inject' AND outcome IS NULL").run(at, id, conversationId);
+      db.query("INSERT OR IGNORE INTO memory_offers VALUES (?, ?, ?, ?, 'search', NULL, 'opened', ?)").run(resolvedId, ledgerKey, conversationId, at, at);
+      db.query("UPDATE memory_offers SET outcome = 'opened', outcome_at = ? WHERE memory_id = ? AND conversation_id = ? AND channel = 'inject' AND outcome IS NULL").run(at, resolvedId, conversationId);
     };
     const opened = { ...item, sourcePath: displayPath(item.sourcePath), flags: parseSqliteJson(item.flags, this.database()) as string[] };
     const budget = Math.min(MEMORY_RESPONSE_BYTES, maxBytes);

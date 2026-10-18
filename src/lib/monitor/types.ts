@@ -252,6 +252,7 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
+  occurredAt?: string | null;
   /** Journal identity of a merge this visible line announces on delivery. */
   mergeEventSeq?: number;
   diskPressureEpisode?: string;
@@ -296,6 +297,8 @@ export interface SeatTickItem {
   finalMessageFrom?: { path: string; engine: string | null };
   /** That final message, bounded and redacted, once the controller read it. */
   finalMessage?: string;
+  /** Compact catch-up row used by its payload renderer and delivery receipt. */
+  manifestLine?: string;
   /** Only on a `deploy` line (#2063): the settled deployment as the ledger
       records it. `id` is its deployment id. */
   maintenance?: { runId: string };
@@ -349,6 +352,7 @@ export type SeatTickVerdict =
   | { kind: "quiet"; detail: string }
   | {
     kind: "wake";
+    catchUp?: { key: string; from: string; through: string; covers: string[] };
     reasons: SeatTickWakeReason[];
     items: SeatTickItem[];
     /** Current stall episodes let a landed wake retire stale episode history
@@ -873,6 +877,9 @@ export interface SeatTickPolicy {
  * from anything else would credit the seat with a different message.
  */
 export interface SeatTickWakeCommit {
+  /** Interval at preparation, used to preserve an outage across a delayed landing. */
+  wakeIntervalMs?: number;
+  catchUp?: { key: string; from: string; through: string; covers: string[] };
   diskPressure?: { episode: string; version: string };
   /** Versions of agenda items carried by this frozen delivery plan. */
   itemsShown?: string[];
@@ -1093,6 +1100,8 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  /** First observed failed reachability; cleared only by a landed wake. */
+  unreachableSince?: string | null;
   hostRecovery?: import("./seatHostRecovery").SeatHostRecovery;
   autoRotation?: import("./seatAutoRotation").SeatAutoRotationState;
   authIncident?: SeatAuthIncident;
@@ -1362,6 +1371,9 @@ export interface SeatTickCheckInput {
       owed the check ends `error` rather than quiet. The token names which
       condition stands (#1465); when several do, the most severe is carried. */
   childrenUnavailable: SeatTickChildrenGap | null;
+  /** Catch-up polling still has snapshot tickets to visit, independent of the
+      single highest-priority child source gap shown to the seat. */
+  childrenCatchUpPending?: boolean;
   /**
    * Digest of everything a wake could change, in two parts separated by a dot:
    * the evidence every check reads, then the pull-request evidence.

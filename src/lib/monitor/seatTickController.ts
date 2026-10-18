@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { pendingAutonomyReports, autonomyActive } from "./autonomy";
 import { expireSeatAutonomy, expireSeatSchedule } from "./seatTickSettings";
@@ -1328,7 +1329,7 @@ export async function runSeatTickCheck(
   const canonical = canonicalOrchestratorProject(project);
 
   try {
-    return await check(canonical, policy, dependencies, appendRecord);
+    return await withViewerOperation("seat-tick.check", () => check(canonical, policy, dependencies, appendRecord));
   } catch (error) {
     let detail = `the check failed: ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}`;
     if (error instanceof SeatTickEvidenceRefreshCanceledError) {
@@ -1395,6 +1396,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       workers: input.workers,
       snapshotAt,
       reasons: verdict.reasons,
+      ...(verdict.catchUp ? { catchUp: verdict.catchUp } : {}),
       /* A settled child's final message rides on its line (#1881), read from
          its transcript's tail now that the wake is going out. */
       items: renderedVerdict.kind === "wake" ? renderedVerdict.items : [],
@@ -1432,6 +1434,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
   const text = payload.text;
   if (renderedVerdict.kind === "wake") renderedVerdict.items = [...payload.items];
   const commit = seatTickWakeCommitPlan(renderedVerdict, {
+    wakeIntervalMs: input.settings.wakeIntervalMs,
     fingerprint: input.changeFingerprint,
     eventsThrough: input.events.at(-1)?.seq ?? input.state.eventsThrough ?? 0,
     terminalChildren,
@@ -1642,7 +1645,14 @@ async function check(
   const openingRow = readState(canonical);
   // Credit delivered problem rows before a successor resets the generic agenda history.
   sources.memoryProblems?.(canonical, openingRow.itemsShown ?? [], openingSeat?.conversationId ? { conversationId: openingSeat.conversationId, seatEpoch: openingSeat.seatEpoch } : null);
-  const opened = seatTickStateForEpoch(openingRow, openingSeat?.seatEpoch ?? null);
+  let opened = seatTickStateForEpoch(openingRow, openingSeat?.seatEpoch ?? null);
+  if (openingSeat && mcpHealthFor(openingSeat, opening).status === "dead" && !opened.unreachableSince) {
+    // Legacy rows have no outage marker. Their last confirmed wake bounds
+    // the undelivered window, so recovery does not replay that backlog in batches.
+    opened = { ...opened, unreachableSince: opened.lastWakeAt ?? new Date(opening).toISOString() };
+    writeState(canonical, opened);
+    opened = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
+  }
   /* Whether the project came into this check with anything its card could be
      describing — so a check that finds it all gone closes the card, and a
      project that never had one asks nothing of the board. The refusal run is
@@ -1830,7 +1840,7 @@ async function check(
       operatorInstructions: input.settings.reason,
       monitorPrompt: input.settings.monitorPrompt,
     });
-    const { text, commit } = alarmPayload(input, verdict, proposalIssues, new Date(gathered.now).toISOString());
+    const { text, commit } = withViewerOperation("seat-tick.payload", () => alarmPayload(input, verdict, proposalIssues, new Date(gathered.now).toISOString()));
 
     /* The prompt above came off the settings row this check read, not out of
        anything the controller carries between checks or between seats: the row
@@ -1971,6 +1981,7 @@ async function check(
               state = accounting.readState();
             } else state = landed;
           } else {
+            if (!state.unreachableSince) state = { ...state, unreachableSince: at };
             if (outcome?.operationId && state.outstandingWake) {
               state = { ...state, outstandingWake: { ...state.outstandingWake, operationId: outcome.operationId } };
               if (accounting) { accounting.writeState(state); state = accounting.readState(); }

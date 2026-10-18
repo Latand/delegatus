@@ -1,4 +1,11 @@
+import { resolvePrototypeReviewId as resolveStoredReviewId } from "@/lib/prototypeReview/store";
+import { resolveIssueReportDigest } from "@/lib/issueReports/store";
+import { shortId, shortenHashesInText } from "@/lib/shortIds";
+import { relayAnswerOp } from "@/lib/externalRelay/ownerAnswer";
+import { ExternalRelayError as RelayAnswerError } from "@/lib/externalRelay/client";
+import { DocumentRefusal as RelayDocumentRefusal } from "@/lib/telegram/bot/documents";
 import { relayServiceToolsOp } from "@/lib/externalRelay/ownerServiceTools";
+import { readHistoryProjection, historyFleetLimitWaits } from "@/lib/state/historyProjection";
 import { registryReceiptsForConversation } from "@/lib/agent/registry";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
@@ -179,10 +186,11 @@ import { queuedPipelineCreationMessage, queuedPipelineCreationStatus } from "@/l
 import type { TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_LIST_DEFAULT_LIMIT, pipelineCompactRow, pipelineListRow } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
-import { loadPipelinesForList, pipelineSelectionSource, pipelineDeliveryLookup } from "@/lib/pipelines/store";
+import { loadPipelinesForList, pipelineSelectionSource, pipelineDeliveryLookup, pipelineRevision } from "@/lib/pipelines/store";
 import type { CreatePipelineRequest, PatchPipelineRequest, Pipeline, PipelineAction, PipelineCloseReport, PipelineMergeState } from "@/lib/pipelines/types";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
+import { projectKeyIndexSnapshot } from "@/lib/projects/projectKeyIndex";
 import { listFiles } from "@/lib/scanner";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
@@ -586,6 +594,11 @@ async function postViewerControl(
         } });
       }
     }
+    if (result.code === "short_id_ambiguous") throw new McpToolRefusal(message, {
+      code: "short_id_ambiguous", retryable: false, status: response.status,
+      field: text(result.field) || "reviewId",
+      ...(Array.isArray(result.candidates) ? { candidates: result.candidates.filter(value => typeof value === "string").slice(0, 8) } : {}),
+    });
     const operationId = text(result.operationId);
     if (operationId) {
       throw new McpToolRefusal(message, {
@@ -816,7 +829,8 @@ export interface ViewerMcpDomainDependencies {
   lastCompletedCatalog?(): { projectCatalog: FileScanSnapshot["projectCatalog"]; files: readonly FileScanSnapshot["files"][number][] } | null;
   registrySnapshot(): RegistrySnapshot;
   /** Fresh seat and delivered-wake admission for curator reads and writes. */
-  curatorAdmission?(conversationId: string | null): Promise<void>;
+  curatorSnapshot?(conversationId: string): RegistrySnapshot;
+  curatorAdmission?(conversationId: string | null): Promise<void | (() => void)>;
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
   getFlowsWithPresets(): ReturnType<typeof getFlowsWithPresets>;
@@ -830,6 +844,7 @@ export interface ViewerMcpDomainDependencies {
       scalars and keeps nothing. Optional so partial test harnesses that stub
       only `getPipelines` still project from it. */
   listPipelineRecords?(): readonly Pipeline[];
+  fleetLimitWaits?(ids: string[]): Promise<ReturnType<typeof fleetLimitWaits>>;
   pipelineSelectionSource?: typeof pipelineSelectionSource;
   patchPipeline: typeof patchPipeline;
   readPipelineRecord?: typeof getPipelineRecord;
@@ -1346,9 +1361,10 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     return projectCatalog && files ? { projectCatalog, files } : null;
   },
   registrySnapshot: () => agentRegistry().readOnlySnapshot(),
+  curatorSnapshot: conversationId => agentRegistry().curatorConversationSnapshot(conversationId),
   curatorAdmission: async conversationId => {
     const { curatorRecoveryGuard } = await import("@/lib/memory/curation/admission");
-    await curatorRecoveryGuard(conversationId ?? "");
+    return curatorRecoveryGuard(conversationId ?? "");
   },
   readSpawnAdmissionFence,
   validateSpawnAdmission: (body, context) => productionViewerControlDependencies().post(
@@ -1368,6 +1384,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   closeFlow,
   getPipelines,
   listPipelineRecords: loadPipelinesForList,
+  fleetLimitWaits: ids => readHistoryProjection(db => historyFleetLimitWaits(db, ids), { collections: ["pipelines"] }),
   pipelineSelectionSource,
   taskSelectionSource,
   listTaskRecords: loadTasksForList,
@@ -1970,7 +1987,10 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
       next: "Return PREVIEW with this digest, exact title and body, your privacy judgment and remaining hints as a short list beside the text. The operator decides last and may approve text with hints. Publication is the orchestrator seat's after approval.",
     };
   }
-  const digest = text(args.digest);
+  const givenDigest = text(args.digest);
+  const resolvedDigest = await resolveIssueReportDigest(givenDigest ?? "", directory);
+  if (resolvedDigest.kind === "ambiguous") throw refuse("digest is ambiguous; pass more characters", "short_id_ambiguous", { field: "digest", retryable: false, candidates: resolvedDigest.candidates });
+  const digest = resolvedDigest.kind === "match" ? resolvedDigest.value : givenDigest;
   if (!digest) throw refuse(`${action} needs the digest a preview answered`, "issue_report_invalid", { field: "digest" });
   const stored = readIssueReportPreview(digest, directory);
   if (!stored) {
@@ -1985,8 +2005,8 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     if (!seat) return view(stored);
     return {
       ...view({ ...(markIssueReportShown(digest, seat, { directory }) ?? stored), hints: stored.hints, hintWarnings: stored.hintWarnings }),
-      approvalForm: issueReportApprovalForm(stored, previewLanguage),
-      next: "Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Then ask with publish_prototype_review, omitting taskId, passing approvalForm's title and questions unchanged. Publish after the operator answers: publication reads the newest such form you published after this reading and needs its first option, the one naming this whole digest, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it.",
+      approvalForm: { issueReport: resolvedDigest.reference ?? shortId(stored.digest) },
+      next: "Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Then ask with publish_prototype_review, omitting taskId, passing approvalForm.issueReport. Publish after the operator answers: publication reads the newest such form you published after this reading and needs its first option, the one naming this report, chosen by a person. A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision does not approve it.",
     };
   }
   if (action !== "publish") throw refuse("action is hints, preview, show or publish", "issue_report_invalid", { field: "action" });
@@ -2029,16 +2049,16 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     const label = issueReportApprovalReplies(digest)[previewLanguage];
     const explanation = {
       no_form: {
-        en: "Nothing was published: you have not asked the operator in a decision form since you read this preview back. Call publish_prototype_review without taskId, with approvalForm from show unchanged, and publish after they answer.",
-        uk: "Нічого не опубліковано: після показу цього звіту ви не питали оператора у формі рішення. Викличте publish_prototype_review без taskId, передавши approvalForm із show без змін, і публікуйте після відповіді.",
+        en: "Nothing was published: you have not asked the operator in a decision form since you read this preview back. Call publish_prototype_review without taskId, with issueReport from show, and publish after they answer.",
+        uk: "Нічого не опубліковано: після показу цього звіту ви не питали оператора у формі рішення. Викличте publish_prototype_review без taskId, передавши issueReport із show, і публікуйте після відповіді.",
       },
       not_answered: {
         en: `Nothing was published: the operator has not answered decision form ${form?.id} yet.`,
         uk: `Нічого не опубліковано: оператор ще не відповів на форму рішення ${form?.id}.`,
       },
       not_an_approval: {
-        en: `Nothing was published: the answer to decision form ${form?.id} does not approve this report. Only the option «${label}», chosen by a person, approves it; a form taken on its recommendations, «Other», a custom note or an agent's decision does not.`,
-        uk: `Нічого не опубліковано: відповідь на форму рішення ${form?.id} не схвалює цей звіт. Схвалює лише варіант «${label}», обраний людиною; рекомендації за замовчуванням, «Інше», власна примітка чи рішення агента не схвалюють.`,
+        en: `Nothing was published: the answer to decision form ${form?.id} does not approve this report. Only the option «${shortenHashesInText(label)}», chosen by a person, approves it; a form taken on its recommendations, «Other», a custom note or an agent's decision does not.`,
+        uk: `Нічого не опубліковано: відповідь на форму рішення ${form?.id} не схвалює цей звіт. Схвалює лише варіант «${shortenHashesInText(label)}», обраний людиною; рекомендації за замовчуванням, «Інше», власна примітка чи рішення агента не схвалюють.`,
       },
     }[reason];
     throw refuse(explanation[previewLanguage], "issue_report_approval_required", { status: 403, reason, ...(form ? { reviewId: form.id } : {}) });
@@ -2418,6 +2438,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
     /* A refused conversion carries its editable preview. */
     if (result.legacyReviewPreview) throw new McpToolRefusal(message, { legacyReviewPreview: result.legacyReviewPreview });
+    if (result.code === "short_id_ambiguous") throw new McpToolRefusal(message, { code: result.code, field: result.field, retryable: false, status: result.status });
     if (action === "publish" || action === "takeover" || action === "set-delivery-remote") throw new McpToolRefusal(message, { code: "delivery_refused", status: result.status });
     if (action === "attach-link" || action === "detach-link") throw new McpToolRefusal(message, { code: result.code ?? "WORK_LINK_INVALID", field: "link", status: result.status });
     /* A stale guard names what moved, so the caller re-reads before retrying. */
@@ -3503,7 +3524,7 @@ async function deployExactSha(
   dependencies: ViewerMcpDomainDependencies,
 ): Promise<McpToolPayload> {
   const revision = required(args, "revision");
-  if (!/^[0-9a-f]{40}$/i.test(revision)) throw new Error("revision must be a full 40-character commit SHA");
+  if (!/^[0-9a-f]{7,40}$/i.test(revision)) throw new Error("revision must be a commit SHA or prefix of at least 7 characters");
 
   const authority = viewerSeatAuthority(dependencies);
   if (!authority.ok) {
@@ -4280,11 +4301,15 @@ function orchestratorProjectBinding(
   run: (resolved: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>,
   optionalProject = false,
   requireActiveSeat = true,
+  allowIndexedBoardWithoutSeat = false,
 ): McpToolBinding {
   const resolved = new WeakMap<McpToolArgs, McpToolArgs>();
   const resolve = async (args: McpToolArgs) => {
     if (optionalProject && !text(args.project)) return args;
-    return { ...args, project: await resolveOrchestratorToolProject(required(args, "project"), dependencies, requireActiveSeat) };
+    const requested = required(args, "project");
+    const indexedBoard = allowIndexedBoardWithoutSeat && /^(repo|dir)-[a-f0-9]{32}$/i.test(requested)
+      && [...projectKeyIndexSnapshot()].some(project => project.toLowerCase() === requested.toLowerCase());
+    return { ...args, project: await resolveOrchestratorToolProject(requested, dependencies, requireActiveSeat && !indexedBoard) };
   };
   return Object.assign(
     async (args: McpToolArgs, context?: McpToolCallContext) => {
@@ -4541,7 +4566,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
 
   const change: SeatTickSettingsChange = {};
   if (args.autonomy !== undefined) change.autonomy = args.autonomy as SeatTickSettingsChange["autonomy"];
-  if (args.autonomyDecision !== undefined) change.autonomyDecision = args.autonomyDecision as SeatTickSettingsChange["autonomyDecision"];
+  if (args.autonomyDecision !== undefined) change.autonomyDecision = structuredClone(args.autonomyDecision) as SeatTickSettingsChange["autonomyDecision"];
   if (args.release !== undefined) change.release = args.release as SeatTickSettingsChange["release"];
   if (args.autoRotate !== undefined) change.autoRotate = args.autoRotate as SeatTickSettingsChange["autoRotate"];
   if (args.maintenance !== undefined) change.maintenance = args.maintenance as SeatTickSettingsChange["maintenance"];
@@ -4584,7 +4609,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     };
     const review = change.autonomyDecision?.review;
     if (review) {
-      const round = findPrototypeRound(change.autonomyDecision?.taskId ?? null, review.reviewId);
+      const round = mcpPrototypeRound(change.autonomyDecision?.taskId ?? null, review.reviewId);
+      if (round) review.reviewId = round.id;
       if (!round || round.nativeAssociation || canonicalOrchestratorProject(round.project || project) !== project) throw new Error("autonomy cannot decide this form");
     }
     const applied = dependencies.writeTickSettings || dependencies.readTickSettings
@@ -6564,7 +6590,7 @@ async function agentFleet(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
       && (scope === "all" || canonicalOrchestratorProject(row.project) === scope.project));
     const sessions = detail ? (dependencies.readFleetSessions ?? readCachedResourceSessions)() : { sessions: [], stale: false };
     const agents = fleetDetailRows(fleetAgents(rows, fleetRuntimeFor(rows, registry),
-      new Set(seats.map(seat => seat.conversationId)), fleetLimitWaits(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines),
+      new Set(seats.map(seat => seat.conversationId)), dependencies.fleetLimitWaits ? await dependencies.fleetLimitWaits(rows.flatMap(row => row.conversationId ? [row.conversationId] : [])) : fleetLimitWaits(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines),
       sessions.sessions, sessions.stale), filters);
     const unverifiedCount = rows.filter(row => row.evidenceSource !== "transcript").length;
     const unselectedCount = Math.max(0, snapshot.selection.matched - snapshot.selection.selected);
@@ -7200,7 +7226,10 @@ async function escalateThroughService(
   if (round) {
     /* The round is the operator's question: it has to exist in this project
        and still wait, or the wait would leave the seat for a form nobody sees. */
-    const task = dependencies.loadTasks().find(candidate => candidate.prototypeReviews?.some(held => held.id === round.reviewId));
+    const tasks = dependencies.loadTasks();
+    const resolved = resolvePrototypeReviewId([...tasks.filter(task => canonicalOrchestratorProject(task.project) === project).flatMap(task => task.prototypeReviews ?? []), ...loadSeatRounds(project)], round.reviewId);
+    if (resolved) round.reviewId = resolved;
+    const task = tasks.find(candidate => candidate.prototypeReviews?.some(held => held.id === round.reviewId));
     const seatRound = task ? null : loadSeatRounds().find(held => held.id === round.reviewId);
     if ((!task && !seatRound) || canonicalOrchestratorProject(task?.project ?? seatRound!.project) !== project) {
       throw new McpToolRefusal(`no decision round ${round.reviewId} in this project: ask with publish_prototype_review first and pass the reviewId it answers`, { code: "ROUND_NOT_FOUND" });
@@ -7251,6 +7280,10 @@ async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDo
   let target: DismissalTarget;
   try {
     target = parseDismissalTarget(args.target, { allowSubjects: false });
+    if (target.kind === "prototype") {
+      const round = mcpPrototypeRound(target.taskId, target.reviewId);
+      if (round) target = { ...target, reviewId: round.id };
+    }
   } catch (error) {
     if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code });
     throw error;
@@ -7845,12 +7878,23 @@ export function viewerMcpBindings(
     spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context, domainDependencies),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
-    create_task: orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true),
+    create_task: orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true, true, true),
     update_task: (args) => updateBoardTask(args, domainDependencies),
     create_pipeline: (args, context) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
     pipeline_action: Object.assign(
       (args: McpToolArgs) => unadmittedBeforeMutation(() => pipelineAction(args, domainDependencies)),
-      { authorizeReceipt: (args: McpToolArgs) => {
+      { canonicalizeReceiptArgs: (args: McpToolArgs) => {
+        if (args.action !== "resolve-decision" || typeof args.expectedRevision !== "string") return args;
+        const id = required(args, "pipelineId");
+        const pipeline = domainDependencies.readPipelineRecord
+          ? domainDependencies.readPipelineRecord(id)
+          : domainDependencies.getPipelines?.().pipelines.find((item) => item.id === id);
+        if (!pipeline) return args;
+        const accepted = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === args.clientRequestId);
+        const retained = accepted?.expectedRevision ?? pipelineRevision(pipeline);
+        if (!/^[a-f0-9]{7,64}$/i.test(args.expectedRevision) || !retained.toLowerCase().startsWith(args.expectedRevision.toLowerCase())) return args;
+        return { ...args, expectedRevision: retained };
+      }, authorizeReceipt: (args: McpToolArgs) => {
         if (!PIPELINE_RECEIPT_ACTIONS.has(args.action as PipelineAction)) return;
         const id = required(args, "pipelineId");
         const pipeline = domainDependencies.readPipelineRecord
@@ -7870,9 +7914,14 @@ export function viewerMcpBindings(
     curate_rules: Object.assign(async (args: McpToolArgs) => {
       try {
         const conversationId = attributionOf(domainDependencies).conversationId;
-        await domainDependencies.curatorAdmission?.(conversationId);
-        const pass = curatorCallerOf(conversationId, domainDependencies.registrySnapshot());
-        return args.action === "read" ? readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined) : applyCuration(pass, args as unknown as CurationApply);
+        const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
+        if (typeof assertAdmission === "function") assertAdmission();
+        const pass = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+        if (args.action !== "read") return applyCuration(pass, args as unknown as CurationApply);
+        const result = await readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined);
+        if (typeof assertAdmission === "function") assertAdmission();
+        curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+        return result;
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
         if (error instanceof DeliveryAdmissionRefusedError) throw new McpToolRefusal(error.message, { code: "CURATE_CALLER", status: 409 });
@@ -7881,8 +7930,9 @@ export function viewerMcpBindings(
     }, { authorizeReceipt: async () => {
       try {
         const conversationId = attributionOf(domainDependencies).conversationId;
-        await domainDependencies.curatorAdmission?.(conversationId);
-        curatorCallerOf(conversationId, domainDependencies.registrySnapshot());
+        const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
+        if (typeof assertAdmission === "function") assertAdmission();
+        curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
         if (error instanceof DeliveryAdmissionRefusedError) throw new McpToolRefusal(error.message, { code: "CURATE_CALLER", status: 409 });
@@ -7955,6 +8005,19 @@ export function viewerMcpBindings(
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
+    relay_answer: async (args) => {
+      const caller = attributionOf(domainDependencies);
+      try {
+        const result = caller.kind === "agent" && !caller.via && caller.conversationId
+          ? await relayAnswerOp(caller.conversationId, args) : null;
+        if (result === null) throw new McpToolRefusal("Answer parts exist only during your live owner relay turn.", { code: "relay_answer_unavailable", retryable: false });
+        return result;
+      } catch (error) {
+        if (error instanceof RelayAnswerError || error instanceof RelayDocumentRefusal)
+          throw new McpToolRefusal("Relay answer parts refused: " + error.code, { code: error.code, retryable: false });
+        throw error;
+      }
+    },
     relay_service_tools: async (args) => {
       const caller = attributionOf(domainDependencies);
       const result = caller.kind === "agent" && !caller.via && caller.conversationId
@@ -7966,4 +8029,19 @@ export function viewerMcpBindings(
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
     issue_report: (args, context) => issueReportTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
   };
+}
+
+function resolvePrototypeReviewId(...args: Parameters<typeof resolveStoredReviewId>): ReturnType<typeof resolveStoredReviewId> {
+  try { return resolveStoredReviewId(...args); }
+  catch (error) {
+    if ((error as { code?: string }).code === "short_id_ambiguous") throw new McpToolRefusal("reviewId is ambiguous; pass more characters", { code: "short_id_ambiguous", field: "reviewId", retryable: false, candidates: (error as { candidates?: string[] }).candidates });
+    throw error;
+  }
+}
+function mcpPrototypeRound(taskId: string | null, given: string) {
+  try { return findPrototypeRound(taskId, given); }
+  catch (error) {
+    if ((error as { code?: string }).code === "short_id_ambiguous") throw new McpToolRefusal("reviewId is ambiguous; pass more characters", { code: "short_id_ambiguous", field: "reviewId", retryable: false, candidates: (error as { candidates?: string[] }).candidates });
+    throw error;
+  }
 }
