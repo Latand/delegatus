@@ -15,9 +15,14 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { Engine, FileEntry } from "@/lib/types";
 import { decodeLaneRow, isLaneKey, laneRowsFor, MAX_LANE_ROWS, type LaneRow } from "./laneFeed";
 import { linkedContext, runsHere } from "./linked";
-import { withoutStoredLessons } from "@/lib/memory/roleStore";
+import { storedLessonRevision } from "@/lib/memory/roleStore";
+import { runPrivacyWork } from "./taskPageWorker";
+import { markTaskExport } from "./taskExportPrivacy";
 
 export type AgentRow = { k: string; p: string; t: string; e: string; m: string; st: "working" | "waiting" | "done"; task?: string; ro?: string; seat?: 1; at: number; pl?: { id: string; state: string; stage: string; stageState: string } };
+// Keep the complete chosen title local until the outbound worker filters it.
+const chosenTitle = Symbol.for("delegatus.agent-feed.chosen-title");
+const titleToFilter = (row: object) => (row as { [chosenTitle]?: string })[chosenTitle];
 type Change = AgentRow | LaneRow | { k: string; gone: true };
 type Versioned = { row: AgentRow | LaneRow; version: number };
 type Marker = { k: string; version: number; at: number };
@@ -119,13 +124,15 @@ function rowFor(file: FileEntry, tasks: ReturnType<typeof taskLookup>, projects:
   const stage = pipeline?.stages.find((item) => item.id === membership?.stageId);
   const attempt = pipeline?.runs.find((run) => run.stageId === stage?.id)?.attempts.find((item) => typeof conversationId === "string" && typeof item.conversationId === "string" && item.conversationId === conversationId || item.agentPath === file.path);
   /* The whole first line is checked before it is cut, so a lesson it quotes is withheld whole. */
-  const title = seat ? "orchestrator" : boundTask?.chosen ? withoutStoredLessons(boundTask.text.split(/\r?\n|\r/, 1)[0]!).slice(0, 120)
+  const title = seat ? "orchestrator" : boundTask?.chosen ? boundTask.text.split(/\r?\n|\r/, 1)[0]!
     : stage ? `${safeId(stage.id) ?? "Pipeline"} stage` : `${role ?? engine} agent`;
   const working = file.proc === "running" && (file.activity === "live" || file.activity === "recent");
   const st = file.pendingQuestion || file.waitingInput || file.pendingPermission ? "waiting" : working ? "working" : "done";
-  return { k: `a:${createHash("sha256").update(identity).digest("hex").slice(0, 16)}`, p, t: title,
+  const row: AgentRow = { k: `a:${createHash("sha256").update(identity).digest("hex").slice(0, 16)}`, p, t: title.slice(0, 120),
     e: engine, m: model, st, ...(role ? { ro: role } : {}), ...(seat ? { seat: 1 as const } : {}), ...(boundTask ? { task: boundTask.id } : {}), at,
     ...(pipeline && stage ? { pl: { id: safeId(pipeline.id) ?? "pipeline", state: safeId(pipeline.state) ?? "unknown", stage: safeId(stage.id) ?? "stage", stageState: safeId(attempt?.state) ?? "unknown" } } : {}) };
+  if (!seat && boundTask?.chosen) Object.defineProperty(row, chosenTitle, { value: title });
+  return row;
 }
 
 export function decodeAgentRow(value: unknown, projects: ReadonlySet<string>): AgentRow | null {
@@ -153,6 +160,7 @@ export class AgentFeed {
   private owned = false;
   private projectsKey = "";
   private seatRevision = "";
+  private privacyRevision = "";
   private resetSnapshot: { key: string; rows: Array<AgentRow | LaneRow>; cursor: Cursor } | null = null;
   private floor = 0;
   private expiresAt = Infinity;
@@ -164,6 +172,8 @@ export class AgentFeed {
     private readonly registrySources: FeedSources = {}) {}
 
   refresh(projects: ReadonlySet<string>): void {
+    const privacyRevision = storedLessonRevision();
+    const privacyChanged = privacyRevision !== this.privacyRevision;
     const files = this.source();
     const tasks = this.tasks();
     const projectsKey = [...projects].sort().join("|");
@@ -177,13 +187,14 @@ export class AgentFeed {
     const owns = this.ownership();
     if (tasks !== this.seenTasks || projectsKey !== this.projectsKey) this.owned = projects.size > 0 && tasks.some((task) => projects.has(task.project) && owns(task));
     const pipelines = this.owned || (projects.size > 0 && !!files?.length) ? this.pipelines() : null;
-    if (files === this.scanned && tasks === this.seenTasks && pipelines === this.seenPipelines && projectsKey === this.projectsKey && seatRevision === this.seatRevision && Date.now() < this.expiresAt) { this.pruneMarkers(); return; }
-    if (projectsKey !== this.projectsKey) this.resetSnapshot = null;
+    if (!privacyChanged && files === this.scanned && tasks === this.seenTasks && pipelines === this.seenPipelines && projectsKey === this.projectsKey && seatRevision === this.seatRevision && Date.now() < this.expiresAt) { this.pruneMarkers(); return; }
+    if (privacyChanged || projectsKey !== this.projectsKey) this.resetSnapshot = null;
     this.scanned = files;
     this.seenTasks = tasks;
     this.seenPipelines = pipelines;
     this.projectsKey = projectsKey;
     this.seatRevision = seatRevision;
+    this.privacyRevision = privacyRevision;
     this.expiresAt = Infinity;
     // Registry and seat storage are consulted only past the refresh cache fence.
     const seatRows = projects.size > 0
@@ -256,7 +267,8 @@ export class AgentFeed {
     }
     for (const [key, row] of wanted) {
       const previous = this.rows.get(key);
-      if (!previous || JSON.stringify(previous.row) !== JSON.stringify(row)) this.rows.set(key, { row, version: ++this.version });
+      if (privacyChanged || !previous || titleToFilter(previous.row) !== titleToFilter(row)
+        || JSON.stringify(previous.row) !== JSON.stringify(row)) this.rows.set(key, { row, version: ++this.version });
     }
     this.pruneMarkers();
   }
@@ -324,9 +336,14 @@ export function decodeCursor(value: unknown): Cursor | null | undefined {
   const version = parseInt(match[2]!, 36);
   return Number.isSafeInteger(version) ? { epoch: match[1]!, version } : undefined;
 }
-export function agentPart(id: string, after: Cursor | null, projects: ReadonlySet<string>, offset = 0) {
+export async function agentPart(id: string, after: Cursor | null, projects: ReadonlySet<string>, offset = 0) {
   const { rows, reset, more, cursor } = agentFeed(id).page(after, projects, offset);
-  return { ...(rows?.length ? { rows } : {}), ...(reset ? { reset } : {}), ...(more ? { more } : {}), cursor: encodeCursor(cursor) };
+  const titles = rows?.map(row => titleToFilter(row) ?? null);
+  const result = titles?.some(title => title !== null) ? await runPrivacyWork({ kind: "filter", value: titles }) : null;
+  const filtered = result?.value as Array<string | null> | undefined;
+  const safeRows = rows?.map((row, index) => "t" in row ? { ...row, t: (filtered?.[index] ?? row.t).slice(0, 120) } : row);
+  const part = { ...(safeRows?.length ? { rows: safeRows } : {}), ...(reset ? { reset } : {}), ...(more ? { more } : {}), cursor: encodeCursor(cursor) };
+  return result ? markTaskExport(part, result.privacyRevision) : part;
 }
 export function dropAgents(id: string): void { feeds.delete(id); received.delete(id); cursors.delete(id); }
 export function receivedAgentRows(id: string): readonly AgentRow[] { return [...(received.get(id)?.rows.values() ?? [])]; }
