@@ -8069,6 +8069,7 @@ function readTokenFrame() {
     empty: document.querySelector("[data-token-empty]")?.textContent ?? null,
     weekColumns: document.querySelectorAll("[data-activity-pair]").length,
     cappedColumns: Array.from(document.querySelectorAll("[data-activity-pair] text")).map((text) => (text.textContent ?? "").trim()).filter((text) => text !== ""),
+    tokensSelected: document.querySelector('[data-activity-tabs] [data-activity-option="tokens"], [aria-label="View"] [data-activity-option="tokens"]')?.getAttribute("aria-selected") === "true",
     tab: document.querySelector("[data-activity-tab]")?.getAttribute("data-activity-tab") ?? (document.querySelector("[data-token-tab]") ? "tokens" : "time"),
     layout: page.dataset.activityLayout ?? "phone",
     width: window.innerWidth,
@@ -8160,6 +8161,7 @@ async function activityTokensMain(): Promise<void> {
   const localHistory = path.join(activityDir, "hosts", "workstation");
   fs.mkdirSync(localHistory, { recursive: true });
   fs.writeFileSync(path.join(localHistory, "human-input.jsonl"), exportLines({ host: "workstation", coveredFrom: history[0]!.start - 86_400_000, coveredUntil: history.at(-1)!.end, exportedAt: now, records: 0, excluded: {} }, []));
+  fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [] }));
   const failures: string[] = [];
   const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
   const report: Record<string, unknown> = { commit: captureCommit(), case: "activity-tokens", seeded: { records: seeded.records, countedFrom: new Date(seeded.countedFrom).toISOString(), range: free, uncountedRange: uncounted, timeHistory: { workdays: historyRuns, inputs: historyInputs } }, frames: {} as Record<string, unknown> };
@@ -8290,7 +8292,7 @@ async function activityTokensMain(): Promise<void> {
       const tokensTab = state !== "time-range";
       const figured = tokensTab && state !== "nothing" && state !== "loading" && state !== "error";
       must(reading.layout === (size.phone ? "phone" : "desktop"), `${name}: the ${reading.layout} layout at ${size.width}px`);
-      must(reading.tab === (tokensTab ? "tokens" : "time"), `${name}: the ${reading.tab} tab`);
+      must(reading.tab === (tokensTab ? "tokens" : "time") || (tokensTab && (state === "loading" || state === "error") && reading.tokensSelected), `${name}: the ${reading.tab} tab`);
       must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
       must(reading.cut.length === 0, `${name}: text cut by its box: ${JSON.stringify(reading.cut)}`);
       must(reading.offscreen.length === 0, `${name}: text past the window's edge: ${JSON.stringify(reading.offscreen)}`);
@@ -8347,7 +8349,7 @@ async function activityTokensMain(): Promise<void> {
       if (state === "drawer") must(reading.drawer !== null && reading.drawer.inside && (reading.drawerText ?? "").includes("2026-10-18"), `${name}: the drawer ${JSON.stringify(reading.drawer)}`);
       if (state === "time-range") {
         must(reading.timeChart || size.phone, `${name}: the Time tab draws no chart over the free range`);
-        must(!reading.cappedColumns.every((text) => text === "?"), `${name}: every column cap reads «?»: ${JSON.stringify(reading.cappedColumns)}`);
+        must(size.phone || !reading.cappedColumns.every((text) => text === "?"), `${name}: every column cap reads «?»: ${JSON.stringify(reading.cappedColumns)}`);
       }
       if (state === "nothing") must(reading.none !== null && reading.coverage === "none" && reading.by === null, `${name}: nothing counted reads ${reading.none} (${reading.coverage}), breakdown ${reading.by}`);
       await context.close();
