@@ -284,7 +284,7 @@ export function TokensCountingDrawer({ ctx, onClose }: { ctx: TokenCtx; onClose(
         {PRICE_SOURCES.map((url, index) => (
           <span key={url}>
             {index > 0 ? ", " : null}
-            <a href={url} target="_blank" rel="noreferrer" className="font-semibold text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{PRICE_SOURCE_NAMES[index]}</a>
+            <a href={url} target="_blank" rel="noreferrer" className="font-semibold text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:inline-flex max-sm:min-h-11 max-sm:items-center">{PRICE_SOURCE_NAMES[index]}</a>
           </span>
         ))}
       </p>

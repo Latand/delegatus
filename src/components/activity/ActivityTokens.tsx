@@ -11,6 +11,7 @@ import type { Locale, TFunction } from "@/lib/i18n";
 import { Segmented } from "./ActivityDashboard";
 import { ALL_MEMBERS, MEMBER_FORBIDDEN, memberLabel, type MemberChoice } from "./ActivityMembers";
 import { ActivityScopeChip } from "./ActivityProjectPicker";
+import { MarkPatterns } from "./marks";
 import { writeRange, type PageRange } from "./pageParams";
 import {
   BY_KEYS, chartBuckets, ColumnChart, compact, CoverageDot, entityName, exact, foldWeeks, inputTotal, KindMeter, Legend, money, namedKeys,
@@ -350,26 +351,36 @@ export function ActivityTokensBody({ answer, by, onBy, project, onProject, membe
   );
   const dim = `transition-opacity ${loading ? "opacity-60" : ""}`;
 
+  /* Until anything is counted there is nothing to break down. */
+  const counted = trust !== "none";
   if (!phone) {
     return (
       <div className={`grid grid-cols-[minmax(0,1fr)_420px] items-start gap-4 ${dim}`} data-token-tab="desktop" data-activity-loaded="tokens">
         <section className="rounded-[12px] border border-border bg-card px-[22px] pb-3.5 pt-5 shadow-1" data-token-card="main">{figure}{chart}</section>
-        <section className="overflow-hidden rounded-[12px] border border-border bg-card shadow-1" data-token-card="breakdown">
-          <div className="px-[18px] pb-3 pt-4">
-            <div className="mb-2 text-[12px] font-semibold text-secondary">{t("activity.tokens.by.title")}</div>
-            {byControl}
-          </div>
-          <div className="border-t border-border">{list}</div>
-        </section>
+        {counted ? (
+          <section className="overflow-hidden rounded-[12px] border border-border bg-card shadow-1" data-token-card="breakdown">
+            <div className="px-[18px] pb-3 pt-4">
+              <div className="mb-2 text-[12px] font-semibold text-secondary">{t("activity.tokens.by.title")}</div>
+              {byControl}
+            </div>
+            <div className="border-t border-border">{list}</div>
+          </section>
+        ) : null}
       </div>
     );
   }
   return (
     <div className={`flex flex-col gap-3 ${dim}`} data-token-tab="phone" data-activity-loaded="tokens">
+      {/* The desktop page defines the hatch of uncounted days; the phone draws it here. */}
+      <MarkPatterns />
       <section className="rounded-[12px] border border-border bg-card px-4 pb-3 pt-4 shadow-1" data-token-card="main">{figure}{chart}</section>
-      <div className="text-[12px] font-semibold text-secondary">{t("activity.tokens.by.title")}</div>
-      {byControl}
-      <section className="overflow-hidden rounded-[12px] border border-border bg-card shadow-1" data-token-card="breakdown">{list}</section>
+      {counted ? (
+        <>
+          <div className="text-[12px] font-semibold text-secondary">{t("activity.tokens.by.title")}</div>
+          {byControl}
+          <section className="overflow-hidden rounded-[12px] border border-border bg-card shadow-1" data-token-card="breakdown">{list}</section>
+        </>
+      ) : null}
     </div>
   );
 }

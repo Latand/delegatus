@@ -619,7 +619,9 @@ describe("the Tokens tab", () => {
     await click($('[data-activity-tabs] [data-activity-option="time"]'));
     expect(lastRequest().get("from")).toBe("2026-09-10");
     expect(lastRequest().get("to")).toBe("2026-09-20");
-    expect($("[data-activity-range-label]")!.textContent).toBe(datesLabel("2026-09-10", "2026-09-20", "en"));
+    /* The free range's dates are printed once, on its own segment. */
+    expect($("[data-activity-range-label]")).toBeNull();
+    expect($('[data-activity-option="custom"]')!.textContent).toBe(datesLabel("2026-09-10", "2026-09-20", "en"));
     await click($('[data-activity-option="custom"]'));
     expect((($('[data-activity-range-input="to"]') as unknown) as HTMLInputElement).value).toBe("2026-09-20");
     await typeDate("from", "2024-01-01");

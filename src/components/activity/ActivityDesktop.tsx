@@ -120,7 +120,9 @@ export function ActivityDesktop({ tab, onTab, data, range, onRange, today, scope
   const shown = onTokens
     ? answer ? { from: answer.params.from, to: answer.params.to } : null
     : data?.days.length ? { from: data.days[0]!.date, to: data.days.at(-1)!.date } : null;
-  const rangeLabel = onTokens ? (answer ? datesLabel(answer.params.from, answer.params.to, locale) : null) : data ? rangeText(data, locale) : null;
+  /* A free range already reads its dates on its own segment. */
+  const rangeLabel = range.preset === null ? null
+    : onTokens ? (answer ? datesLabel(answer.params.from, answer.params.to, locale) : null) : data ? rangeText(data, locale) : null;
   const ready = onTokens ? answer !== null : data !== null;
 
   return (
@@ -139,7 +141,7 @@ export function ActivityDesktop({ tab, onTab, data, range, onRange, today, scope
           <div className="w-[136px] shrink-0" data-activity-tabs="">
             <Segmented<DesktopTab> label={t("activity.view.switchAria")} value={tab} onChange={onTab} options={[{ value: "time", label: t("activity.view.time") }, { value: "tokens", label: t("activity.view.tokens") }]} />
           </div>
-          <div className="flex min-w-0 items-baseline gap-2.5">
+          <div className="flex min-w-0 items-center gap-2.5">
             {scope ? <ActivityScopeChip name={scope.name} onClear={() => onProject(null)} t={t} /> : null}
             {onTokens ? <TokenFilterChips answer={answer} filters={tokens.filters} onClear={(dimension) => tokens.onFilter(dimension, null)} locale={locale} t={t} /> : null}
             {rangeLabel ? <span className="truncate text-[13px] text-muted" data-activity-range-label="">{rangeLabel}</span> : null}

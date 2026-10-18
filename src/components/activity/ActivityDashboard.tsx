@@ -914,7 +914,7 @@ export function ActivityDashboard({ initialRange, initialView, initialBy = "mode
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
               <h1 className="text-[15px] font-bold text-primary">{t("activity.title")}</h1>
-              {(onTokens ? tokenScope : scope) ? <ActivityScopeChip name={(onTokens ? tokenScope : scope)!.name} onClear={() => selectProject(null)} t={t} /> : null}
+              {!onTokens && scope ? <ActivityScopeChip name={scope.name} onClear={() => selectProject(null)} t={t} /> : null}
             </div>
             {onTokens ? null : <p className="text-[11.5px] text-muted">{t("activity.subtitle")}</p>}
           </div>
@@ -945,8 +945,12 @@ export function ActivityDashboard({ initialRange, initialView, initialBy = "mode
             {onTokens
               ? answer?.member.canChoose ? <TokensMemberChooser answer={answer} selected={member} onSelect={selectMember} t={viewerT} wide /> : null
               : data?.member.canChoose ? <ActivityMemberFilter data={data} selected={member} onSelect={selectMember} locale={locale} t={t} wide /> : null}
-            {onTokens && Object.keys(filters).length ? (
-              <div className="flex flex-wrap gap-2"><TokenFilterChips answer={answer} filters={filters} onClear={(dimension) => changeFilter(dimension, null)} locale={locale} t={viewerT} /></div>
+            {/* The Tokens tab's filters, the project's among them, on their own row. */}
+            {onTokens && (tokenScope || Object.keys(filters).length) ? (
+              <div className="flex flex-wrap gap-2">
+                {tokenScope ? <ActivityScopeChip name={tokenScope.name} onClear={() => selectProject(null)} t={viewerT} /> : null}
+                <TokenFilterChips answer={answer} filters={filters} onClear={(dimension) => changeFilter(dimension, null)} locale={locale} t={viewerT} />
+              </div>
             ) : null}
             <ActivityRangeControl
               range={range}
