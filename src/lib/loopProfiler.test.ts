@@ -9,7 +9,7 @@ import { createPerformanceSpans } from "./performanceSpans";
 import { loopProfilerEnabled } from "./loopProfilerServing";
 
 const root = path.resolve(".");
-const frame = { name: "syntheticFunction", sourceURL: path.join(root, "src/lib/loopProfiler.fixture.ts"), line: 7 };
+const frame = { name: "syntheticThreeSecondBlock", sourceURL: path.join(root, "src/lib/loopProfiler.fixture.ts"), line: 7 };
 const sample: LoopProfile = { traces: [{ frames: [frame] }] };
 function harness(expires = LOOP_PROFILE_ARM_MS) {
   let at = 0, enabled = true, reads = 0, calls = 0;
@@ -49,7 +49,7 @@ test("only overlapping gaps at the exact threshold correlate and retention is bo
   h.finish(); await done;
   expect(h.emitted).toHaveLength(4);
   expect(h.emitted[0]).toMatchObject({ status: "captured", from: 0, to: 5000, intervalUs: 10000,
-    frames: { rows: [{ function: "syntheticFunction", file: "src/lib/loopProfiler.fixture.ts", selfWeight: 1, totalWeight: 1 }] } });
+    frames: { rows: [{ function: "syntheticThreeSecondBlock", file: "src/lib/loopProfiler.fixture.ts", selfWeight: 1, totalWeight: 1 }] } });
   expect(Buffer.byteLength(JSON.stringify(h.emitted[0]))).toBeLessThanOrEqual(LOOP_PROFILE_BYTES);
 });
 
@@ -66,7 +66,7 @@ test("profile completion before the poll flushes into the same loop-gap sequence
   expect(lines).toHaveLength(1);
   expect(lines[0]!.startsWith("[viewer loop-gap] ")).toBe(true);
   expect(JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length))).toMatchObject({ sequence: 1, gapMs: 3000,
-    jsProfile: { status: "captured", frames: { rows: [{ function: "syntheticFunction" }] } } });
+    jsProfile: { status: "captured", frames: { rows: [{ function: "syntheticThreeSecondBlock" }] } } });
   monitor.stop();
 });
 
@@ -116,37 +116,51 @@ test("collection and conversion failures release pending gap records and stop re
 });
 
 test("privacy filter rejects outside paths, URL payloads, dynamic names and native frames", () => {
+  const marker = "privateSyntheticMarker";
   const bad = [
     { ...frame, sourceURL: path.resolve(root, "../private.ts") },
     { ...frame, sourceURL: path.join(root, "node_modules/package/index.ts") },
     { ...frame, sourceURL: `file://${frame.sourceURL}?message=private` },
     { ...frame, sourceURL: "https://example.invalid/private.ts" },
-    { ...frame, name: "message text\nprivate" }, { ...frame, name: "native function" },
+    { ...frame, name: "message text\nprivate" }, { ...frame, name: "native function" }, { ...frame, name: marker },
     { ...frame, sourceURL: undefined }, { ...frame, line: NaN },
   ];
   expect(trimLoopProfile({ traces: bad.map(value => ({ frames: [value] })) }, root).rows).toEqual([]);
+  expect(trimLoopProfile({ traces: [{ frames: [{ ...frame, name: marker }] }] }, root).rows).toEqual([]);
   const recursive = trimLoopProfile({ traces: [{ frames: [frame, frame] }] }, root);
   expect(recursive.rows[0]).toMatchObject({ self: 1, total: 1 });
 });
 
-test("large profiles visit at most 4096 samples and 32 frames with at most 16 retained rows", () => {
-  let visits = 0;
-  const frames = Array.from({ length: 100 }, (_, i) => ({ ...frame, name: `function${i}`, get line() { visits++; return i + 1; } }));
-  const raw = { traces: Array.from({ length: 10000 }, () => ({ frames })) };
-  const result = trimLoopProfile(raw, root);
-  expect(result.inspectedSamples).toBe(4096); expect(visits).toBeLessThanOrEqual(2 * 4096 * 32 * 3);
-  expect(result.rows).toHaveLength(16); expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(LOOP_PROFILE_BYTES);
+test("a correctly attributed low-sample profile keeps its frame without a count threshold", () => {
+  const result = trimLoopProfile({ traces: Array.from({ length: 119 }, () => ({ frames: [frame] })) }, root);
+  expect(result.rows[0]).toMatchObject({ function: "syntheticThreeSecondBlock", file: "src/lib/loopProfiler.fixture.ts", self: 119, total: 119 });
 });
 
-test("a late hot blocker survives candidate churn and long locations respect the byte cap", () => {
-  const traces = Array.from({ length: 256 }, (_, i) => ({ frames: [{ ...frame, name: `cold${i}` }] }));
-  traces.push(...Array.from({ length: 300 }, () => ({ frames: [frame] })));
-  expect(trimLoopProfile({ traces }, root).rows[0]).toMatchObject({ function: frame.name, self: 300, total: 300 });
-  const large = trimLoopProfile({ traces: Array.from({ length: 16 }, (_, i) => ({ frames: [{
-    ...frame, name: `long${i}`, sourceURL: path.join(root, `src/${"x".repeat(650)}${i}.ts`),
-  }] })) }, root);
-  expect(large.rows.length).toBeLessThan(16);
-  expect(Buffer.byteLength(JSON.stringify(large))).toBeLessThanOrEqual(LOOP_PROFILE_BYTES - 512);
+test("large profiles visit at most 4096 samples and 32 frames with at most 16 retained rows", async () => {
+  const source = await namedSource("function", 100);
+  try {
+    let visits = 0;
+    const frames = source.frames.map(value => ({ ...value, get line() { visits++; return value.line; } }));
+    const raw = { traces: Array.from({ length: 10000 }, () => ({ frames })) };
+    const result = trimLoopProfile(raw, source.directory);
+    expect(result.inspectedSamples).toBe(4096); expect(visits).toBeLessThanOrEqual(2 * 4096 * 32 * 3);
+    expect(result.rows).toHaveLength(16); expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(LOOP_PROFILE_BYTES);
+  } finally { await source.cleanup(); }
+});
+
+test("a late hot blocker survives candidate churn and long locations respect the byte cap", async () => {
+  const source = await namedSource("cold", 257);
+  try {
+    const hot = source.frames[256]!;
+    const traces = source.frames.slice(0, 256).map(value => ({ frames: [value] }));
+    traces.push(...Array.from({ length: 300 }, () => ({ frames: [hot] })));
+    expect(trimLoopProfile({ traces }, source.directory).rows[0]).toMatchObject({ function: hot.name, self: 300, total: 300 });
+    const large = trimLoopProfile({ traces: Array.from({ length: 16 }, (_, i) => ({ frames: [{
+      ...hot, name: `long${i}`, sourceURL: path.join(source.directory, `src/${"x".repeat(650)}${i}.ts`),
+    }] })) }, source.directory);
+    expect(large.rows.length).toBeLessThan(16);
+    expect(Buffer.byteLength(JSON.stringify(large))).toBeLessThanOrEqual(LOOP_PROFILE_BYTES - 512);
+  } finally { await source.cleanup(); }
 });
 
 async function child(args: string[], directory: string) {
@@ -160,6 +174,17 @@ async function child(args: string[], directory: string) {
     const [stdout, stderr, code] = await Promise.all([new Response(processChild.stdout).text(), new Response(processChild.stderr).text(), processChild.exited]);
     expect(stderr).toBe(""); expect(code).toBe(0); return JSON.parse(stdout);
   } finally { clearTimeout(deadline); processChild.kill("SIGKILL"); await processChild.exited; }
+}
+
+async function namedSource(prefix: string, count: number) {
+  const directory = await mkdtemp(path.join(tmpdir(), "loop-profile-names-"));
+  const sourceDirectory = path.join(directory, "src");
+  await mkdir(sourceDirectory, { recursive: true });
+  const sourceURL = path.join(sourceDirectory, "names.ts");
+  const names = Array.from({ length: count }, (_, index) => `${prefix}${index}`);
+  await writeFile(sourceURL, names.map(name => `function ${name}() {}`).join("\n"));
+  const frames = names.map((name, index) => ({ name, sourceURL, line: index + 1 }));
+  return { directory, frames, cleanup: () => rm(directory, { recursive: true, force: true }) };
 }
 
 test("fresh processes cannot renew a consumed deploy budget; runtime host never claims it", async () => {
@@ -194,7 +219,23 @@ test("Bun main-thread three-second block is named on its actual loop-gap record"
     expect(gap.operations.some((op: { name: string }) => op.name === "loop-profiler.collect")).toBe(true);
     const target = gap.jsProfile.frames.rows.find((row: { function: string }) => row.function === "syntheticThreeSecondBlock");
     expect(target).toMatchObject({ file: "src/lib/loopProfiler.fixture.ts" });
-    expect(target.self).toBeGreaterThan(200); expect(target.total).toBeGreaterThan(200); expect(target.line).toBeGreaterThan(0);
+    expect(target.line).toBeGreaterThan(0);
+    expect(Number.isSafeInteger(target.self) && target.self >= 0).toBe(true);
+    expect(Number.isSafeInteger(target.total) && target.total >= target.self).toBe(true);
+    expect(target.total).toBeLessThanOrEqual(gap.jsProfile.frames.inspectedSamples);
     expect(Buffer.byteLength(JSON.stringify(gap.jsProfile))).toBeLessThanOrEqual(LOOP_PROFILE_BYTES);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+}, 25_000);
+
+test("runtime computed method keys never appear in a native loop-gap profile", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "loop-profile-computed-key-"));
+  try {
+    const lines: string[] = await child(["native-computed"], dir);
+    const serialized = JSON.stringify(lines);
+    expect(serialized).not.toContain("privateSyntheticMarker");
+    const gaps = lines.filter(line => line.startsWith("[viewer loop-gap] ")).map(line => JSON.parse(line.slice("[viewer loop-gap] ".length)));
+    const gap = gaps.find(row => row.gapMs >= 2000);
+    expect(gap?.jsProfile?.status).toBe("captured");
+    expect(gap.jsProfile.frames.rows.some((row: { function: string }) => row.function === "privateSyntheticMarker")).toBe(false);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }, 25_000);

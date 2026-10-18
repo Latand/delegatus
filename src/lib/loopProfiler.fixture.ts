@@ -11,7 +11,7 @@ function syntheticThreeSecondBlock() {
   return value;
 }
 
-if (process.argv[2] === "native" || process.argv[2] === "native-compiled") {
+if (process.argv[2] === "native" || process.argv[2] === "native-computed" || process.argv[2] === "native-compiled") {
   const lines: string[] = [];
   const settings = path.join(process.env.LLV_STATE_DIR!, "loop-profiler.json");
   fs.writeFileSync(settings, JSON.stringify({ enabled: true }));
@@ -39,7 +39,18 @@ if (process.argv[2] === "native" || process.argv[2] === "native-compiled") {
     if (line.includes('"jsProfile"')) fs.writeFileSync(settings, JSON.stringify({ enabled: false }));
   });
   const ticker = setInterval(() => monitor.tick(), 10);
-  const block = setTimeout(syntheticThreeSecondBlock, 100);
+  const block = process.argv[2] === "native-computed"
+    ? setTimeout(() => {
+      const marker = "privateSyntheticMarker";
+      const computed = { [marker]() {
+        const until = performance.now() + 3000;
+        let value = 0;
+        while (performance.now() < until) value += Math.sqrt(value + 1) % 123;
+        return value;
+      } };
+      computed[marker]();
+    }, 100)
+    : setTimeout(syntheticThreeSecondBlock, 100);
   try { await start(monitor, { ...process.env, LLV_STATE_OWNER: "viewer", NODE_ENV: "production", LLV_DIAGNOSTIC_REVISION: "a".repeat(40) }); console.log(JSON.stringify(lines)); }
   finally { clearTimeout(block); clearInterval(ticker); monitor.stop(); }
 } else if (process.argv[2] === "claim") {

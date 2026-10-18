@@ -1,22 +1,25 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFileSync, statSync } from "node:fs";
 
 export const LOOP_PROFILE_WINDOW_MS = 5000;
 export const LOOP_PROFILE_ARM_MS = 30 * 60_000;
 export const LOOP_PROFILE_COOLDOWN_MS = 60_000;
 export const LOOP_PROFILE_BYTES = 8192;
 const intervalUs = 10_000, sampleCap = 4096, depthCap = 32, frameCap = 128, topN = 16;
+const sourceFileCap = 8, sourceBytesCap = 2 * 1024 * 1024, sourceFileBytesCap = 256 * 1024;
 type Frame = { name: string; sourceURL?: string; line: number };
 export type LoopProfile = { traces: { frames: Frame[] }[] };
 type Summary = ReturnType<typeof trimLoopProfile>;
 export type LoopGapProfile = { status: "captured"; from: number; to: number; intervalUs: number; frames: Summary } | { status: "unavailable" };
 type Emit = (profile: LoopGapProfile) => void;
 
-/** Reject external paths, URL payloads and dynamic names. Only repository code
- * locations and identifier-shaped symbols may cross the logging boundary. */
-function location(frame: Frame, root: string) {
+/** Runtime names can come from computed property keys. Require nearby source
+ * syntax that declares the same name before it crosses the logging boundary. */
+function location(frame: Frame, root: string, sources: Map<string, string | null>) {
+  const line = frame.line;
   if (!frame.sourceURL || frame.sourceURL.length > 1024 || !/^[A-Za-z_$][\w$]{0,95}$/.test(frame.name)
-    || !Number.isSafeInteger(frame.line) || frame.line < 1) return null;
+    || !Number.isSafeInteger(line) || line < 1) return null;
   let source = frame.sourceURL;
   if (source.startsWith("file:")) {
     try { const url = new URL(source); if (url.search || url.hash || url.host) return null; source = fileURLToPath(url); }
@@ -24,15 +27,44 @@ function location(frame: Frame, root: string) {
   }
   if (!path.isAbsolute(source)) return null;
   const file = path.relative(root, source).split(path.sep).join("/");
-  if (!/^(?:src|scripts|\.next\/server)\/[\w./-]+\.[cm]?[jt]sx?$/.test(file)
+  if (!/^(?:src|scripts)\/[\w./-]+\.[cm]?[jt]sx?$/.test(file)
     || file.split("/").some(part => part === ".." || part === "node_modules")) return null;
-  return { function: frame.name, file, line: frame.line };
+  const sourcePath = path.resolve(root, file);
+  let sourceText = sources.get(file);
+  if (sourceText === undefined) {
+    if (sources.size >= sourceFileCap) return null;
+    try {
+      const size = statSync(sourcePath).size;
+      const used = [...sources.values()].reduce((total, value) => total + (value?.length ?? 0), 0);
+      if (size > sourceFileBytesCap || used + size > sourceBytesCap) sourceText = null;
+      else sourceText = readFileSync(sourcePath, "utf8");
+    } catch { sourceText = null; }
+    sources.set(file, sourceText);
+  }
+  if (!sourceText || !hasStaticNameAtLine(sourceText, frame.name, line)) return null;
+  return { function: frame.name, file, line };
+}
+
+function hasStaticNameAtLine(source: string, name: string, line: number) {
+  const lines = source.split("\n");
+  const first = Math.max(0, line - 33), last = Math.min(lines.length, line);
+  for (let index = last - 1; index >= first; index--) {
+    const text = lines[index]!;
+    const declaration = text.match(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/);
+    if (declaration) return declaration[1] === name;
+    const method = text.match(/(?:^|[,{;]\s*)(?:\[([^\]]+)\]|([A-Za-z_$][\w$]*))\s*\([^)]*\)\s*\{/);
+    if (method) return method[2] === name;
+    const arrow = text.match(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/);
+    if (arrow) return arrow[1] === name;
+  }
+  return false;
 }
 
 /** Conversion has a fixed visit/allocation budget even when native collection
  * was unbounded. Even spacing covers the whole window; weights use visited
  * samples, including samples whose frames privacy filtering omitted. */
 export function trimLoopProfile(raw: LoopProfile, root: string) {
+  const sources = new Map<string, string | null>();
   const frames = new Map<string, { function: string; file: string; line: number; self: number; total: number }>();
   const count = Math.min(sampleCap, raw.traces.length);
   // Misra-Gries candidates let a hot function arriving late displace earlier
@@ -42,7 +74,7 @@ export function trimLoopProfile(raw: LoopProfile, root: string) {
     const trace = raw.traces[Math.floor(i * raw.traces.length / count)]!;
     const seen = new Set<string>();
     for (let depth = 0; depth < Math.min(depthCap, trace.frames.length); depth++) {
-      const frame = location(trace.frames[depth]!, root);
+      const frame = location(trace.frames[depth]!, root, sources);
       if (!frame) continue;
       const key = `${frame.file}:${frame.line}:${frame.function}`;
       if (seen.has(key)) continue;
@@ -60,7 +92,7 @@ export function trimLoopProfile(raw: LoopProfile, root: string) {
     const trace = raw.traces[Math.floor(i * raw.traces.length / count)]!;
     const seen = new Set<string>();
     for (let depth = 0; depth < Math.min(depthCap, trace.frames.length); depth++) {
-      const frame = location(trace.frames[depth]!, root);
+      const frame = location(trace.frames[depth]!, root, sources);
       if (!frame) continue;
       const key = `${frame.file}:${frame.line}:${frame.function}`;
       if (!candidates.has(key)) continue;
