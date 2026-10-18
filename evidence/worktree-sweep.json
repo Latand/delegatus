@@ -1,0 +1,326 @@
+{
+  "baseRevision": "c91603e0691987984ca5c0468ef56f9b4d509144",
+  "procedure": "scripts/measure-worktree-sweep.ts",
+  "sourceSha256": {
+    "next.config.ts": "a53e20bf5500ec726f7d35046b1cc1f7b7efabde60327eef65f8cc90bfe2c34f",
+    "src/lib/viewerLoopMonitor.ts": "10e1e80186f1304e164506c25eb8d7ee3061907ea4ada049e65d386680eca1a5",
+    "src/lib/worktreeSweep.worker.ts": "e6f1969157b406953ab916c5639072ac169735ec6fe809642619d9feeadf5e30",
+    "src/lib/pipelines/worktreeSweep.ts": "65485eb0d60e5f1813f9a3345953040e064c5a675d619c4ba80526ca7bb5420b",
+    "src/lib/pipelines/worktreeSweepWorker.ts": "9e9d4d992bc8499fa4c52e2606b4dd88990f770e81ab07d4eeff68b36e94668a",
+    "src/lib/pipelines/worktreeSweepCache.ts": "8e925b081c7c7871c918031a51c63a740f4f7fcfda5942a08ee6c9030d0281ac",
+    "src/lib/pipelines/worktreeSweepWorker.test.ts": "541fcc543ca12c0cd1bfe1e1f0c9f15d8aee97fbf82cf637bd53fa00adec226d",
+    "src/lib/pipelines/worktreeSweepCache.test.ts": "fcc3b29569fbe2b1f0b89a6bd01e96bd42755248714b89dfc988433e1abc1247",
+    "src/lib/pipelines/worktreeSweep.fixture.ts": "d1b625b9765def988022868e9ea9d2aad08fb5cfa037609a48db8f687ee9db91",
+    "scripts/measure-worktree-sweep.ts": "003b50145c8e903f86477df40985f53bd0522ee8ac082c6fee9a7a165dd021e9"
+  },
+  "conditions": {
+    "fixture": "same synthetic filesystem copy in both exports",
+    "trees": 930,
+    "filesPerTree": 101,
+    "keptDecisionsPerPass": 1860,
+    "configuredCpuBudget": "300% through gate-slot.sh",
+    "interpreter": "Bun 1.4.0",
+    "sampler": "1 ms interval; maximum observed interval, including scheduler delay",
+    "injectedLoad": "none; ambient load averages recorded per pass",
+    "ports": "synthetic Git listing and pipeline owners; no registry, forge or process reads",
+    "scope": "main-loop responsiveness and reuse; no production throughput claim"
+  },
+  "initialBefore": [
+    {
+      "run": 0,
+      "trees": 930,
+      "filesPerTree": 101,
+      "elapsedMs": 9772.780336,
+      "maxLoopGapMs": 7015.342114,
+      "ticks": 2280,
+      "cpu": {
+        "user": 5435265,
+        "system": 5134389
+      },
+      "loadBefore": [
+        7.51,
+        7.33,
+        6.01
+      ],
+      "loadAfter": [
+        7.98,
+        7.43,
+        6.06
+      ],
+      "kept": 1860,
+      "trimmed": 0,
+      "errors": 0
+    },
+    {
+      "run": 1,
+      "trees": 930,
+      "filesPerTree": 101,
+      "elapsedMs": 10317.574975000001,
+      "maxLoopGapMs": 7782.099640999999,
+      "ticks": 2154,
+      "cpu": {
+        "user": 5611113,
+        "system": 5450427
+      },
+      "loadBefore": [
+        7.98,
+        7.43,
+        6.06
+      ],
+      "loadAfter": [
+        8.74,
+        7.61,
+        6.13
+      ],
+      "kept": 1860,
+      "trimmed": 0,
+      "errors": 0
+    },
+    {
+      "run": 2,
+      "trees": 930,
+      "filesPerTree": 101,
+      "elapsedMs": 8719.161585000002,
+      "maxLoopGapMs": 6506.394161999997,
+      "ticks": 1967,
+      "cpu": {
+        "user": 4825050,
+        "system": 4632042
+      },
+      "loadBefore": [
+        8.74,
+        7.61,
+        6.13
+      ],
+      "loadAfter": [
+        8.92,
+        7.67,
+        6.16
+      ],
+      "kept": 1860,
+      "trimmed": 0,
+      "errors": 0
+    }
+  ],
+  "before": [
+    {
+      "at": "2026-10-18T13:25:19.391Z",
+      "run": 0,
+      "trees": 930,
+      "filesPerTree": 101,
+      "elapsedMs": 8239.263297,
+      "maxLoopGapMs": 6287.799867,
+      "ticks": 1793,
+      "cpu": {
+        "user": 4471548,
+        "system": 4603078
+      },
+      "loadBefore": [
+        9.09,
+        8.59,
+        8.55
+      ],
+      "loadAfter": [
+        9.26,
+        8.64,
+        8.57
+      ],
+      "bun": "1.4.0",
+      "cpus": 3,
+      "kept": 1860,
+      "trimmed": 0,
+      "errors": 0,
+      "keptBytes": {
+        "recent-writes": 388546560,
+        "retention": 3809280
+      }
+    },
+    {
+      "at": "2026-10-18T13:25:27.263Z",
+      "run": 1,
+      "trees": 930,
+      "filesPerTree": 101,
+      "elapsedMs": 7867.49152,
+      "maxLoopGapMs": 5967.797962000001,
+      "ticks": 1771,
+      "cpu": {
+        "user": 4266932,
+        "system": 4340189
+      },
+      "loadBefore": [
+        9.26,
+        8.64,
+        8.57
+      ],
+      "loadAfter": [
+        8.68,
+        8.53,
+        8.53
+      ],
+      "bun": "1.4.0",
+      "cpus": 3,
+      "kept": 1860,
+      "trimmed": 0,
+      "errors": 0,
+      "keptBytes": {
+        "recent-writes": 388546560,
+        "retention": 3809280
+      }
+    },
+    {
+      "at": "2026-10-18T13:25:34.736Z",
+      "run": 2,
+      "trees": 930,
+      "filesPerTree": 101,
+      "elapsedMs": 7468.076173000001,
+      "maxLoopGapMs": 5750.059487000002,
+      "ticks": 1611,
+      "cpu": {
+        "user": 3964712,
+        "system": 4174061
+      },
+      "loadBefore": [
+        8.68,
+        8.53,
+        8.53
+      ],
+      "loadAfter": [
+        8.46,
+        8.49,
+        8.52
+      ],
+      "bun": "1.4.0",
+      "cpus": 3,
+      "kept": 1860,
+      "trimmed": 0,
+      "errors": 0,
+      "keptBytes": {
+        "recent-writes": 388546560,
+        "retention": 3809280
+      }
+    }
+  ],
+  "after": [
+    {
+      "at": "2026-10-18T13:25:46.035Z",
+      "run": 0,
+      "trees": 930,
+      "filesPerTree": 101,
+      "elapsedMs": 11189.328665000001,
+      "maxLoopGapMs": 9.243713999999997,
+      "ticks": 10559,
+      "cpu": {
+        "user": 215076,
+        "system": 84902
+      },
+      "loadBefore": [
+        8.46,
+        8.49,
+        8.52
+      ],
+      "loadAfter": [
+        8.02,
+        8.39,
+        8.48
+      ],
+      "bun": "1.4.0",
+      "cpus": 3,
+      "kept": 1860,
+      "trimmed": 0,
+      "errors": 0,
+      "keptBytes": {
+        "recent-writes": 388546560,
+        "retention": 3809280
+      },
+      "cacheStats": {
+        "allocationHits": 0,
+        "allocationMisses": 1860,
+        "discoveryHits": 0,
+        "discoveryMisses": 930
+      }
+    },
+    {
+      "at": "2026-10-18T13:25:53.224Z",
+      "run": 1,
+      "trees": 930,
+      "filesPerTree": 101,
+      "elapsedMs": 7183.389259000001,
+      "maxLoopGapMs": 2.4565120000006573,
+      "ticks": 6784,
+      "cpu": {
+        "user": 98529,
+        "system": 71964
+      },
+      "loadBefore": [
+        8.02,
+        8.39,
+        8.48
+      ],
+      "loadAfter": [
+        7.95,
+        8.36,
+        8.47
+      ],
+      "bun": "1.4.0",
+      "cpus": 3,
+      "kept": 1860,
+      "trimmed": 0,
+      "errors": 0,
+      "keptBytes": {
+        "recent-writes": 388546560,
+        "retention": 3809280
+      },
+      "cacheStats": {
+        "allocationHits": 1860,
+        "allocationMisses": 1860,
+        "discoveryHits": 930,
+        "discoveryMisses": 930
+      }
+    },
+    {
+      "at": "2026-10-18T13:25:59.809Z",
+      "run": 2,
+      "trees": 930,
+      "filesPerTree": 101,
+      "elapsedMs": 6579.653935000002,
+      "maxLoopGapMs": 2.1099130000002333,
+      "ticks": 6211,
+      "cpu": {
+        "user": 94191,
+        "system": 60142
+      },
+      "loadBefore": [
+        7.95,
+        8.36,
+        8.47
+      ],
+      "loadAfter": [
+        7.95,
+        8.36,
+        8.47
+      ],
+      "bun": "1.4.0",
+      "cpus": 3,
+      "kept": 1860,
+      "trimmed": 0,
+      "errors": 0,
+      "keptBytes": {
+        "recent-writes": 388546560,
+        "retention": 3809280
+      },
+      "cacheStats": {
+        "allocationHits": 3720,
+        "allocationMisses": 1860,
+        "discoveryHits": 1860,
+        "discoveryMisses": 930
+      }
+    }
+  ],
+  "compiledWorkerSmoke": {
+    "passes": 2,
+    "kept": 1,
+    "errors": 0,
+    "fixture": "one real linked Git worktree, registered in isolated project curation",
+    "entry": ".next/server/worktree-sweep-worker.js"
+  }
+}
