@@ -18,7 +18,10 @@ type StageTurnEvidence = import("./durableEvidence").StageTurnEvidence;
 /* A tick this suite did not ask for must never reach the real ports. */
 registerPipelineTick(async () => {});
 
-afterAll(() => fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }));
+afterAll(async () => {
+  await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
+  fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+});
 
 const STAGE_TRANSCRIPT = "/claude/stage-1.jsonl";
 const STAGE_CONVERSATION = "conversation_stage_1";

@@ -12,7 +12,7 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { StructuredControlResult } from "@/lib/runtime/structuredControls";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { Pipeline, PipelineStage, PipelineStageAttempt, PipelineRuntimeSeat, PipelineRuntimeSwitch, EffectivePipelineRole } from "./types";
-import { withoutStoredLessons } from "@/lib/memory/roleStore";
+import { withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 
 export class RuntimeSwitchSuperseded extends Error {
   constructor() { super("runtime switch changed before dispatch or settlement"); }
@@ -343,7 +343,7 @@ export async function driveRuntimeSwitch(
           tail.push(result.code === 0 ? result.stdout.split("\n").slice(0,40).join("\n") : "Git observation unavailable");
         }
         /* The transcript tail can hold the learned rules the attempt started with; they stay out of the checkout. */
-        const content = withoutStoredLessons(hardenedRedact(`Continue attempt ${attempt.n} from ${record.from.engine}/${record.from.model} on ${record.to.engine}/${record.to.model}. Keep the same worktree and branch. Do not reset, stash or discard work.\n${tail.join("\n")}`));
+        const content = await withoutStoredLessonsAsync(hardenedRedact(`Continue attempt ${attempt.n} from ${record.from.engine}/${record.from.model} on ${record.to.engine}/${record.to.model}. Keep the same worktree and branch. Do not reset, stash or discard work.\n${tail.join("\n")}`));
         const directory = await prepareControllerArtifactDirectory(pipeline.worktreeDir, ports.exec);
         const digest = crypto.createHash("sha256").update(content).digest("hex");
         const file = path.join(directory, `runtime-handoff-${digest}.md`);

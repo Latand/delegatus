@@ -2934,6 +2934,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "pipelinePreflight.not_directory": "Обери каталог: {path}",
   "pipelinePreflight.repo_unreadable": "Репозиторій недоступний для читання: {path}",
   "pipelinePreflight.repo_untraversable": "Репозиторій неможливо відкрити: {path}",
+  "pipelinePreflight.initialization_refused": "Цю папку неможливо безпечно додати до Git: {path}",
   "pipelinePreflight.not_git": "Обери Git-репозиторій: {path}",
   "pipelinePreflight.probe_failed": "Перевірку репозиторію не завершено — повтори: {path}",
   "pipelinePreflight.git_metadata_unwritable": "Метадані Git доступні лише для читання: {path}",
