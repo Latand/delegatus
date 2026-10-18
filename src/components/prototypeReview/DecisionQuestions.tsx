@@ -1,5 +1,6 @@
 "use client";
 
+import { shortenHashesInText } from "@/lib/shortIds";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { SkipForward } from "lucide-react";
@@ -87,7 +88,7 @@ export function DecisionQuestions({ questions, answers, open, onSelect, boxed = 
       <div className={`${boxed ? "mb-2" : "mb-1.5"} flex items-start gap-1.5`}><span data-prototype-question-number="" className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-sm bg-sunken text-caption font-bold">{at + 1}</span><p className="m-0 min-w-0 flex-1 text-ui font-semibold text-primary [overflow-wrap:anywhere]">{question.text}</p></div>
       {question.multiple && !closed && !skipped ? <p data-prototype-hint="" className={`m-0 ${boxed ? "mb-2" : "mb-1.5"} text-label text-muted`}>{t("proto.q.multiple")}</p> : null}
       <div role={question.multiple ? "group" : "radiogroup"} aria-label={question.text} className={`flex flex-col ${boxed ? "gap-1.5" : "gap-1"} ${skipped && open ? "opacity-60" : ""}`}>
-        {question.options.map((option, index) => choice(index, option.label, option.recommended))}
+        {question.options.map((option, index) => choice(index, shortenHashesInText(option.label), option.recommended))}
         {question.other ? choice("other", t("proto.q.other")) : null}
       </div>
       {open || skipped ? <button type="button" role="checkbox" aria-checked={skipped} disabled={!open} data-prototype-question-skip={question.id}

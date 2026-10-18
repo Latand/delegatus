@@ -1,3 +1,4 @@
+import { matchesShortId } from "@/lib/shortIds";
 import { agentRegistry } from "@/lib/agent/registry";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { pendingBackgroundTasks, readBackgroundTaskLedger, type RunningBackgroundTask } from "@/lib/pipelines/backgroundTasks";
@@ -137,7 +138,7 @@ export async function submitFlowDecision(request: FlowDecisionRequest, caller: s
   if (!snapshot || !decisionOwner(snapshot, caller)) throw new Error("flow decision owner could not be verified");
   const existing = snapshot.agentDecisions?.find((item) => item.clientRequestId === request.clientRequestId);
   if (existing) {
-    if (existing.owner !== caller || JSON.stringify(requestOf(existing)) !== JSON.stringify(request)) throw new Error("flow decision idempotency conflict");
+    if (existing.owner !== caller || !sameRequest(existing, request)) throw new Error("flow decision idempotency conflict");
     return { flowId: snapshot.id, decision: existing, replayed: true };
   }
   const turn = await dependencies.turn(snapshot);
@@ -147,7 +148,7 @@ export async function submitFlowDecision(request: FlowDecisionRequest, caller: s
     if (!flow || !decisionOwner(flow, caller)) throw new Error("flow decision owner changed");
     const duplicate = flow.agentDecisions?.find((item) => item.clientRequestId === request.clientRequestId);
     if (duplicate) {
-      if (duplicate.owner !== caller || JSON.stringify(requestOf(duplicate)) !== JSON.stringify(request)) throw new Error("flow decision idempotency conflict");
+      if (duplicate.owner !== caller || !sameRequest(duplicate, request)) throw new Error("flow decision idempotency conflict");
       accepted = duplicate;
       return [];
     }
@@ -159,11 +160,11 @@ export async function submitFlowDecision(request: FlowDecisionRequest, caller: s
     if (request.round !== flow.rounds.length) throw new Error("stale flow decision round");
     if (!turn?.turnId || turn.turnId !== request.turnId || turn.state === "unknown") throw new Error("flow decision turn is unavailable or stale");
     if (!decisionStageMatches(flow, request.stage, dependencies.pipelines())) throw new Error("flow decision stage attempt is stale or unavailable");
-    if (!/^[0-9a-f]{40}$/.test(request.expectedHead) || observedHead !== request.expectedHead) throw new Error("flow decision HEAD is unavailable, changed or not clean for review/completion");
+    if (!observedHead || !matchesShortId(observedHead, request.expectedHead)) throw new Error("flow decision HEAD is unavailable, changed or not clean for review/completion");
     if (request.decision === "submit-review" && flow.roundLimit > 0 && flow.rounds.length >= flow.roundLimit) throw new Error("flow review round limit reached");
     if (flow.agentDecisions?.some((item) => item.disposition === "accepted" || (item.turnId === request.turnId && item.transcriptPath === flow.implementerPath))) throw new Error("this flow turn already has a decision");
     if ((flow.agentDecisions?.length ?? 0) >= 512) throw new Error("flow decision receipt capacity reached");
-    accepted = { ...request, owner: caller!, transcriptPath: flow.implementerPath, acceptedAt: new Date().toISOString(), disposition: "accepted" };
+    accepted = { ...request, expectedHead: observedHead!, owner: caller!, transcriptPath: flow.implementerPath, acceptedAt: new Date().toISOString(), disposition: "accepted" };
     flow.agentDecisions = [...(flow.agentDecisions ?? []), accepted];
     flow.decisionRequired = false;
     flow.state = flow.rounds.length ? "fixing" : "waiting_ready";
@@ -178,4 +179,9 @@ export function decisionStillOwned(flow: Flow, decision: FlowAgentDecision): boo
   if (!decisionOwner(flow, decision.owner) || flow.implementerPath !== decision.transcriptPath) return false;
   const current = agentRegistry().conversation(decision.owner as `conversation_${string}`);
   return !current || current.generations.at(-1)?.path === decision.transcriptPath;
+}
+
+function sameRequest(stored: FlowAgentDecision, request: FlowDecisionRequest): boolean {
+  return matchesShortId(stored.expectedHead, request.expectedHead)
+    && JSON.stringify(requestOf(stored)) === JSON.stringify({ ...request, expectedHead: stored.expectedHead });
 }

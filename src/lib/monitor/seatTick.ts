@@ -1,3 +1,4 @@
+import { shortId } from "@/lib/shortIds";
 import { autonomyActive, pendingAutonomyReports, autonomyEndInstructions } from "./autonomy";
 import { createHash } from "node:crypto";
 import { seatTickBullet } from "./report";
@@ -216,7 +217,7 @@ function seatSettledDeploys(input: SeatTickCheckInput): readonly SeatTickDeployI
 
 function deployLabel(deploy: SeatTickDeployInput): string {
   const outcome = deploy.phase === "succeeded" ? "succeeded" : `ended ${deploy.phase}`;
-  return `deploy settled: the deployment you started ${outcome}, sha ${deploy.sha}${deploy.error ? `, error: ${deploy.error}` : ""}`;
+  return `deploy settled: the deployment you started ${outcome}, sha ${shortId(deploy.sha)}${deploy.error ? `, error: ${deploy.error}` : ""}`;
 }
 
 /** A standalone child with a live host behind it (#1465): open work, exactly
@@ -755,7 +756,7 @@ function ownLaneLabel(lane: SeatTickOwnLaneInput): string {
     /* #1938: never "finished". The wake says the last review failed and the
        head is unreviewed, with both heads, so nobody merges on it. */
     const review = lane.review;
-    const short = (sha: string | null | undefined) => sha ? sha.slice(0, 12) : "unknown";
+    const short = (sha: string | null | undefined) => shortId(sha ?? "unknown");
     const verdict = review ? `${review.stageId} said ${review.lastVerdict} with ${review.findings} finding${review.findings === 1 ? "" : "s"} on ${short(review.reviewedHead)}; ` : "";
     return `${lane.title} — lane you launched: last review failed, head unreviewed: ${verdict}current head ${short(review?.currentHead)} was never reviewed. The review budget is fixed: accept the head with pipeline_action accept-head when the findings are fixed, or ask the operator with publish_prototype_review and dismiss_attention escalate {reviewId}`;
   }

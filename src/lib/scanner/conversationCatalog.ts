@@ -56,6 +56,8 @@ const DEFAULT_PAGE_SIZE = 40;
 const MAX_PAGE_SIZE = 100;
 const catalogStore = globalThis as typeof globalThis & {
   __llvConversationCatalog?: ConversationCatalogEntry[];
+  __llvConversationProjects?: ReadonlySet<string>;
+  __llvConversationCatalogGeneration?: number;
   __llvConversationPagination?: Map<number, CatalogPaginationSnapshot>;
   __llvConversationPaginationSequence?: number;
 };
@@ -71,10 +73,22 @@ export class ExpiredConversationCatalogCursorError extends Error {
 
 export function replaceConversationCatalog(entries: ConversationCatalogEntry[]): void {
   catalogStore.__llvConversationCatalog = entries;
+  catalogStore.__llvConversationProjects = new Set(entries.map(entry => entry.project));
+  catalogStore.__llvConversationCatalogGeneration = (catalogStore.__llvConversationCatalogGeneration ?? 0) + 1;
 }
 
 export function conversationCatalogSnapshot(): readonly ConversationCatalogEntry[] {
   return catalogStore.__llvConversationCatalog ?? [];
+}
+
+/** Project membership is precomputed at publication so hot project resolution
+ * does not walk every retained conversation for each short-key request. */
+export function conversationCatalogProjectsSnapshot(): ReadonlySet<string> {
+  return catalogStore.__llvConversationProjects ?? new Set(conversationCatalogSnapshot().map(entry => entry.project));
+}
+
+export function conversationCatalogGeneration(): number {
+  return catalogStore.__llvConversationCatalogGeneration ?? 0;
 }
 
 export function conversationCatalogReady(): boolean {

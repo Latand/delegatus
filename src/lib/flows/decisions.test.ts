@@ -307,3 +307,10 @@ for (const previous of ["previous answer", "REVIEW_READY: previous work"]) {
     expect(flow.rounds).toHaveLength(0);
   });
 }
+
+test("short flow HEAD is stored whole, replays in full and refuses a stale prefix", async () => {
+  await expect(submitFlowDecision({ ...request, expectedHead: "ffffffff" }, owner)).rejects.toThrow("HEAD");
+  const result = await submitFlowDecision({ ...request, expectedHead: request.expectedHead.slice(0, 8) }, owner);
+  expect(result.decision.expectedHead).toBe(request.expectedHead);
+  expect((await submitFlowDecision(request, owner)).replayed).toBe(true);
+});

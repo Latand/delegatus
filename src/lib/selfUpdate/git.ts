@@ -1,3 +1,5 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { resolveShortId } from "@/lib/shortIds";
 /* The update check (#2007): ls-remote (no objects), then, only when the tip
    differs, a fetch into refs/self-update/tip and a local delta. Nothing here
    moves HEAD, a branch or a working tree. The repository may be the
@@ -165,4 +167,17 @@ export async function checkForUpdate({ repo, remote, branch, installed: installe
       installed,
     };
   }
+}
+
+/** Resolve only commits reachable from the fetched tracked branch. */
+export async function resolveTrackedRevision(repo: string, remote: string, branch: string, prefix: string, list = runGit): Promise<string> {
+  return withViewerOperation("self-update.revision-prefix", async () => {
+    await fetchTip(repo, remote, branch);
+    const rows = await list(["rev-list", TIP_REF], repo);
+    if (rows.code !== 0) throw new Error("Could not read the tracked branch history");
+    const result = resolveShortId(rows.stdout.trim().split(/\s+/).filter(value => /^[a-f0-9]{40}$/.test(value)), prefix);
+    if (result.kind === "ambiguous") throw new Error(`The short revision ${prefix} names several commits on the tracked branch; pass more characters`);
+    if (result.kind === "none") throw new Error("The requested revision was not found on the tracked branch");
+    return result.value;
+  });
 }

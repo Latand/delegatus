@@ -188,6 +188,73 @@ export async function openFixture(
   return { context, page, pageErrors };
 }
 
+/** Finished-frame lifetime, shared by the existing board and phone drivers.
+ * Serve the real state copy after deleting this case's capture directory. */
+export async function captureDoneFrames(browser: Browser, phone: boolean) {
+  const { preserveDoneFrame } = await import("@/lib/done/media");
+  const { copyDoneFrameSource } = await import("@/lib/done/source");
+  const { GET } = await import("@/app/api/image/route");
+  const { NextRequest } = await import("next/server");
+  const sharp = (await import("sharp")).default;
+  const out = path.resolve(".artifacts/done-frames",phone ? "phone" : "desktop");
+  fs.mkdirSync(out,{recursive:true});
+  const lane = fs.mkdtempSync(path.join(process.env.HOME!,"done-render-lane-"));
+  const source = path.join(lane,"result.png");
+  const raster = await sharp(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="720" height="460"><rect width="720" height="460" fill="#1b2332"/><rect x="40" y="45" width="640" height="110" rx="12" fill="#314660"/><text x="65" y="112" fill="#ffffff" font-family="sans-serif" font-size="34">Saved result</text><rect x="40" y="190" width="640" height="210" rx="12" fill="#243649"/></svg>')).png().toBuffer();
+  fs.writeFileSync(source,raster);
+  let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+  const readings: unknown[] = [], failures: string[] = [];
+  try {
+    const saved = await preserveDoneFrame(`task:rendered-${phone ? "phone" : "desktop"}`,{src:`/api/artifact?${new URLSearchParams({path:source})}`,caption:"Saved result"},copyDoneFrameSource,Date.parse("2026-10-18T08:00:00Z"));
+    if (saved.unavailable) throw new Error("fixture state copy failed");
+    fs.rmSync(lane,{recursive:true,force:true});
+    server = await serveEvidenceFixture(out,"src/components/attention/needsYouPanel.fixture.tsx",{
+      "/api/image":(request: Request)=>GET(new NextRequest(request)),
+    });
+    for (const width of phone ? [390] : [800,1440]) for (const lang of ["en","uk"] as const) for (const theme of ["light","dark"] as const) for (const state of ["retained","missing","error"] as const) {
+      const name = `${width}-${lang}-${theme}-${state}`;
+      const { page,context,pageErrors } = await openFixture(browser,`${server.base}?${new URLSearchParams({lang,open:"1",done:"1",doneframes:state,"done-frame-src":saved.src})}`,{width,height:phone?844:900},theme,lang,"reduce",phone);
+      try {
+        if (phone) {
+          await page.waitForFunction(()=>Number(document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count"))>1);
+          await page.locator('[data-mobile2-open="attention"]').click();
+        }
+        const section = page.locator(`[data-done-section="${phone ? "phone" : "desktop"}"][data-done-place="needs-you"]`);
+        await section.waitFor();
+        if (!phone) await page.waitForFunction(()=>document.querySelectorAll("[data-needs-you-section]").length >= 3);
+        if (state === "retained") {
+          await page.waitForFunction(()=>{const image=document.querySelector<HTMLImageElement>("[data-done-thumb] img");return Boolean(image?.complete && image.naturalWidth);});
+          const loaded=await section.locator("[data-done-thumb] img").evaluate((image)=>({width:(image as HTMLImageElement).naturalWidth,src:image.getAttribute("src")}));
+          if (loaded.width !== 720 || !loaded.src?.startsWith("/api/image?done=")) failures.push(`${name}: retained copy did not load`);
+          await section.scrollIntoViewIfNeeded();
+          await page.screenshot({path:path.join(out,`${name}.png`)});
+          await section.locator("[data-done-thumb]").click();
+          const dialog=page.locator('[role="dialog"][aria-modal="true"]:not([data-mobile2-sheet])'); await dialog.waitFor();
+          if (await dialog.locator("[data-lightbox-compare-side]").count() !== 2) failures.push(`${name}: pair did not open`);
+          await page.screenshot({path:path.join(out,`${name}-viewer.png`)});
+          await page.keyboard.press("Escape");
+          readings.push({name,loaded,sourceRemoved:!fs.existsSync(source),viewer:true});
+        } else {
+          const missing=section.locator("[data-done-frame-missing]"); await missing.waitFor(); await missing.scrollIntoViewIfNeeded();
+          const expected=lang==="uk" ? "Кадри не збереглися" : "Frames were not retained";
+          if ((await missing.innerText()).trim()!==expected || await section.locator("[data-done-thumb] img").count()) failures.push(`${name}: missing-frame state is wrong`);
+          const text=await missing.evaluate(element=>{
+            const box=element.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(element);
+            return {whole:[...range.getClientRects()].every(r=>r.left>=box.left && r.right<=box.right && r.top>=box.top && r.bottom<=box.bottom && r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight),label:element.textContent};
+          });
+          if (!text.whole) failures.push(`${name}: missing-frame text clipped`);
+          await page.screenshot({path:path.join(out,`${name}.png`)});
+          readings.push({name,...text});
+        }
+        if(pageErrors.length) failures.push(`${name}: ${pageErrors.join(", ")}`);
+      } finally {await context.close();}
+    }
+  } finally {server?.stop();fs.rmSync(lane,{recursive:true,force:true});}
+  const evidence=path.resolve("evidence/done-frames");fs.mkdirSync(evidence,{recursive:true});
+  fs.writeFileSync(path.join(evidence,phone ? "phone.json" : "desktop.json"),JSON.stringify({driver:phone ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx",readings,failures},null,2)+"\n");
+  return failures;
+}
+
 type WorkersRowReading = { icon: number; titleSize: number; titleWeight: number; titleColor: string; titleX: number; stateWeight: number; stateColor: string;
   inputWeight: number; inputAlign: string; inputX: number; inputY: number; inputH: number; stateRight: number; stateTop: number; stateBottom: number };
 

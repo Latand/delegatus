@@ -1,10 +1,14 @@
+import { prototypePublishSchema } from "./input";
+import { resolveIssueReportDigest, readIssueReportPreview } from "@/lib/issueReports/store";
+import { issueReportApprovalForm } from "@/lib/issueReports/approvalForm";
+import { operatorLocale } from "@/lib/operator/settings";
 import { NextRequest, NextResponse } from "next/server";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { refuseAnonymous, teamActor } from "@/lib/team";
 import { parsePrototypeInput, PrototypeError } from "./input";
 import { prototypeCriticGate, criticRefusal } from "./criticGate";
-import { findPrototypeRound, publishPrototype, withPrototypeState } from "./store";
+import { findPrototypeRound, publishPrototype, withPrototypeState, resolvePrototypeReviewId } from "./store";
 import { operatorDecisionRound, operatorDecisions, readPrototypeReviews, readSeatRounds } from "./read";
 import { findSeatRound, loadSeatRounds } from "./seatRounds";
 import { loadTasksForList } from "@/lib/tasks/store";
@@ -18,15 +22,22 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import { postPrototypeReviewToTelegram } from "./telegramPost";
 
 export function prototypeFailure(error: unknown, route = "prototype review"): NextResponse {
+  const ambiguous = error instanceof PrototypeError && (error as { code?: string }).code === "short_id_ambiguous";
   if (!(error instanceof PrototypeError)) console.error(`[prototype review] ${route}`, error);
-  return NextResponse.json({ error: error instanceof PrototypeError ? error.message : "prototype review is unavailable" }, { status: error instanceof PrototypeError ? error.status : 503 });
+  return NextResponse.json({
+    error: error instanceof PrototypeError ? error.message : "prototype review is unavailable",
+    ...(ambiguous ? { code: "short_id_ambiguous", field: "reviewId", retryable: false, candidates: (error as { candidates?: string[] }).candidates } : {}),
+  }, { status: error instanceof PrototypeError ? error.status : 503 });
 }
 /** The same project fence as reads, resolved by round for taskless forms too. */
 function resendTarget(request: NextRequest, reviewId: unknown, world: PrototypeWorld) {
-  if (typeof reviewId !== "string" || !/^pr_[a-f0-9]{32}$/.test(reviewId)) throw new PrototypeError("invalid reviewId");
+  if (typeof reviewId !== "string" || !/^pr_[a-f0-9]{7,32}$/i.test(reviewId)) throw new PrototypeError("invalid reviewId");
   const caller = world.caller(request);
+  const rounds = [...loadTasksForList().flatMap(task => task.prototypeReviews ?? []), ...loadSeatRounds()]
+    .filter(round => !caller.conversationId || (caller.project && canonicalProject(round.project) === canonicalProject(caller.project)));
+  reviewId = resolvePrototypeReviewId(rounds, reviewId);
   const task = loadTasksForList().find(t => t.prototypeReviews?.some(r => r.id === reviewId));
-  const round = task?.prototypeReviews?.find(r => r.id === reviewId) ?? findSeatRound(reviewId);
+  const round = task?.prototypeReviews?.find(r => r.id === reviewId) ?? findSeatRound(String(reviewId));
   if (!round) throw new PrototypeError("review not found", 404);
   if (caller.conversationId && (!caller.project || canonicalProject(round.project) !== canonicalProject(caller.project))) throw new PrototypeError("prototype access is limited to the caller's project", 403);
   if (task) taskForPrototype(task.id, caller, true);
@@ -119,7 +130,18 @@ export async function publishPOST(request: NextRequest,world: PrototypeWorld = p
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
   const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
-    const input = parsePrototypeInput(await request.json());
+    let raw = await request.json();
+    if (raw?.issueReport !== undefined) {
+      if (!prototypePublishSchema.safeParse(raw).success || raw.taskId !== undefined || raw.title !== undefined || raw.questions !== undefined || raw.variants !== undefined || raw.dir !== undefined) throw new PrototypeError("issueReport is used alone with clientRequestId");
+      const target = await withPrototypeState(() => publicationTarget(request, undefined, world));
+      if (target.taskId !== null || !target.seat) throw new PrototypeError("only the designated seat asks for issue-report approval", 403);
+      const result = await resolveIssueReportDigest(raw.issueReport);
+      if (result.kind === "ambiguous") return NextResponse.json({ error: "issueReport is ambiguous; pass more characters", code: "short_id_ambiguous", field: "issueReport", candidates: result.candidates }, { status: 409 });
+      const preview = result.kind === "match" ? readIssueReportPreview(result.value) : null;
+      if (!preview) throw new PrototypeError("issue-report preview not found", 404);
+      raw = { clientRequestId: raw.clientRequestId, ...issueReportApprovalForm(preview, operatorLocale() ?? "en") };
+    }
+    const input = parsePrototypeInput(raw);
     const { caller, stage, taskId, seat } = await withPrototypeState(() => publicationTarget(request,input.taskId,world));
     if (taskId === null && !input.questions?.length) throw new PrototypeError("a decision asked without a task is a form: give it 1–7 questions");
     let critic;
