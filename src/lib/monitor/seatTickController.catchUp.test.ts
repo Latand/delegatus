@@ -50,20 +50,26 @@ test("a refused catch-up credits nothing and the same catch-up key survives a fr
   expect(second.deps.readState!(PROJECT).announcedLanes).toHaveLength(35);
 });
 
-test.each([true, false])("native completed tail without opening boundary reaches tick admission (completed: %s)", async completed => {
+test.each(["completed", "open", "split-open"] as const)("native tail without opening boundary reaches tick admission safely (%s)", async scenario => {
   const f = childFixture("native-completed-tail", false, "off");
   const at = new Date(NOW - 13 * 60 * MINUTE).toISOString();
   // More than the native tail budget, with no retained opening prompt.
   const padding = Array.from({ length: 1000 }, () => JSON.stringify({ type: "progress", timestamp: at, data: "x".repeat(1000) })).join("\n");
-  const record = { type: "assistant", timestamp: at, message: { role: "assistant", model: "fixture", stop_reason: completed ? "end_turn" : null, content: [{ type: "text", text: "finished" }] } };
-  fs.writeFileSync(f.seat.path!, `${padding}\n${JSON.stringify(record)}\n`);
+  const records = scenario === "split-open"
+    ? [
+      { type: "assistant", timestamp: at, apiBlockIndex: 0, message: { id: "msg-split", role: "assistant", model: "fixture", stop_reason: "end_turn", content: [{ type: "tool_use", id: "toolu-open", name: "Read", input: { file_path: "src/example.ts" } }] } },
+      { type: "assistant", timestamp: at, apiBlockIndex: 1, message: { id: "msg-split", role: "assistant", model: "fixture", stop_reason: "end_turn", content: [{ type: "text", text: "finished" }] } },
+    ]
+    : [{ type: "assistant", timestamp: at, message: { role: "assistant", model: "fixture", stop_reason: scenario === "completed" ? "end_turn" : null, content: [{ type: "text", text: "finished" }] } }];
+  fs.writeFileSync(f.seat.path!, `${padding}\n${records.map(record => JSON.stringify(record)).join("\n")}\n`);
   f.registry.upsert({ key: { engine: "claude", sessionId: path.basename(f.seat.path!, ".jsonl") }, artifactPath: f.seat.path!, cwd: f.cwd,
     accountId: null, status: "dead", host: null, structuredHost: null, claimEpoch: 1, claimOwner: null, pendingAction: null });
   f.seed({ unreachableSince: at, lastWakeAt: FROM, lastProposalAt: AT });
   const evidence = (await readLivenessTranscriptEvidence("claude", f.seat.path!))!;
   if (evidence.nativeTail?.integrity !== "complete") throw new Error("native tail unreadable");
   expect(evidence.nativeTail.prefixTruncated).toBe(true);
-  const deploymentId = `native-tail-${completed ? "completed" : "open"}`;
+  const completed = scenario === "completed";
+  const deploymentId = `native-tail-${scenario}`;
   // This durable attribution is what deploy_exact_sha persists before returning
   // wakeOnSettle:true. A replacement tick reads it after succession.
   recordSeatDeployment({ conversationId: f.seat.conversationId, deploymentId, project: f.project, revision: "a".repeat(40), requestedAt: at });
@@ -113,16 +119,20 @@ test("catch-up crosses the event page boundary and leaves later events for later
   expect(next.sent[0]!.text).not.toContain("unreachable window");
 });
 
-test("450 multilingual UUID outcomes fit the real structured transport and credit only on delivery", async () => {
+test("500 UUID outcomes and a mixed lane manifest fit transport and credit only after delivery", async () => {
   const f = childFixture("catch-up-real-transport");
   const from = new Date(f.now - 13 * 60 * MINUTE).toISOString();
-  const events = Array.from({ length: 450 }, (_, i) => ({ ...terminalEvent(i + 1), project: PROJECT, type: "pipeline_merged" as const,
-    pipelineId: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`, at: new Date(f.now - 12 * 60 * MINUTE + i * 1000).toISOString(), summary: `merged outcome ${i + 1} — ${"я界🙂".repeat(45)}` }));
+  const pipelineId = (value: number) => ["00000000", "0000", "4000", "8000", String(value).padStart(12, "0")].join("-");
+  const events = Array.from({ length: 500 }, (_, i) => ({ ...terminalEvent(i + 1), project: PROJECT, type: "pipeline_merged" as const,
+    pipelineId: pipelineId(i + 1), at: new Date(f.now - 12 * 60 * MINUTE + i * 1000).toISOString(), summary: `merged outcome ${i + 1} — ${"я界🙂".repeat(45)}` }));
+  const lane = { id: pipelineId(501), state: "completed", src: f.seat.conversationId,
+    createdAt: from, movedAt: new Date(f.now - 11 * 60 * MINUTE).toISOString() };
+  const priorReport = { key: "lane:prior:completed", label: "earlier outcome", receivedAt: from };
   writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastCheckAt: from, lastWakeAt: from,
-    lastProposalAt: AT, unreachableSince: from, eventsThrough: 0, accounting: undefined }, f.stateFile);
+    lastProposalAt: AT, unreachableSince: from, eventsThrough: 0, reportsOwed: [priorReport], accounting: undefined }, f.stateFile);
   setAgentRegistryForTests(f.registry);
   const hosted = hostedSeat(f);
-  const rig = harness({ seat: f.seat, registry: f.registry, stateFile: f.stateFile, now: f.now, events,
+  const rig = harness({ seat: f.seat, registry: f.registry, stateFile: f.stateFile, now: f.now, events, pipelines: [lane],
     realWakeState: true, journal: { client: hosted.client },
     deliverWith: realTransport(f, hosted.client) });
   rig.deps.sources!.reports = reportPort(() => []);
@@ -135,16 +145,34 @@ test("450 multilingual UUID outcomes fit the real structured transport and credi
   expect(text).toContain(`unreachable window ${from} through ${new Date(f.now).toISOString()}`);
   expect(text).toContain(`manifest catch-up:7:${from}`);
   expect(text).toContain(`key catch-up:7:${from}`);
-  for (const event of events) { expect(text).toContain(event.pipelineId); expect(text).toContain(event.at); }
+  const base = Date.parse(events[0]!.at);
+  expect(text).toContain(`milliseconds relative to ${new Date(base).toISOString()}`);
+  for (const event of events) {
+    expect(text).toContain(event.pipelineId);
+    expect(text).toContain(`+${Date.parse(event.at) - base}ms`);
+  }
+  expect(text).toContain(lane.id);
+  expect(text).toContain(`+${Date.parse(lane.movedAt) - base}ms`);
   expect(rig.deps.readState!(PROJECT).eventsThrough).toBe(0);
+  expect(rig.deps.readState!(PROJECT).announcedLanes ?? []).toHaveLength(0);
+  expect(rig.deps.readState!(PROJECT).reportsOwed).toEqual([priorReport]);
+  expect(rig.deps.readState!(PROJECT).unreachableSince).toBe(from);
   const queued = rig.deps.readState!(PROJECT).outstandingWake!;
   expect(queued.operationId).toBeTruthy();
   hosted.journal.transitionOperation(queued.operationId!, "delivered");
   await runSeatTickCheck(PROJECT, rig.deps);
   const row = rig.deps.readState!(PROJECT);
-  expect(row.eventsThrough).toBe(450);
-  expect(row.itemsShown).toHaveLength(450);
+  expect(row.eventsThrough).toBe(500);
+  expect(row.itemsShown).toHaveLength(501);
+  expect(row.announcedLanes).toEqual([`${lane.id}:completed`]);
   expect(row.reportsOwed?.map(report => report.key)).toEqual([`catch-up:7:${from}`]);
+  expect(row.unreachableSince).toBeNull();
+  const later = harness({ seat: f.seat, registry: f.registry, stateFile: f.stateFile, now: f.now + 61 * MINUTE,
+    events, pipelines: [lane], realWakeState: true, journal: { client: hosted.client },
+    deliverWith: realTransport(f, hosted.client) });
+  await runSeatTickCheck(f.project, later.deps);
+  expect(later.sent.every(message => !message.text.includes("manifest catch-up:7:")
+    && !message.text.includes(lane.id) && !message.text.includes(events[0]!.pipelineId))).toBe(true);
 });
 
 test("a landed catch-up stays acknowledged after a real process restart", async () => {

@@ -235,6 +235,7 @@ function snapshotSection(snapshotAt: string | undefined, compact: boolean): stri
 export function seatTickWakeMessage(input: {
   catchUp?: { key: string; from: string; through: string };
   compactCatchUpManifest?: boolean;
+  compactCatchUpTimeBase?: string;
   autonomy?: AutonomySetting | null;
   autonomyUnchanged?: boolean;
   issues?: readonly ProposalIssue[];
@@ -278,7 +279,7 @@ export function seatTickWakeMessage(input: {
     `Wake reasons: ${input.reasons.map(reason => reason.kind).join(", ")}.`,
   ];
   if (input.catchUp) lines.push("", `Catch-up manifest ${input.catchUp.key}: unreachable window ${input.catchUp.from} through ${input.catchUp.through}.`,
-    `This bounds the delivery gap; host loss may have occurred later. Held backlog: ${input.items.length} items. Times below are original event times in UTC. Re-read unresolved actions before acting.`);
+    `This bounds the delivery gap; host loss may have occurred later. Held backlog: ${input.items.length} items. Times below are original event times in UTC${input.compactCatchUpTimeBase ? ` milliseconds relative to ${input.compactCatchUpTimeBase}` : ""}. Re-read unresolved actions before acting.`);
   /* Directly under the reasons, above the agenda, because it qualifies the
      whole message and because the agenda is the half the length bound eats
      into. A wake that dropped its own blind spot to fit one more item would be
@@ -376,9 +377,13 @@ export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage
     // The manifest form keeps each item's stable identity and original time,
     // while dropping repeated labels and punctuation that dominate large
     // catch-ups. Its size is checked before transport admission.
-    const items = compact(0).map(item => ({ ...item,
-      manifestLine: `- ${item.kind[0]} ${item.id} ${item.occurredAt ?? "time-unavailable"}` }));
-    const text = seatTickWakeMessage({ ...input, items, compactCatchUpManifest: true });
+    const dated = compact(0).map(item => ({ item, time: item.occurredAt ? Date.parse(item.occurredAt) : Number.NaN }));
+    const validTimes = dated.flatMap(row => Number.isFinite(row.time) ? [row.time] : []);
+    const timeBase = validTimes.length ? Math.min(...validTimes) : null;
+    const timeBaseText = timeBase === null ? undefined : new Date(timeBase).toISOString();
+    const items = dated.map(({ item, time }) => ({ ...item,
+      manifestLine: `- ${item.kind[0]} ${item.id} ${timeBase !== null && Number.isFinite(time) ? `+${time - timeBase}ms` : "time-unavailable"}` }));
+    const text = seatTickWakeMessage({ ...input, items, compactCatchUpManifest: true, compactCatchUpTimeBase: timeBaseText });
     if (Buffer.byteLength(text, "utf8") > MAX_STRUCTURED_TEXT_BYTES) {
       throw new Error("catch-up manifest exceeds structured transport budget");
     }

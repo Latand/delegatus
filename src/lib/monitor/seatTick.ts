@@ -2112,7 +2112,7 @@ export function seatTickWakeCommitPlan(
       ...(item.stallToken ? [`stall:${item.stallToken}`] : []),
       ...(context.bridgeReports ? seatTickOwedOutcomes([item]).map(outcome => `report:${outcome.key}`) : []),
     ];
-    return keys.map(key => ({ key, line: redactMonitorText(seatTickBullet(item)) }));
+    return keys.map(key => ({ key, line: redactMonitorText(item.manifestLine ?? seatTickBullet(item)) }));
   });
   if (catchUp && context.bridgeReports) {
     const line = context.frozenText?.split("\n").find(line => line.includes(`key ${catchUp.key} and coversOwed: true`));
