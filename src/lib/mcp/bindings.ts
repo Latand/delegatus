@@ -7398,13 +7398,26 @@ export function viewerMcpToolPolicy(
     projection the call already holds — never a separately resolved guess. An
     authority or registry that faults reads as unidentified, which fails both
     a fresh claim and a recovery closed. */
-function recoveryCaller(dependencies: Partial<Pick<ViewerMcpDomainDependencies, "attentionAuthority" | "registrySnapshot" | "recoveryPredecessors">>): McpRequestCaller {
+function recoveryCaller(
+  dependencies: Partial<Pick<ViewerMcpDomainDependencies, "attentionAuthority" | "registrySnapshot" | "recoveryPredecessors">>,
+  revalidateNative = false,
+): McpRequestCaller {
   const unidentified: McpRequestCaller = { kind: "unidentified", conversationId: null, project: null };
   let authority: AttentionCallerAuthority;
   try {
     authority = dependencies.attentionAuthority ? authorityOf(dependencies as ViewerMcpDomainDependencies) : { kind: "unidentified" };
   } catch {
     return unidentified;
+  }
+  /* Caller attribution is shared for the whole tool call, while a native
+     session proof is a live fence: generation changes must be visible at each
+     recovery check even when the original authority is memoized. */
+  if (revalidateNative && authority.nativeProof && dependencies.attentionAuthority) {
+    try {
+      authority = dependencies.attentionAuthority();
+    } catch {
+      return unidentified;
+    }
   }
   if (authority.kind === "unidentified") return { ...unidentified, ...(authority.admission ? { admission: authority.admission } : {}) };
   if (authority.conversationId === null) return { kind: authority.kind, conversationId: null, project: null };
@@ -7838,7 +7851,7 @@ export function viewerMcpRecoverableTools(
 ): Partial<Record<McpToolName, McpRecoverableTool>> {
   return {
     create_pipeline: {
-      currentCaller: () => recoveryCaller(domainDependencies),
+      currentCaller: () => recoveryCaller(domainDependencies, true),
       bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "repoDir"),
       bind: async (args) => {
         args = await namedLaunchProject(args, domainDependencies, "repoDir");
@@ -7858,7 +7871,7 @@ export function viewerMcpRecoverableTools(
     },
     spawn_agent: {
       bind: (args) => bindSpawn(args, domainDependencies),
-      currentCaller: () => recoveryCaller(domainDependencies),
+      currentCaller: () => recoveryCaller(domainDependencies, true),
       bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "cwd"),
       authorizeClaim: (args, binding) => {
         requireMcpDeployerCaller(args, binding.target.project, domainDependencies);
@@ -7867,13 +7880,13 @@ export function viewerMcpRecoverableTools(
       recover: (binding, options) => recoverSpawn(binding, options.legacy, domainDependencies, options.args, options.context),
     },
     send_message_to_orchestrator: {
-      currentCaller: () => recoveryCaller(domainDependencies),
+      currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindOrchestratorSend(args, domainDependencies),
       bindForRecovery: (args) => bindOrchestratorSend(args, domainDependencies, true),
       recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
     },
     send_message: {
-      currentCaller: () => recoveryCaller(domainDependencies),
+      currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindSend(args, domainDependencies),
       recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
     },

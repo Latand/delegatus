@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { liveRootSession } from "@/lib/root/adopt";
 import { attentionCallerAuthority } from "@/lib/attention/callerAuthority";
-import { hostedConversationsFromSnapshot, attentionCallerSources, productionDomainDependencies, viewerMcpBindings, viewerMcpToolPolicy } from "./bindings";
+import { hostedConversationsFromSnapshot, attentionCallerSources, productionDomainDependencies, viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy } from "./bindings";
 import { runAsMcpHttpCaller } from "./callerContext";
 import { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES, MUTATING_MCP_TOOL_NAMES, type McpToolBindings } from "./server";
 import crypto from "node:crypto";
@@ -128,6 +128,54 @@ test("targeted and enumerated authority agree for hostile capabilities and proce
       });
     }
   }
+});
+
+test("recovery refuses a native generation change after the production send binding", async () => {
+  const f = fixture(0);
+  let authority = { kind: "worker" as const, conversationId: id, role: "worker", nativeProof: "generation-a" };
+  const dependencies = { ...productionDomainDependencies, registrySnapshot: () => f.registry.readOnlySnapshot(), attentionAuthority: () => authority };
+  const recovery = viewerMcpRecoverableTools(dependencies);
+  const originalBind = recovery.send_message!.bind!;
+  recovery.send_message!.bind = async args => {
+    const result = await originalBind(args);
+    authority = { ...authority, nativeProof: "generation-b" };
+    return result;
+  };
+  let claims = 0, dispatches = 0;
+  const receipts = new MemoryMcpReceiptStore();
+  const claim = receipts.claim.bind(receipts);
+  receipts.claim = async (...args) => { claims++; return claim(...args); };
+  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(tool => [tool, async () => ({})])) as unknown as McpToolBindings;
+  bindings.send_message = async () => { dispatches++; return { operationId: "op_stale" }; };
+  const service = createMcpToolService(bindings, receipts, undefined, { recovery });
+  const result = await runAsMcpHttpCaller({ capability }, () => service.callTool("send_message", {
+    clientRequestId: "native-generation-bind", conversationId: id, text: "fixture",
+  }));
+  expect(result).toMatchObject({ ok: false, code: "caller_unidentified" });
+  expect({ claims, dispatches }).toEqual({ claims: 0, dispatches: 0 });
+});
+
+test("recovery discloses no receipt when native generation changes during receipt lookup", async () => {
+  const f = fixture(0);
+  let authority = { kind: "worker" as const, conversationId: id, role: "worker", nativeProof: "generation-a" };
+  const dependencies = { ...productionDomainDependencies, registrySnapshot: () => f.registry.readOnlySnapshot(), attentionAuthority: () => authority };
+  const receipts = new MemoryMcpReceiptStore();
+  let dispatches = 0;
+  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(tool => [tool, async () => ({})])) as unknown as McpToolBindings;
+  bindings.send_message = async () => { dispatches++; return { operationId: "op_receipt" }; };
+  const service = createMcpToolService(bindings, receipts, undefined, { recovery: viewerMcpRecoverableTools(dependencies) });
+  const args = { clientRequestId: "native-generation-receipt", conversationId: id, text: "fixture" };
+  expect(await runAsMcpHttpCaller({ capability }, () => service.callTool("send_message", args))).toMatchObject({ ok: true });
+  const lookup = receipts.lookup.bind(receipts);
+  receipts.lookup = async key => {
+    const row = await lookup(key);
+    authority = { ...authority, nativeProof: "generation-b" };
+    return row;
+  };
+  const result = await runAsMcpHttpCaller({ capability }, () => service.callTool("send_message", { ...args, recoveryOnly: true }));
+  expect(result).toMatchObject({ ok: false, code: "caller_unidentified" });
+  expect(JSON.stringify(result)).not.toContain("op_receipt");
+  expect(dispatches).toBe(1);
 });
 
 
