@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import os from "node:os";
 
@@ -79,6 +80,7 @@ interface SeatFailure {
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | SeatConversationsAnswer | ApiError>> {
+  return withViewerOperation("seat.panel", async () => {
   const project = req.nextUrl.searchParams.get("project")?.trim() ?? "";
   if (req.nextUrl.searchParams.get("scope")?.trim() === "all") {
     return NextResponse.json({ all: withDeputyRefs(allSeatConversationsIn(readOrchestratorSeatFileOrNull()), readDeputyFileOrNull()) });
@@ -145,6 +147,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
     /* docs/design/ghost-seat.md §5: the seat's feed draws each deputy's block
        from these, and the seat head and card point at the live one. */
     ...(seatDeputies.length ? { deputies: seatDeputies } : {}),
+  });
   });
 }
 

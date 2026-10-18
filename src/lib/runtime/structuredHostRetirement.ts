@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -1359,7 +1360,7 @@ export function startStructuredHostRetirement(ports: {
   if (retirementHost.__llvStructuredHostRetirementTimer) return;
   const schedule = ports.scheduleInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
   const sweep = ports.sweep ?? (() => reconcileStructuredHostRetirement());
-  const timer = schedule(() => { void sweep(); }, ports.intervalMs ?? STRUCTURED_HOST_RETIREMENT_INTERVAL_MS);
+  const timer = schedule(() => { void withViewerOperation("hosts.retirement", sweep); }, ports.intervalMs ?? STRUCTURED_HOST_RETIREMENT_INTERVAL_MS);
   timer.unref?.();
   retirementHost.__llvStructuredHostRetirementTimer = timer;
 }
