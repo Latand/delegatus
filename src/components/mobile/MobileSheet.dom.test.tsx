@@ -476,3 +476,117 @@ test("what a release does, by detent, distance and speed", () => {
   expect(sheetRelease({ detent: "expanded", dy: 30, velocity: 0.1 })).toBe("stay");
   expect(sheetRelease({ detent: "expanded", dy: -100, velocity: -fast })).toBe("stay");
 });
+
+/*
+ * A sheet shorter than 88 % of the screen: the expanded class carries a
+ * minimum of 88 %, so the first detent has to be measured without it, or a
+ * folding drag stops at 88 % and the sheet jumps to its own height on release.
+ * The stub lays the sheet out the way the classes and the inline style say.
+ */
+test("a short sheet follows a downward drag from the second detent to its own height, and settles there without a jump", () => {
+  const VIEW = 844;
+  const CONTENT = 194;
+  const { dialog, grab, closes } = openExpandable();
+  Object.defineProperty(dialog, "offsetHeight", {
+    configurable: true,
+    get: () => {
+      const { height, minHeight } = dialog.style;
+      const min = minHeight === "0" || minHeight === "0px" ? 0 : (minHeight === "88%" || dialog.className.includes("min-h-[88%]")) ? VIEW * 0.88 : 0;
+      if (height.endsWith("px")) return Math.max(parseFloat(height), min);
+      return Math.max(height === "auto" ? CONTENT : VIEW - 56, min);
+    },
+  });
+  dragBy(grab, -200)();
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("expanded");
+  flushSync(() => grab.dispatchEvent(pointer("pointerdown", 100)));
+  expect(dialog.style.height).toBe(`${VIEW - 56}px`);
+  flushSync(() => grab.dispatchEvent(pointer("pointermove", 200)));
+  expect(dialog.style.height).toBe(`${VIEW - 56 - 100}px`);
+  expect(dialog.offsetHeight).toBe(VIEW - 56 - 100);
+  flushSync(() => grab.dispatchEvent(pointer("pointermove", 1000)));
+  expect(dialog.style.height).toBe(`${CONTENT}px`);
+  expect(dialog.offsetHeight).toBe(CONTENT);
+  clock += 600;
+  flushSync(() => grab.dispatchEvent(pointer("pointerup", 1000)));
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+  /* The settle runs to the sheet's own height, not to 88 %. */
+  expect(dialog.style.height).toBe(`${CONTENT}px`);
+  expect(dialog.offsetHeight).toBe(CONTENT);
+  expect(closes()).toBe(0);
+});
+
+/*
+ * The handle of an expandable sheet is the control a keyboard and a screen
+ * reader reach: a named native button with `aria-expanded`.
+ */
+test("the handle of an expandable sheet is a named button that reports and switches the detent", () => {
+  const { dialog, grab } = openExpandable();
+  expect(grab.tagName).toBe("BUTTON");
+  expect(grab.getAttribute("type")).toBe("button");
+  expect(grab.getAttribute("aria-label")).toBe("Full height");
+  expect(grab.getAttribute("aria-expanded")).toBe("false");
+  /* Reached by Tab: it is a focusable button, not tabindex -1. */
+  expect(grab.getAttribute("tabindex")).toBeNull();
+  /* Enter and Space on a button arrive as a click with no pointer press. */
+  flushSync(() => grab.click());
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("expanded");
+  expect(grab.getAttribute("aria-expanded")).toBe("true");
+  flushSync(() => grab.click());
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+  expect(grab.getAttribute("aria-expanded")).toBe("false");
+});
+
+/** The click a pointer press ends in: `detail` 1, where Enter and Space send 0. */
+const pointerClick = () => new dom.MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }) as unknown as Event;
+
+test("a keyboard click right after a drag still switches the detent", () => {
+  const { dialog, grab } = openExpandable();
+  dragBy(grab, -200)();
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("expanded");
+  clock += 100;
+  flushSync(() => grab.click());
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+});
+
+test("a tap and the click that ends it switch the detent once; a drag and its click move it once", () => {
+  const { dialog, grab } = openExpandable();
+  flushSync(() => grab.dispatchEvent(pointer("pointerdown", 600)));
+  flushSync(() => grab.dispatchEvent(pointer("pointerup", 600)));
+  clock += 20;
+  flushSync(() => grab.dispatchEvent(pointerClick()));
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("expanded");
+  /* A drag down that folds it, then the click some engines send after it. */
+  dragBy(grab, 200)();
+  clock += 20;
+  flushSync(() => grab.dispatchEvent(pointerClick()));
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+  /* A click long after a press is a fresh activation. */
+  clock += 2000;
+  flushSync(() => grab.dispatchEvent(pointerClick()));
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("expanded");
+  /* A cancelled press leaves no click owing; the next click is the keyboard's. */
+  flushSync(() => grab.dispatchEvent(pointer("pointerdown", 600)));
+  flushSync(() => grab.dispatchEvent(pointer("pointercancel", 600)));
+  flushSync(() => grab.click());
+  expect(dialog.getAttribute("data-mobile2-detent")).toBe("collapsed");
+});
+
+test("Enter and Space on the focused handle each switch the detent once, and Tab reaches the handle first", () => {
+  const { host, dialog, grab } = openExpandable();
+  const focusable = [...host.querySelectorAll("button")];
+  expect(focusable[0]).toBe(grab as unknown);
+  (grab as unknown as HTMLButtonElement).focus();
+  expect(dom.document.activeElement).toBe(grab as unknown);
+  /* A native button turns Enter and Space into one click; the page does that, so the test sends the click. */
+  for (const expected of ["expanded", "collapsed", "expanded"]) {
+    flushSync(() => grab.click());
+    expect(dialog.getAttribute("data-mobile2-detent")).toBe(expected);
+  }
+});
+
+test("a plain sheet keeps its handle as a plain, unfocusable strip", () => {
+  const { host } = open();
+  const grab = host.querySelector("[data-mobile2-grab]") as unknown as HTMLElement;
+  expect(grab.tagName).toBe("DIV");
+  expect(grab.hasAttribute("aria-expanded")).toBe(false);
+});

@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronUp, X } from "lucide-react";
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
 import { useModalLayer } from "@/components/modalLayer";
 import { useLocale } from "@/lib/i18n";
@@ -34,7 +34,10 @@ import { Z } from "@/components/layers";
  * leaves the top bar and the safe area showing), where its body is the one
  * scroller. From there a drag down, or a flick, folds it back to the first
  * detent, and only from the first detent does a drag close it. A tap on the
- * handle switches between the two for a person who does not drag.
+ * handle switches between the two for a person who does not drag. On such a
+ * sheet the handle is a native button (`aria-expanded`, Enter and Space), 44 px
+ * high above the header; a tap and the click that follows it switch the detent
+ * once, and a click with no press (Enter, Space, assistive tech) switches it too.
  */
 
 /** A drag of the handle past this many pixels closes the sheet. */
@@ -55,11 +58,15 @@ const SHEET_FLICK_WINDOW_MS = 120;
 /** A drag shorter than this on the handle is a tap. */
 const SHEET_TAP_PX = 6;
 
+/** The click that follows a press of the handle came from the same press. */
+const SHEET_TAP_CLICK_MS = 500;
+
 /** The expanded detent: the screen less the safe area and the top bar (3.5 rem),
     so the bar stays visible over the scrim. The sheet's class below says the same,
     and never goes under the first detent (a landscape phone has less than that). */
 const EXPANDED_HEIGHT = "calc(100% - env(safe-area-inset-top) - 3.5rem)";
 const EXPANDED_CLASS = "h-[calc(100%-env(safe-area-inset-top)-3.5rem)] min-h-[88%] max-h-none";
+const EXPANDED_MIN = "88%";
 
 export type SheetDetent = "collapsed" | "expanded";
 
@@ -128,18 +135,21 @@ export function MobileSheet({
   const drag = useRef<{ y: number; dy: number; grab: boolean; start: number; low: number; high: number; lastY: number; lastAt: number; velocity: number } | null>(null);
   const [expanded, setExpanded] = useState(false);
   const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pressedAt = useRef<number | null>(null);
   useModalLayer({ containerRef: sheetRef, onClose });
   useEffect(() => () => { if (clearTimer.current) clearTimeout(clearTimer.current); }, []);
   const detent: SheetDetent = expandable && expanded ? "expanded" : "collapsed";
 
-  /** The height the sheet would have with `height` and `maxHeight` set, in px. */
-  const measure = (sheet: HTMLElement, height: string, maxHeight: string) => {
-    const { height: h, maxHeight: m } = sheet.style;
+  /** The height the sheet would have with `height`, `maxHeight` and `minHeight` set, in px. */
+  const measure = (sheet: HTMLElement, height: string, maxHeight: string, minHeight: string) => {
+    const { height: h, maxHeight: m, minHeight: n } = sheet.style;
     sheet.style.height = height;
     sheet.style.maxHeight = maxHeight;
+    sheet.style.minHeight = minHeight;
     const px = sheet.offsetHeight;
     sheet.style.height = h;
     sheet.style.maxHeight = m;
+    sheet.style.minHeight = n;
     return px;
   };
 
@@ -149,6 +159,7 @@ export function MobileSheet({
        pointer on the × or another header control is that control's tap. */
     if (isControlTarget(event.target, event.currentTarget)) return;
     if (clearTimer.current) { clearTimeout(clearTimer.current); clearTimer.current = null; }
+    pressedAt.current = null;
     const sheet = sheetRef.current;
     const grab = event.currentTarget.hasAttribute("data-mobile2-grab");
     drag.current = { y: event.clientY, dy: 0, grab, start: 0, low: 0, high: 0, lastY: event.clientY, lastAt: performance.now(), velocity: 0 };
@@ -156,14 +167,16 @@ export function MobileSheet({
       sheet.style.transition = "none";
       if (expandable) {
         /* Pin the height in px so the sheet can follow the finger up and down
-           between its two detents. */
-        const low = measure(sheet, "auto", "88%");
-        const high = Math.max(low, measure(sheet, EXPANDED_HEIGHT, "none"));
+           between its two detents. The first detent is measured without the
+           expanded class's minimum, so a short sheet folds to its own height. */
+        const low = measure(sheet, "auto", "88%", "0");
+        const high = Math.max(low, measure(sheet, EXPANDED_HEIGHT, "none", EXPANDED_MIN));
         const current = detent === "expanded" ? high : low;
         drag.current.low = low;
         drag.current.high = high;
         drag.current.start = current;
         sheet.style.maxHeight = "none";
+        sheet.style.minHeight = "0";
         sheet.style.height = `${current}px`;
       }
     }
@@ -215,6 +228,8 @@ export function MobileSheet({
     }
     const still = performance.now() - current.lastAt > SHEET_FLICK_WINDOW_MS;
     const tap = release && current.grab && Math.abs(current.dy) < SHEET_TAP_PX;
+    /* Any press of the handle ends in a click the pointer path has already answered. */
+    if (release && current.grab) pressedAt.current = performance.now();
     const outcome = !release ? "stay" : tap ? (detent === "collapsed" ? "expand" : "collapse") : sheetRelease({ detent, dy: current.dy, velocity: still ? 0 : current.velocity });
     if (outcome === "close") {
       onClose();
@@ -230,10 +245,21 @@ export function MobileSheet({
         clearTimer.current = null;
         sheet.style.height = "";
         sheet.style.maxHeight = "";
+        sheet.style.minHeight = "";
         sheet.style.transition = "";
       }, 220);
     }
     setExpanded(next === "expanded");
+  };
+  /* A press of the handle already had its answer (a tap switches the detent, a
+     drag moves it); the pointer click it ends in (`detail` above 0) is not
+     another. Enter, Space and a screen reader's activation arrive as a click
+     with `detail` 0, and that is the keyboard's way to the switch. */
+  const onGrabClick = (event: ReactMouseEvent<HTMLElement>) => {
+    const pressed = pressedAt.current;
+    pressedAt.current = null;
+    if (event.detail > 0 && pressed !== null && performance.now() - pressed < SHEET_TAP_CLICK_MS) return;
+    setExpanded(detent !== "expanded");
   };
   const onPointerUp = () => settle(true);
   const onPointerCancel = () => settle(false);
@@ -260,7 +286,19 @@ export function MobileSheet({
           full ? "h-full max-h-full rounded-none pt-[env(safe-area-inset-top)]" : detent === "expanded" ? `${EXPANDED_CLASS} rounded-t-[16px]` : "max-h-[88%] rounded-t-[16px]"
         } pb-[calc(6px+env(safe-area-inset-bottom))]`}
       >
-        {full ? null : (
+        {full ? null : expandable ? (
+          <button
+            type="button"
+            className="group flex h-11 w-full shrink-0 touch-none items-center justify-center px-6 outline-none"
+            aria-label={t("mobile2.sheet.expand")}
+            aria-expanded={detent === "expanded"}
+            data-mobile2-grab
+            onClick={onGrabClick}
+            {...handle}
+          >
+            <span className="block h-1 w-9 rounded-sm bg-strong group-focus-visible:ring-2 group-focus-visible:ring-accent/60 group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-raised" aria-hidden />
+          </button>
+        ) : (
           <div className="shrink-0 touch-none px-6 pb-0.5 pt-2" data-mobile2-grab {...handle}>
             <div className="mx-auto h-1 w-9 rounded-sm bg-strong" aria-hidden />
           </div>

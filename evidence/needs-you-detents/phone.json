@@ -13,10 +13,10 @@
         "top": 101,
         "bottom": 844,
         "height": 743,
-        "bodyHeight": 337,
+        "bodyHeight": 307,
         "bodyScrolls": true,
         "handleX": 195,
-        "handleY": 108,
+        "handleY": 123,
         "overflow": false
       },
       "expanded": {
@@ -24,10 +24,10 @@
         "top": 56,
         "bottom": 844,
         "height": 788,
-        "bodyHeight": 382,
+        "bodyHeight": 352,
         "bodyScrolls": true,
         "handleX": 195,
-        "handleY": 63,
+        "handleY": 78,
         "overflow": false
       },
       "folded": {
@@ -35,13 +35,13 @@
         "top": 101,
         "bottom": 844,
         "height": 743,
-        "bodyHeight": 337,
+        "bodyHeight": 307,
         "bodyScrolls": true,
         "handleX": 195,
-        "handleY": 108,
+        "handleY": 123,
         "overflow": false
       },
-      "scrolled": 370
+      "scrolled": 400
     },
     {
       "tag": "390-uk-light",
@@ -55,10 +55,10 @@
         "top": 101,
         "bottom": 844,
         "height": 743,
-        "bodyHeight": 337,
+        "bodyHeight": 307,
         "bodyScrolls": true,
         "handleX": 195,
-        "handleY": 108,
+        "handleY": 123,
         "overflow": false
       },
       "expanded": {
@@ -66,10 +66,10 @@
         "top": 56,
         "bottom": 844,
         "height": 788,
-        "bodyHeight": 382,
+        "bodyHeight": 352,
         "bodyScrolls": true,
         "handleX": 195,
-        "handleY": 63,
+        "handleY": 78,
         "overflow": false
       },
       "folded": {
@@ -77,13 +77,13 @@
         "top": 101,
         "bottom": 844,
         "height": 743,
-        "bodyHeight": 337,
+        "bodyHeight": 307,
         "bodyScrolls": true,
         "handleX": 195,
-        "handleY": 108,
+        "handleY": 123,
         "overflow": false
       },
-      "scrolled": 370
+      "scrolled": 400
     },
     {
       "tag": "390-en-light",
@@ -97,10 +97,10 @@
         "top": 101,
         "bottom": 844,
         "height": 743,
-        "bodyHeight": 337,
+        "bodyHeight": 307,
         "bodyScrolls": true,
         "handleX": 195,
-        "handleY": 108,
+        "handleY": 123,
         "overflow": false
       },
       "expanded": {
@@ -108,10 +108,10 @@
         "top": 56,
         "bottom": 844,
         "height": 788,
-        "bodyHeight": 382,
+        "bodyHeight": 352,
         "bodyScrolls": true,
         "handleX": 195,
-        "handleY": 63,
+        "handleY": 78,
         "overflow": false
       },
       "folded": {
@@ -119,13 +119,13 @@
         "top": 101,
         "bottom": 844,
         "height": 743,
-        "bodyHeight": 337,
+        "bodyHeight": 307,
         "bodyScrolls": true,
         "handleX": 195,
-        "handleY": 108,
+        "handleY": 123,
         "overflow": false
       },
-      "scrolled": 370
+      "scrolled": 400
     },
     {
       "tag": "440-uk-dark",
@@ -139,10 +139,10 @@
         "top": 112,
         "bottom": 932,
         "height": 820,
-        "bodyHeight": 379,
+        "bodyHeight": 349,
         "bodyScrolls": true,
         "handleX": 220,
-        "handleY": 119,
+        "handleY": 134,
         "overflow": false
       },
       "expanded": {
@@ -150,10 +150,10 @@
         "top": 56,
         "bottom": 932,
         "height": 876,
-        "bodyHeight": 435,
+        "bodyHeight": 405,
         "bodyScrolls": true,
         "handleX": 220,
-        "handleY": 63,
+        "handleY": 78,
         "overflow": false
       },
       "folded": {
@@ -161,13 +161,13 @@
         "top": 112,
         "bottom": 932,
         "height": 820,
-        "bodyHeight": 379,
+        "bodyHeight": 349,
         "bodyScrolls": true,
         "handleX": 220,
-        "handleY": 119,
+        "handleY": 134,
         "overflow": false
       },
-      "scrolled": 317
+      "scrolled": 347
     },
     {
       "tag": "440-uk-light",
@@ -181,10 +181,10 @@
         "top": 112,
         "bottom": 932,
         "height": 820,
-        "bodyHeight": 379,
+        "bodyHeight": 349,
         "bodyScrolls": true,
         "handleX": 220,
-        "handleY": 119,
+        "handleY": 134,
         "overflow": false
       },
       "expanded": {
@@ -192,10 +192,10 @@
         "top": 56,
         "bottom": 932,
         "height": 876,
-        "bodyHeight": 435,
+        "bodyHeight": 405,
         "bodyScrolls": true,
         "handleX": 220,
-        "handleY": 63,
+        "handleY": 78,
         "overflow": false
       },
       "folded": {
@@ -203,16 +203,16 @@
         "top": 112,
         "bottom": 932,
         "height": 820,
-        "bodyHeight": 379,
+        "bodyHeight": 349,
         "bodyScrolls": true,
         "handleX": 220,
-        "handleY": 119,
+        "handleY": 134,
         "overflow": false
       },
-      "scrolled": 317
+      "scrolled": 347
     },
     {
-      "tag": "390-uk-light-short",
+      "tag": "390-uk-light-no-done",
       "width": 390,
       "height": 844,
       "lang": "uk",
@@ -223,10 +223,10 @@
         "top": 101,
         "bottom": 844,
         "height": 743,
-        "bodyHeight": 675,
+        "bodyHeight": 645,
         "bodyScrolls": true,
         "handleX": 195,
-        "handleY": 108,
+        "handleY": 123,
         "overflow": false
       },
       "expanded": {
@@ -234,10 +234,10 @@
         "top": 56,
         "bottom": 844,
         "height": 788,
-        "bodyHeight": 720,
+        "bodyHeight": 690,
         "bodyScrolls": true,
         "handleX": 195,
-        "handleY": 63,
+        "handleY": 78,
         "overflow": false
       },
       "folded": {
@@ -245,10 +245,94 @@
         "top": 101,
         "bottom": 844,
         "height": 743,
-        "bodyHeight": 675,
+        "bodyHeight": 645,
         "bodyScrolls": true,
         "handleX": 195,
-        "handleY": 108,
+        "handleY": 123,
+        "overflow": false
+      },
+      "scrolled": 0
+    },
+    {
+      "tag": "390-uk-light-one-row",
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "scheme": "light",
+      "done": false,
+      "collapsed": {
+        "detent": "collapsed",
+        "top": 620,
+        "bottom": 844,
+        "height": 224,
+        "bodyHeight": 126,
+        "bodyScrolls": false,
+        "handleX": 195,
+        "handleY": 642,
+        "overflow": false
+      },
+      "expanded": {
+        "detent": "expanded",
+        "top": 56,
+        "bottom": 844,
+        "height": 788,
+        "bodyHeight": 690,
+        "bodyScrolls": false,
+        "handleX": 195,
+        "handleY": 78,
+        "overflow": false
+      },
+      "folded": {
+        "detent": "collapsed",
+        "top": 620,
+        "bottom": 844,
+        "height": 224,
+        "bodyHeight": 126,
+        "bodyScrolls": false,
+        "handleX": 195,
+        "handleY": 642,
+        "overflow": false
+      },
+      "scrolled": 0
+    },
+    {
+      "tag": "440-uk-light-one-row",
+      "width": 440,
+      "height": 932,
+      "lang": "uk",
+      "scheme": "light",
+      "done": false,
+      "collapsed": {
+        "detent": "collapsed",
+        "top": 708,
+        "bottom": 932,
+        "height": 224,
+        "bodyHeight": 126,
+        "bodyScrolls": false,
+        "handleX": 220,
+        "handleY": 730,
+        "overflow": false
+      },
+      "expanded": {
+        "detent": "expanded",
+        "top": 56,
+        "bottom": 932,
+        "height": 876,
+        "bodyHeight": 778,
+        "bodyScrolls": false,
+        "handleX": 220,
+        "handleY": 78,
+        "overflow": false
+      },
+      "folded": {
+        "detent": "collapsed",
+        "top": 708,
+        "bottom": 932,
+        "height": 224,
+        "bodyHeight": 126,
+        "bodyScrolls": false,
+        "handleX": 220,
+        "handleY": 730,
         "overflow": false
       },
       "scrolled": 0
