@@ -1,6 +1,34 @@
 import { expect, test } from "bun:test";
 
 import { registerPipelineTick, requestPipelineTick, requestRemotePipelineTick } from "./controllerSignal";
+import { controllerPipelineKeys, withControllerPipelineScope } from "./controllerScope";
+
+test("both the initial signal and a retained wake clear lane scope across awaits", async () => {
+  let entered!: () => void, release!: () => void, finished!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const done = new Promise<void>(resolve => { finished = resolve; });
+  const observed: Array<readonly string[] | undefined> = [];
+  let calls = 0;
+  const unregister = registerPipelineTick(async () => {
+    observed.push(controllerPipelineKeys());
+    if (++calls === 1) { entered(); await held; }
+    else { await Promise.resolve(); finished(); }
+    observed.push(controllerPipelineKeys());
+  });
+  try {
+    await withControllerPipelineScope(["first-lane"], async () => {
+      requestPipelineTick();
+      await started;
+      await withControllerPipelineScope(["second-lane"], async () => { requestPipelineTick(); });
+      release();
+      await done;
+      expect(controllerPipelineKeys()).toEqual(["first-lane"]);
+      expect(calls).toBe(2);
+      expect(observed).toEqual([undefined, undefined, undefined, undefined]);
+    });
+  } finally { release(); for (let i = 0; i < 20; i++) await Promise.resolve(); unregister(); }
+});
 
 test("pipeline controller signals coalesce concurrent requests", async () => {
   let calls = 0;
