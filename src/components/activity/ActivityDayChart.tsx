@@ -172,7 +172,7 @@ export function ActivityDayChart({ context, bounds }: { context: TipContext; bou
     let run = 0;
     for (const col of cols) {
       const { flagged, complete, humanHours } = facts(col);
-      if (flagged || (!unread && (complete || humanHours > 0))) break;
+      if (!unread && !flagged && (complete || humanHours > 0)) break;
       run += 1;
     }
     return run >= 2 ? run : 0;
@@ -389,7 +389,8 @@ function DayTable({ context }: { context: TipContext }) {
   const { data, locale, t } = context;
   const tz = data.params.tz;
   return (
-    <table className="sr-only" data-activity-table="">
+    <div className="sr-only">
+    <table data-activity-table="">
       <caption>{t(data.days.length === 1 ? "activity.chart.ariaToday" : "activity.chart.aria")}</caption>
       <thead>
         <tr>
@@ -418,5 +419,6 @@ function DayTable({ context }: { context: TipContext }) {
         })}
       </tbody>
     </table>
+    </div>
   );
 }

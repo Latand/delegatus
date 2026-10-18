@@ -89,7 +89,12 @@ export function datesLabel(from: string, to: string, locale: Locale): string {
   const format = new Intl.DateTimeFormat(intlLocale(locale), { day: "numeric", month: "short", timeZone: "UTC" });
   const a = new Date(`${from}T12:00:00Z`);
   if (from === to) return format.format(a);
-  return format.formatRange(a, new Date(`${to}T12:00:00Z`));
+  const b = new Date(`${to}T12:00:00Z`);
+  /* Across a year change a day and a month name would print both years in full: numbers keep the control one row. */
+  if (from.slice(0, 4) !== to.slice(0, 4)) {
+    return new Intl.DateTimeFormat(intlLocale(locale), { day: "2-digit", month: "2-digit", year: "2-digit", timeZone: "UTC" }).formatRange(a, b);
+  }
+  return format.formatRange(a, b);
 }
 
 /* ------------------------------------------------------------------------ */

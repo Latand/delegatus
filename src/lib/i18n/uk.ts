@@ -6322,7 +6322,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "activity.rhythm.title": "Ритм",
   "activity.rhythm.aria": "Ваші години у звіті й агенти без вас, по днях і годинах",
   "activity.rhythm.capped": "Показано останні 92 дні",
-  "activity.days.capped": "Показано останні 31 день",
+  "activity.days.capped": "Показано останні 14 днів",
   "activity.rhythm.you": "Ви:",
   "activity.rhythm.full": "1 год",
   "activity.rhythm.half": "½ год",

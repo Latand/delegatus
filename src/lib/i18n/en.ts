@@ -6418,7 +6418,7 @@ export const en = {
   "activity.rhythm.title": "Rhythm",
   "activity.rhythm.aria": "Your reported hours and agents working without you, per day and hour",
   "activity.rhythm.capped": "Showing the last 92 days",
-  "activity.days.capped": "Showing the last 31 days",
+  "activity.days.capped": "Showing the last 14 days",
   "activity.rhythm.you": "You:",
   "activity.rhythm.full": "1 h",
   "activity.rhythm.half": "½ h",

@@ -8462,9 +8462,9 @@ async function activityTokensMain(): Promise<void> {
       if (!phone && theme === "light") report.timeYearRender = { loadedMs, ...measured };
       must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
       must(reading.cut.length === 0 && reading.offscreen.length === 0 && reading.svgCut.length === 0, `${name}: cut text ${JSON.stringify({ cut: reading.cut, offscreen: reading.offscreen, svgCut: reading.svgCut })}`);
-      must(reading.scrollHeight <= height * (phone ? 6 : 4), `${name}: the page is ${reading.scrollHeight}px tall, over ${phone ? 6 : 4} screens`);
+      must(reading.scrollHeight <= height * (phone ? 5 : 4), `${name}: the page is ${reading.scrollHeight}px tall, over ${phone ? 5 : 4} screens`);
       if (phone) {
-        must(reading.dayRows > 0 && reading.dayRows <= 31 && reading.daysNote === (lang === "uk" ? "Показано останні 31 день" : "Showing the last 31 days"), `${name}: ${reading.dayRows} day rows, note ${reading.daysNote}`);
+        must(reading.dayRows > 0 && reading.dayRows <= 14 && reading.daysNote === (lang === "uk" ? "Показано останні 14 днів" : "Showing the last 14 days"), `${name}: ${reading.dayRows} day rows, note ${reading.daysNote}`);
       } else {
         must(measured.pairs > 0 && measured.pairs <= 54, `${name}: the Time chart over 366 days draws ${measured.pairs} columns`);
         must(measured.caps.some((text) => text !== "?" && text !== ""), `${name}: the year's column caps read ${JSON.stringify(measured.caps.slice(0, 12))}`);

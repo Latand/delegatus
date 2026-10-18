@@ -38,7 +38,7 @@ type ProjectSort = "human" | "agent";
 const REFRESH_MS = 60_000;
 /** Longer ranges than this show only the newest PHONE_DAYS days as rows. */
 const PHONE_DAYS_LIMIT_FROM = 92;
-const PHONE_DAYS = 31;
+const PHONE_DAYS = 14;
 const DESKTOP_QUERY = "(min-width: 1024px)";
 
 function subscribeDesktop(onChange: () => void) {
@@ -844,7 +844,7 @@ export function ActivityDashboard({ initialRange, initialView, initialBy = "mode
       : rows.sort((a, b) => b.humanMs - a.humanMs || b.wallMs - a.wallMs);
   }, [data, sort]);
   const projectMax = Math.max(0, ...projects.map((row) => Math.max(row.humanMs, row.wallMs)));
-  /* Past 92 days (a year) a row per day is a page of its own: the phone keeps the newest month and says so. */
+  /* Past 92 days (a year) a row per day is a page of its own: the phone keeps the newest two weeks and says so. */
   const dayRowsCapped = (data?.days.length ?? 0) > PHONE_DAYS_LIMIT_FROM;
   const days = useMemo(() => [...(data?.days ?? [])].reverse().slice(0, dayRowsCapped ? PHONE_DAYS : undefined), [data, dayRowsCapped]);
   const hosts = data?.coverage.hosts ?? [];
