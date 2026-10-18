@@ -2222,6 +2222,10 @@ async function childWork(
         observedRunning.add(child.key);
       }
     }
+    // Cold visits count as covered by this pass too; rotate their ticket
+    // before checking the frozen snapshot so an unchanged ledger does not
+    // force an unnecessary extra catch-up check.
+    accounting.rotateCold(coldVisits);
     if (catchUpPollThrough !== null) {
       const next = accounting.page("poll", 1)[0];
       const pending = next?.kind === "poll" && (next.key.startsWith(`poll/${encodeURIComponent(project)}/!`)
@@ -2229,7 +2233,6 @@ async function childWork(
       if (pending) gaps.add("ledger-pending");
       else accounting.endCatchUpPoll();
     }
-    accounting.rotateCold(coldVisits);
     // Page the persisted ready queue, yielding between pages. The cutoff is
     // the snapshot gathered by this check; deliveries acknowledge its exact ids.
     const ready = async function* () {
