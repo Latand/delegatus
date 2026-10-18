@@ -7,7 +7,7 @@ import { installActEnv } from "@/test-helpers/actEnv";
 import { formatArtifactFragment } from "@/lib/artifact/fragment";
 import { setLocale } from "@/lib/i18n";
 
-import { setLeftShellInset } from "../shellLayout";
+import { setHostedColumnLeft, setLeftShellInset } from "../shellLayout";
 import { useModalLayer } from "../modalLayer";
 import { useMenuDismiss } from "../kanban/kanbanMenus";
 import { ArtifactPreviewHost, roomForSheet } from "./ArtifactPreviewHost";
@@ -582,6 +582,56 @@ test("the desktop sheet yields to the orchestrator dock so the board keeps its 3
 
   await act(async () => setLeftShellInset(0));
   expect(surface()!.getAttribute("data-artifact-preview-inset")).toBe("0");
+});
+
+/* Over the full-screen agent window the conversation is the window's right
+   column, which starts after the window's margin and its agent list. */
+test("opened over the agent window, the sheet keeps 320px of conversation measured from its column", async () => {
+  /* The column's left edge at the widths the window stands in: 8 + 220 below
+     1200 px, and behind the 248 px sidebar from 1100 px up. */
+  expect(roomForSheet(1_440, 504, true)).toBe(616);
+  expect(1_440 - 504 - Math.min(560, roomForSheet(1_440, 504, true))).toBeGreaterThanOrEqual(320);
+  expect(roomForSheet(1_200, 504, true)).toBe(376);
+  expect(1_200 - 504 - roomForSheet(1_200, 504, true)).toBe(320);
+  /* 1000 px: the 560 the board geometry would give is cut to the floor. */
+  expect(roomForSheet(1_000, 228, true)).toBe(452);
+  expect(1_000 - 228 - Math.min(560, roomForSheet(1_000, 228, true))).toBe(320);
+  /* Where the minimum sheet and the floor no longer fit, the sheet takes the column whole. */
+  expect(roomForSheet(700, 228, true)).toBe(472);
+  expect(roomForSheet(907, 228, true)).toBe(679);
+  expect(roomForSheet(908, 228, true)).toBe(360);
+  expect(roomForSheet(500, 228, true)).toBe(380);
+  /* The board's geometry is the same function without a host. */
+  expect(roomForSheet(1_000, 228)).toBe(452);
+  expect(roomForSheet(700, 228)).toBe(380);
+  expect(roomForSheet(1_440, 0)).toBe(1_120);
+});
+
+test("the sheet sizes itself to the agent window's column while the window is open, and back to the board's geometry after", async () => {
+  textRoutes();
+  const happy = dom as unknown as { happyDOM: { setViewport(size: { width: number; height: number }): void } };
+  happy.happyDOM.setViewport({ width: 1_000, height: 760 });
+  await render();
+  await act(async () => openArtifactPreview(TEXT_PATH));
+  await flush();
+  await flush();
+  /* The board: the CSS clamp, whose max()/min() this DOM does not parse, so no pixel width is written. */
+  expect(surface()!.getAttribute("style")).not.toContain("px;");
+
+  await act(async () => setHostedColumnLeft(228));
+  expect(surface()!.getAttribute("data-artifact-preview-inset")).toBe("228");
+  expect(surface()!.getAttribute("style")).toContain("width: 452px");
+
+  /* The window's list narrows or the viewport shrinks: the sheet follows both. */
+  await act(async () => happy.happyDOM.setViewport({ width: 700, height: 760 }));
+  await act(async () => {
+    dom.dispatchEvent(new dom.Event("resize") as never);
+  });
+  expect(surface()!.getAttribute("style")).toContain("width: 472px");
+
+  await act(async () => setHostedColumnLeft(0));
+  expect(surface()!.getAttribute("data-artifact-preview-inset")).toBe("0");
+  happy.happyDOM.setViewport({ width: 1_024, height: 768 });
 });
 
 test("the mobile sheet ignores the dock — it is fullscreen and nothing is docked beside it", async () => {

@@ -33889,4 +33889,78 @@ describe("overlays opened from a conversation draw above the full-screen view th
       fs.writeFileSync("evidence/reader-overlays/escape-and-board.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
     } finally { await browser.close(); browserServer.close(); server.stop(); }
   }, 300_000);
+
+  browserTest("the preview over the agent window keeps 320px of conversation from the column's edge, and the board's geometry is unchanged", async () => {
+    /*
+     * The conversation is the window's right column, which starts after the window's margin and its agent list.
+     * The sheet measures its floor from that edge: at least 320px of conversation stay visible, or, where the
+     * narrowest useful sheet no longer fits beside that floor, the sheet takes the column whole.
+     *
+     *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "keeps 320px of conversation"
+     */
+    const out = path.resolve(".artifacts/reader-overlays"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, undefined, await stubs());
+    const browserServer = await chromium.launchServer({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    fs.writeFileSync(path.join(out, "browser-geometry.pid"), String(browserServer.process()?.pid));
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: unknown[] = [];
+    const RUNS = [
+      { width: 1440, height: 900 }, { width: 1200, height: 800 }, { width: 1000, height: 700 }, { width: 700, height: 900 },
+    ];
+    try {
+      for (const { width, height } of RUNS) for (const [lang, scheme] of [["uk", "light"], ["en", "dark"]] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured&overlay-links`, { width, height }, scheme, lang, "reduce");
+        const tag = `${width}-${lang}-${scheme}`;
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+          await page.locator(`.card[data-id="task:t-search"] .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await page.click('.card[data-id="task:t-search"] .pb-pills [data-stage="verify"]');
+          await page.waitForSelector("[data-agent-window] [data-file-link]", { timeout: 15_000 });
+          await page.waitForTimeout(500);
+          const measure = () => page.evaluate(() => {
+            const preview = document.querySelector<HTMLElement>("[data-artifact-preview]")!.getBoundingClientRect();
+            const column = document.querySelector<HTMLElement>("[data-agent-window] .aw-reader")?.getBoundingClientRect() ?? null;
+            const list = document.querySelector<HTMLElement>("[data-agent-window] .aw-list")?.getBoundingClientRect() ?? null;
+            return {
+              preview: { left: preview.left, width: preview.width },
+              column: column && { left: column.left, width: column.width },
+              list: list && { left: list.left, width: list.width },
+              inset: Number(document.querySelector("[data-artifact-preview]")!.getAttribute("data-artifact-preview-inset")),
+              viewport: innerWidth,
+            };
+          });
+          for (const name of ["plan", "log"]) {
+            await page.locator("[data-agent-window] [data-file-link]", { hasText: name }).first().click();
+            await page.waitForSelector("[data-artifact-preview]", { timeout: 5_000 });
+            await page.waitForFunction(() => document.querySelector("[data-artifact-preview]")?.getAttribute("data-artifact-state") === "ready", undefined, { timeout: 10_000 });
+            const reading = await measure();
+            const visible = reading.preview.left - reading.column!.left;
+            const takesColumn = Math.abs(visible) <= 1;
+            expect(takesColumn || visible >= 319.5, `${tag} ${name}: ${visible}px of conversation left of the preview`).toBe(true);
+            expect(reading.preview.left + reading.preview.width, `${tag} the sheet reaches the right edge`).toBeCloseTo(width, 0);
+            expect(reading.preview.width, `${tag} the sheet is never narrower than a usable strip`).toBeGreaterThanOrEqual(359.5);
+            if (name === "plan") await page.screenshot({ path: path.join(out, `${tag}-preview-over-window.png`) });
+            readings.push({ width, height, lang, scheme, host: "window", file: name, ...reading, conversationVisible: visible, takesColumn });
+            await page.click(`[data-artifact-preview] button[aria-label="${translate(lang, "preview.close")}"]`);
+            await page.waitForSelector("[data-artifact-preview]", { state: "detached", timeout: 5_000 });
+          }
+          /* A preview that outlives the window sits on the plain board: the board's geometry, untouched. */
+          await page.locator("[data-agent-window] [data-file-link]", { hasText: "plan" }).first().click();
+          await page.waitForSelector("[data-artifact-preview]");
+          await page.locator("[data-agent-window] [data-reader-close]").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForFunction(() => !document.querySelector("[data-agent-window]"), undefined, { timeout: 5_000 });
+          const board = await page.evaluate(() => {
+            const sheet = document.querySelector<HTMLElement>("[data-artifact-preview]")!;
+            return { width: sheet.getBoundingClientRect().width, inset: Number(sheet.getAttribute("data-artifact-preview-inset")), viewport: innerWidth };
+          });
+          expect(board.width, `${tag} board preview width`).toBeCloseTo(Math.max(380, Math.min(560, board.viewport - 320 - board.inset)), 0);
+          await page.screenshot({ path: path.join(out, `${tag}-preview-on-board.png`) });
+          readings.push({ width, height, lang, scheme, host: "board", ...board });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/reader-overlays", { recursive: true });
+      fs.writeFileSync("evidence/reader-overlays/preview-geometry.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { await browser.close(); browserServer.close(); server.stop(); }
+  }, 600_000);
 });

@@ -1,0 +1,461 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": [
+    {
+      "width": 1440,
+      "height": 900,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 880,
+        "width": 560
+      },
+      "column": {
+        "left": 504,
+        "width": 928
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1440,
+      "conversationVisible": 376,
+      "takesColumn": false
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 880,
+        "width": 560
+      },
+      "column": {
+        "left": 504,
+        "width": 928
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1440,
+      "conversationVisible": 376,
+      "takesColumn": false
+    },
+    {
+      "width": 560,
+      "height": 900,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "board",
+      "inset": 0,
+      "viewport": 1440
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 880,
+        "width": 560
+      },
+      "column": {
+        "left": 504,
+        "width": 928
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1440,
+      "conversationVisible": 376,
+      "takesColumn": false
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 880,
+        "width": 560
+      },
+      "column": {
+        "left": 504,
+        "width": 928
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1440,
+      "conversationVisible": 376,
+      "takesColumn": false
+    },
+    {
+      "width": 560,
+      "height": 900,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "board",
+      "inset": 0,
+      "viewport": 1440
+    },
+    {
+      "width": 1200,
+      "height": 800,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 824,
+        "width": 376
+      },
+      "column": {
+        "left": 504,
+        "width": 688
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1200,
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 1200,
+      "height": 800,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 824,
+        "width": 376
+      },
+      "column": {
+        "left": 504,
+        "width": 688
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1200,
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 560,
+      "height": 800,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "board",
+      "inset": 0,
+      "viewport": 1200
+    },
+    {
+      "width": 1200,
+      "height": 800,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 824,
+        "width": 376
+      },
+      "column": {
+        "left": 504,
+        "width": 688
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1200,
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 1200,
+      "height": 800,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 824,
+        "width": 376
+      },
+      "column": {
+        "left": 504,
+        "width": 688
+      },
+      "list": {
+        "left": 256,
+        "width": 248
+      },
+      "inset": 504,
+      "viewport": 1200,
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 560,
+      "height": 800,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "board",
+      "inset": 0,
+      "viewport": 1200
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 548,
+        "width": 452
+      },
+      "column": {
+        "left": 228,
+        "width": 764
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 1000,
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 548,
+        "width": 452
+      },
+      "column": {
+        "left": 228,
+        "width": 764
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 1000,
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 560,
+      "height": 700,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "board",
+      "inset": 0,
+      "viewport": 1000
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 548,
+        "width": 452
+      },
+      "column": {
+        "left": 228,
+        "width": 764
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 1000,
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 548,
+        "width": 452
+      },
+      "column": {
+        "left": 228,
+        "width": 764
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 1000,
+      "conversationVisible": 320,
+      "takesColumn": false
+    },
+    {
+      "width": 560,
+      "height": 700,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "board",
+      "inset": 0,
+      "viewport": 1000
+    },
+    {
+      "width": 700,
+      "height": 900,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 228,
+        "width": 472
+      },
+      "column": {
+        "left": 228,
+        "width": 464
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 700,
+      "conversationVisible": 0,
+      "takesColumn": true
+    },
+    {
+      "width": 700,
+      "height": 900,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 228,
+        "width": 472
+      },
+      "column": {
+        "left": 228,
+        "width": 464
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 700,
+      "conversationVisible": 0,
+      "takesColumn": true
+    },
+    {
+      "width": 380,
+      "height": 900,
+      "lang": "uk",
+      "scheme": "light",
+      "host": "board",
+      "inset": 0,
+      "viewport": 700
+    },
+    {
+      "width": 700,
+      "height": 900,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "window",
+      "file": "plan",
+      "preview": {
+        "left": 228,
+        "width": 472
+      },
+      "column": {
+        "left": 228,
+        "width": 464
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 700,
+      "conversationVisible": 0,
+      "takesColumn": true
+    },
+    {
+      "width": 700,
+      "height": 900,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "window",
+      "file": "log",
+      "preview": {
+        "left": 228,
+        "width": 472
+      },
+      "column": {
+        "left": 228,
+        "width": 464
+      },
+      "list": {
+        "left": 8,
+        "width": 220
+      },
+      "inset": 228,
+      "viewport": 700,
+      "conversationVisible": 0,
+      "takesColumn": true
+    },
+    {
+      "width": 380,
+      "height": 900,
+      "lang": "en",
+      "scheme": "dark",
+      "host": "board",
+      "inset": 0,
+      "viewport": 700
+    }
+  ]
+}

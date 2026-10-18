@@ -54,3 +54,41 @@ function subscribe(listener: () => void): () => void {
 export function useLeftShellInset(): number {
   return useSyncExternalStore(subscribe, leftShellInset, () => 0);
 }
+
+/*
+ * Where the conversation column of a full-screen agent window starts, in
+ * viewport pixels; 0 while no such window is open.
+ *
+ * The preview sheet keeps a floor of conversation visible beside it. Over the
+ * agent window the conversation is the window's right column — it starts after
+ * the window's margin and its own agent list, which the left shell inset knows
+ * nothing about — so the window publishes that edge here and the sheet measures
+ * its floor from it. The window covers the sidebar and the dock beside it, so
+ * while it is open this edge replaces the shell inset instead of adding to it.
+ */
+let hostedColumnLeft = 0;
+const hostedListeners = new Set<() => void>();
+
+/** Published by the agent window while it is mounted; 0 when it closes. */
+export function setHostedColumnLeft(next: number): void {
+  const value = Number.isFinite(next) && next > 0 ? Math.round(next) : 0;
+  if (value === hostedColumnLeft) return;
+  hostedColumnLeft = value;
+  for (const listener of [...hostedListeners]) listener();
+}
+
+export function hostedColumnInset(): number {
+  return hostedColumnLeft;
+}
+
+function subscribeHosted(listener: () => void): () => void {
+  hostedListeners.add(listener);
+  return () => {
+    hostedListeners.delete(listener);
+  };
+}
+
+/** The live hosted column edge, for the preview sheet; 0 when no window hosts it. */
+export function useHostedColumnLeft(): number {
+  return useSyncExternalStore(subscribeHosted, hostedColumnInset, () => 0);
+}

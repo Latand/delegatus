@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { useLocale } from "@/lib/i18n";
 import { RoleEmblem, frameRoleName } from "@/components/RoleFrameMark";
 
+import { setHostedColumnLeft } from "../shellLayout";
 import { ChevronRight, CloseGlyph, MaximizeGlyph } from "./kanbanGlyphs";
 import type { OpenAgent } from "./openAgents";
 
@@ -77,6 +78,24 @@ export function AgentWindow({ agents, current, pending, onJump, onStep, onClose,
   const { t } = useLocale();
   const count = agents.length;
   const frameRef = useRef<HTMLElement>(null);
+  const readerRef = useRef<HTMLDivElement>(null);
+  /* The document preview opens over this window and keeps its floor of
+     conversation measured from the column the conversation is drawn in, which
+     starts after the window's own list. */
+  useLayoutEffect(() => {
+    const reader = readerRef.current;
+    if (!reader) return;
+    const publish = () => setHostedColumnLeft(reader.getBoundingClientRect().left);
+    publish();
+    window.addEventListener("resize", publish);
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(publish) : null;
+    observer?.observe(reader);
+    return () => {
+      window.removeEventListener("resize", publish);
+      observer?.disconnect();
+      setHostedColumnLeft(0);
+    };
+  }, []);
   /* The window is modal: Tab and Shift+Tab go round it and never reach the
      board, the header or the sidebar under its scrim. Listened for on the
      document, because the reader is a portal whose key events never pass
@@ -126,7 +145,7 @@ export function AgentWindow({ agents, current, pending, onJump, onStep, onClose,
           </div>
           <OpenAgentsList agents={agents} current={current} onJump={onJump} onClose={onClose} onCloseAll={onCloseAll} />
         </nav>
-        <div className="aw-reader">{children}</div>
+        <div ref={readerRef} className="aw-reader">{children}</div>
       </section>
     </div>
   );
