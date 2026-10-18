@@ -5679,6 +5679,13 @@ export class AgentRegistry {
     return this.scopedConversationSnapshot({ path: artifactPath }, true);
   }
 
+  /** Liveness for one conversation needs its current generation, aliases and
+      launch receipts. Keep that read keyed so a targeted poll does not hydrate
+      unrelated host rows from the retained registry. */
+  livenessConversationSnapshot(conversationId: string): RegistryFile {
+    return this.scopedConversationSnapshot({ conversationId }, true);
+  }
+
   private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean): RegistryFile {
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });

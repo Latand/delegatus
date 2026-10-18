@@ -11,7 +11,7 @@ import { isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { pipelineSelectionSource, loadPipelines } from "@/lib/pipelines/store";
 import { flowSelectionSource, loadFlows } from "@/lib/flows/store";
-import { readHistoryProjection, historyPipelineRef, historyHeadlessFlows, pruneHistoryHeadlessRounds, canPruneHistoryHeadlessRounds, historyHeadlessDeadRounds } from "@/lib/state/historyProjection";
+import { readHistoryProjection, historyPipelineRef, historyHeadlessFlows, historyHeadlessFlowsForTarget, pruneHistoryHeadlessRounds, canPruneHistoryHeadlessRounds, historyHeadlessDeadRounds } from "@/lib/state/historyProjection";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { Flow } from "@/lib/flows/types";
 import { completedFileScan } from "@/lib/scanner/scanCache";
@@ -318,13 +318,16 @@ export interface AgentLivenessSources {
       as null like a path that names no file. */
   describeTranscript(transcriptPath: string, options?: { strict?: boolean }): Promise<LivenessTranscript | null>;
   registrySnapshot(): LivenessRegistrySnapshot;
+  /** Keyed registry view for a conversation-only liveness request. */
+  registrySnapshotForConversation?(conversationId: string): LivenessRegistrySnapshot;
   pipelines: {
     (): Pipeline[];
     forLiveness?: (targets: { conversationId: string | null; path: string }[], options?: LivenessProjectionOptions) => Promise<(AgentLivenessPipelineRef | null)[]>;
   };
   /** Active review-loop ownership, read only to resolve detached reviewers that
       intentionally have no structured-host registry entry. */
-  flows?: { (): Flow[]; forLiveness?: (options?: LivenessProjectionOptions) => Promise<LivenessFlow[]> };
+  flows?: { (): Flow[]; forLiveness?: (options?: LivenessProjectionOptions) => Promise<LivenessFlow[]>;
+    forTarget?: (conversationIds: readonly string[], paths: readonly string[], options?: LivenessProjectionOptions) => Promise<LivenessFlow[]> };
   /** Turn state and newest-record freshness from ONE tail read. `strict`
       throws an I/O failure other than a missing file, which otherwise reads
       as null like a torn tail. */
@@ -357,12 +360,19 @@ export function productionLivenessSources(
     }),
     describeTranscript: describeTranscriptPath,
     registrySnapshot: () => agentRegistry().readOnlySnapshot(),
+    registrySnapshotForConversation: conversationId => agentRegistry().livenessConversationSnapshot(conversationId),
     pipelines: Object.assign(() => loadPipelines(), { forLiveness: (targets: { conversationId: string | null; path: string }[], options: LivenessProjectionOptions = {}) =>
       readHistoryProjection(db => targets.map(target => historyPipelineRef(db, target.conversationId, target.path)), { ...options, collections: ["pipelines"] }) }),
-    flows: Object.assign(() => loadFlows(), { forLiveness: (options: LivenessProjectionOptions = {}) => {
-      pipelineSelectionSource(); flowSelectionSource();
-      return readHistoryProjection(historyHeadlessFlows, { ...options, collections: ["flows"] });
-    } }),
+    flows: Object.assign(() => loadFlows(), {
+      forLiveness: (options: LivenessProjectionOptions = {}) => {
+        pipelineSelectionSource(); flowSelectionSource();
+        return readHistoryProjection(historyHeadlessFlows, { ...options, collections: ["flows"] });
+      },
+      forTarget: (conversationIds: readonly string[], paths: readonly string[], options: LivenessProjectionOptions = {}) => {
+        pipelineSelectionSource(); flowSelectionSource();
+        return readHistoryProjection(db => historyHeadlessFlowsForTarget(db, conversationIds, paths), { ...options, collections: ["flows"] });
+      },
+    }),
     transcriptEvidence: readLivenessTranscriptEvidence,
     probe: livenessProbe(),
   };
@@ -1102,7 +1112,10 @@ async function livenessSnapshotWithin(
   const limit = Math.max(1, Math.min(200, Number.isInteger(request.limit) ? request.limit as number : 100));
 
   const projectionStartedAt = phaseClock();
-  const registry = sources.registrySnapshot();
+  const targeted = Boolean(request.transcriptPath || request.conversationId);
+  const registry = request.conversationId && sources.registrySnapshotForConversation
+    ? sources.registrySnapshotForConversation(request.conversationId)
+    : sources.registrySnapshot();
   // Archive rows are getters that check the database on every access. A
   // fallback through every entry must not enumerate every conversation for
   // each candidate. These indexes belong only to this captured snapshot.
@@ -1110,10 +1123,16 @@ async function livenessSnapshotWithin(
   const conversationForPath = (path: string) => (paths ??= conversationPathIndex(registry)).get(path) ?? null;
   let entriesInRegistry: AgentRegistryEntry[] | undefined;
   const registryEntries = () => entriesInRegistry ??= Object.values(registry.entries);
-  const pipelines = pipelineIndex(sources.pipelines.forLiveness ? [] : sources.pipelines());
+  const pipelines = pipelineIndex(targeted ? [] : sources.pipelines.forLiveness ? [] : sources.pipelines());
   const projectionOptions = { ...(request.signal ? { signal: request.signal } : {}), deadlineMs: answer.deadlineMs };
-  const flows = await (sources.flows?.forLiveness ? sources.flows.forLiveness(projectionOptions) : sources.flows?.() ?? []);
-  const hostedPaths = new Set([
+  const flows = targeted
+    ? request.conversationId && sources.flows?.forTarget
+      ? await sources.flows.forTarget(conversationIdsResolvingTo(registry as RegistryFile,
+        canonicalConversationId(registry, request.conversationId) as `conversation_${string}`),
+      [...(canonicalConversation(registry, request.conversationId)?.generations.map(g => g.path) ?? []), ...(canonicalConversation(registry, request.conversationId)?.continuityPaths ?? [])], projectionOptions)
+      : sources.flows?.() ?? []
+    : await (sources.flows?.forLiveness ? sources.flows.forLiveness(projectionOptions) : sources.flows?.() ?? []);
+  const hostedPaths = targeted ? new Set<string>() : new Set([
     ...hostedTranscriptPaths(registry, sources.probe),
     ...activeHeadlessTranscriptPaths(flows, registry, sources.probe, Boolean(sources.flows?.forLiveness && canPruneHistoryHeadlessRounds(flows))),
   ]);
@@ -1149,7 +1168,6 @@ async function livenessSnapshotWithin(
   /* Stat known generations together: a resumed writer can precede its host
      registry update, so generation order alone cannot choose it. */
   const requestedPaths = new Set<string>();
-  const targeted = Boolean(request.transcriptPath || request.conversationId);
   if (request.transcriptPath) requestedPaths.add(request.transcriptPath);
   if (request.conversationId) {
     /* Through the aliases: a journal row or a card can still hold the id a
@@ -1176,7 +1194,7 @@ async function livenessSnapshotWithin(
     async (paths, readSignal) => {
       const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
       const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
-      const currentWriterPaths = new Set(registryEntries()
+      const currentWriterPaths = new Set((targeted ? [] : registryEntries())
         .filter(entry => hostEvidence(entry, sources.probe).state === "alive")
         .map(entry => entry.artifactPath)
         .filter((path): path is string => Boolean(path && paths.has(path))));
@@ -1314,7 +1332,7 @@ async function livenessSnapshotWithin(
   await Promise.all([...unhostedGenerations.values()].map(async paths => {
     const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
     const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
-    const currentWriterPaths = new Set(registryEntries()
+    const currentWriterPaths = new Set((targeted ? [] : registryEntries())
       .filter(entry => hostEvidence(entry, sources.probe).state === "alive")
       .map(entry => entry.artifactPath)
       .filter((path): path is string => Boolean(path && paths.has(path))));

@@ -25,7 +25,7 @@ const triggers = [
 export function historyProjectionReady(db: Database): boolean {
   const rows = db.query<{ name: string; sql: string }, []>("SELECT name,sql FROM sqlite_master WHERE name LIKE 'history_%'").all();
   const names = new Set(rows.map(row => row.name));
-  return ["history_meta", "history_flow_meta", "history_flow_changes", "history_count_meta", "history_count_roles", "history_pending", "history_inputs", "history_runs", "history_attempts", "history_rounds", "history_projects", "history_count_projects", "history_conversation", "history_path", "history_project", "history_reviewer", "history_started"].every(name => names.has(name))
+  return ["history_meta", "history_flow_meta", "history_flow_changes", "history_count_meta", "history_count_roles", "history_pending", "history_inputs", "history_runs", "history_attempts", "history_rounds", "history_projects", "history_count_projects", "history_conversation", "history_path", "history_project", "history_reviewer", "history_reviewer_conversation", "history_reviewer_path", "history_started"].every(name => names.has(name))
     && triggers.every(sql => rows.some(row => row.sql === sql));
 }
 
@@ -60,6 +60,8 @@ export function installHistoryProjection(db: Database, directory: string): void 
     `CREATE TABLE history_rounds(row_key TEXT NOT NULL,round INTEGER NOT NULL,reviewerPath TEXT,reviewerConversationId TEXT,
       reviewerPid INTEGER,reviewerIdentity TEXT,PRIMARY KEY(row_key,round))`,
     "CREATE INDEX history_reviewer ON history_rounds(reviewerPid)",
+    "CREATE INDEX history_reviewer_conversation ON history_rounds(reviewerConversationId,row_key,round)",
+    "CREATE INDEX history_reviewer_path ON history_rounds(reviewerPath,row_key,round)",
     ...triggers,
     "INSERT INTO history_pending SELECT collection,row_key FROM state_rows WHERE collection IN ('pipelines','pipelines_archive','flows')",
   ]) db.exec(sql);
@@ -391,6 +393,23 @@ export function historyHeadlessFlows(db: Database): LivenessFlow[] {
     enforceHeadlessCacheBudget();
   } else { shared.headless.delete(key); shared.headless.set(key,cached); }
   return cached.flows;
+}
+
+/** Read only reviewer rounds owned by one liveness target. The registry path
+ * uses this during targeted seat probes so unrelated flow history is untouched. */
+export function historyHeadlessFlowsForTarget(db: Database, conversationIds: readonly string[], transcriptPaths: readonly string[]): LivenessFlow[] {
+  const ids = [...new Set(conversationIds)];
+  const paths = [...new Set(transcriptPaths)];
+  if (!ids.length && !paths.length) return [];
+  const predicates = [
+    ...(ids.length ? [`r.reviewerConversationId IN (${ids.map(() => "?").join(",")})`] : []),
+    ...(paths.length ? [`r.reviewerPath IN (${paths.map(() => "?").join(",")})`] : []),
+  ];
+  const rows = db.query<HeadlessRow, string[]>(`SELECT r.*,p.row_order FROM history_rounds r
+    JOIN history_inputs p ON p.collection='flows' AND p.row_key=r.row_key
+    WHERE ${predicates.join(" OR ")}
+    ORDER BY p.row_order,p.row_key,r.round`).all(...ids, ...paths);
+  return rows.map(round => ({ reviewerMode: "headless" as const, rounds: [round] }));
 }
 
 const rowOrder=(left:HeadlessRow,right:HeadlessRow)=>left.row_order-right.row_order||left.row_key.localeCompare(right.row_key)||left.round-right.round;

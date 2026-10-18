@@ -390,3 +390,28 @@ test("a recent host-loss observation retains an older backlog across a normal la
   expect(row.unreachableSince).toBe(observedAt);
   expect(row.unreachableBacklogSince).toBe(FROM);
 });
+
+test("quiet idle host probe reads only its designated registry rows", async () => {
+  let unrelatedEntryReads = 0;
+  const f = childFixture("idle-keyed-host-probe", false, "sqlite", (collection, count) => {
+    if (collection === "entries") unrelatedEntryReads += count;
+  });
+  f.seed({ lastWakeAt: new Date(NOW - 5 * MINUTE).toISOString(), lastProposalAt: new Date(NOW - MINUTE).toISOString() });
+  for (let index = 0; index < 160; index += 1) {
+    f.registry.upsert({ key: { engine: "claude", sessionId: `unrelated-${index}` },
+      artifactPath: path.join(f.dir, `unrelated-${index}.jsonl`), cwd: f.cwd, accountId: null,
+      status: "dead", host: null, structuredHost: null, claimEpoch: 1, claimOwner: null, pendingAction: null });
+  }
+  setAgentRegistryForTests(f.registry);
+  const rig = childRig(f);
+  const production = (await import("./seatTickSources")).defaultSeatTickSources();
+  rig.deps.sources!.liveness = production.liveness;
+  rig.deps.mcpHealth = () => ({ status: "dead", detail: "MCP unavailable" });
+  unrelatedEntryReads = 0;
+
+  await runSeatTickCheck(f.project, rig.deps);
+
+  expect(unrelatedEntryReads).toBeLessThanOrEqual(2);
+  expect(rig.sent).toHaveLength(0);
+  expect(f.row().unreachableSince ?? null).toBeNull();
+});
