@@ -12,7 +12,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { AgentLivenessPipelineRef, LivenessFlow } from "@/lib/lifecycle/liveness";
 import type { fleetLimitWaits } from "@/lib/mcp/agentFleet";
 import { isStoredPipeline } from "@/lib/pipelines/store";
-import { decodeFlow } from "@/lib/reviewHistory/decode";
+import { isStoredFlow } from "@/lib/flows/store";
 
 const tracked = (row: string) => `${row}.collection IN ('pipelines','pipelines_archive','flows')`;
 const enqueue = (row: string) => `INSERT INTO history_pending SELECT ${row}.collection,${row}.row_key WHERE ${tracked(row)} ON CONFLICT(collection,row_key) DO NOTHING;`;
@@ -88,7 +88,7 @@ function projectOne(db: Database, collection: string, key: string): CountUpdate 
   if (raw) {
     try { decoded = JSON.parse(raw.value_json) as unknown; } catch { /* malformed persisted records remain stored and excluded */ }
   }
-  const accepted = raw && (collection === "flows" ? decodeFlow(decoded) !== null : isStoredPipeline(decoded));
+  const accepted = raw && (collection === "flows" ? isStoredFlow(decoded) : isStoredPipeline(decoded));
   const row = accepted ? db.query<{ project: string | null; state: string | null; row_order: number }, [string,string]>(
     "SELECT json_extract(value_json,'$.project') AS project,json_extract(value_json,'$.state') AS state,row_order FROM state_rows WHERE collection=? AND row_key=?").get(collection,key) : null;
   const input = row ? db.query<{ input: Uint8Array }, [string,string]>(collection === "flows" ? flowSql : pipelineSql).get(collection,key)!.input : null;
@@ -170,23 +170,30 @@ function countSignatureFromInput(db:Database,input:Uint8Array): string {
 
 type CountCache = { stamp: string; at: number; until: number; value: Record<string,number>; roles: Record<string,number> };
 type HeadlessRow={row_key:string;round:number;row_order:number;reviewerPath:string|null;reviewerConversationId:string|null;reviewerPid:number;reviewerIdentity:string|null};
-type HeadlessCache = { revision:number; rows:HeadlessRow[]; flows:LivenessFlow[]; deadOwners:HeadlessRow[]; deadByPath:Map<string,HeadlessRow[]>; deadByConversation:Map<string,HeadlessRow[]>; bytes:number };
-type Shared = { connections: Map<string,Database>; counts: Map<string,CountCache>; headless: Map<string,HeadlessCache>; headlessRoundRows:WeakMap<object,HeadlessRow> };
+type HeadlessCache = { revision:number; rows:HeadlessRow[]; rowsByFlow:Map<string,HeadlessRow[]>; flows:LivenessFlow[]; views:Map<HeadlessRow,LivenessFlow>; viewBytes:Map<HeadlessRow,number>; deadByFlow:Map<string,HeadlessRow[]>; deadByPath:Map<string,HeadlessRow[]>; deadByConversation:Map<string,HeadlessRow[]>; flowBytes:number; deadBytes:number; bytes:number };
+type Shared = { connections: Map<string,Database>; counts: Map<string,CountCache>; headless: Map<string,HeadlessCache>; headlessRoundRows:WeakMap<object,HeadlessRow>; headlessFlowRows:WeakMap<object,HeadlessRow> };
 const host = globalThis as typeof globalThis & { __delegatusHistoryProjectionV1?: Shared };
-const shared:Shared = host.__delegatusHistoryProjectionV1 ??= { connections: new Map<string,Database>(), counts: new Map<string,CountCache>(), headless: new Map<string,HeadlessCache>(), headlessRoundRows:new WeakMap<object,HeadlessRow>() };
+const shared:Shared = host.__delegatusHistoryProjectionV1 ??= { connections: new Map<string,Database>(), counts: new Map<string,CountCache>(), headless: new Map<string,HeadlessCache>(), headlessRoundRows:new WeakMap<object,HeadlessRow>(), headlessFlowRows:new WeakMap<object,HeadlessRow>() };
 shared.headless ??= new Map();
 shared.headlessRoundRows ??= new WeakMap();
+shared.headlessFlowRows ??= new WeakMap();
 
 const COUNT_WINDOW_MS = 30 * 24 * 60 * 60_000;
+const HEADLESS_CACHE_BYTES = 16 * 1024 * 1024;
 
-function updateWarmCountCaches(db:Database, update:CountUpdate, allowedStamps:Map<string,string>):void {
+function enforceHeadlessCacheBudget():void {
+  const bytes=()=>[...shared.headless.values()].reduce((sum,item)=>sum+item.bytes,0);
+  while(shared.headless.size>2||bytes()>HEADLESS_CACHE_BYTES)shared.headless.delete(shared.headless.keys().next().value!);
+}
+
+function updateWarmCountCaches(filename:string, update:CountUpdate, allowedStamps:Map<string,{before:string;after:string}>):void {
   const oldValue=JSON.parse(update.oldSignature) as [string[],Array<{role:string|null;startedAt:string|null}>];
   const newValue=JSON.parse(update.newSignature) as [string[],Array<{role:string|null;startedAt:string|null}>];
   for(const [key,cache] of shared.counts){
-    const [filename,cachedProject]=JSON.parse(key) as [string,string];
-    if(filename!==db.filename)continue;
+    const [cachedFilename,cachedProject]=JSON.parse(key) as [string,string];
+    if(cachedFilename!==filename)continue;
     const allowed=allowedStamps.get(key);
-    if(!allowed || cache.stamp!==allowed){shared.counts.delete(key);continue;}
+    if(!allowed || cache.stamp!==allowed.before){shared.counts.delete(key);continue;}
     const stamped=JSON.parse(cache.stamp) as [string,string,string[],Array<{project:string;revision:number}>];
     const currentProjects=[...new Set([canonicalProject(cachedProject),...Object.keys(projectAliasSnapshot().aliases).filter(alias=>canonicalProject(alias)===canonicalProject(cachedProject))])].sort();
     if(JSON.stringify(stamped[2])!==JSON.stringify(currentProjects)){shared.counts.delete(key);continue;}
@@ -209,11 +216,16 @@ function updateWarmCountCaches(db:Database, update:CountUpdate, allowedStamps:Ma
     }
     for(const [role,delta] of changes){const next=(cache.value[role]??0)+delta;if(next>0||cache.roles[role])cache.value[role]=next;else delete cache.value[role];}
     for(const [role,delta] of roleDelta){const next=(cache.roles[role]??0)+delta;if(next>0){cache.roles[role]=next;cache.value[role]??=0;}else{delete cache.roles[role];if((cache.value[role]??0)<=0)delete cache.value[role];}}
-    const placeholders=currentProjects.map(()=>"?").join(",");
-    const revisions=db.query<{project:string;revision:number},SQLQueryBindings[]>(`SELECT project,revision FROM history_count_projects WHERE project IN (${placeholders}) ORDER BY project`).all(...currentProjects);
-    const generation=db.query<{generation:string},[]>("SELECT generation FROM history_meta").get()!.generation;
-    cache.stamp=JSON.stringify([databaseFileIdentity(db.filename),generation,currentProjects,revisions]);
+    cache.stamp=allowed.after;
   }
+}
+
+function countCacheStamp(db:Database, projects:string[]):string {
+  const sorted=[...new Set(projects)].sort();
+  const placeholders=sorted.map(()=>"?").join(",");
+  const revisions=db.query<{project:string;revision:number},SQLQueryBindings[]>(`SELECT project,revision FROM history_count_projects WHERE project IN (${placeholders}) ORDER BY project`).all(...sorted);
+  const generation=db.query<{generation:string},[]>("SELECT generation FROM history_meta").get()!.generation;
+  return JSON.stringify([databaseFileIdentity(db.filename),generation,sorted,revisions]);
 }
 
 function connection(filename: string): Database {
@@ -283,12 +295,24 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
           const pending = db.query<{ collection: string; row_key: string }, SQLQueryBindings[]>(pendingSql).get(...collections);
           assertWriter();
           if (pending) {
-            const allowedStamps=new Map([...shared.counts].filter(([key])=>(JSON.parse(key) as [string,string])[0]===filename).map(([key,value])=>[key,value.stamp]));
+            const allowedStamps=new Map<string,{before:string;after:string}>();
+            for(const [key,cache] of shared.counts){
+              if((JSON.parse(key) as [string,string])[0]!==filename)continue;
+              const stamped=JSON.parse(cache.stamp) as [string,string,string[],unknown[]];
+              const before=countCacheStamp(db,stamped[2]);
+              if(before===cache.stamp)allowedStamps.set(key,{before,after:before});
+            }
             const countUpdate = withViewerOperation("history.project-row", () => projectOne(db,pending.collection,pending.row_key));
+            if(countUpdate){
+              for(const [key,entry] of allowedStamps){
+                const projects=(JSON.parse(entry.before) as [string,string,string[],unknown[]])[2];
+                allowedStamps.set(key,{...entry,after:countCacheStamp(db,projects)});
+              }
+            }
             db.query("DELETE FROM history_pending WHERE collection=? AND row_key=?").run(pending.collection,pending.row_key);
             assertWriter();
             db.exec("COMMIT");
-            if(countUpdate)updateWarmCountCaches(db,countUpdate,allowedStamps);
+            if(countUpdate)updateWarmCountCaches(filename,countUpdate,allowedStamps);
             return null;
           }
           assertWriter();
@@ -320,12 +344,17 @@ export function historyHeadlessFlows(db: Database): LivenessFlow[] {
     const rows:HeadlessRow[] = db.query<HeadlessRow, []>(
       "SELECT r.*,p.row_order FROM history_rounds r JOIN history_inputs p ON p.collection='flows' AND p.row_key=r.row_key ORDER BY p.row_order,p.row_key,r.round").all();
     const flows=rows.map(row => ({ reviewerMode: "headless" as const, rounds: [row] }));
-    for(const row of rows)shared.headlessRoundRows.set(row,row);
-    const bytes=Buffer.byteLength(JSON.stringify(flows))+rows.length*8;
-    cached={revision,rows,flows,deadOwners:[],deadByPath:new Map(),deadByConversation:new Map(),bytes};
-    if(bytes<=16*1024*1024){shared.headless.delete(key);shared.headless.set(key,cached);}
+    for(let index=0;index<rows.length;index++){const row=rows[index]!,view=flows[index]!;shared.headlessRoundRows.set(row,row);shared.headlessFlowRows.set(view,row);}
+    const viewBytes=new Map(rows.map((row,index)=>[row,Buffer.byteLength(JSON.stringify(flows[index]))+8]));
+    const flowBytes=[...viewBytes.values()].reduce((sum,bytes)=>sum+bytes,2);
+    const bytes=flowBytes;
+    const rowsByFlow=new Map<string,HeadlessRow[]>();
+    for(const row of rows){const group=rowsByFlow.get(row.row_key)??[];group.push(row);rowsByFlow.set(row.row_key,group);}
+    const views=new Map(rows.map((row,index)=>[row,flows[index]!]));
+    cached={revision,rows,rowsByFlow,flows,views,viewBytes,deadByFlow:new Map(),deadByPath:new Map(),deadByConversation:new Map(),flowBytes,deadBytes:0,bytes};
+    if(bytes<=HEADLESS_CACHE_BYTES){shared.headless.delete(key);shared.headless.set(key,cached);}
     else {shared.headless.delete(key);return flows;}
-    while(shared.headless.size>2 || [...shared.headless.values()].reduce((sum,item)=>sum+item.bytes,0)>16*1024*1024) shared.headless.delete(shared.headless.keys().next().value!);
+    enforceHeadlessCacheBudget();
   } else if (cached.revision!==revision) {
     const changes=db.query<{row_key:string},[number]>("SELECT row_key FROM history_flow_changes WHERE revision>? ORDER BY revision").all(cached.revision);
     const keys=[...new Set(changes.map(row=>row.row_key))];
@@ -333,30 +362,61 @@ export function historyHeadlessFlows(db: Database): LivenessFlow[] {
       shared.headless.delete(key);
       return historyHeadlessFlows(db);
     }
-    const changed=new Set(keys);
-    let rows=cached.rows.filter(row=>!changed.has(row.row_key));
-    cached.deadOwners=cached.deadOwners.filter(row=>!changed.has(row.row_key));
-    for(const flowKey of keys) rows=rows.concat(db.query<HeadlessRow,[string]>("SELECT r.*,p.row_order FROM history_rounds r JOIN history_inputs p ON p.collection='flows' AND p.row_key=r.row_key WHERE r.row_key=? ORDER BY r.round").all(flowKey));
-    rows.sort((left,right)=>left.row_order-right.row_order||left.row_key.localeCompare(right.row_key)||left.round-right.round);
-    const flows=rows.map(row=>({reviewerMode:"headless" as const,rounds:[row]}));
-    for(const row of rows)shared.headlessRoundRows.set(row,row);
-    cached.rows=rows;cached.flows=flows;
-    rebuildDeadOwnerIndexes(cached);
-    const bytes=Buffer.byteLength(JSON.stringify(flows))+rows.length*8;
-    cached.revision=revision;cached.bytes=bytes+deadOwnerBytes(cached.deadOwners);
-    if(cached.bytes>16*1024*1024){shared.headless.delete(key);return flows;}
+    for(const flowKey of keys){
+      const previous=cached.rowsByFlow.get(flowKey)??[];
+      for(const row of previous){
+        removeOrdered(cached.rows,row,rowOrder);
+        const view=cached.views.get(row);
+        if(view)removeOrdered(cached.flows,view,flowOrder);
+        cached.flowBytes-=cached.viewBytes.get(row)??0;
+        cached.views.delete(row);cached.viewBytes.delete(row);
+      }
+      cached.rowsByFlow.delete(flowKey);
+      for(const row of [...(cached.deadByFlow.get(flowKey)??[])])removeDeadOwner(cached,row);
+      cached.deadByFlow.delete(flowKey);
+      const rows=db.query<HeadlessRow,[string]>("SELECT r.*,p.row_order FROM history_rounds r JOIN history_inputs p ON p.collection='flows' AND p.row_key=r.row_key WHERE r.row_key=? ORDER BY r.round").all(flowKey);
+      if(!rows.length)continue;
+      cached.rowsByFlow.set(flowKey,rows);
+      for(const row of rows){
+        const view:LivenessFlow={reviewerMode:"headless",rounds:[row]};shared.headlessFlowRows.set(view,row);
+        const bytes=Buffer.byteLength(JSON.stringify(view))+8;
+        insertOrdered(cached.rows,row,rowOrder);insertOrdered(cached.flows,view,flowOrder);
+        cached.views.set(row,view);cached.viewBytes.set(row,bytes);cached.flowBytes+=bytes;
+        shared.headlessRoundRows.set(row,row);
+      }
+    }
+    cached.revision=revision;cached.bytes=cached.flowBytes+cached.deadBytes;
+    if(cached.bytes>HEADLESS_CACHE_BYTES){shared.headless.delete(key);return cached.flows;}
     shared.headless.delete(key);shared.headless.set(key,cached);
+    enforceHeadlessCacheBudget();
   } else { shared.headless.delete(key); shared.headless.set(key,cached); }
   return cached.flows;
 }
 
-function deadOwnerBytes(rows:HeadlessRow[]):number{return Buffer.byteLength(JSON.stringify(rows))+rows.length*8;}
-function rebuildDeadOwnerIndexes(cache:HeadlessCache):void{
-  cache.deadByPath=new Map();cache.deadByConversation=new Map();
-  for(const row of cache.deadOwners){
-    if(row.reviewerPath){const list=cache.deadByPath.get(row.reviewerPath)??[];list.push(row);cache.deadByPath.set(row.reviewerPath,list);}
-    if(row.reviewerConversationId){const list=cache.deadByConversation.get(row.reviewerConversationId)??[];list.push(row);cache.deadByConversation.set(row.reviewerConversationId,list);}
-  }
+const rowOrder=(left:HeadlessRow,right:HeadlessRow)=>left.row_order-right.row_order||left.row_key.localeCompare(right.row_key)||left.round-right.round;
+const flowOrder=(left:LivenessFlow,right:LivenessFlow)=>rowOrder(shared.headlessFlowRows.get(left)!,shared.headlessFlowRows.get(right)!);
+function insertOrdered<T>(items:T[],item:T,compare:(left:T,right:T)=>number):void{
+  let low=0,high=items.length;while(low<high){const mid=(low+high)>>>1;if(compare(items[mid]!,item)<0)low=mid+1;else high=mid;}items.splice(low,0,item);
+}
+function removeOrdered<T>(items:T[],item:T,compare:(left:T,right:T)=>number):void{
+  let low=0,high=items.length;while(low<high){const mid=(low+high)>>>1;const order=compare(items[mid]!,item);if(order<0)low=mid+1;else high=mid;}
+  if(low<items.length&&items[low]===item)items.splice(low,1);
+}
+function indexOwner(index:Map<string,HeadlessRow[]>,value:string|null,row:HeadlessRow):void{
+  if(!value)return;const rows=index.get(value)??[];rows.push(row);index.set(value,rows);
+}
+function unindexOwner(index:Map<string,HeadlessRow[]>,value:string|null,row:HeadlessRow):void{
+  if(!value)return;const rows=index.get(value);if(!rows)return;const at=rows.indexOf(row);if(at>=0)rows.splice(at,1);if(!rows.length)index.delete(value);
+}
+function addDeadOwner(cache:HeadlessCache,row:HeadlessRow):void{
+  const rows=cache.deadByFlow.get(row.row_key)??[];rows.push(row);cache.deadByFlow.set(row.row_key,rows);
+  indexOwner(cache.deadByPath,row.reviewerPath,row);indexOwner(cache.deadByConversation,row.reviewerConversationId,row);
+  cache.deadBytes+=Buffer.byteLength(JSON.stringify(row))+8;
+}
+function removeDeadOwner(cache:HeadlessCache,row:HeadlessRow):void{
+  const rows=cache.deadByFlow.get(row.row_key);if(rows){const at=rows.indexOf(row);if(at>=0)rows.splice(at,1);if(!rows.length)cache.deadByFlow.delete(row.row_key);}
+  unindexOwner(cache.deadByPath,row.reviewerPath,row);unindexOwner(cache.deadByConversation,row.reviewerConversationId,row);
+  cache.deadBytes-=Buffer.byteLength(JSON.stringify(row))+8;
 }
 
 /** Move confirmed-dead rounds out of the active walk while retaining an indexed
@@ -367,10 +427,15 @@ export function pruneHistoryHeadlessRounds(flows:readonly LivenessFlow[], rounds
   const moved=new Set<HeadlessRow>();
   for(const round of rounds){const row=shared.headlessRoundRows.get(round);if(row)moved.add(row);}
   if(!moved.size)return;
-  cache.rows=cache.rows.filter(row=>!moved.has(row));
-  cache.deadOwners.push(...moved);
-  rebuildDeadOwnerIndexes(cache);
-  cache.bytes=Buffer.byteLength(JSON.stringify(cache.flows))+cache.rows.length*8+deadOwnerBytes(cache.deadOwners);
+  for(const row of moved){
+    removeOrdered(cache.rows,row,rowOrder);
+    const view=cache.views.get(row);if(view)removeOrdered(cache.flows,view,flowOrder);
+    cache.flowBytes-=cache.viewBytes.get(row)??0;cache.views.delete(row);cache.viewBytes.delete(row);
+    const active=cache.rowsByFlow.get(row.row_key);if(active){const at=active.indexOf(row);if(at>=0)active.splice(at,1);if(!active.length)cache.rowsByFlow.delete(row.row_key);}
+    addDeadOwner(cache,row);
+  }
+  cache.bytes=cache.flowBytes+cache.deadBytes;
+  enforceHeadlessCacheBudget();
 }
 
 export function canPruneHistoryHeadlessRounds(flows:readonly LivenessFlow[]):boolean{
@@ -427,7 +492,10 @@ export function historyAttemptCounts(db: Database, project: string, now: number)
   const runs = db.query<{ role: string; count:number }, SQLQueryBindings[]>(`SELECT role,runs AS count FROM history_count_roles WHERE project IN (${placeholders}) ORDER BY role`).all(...projects);
   const value: Record<string,number> = {};
   const roles:Record<string,number>={};
-  for (const row of runs) { value[row.role] = 0; roles[row.role]=row.count; }
+  for (const row of runs) {
+    value[row.role] = 0;
+    roles[row.role]=(roles[row.role]??0)+row.count;
+  }
   const cutoff=now-30*24*60*60_000;
   const window=COUNT_WINDOW_MS;
   const attempts = db.query<{ role: string; count:number }, SQLQueryBindings[]>(`SELECT COALESCE(a.role,r.role) AS role,count(*) AS count FROM history_attempts a INDEXED BY history_started

@@ -5,7 +5,7 @@ import { isTaskNotificationRecord } from "@/lib/pipelines/backgroundTasks";
 import { recordValue, recordsValue } from "@/lib/scanner/json";
 import { livenessProbe, receiptIsLive, receiptProcessEvidence, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
-import { agentRegistry, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
+import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
 import { registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
@@ -523,7 +523,10 @@ function headlessHostEvidence(
 ): { state: AgentHostState; kind: "headless"; pid: number } | null {
   const canonicalId = conversationId ? canonicalConversationId(registry, conversationId) : null;
   let fallback: { state: AgentHostState; kind: "headless"; pid: number } | null = null;
-  const deadRounds=historyHeadlessDeadRounds(flows,transcriptPath,[conversationId,canonicalId].filter((value):value is string=>value!==null));
+  const deadConversationIds=conversationId&&canonicalId
+    ? conversationIdsResolvingTo(registry as RegistryFile,canonicalId as `conversation_${string}`)
+    : [conversationId,canonicalId].filter((value):value is string=>value!==null);
+  const deadRounds=historyHeadlessDeadRounds(flows,transcriptPath,deadConversationIds);
   const candidates=[...flows.flatMap(flow=>flow.reviewerMode==="headless"?flow.rounds:[]),...deadRounds];
   candidates.sort((left,right)=>{
     const a=left as typeof left & {row_order?:number;row_key?:string;round?:number};

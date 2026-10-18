@@ -294,6 +294,20 @@ test("unrecognized and malformed saved records remain stored but never poison pr
   } finally { f.db.close(); }
 });
 
+test("invalid persisted flows are excluded with the authoritative validator",async()=>{
+  const f=fixture();
+  try{
+    const missingRoles={...flow({id:"missing_roles"})} as Record<string,unknown>;delete missingRoles.roles;
+    const invalidRole=flow({id:"invalid_role",roles:{implementer:{engine:"codex",model:null,effort:null},reviewer:{engine:"unknown",model:null,effort:null}}});
+    const nullRound=flow({id:"null_round",rounds:[null]});
+    for(const row of [missingRoles,invalidRole,nullRound])f.put(row,"flows");
+    expect(await f.read(historyHeadlessFlows,{startup:true,collections:["flows"]})).toEqual([]);
+    expect(f.db.query<{n:number},[]>("SELECT count(*) AS n FROM state_rows WHERE collection='flows'").get()!.n).toBe(3);
+    expect(f.db.query<{n:number},[]>("SELECT count(*) AS n FROM history_rounds").get()!.n).toBe(0);
+    expect(await f.read(historyHeadlessFlows,{startup:true,collections:["flows"]})).toEqual([]);
+  }finally{f.db.close();}
+});
+
 test("a commit during cooperative bootstrap is included before the read answers",async () => {
   const f = fixture();
   try {
@@ -393,6 +407,39 @@ test("dead headless rounds leave the active walk but remain indexed across unrel
     });
     expect(probes).toBe(3000);
   } finally { f.db.close(); }
+});
+
+test("small flow deltas preserve dead-owner indexes without scanning retained history",async()=>{
+  const f=fixture();
+  try{
+    f.put(flow({rounds:Array.from({length:3000},(_,n)=>({reviewerPid:30000+n,reviewerPath:`dead-retained-${n}`,reviewerIdentity:`start-${n}`}))}),"flows");
+    const flows=await f.read(historyHeadlessFlows);
+    const probe=livenessProbe({now:()=>NOW,pidAlive:()=>false,processIdentity:()=>null});
+    expect([...activeHeadlessTranscriptPaths(flows,{entries:{},conversations:{}},probe,true)]).toEqual([]);
+    f.put(flow({id:"unrelated_empty",rounds:[]}),"flows",2);
+    await f.read(db=>{
+      const query=spyOn(Database.prototype,"query");
+      try{
+        expect(historyHeadlessFlows(db)).toEqual([]);
+        const sql=query.mock.calls.map(([statement])=>String(statement));
+        expect(sql.some(statement=>statement.includes("SELECT r.*,p.row_order FROM history_rounds r JOIN history_inputs p ON p.collection='flows' AND p.row_key=r.row_key ORDER BY"))).toBe(false);
+        expect(sql.some(statement=>statement.includes("SELECT r.*,p.row_order FROM history_rounds r JOIN history_inputs p ON p.collection='flows' AND p.row_key=r.row_key WHERE r.row_key=?"))).toBe(true);
+      }finally{query.mockRestore();}
+    });
+    expect(historyHeadlessDeadRounds(flows,"dead-retained-0",[])).toHaveLength(1);
+    f.put(flow({id:"small_delta",rounds:[{reviewerPid:40001,reviewerPath:"new-reviewer",reviewerIdentity:"new-start"}]}),"flows",3);
+    await f.read(db=>{
+      const query=spyOn(Database.prototype,"query");
+      try{
+        const updated=historyHeadlessFlows(db);
+        expect(updated.flatMap(item=>item.rounds.map(round=>round.reviewerPath))).toEqual(["new-reviewer"]);
+        expect(historyHeadlessDeadRounds(updated,"dead-retained-0",[])).toHaveLength(1);
+        const sql=query.mock.calls.map(([statement])=>String(statement));
+        expect(sql.filter(statement=>statement.includes("SELECT r.*,p.row_order FROM history_rounds"))).toHaveLength(1);
+        expect(sql.some(statement=>statement.includes("ORDER BY p.row_order,p.row_key,r.round"))).toBe(false);
+      }finally{query.mockRestore();}
+    });
+  }finally{f.db.close();}
 });
 
 test("malformed persisted records are skipped without losing the source row",async () => {
@@ -506,6 +553,28 @@ test("a result exceeding the byte budget is returned without remaining cached",a
   } finally {f.db.close();}
 });
 
+test("headless shared byte cap is enforced after flow refresh and dead-owner pruning",async()=>{
+  const f=fixture();
+  const cap=16*1024*1024;
+  const cacheBytes=()=>[...((globalThis as typeof globalThis&{__delegatusHistoryProjectionV1?:{headless:Map<string,{bytes:number}>}}).__delegatusHistoryProjectionV1?.headless.values()??[])].reduce((sum,item)=>sum+item.bytes,0);
+  const make=(id:string,size:number)=>flow({id,rounds:[{reviewerPid:51001,reviewerPath:"r".repeat(size),reviewerIdentity:"dead-start"}]});
+  try{
+    f.put(make("large_one",6*1024*1024),"flows",1);f.put(make("large_two",6*1024*1024),"flows",2);
+    await f.read(historyHeadlessFlows);
+    f.put(make("large_one",9*1024*1024),"flows",1);await f.read(historyHeadlessFlows);
+    f.put(make("large_two",9*1024*1024),"flows",2);await f.read(historyHeadlessFlows);
+    expect(cacheBytes()).toBeLessThanOrEqual(cap);
+  }finally{f.db.close();}
+  const pruned=fixture();
+  try{
+    pruned.put(flow({id:"large_pruned",rounds:[{reviewerPid:52001,reviewerPath:"p".repeat(9*1024*1024),reviewerIdentity:"dead-start"}]}),"flows");
+    const projected=await pruned.read(historyHeadlessFlows);
+    const dead=livenessProbe({now:()=>NOW,pidAlive:()=>false,processIdentity:()=>null});
+    expect([...activeHeadlessTranscriptPaths(projected,{entries:{},conversations:{}},dead,true)]).toEqual([]);
+    expect(cacheBytes()).toBeLessThanOrEqual(cap);
+  }finally{pruned.db.close();}
+});
+
 
 test("identity and fleet selectors use scoped indexes with singleton and duplicate multi-value binds",async () => {
   const f=fixture();
@@ -597,6 +666,25 @@ test("a warmed count follows project succession even when its caller holds the e
   }
 });
 
+test("local count delta cannot hide a peer projection revision",async()=>{
+  const f=fixture();
+  const childRoot=path.join(path.dirname(f.filename),"peer-reader");fs.mkdirSync(childRoot);
+  const env={...process.env,HOME:childRoot,XDG_CONFIG_HOME:childRoot,TMPDIR:childRoot,LLV_STATE_DIR:childRoot,LLV_VIEWER_CONTROL_URL:"http://127.0.0.1:1"};
+  try{
+    const a=pipeline("peer_a"),b=pipeline("peer_b");f.put(a);f.put(b,"pipelines",1);
+    expect((await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).builder).toBe(2);
+    b.runs[0]!.attempts.push({...b.runs[0]!.attempts[0]!,n:2});f.put(b,"pipelines",1);
+    const child=Bun.spawn([process.execPath,"-e",`
+      const {readHistoryProjection,historyHeadlessFlows}=await import(process.argv[1]);
+      await readHistoryProjection(historyHeadlessFlows,{filename:process.argv[2],collections:["pipelines"]});
+    `,path.join(import.meta.dir,"historyProjection.ts"),f.filename],{env,stdout:"pipe",stderr:"pipe"});
+    const [code,stderr]=await Promise.all([child.exited,new Response(child.stderr).text()]);
+    expect(code).toBe(0);expect(stderr).toBe("");
+    a.runs[0]!.attempts.push({...a.runs[0]!.attempts[0]!,n:2});f.put(a);
+    expect((await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).builder).toBe(4);
+  }finally{f.db.close();}
+});
+
 test("alias change plus a record update rebuilds the complete canonical count",async()=>{
   const f=fixture();const previous=process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR=path.dirname(f.filename);resetProjectAliasesForTests();
@@ -618,6 +706,20 @@ test("warm count removal drops an unbacked effective role key",async()=>{
     row.runs[0]!.attempts=[];f.put(row);
     expect(await f.read(db=>historyAttemptCounts(db,"fixture",NOW))).toEqual({builder:0});
   }finally{f.db.close();}
+});
+
+test("aliased project role backing sums survive a member deletion",async()=>{
+  const f=fixture();const previous=process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR=path.dirname(f.filename);resetProjectAliasesForTests();
+  try{
+    const first=pipeline("backing_first",{project:"fixture"}),second=pipeline("backing_second",{project:"renamed"});
+    first.runs.forEach(run=>{run.attempts=[];});second.runs.forEach(run=>{run.attempts=[];});
+    f.put(first);f.put(second,"pipelines",1);
+    expect(persistProjectAliases([{source:"fixture",target:"renamed",displayName:"renamed"}])).toBe(true);
+    expect(await f.read(db=>historyAttemptCounts(db,"renamed",NOW))).toEqual({builder:0,reviewer:0});
+    f.db.query("DELETE FROM state_rows WHERE collection='pipelines' AND row_key='backing_second'").run();
+    expect(await f.read(db=>historyAttemptCounts(db,"renamed",NOW))).toEqual({builder:0,reviewer:0});
+  }finally{if(previous===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=previous;resetProjectAliasesForTests();f.db.close();}
 });
 
 

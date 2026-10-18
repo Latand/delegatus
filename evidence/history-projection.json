@@ -4,11 +4,11 @@
   "baseCommit": "e4a86ff27da40a747b801f8f20cfd175ca638668",
   "measuredSourceSha256": "a4f37b12e9c979c69b14a667b62c8f09110b526817a91e32eee8c4eb47059f7e",
   "sourceFileSha256": {
-    "scripts/measure-history-deltas.ts": "5019d50b89aa1cf7a6b619ee936089beb592d7d42624b8108947f699428829d9",
+    "scripts/measure-history-deltas.ts": "43740fd064d0733db10f3b7d354bebbae96f92e62ae25a4ab99026d437b7febe",
     "scripts/measure-history-projection.ts": "48be895d6e9726e05b91a831cd4d5515fe7b662cd555c8d1b2d967fa25dcd9b2",
     "src/lib/agent/registry.ts": "ced51ad76cf6d8e80182acede5777b2a696d65f92b055dd5fc434a5bfcd5ed32",
-    "src/lib/lifecycle/liveness.test.ts": "fed54ab9f3ef1e84dd229e15566b71314940627a11fd1ed6cbf8f9fe4c83f46f",
-    "src/lib/lifecycle/liveness.ts": "2b8f83b492beb7465c29fefeda88f79ddd70333e963068513b029831d71cda16",
+    "src/lib/lifecycle/liveness.test.ts": "485d1921dde93334d3105c270c495b9101fb2eb95940d150add753521e592c9f",
+    "src/lib/lifecycle/liveness.ts": "c0d9492262d0de7713914e5f170da4bcc022d0ddc8688a78db88f9ea99b81dd6",
     "src/lib/mcp/bindings.ts": "8e84ec048a0ac1850fef83a668a50b88a023f6c1da1cc15b11b04ef85e3147a0",
     "src/lib/mcp/curateRules.test.ts": "97b2dceff282396da8bc0d3f24d2d9b3919f51911de3966df2ed7a5910c9b739",
     "src/lib/memory/curation/admission.ts": "74b9ae4a35b76b088a900a311e2c020704c36062f33b50b3d4456a84bd8164a0",
@@ -16,12 +16,13 @@
     "src/lib/memory/curation/evalServer.fixture.ts": "45c1087520ce820aefa710c45a6fc22831abad214ebe111caa3b41eafbe65082",
     "src/lib/memory/curation/read.ts": "ccd355c588504843c23a59d32f600e4fdb371f7e464bd2841853f2ea2f8526af",
     "src/lib/memory/curation/reviewLessons.test.ts": "40a1b315e5d7ea1cbaa8f683b847f76ade70305d234a7ad6f476fcae9ddb7320",
-    "src/lib/state/historyProjection.test.ts": "f8ea0897dccaec937943ad99ef4a528dd291eca1cd4e3fd4d967e3e05cad362f",
-    "src/lib/state/historyProjection.ts": "fa7a92219b59a58311b13ca068682235c73620134b0634ae5452a62a77aa1d27",
+    "src/lib/state/historyProjection.test.ts": "9c69772f678e9fb142cf10582a82d2f990d7b04b8f8de3783cc17afbee429071",
+    "src/lib/state/historyProjection.ts": "24b6e078859acf9ee43e119b5adc45fb70c9a41442903780470f6eed9bc8f258",
     "src/lib/state/hotStateStores.sqlite.test.ts": "7fc03817862035c24d6efe986291ef97ed1cb786491e98a58c20fe7545c5a215",
     "src/lib/state/pipelineEvidenceIndex.ts": "adfecb6309684ad3e235aef6549e78d7ce4e857867c46ea0913648d8a9eaec2c",
     "src/lib/viewerInstrumentation.ts": "a6380b54e9645ab5a1943829e4b8200561196f0755d021ad978342e8e0edca6d",
-    "src/lib/viewerLoopMonitor.ts": "3b2de4b962261816de70dbbf0ff6f23a14aff48fc62c6aa2738ee8648230523d"
+    "src/lib/viewerLoopMonitor.ts": "3b2de4b962261816de70dbbf0ff6f23a14aff48fc62c6aa2738ee8648230523d",
+    "src/lib/flows/store.ts": "8cceab027095f37284e70a6cf475311f78a67f449c99beccce74bc71378aa764"
   },
   "runtime": {
     "bun": "1.4.0",
@@ -42,7 +43,7 @@
     "mainThreadMs": "main-thread schedstat run counter delta; sub-millisecond calls can fall below update resolution",
     "sourceSetup": "Each side and repetition starts from the same page-streamed read-only SQLite backups copied to a fresh private LLV_STATE_DIR.",
     "livenessProbe": "Deterministic synthetic dead-owner probe for identical legacy/projected walk cost.",
-    "sourceFingerprint": "SHA-256 of canonical JSON for sourceFileSha256."
+    "sourceFingerprint": "8c717586db21f9703382c097956f7fea6bf9e226bcaa1b7622aad056ca4a096f"
   },
   "statistics": {
     "history": {
@@ -1024,11 +1025,9 @@
   "validation": {
     "typecheck": {
       "command": [
-        "bun",
-        "node_modules/typescript/bin/tsc",
-        "--noEmit",
-        "--incremental",
-        "false"
+        "bunx",
+        "tsc",
+        "--noEmit"
       ],
       "runner": "bash scripts/gate-slot.sh",
       "isolated": [
@@ -1053,7 +1052,7 @@
         "bun",
         "scripts/local-gate-tests.ts",
         "--base",
-        "e4a86ff27da40a747b801f8f20cfd175ca638668",
+        "5b6e82b5ce95ccd614b0d31aae28479190e9f423",
         "./src/lib/mcp/curateRules.test.ts",
         "./src/lib/memory/curation/curation.test.ts",
         "./src/lib/memory/curation/reviewLessons.test.ts",
@@ -1095,11 +1094,11 @@
         "TMPDIR"
       ],
       "fileCount": 32,
-      "headElapsedMs": 71647,
-      "baselineElapsedMs": 15613,
-      "flakyConfirmationElapsedMs": 11141,
+      "headElapsedMs": 53031,
+      "baselineElapsedMs": 7876,
+      "flakyConfirmationElapsedMs": 7855,
       "newFailures": 0,
-      "preExistingFailures": 8,
+      "preExistingFailures": 6,
       "fixed": 0,
       "removedOrSkipped": 0,
       "flaky": 1,
@@ -1108,7 +1107,7 @@
         {
           "classification": "FLAKY",
           "file": "src/lib/mcp/bindings.test.ts",
-          "test": "task placement bindings require atomic guards and classify field refusals as non-retryable (base 1 pass/3 fail; head 1 pass/3 fail)"
+          "test": "task placement bindings require atomic guards and classify field refusals as non-retryable (base 4 pass/0 fail; head 3 pass/1 fail)"
         },
         {
           "classification": "PRE-EXISTING",
@@ -1137,11 +1136,6 @@
         },
         {
           "classification": "PRE-EXISTING",
-          "file": "src/lib/mcp/bindings.test.ts",
-          "test": "MCP task writes normalize holds, preserve step operator reasons and server provenance"
-        },
-        {
-          "classification": "PRE-EXISTING",
           "file": "src/lib/state/hotStateStores.sqlite.test.ts",
           "test": "bounded change retention forces a stale reader through a full reload"
         },
@@ -1150,7 +1144,9 @@
           "file": "src/lib/state/pipelineEvidenceIndex.test.ts",
           "test": "a contended synchronous initialization refuses promptly, records its wait, and retries intact"
         }
-      ]
+      ],
+      "baseCommit": "5b6e82b5ce95ccd614b0d31aae28479190e9f423",
+      "reviewedHead": "f96c504b5eee21b4ab073b20de617b2736025676 (working tree)"
     }
   },
   "mainRecheck": {
@@ -1158,7 +1154,7 @@
     "change": "relay tools integrated; subsequent task-index readiness diff reviewed; other main changes concern form delivery; no task readiness/index changes made by this branch"
   },
   "refreshMeasurements": {
-    "generatedAt": "2026-10-18T05:05:02Z",
+    "generatedAt": "2026-10-18T05:50:24Z",
     "sourceBackup": {
       "backupBytes": 210534400,
       "backupSha256": "c80c46b57b4bd9a5d3d4bb980c08fe7107224e469e749559e7a483076e7078a8",
@@ -1499,6 +1495,88 @@
             "pathCount": 0
           }
         ]
+      },
+      "flow-refresh": {
+        "sourceRows": 1,
+        "sourceJsonBytes": 1175,
+        "sourceSha256": "d9f0e724e2f371fc06fd419157d18e5a98015d0000edbb0621ee810bef120ccd",
+        "syntheticDeadRounds": 3000,
+        "method": "Three sequential matched pairs in one fresh process and one isolated on-disk SQLite copy. Before emulates the former whole dead-owner filter/index/serialization path; after calls the production reader. One empty unrelated flow is added for each pair.",
+        "samples": [
+          {
+            "repetition": 1,
+            "before": {
+              "result": {
+                "rounds": 0,
+                "deadProofs": 1,
+                "indexedPaths": 3000,
+                "bytes": 608673
+              },
+              "elapsedMs": 1.854723000000007,
+              "mainThreadMs": 2.000278,
+              "readBytes": 4267
+            },
+            "after": {
+              "result": {
+                "rounds": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 2.9228410000000054,
+              "mainThreadMs": 1.863512,
+              "readBytes": 65708
+            }
+          },
+          {
+            "repetition": 2,
+            "before": {
+              "result": {
+                "rounds": 0,
+                "deadProofs": 1,
+                "indexedPaths": 3000,
+                "bytes": 608673
+              },
+              "elapsedMs": 1.559490000000011,
+              "mainThreadMs": 0.910044,
+              "readBytes": 4230
+            },
+            "after": {
+              "result": {
+                "rounds": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 1.3248210000000142,
+              "mainThreadMs": 0.956156,
+              "readBytes": 65708
+            }
+          },
+          {
+            "repetition": 3,
+            "before": {
+              "result": {
+                "rounds": 0,
+                "deadProofs": 1,
+                "indexedPaths": 3000,
+                "bytes": 608673
+              },
+              "elapsedMs": 1.2018830000000094,
+              "mainThreadMs": 1.000343,
+              "readBytes": 4230
+            },
+            "after": {
+              "result": {
+                "rounds": 0,
+                "deadProofs": 1
+              },
+              "elapsedMs": 1.7927869999999757,
+              "mainThreadMs": 1.38136,
+              "readBytes": 65708
+            }
+          }
+        ],
+        "result": {
+          "rounds": 0,
+          "deadProofs": 1
+        }
       }
     }
   }

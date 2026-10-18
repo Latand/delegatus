@@ -11,11 +11,11 @@ import { installHistoryProjection, readHistoryProjection, historyAttemptCounts, 
 import { activeHeadlessTranscriptPaths } from "@/lib/lifecycle/liveness";
 import { livenessProbe } from "@/lib/agent/accountLiveness";
 
-type Operation = "update" | "expiry" | "liveness";
+type Operation = "update" | "expiry" | "liveness" | "flow-refresh";
 const operation = process.argv.find(value => value.startsWith("--operation="))?.slice("--operation=".length) as Operation | undefined;
 const prepareTemplate=process.argv.includes("--prepare-template");
-if (!process.env.LLV_STATE_DIR || !process.argv.includes("--isolated-copy") || (!prepareTemplate && !["update","expiry","liveness"].includes(operation ?? ""))) {
-  throw new Error("requires --isolated-copy, LLV_STATE_DIR for a private database copy, and --operation=update|expiry|liveness or --prepare-template");
+if (!process.env.LLV_STATE_DIR || !process.argv.includes("--isolated-copy") || (!prepareTemplate && !["update","expiry","liveness","flow-refresh"].includes(operation ?? ""))) {
+  throw new Error("requires --isolated-copy, LLV_STATE_DIR for a private database copy, and --operation=update|expiry|liveness|flow-refresh or --prepare-template");
 }
 if (process.platform !== "linux") throw new Error("measurement requires Linux per-thread counters");
 
@@ -34,12 +34,13 @@ const project = db.query<{project:string},[]>(`SELECT json_extract(value_json,'$
 const dimensions = db.query<{rows:number;bytes:number},[]>(`SELECT count(*) AS rows,sum(length(CAST(value_json AS BLOB))) AS bytes FROM state_rows
  WHERE collection IN ('pipelines','pipelines_archive','flows')`).get()!;
 let now=base, targetRows=0;
-if(operation==="liveness"||prepareTemplate) {
-  const existing=db.query<{value_json:string},[string]>("SELECT value_json FROM state_rows WHERE collection='flows' AND row_key=?").get("history_measure_flow");
+if(operation==="liveness"||operation==="flow-refresh"||prepareTemplate) {
+  const flowId=operation==="flow-refresh"?"history_measure_delta_flow":"history_measure_flow";
+  const existing=db.query<{value_json:string},[string]>("SELECT value_json FROM state_rows WHERE collection='flows' AND row_key=?").get(flowId);
   if(!existing) {
     const rowOrder=db.query<{value:number},[]>("SELECT COALESCE(MAX(row_order),-1)+1 AS value FROM state_rows WHERE collection='flows'").get()!.value;
-    const rounds=Array.from({length:1000},(_,n)=>({reviewerPid:2_147_000_000+n,reviewerPath:`history-measure-${n}`,reviewerConversationId:null,reviewerIdentity:`historical-start-${n}`}));
-    const fixture={id:"history_measure_flow",project:"fixture",template:"implement-review-loop",cwd:"/repo",implementerPath:"implementer.jsonl",baseRef:"a".repeat(40),
+    const rounds=Array.from({length:operation==="flow-refresh"?3000:1000},(_,n)=>({reviewerPid:2_147_000_000+n,reviewerPath:`history-measure-${n}`,reviewerConversationId:null,reviewerIdentity:`historical-start-${n}`}));
+    const fixture={id:flowId,project:"fixture",template:"implement-review-loop",cwd:"/repo",implementerPath:"implementer.jsonl",baseRef:"a".repeat(40),
       roles:{implementer:{engine:"codex",model:null,effort:null},reviewer:{engine:"codex",model:null,effort:null}},reviewerMode:"headless",rounds};
     db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES ('flows',?,?,?,1,1)")
       .run(fixture.id,JSON.stringify(fixture),rowOrder);
@@ -86,7 +87,7 @@ async function measure<T>(work:()=>T|Promise<T>) {
     decodedJsonBytes:manualDecodedJsonBytes+readAttribution.snapshot(elapsedMs).decodedJsonBytes,maxTimerGapMs};
 }
 
-if (operation === "liveness") {
+if (operation === "liveness" || operation === "flow-refresh") {
   await readHistoryProjection(historyHeadlessFlows,{filename,collections:["flows"]});
 } else {
   await readHistoryProjection(database=>historyAttemptCounts(database,project,base),{filename,collections:["pipelines","pipelines_archive"]});
@@ -118,7 +119,42 @@ const probe=livenessProbe({
 const registry={entries:{},conversations:{}};
 const summaries:Record<string,unknown>={};
 
-if(operation==="liveness") {
+if(operation==="flow-refresh"){
+  const warm=await readHistoryProjection(historyHeadlessFlows,{filename,collections:["flows"]});
+  activeHeadlessTranscriptPaths(warm,registry,probe,true);
+  const deadRows=db.query<{row_key:string;round:number;row_order:number;reviewerPath:string|null;reviewerConversationId:string|null;reviewerPid:number;reviewerIdentity:string|null},[]>(
+    "SELECT r.*,p.row_order FROM history_rounds r JOIN history_inputs p ON p.collection='flows' AND p.row_key=r.row_key ORDER BY p.row_order,p.row_key,r.round").all();
+  const revision=()=>db.query<{revision:number},[]>("SELECT revision FROM history_flow_meta").get()!.revision;
+  let cachedRevision=revision();
+  const pairs:unknown[]=[];
+  for(let repeat=0;repeat<3;repeat++){
+    const id=`history_measure_unrelated_${repeat}`;
+    const rowOrder=db.query<{value:number},[]>("SELECT COALESCE(MAX(row_order),-1)+1 AS value FROM state_rows WHERE collection='flows'").get()!.value;
+    const value={id,project:"fixture",template:"implement-review-loop",cwd:"/repo",implementerPath:"implementer.jsonl",baseRef:"b".repeat(40),
+      roles:{implementer:{engine:"codex",model:null,effort:null},reviewer:{engine:"codex",model:null,effort:null}},reviewerMode:"headless",rounds:[]};
+    db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES ('flows',?,?,?,1,1)").run(id,JSON.stringify(value),rowOrder);
+    const before=await measure(()=>{
+      const changedRows=db.query<{row_key:string},[number]>("SELECT row_key FROM history_flow_changes WHERE revision>? ORDER BY revision").all(cachedRevision);
+      const keys=[...new Set(changedRows.map(row=>row.row_key))],changed=new Set(keys);
+      for(const flowKey of keys)db.query<{n:number},[string]>("SELECT count(*) AS n FROM history_rounds WHERE row_key=?").get(flowKey);
+      const activeRows:typeof deadRows=[];
+      const rows=activeRows.filter(row=>!changed.has(row.row_key));
+      const owners=deadRows.filter(row=>!changed.has(row.row_key));
+      rows.sort((left,right)=>left.row_order-right.row_order||left.row_key.localeCompare(right.row_key)||left.round-right.round);
+      const flows=rows.map(row=>({reviewerMode:"headless",rounds:[row]}));
+      const byPath=new Map<string,typeof deadRows>();
+      for(const row of owners)if(row.reviewerPath)byPath.set(row.reviewerPath,[...(byPath.get(row.reviewerPath)??[]),row]);
+      return {rounds:flows.length,deadProofs:owners.filter(row=>row.reviewerPath==="history-measure-0").length,indexedPaths:byPath.size,bytes:Buffer.byteLength(JSON.stringify(flows))+Buffer.byteLength(JSON.stringify(owners))};
+    });
+    const after=await measure(async()=>{
+      const flows=await readHistoryProjection(historyHeadlessFlows,{filename,collections:["flows"]});
+      return {rounds:flows.reduce((sum,flow)=>sum+flow.rounds.length,0),deadProofs:historyHeadlessDeadRounds(flows,"history-measure-0",[]).length};
+    });
+    if(before.result.rounds!==after.result.rounds||before.result.deadProofs!==after.result.deadProofs)throw new Error("legacy and projected flow refresh differ");
+    pairs.push({repeat,before,after});cachedRevision=revision();
+  }
+  summaries.pairs=pairs;summaries.result={rounds:0,deadProofs:1};
+} else if(operation==="liveness") {
   const before=await measure(()=>{
     const flows=readLegacyRows(["flows"],(value): value is Flow => decodeFlow(value)!==null).filter(flow=>flow.reviewerMode==="headless");
     const roundRows=flows.reduce((sum,flow)=>sum+flow.rounds.length,0);

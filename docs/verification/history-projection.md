@@ -108,6 +108,29 @@ the exact boundary timestamp matched across every pair.
 `scripts/measure-history-deltas.ts` records the procedure and writes one raw
 measurement record per isolated process.
 
+The unrelated-flow refresh was also measured on an on-disk isolated SQLite
+copy, with 3,000 confirmed-dead owner rounds retained in the shared cache. The
+same process ran three matched legacy-algorithm/current-reader pairs against
+that unchanged round corpus, inserting one empty unrelated flow before each
+pair. Both sides returned zero active rounds and retained the targeted dead
+owner proof.
+
+| Median across three pairs | Legacy refresh algorithm | Current projection |
+| --- | ---: | ---: |
+| Main-thread time per refresh | 1.000 ms | 1.381 ms |
+| Bytes read per refresh | 4,230 | 65,708 |
+
+The current read has a fixed indexed journal/key lookup cost; the legacy model
+filters all 3,000 retained dead-owner rows and rebuilds its path index. This
+small synthetic transition showed no latency gain at this size. The regression
+test asserts that a one-flow delta reads only that flow's rows and preserves
+the 3,000 unrelated dead-owner index entries. The copy began with one state row
+(1,175 JSON bytes; SHA-256
+`d9f0e724e2f371fc06fd419157d18e5a98015d0000edbb0621ee810bef120ccd`); the
+3,000-round liveness fixture and three empty-flow deltas were generated in the
+copy. The measurement procedure is
+`bun scripts/measure-history-deltas.ts --isolated-copy --operation=flow-refresh`.
+
 Cold projection preparation has a median elapsed time of 5,191.2 ms and median main-thread time of 4,138.3 ms. The first measured history request after preparation has a median elapsed time of 16.848 ms; warm calls have 0.640 ms median elapsed time and a maximum observed timer gap of 0.121 ms. Preparation is paid during Viewer startup.
 
 The procedure uses byte-identical private SQLite backups for each mode and fresh
