@@ -135,6 +135,14 @@
  * opens the owner's `?member=all` link lands on their own page with `member`
  * gone from the address.
  *
+ * With BOARD_CAPTURE_CASE=activity-tokens it frames the four numbered
+ * variants of the token usage prototype (docs/design/activity-token-usage.md
+ * §9, the route /activity/tokens-prototype over invented fixture data) with a
+ * free range and a project filter, the range popover open and closed, at
+ * 1440, 1024 and 390 px, light and dark, in uk (and en at 1440 light), and
+ * measures overflow, cut text, the popover and the range segments. With
+ * ACTIVITY_RENDER_DIR set, the frames are copied there.
+ *
  * With BOARD_CAPTURE_CASE=lightbox it walks the full-screen image viewer
  * through one conversation's 26 invented pictures (#2144): inbox attachments,
  * markdown images and pictures a tool showed its agent, interleaved. It opens
@@ -7934,6 +7942,290 @@ async function registryHistoryMain(): Promise<void> {
   if (report.failures.length) throw new Error(report.failures.join("; "));
 }
 
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=activity-tokens: the token usage prototype variants    */
+/* ------------------------------------------------------------------------- */
+
+/* The prototype route (docs/design/activity-token-usage.md §9) draws invented
+   fixture data in the browser, so the home needs no seeding beyond its empty
+   directories. Each variant is framed with the free range 1–16 October and
+   the orchard-client filter applied, once with the custom range popover open
+   and once closed, at 1440 × 900, 1024 × 768 (between the named widths) and
+   390 × 844, light and dark, in Ukrainian; English at 1440 light. Frames are
+   full-page (the viewport grows to the page's scroll height) and named
+   variant-N-<width>-<theme>-<state>[-en].png. Each frame is measured from the
+   DOM: no sideways overflow, no cut text (chart text included), the popover
+   inside the viewport and over no text, every range segment whole, axis
+   labels 4 px apart, no line through a value label, no kind segment under
+   6 px, the four kinds printed, the variant number printed. */
+const TOKEN_VARIANTS = [1, 2, 3, 4] as const;
+const TOKEN_SIZES: ReadonlyArray<{ width: number; height: number; phone: boolean }> = [
+  { width: 1440, height: 900, phone: false },
+  { width: 1024, height: 768, phone: false },
+  { width: 390, height: 844, phone: true },
+];
+
+function readTokenFrame() {
+  const page = document.querySelector<HTMLElement>("[data-activity-page]")!;
+  const inView = (el: Element | null) => {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), bottom: Math.round(r.bottom), inside: r.left >= 0 && r.right <= window.innerWidth + 0.5 && r.top >= 0 && r.bottom <= window.innerHeight + 0.5 };
+  };
+  const cut: string[] = [];
+  for (const el of Array.from(page.querySelectorAll<HTMLElement>("span, button, a, h1, th, td, label, div"))) {
+    if (!el.childNodes.length || Array.from(el.childNodes).some((node) => node.nodeType === 1 && (node as Element).tagName !== "svg")) continue;
+    const text = (el.textContent ?? "").trim();
+    if (!text) continue;
+    if (el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflow !== "visible") cut.push(text);
+  }
+  const segments = Array.from(document.querySelectorAll<HTMLElement>("[data-token-range-option]")).map((button) => ({
+    option: button.dataset.tokenRangeOption ?? "",
+    text: (button.textContent ?? "").trim(),
+    whole: button.scrollWidth <= button.clientWidth + 1,
+    width: Math.round(button.getBoundingClientRect().width),
+  }));
+  const header = document.querySelector("[data-token-header]")?.getBoundingClientRect();
+  /* SVG text is outside the box checks above: a label whose glyphs leave its
+     own drawing is cut (a max label once read 63,7 for 663,7). */
+  const svgCut: string[] = [];
+  const tickGaps: Array<{ chart: string; gap: number; between: string }> = [];
+  const crossed: string[] = [];
+  for (const svg of Array.from(page.querySelectorAll<SVGSVGElement>("svg"))) {
+    const box = svg.getBoundingClientRect();
+    if (box.width < 1 || box.height < 1) continue;
+    for (const text of Array.from(svg.querySelectorAll("text"))) {
+      const r = text.getBoundingClientRect();
+      if (r.width && (r.left < box.left - 0.5 || r.right > box.right + 0.5 || r.top < box.top - 0.5 || r.bottom > box.bottom + 0.5)) svgCut.push((text.textContent ?? "").trim());
+    }
+    const ticks = Array.from(svg.querySelectorAll("text[data-token-tick]")).map((text) => ({ text: text.textContent ?? "", rect: text.getBoundingClientRect() })).sort((a, b) => a.rect.left - b.rect.left);
+    for (let index = 1; index < ticks.length; index++) {
+      const gap = ticks[index]!.rect.left - ticks[index - 1]!.rect.right;
+      if (gap < 4) tickGaps.push({ chart: svg.closest("[data-token-chart]")?.getAttribute("data-token-chart") ?? "", gap: Math.round(gap * 10) / 10, between: `${ticks[index - 1]!.text}|${ticks[index]!.text}` });
+    }
+    /* A value label beside lines: no line or gridline may pass through its glyph box. */
+    for (const label of Array.from(svg.querySelectorAll<SVGTextElement>("text[data-token-window-end], text[data-token-strip-max]"))) {
+      const bbox = label.getBBox();
+      const strokes = Array.from(svg.querySelectorAll<SVGGeometryElement>("path, line"));
+      let hit = false;
+      for (let px = bbox.x; px <= bbox.x + bbox.width && !hit; px += 1) {
+        for (let py = bbox.y + 1; py <= bbox.y + bbox.height - 1 && !hit; py += 1) {
+          const point = new DOMPoint(px, py);
+          if (strokes.some((stroke) => stroke.isPointInStroke(point))) hit = true;
+        }
+      }
+      if (hit) crossed.push((label.textContent ?? "").trim());
+    }
+  }
+  /* The phone range opens inline: nothing it is drawn over may hold text. */
+  const popoverEl = document.querySelector("[data-token-range-popover]");
+  const covered: string[] = [];
+  if (popoverEl) {
+    const p = popoverEl.getBoundingClientRect();
+    const walker = document.createTreeWalker(page, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!(node.textContent ?? "").trim() || popoverEl.contains(node)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const r of Array.from(range.getClientRects())) {
+        if (r.width && r.right > p.left && r.left < p.right && r.bottom > p.top && r.top < p.bottom) { covered.push((node.textContent ?? "").trim()); break; }
+      }
+    }
+  }
+  const segments6 = Array.from(document.querySelectorAll<HTMLElement>("[data-token-segment]")).map((el) => el.getBoundingClientRect().width).filter((width) => width < 6).map((width) => Math.round(width * 10) / 10);
+  const meterValues = Array.from(document.querySelectorAll<HTMLElement>("[data-token-meter] [data-token-kind]")).map((el) => ({ kind: el.dataset.tokenKind ?? "", text: (el.textContent ?? "").replace(/\s+/g, " ").trim() }));
+  /* Colours as drawn: each meter segment's contrast with its card, and the day strip's fill beside the kind swatches. */
+  const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+  const luminance = (value: string) => {
+    const [r = 0, g = 0, b = 0] = rgb(value).map((channel) => { const c = channel / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a: string, b: string) => { const [x, y] = [luminance(a), luminance(b)].sort((m, n) => n - m); return Math.round(((x! + 0.05) / (y! + 0.05)) * 100) / 100; };
+  const cardColor = (el: Element) => getComputedStyle(el.closest("[data-token-card]") ?? page).backgroundColor;
+  const segmentContrast = Array.from(document.querySelectorAll<HTMLElement>("[data-token-segment]")).map((el) => ({ kind: el.dataset.tokenSegment ?? "", ratio: contrast(getComputedStyle(el).backgroundColor, cardColor(el)) }));
+  const kindSwatches = [...new Set(Array.from(document.querySelectorAll<HTMLElement>("[data-token-segment]")).map((el) => getComputedStyle(el).backgroundColor))];
+  const stripBar = document.querySelector("[data-token-strip-bar]");
+  const stripFill = stripBar ? getComputedStyle(stripBar).fill : null;
+  /* How far apart a colour pair sits in hue and lightness: a grey beside a grey of near lightness is one kind to a reader. */
+  const colourGap = (a: string, b: string) => { const [p, q] = [rgb(a), rgb(b)]; return Math.round(Math.hypot(p[0]! - q[0]!, p[1]! - q[1]!, p[2]! - q[2]!)); };
+  const stripVsKinds = stripFill ? kindSwatches.map((swatch) => ({ swatch, gap: colourGap(stripFill, swatch), ratio: contrast(stripFill, swatch) })) : [];
+  /* Variant 2's open project row: every split line adds up to the row's total. */
+  const projectTotal = Number(document.querySelector<HTMLElement>("[data-token-project-detail]")?.dataset.tokenProjectDetail ?? NaN);
+  const splits = Array.from(document.querySelectorAll<HTMLElement>("[data-token-split]")).map((el) => ({ sum: Number(el.dataset.tokenSplit), rest: el.querySelector("[data-token-detail-rest]")?.textContent ?? null, items: (el.textContent ?? "").split(" · ").length }));
+  /* Variant 2's hour figures: two numbers on one baseline need clear air between them. */
+  const figure = (key: string) => document.querySelector(`[data-token-figure="${key}"] [data-token-hours]`)?.getBoundingClientRect() ?? null;
+  const you = figure("you");
+  const agents = figure("agents");
+  const figuresGap = you && agents && Math.abs(you.bottom - agents.bottom) < 2 ? Math.round(agents.left - you.right) : null;
+  /* The figures' columns hold about the same height of content, so neither leaves an empty block beside the other. */
+  const figuresBox = document.querySelector<HTMLElement>("[data-token-figures]");
+  const heightOf = (key: string) => figuresBox?.querySelector(`[data-token-figure="${key}"]`)?.getBoundingClientRect().height ?? 0;
+  const figuresEmpty = figuresBox
+    ? Math.round(figuresBox.dataset.tokenFigures === "wide"
+      ? Math.abs(heightOf("tokens") - (Math.max(heightOf("you"), heightOf("agents")) + heightOf("cost")))
+      : Math.abs(heightOf("tokens") - (heightOf("you") + heightOf("agents") + heightOf("cost"))))
+    : null;
+  /* Variant 3: the folds' heights side by side, and project names in the largest conversations' meta lines. */
+  const folds = Array.from(document.querySelectorAll<HTMLElement>("[data-token-card^=fold-]")).map((el) => ({ key: el.dataset.tokenCard ?? "", top: Math.round(el.getBoundingClientRect().top), height: Math.round(el.getBoundingClientRect().height) }));
+  const topMeta = Array.from(document.querySelectorAll<HTMLElement>("[data-token-top-meta]")).map((el) => el.textContent ?? "");
+  /* Variant 4: each account card's day chart and windows chart on one line, and one scale over the day charts. */
+  const accountCharts = Array.from(document.querySelectorAll<HTMLElement>("[data-token-card^=account-]")).map((card) => {
+    const chart = card.querySelector("[data-token-chart^=account-]");
+    const windows = card.querySelector("[data-token-windows]");
+    return { card: card.dataset.tokenCard ?? "", chartTop: chart ? Math.round(chart.getBoundingClientRect().top) : null, windowsTop: windows ? Math.round(windows.getBoundingClientRect().top) : null, scaleTop: chart?.querySelector("[data-token-scale-top]")?.textContent ?? null };
+  });
+  return {
+    segmentContrast,
+    stripFill,
+    stripVsKinds,
+    projectTotal: Number.isNaN(projectTotal) ? null : projectTotal,
+    splits,
+    figuresGap,
+    figuresEmpty,
+    figuresLayout: document.querySelector<HTMLElement>("[data-token-figures]")?.dataset.tokenFigures ?? null,
+    folds,
+    topMeta,
+    accountCharts,
+    svgCut,
+    tickGaps,
+    crossed,
+    covered,
+    narrowSegments: segments6,
+    meterValues,
+    legends: document.querySelectorAll("[data-token-legend]").length,
+    stripMax: document.querySelector("[data-token-strip-max]")?.textContent ?? null,
+    width: window.innerWidth,
+    scrollWidth: Math.max(document.documentElement.scrollWidth, page.scrollWidth),
+    scrollHeight: page.scrollHeight,
+    banner: document.querySelector("[data-token-variant]")?.textContent ?? "",
+    layout: page.dataset.tokenLayout ?? "",
+    popover: inView(document.querySelector("[data-token-range-popover]")),
+    inputs: Array.from(document.querySelectorAll<HTMLInputElement>("[data-token-range-input]")).map((input) => input.value),
+    chips: Array.from(document.querySelectorAll("[data-activity-scope-chip]")).map((chip) => chip.textContent ?? ""),
+    hero: document.querySelector("[data-token-hero]")?.textContent ?? "",
+    headerHeight: header ? Math.round(header.height) : null,
+    segments,
+    cut,
+  };
+}
+
+async function activityTokensMain(): Promise<void> {
+  for (const dir of [OUT_DIR, path.join(BASE, "tmp"), path.join(BASE, "tmux"), STATE_DIR, path.join(HOME, ".codex/sessions"), path.join(HOME, ".claude/projects")]) fs.mkdirSync(dir, { recursive: true });
+  /* The Viewer control URL on a closed port: nothing this run starts can reach a live Viewer. */
+  SERVER_EXTRA_ENV.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:9";
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const report: Record<string, unknown> = { commit: captureCommit(), case: "activity-tokens", frames: {} as Record<string, unknown> };
+  const shots: string[] = [];
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    /* Native date inputs draw in the browser's own language. */
+    browser = await chromium.launch({
+      args: ["--no-sandbox", "--disable-dev-shm-usage", "--lang=uk"],
+      env: { ...process.env, LANGUAGE: "uk", LANG: "uk_UA.UTF-8" },
+      ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}),
+    });
+    const frames = report.frames as Record<string, unknown>;
+    const cases = TOKEN_VARIANTS.flatMap((variant) => [
+      ...TOKEN_SIZES.flatMap((size) => (["light", "dark"] as const).flatMap((theme) => (["open", "applied"] as const).map((state) => ({ variant, size, theme, state, lang: "uk" as const })))),
+      { variant, size: TOKEN_SIZES[0]!, theme: "light" as const, state: "applied" as const, lang: "en" as const },
+    ]);
+    for (const { variant, size, theme, state, lang } of cases) {
+      const name = `variant-${variant}-${size.width}-${theme}-${state === "open" ? "range-open" : "range-applied"}${lang === "en" ? "-en" : ""}`;
+      if (!browser.isConnected()) browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage", "--lang=uk"], env: { ...process.env, LANGUAGE: "uk", LANG: "uk_UA.UTF-8" }, ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+      const context = await browser.newContext({
+        viewport: { width: size.width, height: size.height },
+        colorScheme: theme,
+        locale: lang === "uk" ? "uk-UA" : "en-GB",
+        reducedMotion: "reduce",
+        ...(size.phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
+      });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+      const page = await context.newPage();
+      const by = variant === 4 ? "member" : "model";
+      await page.goto(`${baseUrl}/activity/tokens-prototype?variant=${variant}&range=custom&from=2026-10-01&to=2026-10-16&project=repo-orchard-client&by=${by}&open=${state === "open" ? 1 : 0}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      await page.waitForSelector(`[data-token-prototype="${variant}"]`, { timeout: 120_000 });
+      await page.waitForTimeout(500);
+      const first = await page.evaluate(readTokenFrame);
+      if (first.scrollHeight > size.height) {
+        await page.setViewportSize({ width: size.width, height: Math.min(first.scrollHeight, 7_000) });
+        await page.waitForTimeout(300);
+      }
+      const reading = await page.evaluate(readTokenFrame);
+      const file = path.join(OUT_DIR, `${name}.png`);
+      await page.screenshot({ path: file });
+      shots.push(file);
+      frames[name] = reading;
+      must(reading.layout === (size.phone ? "phone" : "desktop"), `${name}: the ${reading.layout} layout at ${size.width}px`);
+      must(reading.banner.includes(lang === "uk" ? `Варіант ${variant} з 4` : `Variant ${variant} of 4`), `${name}: the banner reads ${JSON.stringify(reading.banner)}`);
+      must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
+      must(reading.cut.length === 0, `${name}: text cut by its box: ${JSON.stringify(reading.cut)}`);
+      must(reading.svgCut.length === 0, `${name}: chart text cut by its drawing: ${JSON.stringify(reading.svgCut)}`);
+      must(reading.tickGaps.length === 0, `${name}: axis labels closer than 4px: ${JSON.stringify(reading.tickGaps)}`);
+      must(reading.crossed.length === 0, `${name}: a line crosses the labels ${JSON.stringify(reading.crossed)}`);
+      /* On the phone the range opens inline; a desktop popover floats over the page on its own surface. */
+      if (size.phone) must(reading.covered.length === 0, `${name}: the range popover covers ${JSON.stringify(reading.covered)}`);
+      must(reading.narrowSegments.length === 0, `${name}: kind segments under 6px: ${JSON.stringify(reading.narrowSegments)}`);
+      /* Every variant but the table prints the four kinds as values; the table prints them in its columns. */
+      if (variant !== 3) {
+        for (const kind of ["cacheRead", "input", "cacheWrite", "output"]) {
+          must(reading.meterValues.some((entry) => entry.kind === kind && /(\d|—)/.test(entry.text)), `${name}: no printed ${kind} value in ${JSON.stringify(reading.meterValues)}`);
+        }
+      }
+      if (variant === 2) must(reading.legends === 0 && /^663[,.]7/.test(reading.stripMax ?? ""), `${name}: ${reading.legends} legends; the strip's scale reads ${JSON.stringify(reading.stripMax)}`);
+      /* The fresh-input segment is a graphical object: 3:1 against its card. */
+      for (const segment of reading.segmentContrast) must(segment.kind !== "input" || segment.ratio >= 3, `${name}: the ${segment.kind} segment has ${segment.ratio}:1 against its card`);
+      if (variant === 2) {
+        /* The day strip sums every kind, so it must not look like any one kind's swatch. */
+        must(reading.stripFill !== null && reading.stripVsKinds.length > 0 && reading.stripVsKinds.every((entry) => entry.gap >= 80), `${name}: the day strip ${reading.stripFill} sits near a kind swatch ${JSON.stringify(reading.stripVsKinds)}`);
+        must(reading.projectTotal !== null && reading.splits.length === 2 && reading.splits.every((split) => Math.abs(split.sum - reading.projectTotal!) <= 1), `${name}: the project's split lines ${JSON.stringify(reading.splits)} do not add up to ${reading.projectTotal}`);
+        must(reading.splits.every((split) => split.items <= 6), `${name}: a split line lists ${JSON.stringify(reading.splits.map((split) => split.items))} entries`);
+        if (!size.phone) {
+          must(reading.figuresGap === null || reading.figuresGap >= 24, `${name}: the hour figures sit ${reading.figuresGap}px apart on one baseline (${reading.figuresLayout})`);
+          /* The critic's empty block was 190 px tall; up to 80 px is the ordinary air between two groups of text. */
+          must(reading.figuresEmpty !== null && reading.figuresEmpty <= 80, `${name}: ${reading.figuresEmpty}px empty under the hour figures beside the tokens column (${reading.figuresLayout})`);
+        }
+      }
+      if (variant === 3) {
+        /* On the phone the fold starts closed. */
+        must((size.phone || reading.topMeta.length > 0) && reading.topMeta.every((meta) => !meta.includes("orchard-client")), `${name}: the largest conversations repeat the filtered project: ${JSON.stringify(reading.topMeta)}`);
+        if (!size.phone) must(reading.folds.length === 2 && reading.folds[0]!.top === reading.folds[1]!.top && Math.abs(reading.folds[0]!.height - reading.folds[1]!.height) <= 4, `${name}: the optional folds ${JSON.stringify(reading.folds)} sit at uneven heights`);
+      }
+      if (variant === 4) {
+        must(reading.accountCharts.length === 3 && new Set(reading.accountCharts.map((chart) => chart.scaleTop)).size === 1, `${name}: the account day charts use their own scales ${JSON.stringify(reading.accountCharts)}`);
+        if (!size.phone) must(new Set(reading.accountCharts.map((chart) => chart.chartTop)).size === 1 && new Set(reading.accountCharts.map((chart) => chart.windowsTop)).size === 1, `${name}: the account cards' charts are out of line ${JSON.stringify(reading.accountCharts)}`);
+      }
+      must(reading.segments.length === 5 && reading.segments.every((segment) => segment.whole), `${name}: range segments ${JSON.stringify(reading.segments)}`);
+      must(reading.chips.some((chip) => chip.includes("orchard-client")), `${name}: no orchard-client filter chip (${JSON.stringify(reading.chips)})`);
+      if (state === "open") {
+        must(reading.popover !== null && reading.popover.inside, `${name}: the range popover ${JSON.stringify(reading.popover)} leaves the viewport`);
+        must(reading.inputs.join(" ") === "2026-10-01 2026-10-16", `${name}: the date fields hold ${reading.inputs.join(" ")}`);
+      } else must(reading.popover === null, `${name}: the range popover is open`);
+      await context.close();
+    }
+  } finally {
+    await browser?.close().catch(() => undefined);
+    await stop(server);
+  }
+  report.failures = failures;
+  const scrub = (value: unknown) => JSON.parse(JSON.stringify(value).split(HOME).join("$HOME"));
+  fs.writeFileSync(path.join(OUT_DIR, "activity-tokens.json"), JSON.stringify(scrub(report), null, 2) + "\n", "utf8");
+  const target = process.env.ACTIVITY_RENDER_DIR?.trim();
+  if (target) {
+    fs.mkdirSync(target, { recursive: true });
+    for (const file of [...shots, path.join(OUT_DIR, "activity-tokens.json")]) fs.copyFileSync(file, path.join(target, path.basename(file)));
+  }
+  console.log(`activity-tokens: ${shots.length} frames in ${target || OUT_DIR}; ${failures.length} failures`);
+  for (const failure of failures) console.log(`  - ${failure}`);
+  if (failures.length) process.exitCode = 1;
+}
+
 if (process.env.BOARD_CAPTURE_CASE === "registry-history") await registryHistoryMain();
 else if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
 else if (process.env.BOARD_CAPTURE_CASE === "twice-switched-link") await twiceSwitchedLinkMain();
@@ -7944,6 +8236,7 @@ else if (["self-update-install", "managed-update"].includes(process.env.BOARD_CA
 else if (process.env.BOARD_CAPTURE_CASE === "linking") await linkingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity-members") await activityMembersMain();
+else if (process.env.BOARD_CAPTURE_CASE === "activity-tokens") await activityTokensMain();
 else if (process.env.BOARD_CAPTURE_CASE === "lightbox") await lightboxMain();
 else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();
