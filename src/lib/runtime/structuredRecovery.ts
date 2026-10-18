@@ -429,9 +429,16 @@ async function recoverCandidate(
         ...liveHostResult(current),
         ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}),
       };
-      await ownership.releaseHost(current.key);
+      const releasedKey = current.key;
+      const releasedEpoch = registry.readOnlySnapshot().entries[sessionKeyId(releasedKey)]?.claimEpoch;
+      await ownership.releaseHost(releasedKey);
       await assertOwnership();
-      (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, current.key)));
+      await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
+        request.authorityGuard?.();
+        assertPipelineTurnAllowed(candidate.conversationId, registry);
+        if (registry.readOnlySnapshot().entries[sessionKeyId(releasedKey)]?.claimEpoch !== releasedEpoch) return false;
+        return registry.terminateStructuredHost(releasedKey);
+      });
       await assertOwnership();
       current = candidateFor(registry, request, true, park);
       if (!current) return null;
@@ -597,7 +604,9 @@ async function recoverCandidate(
     } catch (error) {
       if (ownsSuccessor()) {
         await ownership?.releaseHost(current.key);
-        if (ownsSuccessor()) (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, current.key)));
+        await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
+          if (ownsSuccessor()) registry.terminateStructuredHost(current!.key);
+        });
       }
       throw error;
     }

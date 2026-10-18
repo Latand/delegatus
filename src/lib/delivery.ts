@@ -265,7 +265,10 @@ export async function reconfigureConversation(
           return "pending" as const;
         }
         if (!await (overrides.killHost ?? killTmuxHostIfMatches)(refreshedHost)) return failure("the registered pane changed or its process did not exit", 409);
-        (await registry.deliveryWriteOrBusy({ label: "registry.markUnhosted" }, registry.markUnhosted.bind(registry, refreshed.key)));
+        await registry.deliveryWriteOrBusy({ label: "registry.markUnhosted" }, () => {
+          const current = registry.readOnlySnapshot().entries[`${refreshed.key.engine}:${refreshed.key.sessionId}`];
+          if (current?.artifactPath === filePath && sameRegisteredHost(current.host, refreshedHost)) registry.markUnhosted(refreshed.key);
+        });
         forgetResumePane(filePath);
         return { state: "prepared" as const, spec };
       });
