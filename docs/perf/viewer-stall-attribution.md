@@ -366,3 +366,119 @@ Check summary coverage across both window edges and each minute in between.
 Record START and END and verify their difference is exactly 1,800 seconds.
 An empty selection alone cannot pass. A populated isolated replay does not
 replace this production acceptance window.
+
+
+## Follow-up sampling spike on the pinned runtime
+
+The standing requirement dated 2026-10-14 is to eliminate multi-second Viewer
+pauses. A profiler can supply the missing caller evidence; it supplies no
+latency improvement by itself. This spike follows the specification's stop
+condition: no tested API supplies the required hard producer bound on Bun
+1.4.0. Serving capture, its setting, deploy activation, cooldown and correlated
+loop-gap output remain unimplemented pending a suitable producer.
+
+`scripts/probe-loop-profiler.ts --jsc` now tests `bun:jsc.profile()` in a
+disposable main-thread process. A synthetic three-second CPU block is sampled
+at 10,000 microseconds. The result identifies `syntheticThreeSecondBlock` in
+`scripts/probe-loop-profiler.ts`, including its source line and self/total
+sample weights. Only the known synthetic target's metadata leaves the child;
+raw profiles, source paths and function names from other frames stay inside it.
+The control also checks exception propagation and a clean subsequent capture.
+This proves function attribution in the spike. It creates no serving
+`[viewer loop-gap]` record.
+
+| API on Bun 1.4.0 | Result | Missing bound |
+| --- | --- | --- |
+| `bun:jsc.profile(callback, interval)` | Names the synthetic function and source line; accepts an async callback. | Stops when the callback/promise completes. A 100 ms stop timer is delayed until the three-second CPU block returns. No exposed sample, byte or stack-depth cap. |
+| `bun:jsc.startSamplingProfiler()` | Export exists; its binding starts the current VM's profiler. | No exported stop; unsuitable for a temporary serving recorder. |
+| Local `node:inspector` CPU profiler | Existing control captures JS/native callers and clears them on stop. | Requested one-sample limits are ignored. The main loop must execute stop. |
+| Worker `connectToMainThread()` | Existing worker control stops before main-thread recovery. | It misses the main-thread function captured by the local session. |
+
+The pinned [JSC binding](https://github.com/oven-sh/bun/blob/bun-v1.4.0/src/jsc/modules/BunJSCModule.h#L621)
+starts profiling before invoking the callback and builds the reports after it
+returns or its promise settles. It exposes the interval and callback arguments.
+Its [start binding](https://github.com/oven-sh/bun/blob/bun-v1.4.0/src/jsc/modules/BunJSCModule.h#L412)
+also uses the calling VM. The pinned
+[inspector binding](https://github.com/oven-sh/bun/blob/bun-v1.4.0/src/jsc/bindings/BunCPUProfiler.cpp#L44)
+starts that VM's sampling profiler with its interval. These exposed paths
+provide no independently enforced producer cap. This is a conclusion about
+the tested APIs and reviewed bindings; no custom native implementation was
+attempted. Trimming a returned profile limits output only after collection
+and report conversion have already happened. A cooldown also cannot bound the
+capture already in progress.
+
+### Reproduce the spike
+
+Work in a scratch export with frozen dependencies. Set private HOME,
+XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR; unset LLV_STATE_OWNER and set
+LLV_VIEWER_CONTROL_URL to `http://127.0.0.1:1`. GATE below is the installed
+`scripts/gate-slot.sh`. Run each heavy command serially:
+
+```sh
+bash "$GATE" bun scripts/probe-loop-profiler.ts
+bash "$GATE" bun scripts/probe-loop-profiler.ts --jsc
+bash "$GATE" bun scripts/probe-loop-profiler.ts --cost
+bash "$GATE" bun scripts/local-gate-tests.ts --base "$BASE" \
+  ./scripts/probe-loop-profiler.test.ts
+bash "$GATE" ./node_modules/.bin/tsc --noEmit --incremental false
+bash "$GATE" ./node_modules/.bin/eslint \
+  scripts/probe-loop-profiler.ts scripts/probe-loop-profiler.test.ts
+```
+
+The capability child has a parent-owned 15-second kill deadline. Each cost
+child has a 120-second parent-owned deadline; the gate owns the whole run.
+Those protections belong to disposable spike processes. Killing a serving
+Viewer would violate the purpose of this task.
+
+The cost driver repeats each API in three fresh processes, reversing API
+order on the middle repetition. Each process warms both arms, then alternates
+baseline/profiled order for 20 idle and 20 busy pairs. Idle awaits 200 ms;
+busy performs fixed batches of 20 JSON round trips over 10,000 fixed rows.
+A calibration chooses the batch count once per process, then both arms use
+that identical work. Both arms retain the loaded profiler modules and idle
+inspector session. Whole-process CPU and elapsed time include start, stop
+and report conversion. Raw pairs include the work counts, checksum and load
+averages before/after; background machine work is uncontrolled. Negative
+paired deltas are measurement variation. These synthetic results establish
+no production overhead or maximum-memory guarantee.
+
+Results and source hashes are in
+[`evidence/loop-profiler-spike/spike.json`](../../evidence/loop-profiler-spike/spike.json).
+The final cost run completed at **2026-10-18T09:45:45.769Z** under Bun
+**1.4.0**, revision `34cbb9a40b4bd1bd767d134a7065e66c2432a676`.
+Each row has 60 pairs. Values below are profiled minus baseline milliseconds
+per paired block, including report conversion.
+
+| API | Workload | Mean added CPU ms | CPU-difference SD ms | Mean added wall ms |
+| --- | --- | ---: | ---: | ---: |
+| jsc | idle | -0.0640 | 0.6360 | 0.0914 |
+| jsc | busy | 0.6346 | 22.4417 | 0.2265 |
+| inspector | idle | -0.0141 | 0.6290 | 0.1124 |
+| inspector | busy | -5.1869 | 9.7884 | -5.6862 |
+
+The dispersion prevents a negligible-overhead claim. The parent gate had a
+three-core CPU quota and an 8 GiB memory cap; it shared an eighteen-core work
+slice. These are disposable-process containment limits. They provide no
+in-process native-buffer guarantee for a serving Viewer.
+
+The full touched-tests gate passed both tests with a green head and no new
+failures against base `f69ba98f92fcd84743c9570ca7a2ba011b474742`; no baseline
+checkout was needed. Full TypeScript and changed-file ESLint passed.
+No runtime-host source, shared
+monitor, release pin or deploy path changes in this spike. The exercised
+processes are disposable Bun main-thread controls and their inspector worker;
+neither a serving Viewer nor a runtime-host generation is exercised.
+
+### Options after the stop condition
+
+1. Recommended: authorize a runtime-level follow-up that adds or selects a
+   profiler with a fixed native sample/byte/depth budget and a stop deadline
+   independent of the sampled main thread. Re-run this spike before wiring
+   the Viewer setting and 30-minute deploy window. A changed Bun pin also
+   requires both Viewer and runtime-host rehearsals.
+2. Revise the hard-bound acceptance to permit a temporary opt-in recorder
+   whose native collection can continue for the entire blocked interval.
+   A timer/cooldown and bounded log would still leave that exposure.
+3. Reconsider separately authorized external native sampling with independently
+   bounded collection. This changes the no-privileges constraint and requires
+   a new scope; existing machine access restrictions remain in force.
