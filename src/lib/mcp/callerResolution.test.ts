@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import { AgentRegistry } from "@/lib/agent/registry";
+import { liveRootSession } from "@/lib/root/adopt";
 import { attentionCallerAuthority } from "@/lib/attention/callerAuthority";
 import { hostedConversationsFromSnapshot, attentionCallerSources, productionDomainDependencies, viewerMcpBindings, viewerMcpToolPolicy } from "./bindings";
 import { runAsMcpHttpCaller } from "./callerContext";
@@ -137,6 +138,28 @@ test("a stale generation cannot hide a conflicting live ancestor", () => {
     .run(JSON.stringify([{ id: session, path: transcript, launchProfile: { role: "worker" } }]), "conversation_history_1");
   db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.generations',json('[]')) WHERE collection='conversations' AND row_key=?").run(id);
   db.close();
+  for (const identity of ["42:original", "42:reused"]) {
+    runAsMcpHttpCaller({ capability }, () => {
+      const currentProbe = { ...probe, processIdentity: () => identity };
+      const sources = attentionCallerSources(f.registry, currentProbe, () => [42]);
+      const snapshot = f.registry.readOnlySnapshot();
+      const old = { ...sources, hosted: () => hostedConversationsFromSnapshot(snapshot, currentProbe) };
+      if (identity === "42:original") {
+        expect(attentionCallerAuthority(old)).toMatchObject({ kind: "unidentified", admission: { reason: "capability-conflict" } });
+      }
+      expect(attentionCallerAuthority(sources)).toEqual(attentionCallerAuthority(old));
+    });
+  }
+});
+
+test("an ancestry entry with a stale generation key still conflicts with a foreign capability", () => {
+  const f = fixture(10);
+  const staleSession = "stale-session-two";
+  const db = new Database(f.sqliteFilename);
+  db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.generations',json('[]')) WHERE collection='conversations' AND row_key=?").run(id);
+  db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.generations',json(?)) WHERE collection='conversations' AND row_key='conversation_history_1'")
+    .run(JSON.stringify([{ id: staleSession, path: transcript, launchProfile: { role: "worker" } }]));
+  db.close();
   runAsMcpHttpCaller({ capability }, () => {
     const sources = attentionCallerSources(f.registry, probe, () => [42]);
     const old = { ...sources, hosted: () => hostedConversationsFromSnapshot(f.registry.readOnlySnapshot(), probe) };
@@ -149,7 +172,7 @@ test("root ordering and configured-root precedence survive peer writes and reope
   const f = fixture(10);
   const db = new Database(f.sqliteFilename);
   const update = (key: string, role: string, updated: string) => db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.generations',json(?),'$.updatedAt',?) WHERE collection='conversations' AND row_key=?")
-    .run(JSON.stringify([{ id: session, path: `/root/${key}`, launchProfile: { role } }, { id: session, path: `/legacy/${key}` }]), updated, key);
+    .run(JSON.stringify([{ id: session, path: `/root/${key}`, launchProfile: { role } }, { id: session, path: `/legacy/${key}`, launchProfile: { role } }]), updated, key);
   update(id, "root", stamp);
   expect(f.registry.mcpCallerSnapshot(id, [], null).rootConversationId).toBe(id);
   update("conversation_history_1", "root", "2026-10-19T00:00:00.000Z");
@@ -164,6 +187,59 @@ test("root ordering and configured-root precedence survive peer writes and reope
   f.registry.close();
   const reopened = new AgentRegistry(f.registry.filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: f.sqliteFilename }); registries.push(reopened);
   expect(reopened.mcpCallerSnapshot(id, [], null).rootConversationId).toBeNull();
+});
+
+test("a roleless newest generation defaults to worker in root authority selection", () => {
+  const f = fixture(10);
+  const db = new Database(f.sqliteFilename);
+  db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.generations',json(?)) WHERE collection='conversations' AND row_key=?")
+    .run(JSON.stringify([
+      { id: session, path: `/root/${id}`, launchProfile: { role: "root" } },
+      { id: "legacy-generation-three", path: `/legacy/${id}` },
+    ]), id);
+  db.close();
+  const priorRoot = process.env.LLV_ROOT_CONVERSATION_ID;
+  delete process.env.LLV_ROOT_CONVERSATION_ID;
+  try {
+    const expectParity = (registry: AgentRegistry) => runAsMcpHttpCaller({ capability }, () => {
+      const sources = attentionCallerSources(registry, probe, () => []);
+      const snapshot = registry.readOnlySnapshot();
+      const old = { ...sources,
+        hosted: () => hostedConversationsFromSnapshot(snapshot, probe),
+        rootConversationId: () => liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId: null })?.conversationId ?? null,
+      };
+      expect(attentionCallerAuthority(sources)).toEqual(attentionCallerAuthority(old));
+      return attentionCallerAuthority(old);
+    });
+    expect(expectParity(f.registry)).toEqual({ kind: "worker", conversationId: id, role: "worker" });
+
+    const peer = new Database(f.sqliteFilename);
+    peer.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.generations',json(?)) WHERE collection='conversations' AND row_key=?")
+      .run(JSON.stringify([
+        { id: session, path: `/root/${id}`, launchProfile: { role: "root" } },
+        { id: "legacy-generation-three", path: `/next/${id}`, launchProfile: { role: "root" } },
+      ]), id);
+    peer.close();
+    expect(expectParity(f.registry)).toEqual({ kind: "root", conversationId: id });
+
+    const legacyPeer = new Database(f.sqliteFilename);
+    legacyPeer.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.generations',json(?)) WHERE collection='conversations' AND row_key=?")
+      .run(JSON.stringify([
+        { id: session, path: `/root/${id}`, launchProfile: { role: "root" } },
+        { id: "legacy-generation-four", path: `/legacy/${id}` },
+      ]), id);
+    legacyPeer.query("UPDATE registry_meta SET value='1' WHERE key='caller_indexes_version'").run();
+    legacyPeer.close();
+    expect(expectParity(f.registry)).toEqual({ kind: "worker", conversationId: id, role: "worker" });
+
+    f.registry.close();
+    const reopened = new AgentRegistry(f.registry.filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: f.sqliteFilename });
+    registries.push(reopened);
+    expect(expectParity(reopened)).toEqual({ kind: "worker", conversationId: id, role: "worker" });
+  } finally {
+    if (priorRoot === undefined) delete process.env.LLV_ROOT_CONVERSATION_ID;
+    else process.env.LLV_ROOT_CONVERSATION_ID = priorRoot;
+  }
 });
 
 test("ancestry and root selectors use scoped indexes", () => {
