@@ -3499,7 +3499,8 @@ browserTest("#2072 slice 4 touch: the pager swipes, a column scrolls alone, a he
  * The phone board has no page to carry a scroll to: the document does not
  * overflow, the seat card, the tabs and the dock never leave the screen, and
  * the four column pages are the only vertical scrollers, each contained. A
- * finger dragged down at a column's top or up at its end moves nothing else.
+ * finger dragged down at a column's top or up at its end moves nothing else,
+ * the seat card stays on screen, and the desktop's return strip is not drawn.
  * Readings go to `evidence/panel-scroll/phone.json`.
  *
  *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
@@ -3546,6 +3547,8 @@ browserTest("independent panel scroll: the phone has no page to scroll, and a co
         if (others.length) fail(`scrollers other than the columns overflow: ${JSON.stringify(others)}`);
         for (const scroller of resting.scrollers) if (scroller.column && scroller.overscrollY !== "contain") fail(`${scroller.name} has overscroll-behavior-y ${scroller.overscrollY}`);
         if (!resting.scrollers.some((scroller) => scroller.name === "column:assigned")) fail("the Assigned column does not overflow, so a finger has nothing to reach the end of");
+        /* The strip that returns the desktop page to the seat has no page to return: the phone draws none. */
+        if (await page.locator("[data-seat-return]").count()) fail("the phone draws the desktop's return strip");
         const column = await rectOf(page, '[data-phone-kanban-column="assigned"]');
         if (!column) throw new Error("no Assigned column");
         const x = column.x + column.width / 2;
@@ -3566,6 +3569,7 @@ browserTest("independent panel scroll: the phone has no page to scroll, and a co
           if (named(before) !== named(after)) fail(`a finger at the ${end} of a column moved ${named(before)} → ${named(after)}`);
           for (const place of ["seat", "tabs", "dock"] as const) if (JSON.stringify(before[place]) !== JSON.stringify(after[place])) fail(`a finger at the ${end} of a column moved the ${place}: ${JSON.stringify(before[place])} → ${JSON.stringify(after[place])}`);
           if (after.scrollY !== 0) fail(`a finger at the ${end} of a column scrolled the document to ${after.scrollY}`);
+          if (!after.seat || after.seat[1] < 0 || after.seat[1] + after.seat[3] > viewport.height) fail(`the seat card is off screen with a column at its ${end}: ${JSON.stringify(after.seat)}`);
         }
         await page.screenshot({ path: path.join(out, `${key}-column-end.png`) });
         expect(pageErrors).toEqual([]);
