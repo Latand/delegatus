@@ -40,7 +40,7 @@ export interface PublishPrototypeInput {
 }
 export interface PrototypeMedia {
   id: string;
-  mime: "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | "video/webm";
+  mime: "image/png" | "image/jpeg" | "image/webp" | "image/gif" | "video/mp4" | "video/webm";
   bytes: number;
 }
 export interface PrototypeFrame {

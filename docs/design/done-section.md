@@ -217,8 +217,9 @@ interface DoneItemV1 {
   next. An unacknowledged row may refresh its `title`, its limit text and its
   `frame`. Running it twice writes nothing the second time. The sweep of the
   release that owns traffic runs it every minute and the read route runs it
-  too, each at most once every 30 s per process (a `globalThis` stamp, as
-  `src/lib/lifecycle/projector.ts` throttles); a Viewer that was stopped
+  too, at most once every 30 s per process (a `globalThis` stamp, as
+  `src/lib/lifecycle/projector.ts` throttles). The minute sweep bypasses that
+  read throttle so browser polling cannot starve its media recovery. A Viewer that was stopped
   catches up from `activation` when it starts.
 - **Acknowledgement.** Sets `acknowledgedAt` and `acknowledgedBy`; undo clears
   both. Operator only, through the Viewer's own route: no MCP tool takes it, so
@@ -234,7 +235,8 @@ interface DoneItemV1 {
   that event, so only an outcome older than that which no projection saw in
   all that time is no longer inserted.
 - **Routes.** `GET /api/attention/done` answers `{ items, revision }`, the
-  unacknowledged rows, newest event first, after projecting.
+  persisted unacknowledged rows, newest event first, and refines the projection
+  in the background. A slow frame copy never holds the read response.
   `POST /api/attention/done` takes `{ keys, undo?, surface }` (at most 200
   keys), same-origin checked as the dismissals route is, and answers the rows
   it changed. The Viewer reads it on mount, every 30 s while the tab is visible,
@@ -291,6 +293,52 @@ projection reads at most four albums and leaves the rest open for the next, so
 indexing stays bounded and retryable.
 
 A press on the thumbnail opens `Lightbox` with `{ src, before }`, unchanged.
+
+#### Retained frames (2026-10-18)
+
+Before a finished item's frame is recorded, `done/media.ts` copies its after
+and optional before image into `state/done-media`. It shares the prototype
+publisher's descriptor-pinned reader, raster validation, 4 MiB/image bound,
+content hash and durable write (`prototypeReview/copy.ts`). The done item owns
+its copies independently of a prototype round, transcript index or lane path.
+One asynchronous file-transaction lock owns a persisted bounded manifest:
+128 pairs and 64 MiB, oldest capture first (item key breaks ties). One copy in
+flight adds at most 8 MiB; orphan staging is removed under the same lock after
+a restart. Acknowledgement keeps frames for Undo; removing the item through
+the existing 30-day/2,000-row acknowledgement retention removes its copies.
+The explicit media cap can evict an older unacknowledged item's frames without
+removing the item itself. An evicted URL is never silently re-admitted.
+
+`/api/image?done=…&media=…` serves only the manifest's raster through a pinned
+descriptor and a bounded stream. Cross-origin pages, anonymous team callers
+and agent capabilities are refused. The local image and artifact path readers
+fence this store, including symlinks, just as they fence prototype copies.
+
+The projector revisits up to four legacy frames per pass, even if their source
+left the candidate window. An old task-album URL first advances the album's
+bounded transcript index; incomplete indexing retries on a later pass. Inline
+transcript images, available task-album evidence copies and local prototype
+media can recover without network access. A copied frame selected while an
+album is still indexing remains provisional: the next settled lookup can
+promote it. The owner lock commits the replacement before removing superseded
+bytes, and the projection timestamp prevents a stale copy from replacing a
+newer one.
+
+The background sweep alone also tries up to four PR-body image attachments and
+the exact named frame in a retained local ref, a PR-referenced commit, or the
+PR head commit read through GitHub's tree/blob API. An attachment must positively
+match the requested filename or context; ambiguous attachments fall through to
+named git evidence. These reads never fetch, check out or change a ref. Network
+requests have five-second deadlines, reject redirects and arbitrary hosts, and
+stop at 4 MiB. Supported raster types include GIF alongside PNG, JPEG and WebP.
+A recovered frame is copied before its URL is stored. No readable copy: the row
+shows «Кадри не збереглися» (English: “Frames were not retained”). A later image
+failure, including media cap eviction, shows the same label; acknowledgement
+remains available.
+
+Read-only production diagnosis and its time limits are recorded in
+`docs/verification/done-frames.md`. Rendered cases use the existing kanban and
+phone drivers; their records are `evidence/done-frames/{desktop,phone}.json`.
 
 ### 4.3 Layout inside the section
 
