@@ -11,7 +11,7 @@ const PASSING: CandidatePerformanceMeasurements = {
   dataset: { scale: 1, rows: 53_299, coldRows: 51_099, payloadBytes: 214_600_000, transcripts: 320, seedMs: 7_000,
     receipts: { total: 10_971, failedStructured: 892, failedLegacy: 122, conflicted: 133 } },
   firstBoot: { registryOpenMs: 80, firstSnapshotMs: 600, coldProjectionMs: 4_200, firstUsableMs: 4_900, eventLoopMaxMs: 600, coldBuild: { sequence: 1, buildMs: 2_500 } },
-  activation: { incumbentMs: 4_300, successorMs: 4_800, eventLoopMaxMs: 900 },
+    activation: { incumbentMs: 4_300, successorMs: 4_800, eventLoopMaxMs: 900, incumbentCompleted: true, successorCompleted: true },
   grantWrites: { count: 60, p50Ms: 5, p95Ms: 9, maxMs: 30, mismatches: 0, failures: 0 },
   externalWrites: { count: 300, p50Ms: 3, p95Ms: 7, maxMs: 30, mismatches: 0, failures: 0 },
   keyedOperationReads: { count: 100, p50Ms: 1, p95Ms: 2, maxMs: 4 },

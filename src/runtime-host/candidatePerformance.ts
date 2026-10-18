@@ -136,7 +136,11 @@ export interface CandidatePerformanceMeasurements {
     coldBuild: { sequence: number; buildMs: number };
   };
   /** Each release's activation; one that never completed counts the time it ran. */
-  activation: { incumbentMs: number; successorMs: number; eventLoopMaxMs: number };
+  activation: {
+    incumbentMs: number; successorMs: number; eventLoopMaxMs: number;
+    /** Older reports omitted completion; an over-budget legacy activation is unproven. */
+    incumbentCompleted?: boolean; successorCompleted?: boolean;
+  };
   grantWrites: LatencySummary & { mismatches: number; failures: number };
   externalWrites: LatencySummary & { mismatches: number; failures: number };
   keyedOperationReads: LatencySummary;
@@ -258,6 +262,15 @@ export function candidatePerformanceBreaches(
   over("first boot to a usable board", measured.firstBoot.firstUsableMs, bounds.firstBoot.firstUsableMs);
   over("Viewer event-loop delay during first boot", measured.firstBoot.eventLoopMaxMs, bounds.firstBoot.eventLoopMaxMs);
   if (measured.firstBoot.coldBuild.sequence !== 1) breaches.push("the first projection build was not measured");
+  for (const [name, duration, completed] of [
+    ["incumbent", measured.activation.incumbentMs, measured.activation.incumbentCompleted],
+    ["successor", measured.activation.successorMs, measured.activation.successorCompleted],
+  ] as const) {
+    if (completed === false) breaches.push(`${name} release activation did not complete`);
+    else if (completed === undefined && duration > bounds.activation.durationMs) {
+      breaches.push(`${name} release activation completion was not recorded`);
+    }
+  }
   over("incumbent release activation", measured.activation.incumbentMs, bounds.activation.durationMs);
   over("successor release activation", measured.activation.successorMs, bounds.activation.durationMs);
   over("Viewer event-loop delay during a release activation", measured.activation.eventLoopMaxMs, bounds.activation.eventLoopMaxMs);
@@ -386,7 +399,7 @@ export function parseCandidatePerformanceReport(output: string): CandidatePerfor
 /* The shape every measurement must have: each leaf a finite, non-negative
    number, a boolean or one of the named words. Evidence that lacks a leaf, or
    carries one that is not what it should be, cannot be judged. */
-type Shape = "n" | "b" | "n?" | "s?" | readonly string[] | { readonly [key: string]: Shape };
+type Shape = "n" | "b" | "b?" | "n?" | "s?" | readonly string[] | { readonly [key: string]: Shape };
 const LATENCY = { count: "n", p50Ms: "n", p95Ms: "n", maxMs: "n" } as const;
 const MEASUREMENT_SHAPE: Shape = {
   dataset: { scale: "n", rows: "n", coldRows: "n", payloadBytes: "n", transcripts: "n", seedMs: "n",
@@ -395,7 +408,7 @@ const MEASUREMENT_SHAPE: Shape = {
     registryOpenMs: "n", firstSnapshotMs: "n", coldProjectionMs: "n", firstUsableMs: "n", eventLoopMaxMs: "n",
     coldBuild: { sequence: "n", buildMs: "n" },
   },
-  activation: { incumbentMs: "n", successorMs: "n", eventLoopMaxMs: "n" },
+  activation: { incumbentMs: "n", successorMs: "n", eventLoopMaxMs: "n", incumbentCompleted: "b?", successorCompleted: "b?" },
   grantWrites: { ...LATENCY, mismatches: "n", failures: "n" },
   externalWrites: { ...LATENCY, mismatches: "n", failures: "n" },
   keyedOperationReads: LATENCY,
@@ -436,6 +449,7 @@ function shapeErrors(value: unknown, shape: Shape, at: string): string[] {
   if (shape === "n?") return value === null || finite(value) ? [] : [at];
   if (shape === "s?") return value === null || typeof value === "string" ? [] : [at];
   if (shape === "b") return typeof value === "boolean" ? [] : [at];
+  if (shape === "b?") return value === undefined || typeof value === "boolean" ? [] : [at];
   if (Array.isArray(shape)) return shape.includes(value as string) ? [] : [at];
   if (!value || typeof value !== "object" || Array.isArray(value)) return [at];
   return Object.entries(shape as Record<string, Shape>)

@@ -27,7 +27,7 @@ const WINDOW_MS = 12_000;
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-candidate-browser-"));
 afterAll(() => fs.rmSync(directory, { recursive: true, force: true }));
 
-type Fault = "none" | "stalled-targets" | "snapshot-503" | "held-server";
+type Fault = "none" | "stalled-targets" | "late-targets" | "snapshot-503" | "held-server";
 const HELD_MS = 800;
 
 const PAGE = `<!doctype html><html><body>
@@ -54,7 +54,11 @@ const server = Bun.serve({
     const route = new URL(request.url).pathname;
     if (route === "/") return new Response(page, { headers: { "content-type": "text/html" } });
     if (route === "/api/files") return Response.json({ files: [] });
-    if (route === "/api/tmux/targets") return fault === "stalled-targets" ? new Promise(() => {}) : Response.json({ targets: {} });
+    if (route === "/api/tmux/targets") {
+      if (fault === "stalled-targets") return new Promise(() => {});
+      if (fault === "late-targets") return new Promise(resolve => setTimeout(() => resolve(Response.json({ targets: {} })), 18000));
+      return Response.json({ targets: {} });
+    }
     if (route === "/api/runtime/snapshot") return fault === "snapshot-503" ? Response.json({ error: "runtime host is unavailable" }, { status: 503 }) : Response.json({ sessions: [] });
     if (route === "/api/streams") {
       return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(": open\\n\\n")); } }), {
@@ -182,7 +186,16 @@ test.skipIf(!browser)("a server that carries no probe is not measured, and the c
   expect(outcome).toMatchObject({ promoted: [], retired: true, servingKept: true });
 }, 120_000);
 
-test.skipIf(!browser)("a side request left unanswered past the bound refuses the candidate and keeps the serving release", async () => {
+test.skipIf(!browser)("an in-flight request completed during the drain permits promotion with a warning", async () => {
+  const result = await measure("late-targets");
+  expect(result.measurements.apiUnfinished).toBe(0);
+  expect(result.measurements.apiMaxMs).toBeGreaterThanOrEqual(18000);
+  const outcome = await throughCoordinator({ ...passingCandidatePerformanceMeasurements(), browser: result.measurements });
+  expect(outcome.status).toMatchObject({ phase: "succeeded", terminal: true });
+  expect(outcome.status?.health[0]?.performance?.timingWarnings?.some(warning => warning.startsWith("browser /api/tmux/targets "))).toBe(true);
+}, 120_000);
+
+test.skipIf(!browser)("a side request left unanswered after draining refuses the candidate and keeps the serving release", async () => {
   const result = await measure("stalled-targets");
   const breaches = candidateBrowserBreaches(result.measurements);
   expect(breaches).toHaveLength(2);

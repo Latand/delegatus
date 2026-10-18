@@ -8,7 +8,7 @@
    A request's time runs from the page issuing it to its last byte, so a wait
    for a free browser connection counts: the operator waits through it too.
    A request that failed counts the time until it did, and one still open
-   when the window closes counts its age so far; only the declared event
+   after the window's bounded drain counts its age so far; only the declared event
    streams (`CANDIDATE_BROWSER_STREAM_ROUTES`) stay open by design.
    Main-thread delay is bounded apart for the boot (navigation to a drawn
    board) and for operation after it. The server's own event loop is read
@@ -25,6 +25,8 @@ import type { ServerLoopWindow } from "./candidateServerLoopProbe";
 
 export const CANDIDATE_BROWSER_VIEWS = 8;
 export const CANDIDATE_BROWSER_WINDOW_MS = 30_000;
+/** Complete requests already in flight before judging the observation window. */
+export const CANDIDATE_BROWSER_REQUEST_DRAIN_MS = 30_000;
 /** How long after its last board drew the server is still answering the views'
     opening requests. A view issues two dozen of them, and the slowest arrive
     for seconds after the board is on screen: that tail belongs to the opening,
@@ -238,13 +240,14 @@ export async function measureBoardInBrowser(options: {
       /* Ordinary requests the page started and has not finished: what can
          hold a connection, and what an operator is still waiting for. */
       const open = new Map<object, { route: string; at: number; startedAt: number }>();
+      const tracking = { accepting: true };
       const ordinary = (url: URL) => url.pathname.startsWith("/api/") && !CANDIDATE_BROWSER_STREAM_ROUTES.has(url.pathname);
       page.on("request", (request) => {
         const url = new URL(request.url());
-        if (ordinary(url)) open.set(request, { route: url.pathname, at: Date.now() - navigatedAt, startedAt: Date.now() });
+        if (tracking.accepting && ordinary(url)) open.set(request, { route: url.pathname, at: Date.now() - navigatedAt, startedAt: Date.now() });
       });
       page.on("requestfinished", async (request) => {
-        open.delete(request);
+        if (!open.has(request)) return;
         const url = new URL(request.url());
         if (!ordinary(url)) return;
         const timing = request.timing();
@@ -258,9 +261,11 @@ export async function measureBoardInBrowser(options: {
           firstByteMs: Math.round(Math.max(0, timing.responseStart)),
           at: Math.round(timing.startTime - navigatedAt),
         });
+        open.delete(request);
       });
       page.on("requestfailed", (request) => {
         const started = open.get(request);
+        if (!started) return;
         open.delete(request);
         const url = new URL(request.url());
         if (!ordinary(url)) return;
@@ -275,8 +280,8 @@ export async function measureBoardInBrowser(options: {
       await page.goto(`${options.baseUrl}/#f=${encodeURIComponent(pin.path)}`, { waitUntil: "domcontentloaded" });
       const drawn = await page.waitForSelector("[data-kanban-board]", { timeout: 60_000 }).then(() => true, () => false);
       const readyMs = drawn ? Math.round(performance.now() - started) : Number.POSITIVE_INFINITY;
-      const drawnAt = await page.evaluate(() => performance.now());
-      return { index, context, page, pin, requests, failed, open, readyMs, drawnAt, staleSeen: 0, lostSeen: 0, inputs: [] as number[] };
+      const { drawnAt, timeOrigin } = await page.evaluate(() => ({ drawnAt: performance.now(), timeOrigin: performance.timeOrigin }));
+      return { index, context, page, pin, requests, failed, open, tracking, readyMs, drawnAt, timeOrigin, staleSeen: 0, lostSeen: 0, inputs: [] as number[] };
     }));
     writers = startWriters(options.writers, process.pid);
     /* The server's operation is read from here on; its opening until here. */
@@ -307,10 +312,17 @@ export async function measureBoardInBrowser(options: {
       }
       await Bun.sleep(2_000);
     }
+    // Freeze the measured request set before draining it. Polls started after
+    // the observation window cannot keep this drain alive or enter its result.
+    for (const view of views) view.tracking.accepting = false;
+    const drainDeadline = performance.now() + CANDIDATE_BROWSER_REQUEST_DRAIN_MS;
     const written = await writers.stop();
     writers = null;
     /* The server's own account of the two spans, asked once the load is over. */
     const closedLoopAt = Date.now();
+    while (views.some(view => view.open.size > 0) && performance.now() < drainDeadline) {
+      await Bun.sleep(25);
+    }
     const opened = await options.server?.read(openedAt, operatingAt) ?? null;
     const operated = await options.server?.read(operatingAt, closedLoopAt) ?? null;
     const server: CandidateBrowserServerLoop | null = opened && operated
@@ -320,7 +332,7 @@ export async function measureBoardInBrowser(options: {
     for (const view of views) {
       const lags = await view.page.evaluate(() => (window as unknown as { __historyProbe: { lags: Array<[number, number]> } }).__historyProbe.lags);
       const bootLags = lags.filter(([at]) => at <= view.drawnAt).map(([, lag]) => lag);
-      const operatingLags = lags.filter(([at]) => at > view.drawnAt).map(([, lag]) => lag);
+      const operatingLags = lags.filter(([at]) => at > view.drawnAt && view.timeOrigin + at <= closedLoopAt).map(([, lag]) => lag);
       const hash = await view.page.evaluate(() => decodeURIComponent(location.hash));
       const documentTiming = await view.page.evaluate(() => {
         const entry = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
@@ -347,7 +359,7 @@ export async function measureBoardInBrowser(options: {
       const stillSelected = await holdsSelection(view);
       if (await view.page.locator("[data-stale-focus-notice]").count()) view.staleSeen += 1;
       const answered = view.requests.filter((request) => request.files && request.status >= 200 && request.status < 400);
-      /* Still open as the window closes: its age so far is its time. */
+      /* Boundary requests still open after the drain retain their elapsed age. */
       const closedAt = Date.now();
       const unfinished = [...view.open.values()].map((request) => ({ route: request.route, at: request.at, ageMs: closedAt - request.startedAt }));
       const timed = [...view.requests.map((request) => ({ route: request.route, ms: request.ms })),

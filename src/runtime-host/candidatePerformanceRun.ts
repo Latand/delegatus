@@ -1313,10 +1313,11 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       return before && after && !after.cold && before.json === after.json;
     });
     if (externalOutcome.error) note(`separate writer: ${externalOutcome.error}`);
-    /* An activation that never completed counts the time it had. */
+    /* Keep completion separate from the elapsed time of an unfinished activation. */
     const activationOf = (report: Record<string, unknown>, since: number | null) => {
       const value = (report.activation ?? {}) as { completed?: boolean; ms?: number | null; eventLoopMaxMs?: number };
       return {
+        completed: value.completed === true,
         ms: value.completed === true ? finite(value.ms) : since === null ? 0 : Math.max(0, workersCheckedAt - since),
         eventLoopMaxMs: Number.isFinite(value.eventLoopMaxMs) ? Number(value.eventLoopMaxMs) : 0,
       };
@@ -1371,6 +1372,8 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       activation: {
         incumbentMs: incumbentActivation.ms,
         successorMs: successorActivation.ms,
+        incumbentCompleted: incumbentActivation.completed,
+        successorCompleted: successorActivation.completed,
         eventLoopMaxMs: Math.round(Math.max(incumbentActivation.eventLoopMaxMs, successorActivation.eventLoopMaxMs)),
       },
       grantWrites: {

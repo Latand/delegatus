@@ -6,6 +6,14 @@ thresholds, including observations from older candidate images. Missing or
 malformed measurements, failed operations, lost sessions or receipts and
 induced faults still refuse promotion.
 
+Both release activations carry explicit completion flags. An incomplete
+activation refuses at any duration. An older report without these flags can
+retain its former within-budget result; an over-budget activation with no
+completion evidence stays refused. Browser observation stops accepting new
+requests at the window boundary and drains the captured in-flight requests for
+up to 30 seconds before deciding whether any went unanswered. Young in-flight
+requests in older reports retain their former within-budget result.
+
 ## What went wrong
 
 Release 05d66b73 (#2714) moved terminal registry history into an archive

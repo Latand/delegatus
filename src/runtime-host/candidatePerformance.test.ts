@@ -22,7 +22,7 @@ function healthy(): CandidatePerformanceMeasurements {
     dataset: { scale: 1, rows: 53_299, coldRows: 51_099, payloadBytes: 214_000_000, transcripts: 320, seedMs: 7_000,
       receipts: { total: 10_971, failedStructured: 892, failedLegacy: 122, conflicted: 133 } },
     firstBoot: { registryOpenMs: 80, firstSnapshotMs: 550, coldProjectionMs: 4_200, firstUsableMs: 4_900, eventLoopMaxMs: 600, coldBuild: { sequence: 1, buildMs: 4_000 } },
-    activation: { incumbentMs: 4_300, successorMs: 4_800, eventLoopMaxMs: 900 },
+    activation: { incumbentMs: 4_300, successorMs: 4_800, eventLoopMaxMs: 900, incumbentCompleted: true, successorCompleted: true },
     grantWrites: { ...latency(7, 40), count: 300, mismatches: 0, failures: 0 },
     externalWrites: { ...latency(7, 30), count: 300, mismatches: 0, failures: 0 },
     keyedOperationReads: { ...latency(2), count: 150 },
@@ -104,7 +104,7 @@ test("each bound names its breach with the measured value", () => {
   measured.scopeRequests = { ...measured.scopeRequests, ...latency(13_100, 97_960), count: 200, maxQueueDepth: 9 };
   measured.worker = { spawns: 2, timeoutRetirements: 1, pidStable: false };
   measured.handover.successor = { ...measured.handover.successor, readyMs: 20_000, adoptionMs: 31_000 };
-  measured.activation = { incumbentMs: 16_000, successorMs: 31_000, eventLoopMaxMs: 13_300 };
+  measured.activation = { incumbentMs: 16_000, successorMs: 31_000, eventLoopMaxMs: 13_300, incumbentCompleted: true, successorCompleted: true };
   measured.workers.progressGapMaxMs = 25_000;
   measured.sqliteBusy = 3;
   measured.runtimeTimeouts = 1;
@@ -435,6 +435,31 @@ test("an unanswered browser request refuses promotion even when it only exceeded
     ok: false,
     breaches: ["1 browser API request(s) did not finish"],
     timingWarnings: ["browser /api/accounts 30000ms exceeds 10000ms"],
+  });
+});
+
+test("legacy young in-flight requests do not turn a healthy observation into a refusal", () => {
+  const measured = healthy();
+  measured.browser!.apiUnfinished = 2;
+  measured.browser!.apiMaxMs = 1358;
+  expect(candidatePerformanceEvidence(report(measured))).toMatchObject({ ok: true, breaches: [] });
+});
+
+test("completed activation may be slow while incomplete or unproven activation refuses", () => {
+  const measured = healthy();
+  measured.activation.successorMs = 95000;
+  expect(candidatePerformanceEvidence(report(measured))).toMatchObject({
+    ok: true, breaches: [], timingWarnings: ["successor release activation 95000ms exceeds 15000ms"],
+  });
+  measured.activation.successorCompleted = false;
+  measured.activation.successorMs = 10;
+  expect(candidatePerformanceEvidence(report(measured))).toMatchObject({
+    ok: false, breaches: ["successor release activation did not complete"],
+  });
+  delete measured.activation.successorCompleted;
+  measured.activation.successorMs = 95000;
+  expect(candidatePerformanceEvidence(report(measured))).toMatchObject({
+    ok: false, breaches: ["successor release activation completion was not recorded"],
   });
 });
 
