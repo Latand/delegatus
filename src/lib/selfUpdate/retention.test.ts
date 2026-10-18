@@ -57,6 +57,55 @@ function fixture(count = 8) {
 }
 const exists = fs.existsSync;
 
+test("a pass over 87 retained releases inventories processes once", async () => {
+  const h = fixture(87);
+  h.inputs.inFlight = [...h.dirs];
+  let scans = 0;
+  h.ports.scan = () => { scans++; return EMPTY; };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.removed).toEqual([]);
+  expect(report.kept.map(row => row.dir)).toEqual(h.dirs);
+  expect(scans).toBe(1);
+});
+
+test("the loop stays within 50 ms while counting 87 retained release trees", async () => {
+  const h = fixture(87);
+  h.inputs.inFlight = [...h.dirs];
+  for (const dir of h.dirs) {
+    const tree = path.join(dir, "node_modules/fixture");
+    fs.mkdirSync(tree);
+    for (let i = 0; i < 512; i++) fs.writeFileSync(path.join(tree, `${i}.js`), "fixture");
+  }
+  let last = performance.now();
+  let maxGapMs = 0;
+  let samples = 0;
+  let nextSample: (() => void) | undefined;
+  const sample = () => new Promise<void>(resolve => { nextSample = resolve; });
+  const timer = setInterval(() => {
+    const at = performance.now();
+    maxGapMs = Math.max(maxGapMs, at - last);
+    last = at;
+    samples++;
+    const resolve = nextSample;
+    nextSample = undefined;
+    resolve?.();
+  }, 10);
+  try {
+    await sample();
+    maxGapMs = 0;
+    const before = samples;
+    const report = await h.run();
+    const during = samples - before;
+    // Observe the timer overdue at completion before deciding the pass was responsive.
+    await sample();
+    expect(report.errors).toEqual([]);
+    expect(report.kept).toHaveLength(87);
+    expect(maxGapMs).toBeLessThanOrEqual(50);
+    expect(during).toBeGreaterThan(0);
+  } finally { clearInterval(timer); }
+}, 30_000);
+
 test("the first pass removes every unprotected old release and reclaims retained caches", async () => {
   const h = fixture(); const report = await h.run();
   expect(report.errors).toEqual([]);
@@ -103,6 +152,38 @@ test("the process scan is read again before each removal", async () => {
   expect(exists(h.dirs[1]!)).toBeTrue();
   expect(report.removed.some(row => row.dir === h.dirs[1])).toBeFalse();
 });
+
+test("a real process started during the final Git check protects its release", async () => {
+  const h = fixture(4);
+  h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  h.ports.scan = scanProcesses;
+  const run = h.ports.git!;
+  const target = h.dirs[1]!;
+  let refChecks = 0;
+  let started = false;
+  h.ports.git = async (args, cwd) => {
+    const result = await run(args, cwd);
+    if (args[0] === "for-each-ref" && args[2] === h.shas[1] && ++refChecks === 2) {
+      const child = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
+        cwd: target, env: { PATH: process.env.PATH, NODE_ENV: "test" }, stdio: ["ignore", "pipe", "ignore"],
+      });
+      children.push(child);
+      await new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        child.stdout!.once("data", () => resolve());
+        child.once("exit", () => reject(new Error("holder exited before retention finished")));
+      });
+      started = true;
+    }
+    return result;
+  };
+  const report = await h.run();
+  expect(started).toBeTrue();
+  expect(report.errors).toEqual([]);
+  expect(exists(target)).toBeTrue();
+  expect(report.removed.some(row => row.dir === target)).toBeFalse();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: target, reason: "changed" }));
+}, 30_000);
 
 test("recent and newest-K releases are kept; K follows LLV_SELF_UPDATE_KEEP_RELEASES", async () => {
   const h = fixture(); h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
