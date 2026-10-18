@@ -17,7 +17,7 @@ import { installPipelineControllerSchedule, selectPipelineTickWork, type Pipelin
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
 import { installPipelineControllerReferences, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
 import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady } from "./pipelineEvidenceIndex";
-import { databaseFileIdentity, openCurrentDatabase } from "./currentDatabase";
+import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
 import { FileTransactionBusyError } from "./fileTransaction";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, StateDiskFullError, stateFreeBytes, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
@@ -1995,6 +1995,36 @@ export class SqliteStateCollection<T> {
 
   async patch<C = never>(prepare: () => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[]; companion?: CompanionPatch<C> }, options: { fenceOwner?: boolean; companion?: SqliteStateCollection<C> } = {}): Promise<void> {
     await waitForStateLock("state.patch", () => this.patchSync(prepare, options), { subject: this.options.collection });
+  }
+
+  /** One prepared, indexed revision reader per in-flight pipeline operation.
+      Check the file fence before reusing its statement, as openCurrentDatabase
+      does before preparing one. A swap rebinds it to the replacement inode. */
+  pipelineRecordVersionReader(rowKey: string, authority: () => unknown = () => this.options.decodeAuthority?.()): () => string {
+    const marker = databaseSwapMarker(this.filename);
+    let boundIdentity: string | null | undefined;
+    let read: (() => { hot: number | null; archive: number | null; recovery: number | null } | null) | undefined;
+    let previous: { identity: string | null; hot: number | null; archive: number | null; recovery: number | null; authority: unknown } | undefined;
+    let token = "";
+    return () => {
+      const identity = databaseFileIdentity(this.filename);
+      if (fs.existsSync(marker) && databaseSwapInProgress(this.filename)) throw new DatabaseReplacedError("pipeline state is being restored; try again");
+      if (!read || boundIdentity !== identity) {
+        const statement = this.readDb.query<{ hot: number | null; archive: number | null; recovery: number | null }, [string, string]>(`
+          SELECT (SELECT row_revision FROM state_rows WHERE collection = 'pipelines' AND row_key = ?) AS hot,
+                 (SELECT row_revision FROM state_rows WHERE collection = 'pipelines_archive' AND row_key = ?) AS archive,
+                 (SELECT revision FROM state_collections WHERE collection = 'worktree_recovery') AS recovery`);
+        read = () => statement.get(rowKey, rowKey);
+        boundIdentity = identity;
+      }
+      const row = read(), currentAuthority = authority();
+      if (!previous || previous.identity !== identity || previous.hot !== row?.hot
+        || previous.archive !== row?.archive || previous.recovery !== row?.recovery || previous.authority !== currentAuthority) {
+        previous = { identity, hot: row?.hot ?? null, archive: row?.archive ?? null, recovery: row?.recovery ?? null, authority: currentAuthority };
+        token = JSON.stringify(previous);
+      }
+      return token;
+    };
   }
 
   /** Each row's last-written collection revision, by row key. */
