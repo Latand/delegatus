@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -67,6 +67,7 @@ function deployRequest(body: unknown): NextRequest {
   });
 }
 
+describe.serial("HTTP deployment route", () => {
 test("admission records the pending seat before a lost HTTP reply, including checkout installs", async () => {
   for (const mode of ["managed", "checkout"] as const) {
     const key = `lost-${mode}`;
@@ -83,6 +84,25 @@ test("admission records the pending seat before a lost HTTP reply, including che
       deploymentId: mode === "managed" ? "deployment_1" : "checkout-admitted", idempotencyKey: key,
     }]);
   }
+});
+
+test("a same-SHA busy HTTP join durably binds its own key to the admitted deployment", async () => {
+  const seat = "joining-seat";
+  await beginSeatDeployment({ conversationId: seat, project: "viewer", revision: SHA,
+    requestedAt: "2026-10-19T12:00:00Z", idempotencyKey: "joining-original-key" });
+  await POST(deployRequest({ revision: SHA, idempotencyKey: "joining-original-key" }));
+  const original = seatDeploymentsFor(seat).find(record => record.deploymentId === "deployment_1");
+  expect(original?.idempotencyKey).toBe("joining-original-key");
+
+  await beginSeatDeployment({ conversationId: seat, project: "viewer", revision: SHA,
+    requestedAt: "2026-10-19T12:01:00Z", idempotencyKey: "joining-busy-key" });
+  setDeploymentRuntimeForTests(async () => ({ state: "busy", deploymentId: "deployment_1", revision: SHA }));
+  const response = await POST(deployRequest({ revision: SHA, idempotencyKey: "joining-busy-key" }));
+  expect(response.status).toBe(409);
+  expect(seatDeploymentsFor(seat).find(record => record.deploymentId === "deployment_1")?.idempotencyKeys)
+    .toContain("joining-busy-key");
+  expect(seatDeploymentsFor(seat).find(record => record.deploymentId === "deployment_1"))
+    .toMatchObject({ idempotencyKeys: ["joining-original-key", "joining-busy-key"] });
 });
 
 test("HTTP admission cannot invent a seat or attach a different busy SHA", async () => {
@@ -195,4 +215,5 @@ test("the deployment endpoint reserves the disabled message for explicit rollbac
     error: "runtime host socket is unavailable",
     code: RUNTIME_PLANE_ABSENT,
   });
+});
 });

@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +20,7 @@ const row = (deploymentId: string, conversationId = SEAT) => ({
   deploymentId, conversationId, project: "viewer", revision: "a".repeat(40), requestedAt: "2026-09-23T06:00:00.000Z",
 });
 
+describe.serial("seat deployment attribution", () => {
 test("seat writes yield under contention and recheck authority after admission", async () => {
   const { withFileTransaction } = await import("@/lib/state/fileTransaction");
   const entered = Promise.withResolvers<void>();
@@ -51,6 +52,14 @@ test("a seat's deployments are recorded once each and read back per seat (#2063)
   expect(seatDeploymentsFor("conversation_nobody")).toEqual([]);
 });
 
+test("a joined deployment retains every request key for original-key replay", async () => {
+  await recordSeatDeployment({ ...row("joined-deploy"), idempotencyKey: "first-key" });
+  await recordSeatDeployment({ ...row("joined-deploy"), idempotencyKey: "joined-key" });
+
+  expect(seatDeploymentsFor(SEAT).find(record => record.deploymentId === "joined-deploy"))
+    .toMatchObject({ idempotencyKeys: ["first-key", "joined-key"] });
+});
+
 test("the record is bounded, oldest first out, and an unreadable file reads as none (#2063)", async () => {
   for (let index = 0; index < SEAT_DEPLOYMENTS_LIMIT + 5; index += 1) await recordSeatDeployment(row(`bulk-${index}`));
   const kept = seatDeploymentsFor(SEAT).map((record) => record.deploymentId);
@@ -80,4 +89,5 @@ test("a pending key stays bound to its authorized seat and revision until accept
   expect(seatDeploymentsFor(OTHER)).toEqual([]);
   await recoverSeatDeploymentRequests(SEAT, async () => { throw new Error("resolved requests need no lookup"); });
   expect(seatDeploymentsFor(SEAT).filter(row => row.deploymentId === "accepted-pending")).toHaveLength(1);
+});
 });

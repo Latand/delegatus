@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +9,7 @@ import { FakeDeploymentAdapter } from "../../runtime-host/fixtures/fakeDeploymen
 import { RuntimeJournal } from "../../runtime-host/journal";
 import { productionViewerControlDependencies, viewerMcpBindings, type ViewerControlDependencies } from "./bindings";
 import { createMcpToolService, SqliteMcpReceiptStore } from "./server";
-import { seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
+import { recordSeatDeploymentAdmission, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 
 const SHA = "a".repeat(40);
 const SEAT = "conversation_deploy_seat";
@@ -22,6 +22,7 @@ const domain = {
   findDeploymentByIdempotencyKey: async () => { throw new Error("ledger read unavailable during reconnect"); },
 };
 
+describe.serial("deployment bindings", () => {
 test("admission survives a control timeout and the original MCP key resolves through a reopened receipt store", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-receipt-"));
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 1_000 });
@@ -88,6 +89,50 @@ test("admission survives a control timeout and the original MCP key resolves thr
     if (deploymentId) await coordinator.waitForDeployment(deploymentId);
     server.stop(true);
     if (!storeClosed) store.close();
+    journal.close();
+    if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a reconnect refusal after admission stays unknown and original-key replay resolves it", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-reconnect-refusal-"));
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 2_000 });
+  const adapter = new FakeDeploymentAdapter();
+  const coordinator = new ViewerDeploymentCoordinator(journal, adapter, { pid: 20, startIdentity: "20:1" });
+  let attempts = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    attempts++;
+    if (attempts === 1) {
+      const body = await request.json() as { revision: string; idempotencyKey: string };
+      const admitted = await coordinator.requestViewerDeployment(body);
+      await recordSeatDeploymentAdmission(body.idempotencyKey, admitted);
+      return Response.json({ error: "upstream response was lost" }, { status: 502 });
+    }
+    return Response.json({ error: "reconnect refusal" }, { status: 403 });
+  } });
+  const previous = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
+  const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domain as never), store);
+  const args = { revision: SHA, clientRequestId: "admitted-then-refused" };
+  const context = { deadlineAt: Date.now() + 5_000 };
+  try {
+    const first = await service.callTool("deploy_exact_sha", args, context);
+    expect(first).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
+    expect(JSON.stringify(first)).toContain("deployment_status");
+    expect(journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)?.revision).toBe(SHA);
+
+    const replay = await service.callTool("deploy_exact_sha", args, { deadlineAt: Date.now() + 5_000 });
+    expect(replay).toMatchObject({ ok: true, state: "accepted", deploymentId: journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)?.deploymentId,
+      wakeOnSettle: true });
+    expect(attempts).toBe(2);
+    expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
+  } finally {
+    store.close();
+    await coordinator.waitForDeployment(journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)!.deploymentId);
+    server.stop(true);
     journal.close();
     if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
     else process.env.LLV_VIEWER_CONTROL_URL = previous;
@@ -197,4 +242,5 @@ test.each(["write-refused", "seat-revoked"])("an admitted deployment remains acc
   } as never);
   expect(await bindings.deploy_exact_sha({ revision: SHA, clientRequestId: `admitted-${cause}` }))
     .toMatchObject({ state: "accepted", deploymentId: `admitted-${cause}`, wakeOnSettle: false });
+});
 });

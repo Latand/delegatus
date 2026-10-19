@@ -288,6 +288,8 @@ export interface McpToolCallContext {
   redactText?: (text: string) => string;
   signal?: AbortSignal;
   deadlineAt?: number;
+  /** An earlier attempt of this logical deploy may have reached admission. */
+  priorAttemptUncertain?: boolean;
   /** Numeric transport subphases, supplied by the service, never tool arguments. */
   recordTiming?: (phase: "http", milliseconds: number) => void;
   /** #1490: the durable binding this call's dispatch must use. Present only on
@@ -3279,8 +3281,11 @@ export function createMcpToolService(
         const retryPrototypePublication = typedTool === "publish_prototype_review"
           && claim.kind === "replay" && !claim.result.ok && claim.result.retryable;
         const retryDeployment = typedTool === "deploy_exact_sha" && claim.kind === "replay"
-          && !claim.result.ok && claim.result.code === "tool_failed" && claim.result.retryable
-          && claim.result.error.startsWith("Viewer control");
+          && !claim.result.ok && (
+            claim.result.code === "tool_failed" && claim.result.retryable
+              && claim.result.error.startsWith("Viewer control")
+            || claim.result.code === "outcome_unknown" && claim.result.details?.outcome === "unknown"
+          );
         if (claim.kind === "replay" && !retryPrototypePublication && !retryDeployment) {
           const replayStartedAt = performance.now();
           const replayed = { ...claim.result, replayed: true };
@@ -3292,7 +3297,9 @@ export function createMcpToolService(
         let unadmitted = false;
         const bindingStartedAt = performance.now();
         try {
-          const payload = await bindings[typedTool](effectiveArgs, context);
+          const payload = await bindings[typedTool](effectiveArgs, retryDeployment
+            ? { ...context, priorAttemptUncertain: true }
+            : context);
           settled = {
             ...payload,
             ...(normalized.clamped ? { clamped: normalized.clamped } : {}),

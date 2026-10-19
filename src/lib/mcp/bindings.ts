@@ -167,7 +167,7 @@ import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import type { SeatTickProjectState } from "@/lib/monitor/types";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
-import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, seatDeploymentForRequestKey, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -416,7 +416,7 @@ async function requestViewerControl(
   init: RequestInit,
   context: McpToolCallContext = {},
   pinConfiguredEndpoint = false,
-): Promise<{ response: Response; parsed: unknown; unreadable: boolean }> {
+): Promise<{ response: Response; parsed: unknown; unreadable: boolean; uncertainPriorPost: boolean }> {
   const baseUrl = viewerControlOrigin(process.env, pinConfiguredEndpoint);
   const token = viewerControlToken(process.env, baseUrl);
   const now = Date.now();
@@ -429,6 +429,7 @@ async function requestViewerControl(
   const expiresAt = now + Math.min(publication ? PROTOTYPE_CONTROL_BUDGET_MS : CONTROL_READ_RECOVERY_BUDGET_MS, callerBudget);
   let attempts = 0;
   let lastFailure = "connection failed";
+  let uncertainPriorPost = init.method === "POST" && context.priorAttemptUncertain === true;
   while (Date.now() < expiresAt) {
     if (context.signal?.aborted) throw context.signal.reason;
     if (init.method === "POST") context.assertCaller?.();
@@ -446,6 +447,7 @@ async function requestViewerControl(
       }
       const response = await fetch(new URL(pathname, baseUrl), { ...init, headers, signal: attempt.signal });
       if (TRANSIENT_CONTROL_STATUSES.has(response.status)) {
+        if (init.method === "POST") uncertainPriorPost = true;
         lastFailure = `status ${response.status}`;
         await response.body?.cancel().catch(() => {});
       } else {
@@ -455,13 +457,13 @@ async function requestViewerControl(
             && objectRecord(parsed)
             && Boolean(text(parsed.error) || text(parsed.code));
           if (response.status !== 503 || answeredDomainFailure || !retryable) {
-            return { response, parsed, unreadable: false };
+            return { response, parsed, unreadable: false, uncertainPriorPost };
           }
           lastFailure = "status 503";
         } catch {
           if (context.signal?.aborted) throw context.signal.reason;
           if (!retryable) {
-            return { response, parsed: null, unreadable: true };
+            return { response, parsed: null, unreadable: true, uncertainPriorPost };
           } else if (attempt.signal.aborted) {
             lastFailure = "response body timed out";
           } else if (response.status === 503) {
@@ -471,8 +473,10 @@ async function requestViewerControl(
           }
         }
       }
-    } catch {
+    } catch (error) {
       if (context.signal?.aborted) throw context.signal.reason;
+      const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+      if (init.method === "POST" && code !== "ConnectionRefused" && code !== "ECONNREFUSED") uncertainPriorPost = true;
       lastFailure = attempt.signal.aborted ? "attempt timed out" : "connection failed";
     } finally {
       attempt.release();
@@ -562,7 +566,7 @@ async function postViewerControl(
     }
     throw error;
   }
-  const { response, parsed, unreadable } = answer;
+  const { response, parsed, unreadable, uncertainPriorPost } = answer;
   /* A body of literal `null` is valid JSON, so `.catch` never fires and every
      later `result.x` throws a TypeError before the status can be classified —
      which is how a 405 from a revision that does not serve the route arrived as
@@ -576,6 +580,9 @@ async function postViewerControl(
   const result: Record<string, unknown> = parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? parsed as Record<string, unknown>
     : {};
+  if (pathname === "/api/runtime/deployments" && uncertainPriorPost && !response.ok) {
+    throw new McpDeploymentPendingError(`${controlFailureMessage(response.status, result.error)} after an earlier deploy request may have reached admission`);
+  }
   if (pathname === "/api/prototype-reviews" && response.ok
     && (typeof result.reviewId !== "string" || !/^pr_[a-f0-9]{32}$/.test(result.reviewId))) {
     throw new McpPrototypePublicationPendingError("Viewer publication response did not name its reviewId");
@@ -3595,7 +3602,17 @@ async function deployExactSha(
   await beginSeatDeployment(pending, assertSeat);
   assertSeat();
   let receipt: Record<string, unknown>;
-  try {
+  const priorAdmission = seatDeploymentForRequestKey(idempotencyKey);
+  if (priorAdmission) {
+    if (priorAdmission.conversationId !== seat.conversationId || priorAdmission.project !== seat.project
+      || !priorAdmission.revision.toLowerCase().startsWith(revision.toLowerCase())) {
+      throw new McpToolRefusal("the deployment request key is attributed to a different seat or revision", {
+        code: "deploy_request_key_conflict", retryable: false,
+      });
+    }
+    receipt = { state: "accepted", deploymentId: priorAdmission.deploymentId,
+      revision: priorAdmission.revision, replayed: true };
+  } else try {
     receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
   } catch (error) {
     if (error instanceof McpToolRefusal) {

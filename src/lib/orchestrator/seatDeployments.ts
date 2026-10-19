@@ -30,6 +30,8 @@ export interface SeatDeploymentRecord {
   revision: string;
   requestedAt: string;
   idempotencyKey?: string;
+  /** Every seat request key that joined this deployment. */
+  idempotencyKeys?: string[];
 }
 
 export interface PendingSeatDeployment extends Omit<SeatDeploymentRecord, "deploymentId"> {
@@ -64,7 +66,9 @@ function isRecord(value: unknown): value is SeatDeploymentRecord {
     && typeof row.conversationId === "string" && row.conversationId.length > 0
     && (row.project === null || typeof row.project === "string")
     && typeof row.revision === "string"
-    && typeof row.requestedAt === "string";
+    && typeof row.requestedAt === "string"
+    && (row.idempotencyKeys === undefined || Array.isArray(row.idempotencyKeys)
+      && row.idempotencyKeys.every(key => typeof key === "string" && key.length > 0));
 }
 
 function readRecords(filePath: string): SeatDeploymentRecord[] {
@@ -85,10 +89,15 @@ export async function recordSeatDeployment(record: SeatDeploymentRecord, assertC
 /** The caller holds this file's transaction. */
 function writeRecord(filePath: string, record: SeatDeploymentRecord): void {
   const previous = readRecords(filePath);
-  const rows = previous.filter((row) => row.deploymentId !== record.deploymentId);
   const existing = previous.find(row => row.deploymentId === record.deploymentId);
   if (existing && existing.conversationId !== record.conversationId) throw new Error("deployment is attributed to another seat");
-  rows.push(record);
+  const requestKeys = new Set([
+    ...(existing?.idempotencyKeys ?? (existing?.idempotencyKey ? [existing.idempotencyKey] : [])),
+    ...(record.idempotencyKeys ?? []),
+    ...(record.idempotencyKey ? [record.idempotencyKey] : []),
+  ]);
+  const rows = previous.filter((row) => row.deploymentId !== record.deploymentId);
+  rows.push({ ...existing, ...record, idempotencyKeys: [...requestKeys] });
   const pending = readPending(filePath).filter(row => row.idempotencyKey !== record.idempotencyKey);
   const file: SeatDeploymentFile = { schemaVersion: 1, deployments: rows.slice(-SEAT_DEPLOYMENTS_LIMIT), pending };
   writeJsonDurably(filePath, file);
@@ -116,6 +125,12 @@ export function seatDeploymentsFor(conversationId: string): SeatDeploymentRecord
   return readRecords(seatDeploymentsFile()).filter((row) => row.conversationId === conversationId);
 }
 
+/** Resolve a request key already attached to an admitted deployment. */
+export function seatDeploymentForRequestKey(idempotencyKey: string): SeatDeploymentRecord | null {
+  return readRecords(seatDeploymentsFile()).find(row => row.idempotencyKey === idempotencyKey
+    || row.idempotencyKeys?.includes(idempotencyKey)) ?? null;
+}
+
 function readPending(filePath: string): PendingSeatDeployment[] {
   const raw = readJsonCache(filePath) as Partial<SeatDeploymentFile> | undefined;
   return Array.isArray(raw?.pending) ? raw.pending.filter(row => row
@@ -130,7 +145,8 @@ export async function beginSeatDeployment(record: PendingSeatDeployment, assertC
     assertCaller?.();
     const deployments = readRecords(filePath);
     const pending = readPending(filePath);
-    const previous = [...deployments, ...pending].find(row => row.idempotencyKey === record.idempotencyKey);
+    const previous = [...deployments, ...pending].find(row => row.idempotencyKey === record.idempotencyKey
+      || "idempotencyKeys" in row && row.idempotencyKeys?.includes(record.idempotencyKey));
     if (previous) {
       const sameRevision = previous.revision === record.revision
         || "deploymentId" in previous && previous.revision.startsWith(record.revision);
