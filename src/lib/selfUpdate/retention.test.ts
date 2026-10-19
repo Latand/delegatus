@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { Worker } from "node:worker_threads";
 import { retainReleases, type RetentionInputs, type RetentionPorts } from "./retention";
 import { finishTreeTrash, removeTreeViaTrash, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 import type { LauncherRecord } from "./launcher";
@@ -10,6 +11,8 @@ import { runGit } from "./git";
 import { RetentionWorker } from "./retentionWorker";
 
 const DAY = 86_400_000;
+const LOOP_PROBE_INTERVAL_MS = 10;
+const missedLoopTimeMs = (workerTicks: number) => Math.max(0, workerTicks - 1) * LOOP_PROBE_INTERVAL_MS;
 const roots: string[] = [];
 const children: ChildProcess[] = [];
 afterEach(async () => {
@@ -70,6 +73,12 @@ test("keep decisions over 87 releases use one inventory; destructive steps use f
   expect(scans).toBe(1);
 });
 
+test("the loop probe maps independently observed missed 10 ms turns to elapsed time", () => {
+  expect(missedLoopTimeMs(1)).toBe(0);
+  expect(missedLoopTimeMs(6)).toBe(50);
+  expect(missedLoopTimeMs(7)).toBe(60);
+});
+
 test("the loop stays within 50 ms while counting 87 retained release trees", async () => {
   const h = fixture(87);
   h.inputs.inFlight = [...h.dirs];
@@ -78,15 +87,33 @@ test("the loop stays within 50 ms while counting 87 retained release trees", asy
     fs.mkdirSync(tree);
     for (let i = 0; i < 128; i++) fs.writeFileSync(path.join(tree, `${i}.js`), "fixture");
   }
+  const heartbeat = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const ticks = new Int32Array(heartbeat);
+  const worker = new Worker(`
+    const { parentPort, workerData } = require("node:worker_threads");
+    const pulses = new Int32Array(workerData);
+    setInterval(() => Atomics.add(pulses, 0, 1), 10);
+    parentPort.postMessage("ready");
+  `, { eval: true, workerData: heartbeat });
+  await new Promise<void>((resolve, reject) => {
+    worker.once("message", value => value === "ready" ? resolve() : reject(new Error("loop probe heartbeat did not become ready")));
+    worker.once("error", reject);
+    worker.once("exit", code => reject(new Error(`loop probe heartbeat exited before ready (${code})`)));
+  });
+  let lastTicks = Atomics.load(ticks, 0);
+  let maxBlockedMs = 0;
+  let maxObservedGapMs = 0;
   let last = performance.now();
-  let maxGapMs = 0;
   let samples = 0;
   let nextSample: (() => void) | undefined;
   const sample = () => new Promise<void>(resolve => { nextSample = resolve; });
   const timer = setInterval(() => {
     const at = performance.now();
-    maxGapMs = Math.max(maxGapMs, at - last);
+    maxObservedGapMs = Math.max(maxObservedGapMs, at - last);
     last = at;
+    const currentTicks = Atomics.load(ticks, 0);
+    maxBlockedMs = Math.max(maxBlockedMs, missedLoopTimeMs(currentTicks - lastTicks));
+    lastTicks = currentTicks;
     samples++;
     const resolve = nextSample;
     nextSample = undefined;
@@ -94,7 +121,8 @@ test("the loop stays within 50 ms while counting 87 retained release trees", asy
   }, 10);
   try {
     await sample();
-    maxGapMs = 0;
+    maxBlockedMs = 0;
+    maxObservedGapMs = 0;
     const before = samples;
     const report = await h.run();
     const during = samples - before;
@@ -103,10 +131,13 @@ test("the loop stays within 50 ms while counting 87 retained release trees", asy
     expect(report.errors).toEqual([]);
     expect(report.kept).toHaveLength(87);
     expect(report.kept.every(row => row.bytes > 0)).toBeTrue();
-    console.info("[retention fixture]", JSON.stringify({ releases: 87, maxGapMs, timerSamplesDuringPass: during }));
-    expect(maxGapMs).toBeLessThanOrEqual(50);
+    console.info("[retention fixture]", JSON.stringify({ releases: 87, maxBlockedMs, maxObservedGapMs, timerSamplesDuringPass: during }));
+    expect(maxBlockedMs).toBeLessThanOrEqual(50);
     expect(during).toBeGreaterThan(0);
-  } finally { clearInterval(timer); }
+  } finally {
+    clearInterval(timer);
+    await worker.terminate();
+  }
 }, 30_000);
 
 test("the first pass removes every unprotected old release and reclaims retained caches", async () => {
