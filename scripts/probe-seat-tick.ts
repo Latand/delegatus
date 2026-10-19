@@ -179,9 +179,9 @@ if (process.env.PROBE_SEAT_WORKER === "1") {
         const started = performance.now();
         const result = await probe.run(index);
         if (!result || result.verdict === "error") {
-          throw new Error(`T9-check run ${index} did not complete successfully: ${result?.detail ?? "no result"}`);
+          throw new Error(`T9-check run ${index} did not complete successfully: ${result?.failureCode ?? "no result"}`);
         }
-        if ((result.verdict !== "wake" && result.verdict !== "proactive") || result.reasons.length === 0 || result.items === 0) {
+        if ((result.verdict !== "wake" && result.verdict !== "proactive") || !result.reasons?.length || !result.items) {
           throw new Error(`T9-check run ${index} did not exercise an eligible wake decision`);
         }
         const ms = performance.now() - started;
