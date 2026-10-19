@@ -289,10 +289,15 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       for (const { file, entry } of newFiles) {
         if (await digest(file.source) !== entry.sha256 || await digest(path.join(record.backup, entry.copy)) !== entry.sha256) throw new MemoryImportError("integrity");
       }
-      const { projectInfoFromCwd } = await import("@/lib/scanner/describe");
-      record.hostProject ??= ports.hostProject ?? projectInfoFromCwd(process.cwd())?.project ?? "installation";
+      const [{ default: manifestMetadata }, { viewerRepositoryProjects }, { orchestratorSeatFor }] = await Promise.all([
+        import("../../../package.json"), import("@/lib/projects/viewerRepository"), import("@/lib/orchestrator/seats"),
+      ]);
+      // Packaged releases have no checkout identity. Use the same durable
+      // release remote as the Viewer's own-project authorization boundary.
+      const projects = viewerRepositoryProjects(process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim() || manifestMetadata.repository.url, process.cwd()).map(canonicalProject);
+      record.hostProject ??= ports.hostProject ?? projects.find(project => orchestratorSeatFor(project).active) ?? projects[0];
+      if (!record.hostProject) throw new MemoryImportError("backup_refused");
       record.roots ??= roots;
-      const { orchestratorSeatFor } = await import("@/lib/orchestrator/seats");
       const { inheritImportDispositions } = await import("./importHistory");
       for (const candidate of candidates) {
         const project = candidate.occurrences[0].project;

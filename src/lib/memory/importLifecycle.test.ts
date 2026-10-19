@@ -58,6 +58,20 @@ async function dispose(options: { room?: boolean; one?: boolean; id?: string } =
 }
 async function manifest() { return JSON.parse(await fs.readFile(path.join(readImportRecord(ID)!.backup, "manifest.json"), "utf8")) as ImportManifest; }
 
+test.each(["configured", "manifest"] as const)("seatless folders join the installation project from its %s remote outside a checkout", async mode => {
+  const { viewerRepositoryProjects } = await import("@/lib/projects/viewerRepository");
+  const { default: metadata } = await import("../../../package.json");
+  const packaged = path.join(root, "packaged"); await fs.mkdir(packaged);
+  await fs.writeFile(path.join(memory, "topic.md"), "A note from a folder without its own seat.\n");
+  const remote = "https://example.invalid/fixture/viewer.git";
+  const expected = viewerRepositoryProjects(mode === "configured" ? remote : metadata.repository.url, packaged)[0];
+  const code = `import {runMemoryImportWork} from ${JSON.stringify(path.join(import.meta.dir, "importWork.ts"))}; import {readImportCandidates} from ${JSON.stringify(path.join(import.meta.dir, "importStore.ts"))}; const record=await runMemoryImportWork(${JSON.stringify(request())},{projectForSlug:()=>"seatless-fixture"}); console.log(JSON.stringify({project:record.hostProject,curationProject:readImportCandidates(record.id).candidates[0].curationProject}));`;
+  const child = Bun.spawn([process.execPath, "--eval", code], { cwd: packaged, env: { ...process.env, LLV_VIEWER_CANONICAL_REMOTE: mode === "configured" ? remote : undefined }, stdout: "pipe", stderr: "pipe" });
+  const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exit, errors).toBe(0);
+  expect(JSON.parse(output)).toEqual({ project: expected, curationProject: expected });
+});
+
 test("the flip waits for every loaded part and happens once; active follows the committed final scan", async () => {
   await backup("x".repeat(16384) + "Decisive instruction in the final bytes.\n");
   const before = await fs.readFile(path.join(memory, "topic.md"));
