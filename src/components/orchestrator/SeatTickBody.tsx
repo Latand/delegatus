@@ -8,6 +8,7 @@ import { requestAccountPanel } from "@/lib/accounts/openPanel";
 import type { CurationAnswer } from "@/lib/memory/curation/answer";
 import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { useLocale, type MessageKey } from "@/lib/i18n";
+import { operatorInstructionText, seatTickInstructionLines } from "@/lib/monitor/seatTickInstructions";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 
 import { autonomyActive, type AutonomySetting } from "@/lib/monitor/autonomy";
@@ -77,7 +78,7 @@ function draftOf(record: SeatTickSettingsAnswer | null): SeatTickDraft {
     enabled: settings ? settings.enabled : true,
     interval: settings == null || settings.wakeIntervalMinutes === null ? "" : String(settings.wakeIntervalMinutes),
     until: settings?.until ? "keep" : "",
-    reason: settings?.reason ?? "",
+    reason: settings ? operatorInstructionText(settings) : "",
   };
 }
 
@@ -94,7 +95,7 @@ function draftOf(record: SeatTickSettingsAnswer | null): SeatTickDraft {
 function signatureOf(record: SeatTickSettingsAnswer | null): string {
   const settings = record?.settings;
   if (!settings) return "";
-  return [record?.project, settings.enabled, settings.wakeIntervalMinutes, settings.reason, settings.until].join("");
+  return [record?.project, settings.enabled, settings.wakeIntervalMinutes, operatorInstructionText(settings), settings.until].join("");
 }
 
 /** Only what CHANGED, so a save touches the fields the operator touched and
@@ -520,6 +521,12 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
   const maintenance = record?.maintenance;
   const maintenanceView = maintenanceReading(maintenance, now, locale, t, state.maintainer.config?.engine === "claude" ? "claude" : "codex");
 
+  const instructionLines = record ? seatTickInstructionLines(record.settings) : [];
+  const protectedLines = instructionLines.filter(line => line.author?.kind !== "gateway");
+  const hasUnknownInstructions = instructionLines.some(line => !line.author || line.author.kind === "unidentified");
+  const hasSeatInstructions = protectedLines.some(line => line.author?.kind === "manager" || line.author?.kind === "agent");
+  const instructionLength = draft.reason.length + protectedLines.map(line => line.text).join("\n").length
+    + (draft.reason && protectedLines.length ? 1 : 0);
   const phone = surface === "mobile";
   const reasonRef = useRef<HTMLTextAreaElement>(null);
 
@@ -656,15 +663,15 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         <label className="flex min-w-0 flex-col gap-1">
           <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
             <span className="text-ui text-primary">{t("seatTick.reasonLabel")}</span>
-            {draft.reason.length >= 450 ? (
+            {instructionLength >= 450 ? (
               <span
-                data-seat-tick-character-count={draft.reason.length}
+                data-seat-tick-character-count={instructionLength}
                 aria-live="polite"
-                className={`text-caption leading-4 ${draft.reason.length > 500 ? "text-danger" : "text-muted"}`}
+                className={`text-caption leading-4 ${instructionLength > 500 ? "text-danger" : "text-muted"}`}
               >
-                {t("seatTick.instructionsCharacterCount", { count: draft.reason.length })}
-                {draft.reason.length > 500 ? (
-                  <span data-seat-tick-over-limit> · {t("seatTick.instructionsOverLimit", { over: draft.reason.length - 500 })}</span>
+                {t("seatTick.instructionsCharacterCount", { count: instructionLength })}
+                {instructionLength > 500 ? (
+                  <span data-seat-tick-over-limit> · {t("seatTick.instructionsOverLimit", { over: instructionLength - 500 })}</span>
                 ) : null}
               </span>
             ) : null}
@@ -681,6 +688,48 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
           />
           <span id={`seat-tick-instructions-${surface}`} data-seat-tick-instructions-hint className="text-caption leading-4 text-muted">{t("seatTick.reasonHint")}</span>
         </label>
+
+        {instructionLines.length > 0 ? (
+          <ul data-seat-tick-instruction-lines className="flex min-w-0 flex-col gap-2 text-ui">
+            {instructionLines.map((line, index) => (
+              <li key={index} data-seat-tick-instruction-line className="min-w-0 break-words">
+                <div className="text-caption text-muted">
+                  <span>{line.author?.kind === "gateway" ? t("seatTick.instruction.operator")
+                    : line.author?.kind === "manager" && line.author.seatEpoch !== null ? t("seatTick.instruction.seat", { epoch: line.author.seatEpoch })
+                    : line.author?.kind === "agent" || line.author?.kind === "manager" ? t("seatTick.instruction.agent")
+                    : t("seatTick.instruction.unknown")}</span>
+                  {" · "}
+                  {line.at ? <time dateTime={line.at}>{new Date(line.at).toLocaleString(locale)}</time> : t("seatTick.instruction.dateUnknown")}
+                </div>
+                <p className="whitespace-pre-wrap text-primary">{line.text}</p>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        {hasUnknownInstructions ? (
+          <button
+            type="button"
+            data-seat-tick-clear-unknown
+            disabled={state.saving || !draft.reason.trim()}
+            onClick={() => void read.save({ clearUnknownInstructions: true, reason: draft.reason.trim() })}
+            className={`inline-flex ${phone ? "min-h-11" : "h-7"} items-center self-start rounded-control px-1 text-ui font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
+          >
+            {t("seatTick.instruction.removeUnknown")}
+          </button>
+        ) : null}
+
+        {hasSeatInstructions ? (
+          <button
+            type="button"
+            data-seat-tick-replace-other
+            disabled={state.saving || !draft.reason.trim()}
+            onClick={() => void read.save({ replaceOtherInstructions: true, reason: draft.reason.trim() })}
+            className={`inline-flex ${phone ? "min-h-11" : "h-7"} items-center self-start rounded-control px-1 text-ui font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
+          >
+            {t("seatTick.instruction.replaceOther")}
+          </button>
+        ) : null}
 
         {reading.offDefault ? (
           <button

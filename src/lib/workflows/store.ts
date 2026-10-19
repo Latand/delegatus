@@ -1,3 +1,5 @@
+import { legacyImportAllowed } from "@/lib/state/legacyImport";
+import { smallStore } from "@/lib/state/smallStore";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument } from "@/lib/state/registryRecords";
 import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
@@ -29,9 +31,9 @@ const artifactDir = () => statePath("workflows");
     registry's semantic validation (e.g. a codex model not prefixed `gpt-`).
     Seed derivation must never crash on that — it falls back to the role's
     hardcoded default config instead of propagating the broken override. */
-function registryRole(role: "builder" | "reviewer" | "architect" | "cleaner", params: Record<string, string> = {}, definitions: RoleDefinition[] = loadRoleDefinitionsOrDefaults()): RoleConfig {
+function registryRole(role: "builder" | "reviewer" | "architect" | "cleaner", params: Record<string, string> = {}, definitions: readonly RoleDefinition[] = loadRoleDefinitionsOrDefaults()): RoleConfig {
   if (role !== "builder") return { ...definitions.find((candidate) => candidate.id === role)!.config };
-  const resolved = resolveRole(role, params, {}, definitions);
+  const resolved = resolveRole(role, params, {}, [...definitions]);
   if (resolved.ok) return { ...resolved.value.config };
   return { ...ROLE_DEFAULTS.find((candidate) => candidate.id === role)!.config };
 }
@@ -39,7 +41,7 @@ function registryRole(role: "builder" | "reviewer" | "architect" | "cleaner", pa
 /** The hard fixer default (W5) derives from Cleaner and clamps its effort.
     W5's codex-only contract outranks the registry: a Cleaner override that
     switches engine falls back to the built-in Cleaner config. */
-export function defaultFixerFromRoles(definitions?: RoleDefinition[]): RoleConfig {
+export function defaultFixerFromRoles(definitions?: readonly RoleDefinition[]): RoleConfig {
   const cleaner = registryRole("cleaner", {}, definitions);
   const config = cleaner.engine === "codex" ? cleaner : { ...ROLE_DEFAULTS.find((role) => role.id === "cleaner")!.config };
   return { ...config, effort: "low" };
@@ -48,10 +50,9 @@ export function defaultFixerFromRoles(definitions?: RoleDefinition[]): RoleConfi
 /** Compatibility export for consumers that render the initial seed default;
     `normalizeFixer` below re-resolves live so a saved role override still
     takes effect without a process restart. */
-export const DEFAULT_FIXER: RoleConfig = defaultFixerFromRoles();
+export const DEFAULT_FIXER: RoleConfig = defaultFixerFromRoles(ROLE_DEFAULTS);
 
-export function seededTemplatesFromRoles(): WorkflowTemplate[] {
-  const definitions = loadRoleDefinitionsOrDefaults();
+export function seededTemplatesFromRoles(definitions: readonly RoleDefinition[] = loadRoleDefinitionsOrDefaults()): WorkflowTemplate[] {
   const builder = registryRole("builder", {}, definitions);
   const frontendBuilder = registryRole("builder", { mode: "plain", domain: "frontend" }, definitions);
   const reviewer = registryRole("reviewer", {}, definitions);
@@ -104,21 +105,12 @@ export function seededTemplatesFromRoles(): WorkflowTemplate[] {
 }
 
 /** Compatibility export for initial template renderers. */
-export const SEEDED_TEMPLATES: WorkflowTemplate[] = seededTemplatesFromRoles();
+export const SEEDED_TEMPLATES: WorkflowTemplate[] = seededTemplatesFromRoles(ROLE_DEFAULTS);
 
 type WorkflowFile = { workflows?: unknown };
-type TemplateFile = { templates?: unknown };
 
 function atomicWriteJson(filePath: string, value: Record<string, unknown>): void {
   atomicWriteText(filePath, stringifyRegistryDocument(value));
-}
-
-function readJson(filePath: string): unknown {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
-  } catch {
-    return null;
-  }
 }
 
 function readWorkflowStateJson(): { raw: unknown; source: string } | null {
@@ -579,18 +571,29 @@ export async function withWorkflowMutation<T>(
   return (await waitForStateLock("workflows.open", workflowStore)).mutate(mutate);
 }
 
+function parseTemplates(value: unknown): WorkflowTemplate[] {
+  const raw = (value ?? {}) as { templates?: unknown };
+  return Array.isArray(raw.templates) ? raw.templates.map(normalizeTemplate).filter((item): item is WorkflowTemplate => item !== null) : [];
+}
+
+export const templateStore = smallStore<WorkflowTemplate[]>({
+  collection: "workflow_templates",
+  empty: () => [],
+  parse: parseTemplates,
+  toRows: items => items.map((value, index) => ({ key: `item:${index}`, value })),
+  fromRows: rows => rows.map(row => normalizeTemplate(row.value)).filter((item): item is WorkflowTemplate => item !== null),
+  toFile: templates => ({ templates }),
+});
+
 export function loadTemplates(): WorkflowTemplate[] {
-  const raw = readJson(templatesFile()) as TemplateFile | null;
-  const templates = Array.isArray(raw?.templates)
-    ? raw.templates.map(normalizeTemplate).filter((template): template is WorkflowTemplate => template !== null)
-    : [];
+  const templates = templateStore.read(templatesFile());
   const merged = mergeSeededTemplates(templates);
-  if (JSON.stringify(merged) !== JSON.stringify(templates)) saveTemplates(merged);
+  if (JSON.stringify(merged) !== JSON.stringify(templates) && legacyImportAllowed(templatesFile())) saveTemplates(merged);
   return merged;
 }
 
 export function saveTemplates(templates: WorkflowTemplate[]): void {
-  atomicWriteJson(templatesFile(), { templates });
+  templateStore.mutate(templatesFile(), () => ({ next: templates, result: undefined }));
 }
 
 /** Seed missing names only; saved templates keep their selected configs even

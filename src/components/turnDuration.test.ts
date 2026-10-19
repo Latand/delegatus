@@ -1,3 +1,4 @@
+import { hostGoneWorkExpired, turnIsRunning } from "./turnDuration";
 import { describe, expect, test } from "bun:test";
 
 import type { FileEntry } from "@/lib/types";
@@ -73,4 +74,15 @@ describe("turn caption + recency", () => {
     const info = recencyTurnInfo(file({ startedAt: 0, endedAt: null }, "stalled"), Date.now(), "en");
     expect(info).toEqual({ running: null, idleTitle: null });
   });
+});
+
+
+test("explicit host-gone evidence expires from every turn indicator at sixty seconds", () => {
+  const now = 1_800_000_000;
+  const file = { proc: null, activity: "live", activityReason: "structured_spawn_host_gone_turn_open", mtime: now - 60, lastTurn: { startedAt: (now - 120) * 1000, endedAt: null } } as const;
+  expect(hostGoneWorkExpired(file, now - 1)).toBe(false);
+  expect(hostGoneWorkExpired(file, now)).toBe(true);
+  expect(turnIsRunning(file, now)).toBe(false);
+  expect(recencyTurnInfo(file, now * 1000, "en").running).toBeNull();
+  expect(turnIsRunning({ ...file, proc: "running" }, now)).toBe(true);
 });

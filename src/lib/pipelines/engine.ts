@@ -155,7 +155,7 @@ import { mergeOnReviewEnabled } from "@/lib/projects/settings";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
 import { assignmentHoldsIdentity } from "@/lib/tasks/membership";
 import { MAX_DECISION_ANSWER_CHARS } from "./types";
-import { mergeAdmission, nudgeAutoMerge } from "@/lib/forge/autoMerge";
+import { lanePullRequest, mergeAdmission, mergeEligible, nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep } from "@/lib/forge/cache";
 import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
 import { editStoredWorkLinks, normalizeWorkLinkInput, resolvePipelineLinks, workLinkInputs, type NormalizedWorkLink } from "@/lib/forge/workLinks";
@@ -13326,7 +13326,7 @@ export async function patchPipeline(
       return result;
     }
     if (req.action === "retry-merge") {
-      const refused = retryMerge(pipeline, ports.now());
+      const refused = retryMerge(pipeline, ports.now(), pipelines);
       if (refused) return refused;
       await persist();
       return { pipeline };
@@ -14339,7 +14339,9 @@ export async function patchPipeline(
  * attempt is counted. Refused while the project's setting is off, because the
  * runner would cancel it again at once.
  */
-function retryMerge(pipeline: Pipeline, now: string): PipelinePatchResult | null {
+function retryMerge(pipeline: Pipeline, now: string, pipelines: readonly Pipeline[], visited = new Set<string>()): PipelinePatchResult | null {
+  if (visited.has(pipeline.id)) return { error: "refresh lineage contains a cycle", status: 409 };
+  visited.add(pipeline.id);
   if (!pipeline.merge) {
     const admission = mergeAdmission(pipeline, Date.parse(now));
     if ("reason" in admission) return { error: admission.reason, status: 409 };
@@ -14349,8 +14351,37 @@ function retryMerge(pipeline: Pipeline, now: string): PipelinePatchResult | null
   }
   const merge = pipeline.merge;
   if (pipeline.state !== "completed") return { error: "only a completed pipeline can retry its merge", status: 409 };
-  if (merge.state !== "blocked" && merge.state !== "cancelled") return { error: `the merge is ${merge.state}; only a stopped merge can be tried again`, status: 409 };
+  if (merge.state !== "blocked" && merge.state !== "cancelled" && merge.state !== "refreshing") return { error: `the merge is ${merge.state}; only a stopped merge can be tried again`, status: 409 };
   if (!mergeOnReviewEnabled(pipeline.project)) return { error: "the project's \"merge when the review passes\" setting is off", status: 409 };
+  if (merge.refresh?.pipelineId) {
+    const successor = pipelines.find(lane => lane.id === merge.refresh!.pipelineId);
+    if (!successor || successor.refreshOf?.pipelineId !== pipeline.id || successor.refreshOf.base !== merge.refresh.base)
+      return { error: "the refresh lane is unavailable or its lineage changed", status: 409 };
+    if (successor.state !== "completed" && successor.state !== "closed")
+      return { error: "the refresh lane is still open; finish or close it before retrying the merge", status: 409 };
+    if (successor.state === "completed") {
+      const pr = successor.merge ? { repository: successor.merge.repository, number: successor.merge.prNumber } : lanePullRequest(successor);
+      if (successor.project !== pipeline.project || pr?.repository !== merge.repository || pr.number !== merge.prNumber
+        || !mergeEligible(successor) || successor.hiddenAt)
+        return { error: "the completed refresh no longer has matching PR and review evidence", status: 409 };
+      // Keep review authority on the successor's head. Retry its stopped or
+      // missing record in this same transaction; a running merge only needs a nudge.
+      if (!successor.merge || ["blocked", "cancelled", "refreshing"].includes(successor.merge.state)) {
+        const refused = retryMerge(successor, now, pipelines, visited);
+        if (refused) return refused;
+      }
+      merge.state = successor.merge!.state === "merged" ? "refreshing" : successor.merge!.state;
+      merge.reason = successor.merge!.reason;
+      merge.blockedAt = successor.merge!.blockedAt;
+      merge.attempts += 1;
+      merge.updatedAt = now;
+      nudgeAutoMerge();
+      return null;
+    }
+    delete merge.refresh;
+  } else if (merge.state === "refreshing") {
+    return { error: "refresh creation is still pending; retry after it settles", status: 409 };
+  }
   merge.state = "queued";
   merge.attempts += 1;
   merge.reason = null;

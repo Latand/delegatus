@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test, setDefaultTimeout } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import path from "node:path";
 import { appendOwnershipFailure, compareTests, confirmFailures, FLAKY_RERUNS, FLAKY_BUDGET_MS, parseReport, touchedTests, type TestSite, type TestRun } from "./local-gate-tests";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
@@ -26,6 +27,7 @@ const source = (pass: boolean) => `import { test, expect, describe } from "bun:t
 test("review evidence names the exact base and head without changing repository refs", async () => {
   const f = fixture(source(false));
   // The fixture's private run environment may acquire Bun cache files.
+  mkdirSync(path.join(f.dir, ".git/info"), { recursive: true });
   writeFileSync(path.join(f.dir, ".git/info/exclude"), "env/\n");
   writeFileSync(path.join(f.dir, "example.test.ts"), `${source(false)}\ntest("added passing case", () => {});`);
   f.git("add", "example.test.ts"); f.git("commit", "-m", "reviewed change");
@@ -371,7 +373,7 @@ test("a base-only scheduled failure is FLAKY with both counts and no unrelated r
   const f = scheduledFixture([3], [1, 2, 3, 4]);
   const result = await f.run();
   expect(result.introduced).toHaveLength(0); expect(result.flaky).toHaveLength(1);
-  expect(f.logs.join("\n")).toContain("FLAKY example.test.ts: inner > outer > target [Ω] (base 3 pass/1 fail; head 0 pass/4 fail)");
+  expect(f.logs.join("\n")).toContain("FLAKY example.test.ts: inner > outer > target [Ω] (base 2 pass/1 fail; head 0 pass/3 fail)");
   expect(readFileSync(f.marker + "-unrelated", "utf8").trim().split("\n")).toEqual(["head"]);
 });
 
@@ -393,6 +395,62 @@ ${extra}
 ${message === null ? "" : `describe("broken", () => { test("inner", () => {}); throw new Error(${JSON.stringify(message)}); });`}`;
 const cliAt = (f: ReturnType<typeof fixture>, base: string, files = ["./example.test.ts"]) => spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, ...files], { cwd: f.dir, env: f.env, encoding: "utf8" });
 const SAME_WAY = "(the base run of this file is broken the same way)";
+
+test.each(["recovers", "changes", "repeats"] as const)("a head-only between-tests error gets one isolated full-file retry: %s", mode => {
+  const f = fixture(source(true));
+  const marker = path.join(f.dir, "diagnostic-runs");
+  writeFileSync(path.join(f.dir, "example.test.ts"), `import { test, describe } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+const marker = ${JSON.stringify(marker)};
+const n = existsSync(marker) ? Number(readFileSync(marker, "utf8")) + 1 : 1;
+writeFileSync(marker, String(n));
+test("whole file still runs", () => {});
+describe("diagnostic", () => {
+  if (n === 1 || ${JSON.stringify(mode)} === "repeats") throw new Error("first diagnostic");
+  if (${JSON.stringify(mode)} === "changes") throw new Error("second diagnostic");
+});`);
+  const outcome = cliAt(f, f.base);
+  expect(outcome.stderr).not.toContain("gate error");
+  expect(readFileSync(marker, "utf8")).toBe("2");
+  expect(outcome.status, outcome.stdout + outcome.stderr).toBe(mode === "recovers" ? 0 : 1);
+  if (mode === "repeats") expect(outcome.stdout).toContain("NEW example.test.ts: <between-tests error> error: first diagnostic");
+  else expect(outcome.stdout).toContain("FLAKY example.test.ts: <between-tests error> error: first diagnostic");
+  if (mode === "changes") expect(outcome.stdout).toContain("NEW example.test.ts: <between-tests error> error: second diagnostic");
+  // A fresh comparator process must resample rather than reuse the prior pass.
+  writeFileSync(marker, "0");
+  const restarted = cliAt(f, f.base);
+  expect(restarted.status).toBe(outcome.status);
+  expect(readFileSync(marker, "utf8")).toBe("2");
+});
+
+test("diagnostic retry preserves extra occurrences beyond the base across comparator restarts", () => {
+  const f = fixture(source(true));
+  const marker = path.join(f.dir, "diagnostic-multiplicity");
+  const scheduled = `import { test, describe } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const counter = ${JSON.stringify(marker)} + "-" + side;
+const run = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
+writeFileSync(counter, String(run));
+test("passing test", () => {});
+const errors = side === "base" ? ["A"] : run === 1 ? ["A", "B"] : ["A", "A"];
+for (const [index, message] of errors.entries()) describe("diagnostic " + index, () => { throw new Error(message); });`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), scheduled);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "diagnostic multiplicity schedule");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, "example.test.ts"), `${scheduled}\n// reviewed head`);
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    writeFileSync(marker + "-base", "0");
+    writeFileSync(marker + "-head", "0");
+    const result = cliAt(f, base);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("NEW example.test.ts: <between-tests error> error: A");
+    expect(result.stdout).toContain("FLAKY example.test.ts: <between-tests error> error: B");
+    expect(result.stdout).toContain("1 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+  }
+});
 
 test("a between-tests error present on both sides is PRE-EXISTING from the CLI and never blocks", async () => {
   const f = fixture(betweenTests("describe boom"));
@@ -418,7 +476,7 @@ test("stays red", () => expect(side === "base").toBe(true));`;
   f.git("add", "example.test.ts"); f.git("commit", "-m", "broken base with a head-only schedule");
   const refused = cliAt(f, f.git("rev-parse", "HEAD"));
   expect(refused.stderr).not.toContain("gate error");
-  expect(refused.stdout).toContain("FLAKY example.test.ts: recovers (base 4 pass/0 fail; head 3 pass/1 fail)");
+  expect(refused.stdout).toContain("FLAKY example.test.ts: recovers (base 2 pass/0 fail; head 1 pass/1 fail)");
   expect(refused.stdout).toContain("NEW example.test.ts: stays red");
   expect(refused.stdout).toContain(`PRE-EXISTING example.test.ts: <between-tests error> error: describe boom ${SAME_WAY}`);
   expect(refused.stdout).toContain("1 new failures, 2 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
@@ -465,9 +523,9 @@ test("a head scheduled recovery passes CLI and never caches a head pass", async 
   const f = scheduledFixture([], [1]);
   const accepted = f.cli();
   expect(accepted.status).toBe(0);
-  expect(accepted.stdout).toContain("FLAKY example.test.ts: inner > outer > target [Ω] (base 4 pass/0 fail; head 3 pass/1 fail)");
+  expect(accepted.stdout).toContain("FLAKY example.test.ts: inner > outer > target [Ω] (base 2 pass/0 fail; head 1 pass/1 fail)");
   // Keep the baseline key and turn only the head into a stable regression.
-  writeFileSync(path.join(f.dir, "example.test.ts"), scheduledSource(f.marker, [], [5, 6, 7, 8]));
+  writeFileSync(path.join(f.dir, "example.test.ts"), scheduledSource(f.marker, [], [3, 4, 5, 6]));
   const refused = f.cli();
   expect(refused.status).toBe(1); expect(refused.stdout).toContain("baseline run");
   expect(refused.stdout).toContain("NEW example.test.ts: inner > outer > target [Ω]");
@@ -480,6 +538,154 @@ test("the stable regression control fails every head sample and refuses CLI", as
   expect(refused.stdout).not.toContain("FLAKY example.test.ts");
   expect(readFileSync(f.marker + "-base", "utf8")).toBe("4");
   expect(readFileSync(f.marker + "-head", "utf8")).toBe("4");
+});
+
+test("a completed recovery leaves later confirmation budget unused across comparator restarts", () => {
+  const f = scheduledFixture([], [1]);
+  writeFileSync(path.join(f.dir, "example.test.ts"), `${scheduledSource(f.marker, [], [1])}
+if (run > 2) throw new Error("settled retry consumed another round");`);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "bounded recovery schedule");
+  const base = f.git("rev-parse", "HEAD");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    for (const side of ["base", "head"]) writeFileSync(f.marker + "-" + side, "0");
+    const outcome = cliAt(f, base);
+    expect(outcome.status, outcome.stdout + outcome.stderr).toBe(0);
+    expect(outcome.stdout).toContain("flaky confirmation 1 round per side (maximum 3)");
+    for (const side of ["base", "head"]) expect(readFileSync(f.marker + "-" + side, "utf8")).toBe("2");
+  }
+});
+
+test("later rounds select only unresolved assertions and still refuse a stable head-only failure", () => {
+  const f = fixture(source(true));
+  const marker = path.join(f.dir, "selective-confirmation");
+  const trace = path.join(f.dir, "confirmation-trace");
+  const scheduled = `import { test, expect } from "bun:test";
+import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const counter = ${JSON.stringify(marker)} + "-" + side;
+const run = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
+writeFileSync(counter, String(run));
+const record = (name) => appendFileSync(${JSON.stringify(trace)}, side + ":" + run + ":" + name + "\\n");
+test("recovers", () => { record("recovers"); expect(side === "base" || run > 1).toBe(true); });
+test("stable", () => { record("stable"); expect(side === "base").toBe(true); });`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), scheduled);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "mixed confirmation schedule");
+  const base = f.git("rev-parse", "HEAD");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    for (const side of ["base", "head"]) writeFileSync(marker + "-" + side, "0");
+    writeFileSync(trace, "");
+    const outcome = cliAt(f, base);
+    expect(outcome.status, outcome.stdout + outcome.stderr).toBe(1);
+    expect(outcome.stderr).not.toContain("gate error");
+    expect(outcome.stdout).toContain("NEW example.test.ts: stable");
+    expect(outcome.stdout).toContain("FLAKY example.test.ts: recovers (base 2 pass/0 fail; head 1 pass/1 fail)");
+    const observations = readFileSync(trace, "utf8").trim().split("\n");
+    for (const side of ["base", "head"]) {
+      expect(observations.filter(line => line.startsWith(side + ":") && line.endsWith(":recovers")))
+        .toEqual([`${side}:1:recovers`, `${side}:2:recovers`]);
+      expect(observations.filter(line => line.startsWith(side + ":") && line.endsWith(":stable")))
+        .toEqual([1, 2, 3, 4].map(run => `${side}:${run}:stable`));
+    }
+  }
+});
+
+test.each(["recovers", "stable", "missing-peer"] as const)("real confirmation processes rendezvous on both sides: %s", async mode => {
+  const f = fixture(source(true));
+  const marker = path.join(f.dir, "paired-samples");
+  const scheduled = `import { test, expect } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+import { createConnection } from "node:net";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const prefix = ${JSON.stringify(marker)} + "-" + process.env.GATE_CONFIRMATION_FIXTURE_RUN;
+const counter = prefix + "-" + side;
+const run = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
+writeFileSync(counter, String(run));
+if (run === 2 && side === "head" && process.env.GATE_CONFIRMATION_FIXTURE_RUN === "0" && ${JSON.stringify(mode)} !== "missing-peer") await Bun.sleep(31000);
+if (run > 1) {
+  await new Promise<void>((resolve, reject) => {
+    const socket = createConnection({ host: "127.0.0.1", port: Number(process.env.GATE_RENDEZVOUS_PORT) });
+    socket.once("error", reject);
+    socket.once("connect", () => socket.write(JSON.stringify({ side, run }) + "\\n"));
+    socket.once("data", chunk => { socket.end(); if (chunk.toString() === "release") resolve(); else reject(new Error("invalid rendezvous release")); });
+  });
+}
+test("paired target", () => expect(side === "base" || (${JSON.stringify(mode)} === "recovers" && run > 1)).toBe(true));`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), scheduled);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "paired process schedule");
+  const base = f.git("rev-parse", "HEAD");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    f.env.GATE_CONFIRMATION_FIXTURE_RUN = String(attempt);
+    const server = createServer();
+    const ready = new Map<number, Map<string, import("node:net").Socket>>();
+    const sockets = new Set<import("node:net").Socket>();
+    server.on("connection", socket => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      let buffered = "";
+      socket.on("data", chunk => {
+        buffered += chunk.toString();
+        const newline = buffered.indexOf("\n");
+        if (newline < 0) return;
+        const message = JSON.parse(buffered.slice(0, newline)) as { side: string; run: number };
+        const peers = ready.get(message.run) ?? new Map<string, import("node:net").Socket>();
+        ready.set(message.run, peers);
+        peers.set(message.side, socket);
+        if (peers.has("base") && peers.has("head") && mode !== "missing-peer") {
+          for (const peer of peers.values()) peer.end("release");
+          ready.delete(message.run);
+        }
+      });
+    });
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+    f.env.GATE_RENDEZVOUS_PORT = String((server.address() as import("node:net").AddressInfo).port);
+    const child = spawn(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, "./example.test.ts"], {
+      cwd: f.dir, env: f.env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
+    });
+    let stdout = "", stderr = "";
+    child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
+    child.stderr.setEncoding("utf8").on("data", chunk => { stderr += chunk; });
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    let outcome: { status: number | null; stdout: string; stderr: string } | undefined;
+    let watchdogError: unknown;
+    try { outcome = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+      let settled = false;
+      let timedOut = false;
+      const finish = (error?: Error, status: number | null = null) => {
+        if (settled) return;
+        settled = true;
+        if (watchdog) clearTimeout(watchdog);
+        if (error) reject(error); else resolve({ status, stdout, stderr });
+      };
+      child.once("error", error => finish(error));
+      child.once("close", (status, signal) => finish(timedOut ? new Error("rendezvous control exceeded its outer watchdog") : undefined, status ?? (signal ? 1 : null)));
+      watchdog = setTimeout(() => {
+        timedOut = true;
+        if (child.pid && process.platform !== "win32") process.kill(-child.pid, "SIGTERM");
+        else child.kill("SIGTERM");
+      }, mode === "missing-peer" ? 1000 : 45000);
+    }); } catch (error) { watchdogError = error; }
+    finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+    if (mode === "missing-peer") {
+      expect(watchdogError).toBeInstanceOf(Error);
+      expect((watchdogError as Error).message).toContain("outer watchdog");
+      expect(outcome).toBeUndefined();
+      expect(stdout).not.toContain("NEW example.test.ts");
+      expect(stdout).not.toContain("PRE-EXISTING example.test.ts");
+      expect(ready.size).toBeGreaterThan(0);
+      break;
+    }
+    expect(watchdogError).toBeUndefined();
+    expect(outcome?.status, (outcome?.stdout ?? "") + (outcome?.stderr ?? "")).toBe(mode === "recovers" ? 0 : 1);
+    expect(outcome?.stderr).not.toContain("gate error");
+    expect(outcome?.stdout).toContain(mode === "recovers" ? "FLAKY example.test.ts: paired target (base 2 pass/0 fail; head 1 pass/1 fail)" : "NEW example.test.ts: paired target");
+    expect(ready.size).toBe(0);
+    for (const side of ["base", "head"]) expect(readFileSync(`${marker}-${attempt}-${side}`, "utf8")).toBe(mode === "recovers" ? "2" : "4");
+  }
 });
 
 test("recovering one duplicate-name occurrence leaves the stable occurrence NEW", async () => {
@@ -529,7 +735,7 @@ test("same name", check);`;
   const cli = spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
   expect(cli.status).toBe(1);
   expect(cli.stdout).toContain("NEW example.test.ts: same name");
-  expect(cli.stdout).toContain("FLAKY example.test.ts: same name (base 3 pass/1 fail; head 3 pass/1 fail)");
+  expect(cli.stdout).toContain("FLAKY example.test.ts: same name (base 1 pass/1 fail; head 1 pass/1 fail)");
   expect(cli.stdout).toContain("1 new failures, 0 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
 });
 
@@ -537,7 +743,7 @@ test("any passing head retry makes an occurrence FLAKY", async () => {
   const f = scheduledFixture([], [1, 2, 4]);
   const accepted = f.cli();
   expect(accepted.status).toBe(0);
-  expect(accepted.stdout).toContain("FLAKY example.test.ts: inner > outer > target [Ω] (base 4 pass/0 fail; head 1 pass/3 fail)");
+  expect(accepted.stdout).toContain("FLAKY example.test.ts: inner > outer > target [Ω] (base 3 pass/0 fail; head 1 pass/2 fail)");
   expect(accepted.stdout).toContain("0 new failures, 0 pre-existing failures");
 });
 
@@ -562,7 +768,7 @@ describe("outer", () => describe("one > two", () => {
   const result = await touchedTests(f.dir, base, ["./example.test.ts"], { env: f.env, log: line => f.logs.push(line) });
   expect(result.introduced).toHaveLength(0);
   expect(result.flaky).toHaveLength(1);
-  expect(f.logs.join("\n")).toContain("FLAKY example.test.ts: one > two > outer > case (base 4 pass/0 fail; head 3 pass/1 fail)");
+  expect(f.logs.join("\n")).toContain("FLAKY example.test.ts: one > two > outer > case (base 2 pass/0 fail; head 1 pass/1 fail)");
   expect(readFileSync(marker + "-unrelated", "utf8").trim().split("\n")).toEqual(["head"]);
 });
 
@@ -580,6 +786,51 @@ test("the retry bound stays small and incomplete samples cannot become FLAKY", a
   expect((await confirmFailures(run([], [first, second]), duplicate, side => side === "base" ? run([], [first, second]) : duplicate)).introduced).toHaveLength(2);
 });
 
+test("a failing base retry still requires a complete paired head sample before retirement", async () => {
+  const site: TestSite = { file: "example.test.ts", suite: "", name: "target", kind: "test", occurrence: 0 };
+  const sample = (failures: TestSite[], passed: TestSite[]): TestRun => ({ failures, passed, completed: [site.file], elapsedMs: 0 });
+  const base = sample([], [site]), head = sample([site], []);
+  await expect(confirmFailures(base, head, side => side === "base" ? head : sample([], [])))
+    .rejects.toThrow("head rerun: missing or skipped test");
+  await expect(confirmFailures(base, head, side => side === "base" ? head : sample([{ ...site, kind: "error", name: "new diagnostic" }], [])))
+    .rejects.toThrow("head rerun: incomplete runner or between-tests error");
+});
+
+test.each(["accepts", "refuses"] as const)("confirmation sides overlap and await their peer when the base %s", async mode => {
+  const refuse = mode === "refuses";
+  const site: TestSite = { file: "example.test.ts", suite: "", name: "target", kind: "test", occurrence: 0 };
+  const base: TestRun = { failures: [], passed: [site], completed: [site.file], elapsedMs: 0 };
+  const head: TestRun = { ...base, failures: [site], passed: [] };
+  const entered: string[] = [];
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let settled = false;
+  const confirmation = confirmFailures(base, head, async side => {
+    entered.push(side);
+    if (side === "base" && refuse) throw new Error("base refusal");
+    await held;
+    return base;
+  });
+  const observed = confirmation.then(value => { settled = true; return { value }; }, error => { settled = true; return { error }; });
+  let assertionError: unknown;
+  try {
+    await Promise.resolve();
+    expect(entered).toEqual(["base", "head"]);
+    expect(settled).toBe(false);
+  } catch (error) { assertionError = error; }
+  finally { release(); }
+  const outcome = await observed;
+  if (assertionError) throw assertionError;
+  if ("error" in outcome) {
+    expect(refuse).toBe(true);
+    expect(outcome.error.message).toBe("base refusal");
+  } else {
+    expect(refuse).toBe(false);
+    expect(outcome.value.introduced).toHaveLength(0);
+    expect(outcome.value.flaky).toHaveLength(1);
+  }
+});
+
 
 test("the shared retry deadline blocks before another child starts", async () => {
   const f = fixture(source(true));
@@ -595,27 +846,28 @@ test("the shared retry deadline blocks before another child starts", async () =>
   } finally { clock?.mockRestore(); }
 });
 
-test("three head files rendezvous concurrently before the fourth starts, with distinct roots", async () => {
+test("four head files rendezvous concurrently before the fifth starts, with distinct roots", async () => {
   const f = fixture(source(true));
   const markers = path.join(f.dir, "rendezvous"); mkdirSync(markers);
-  const files = ["one", "two", "three", "four"].map((word, index) => `${index}-${word}.test.ts`);
+  const files = ["one", "two", "three", "four", "five"].map((word, index) => `${index}-${word}.test.ts`);
   for (const [index, file] of files.entries()) writeFileSync(path.join(f.dir, file), `
 import { test, expect } from "bun:test";
 import { readdirSync, writeFileSync, readFileSync } from "node:fs";
-test("three concurrent roots", async () => {
+test("four concurrent roots", async () => {
   const markers = ${JSON.stringify(markers)}, index = ${index};
-  if (index === 3) expect(readdirSync(markers).filter(f => f.endsWith(".done")).length).toBeGreaterThan(0);
+  if (index === 4) expect(readdirSync(markers).filter(f => f.endsWith(".done")).length).toBeGreaterThan(0);
   writeFileSync(markers + "/" + index + ".root", process.env.HOME!);
-  if (index < 3) {
+  if (index < 4) {
     const until = Date.now() + 8000;
-    while (readdirSync(markers).filter(f => f.endsWith(".root") && f !== "3.root").length < 3 && Date.now() < until) await Bun.sleep(20);
-    const roots = readdirSync(markers).filter(f => f.endsWith(".root") && f !== "3.root").map(f => readFileSync(markers + "/" + f, "utf8"));
-    expect(new Set(roots).size).toBe(3);
+    while (readdirSync(markers).filter(f => f.endsWith(".root") && f !== "4.root").length < 4 && Date.now() < until) await Bun.sleep(20);
+    const roots = readdirSync(markers).filter(f => f.endsWith(".root") && f !== "4.root").map(f => readFileSync(markers + "/" + f, "utf8"));
+    expect(new Set(roots).size).toBe(4);
   }
   writeFileSync(markers + "/" + index + ".done", "done");
 }, 10000);`);
   const result = await f.run(files);
   expect(result.introduced).toHaveLength(0);
+  expect(result.flaky).toHaveLength(0);
   expect(f.logs.join("\n")).toContain("green head; no baseline checkout");
 }, 20_000);
 

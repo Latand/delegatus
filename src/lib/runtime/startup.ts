@@ -15,7 +15,7 @@ import { accountManager } from "@/lib/accounts/manager";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { launchProfileEngineReadOnly, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
-import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { registryRowsMatching, registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -27,9 +27,11 @@ import { loadPipelineOwnershipForStartupAsync, pipelineRegistryHealthAsync, with
 import {
   adoptClaudeRegistryHosts,
   adoptCodexRegistryHosts,
+  codexBootAdoptionRetired,
   detachCodexHostForViewerRestart,
+  flushStructuredHostPersistence,
   demoteSkippedStructuredRegistryHosts,
-  reconcileDeadStructuredRegistryHosts,
+  reconcileDeadStructuredRegistryHostsOffLoop,
   type AdoptedClaudeHost,
   type AdoptedCodexHost,
   type StructuredHostAdoptionFilter,
@@ -180,7 +182,10 @@ async function revalidateRetainedStartupHosts(
   await forEachStartupBatch(retained, async (item) => {
     if (!startupHostInScope(registry, sessionKeyId(item.key))
       || retainedStartupHostIsCurrent(snapshot, item, retainedTerminalHostKeys)) current.push(item);
-    else await item.host.release();
+    else {
+      await item.host.release();
+      await flushStructuredHostPersistence(item.host);
+    }
   });
   return current;
 }
@@ -1691,7 +1696,7 @@ async function structuredStartupAdoptionFilter(
   };
   return Object.assign((entry: AgentRegistryEntry) => {
     const conversation = conversationsByCurrentEntry.get(sessionKeyId(entry.key));
-    if (!conversation) return false;
+    if (!conversation || codexBootAdoptionRetired(entry)) return false;
     /* A superseded conversation is terminal (issue #383): a boot can never
        revive a retired round, held work or not — the successor owns it. */
     if (conversation.supersededBy) return false;
@@ -1764,6 +1769,39 @@ interface PipelineStartupEvidence {
   deferred: ReadonlySet<string>;
 }
 
+export function pipelineStartupMemberships(registry: AgentRegistry) {
+  // Only hosts this pass may adopt need membership evidence. Keyed generation
+  // lookups keep retained conversations and memberships off the retry loop.
+  const snapshot = startupSnapshot(registry);
+  const memberships: RegistryFile["memberships"] = {};
+  const canonicalIds = new Map<string, ViewerConversationId>();
+  const take = (conversationId: ViewerConversationId) => {
+    if (canonicalIds.has(conversationId)) return;
+    const canonical = resolveConversationAlias(snapshot, conversationId);
+    for (const id of conversationIdsResolvingTo(snapshot, canonical)) {
+      if (canonicalIds.has(id)) continue;
+      canonicalIds.set(id, canonical);
+      const entries = snapshot.memberships[id];
+      if (entries) memberships[id] = entries;
+    }
+  };
+  for (const entry of registryRowsMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp"])) {
+    if (!startupHostInScope(registry, sessionKeyId(entry.key))) continue;
+    for (const conversation of registryConversationsForEntryKey(snapshot, sessionKeyId(entry.key))) take(conversation.id);
+  }
+  // Pending structured spawns can have membership before an entry exists.
+  // They need the same unreadable-pipeline fence as resident hosts.
+  for (const receipt of registryRowsMatching(snapshot, "receipts", "state", ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"])) take(receipt.conversationId);
+  const resolve = (id: string) => canonicalIds.get(id) ?? resolveConversationAlias(snapshot, id as ViewerConversationId);
+  const byPipeline = new Map<string, string[]>();
+  for (const [id, entries] of Object.entries(memberships)) for (const entry of entries) {
+    if (entry.kind !== "pipeline") continue;
+    const ids = byPipeline.get(entry.containerId) ?? [];
+    ids.push(id); byPipeline.set(entry.containerId, ids);
+  }
+  return { memberships, resolve, byPipeline, selectedIds: new Set(canonicalIds.keys()) };
+}
+
 /** Pipeline attempts and frozen close hosts determine whether startup may create another writer.
     A failed read retains pipeline members without launch or demotion; a
     captured survivor blocks even pending work until its identity is dead. */
@@ -1780,17 +1818,18 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
     console.error("[structured hosts] pipeline registry unreadable; deferring pipeline adoption", {
       error: error instanceof Error ? error.message : String(error),
     });
-    for (const [id, memberships] of Object.entries(startupSnapshot(registry).memberships)) {
-      if (memberships.some((membership) => membership.kind === "pipeline")) {
-        deferred.add(registry.canonicalConversationId(id as ViewerConversationId));
+    const { memberships, resolve } = pipelineStartupMemberships(registry);
+    for (const [id, entries] of Object.entries(memberships)) {
+      if (entries.some((membership) => membership.kind === "pipeline")) {
+        deferred.add(resolve(id));
       }
     }
     return { settled, deferred };
   }
-  const memberships = startupSnapshot(registry).memberships;
+  const { memberships, resolve, byPipeline, selectedIds } = pipelineStartupMemberships(registry);
   for (const [id, entries] of Object.entries(memberships)) {
     if (entries.some((entry) => entry.kind === "pipeline" && preservedIds.has(entry.containerId))) {
-      deferred.add(registry.canonicalConversationId(id as ViewerConversationId));
+      deferred.add(resolve(id));
     }
   }
   for (const pipeline of pipelines) {
@@ -1799,15 +1838,11 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
     // into frozen close custody. Either record fences every pipeline writer.
     // Memberships also retain conversations absent from an older attempt row.
     if (blocked) {
-      for (const [id, entries] of Object.entries(memberships)) {
-        if (entries.some((entry) => entry.kind === "pipeline" && entry.containerId === pipeline.id)) {
-          deferred.add(registry.canonicalConversationId(id as ViewerConversationId));
-        }
-      }
+      for (const id of byPipeline.get(pipeline.id) ?? []) deferred.add(resolve(id));
     }
     for (const attempt of pipeline.attempts) {
-      if (!attempt.conversationId?.startsWith("conversation_")) continue;
-      const id = registry.canonicalConversationId(attempt.conversationId as ViewerConversationId);
+      if (!attempt.conversationId?.startsWith("conversation_") || !selectedIds.has(attempt.conversationId)) continue;
+      const id = resolve(attempt.conversationId);
       if (SETTLED_STAGE_ATTEMPT_STATES.has(attempt.state)) settled.add(id);
       if (blocked) deferred.add(id);
     }
@@ -1999,7 +2034,7 @@ async function adoptStructuredHostsPass(
   assertActive();
   const delayedRows = new Set(retryEntries.filter(entry => {
     const key = sessionKeyId(entry.key);
-    return rowRetries.get(key)?.resolved || !rowRetries.due(key);
+    return !codexBootAdoptionRetired(entry) && (rowRetries.get(key)?.resolved || !rowRetries.due(key));
   }).map(entry => sessionKeyId(entry.key)));
   const failures = new Map<string, StartupRowReason>();
   const onFailure = (entry: AgentRegistryEntry, error: unknown) => failures.set(sessionKeyId(entry.key), startupRowReason(error));
@@ -2169,12 +2204,12 @@ async function adoptStructuredHostsPass(
     /* Pending work makes a terminal conversation adoption-eligible. Clear any
        provably dead wrapper before that decision so its stale writer fence
        cannot block the startup recovery path. */
-    reconcileDeadStructuredRegistryHosts(registry, (entry) => orchestratorHostKeys.has(sessionKeyId(entry.key))
+    await reconcileDeadStructuredRegistryHostsOffLoop(registry, (entry) => orchestratorHostKeys.has(sessionKeyId(entry.key))
       || interruptionHostKeys.has(sessionKeyId(entry.key))
       || (resumeDeferred !== null && !resumeDeferred.has(sessionKeyId(entry.key)))
       || deferredHostKeys.has(sessionKeyId(entry.key))
       || delayedRows.has(sessionKeyId(entry.key))
-      || evidenceMoved(entry));
+      || evidenceMoved(entry), assertActive);
     const signals = await structuredStartupSignals(
       registry,
       client,
@@ -2461,6 +2496,7 @@ async function adoptStructuredHostsPass(
     const candidateHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
     const shouldRetainCandidateOrAdopt: StructuredHostAdoptionFilter = (entry) =>
       candidateHostKeys.has(sessionKeyId(entry.key))
+      || codexBootAdoptionRetired(entry)
       /* A row this boot could not read a transcript for is left exactly as it
          was. The demotion below retires a skipped row — it releases the endpoint,
          clears the active turn and can signal an unclaimable Claude orphan — and
@@ -2500,7 +2536,12 @@ async function adoptStructuredHostsPass(
           skippedHostKeys.add(sessionKeyId(entry.key));
           return;
         }
-        return mutation();
+        return registry.deliveryWriteOrBusy({ label: "registry.startup-demote" }, () => {
+          assertActive();
+          const latest = startupSnapshot(registry).entries[sessionKeyId(entry.key)];
+          if (!latest || evidenceMoved(latest)) return undefined;
+          return mutation();
+        });
       }, "reconciling structured hosts"));
     const publicationSnapshot = startupSnapshot(registry);
     orchestratorHostKeys = currentOrchestratorRestartRecoveryHostKeys(
@@ -2667,18 +2708,24 @@ async function adoptStructuredHostsPass(
         : [];
     }));
     const retryHostKeys = new Set(waitingContinuationHostKeys);
-    const blockedRows = new Set([...contestedHostKeys, ...(rowRetry ? [...deferredHostKeys, ...held.keys(), ...waitingContinuationHostKeys] : [])]);
+    const failedRows = [...failures.keys()].filter(key => {
+      const entry = heldEntries[key];
+      return entry?.key.engine === "codex" && !codexBootAdoptionRetired(entry);
+    });
+    const blockedRows = new Set([...contestedHostKeys, ...failedRows, ...(rowRetry ? [...deferredHostKeys, ...held.keys(), ...waitingContinuationHostKeys] : [])]);
     const schedule = dependencies.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     for (const entry of retryEntries) {
       const key = sessionKeyId(entry.key);
-      if (blockedRows.has(key)) {
+      const retired = codexBootAdoptionRetired(heldEntries[key] ?? entry);
+      if (blockedRows.has(key) && !retired) {
         await rowRetries.failed(key, failures.get(key) ?? "incumbent-owned", Date.now(), assertActive);
-      } else if (!delayedRows.has(key) && rowRetries.get(key)) {
+      } else if ((!delayedRows.has(key) && rowRetries.get(key))
+        || retired) {
         try {
           await startupRowNotice(entry, null, assertActive);
           await rowRetries.clear(key, assertActive);
         } catch {
-          await rowRetries.failed(key, rowRetries.get(key)!.reason, Date.now(), assertActive, true);
+          await rowRetries.failed(key, rowRetries.get(key)?.reason ?? "missing-rollout", Date.now(), assertActive, true);
           console.error("[structured hosts] quarantine card resolution deferred", { key });
         }
       }
@@ -2981,6 +3028,7 @@ export async function releaseUnpublishedStartupHostsForDemotion(
       throw error;
     }
     await host.release();
+    await flushStructuredHostPersistence(host);
     released.add(sessionKeyId(key));
   }));
   /* A released handle is gone for good: no later pass in this process may

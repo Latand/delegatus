@@ -1,3 +1,4 @@
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,6 +12,12 @@ import {
   type HandoffQueueStoreState,
   type HandoffRow,
 } from "./handoffQueue";
+
+const handoffIndexes = declaredIndexes([
+  `CREATE UNIQUE INDEX IF NOT EXISTS handoff_one_active_conversation
+      ON handoff_rows(conversation_id)
+      WHERE conversation_id IS NOT NULL`,
+]);
 
 /**
  * SQLite-backed durable store for the blue-green handoff queue (issue #253).
@@ -32,6 +39,8 @@ export class SqliteHandoffQueueStore implements HandoffQueueStore {
     this.db = openCurrentDatabase(filename, () => {
       const db = observeSqlite(new sqlite.Database(filename, { create: true, strict: true }), "handoff-queue");
       db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864;");
+      try { handoffIndexes.assertRepairAuthority(db, path.dirname(filename)); }
+      catch (error) { db.close(); throw error; }
       db.exec(`
         CREATE TABLE IF NOT EXISTS handoff_rows (
           operation_id TEXT PRIMARY KEY,
@@ -63,12 +72,13 @@ export class SqliteHandoffQueueStore implements HandoffQueueStore {
       this.db.exec("ROLLBACK");
       throw error;
     }
-    this.migrateActiveRows();
-    this.db.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS handoff_one_active_conversation
-      ON handoff_rows(conversation_id)
-      WHERE conversation_id IS NOT NULL;
-    `);
+    // The column ALTER is committed separately from the data migration so an
+    // interrupted startup can resume from the durable NULL marker.
+    if (this.db.query("SELECT 1 FROM handoff_rows WHERE conversation_id IS NULL LIMIT 1").get()) {
+      this.migrateActiveRows();
+    }
+    try { handoffIndexes.install(this.db, path.dirname(filename)); }
+    catch (error) { this.db.close(); throw error; }
     try { fs.chmodSync(filename, 0o600); } catch { /* best effort */ }
   }
 

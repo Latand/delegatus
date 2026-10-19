@@ -1,11 +1,13 @@
 import { expect, test, afterAll } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { openOwnerAnswer, relayAnswerOp, relayAnswerSchema } from "./ownerAnswer";
+import { ownerAnswer } from "./ownerRun";
 import { richRequest } from "./rich.fixture";
 import { reserveRun, updateRelayStore } from "./store";
 import { procBackend } from "@/lib/proc";
-const root=fs.mkdtempSync(path.join("/tmp","relay-owner-answer-"));
+const root=fs.mkdtempSync(path.join(os.tmpdir(),"relay-owner-answer-"));
 process.env.LLV_STATE_DIR=path.join(root,"state");
 afterAll(()=>fs.rmSync(root,{recursive:true,force:true}));
 test("relay_answer binds a live owner conversation, replaces parts and closes after the answer", async()=>{
@@ -46,4 +48,30 @@ test("relay_answer binds a live owner conversation, replaces parts and closes af
     expect(new Set(stagedFiles())).toEqual(before);
     expect(await relayAnswerOp("conversation_owner_parts",{format:"rich_markdown"})).toBeNull();
   } finally {const files=entry.parts().attachments;await entry.dispose();for(const file of files)expect(fs.existsSync(file.file)).toBe(false);if(savedHome===undefined)delete process.env.HOME;else process.env.HOME=savedHome;}
+});
+
+test("owner mentions keep leading source whitespace and refuse redaction that would move offsets", async () => {
+  const request = richRequest(); request.request_id = "owner_mention_offsets";
+  request.input.requester = { key: "person", is_owner: true, is_admin: true, is_anonymous_admin: false, can_delete_messages: true, can_restrict_members: true };
+  const relay = { id: "relay_mentions", paused: false, targets: [{ id: request.target_id, enabled: true, ownerTier: true }] };
+  updateRelayStore(s => ({ ...s, relays: [relay as never] }));
+  reserveRun({ requestId: request.request_id, leaseId: request.lease_id, relayId: relay.id, targetId: request.target_id, childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid)!, runDir: root, startedAt: "2026-10-17T12:00:00Z", conversationId: "conversation_owner_mentions", ownerTurn: { clientAttemptId: "relay-owner-mentions", request: { text: "Hello", requestText: null } } }, 1);
+  const owner = { messageId: "m1", text: "Hello", requestText: null };
+  const entry = openOwnerAnswer(relay.id, request, root, [], () => true);
+  try {
+    const mentions = [{ author_key: "person", offset: 4, length: 6 }];
+    for (const invalid of [null, [{ ...mentions[0], offset: -1 }], [{ ...mentions[0], length: 129 }], [{ ...mentions[0], extra: true }], Array(17).fill(mentions[0])]) {
+      await expect(relayAnswerOp("conversation_owner_mentions", { format: "rich_markdown", mentions: invalid })).rejects.toMatchObject({ code: "malformed", status: 400 });
+    }
+    await expect(relayAnswerOp("conversation_owner_mentions", { format: "plain", mentions })).rejects.toMatchObject({ code: "malformed", status: 400 });
+    await relayAnswerOp("conversation_owner_mentions", { format: "rich_markdown", mentions });
+    expect(ownerAnswer("  😀 Person", request, owner)).toMatchObject({ text: "  😀 Person", mentions });
+    for (const text of ["[ignore]", "[handoff]"])
+      expect(() => ownerAnswer(text, request, owner)).toThrow("malformed");
+  } finally { await entry.dispose(); }
+  const changed = openOwnerAnswer(relay.id, request, root, ["sensitive-fixture"], () => true);
+  try {
+    await relayAnswerOp("conversation_owner_mentions", { format: "rich_markdown", mentions: [{ author_key: "person", offset: 18, length: 6 }] });
+    expect(() => ownerAnswer("sensitive-fixture Person", request, owner, ["sensitive-fixture"])).toThrow("malformed");
+  } finally { await changed.dispose(); }
 });

@@ -231,12 +231,12 @@ export function readAttentionDismissals(filePath = attentionDismissalsFile(), no
 
 /** Each conversation's dismissal, by durable id and by transcript path, for
     the `/api/files` projection. */
-export function attentionDismissalIndex(file: AttentionDismissalsFileV1 = readAttentionDismissals()): Map<string, AttentionDismissalV1> {
+export function attentionDismissalIndex(file: AttentionDismissalsFileV1 = readAttentionDismissals(), includeRestored = false): Map<string, AttentionDismissalV1> {
   const index = new Map<string, AttentionDismissalV1>();
   for (const record of file.records) {
     /* An escalation names a wait, not a conversation, and a restored record
        covers nothing. */
-    if (record.kind === "escalation" || record.restoredAt) continue;
+    if (record.kind === "escalation" || record.restoredAt && !includeRestored) continue;
     if (record.conversationId) index.set(record.conversationId, record);
     if (record.path) index.set(record.path, record);
     index.set(record.subject, record);
@@ -248,10 +248,11 @@ export function attentionDismissalIndex(file: AttentionDismissalsFileV1 = readAt
  * Stamp each conversation's dismissal onto its entries, for `/api/files`. A
  * retired round is skipped, as the bridge ask overlay skips it: the successor
  * carries the live card. An entry with no record carries none, so an undo
- * takes the mark off on the next projection. A record the store cannot read
+ * retains a restore marker on the next projection, so automatic rules honor
+ * Undo. A record the store cannot read
  * costs a card that flags again, never the poll.
  */
-export function overlayAttentionDismissals(files: readonly FileEntry[], read: () => Map<string, AttentionDismissalV1> = attentionDismissalIndex): void {
+export function overlayAttentionDismissals(files: readonly FileEntry[], read: () => Map<string, AttentionDismissalV1> = () => attentionDismissalIndex(readAttentionDismissals(), true)): void {
   let index: Map<string, AttentionDismissalV1>;
   try {
     index = read();
@@ -262,7 +263,7 @@ export function overlayAttentionDismissals(files: readonly FileEntry[], read: ()
     const record = file.supersededBy || file.migratedTo
       ? undefined
       : (file.conversationId ? index.get(file.conversationId) : undefined) ?? index.get(file.path);
-    if (record && record.kind !== "prototype") file.attentionDismissal = { at: record.at, by: record.by, reasonId: record.reasonId, ...(record.cleared ? { cleared: record.cleared } : {}) };
+    if (record && record.kind !== "prototype") file.attentionDismissal = { at: record.at, by: record.by, reasonId: record.reasonId, ...(record.restoredAt ? { restoredAt: record.restoredAt } : {}), ...(record.cleared ? { cleared: record.cleared } : {}) };
     else if (file.attentionDismissal) delete file.attentionDismissal;
   }
 }

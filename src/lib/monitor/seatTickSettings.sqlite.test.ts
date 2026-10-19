@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -54,10 +55,11 @@ const QUIET: SeatTickSettings = {
   until: null,
   updatedAt: "2026-09-22T09:00:00.000Z",
   setBy: { kind: "manager", conversationId: "conversation_seat", project: "repo-alpha", seatEpoch: 3 },
+  instructionLines: [{ text: "nothing here until the release lands", author: null, at: null }],
 };
 
 function seedLegacy(): void {
-  fs.writeFileSync(file, `${JSON.stringify({ version: 1, projects: { "repo-alpha": QUIET } }, null, 2)}\n`);
+  fs.writeFileSync(file, `${JSON.stringify({ version: 1, projects: { "repo-alpha": { ...QUIET, instructionLines: undefined } } }, null, 2)}\n`);
 }
 
 function writeJson(filePath: string, value: unknown): void {
@@ -81,7 +83,7 @@ describe("import once", () => {
 });
 
 describe("revision", () => {
-  test("the seat_tick_settings revision of an imported row is the one the file's row answered", () => {
+  test("the imported row revision includes its explicit unknown line attribution", () => {
     seedLegacy();
     const before = recordRevision(QUIET);
 
@@ -146,7 +148,7 @@ describe("rollback mirror", () => {
     seedLegacy();
     readSeatTickSettings("repo-alpha");
     checkpointSeatTickSettingsRollbackMirrorForDemotion();
-    const newer = { ...QUIET, reason: "still quiet, now for the migration" };
+    const newer = { ...QUIET, reason: "still quiet, now for the migration", instructionLines: [{ text: "still quiet, now for the migration", author: null, at: null }] };
     /* A new-code MCP process writes during the rollback window. */
     writeSeatTickSettings("repo-alpha", newer);
     writeJson(file, { version: 1, projects: { "repo-alpha": { ...QUIET, enabled: true, reason: null } } });
@@ -165,4 +167,39 @@ test("auto-rotation survives a SQLite round trip beside legacy rows that remain 
   writeSeatTickSettings(project, row, file);
   expect(readSeatTickSettings(project, file)).toEqual(row);
   expect(readSeatTickSettings("old-fixture-row", file).autoRotate).toBeUndefined();
+});
+
+
+test("legacy text never inherits the last row editor's operator attribution", () => {
+  const legacy = { ...QUIET, instructionLines: undefined, reason: "  Legacy first line.\nLegacy second line.  ", setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } };
+  fs.writeFileSync(file, JSON.stringify({ version: 1, projects: { "repo-alpha": legacy } }));
+  const read = readSeatTickSettings("repo-alpha");
+  expect(read.instructionLines).toEqual(legacy.reason.split("\n").map(text => ({ text, author: null, at: null })));
+  checkpointSeatTickSettingsRollbackMirrorForDemotion();
+  const mirrored = JSON.parse(fs.readFileSync(file, "utf8"));
+  expect(mirrored.projects["repo-alpha"].instructionLines).toEqual(read.instructionLines);
+});
+
+
+test("an existing SQLite row migrates unknown lines across a real process restart", () => {
+  writeSeatTickSettings("repo-alpha", QUIET);
+  // Reproduce a row committed by the previous release, bypassing the new writer.
+  const database = new Database(db());
+  database.query("UPDATE state_rows SET value_json = ? WHERE collection = ? AND row_key = ?")
+    .run(JSON.stringify({ key: "p:repo-alpha", value: { ...QUIET, instructionLines: undefined, setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } } }), "seat_tick_settings", "p:repo-alpha");
+  database.close();
+  const child = Bun.spawnSync([process.execPath, "-e", `import { readSeatTickSettings } from "./src/lib/monitor/seatTickSettings"; console.log(JSON.stringify(readSeatTickSettings("repo-alpha")));`], {
+    cwd: process.cwd(), env: { ...process.env, LLV_SEAT_TICK_SETTINGS_FILE: file }, stdout: "pipe", stderr: "pipe",
+  });
+  expect(child.exitCode).toBe(0);
+  const read = JSON.parse(child.stdout.toString());
+  expect(read.instructionLines).toEqual([{ text: QUIET.reason, author: null, at: null }]);
+  expect(read.reason).toBe(QUIET.reason);
+});
+
+
+test("old copied metadata cannot attribute changed text to the operator", () => {
+  const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+  writeSeatTickSettings("repo-alpha", { ...QUIET, reason: "Changed by an older writer.", instructionLines: [{ text: "Old operator wording.", author: operator, at: "2026-10-01T12:00:00.000Z" }] });
+  expect(readSeatTickSettings("repo-alpha").instructionLines).toEqual([{ text: "Changed by an older writer.", author: null, at: null }]);
 });

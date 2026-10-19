@@ -1,3 +1,4 @@
+import { ExternalRelayError } from "./client";
 import { answerCapabilities, checkedAnswerV2, formatSection, richAnswerInstructions } from "./answerV2";
 import { sealOwnerAnswer, ownerAnswerDrops } from "./ownerAnswer";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -34,7 +35,7 @@ export type OwnerSpawnedTurn = SpawnedTurn & { continuation?: { operationId: str
 export class OwnerContinuationRefused extends Error {
   constructor(public readonly reason: "busy" | "unavailable") { super(`owner continuation ${reason}`); }
 }
-export type OwnerTurnObservation = SpawnedTurnObservation & RelayStepObservation & { firstMessagePending?: boolean; initialMessageOperationId?: string };
+export type OwnerTurnObservation = SpawnedTurnObservation & RelayStepObservation & { firstMessagePending?: boolean; initialMessageOperationId?: string; finalTextChanged?: boolean };
 
 export function ownerRunPrompt(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number): string {
   const input = request.input;
@@ -121,14 +122,17 @@ export function ownerInitialCursor(request: ExternalRelayRequest, owner: OwnerIn
 }
 
 export function ownerAnswer(text: string | null, request: ExternalRelayRequest, owner: OwnerInstruction, credentials: readonly string[] = []): ExternalRelayDecision | null {
-  const answer = scrubOwnerOutput(text?.trim() ?? "", credentials);
   const parts = sealOwnerAnswer(request.request_id);
+  const original = parts?.mentions?.length ? text ?? "" : text?.trim() ?? "";
+  const answer = scrubOwnerOutput(original, credentials);
+  if (parts?.mentions?.length && answer !== original) throw new ExternalRelayError("malformed", 400);
+  if (parts?.mentions?.length && ["[ignore]", "[handoff]"].includes(answer)) throw new ExternalRelayError("malformed", 400);
   if (!answer && !parts?.attachments.length) return null;
   if (answer === "[ignore]") return { action: "ignore", text: "", reply_to: null };
   if (answer === "[handoff]") return offersHandoff(request) ? { action: "handoff", text: "", reply_to: null } : null;
   const caps = answerCapabilities(request, "");
   if (caps.rich) {
-    const raw = { action: "reply", text: answer, reply_to: owner.messageId, format: parts?.format ?? "plain", buttons: parts?.buttons ?? [], attachments: parts?.attachments.map(f => ({attachment_id:f.id})) ?? [] };
+    const raw = { action: "reply", text: answer, reply_to: owner.messageId, format: parts?.format ?? "plain", ...(parts?.mentions ? { mentions: parts.mentions } : {}), buttons: parts?.buttons ?? [], attachments: parts?.attachments.map(f => ({attachment_id:f.id})) ?? [] };
     const rich = raw.format === "rich_markdown" ? checkedAnswerV2(raw, request, caps, {handoff:true,ignore:true,stagedAttachments:parts?.attachments.length ?? 0}, ownerAnswerDrops(request.request_id)) : null;
     if (rich) return rich;
     raw.format = "plain";
@@ -224,7 +228,11 @@ const productionPorts: OwnerRunPorts = {
 class OwnerPromptCleanupPending extends Error {}
 export const OWNER_STOP_RECOVERY_GRACE_MS = 60_000;
 export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickSources, "registry" | "liveness" | "now">, progressSteps = false): Promise<OwnerTurnObservation> {
-  const observed: OwnerTurnObservation = { ...await observeSpawnedTurn(run, sources, child => spawnNoticeFinalMessage(child, scrubOwnerOutput)), firstMessagePending: false };
+  let finalTextChanged = false;
+  const observed: OwnerTurnObservation = { ...await observeSpawnedTurn(run, sources, child => spawnNoticeFinalMessage(child, text => {
+    const clean = scrubOwnerOutput(text); finalTextChanged ||= clean !== text; return clean;
+  }, { preserveWhitespace: true })), firstMessagePending: false };
+  if (finalTextChanged) observed.finalTextChanged = true;
   if (progressSteps && observed.conversationId) {
     Object.assign(observed, readOwnerStepObservation(sources.registry(), observed.conversationId));
   }
@@ -321,7 +329,8 @@ export async function observeOwnerContinuation(run: OwnerSpawnedTurn, sources: P
   if (transcript.error) return { state: "failed", conversationId: id, turnError: scrubOwnerOutput(transcript.error) };
   if (!transcript.assistant)
     return { state: "running", firstMessagePending: false };
-  return { state: "ended", conversationId: id, finalText: scrubOwnerOutput(transcript.assistant.text), firstMessagePending: false };
+  const finalText = scrubOwnerOutput(transcript.assistant.text);
+  return { state: "ended", conversationId: id, finalText, ...(finalText !== transcript.assistant.text ? { finalTextChanged: true } : {}), firstMessagePending: false };
 }
 
 const OWNER_TURN_SCAN_LIMIT = 64 * 1024 * 1024;
@@ -330,7 +339,7 @@ const OWNER_TRANSCRIPT_RECORD_LIMIT = 1024 * 1024;
 async function readDeliveredTurn(file: string, size: number, root: "claude-projects" | "codex-sessions", engine: string, sentAt: number) {
   const fd = await fs.promises.open(file, "r");
   let position = size;
-  let partial = "";
+  let partial = Buffer.alloc(0);
   let droppingOversizedRecord = false;
   let scanned = 0;
   let assistant: { text: string; ts: number } | null = null;
@@ -343,16 +352,18 @@ async function readDeliveredTurn(file: string, size: number, root: "claude-proje
       const { bytesRead } = await fd.read(buffer, 0, length, start);
       if (!bytesRead) break;
       position = start; scanned += bytesRead;
-      let complete = buffer.subarray(0, bytesRead).toString("utf8") + partial;
+      let complete = Buffer.concat([buffer.subarray(0, bytesRead), partial]);
       if (droppingOversizedRecord) {
-        const boundary = complete.lastIndexOf("\n");
+        const boundary = complete.lastIndexOf(10);
         if (boundary < 0) continue;
         complete = complete.slice(0, boundary + 1);
         droppingOversizedRecord = false;
       }
-      const lines = complete.split("\n");
-      partial = start === 0 ? "" : lines.shift() ?? "";
-      if (Buffer.byteLength(partial) > OWNER_TRANSCRIPT_RECORD_LIMIT) { partial = ""; droppingOversizedRecord = true; }
+      const boundary = complete.indexOf(10);
+      partial = start === 0 ? Buffer.alloc(0) : boundary < 0 ? complete : complete.subarray(0, boundary);
+      const completeStart = start === 0 ? 0 : boundary < 0 ? complete.length : boundary + 1;
+      const lines = complete.subarray(completeStart).toString("utf8").split("\n");
+      if (partial.length > OWNER_TRANSCRIPT_RECORD_LIMIT) { partial = Buffer.alloc(0); droppingOversizedRecord = true; }
       for (let index = lines.length - 1; index >= 0; index--) {
         const line = lines[index]!;
         if (!line || Buffer.byteLength(line) > OWNER_TRANSCRIPT_RECORD_LIMIT) continue;
@@ -360,7 +371,7 @@ async function readDeliveredTurn(file: string, size: number, root: "claude-proje
         try { row = JSON.parse(line); } catch { continue; }
         reverseRecords.push(row);
         if (!assistant) {
-          const candidate = lastAssistantMessageFromRecords([row], root, 0);
+          const candidate = lastAssistantMessageFromRecords([row], root, 0, { preserveWhitespace: true });
           if (candidate?.text.trim()) assistant = candidate;
         }
         const payload = row.payload as Record<string, unknown> | undefined;
@@ -486,6 +497,7 @@ type OwnerRunInput = {
   request: ExternalRelayRequest; owner: OwnerInstruction; target: RelayTargetSettings;
   accountId: string | null; hardCapMs: number; ports?: OwnerRunPorts; deadline?: RelayRequestDeadline;
   authorize?: () => void; credentials?: readonly string[];
+  inboundContext?: string;
   onConversation(conversationId: string, initialPrompt?: { operationId: string; initialMessage: string }): void | Promise<void>;
   onProgress?(observed: RelayStepObservation): void;
   continuation?: { conversationId: string; prompt: string };
@@ -607,7 +619,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
         await input.onConversation(turn.conversationId!);
         await changeRunAsync(input.request.request_id, r => ({ ...r, conversationId: turn.conversationId!, ownerTurn: { ...r.ownerTurn!, continuation: turn.continuation } }), Date.now() + 5000);
         authorize();
-        const sent = await withViewerOperation("relay.owner-continuation.send", () => ports.continue?.(turn, input.continuation!.prompt, input.target, authorize));
+        const sent = await withViewerOperation("relay.owner-continuation.send", () => ports.continue?.(turn, input.continuation!.prompt + (input.inboundContext ? "\n" + input.inboundContext : ""), input.target, authorize));
         if (!sent || !sent.ok) {
           // Only a proven refusal before reservation permits fallback or retry.
           if ((!sent || sent.admission === "refused") && !stopped) {
@@ -624,7 +636,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       } else {
         launched = await ports.launch({
           engine: input.target.engine, model: input.target.model, effort: input.target.effort,
-          cwd: os.homedir(), prompt: ownerRunPrompt(input.request, input.owner, input.target.hardCapMinutes),
+          cwd: os.homedir(), prompt: ownerRunPrompt(input.request, input.owner, input.target.hardCapMinutes) + (input.inboundContext ? "\n" + input.inboundContext : ""),
           title: `Relay · ${input.target.name}`, clientAttemptId: turn.clientAttemptId, accountId: input.accountId,
           mcpServers: ["viewer"], plugins: [], notifyLauncher: false,
         }, authorize);
@@ -661,6 +673,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
         }
         input.onProgress?.(firstMessagePending ? { queued: true } : { currentTool: observed.currentTool, writingAnswer: observed.writingAnswer || observed.state === "ended" });
         if (observed.state === "ended") {
+          if (observed.finalTextChanged && sealOwnerAnswer(input.request.request_id)?.mentions?.length) throw new ExternalRelayError("malformed", 400);
           const answer = ownerAnswer(observed.finalText ?? null, input.request, input.owner, input.credentials);
           // A silent final message cannot discharge the owner's request. A
           // service handoff continues it through the service's own assistant.

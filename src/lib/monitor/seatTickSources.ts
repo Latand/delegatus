@@ -1383,22 +1383,37 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
     found.push({ id: "deploy", label: `the last deployment ended ${last.phase}` });
   }
   const report = sources.retirementReport();
-  const unknown = report?.refused.filter(refusal => refusal.undetermined) ?? [];
-  const undetermined = unknown.length;
-  if (report && (report.failed.length > 0 || undetermined > 0)) {
+  if (report) {
     const registry = sources.registry();
-    const file = undetermined > 0 ? registry.readOnlySnapshot() : null;
-    const subjects = unknown.map(refusal => {
-      const id = file && refusal.conversationId ? resolveConversationAlias(file, refusal.conversationId as ViewerConversationId) : null;
-      const conversation = id ? file?.conversations[id] : null;
-      const own = Boolean(seat && (conversation?.launcher?.conversationId === seat.conversationId
-        || (id ? file?.lineageEdges[id]?.parentConversationId : null) === seat.conversationId));
-      const title = conversation?.generations.at(-1)?.launchProfile.title ?? "agent";
-      return { own, label: `${redactBounded(title, 60)} (${refusal.conversationId ?? refusal.key}) ${refusal.clause}: ${redactBounded(refusal.reason, 100)}${own ? " (launched by you)" : ""}` };
-    }).sort((a, b) => Number(b.own) - Number(a.own));
-    const more = subjects.length > 3 ? `; and ${subjects.length - 3} more` : "";
-    const names = subjects.length ? `: ${subjects.slice(0, 3).map(subject => subject.label).join("; ")}${more}` : "";
-    found.push({ id: "host-retirement", actionable: subjects.some(subject => subject.own), label: redactBounded(`host retirement: ${report.failed.length} failed, ${undetermined} undetermined${names}`, 800) });
+    const canonicalProject = seatProjectResolver();
+    // Read only report subjects. Missing ownership cannot disclose a target to
+    // this project's seat, even when a launcher points at that seat.
+    const subject = (conversationId: string | null) => {
+      if (!conversationId) return null;
+      const conversation = registry.conversation(conversationId as ViewerConversationId);
+      const owner = conversation?.projectOwnership?.project;
+      return owner && canonicalProject(owner) === project ? conversation : null;
+    };
+    const unknown = report.refused.filter(refusal => refusal.undetermined).flatMap(refusal => {
+      const conversation = subject(refusal.conversationId);
+      if (!conversation) return [];
+      const own = Boolean(seat && conversation.launcher?.conversationId === seat.conversationId);
+      const title = conversation.generations.at(-1)?.launchProfile.title ?? "agent";
+      return [{ own, label: `${redactBounded(title, 60)} (${refusal.conversationId}) ${refusal.clause}: ${redactBounded(refusal.reason, 100)}${own ? " (launched by you)" : ""}` }];
+    });
+    const failed = report.failed.flatMap(failure => {
+      const conversation = subject(failure.conversationId);
+      if (!conversation) return [];
+      const own = Boolean(seat && conversation.launcher?.conversationId === seat.conversationId);
+      const title = conversation.generations.at(-1)?.launchProfile.title ?? "agent";
+      return [{ own, label: `${redactBounded(title, 60)} (${failure.conversationId}) failed: ${redactBounded(failure.error, 100)}${own ? " (launched by you)" : ""}` }];
+    });
+    const subjects = [...failed, ...unknown].sort((a, b) => Number(b.own) - Number(a.own));
+    if (subjects.length > 0) {
+      const more = subjects.length > 3 ? `; and ${subjects.length - 3} more` : "";
+      const names = `: ${subjects.slice(0, 3).map(subject => subject.label).join("; ")}${more}`;
+      found.push({ id: "host-retirement", actionable: true, label: redactBounded(`host retirement: ${failed.length} failed, ${unknown.length} undetermined${names}`, 800) });
+    }
   }
   const stalled = sources.retirementJournal
     ? stalledRetirementClause(sources.retirementJournal(sources.now() - RETIREMENT_STALL_WINDOW_MS))
@@ -1406,6 +1421,7 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
   if (stalled) {
     found.push({
       id: "host-retirement-stalled",
+      actionable: false,
       label: `host retirement: nothing retired in ${stalled.sweeps} sweeps over ${RETIREMENT_STALL_WINDOW_MS / 3_600_000}h while ${stalled.clause} refused ${stalled.refusals} times${stalledRetirementFlags(stalled.flags)}`,
     });
   }

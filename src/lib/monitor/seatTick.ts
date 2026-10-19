@@ -1302,7 +1302,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   }
 
   const laneEvents = input.events.filter(event => isOwedEvent(event, input));
-  const intervalAgenda = input.pipelines.some(isOpenLane) || runningChildren.length > 0 || input.signals.length > 0;
+  const intervalAgenda = input.pipelines.some(isOpenLane) || runningChildren.length > 0 || input.signals.some(signal => signal.actionable !== false);
   const candidates: SeatTickWakeReason[] = [];
   if (endReports.length && (wakeDue || input.state.autonomySummaryFor !== endReports[0]!.startedAt)) candidates.push({ kind: "autonomy-ended", detail: "the autonomy episode ended; its report is owed" });
   if (autonomous && wakeDue && !input.pipelines.some(isOpenLane) && runningChildren.length === 0 && unstarted.length === 0) {
@@ -1671,10 +1671,12 @@ function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): S
     && !(Number.isFinite(coveredThrough) && coveredThrough >= instant(entry.receivedAt)));
 
   let reportSeenAt = state.reportSeenAt ?? null;
-  let reportFingerprint = state.reportFingerprint ?? null;
+  // Without a prior board observation, establish a baseline. Signal-only
+  // wakes cannot turn an unknown baseline into evidence of board movement.
+  let reportFingerprint = state.reportFingerprint ?? state.checkFingerprint ?? boardFingerprint(input.changeFingerprint);
   if (reports.lastReportAt && (!reportSeenAt || instant(reports.lastReportAt) > instant(reportSeenAt))) {
     reportSeenAt = reports.lastReportAt;
-    reportFingerprint = state.checkFingerprint ?? null;
+    reportFingerprint = state.checkFingerprint ?? boardFingerprint(input.changeFingerprint);
   }
   return {
     ...state,
@@ -2010,6 +2012,7 @@ function wakeItems(context: {
   }
   const savedAnswers: SeatTickItem[] = [];
   for (const signal of input.signals) {
+    if (signal.actionable === false) continue;
     if (signal.id === "disk-space" && signal.episode === input.state.diskPressureShown) continue;
     const item: SeatTickItem = { kind: "signal", id: signal.id, label: signal.label, ...(signal.id === "disk-space" && signal.episode ? { diskPressureEpisode: signal.episode } : {}) };
     /* Low disk leads the agenda, so the per-wake bound never cuts it. */
@@ -2359,7 +2362,7 @@ function visibleWakeAcknowledgments(state: SeatTickProjectState, commit: SeatTic
   const carries = (line: string) => !line.includes("\n") ? lines.has(line) : framed.includes(`\n${line}\n`);
   const proofs = commit.acknowledgmentLines;
   const visible = new Set(proofs?.filter(proof => carries(proof.line)).map(proof => proof.key));
-  const agenda = text.split("\nItems:\n")[1]?.split(/\n\n(?:Why you were woken:|Signals:|Bridge reports:|Snapshot at |Operator instructions for every wake:|Standing monitor note|Contract:|Spawned children whose transcript)/)[0] ?? "";
+  const agenda = text.split("\nItems:\n")[1]?.split(/\n\n(?:Why you were woken:|Signals:|Bridge reports:|Snapshot at |Operator instructions for every wake:|Seat notes for every wake:|Instructions — author unknown:|Standing monitor note|Contract:|Spawned children whose transcript)/)[0] ?? "";
   const bullets = [...agenda.matchAll(/^- \[([^\]]+)\] (\S+) — ([\s\S]*?)(?=\n- \[|$)/gm)]
     .filter(match => !match[0].trimEnd().endsWith("…")
       && framed.includes(`\n${match[0].trimEnd()}\n`));

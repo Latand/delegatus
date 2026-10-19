@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { continuityMarker, headSession } from "./lineage";
-import { readRootLineage, recordRootSession, RootLineageStoreError, rootIdentity, rootLineageFile } from "./store";
+import { readRootLineage, recordRootSession, RootLineageStoreError, rootIdentity, rootLineageFile, rootLineageStore } from "./store";
 
 let sandbox = "";
 let previousStateDir: string | undefined;
@@ -61,11 +61,31 @@ test("the root identity is minted once and is stable across later sessions", () 
   expect(rootIdentity()).toBe(minted);
 });
 
-test("a malformed lineage refuses to read rather than silently minting a new identity", () => {
+test("demoting an empty imported lineage preserves the absent-file format", () => {
+  expect(readRootLineage()).toBeNull();
+  rootLineageStore.checkpointRollbackMirror(rootLineageFile());
+  expect(fs.existsSync(rootLineageFile())).toBe(false);
+  expect(readRootLineage()).toBeNull();
+  expect(rootIdentity()).not.toBe("");
+});
+
+test("demoting an empty collection from a torn source also leaves no lineage file", () => {
+  fs.mkdirSync(path.dirname(rootLineageFile()), { recursive: true });
+  fs.writeFileSync(rootLineageFile(), "{ truncated", { mode: 0o600 });
+  expect(readRootLineage()).toBeNull();
+  rootLineageStore.checkpointRollbackMirror(rootLineageFile());
+  expect(fs.existsSync(rootLineageFile())).toBe(false);
+  expect(fs.readdirSync(sandbox).some(name => name.startsWith("root-lineage.json.unreadable-"))).toBe(true);
+});
+
+test("a torn lineage is preserved with an import gap", () => {
   fs.mkdirSync(path.dirname(rootLineageFile()), { recursive: true });
   fs.writeFileSync(rootLineageFile(), "{ not json", "utf8");
 
-  expect(() => readRootLineage()).toThrow(RootLineageStoreError);
+  expect(readRootLineage()).toBeNull();
+  const preserved = fs.readdirSync(sandbox).find(name => name.startsWith("root-lineage.json.unreadable-"));
+  expect(preserved).toBeDefined();
+  expect(fs.readFileSync(path.join(sandbox, preserved!), "utf8")).toBe("{ not json");
 });
 
 test("a lineage written by an unknown schema is refused", () => {

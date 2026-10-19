@@ -307,9 +307,38 @@ test("negotiated native images have a per-run home and a read-confined profile",
   expect(built.args).toContain(`permissions.relay.filesystem={${JSON.stringify(readableRoot)}="read"}`);
   expect(built.args).not.toContain("read-only");
   expect(built.env.CODEX_HOME).toBe(path.join(request.runDir, "codex-home"));
+  const mediaRoot = path.join(request.runDir, "media");
+  const editing = buildEphemeralCommand({ ...request, imageGeneration: { readableRoot, readableMediaRoot: mediaRoot } });
+  expect(editing.args).toContain(`permissions.relay.filesystem={${JSON.stringify(readableRoot)}="read",${JSON.stringify(mediaRoot)}="read"}`);
   const resumed = buildEphemeralCommand({ ...request, imageGeneration: { readableRoot }, session: { mode: "resume", id: "thread_1", cwd: readableRoot, codexHome: path.join(request.runDir, "session-home") } });
   expect(resumed.args.join(" ")).not.toContain("sandbox_mode");
   expect(resumed.env.CODEX_HOME).toBe(path.join(request.runDir, "session-home"));
   const claude = fixture("claude");
   expect(buildEphemeralCommand({ ...claude, imageGeneration: { readableRoot } })).toEqual(buildEphemeralCommand(claude));
+});
+
+test("negotiated inbound images reach each real launcher stdin or native image flag", async () => {
+  const file = path.join(root, "media-user.jsonl");
+  const native = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "fixture" } }] } }) + "\n";
+  fs.writeFileSync(file, native);
+  const image = path.join(root, "original.png"); fs.writeFileSync(image, "fixture image");
+  const script = path.join(root, "media-cli");
+  fs.writeFileSync(script, `#!/usr/bin/env bun
+const args=process.argv.slice(2), text=await Bun.stdin.text();
+if (args.includes('--output-last-message')) {
+  if (!args.includes('--image') || !args.includes(${JSON.stringify(image)})) process.exit(2);
+  await Bun.write(args[args.indexOf('--output-last-message')+1], JSON.stringify({action:'reply',text:'Photo received',reply_to:null}));
+} else {
+  if (text!==${JSON.stringify(native)} || !args.includes('--input-format')) process.exit(3);
+  console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput'],mcp_servers:[]}));
+  console.log(JSON.stringify({type:'result',subtype:'success',structured_output:{action:'reply',text:'Photo received',reply_to:null}}));
+}
+`); fs.chmodSync(script, 0o700);
+  for (const engine of ["codex", "claude"] as const) {
+    const request = fixture(engine);
+    const run = runEphemeralAgent({ ...request, inputImages: [image], ...(engine === "claude" ? { inputFile: file } : {}), runtime: { command: script } });
+    expect(await run.done).toMatchObject({ status: "done", answer: { text: "Photo received" } });
+  }
+  const failed = runEphemeralAgent({ ...fixture("claude"), inputFile: path.join(root, "missing-input"), runtime: { command: script } });
+  expect((await failed.done).status).not.toBe("done");
 });

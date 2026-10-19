@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { NextRequest, NextResponse } from "next/server";
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
@@ -43,7 +44,7 @@ function catalog(snapshot: RoleRegistrySnapshot) {
 }
 
 export async function GET(): Promise<NextResponse> {
-  return NextResponse.json(catalog(loadRoleRegistrySnapshotOrDefaults()));
+  return NextResponse.json(catalog(await waitForStateLock("roles.read", loadRoleRegistrySnapshotOrDefaults)));
 }
 
 /**
@@ -79,12 +80,14 @@ export async function PUT(req: NextRequest): Promise<NextResponse> {
     }
   }
   try {
-    const current = loadRoleRegistrySnapshot();
-    if (expectedRevision !== undefined && expectedRevision !== current.revision) {
-      return NextResponse.json(catalog(current), { status: 409 });
-    }
-    saveRoleMapping(patch);
-    return NextResponse.json(catalog(loadRoleRegistrySnapshot()));
+    return await waitForStateLock("roles.mapping", () => {
+      const current = loadRoleRegistrySnapshot();
+      if (expectedRevision !== undefined && expectedRevision !== current.revision) {
+        return NextResponse.json(catalog(current), { status: 409 });
+      }
+      saveRoleMapping(patch);
+      return NextResponse.json(catalog(loadRoleRegistrySnapshot()));
+    });
   } catch (error) {
     if (error instanceof RoleStoreError) return NextResponse.json({ error: error.message }, { status: 400 });
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });

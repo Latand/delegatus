@@ -167,10 +167,12 @@ import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import type { SeatTickProjectState } from "@/lib/monitor/types";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
-import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, seatDeploymentForRequestKey, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
-import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { checkoutDeploymentByIdempotencyKey } from "@/lib/selfUpdate/deployments";
+import { statePath } from "@/lib/configDir";
+import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -248,6 +250,8 @@ import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import { loadTasks, loadTasksForList, taskSelectionSource, mutateTasks, mutateTasksAsync, mutateTasksFile } from "@/lib/tasks/store";
+import { refreshCurationKnownValuesAsync } from "@/lib/memory/privacy";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { TASK_PRIORITIES, taskPriority, type BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -262,6 +266,7 @@ import {
   McpDispatchNotExecutedError,
   McpDispatchUncertainError,
   McpPrototypePublicationPendingError,
+  McpDeploymentPendingError,
   McpDispatchVerdictError,
   McpDispatchSettledRefusalError,
   McpToolRefusal,
@@ -415,7 +420,7 @@ async function requestViewerControl(
   init: RequestInit,
   context: McpToolCallContext = {},
   pinConfiguredEndpoint = false,
-): Promise<{ response: Response; parsed: unknown; unreadable: boolean }> {
+): Promise<{ response: Response; parsed: unknown; unreadable: boolean; uncertainPriorPost: boolean }> {
   const baseUrl = viewerControlOrigin(process.env, pinConfiguredEndpoint);
   const token = viewerControlToken(process.env, baseUrl);
   const now = Date.now();
@@ -428,6 +433,7 @@ async function requestViewerControl(
   const expiresAt = now + Math.min(publication ? PROTOTYPE_CONTROL_BUDGET_MS : CONTROL_READ_RECOVERY_BUDGET_MS, callerBudget);
   let attempts = 0;
   let lastFailure = "connection failed";
+  let uncertainPriorPost = init.method === "POST" && context.priorAttemptUncertain === true;
   while (Date.now() < expiresAt) {
     if (context.signal?.aborted) throw context.signal.reason;
     if (init.method === "POST") context.assertCaller?.();
@@ -445,6 +451,7 @@ async function requestViewerControl(
       }
       const response = await fetch(new URL(pathname, baseUrl), { ...init, headers, signal: attempt.signal });
       if (TRANSIENT_CONTROL_STATUSES.has(response.status)) {
+        if (init.method === "POST") uncertainPriorPost = true;
         lastFailure = `status ${response.status}`;
         await response.body?.cancel().catch(() => {});
       } else {
@@ -454,13 +461,14 @@ async function requestViewerControl(
             && objectRecord(parsed)
             && Boolean(text(parsed.error) || text(parsed.code));
           if (response.status !== 503 || answeredDomainFailure || !retryable) {
-            return { response, parsed, unreadable: false };
+            return { response, parsed, unreadable: false, uncertainPriorPost };
           }
           lastFailure = "status 503";
         } catch {
           if (context.signal?.aborted) throw context.signal.reason;
+          if (init.method === "POST") uncertainPriorPost = true;
           if (!retryable) {
-            return { response, parsed: null, unreadable: true };
+            return { response, parsed: null, unreadable: true, uncertainPriorPost };
           } else if (attempt.signal.aborted) {
             lastFailure = "response body timed out";
           } else if (response.status === 503) {
@@ -470,8 +478,10 @@ async function requestViewerControl(
           }
         }
       }
-    } catch {
+    } catch (error) {
       if (context.signal?.aborted) throw context.signal.reason;
+      const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+      if (init.method === "POST" && code !== "ConnectionRefused" && code !== "ECONNREFUSED") uncertainPriorPost = true;
       lastFailure = attempt.signal.aborted ? "attempt timed out" : "connection failed";
     } finally {
       attempt.release();
@@ -561,7 +571,7 @@ async function postViewerControl(
     }
     throw error;
   }
-  const { response, parsed, unreadable } = answer;
+  const { response, parsed, unreadable, uncertainPriorPost } = answer;
   /* A body of literal `null` is valid JSON, so `.catch` never fires and every
      later `result.x` throws a TypeError before the status can be classified —
      which is how a 405 from a revision that does not serve the route arrived as
@@ -575,6 +585,9 @@ async function postViewerControl(
   const result: Record<string, unknown> = parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? parsed as Record<string, unknown>
     : {};
+  if (pathname === "/api/runtime/deployments" && uncertainPriorPost && !response.ok) {
+    throw new McpDeploymentPendingError(`${controlFailureMessage(response.status, result.error)} after an earlier deploy request may have reached admission`);
+  }
   if (pathname === "/api/prototype-reviews" && response.ok
     && (typeof result.reviewId !== "string" || !/^pr_[a-f0-9]{32}$/.test(result.reviewId))) {
     throw new McpPrototypePublicationPendingError("Viewer publication response did not name its reviewId");
@@ -608,6 +621,9 @@ async function postViewerControl(
         ...(text(result.resend) ? { resend: text(result.resend) } : {}),
         ...(result.actuation === "started" ? { actuation: "started" } : {}),
       });
+    }
+    if (pathname === "/api/runtime/deployments" && response.status >= 400 && response.status < 500 && response.status !== 408) {
+      throw new McpToolRefusal(message, { code: text(result.code) || "deploy_refused", retryable: false, status: response.status });
     }
     throw new Error(message);
   }
@@ -946,7 +962,8 @@ export interface ViewerMcpDomainDependencies {
   /** Records which seat started an accepted deployment (#2063), so the seat
       tick can wake that seat when it settles. Optional so partial harnesses
       fall back to the production store. */
-  recordSeatDeployment?(record: SeatDeploymentRecord): void;
+  recordSeatDeployment?(record: SeatDeploymentRecord, assertCaller?: () => void): void | Promise<void>;
+  beginSeatDeployment?(record: import("@/lib/orchestrator/seatDeployments").PendingSeatDeployment, assertCaller?: () => void): Promise<void>;
   findDeploymentByIdempotencyKey?: typeof import("@/lib/orchestrator/seatDeployments").findSeatDeploymentByKey;
   /** The account↔project binding store (#1279). Optional so a partial harness
       can exercise the tool with no state directory; production reads and
@@ -1444,6 +1461,11 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
       (conversationId) => managers().some((seat) => seat.conversationId === conversationId),
       (conversationId) => productionDeputyPrincipal(conversationId)?.seatConversationId ?? null,
     );
+  },
+  findDeploymentByIdempotencyKey: async idempotencyKey => {
+    const checkout = checkoutDeploymentByIdempotencyKey(statePath("self-update"), idempotencyKey);
+    if (checkout) return checkout;
+    return (await import("@/lib/orchestrator/seatDeployments")).findSeatDeploymentByKey(idempotencyKey);
   },
   viewerProjects: viewerOwnProjects,
 };
@@ -3551,14 +3573,10 @@ function viewerSeatAuthority(
   return { ok: true, seat };
 }
 
-async function deployExactSha(
-  args: McpToolArgs,
-  control: ViewerControlDependencies,
+function deploySeatAuthority(
   dependencies: ViewerMcpDomainDependencies,
-): Promise<McpToolPayload> {
-  const revision = required(args, "revision");
-  if (!/^[0-9a-f]{7,40}$/i.test(revision)) throw new Error("revision must be a commit SHA or prefix of at least 7 characters");
-
+  revision?: string,
+) {
   const authority = viewerSeatAuthority(dependencies);
   if (!authority.ok) {
     const refusals: Record<ViewerSeatRefusal, [string, string]> = {
@@ -3571,41 +3589,108 @@ async function deployExactSha(
     const [message, code] = refusals[authority.reason];
     throw new McpToolRefusal(message, { code, revision });
   }
-  const seat = authority.seat;
+  return authority.seat;
+}
+
+async function deployExactSha(
+  args: McpToolArgs,
+  control: ViewerControlDependencies,
+  dependencies: ViewerMcpDomainDependencies,
+  callContext: McpToolCallContext = {},
+): Promise<McpToolPayload> {
+  const revision = required(args, "revision");
+  if (!/^[0-9a-f]{7,40}$/i.test(revision)) throw new Error("revision must be a commit SHA or prefix of at least 7 characters");
+  const seat = deploySeatAuthority(dependencies, revision);
+  const assertSeat = () => {
+    const current = deploySeatAuthority(dependencies, revision);
+    if (current.conversationId !== seat.conversationId || current.project !== seat.project) {
+      throw new McpToolRefusal("the designated deploy seat changed", { code: "deploy_caller_not_designated", retryable: false });
+    }
+  };
 
   const idempotencyKey = requestId(args);
   const pending = { conversationId: seat.conversationId, project: seat.project,
     revision: revision.toLowerCase(), requestedAt: new Date().toISOString(), idempotencyKey };
-  beginSeatDeployment(pending);
-  let receipt: Record<string, unknown>;
   try {
-    receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
+    await (dependencies.beginSeatDeployment ?? beginSeatDeployment)(pending, assertSeat);
   } catch (error) {
-    await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
-      dependencies.recordSeatDeployment);
+    if (callContext.priorAttemptUncertain && !(error instanceof McpToolRefusal)) {
+      throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because seat attribution is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
     throw error;
   }
+  assertSeat();
+  if (callContext.priorAttemptUncertain) {
+    try {
+      await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
+        dependencies.recordSeatDeployment);
+      const recovered = seatDeploymentForRequestKey(idempotencyKey);
+      if (recovered) {
+        if (recovered.conversationId !== seat.conversationId || recovered.project !== seat.project
+          || !recovered.revision.toLowerCase().startsWith(revision.toLowerCase())) {
+          throw new McpToolRefusal("the deployment request key is attributed to a different seat or revision", {
+            code: "deploy_request_key_conflict", retryable: false,
+          });
+        }
+      } else {
+        throw new McpDeploymentPendingError("the prior deploy request is still being reconciled; no new admission was sent");
+      }
+    } catch (error) {
+      if (error instanceof McpToolRefusal || error instanceof McpDeploymentPendingError) throw error;
+      throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because its receipt store is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  let receipt: Record<string, unknown>;
+  const priorAdmission = seatDeploymentForRequestKey(idempotencyKey);
+  if (priorAdmission) {
+    if (priorAdmission.conversationId !== seat.conversationId || priorAdmission.project !== seat.project
+      || !priorAdmission.revision.toLowerCase().startsWith(revision.toLowerCase())) {
+      throw new McpToolRefusal("the deployment request key is attributed to a different seat or revision", {
+        code: "deploy_request_key_conflict", retryable: false,
+      });
+    }
+    receipt = { state: "accepted", deploymentId: priorAdmission.deploymentId,
+      revision: priorAdmission.revision, replayed: true };
+  } else try {
+    receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
+  } catch (error) {
+    if (error instanceof McpToolRefusal) {
+      await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+      throw error;
+    }
+    try {
+      await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
+        dependencies.recordSeatDeployment);
+    } catch (recoveryError) {
+      throw new McpDeploymentPendingError(`deployment admission may have completed, and its receipt could not be reconciled: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`);
+    }
+    throw new McpDeploymentPendingError(error instanceof Error ? error.message : "Deployment control wait ended");
+  }
+  const matchingBusy = receipt.state === "busy" && typeof receipt.revision === "string"
+    && /^[0-9a-f]{40}$/i.test(receipt.revision) && receipt.revision.toLowerCase().startsWith(revision.toLowerCase());
+  if (matchingBusy) receipt = { ...receipt, state: "accepted" };
   if (receipt.state === "busy" || receipt.state === "refused") {
-    forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+    await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
   }
   /* #2063: the ledger never learns who asked, and the seat ends its turn so
      the promotion can replace its host. Recording the pair is what lets the
-     seat tick wake this seat when the deployment settles. A `busy` receipt
-     names someone else's deployment, which is not this seat's to be woken on.
+     seat tick wake this seat when the deployment settles. A matching busy
+     receipt joins the same SHA; a different SHA remains a busy refusal.
      A failed write costs the wake and nothing else: the deployment is
      already admitted, so the answer says so rather than failing the call. */
   let wakeOnSettle = false;
   if (receipt.state === "accepted" && typeof receipt.deploymentId === "string" && receipt.deploymentId) {
     try {
-      (dependencies.recordSeatDeployment ?? recordSeatDeployment)({
+      assertSeat();
+      await (dependencies.recordSeatDeployment ?? recordSeatDeployment)({
         deploymentId: receipt.deploymentId,
         conversationId: seat.conversationId,
         project: seat.project,
         revision: typeof receipt.revision === "string" ? receipt.revision : revision.toLowerCase(),
         requestedAt: pending.requestedAt,
         idempotencyKey,
-      });
-      forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+      }, assertSeat);
+      await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
       wakeOnSettle = true;
     } catch (error) {
       console.error(`[deploy_exact_sha] could not record the seat for deployment ${receipt.deploymentId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -4630,15 +4715,23 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   }
 
   const own = callerProject ? canonicalOrchestratorProject(callerProject) : null;
+  // Read designation separately from write authority: a temporarily missing
+  // caller project or manager grant must not turn a known seat's words into
+  // operator instructions.
+  const designatedSeat = orchestratorSeatFor(project).active;
+  const writerSeat = attribution.conversationId
+    ? orchestratorSeatIdentityForConversation(attribution.conversationId)
+    : null;
   let settings = current;
   let changed = false;
   let maintenanceNotes: string[] | undefined;
   if (Object.keys(change).length > 0) {
+    const activeSeat = own === project ? designatedSeat : null;
     const actor: SeatTickSettingsActor = {
       kind: attribution.kind,
       conversationId: attribution.conversationId,
       project: own,
-      seatEpoch: own === project ? orchestratorSeatFor(project).active?.seatEpoch ?? null : null,
+      seatEpoch: activeSeat?.conversationId === attribution.conversationId ? activeSeat.seatEpoch : null,
       ...(attribution.via ? { via: attribution.via } : {}),
     };
     const review = change.autonomyDecision?.review;
@@ -4647,9 +4740,23 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
       if (round) review.reviewId = round.id;
       if (!round || round.nativeAssociation || canonicalOrchestratorProject(round.project || project) !== project) throw new Error("autonomy cannot decide this form");
     }
+    // Instruction authorship is separate from the existing control authority.
+    // A temporarily unavailable manager grant cannot make a recorded seat's
+    // words operator-authored. The designation still proves its authorship.
+    let instructionActor = actor;
+    if (attribution.kind === "gateway") {
+      const designatedWriter = writerSeat;
+      if (designatedWriter) {
+        instructionActor = { ...actor, kind: "manager", project: canonicalOrchestratorProject(designatedWriter.project), seatEpoch: designatedWriter.seatEpoch };
+      } else if (callerSeat?.conversationId === attribution.conversationId) {
+        const authorizedProject = callerSeat.project ? canonicalOrchestratorProject(callerSeat.project) : own;
+        instructionActor = { ...actor, kind: "manager", project: authorizedProject, seatEpoch: null };
+      }
+    }
+    const context = { at: new Date().toISOString(), actor, instructionActor };
     const applied = dependencies.writeTickSettings || dependencies.readTickSettings
-      ? applySeatTickSettingsChange(current, change, { at: new Date().toISOString(), actor })
-      : changeSeatTickSettings(project, change, { at: new Date().toISOString(), actor });
+      ? applySeatTickSettingsChange(current, change, context)
+      : changeSeatTickSettings(project, change, context);
     if (!applied.ok) throw new Error(applied.error);
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
     if (dependencies.writeTickSettings || dependencies.readTickSettings) writeSettings(project, applied.settings);
@@ -4683,7 +4790,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const reportAsk = quieted && bridgeReportsEnabled(project) ? seatTickReportAsk(project, dependencies) : {};
 
   const verbose = args.verbose === true || args.full === true;
-  const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
+  const { monitorPrompt: storedPrompt, reason: storedReason, instructionLines: storedInstructions, ...settingsWithoutPrompt } = settings;
   delete settingsWithoutPrompt.maintenance;
   delete settingsWithoutPrompt.curation;
   delete settingsWithoutPrompt.autoRotate;
@@ -4727,7 +4834,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
        caller's own is allowed, and the answer says so out loud. */
     callerProject: own,
     scope: own === project ? "own-project" : "other-project",
-    settings: verbose ? { ...settingsWithoutPrompt, reason: storedReason } : compactSettings,
+    settings: verbose ? { ...settingsWithoutPrompt, reason: storedReason, instructionLines: storedInstructions } : compactSettings,
     /* The stored note is an explicit read; its length acknowledges a write. The wake shows
        only a marked preview of a long note; this is the whole of it. */
     ...(echoPrompt ? { monitorPrompt: storedPrompt } : {}),
@@ -4737,7 +4844,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     ...(maintenanceNotes ? { notes: maintenanceNotes } : {}),
     /* A full read names nothing it left out (#2030). */
     ...(echoPrompt ? {} : {
-      omittedFieldCount: 1,
+      omittedFieldCount: storedInstructions ? 2 : 1,
       readMore: "seat_tick_settings verbose:true reads the full record.",
     }),
     effective: {
@@ -4925,7 +5032,7 @@ async function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainD
     });
   } catch (error) {
     if (error instanceof RoleStoreError || error instanceof FileTransactionBusyError) throw error;
-    /* The store put the file back when the record failed, so nothing changed. */
+    /* The store rolled the SQLite transaction back when the record failed. */
     throw new McpToolRefusal(
       `the role mapping was not changed: it could not be written together with its audit record (${error instanceof Error ? error.message : String(error)})`,
       { code: "role_presets_audit_unavailable" },
@@ -7276,7 +7383,7 @@ async function escalateThroughService(
        wait escalated to it would leave the seat for a form nobody sees. */
     const summary = task ? withPrototypeReviewSummaries([task])[0]?.prototypeReview : undefined;
     const seatNotice = seatRound ? seatDecisionNotices(project).find(notice => notice.reviewId === round.reviewId && !notice.undelivered) : undefined;
-    if (task ? !prototypeWaitsOnOperator(summary) || summary?.waitingReviewId !== round.reviewId : !seatNotice) {
+    if (task ? !prototypeWaitsOnOperator(summary, task) || summary?.waitingReviewId !== round.reviewId : !seatNotice) {
       throw new McpToolRefusal(`decision round ${round.reviewId} no longer waits: read it with read_prototype_review and carry its answer to the asker`, { code: "ROUND_NOT_WAITING" });
     }
     taskId = task?.id ?? null;
@@ -7967,7 +8074,17 @@ export function viewerMcpBindings(
         const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
         if (typeof assertAdmission === "function") assertAdmission();
         const pass = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
-        if (args.action !== "read") return applyCuration(pass, args as unknown as CurationApply);
+        if (args.action !== "read") {
+          const result = await withViewerOperation("memory.import.curation", () => waitForStateLock("memory.import.curate", () => {
+            if (typeof assertAdmission === "function") assertAdmission();
+            const fresh = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+            return applyCuration(fresh, args as unknown as CurationApply, undefined, { refreshKnownValues: !fresh.importBatch });
+          }));
+          if (pass.importBatch) await refreshCurationKnownValuesAsync();
+          if (typeof assertAdmission === "function") assertAdmission();
+          curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+          return result;
+        }
         const result = await readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined);
         if (typeof assertAdmission === "function") assertAdmission();
         curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
@@ -7999,7 +8116,10 @@ export function viewerMcpBindings(
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),
     conversation_messages: reads.conversation_messages,
-    deploy_exact_sha: (args, context) => deployExactSha(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    deploy_exact_sha: Object.assign(
+      (args: McpToolArgs, context?: McpToolCallContext) => deployExactSha(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
+      { authorizeReceipt: () => { deploySeatAuthority(domainDependencies); } },
+    ),
     get_pipeline: reads.get_pipeline,
     board_snapshot: (args) => boardSnapshot(args, domainDependencies),
     list_flows: (args) => Promise.resolve(listFlows(args, domainDependencies)),
@@ -8044,7 +8164,7 @@ export function viewerMcpBindings(
     seat_tick_settings: orchestratorProjectBinding(domainDependencies, (args) => seatTickSettingsTool(args, domainDependencies), true),
     /* Async bindings expose synchronous refusals as rejected promises. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
-    role_presets: async (args) => rolePresetsTool(args, domainDependencies),
+    role_presets: async (args) => waitForStateLock("mcp.role-presets", () => rolePresetsTool(args, domainDependencies)),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)), false, false),

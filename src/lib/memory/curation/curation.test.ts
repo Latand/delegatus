@@ -6,6 +6,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AgentRegistry } from "@/lib/agent/registry";
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { stopWorktreeSweepWorker } from "@/lib/pipelines/worktreeSweepWorker";
 import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
 import { input as tickInput } from "@/lib/boardMaintenance/testFixture";
 import { roleIsClean } from "../eligibility";
@@ -13,7 +15,7 @@ import { ROLE_MEMORY_BOUND, CURATION_INTERVAL_MS, type RoleMemoryRule, type Rule
 import { scopeChars } from "../roleConsolidate";
 import { canonicalScope, leaveLessons, newRuleId, projectView, recordLessonRequest, learnedRulesBlock, roleMemoryCollection, roleScope, projectScope, restoreRule, deleteRule, storedLessonTexts } from "../roleStore";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
-import { claimPass, currentPass, curationPanelRuns, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
+import { claimPass, readPassAuthority, currentPassAuthority, machinePassAuthority, passForConversationAuthority, currentPass, curationPanelRuns, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
 import { curatorCallerOf } from "./guard";
 import { readCuration } from "./read";
 import { productionCurationController } from "./run";
@@ -47,7 +49,16 @@ beforeEach(() => {
   process.env.LLV_STATE_DIR = dir;
   fs.writeFileSync(path.join(dir, "AGENTS.md"), "Run the repository checks before publication.\n");
 });
-afterEach(() => { process.env.LLV_STATE_DIR = previous; if (previous === undefined) delete process.env.LLV_STATE_DIR; fs.rmSync(dir, { recursive: true, force: true }); resetProjectAliasesForTests(); });
+async function cleanupFixture() {
+  // The inherited disk-pressure source keeps a leased helper between reads.
+  // End this fixture's helper before its state and lease record disappear.
+  await stopWorktreeSweepWorker();
+  process.env.LLV_STATE_DIR = previous;
+  if (previous === undefined) delete process.env.LLV_STATE_DIR;
+  fs.rmSync(dir, { recursive: true, force: true });
+  resetProjectAliasesForTests();
+}
+afterEach(cleanupFixture);
 function row(id: string): RoleMemoryRule {
   const held = roleMemoryCollection()!.get(`r:${id}`);
   if (held?.kind !== "rule") throw Error("rule missing");
@@ -151,6 +162,26 @@ function hostingFixture() {
     observe: async () => ({ state: "running" as const }), archive: () => {} };
   return { sources, seats, lives, bodies, seat, ports, controller: productionCurationController(sources, ports), tick: { ...tickInput(), project: PROJECT, now: NOW } };
 }
+// Helper lease records carry kernel identities on Linux.
+test.skipIf(process.platform !== "linux")("curation fixture cleanup stops its recorded disk-pressure helper", async () => {
+  const f = hostingFixture();
+  await f.sources.diskPressure!();
+  const records = fs.readdirSync(path.join(dir, "helpers")).filter(file => file.endsWith(".json"))
+    .map(file => JSON.parse(fs.readFileSync(path.join(dir, "helpers", file), "utf8")))
+    .filter(record => record.name === "worktree-sweep" && record.ownerPid === process.pid);
+  expect(records).toHaveLength(1);
+  const [record] = records;
+  expect(record.ownerIdentity).toBe(captureProcessIdentity(process.pid).startIdentity);
+  const identities = [captureProcessIdentity(record.pid, undefined, record.identity),
+    captureProcessIdentity(record.group, undefined, record.groupIdentity)];
+  for (const identity of identities) expect(processIdentityStatus(identity)).toBe("alive");
+
+  await cleanupFixture();
+
+  for (const identity of identities) expect(processIdentityStatus(identity)).toBe("dead");
+  expect(fs.existsSync(dir)).toBe(false);
+}, 15_000);
+
 test("curator admission joins a hidden system task without an open board task", async () => {
   fixture(); const f = hostingFixture(); f.seat();
   expect(await f.controller.launchIfDue(f.tick)).toContain("launched");
@@ -1088,4 +1119,58 @@ test("a foreign read scope refuses before requesting pipeline history",async () 
     await expect(readCuration(p,roleScope("foreign-project","builder"))).rejects.toMatchObject({code:"CURATE_SCOPE"});
     expect(history).not.toHaveBeenCalled();
   } finally {history.mockRestore();}
+});
+
+
+test("authority reads never decode scope history across tenfold growth and still see terminal transitions", async () => {
+  fixture();
+  const live = pass();
+  patchPass(live.id, { state: "running", conversationId: "conversation_authority" });
+  const memory = roleMemoryCollection()!;
+  for (const count of [10, 100]) {
+    memory.boundedPatch(2, tx => {
+      const row = tx.get(`s:${roleScope(PROJECT, "builder")}`);
+      if (row?.kind !== "scope") throw Error("missing scope");
+      tx.put({ ...row, history: Array.from({ length: count }, (_, n) => ({ revision: n + 1, at: at(n), by: "curator" as const,
+        pass: live.id, counts: { ...live.counts, calls: 1 }, before: [], added: [], merged: [], archived: [] })) });
+    });
+    const peer = new Database(path.join(dir, "state.sqlite"));
+    try {
+      const retained = Array.from({ length: count / 2 }, (_, n) => `curate_history_${n}`);
+      for (const id of retained) peer.query("INSERT OR REPLACE INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('role_memory_curation',?,?,100,1,0)")
+        .run(`r:${id}`, JSON.stringify({ ...live, id, state: "succeeded", endedAt: at(1), conversationId: null }));
+      peer.query("UPDATE state_rows SET value_json=json_set(value_json,'$.passes',json(?)),row_revision=row_revision+1 WHERE collection='role_memory_curation' AND row_key=?")
+        .run(JSON.stringify([...retained, live.id]), `p:${PROJECT}`);
+    } finally { peer.close(); }
+    const get = spyOn(memory, "get"), range = spyOn(memory, "keyRange");
+    const prototype = SqliteStateCollection.prototype as unknown as { decodeRow(json: string, db?: Database): unknown };
+    const decode = prototype.decodeRow;
+    let scopeDecodes = 0;
+    const decoding = spyOn(prototype, "decodeRow").mockImplementation(function (this: typeof prototype, json, db) {
+      if (JSON.parse(json)?.kind === "scope") scopeDecodes++;
+      return decode.call(this, json, db);
+    });
+    try {
+      expect(readPassAuthority(live.id)?.state).toBe("running");
+      expect(currentPassAuthority(PROJECT)?.id).toBe(live.id);
+      expect(machinePassAuthority()?.id).toBe(live.id);
+      expect(passForConversationAuthority("conversation_authority")?.id).toBe(live.id);
+      patchPass(live.id, { transcriptPath: "fixture-path" });
+      expect(get).not.toHaveBeenCalled(); expect(range).not.toHaveBeenCalled();
+      expect(scopeDecodes).toBe(0);
+    } finally { get.mockRestore(); range.mockRestore(); decoding.mockRestore(); }
+    expect(readPass(live.id)?.counts.calls).toBe(count);
+    const cold = readPass(live.id)!;
+    cold.counts.calls = -1;
+    const scopes = spyOn(memory, "keyRange");
+    try { expect(readPass(live.id)?.counts.calls).toBe(count); expect(scopes).not.toHaveBeenCalled(); }
+    finally { scopes.mockRestore(); }
+  }
+  const child = Bun.spawn([process.execPath, "--eval", `import { readPass, readPassAuthority, machinePassAuthority } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify({ state: readPassAuthority(${JSON.stringify(live.id)})?.state, id: machinePassAuthority()?.id, calls: readPass(${JSON.stringify(live.id)})?.counts.calls }));`], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(child.stdout).text();
+  expect(await child.exited).toBe(0);
+  expect(JSON.parse(output)).toEqual({ state: "running", id: live.id, calls: 100 });
+  patchPass(live.id, { state: "succeeded", endedAt: at(1000) });
+  expect(readPassAuthority(live.id)?.state).toBe("succeeded");
+  expect(machinePassAuthority()).toBeNull();
 });

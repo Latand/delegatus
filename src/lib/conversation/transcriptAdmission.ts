@@ -157,3 +157,13 @@ export function admitTranscriptConversation(
   if (!conversation) return { ok: false, reason: "the viewer could not record an identity for this conversation" };
   return { ok: true, conversationId: conversation.id };
 }
+
+/** Liveness, readability and account provenance are read after writer admission. */
+export async function admitTranscriptConversationOffLoop(
+  registry: AgentRegistry, entry: FileEntry, dependencies: TranscriptAdmissionDependencies = {},
+): Promise<TranscriptAdmission> {
+  // This branch is a pure refusal and needs no registry writer.
+  if (entry.engine !== "claude" && entry.engine !== "codex") return admitTranscriptConversation(registry, entry, dependencies);
+  return registry.deliveryWriteOrBusy({ label: "registry.transcript-admission" }, () =>
+    admitTranscriptConversation(registry, entry, dependencies));
+}

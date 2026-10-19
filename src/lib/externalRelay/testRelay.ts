@@ -9,12 +9,14 @@ export async function startTestRelay(
         body?: unknown;
         headers?: Record<string, string>;
         drop?: boolean;
+        raw?: Buffer;
       }
     | Promise<{
         status?: number;
         body?: unknown;
         headers?: Record<string, string>;
         drop?: boolean;
+        raw?: Buffer;
       }>,
 ) {
   const server = http.createServer(async (req, res) => {
@@ -33,7 +35,7 @@ export async function startTestRelay(
         "content-type": "application/json",
         ...answer.headers,
       });
-      res.end(answer.body === undefined ? "" : JSON.stringify(answer.body));
+      res.end(answer.raw ?? (answer.body === undefined ? "" : JSON.stringify(answer.body)));
     } catch {
       if (!res.headersSent) res.writeHead(500);
       res.end();

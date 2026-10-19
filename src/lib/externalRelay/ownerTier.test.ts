@@ -205,6 +205,13 @@ test("production owner observation scrubs raw transcript answers before ordinary
       expect(spawnNoticeFinalMessage(id).text).toContain(value.slice(0, 27));
       const observed = await observeOwnerTurn({ clientAttemptId: "relay-owner-reader-fixture", claimedAt: new Date(0).toISOString() }, sources);
       expect(observed).toMatchObject({ state: "ended", finalText: "[redacted]", turnError: null });
+      const source = "  😀 Person  ";
+      fs.writeFileSync(transcript, JSON.stringify(engine === "codex"
+        ? { payload: { type: "task_complete", last_agent_message: source } }
+        : { type: "assistant", message: { content: [{ type: "text", text: source }] } }) + "\n");
+      expect(spawnNoticeFinalMessage(id).text).toBe(source.trim());
+      expect(await observeOwnerTurn({ clientAttemptId: "relay-owner-reader-fixture", claimedAt: new Date(0).toISOString() }, sources))
+        .toMatchObject({ state: "ended", finalText: source });
       fs.writeFileSync(transcript, JSON.stringify(engine === "codex"
         ? { payload: { type: "turn_aborted", reason: value } }
         : { type: "system", level: "error", content: value }) + "\n");
@@ -553,9 +560,9 @@ test("continuation observation waits for an assistant after the delivered user",
     expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "running" });
     fs.appendFileSync(transcript, Array.from({ length: 144 }, (_, index) => JSON.stringify({ timestamp: `2026-10-17T12:00:00.${String(index).padStart(3, "0")}Z`,
       payload: { type: "tool_output", message: "x".repeat(64 * 1024) } })).join("\n") + "\n");
-    fs.appendFileSync(transcript, JSON.stringify({ timestamp: "2026-10-17T12:00:01Z", payload: { type: "agent_message", message: "New answer" } }) + "\n");
+    fs.appendFileSync(transcript, JSON.stringify({ timestamp: "2026-10-17T12:00:01Z", payload: { type: "agent_message", message: "  😀 New answer  " } }) + "\n");
     expect(fs.statSync(transcript).size).toBeGreaterThan(8 * 1024 * 1024);
-    expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "ended", finalText: "New answer" });
+    expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "ended", finalText: "  😀 New answer  " });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -581,9 +588,9 @@ test("Claude continuation observation retains a delivered turn across large tool
       message: { content: [{ type: "tool_result", content: "x".repeat(64 * 1024) }] } })).join("\n") + "\n");
     expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "running" });
     fs.appendFileSync(transcript, JSON.stringify({ type: "assistant", timestamp: "2026-10-17T12:00:01Z",
-      message: { content: [{ type: "text", text: "New Claude answer" }] } }) + "\n");
+      message: { content: [{ type: "text", text: "  😀 New Claude answer  " }] } }) + "\n");
     expect(fs.statSync(transcript).size).toBeGreaterThan(8 * 1024 * 1024);
-    expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "ended", finalText: "New Claude answer" });
+    expect(await observeOwnerContinuation(turn, sources, receipt as never)).toMatchObject({ state: "ended", finalText: "  😀 New Claude answer  " });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -623,6 +630,35 @@ test("Codex and Claude continuation readers skip one oversized record without lo
       expect(await observation()).toMatchObject({ state: "ended", finalText: "New answer" });
       writeRecords(...olderContext, oldAnswer, deliveredUser, oversized);
       expect(await observation()).toMatchObject({ state: "running" });
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("owner continuation preserves source scalars across a reverse read boundary", async () => {
+  const { observeOwnerContinuation } = await import("./ownerRun");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-source-boundary-"));
+  const at = "2026-10-17T12:00:00Z";
+  try {
+    for (const engine of ["codex", "claude"] as const) {
+      const id = `conversation_boundary_${engine}`, transcript = path.join(root, `${engine}.jsonl`);
+      const registry = { conversation: () => ({ id, engine, generations: [{ path: transcript }] }) } as unknown as AgentRegistry;
+      const sources = { registry: () => registry, liveness: async () => [{ reason: "host_alive_turn_idle", lastRecordAt: "2026-10-17T12:00:02Z" }], now: () => Date.parse("2026-10-17T12:00:03Z") } as unknown as Pick<SeatTickSources, "registry" | "liveness" | "now">;
+      const turn = { clientAttemptId: `relay-owner-boundary-${engine}`, conversationId: id, claimedAt: at, continuation: { operationId: `relay-owner-boundary-${engine}` } };
+      const user = engine === "codex" ? { timestamp: at, payload: { type: "user_message", message: "Hello" } }
+        : { timestamp: at, type: "user", message: { content: [{ type: "text", text: "Hello" }] } };
+      let source = "", content = Buffer.alloc(0);
+      for (let pad = 0; pad < 4; pad++) {
+        source = "😀".repeat(18000) + " Person" + " ".repeat(pad);
+        const answer = engine === "codex" ? { payload: { type: "task_complete", last_agent_message: source } }
+          : { type: "assistant", message: { content: [{ type: "text", text: source }] } };
+        content = Buffer.from(JSON.stringify(user) + "\n" + JSON.stringify(answer) + "\n");
+        if ((content[content.length - 65536]! & 0xc0) === 0x80) break;
+      }
+      expect(content[content.length - 65536]! & 0xc0).toBe(0x80);
+      fs.writeFileSync(transcript, content);
+      const observed = await observeOwnerContinuation(turn, sources, async () => ({ state: "delivered", acceptedAt: at, settledAt: at, conversationId: id }));
+      expect(observed.state).toBe("ended");
+      expect(observed.finalText === source).toBe(true);
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
