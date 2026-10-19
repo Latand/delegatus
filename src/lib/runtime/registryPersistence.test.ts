@@ -400,3 +400,32 @@ test("durable registry hydration drops malformed memory timestamps and preserves
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// This case also runs, unchanged, on the pre-admission implementation as the red control.
+test("a child-held writer leaves the initial host checkpoint loop below 50 ms", async () => {
+  const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "host-checkpoint-measurement-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), () => false, undefined, { sqliteMode: "sqlite" });
+  const state = hostState();
+  registry.upsert({ key: KEY, artifactPath: "/sessions/checkpoint.jsonl", cwd: "/repo", accountId: null,
+    status: "idle", host: null, claimEpoch: 1, claimOwner: "checkpoint-owner", pendingAction: null,
+    structuredHost: { kind: "codex-app-server", endpoint: state.endpoint,
+      process: { pid: state.pid!, startIdentity: state.processStartIdentity }, eventCursor: 0,
+      protocolVersion: "1", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  const holder = registryLockHolder(path.join(directory, "registry.sqlite"));
+  let pulse: ReturnType<typeof setInterval> | undefined;
+  try {
+    await holder.hold(180);
+    const start = performance.now();
+    let last = start;
+    let maxGap = 0;
+    pulse = setInterval(() => { const at = performance.now(); maxGap = Math.max(maxGap, at - last); last = at; }, 5);
+    const stop = await bindCodexHostPersistence(registry, KEY, new RecordingHost() as unknown as CodexAppServerHost, "checkpoint-owner", 1);
+    await new Promise<void>(resolve => setTimeout(resolve, 5));
+    maxGap = Math.max(maxGap, performance.now() - last);
+    clearInterval(pulse);
+    await stop();
+    console.info(`[host checkpoint measurement] hold=180 ms maxGap=${maxGap.toFixed(2)} ms`);
+    expect(maxGap).toBeLessThan(50);
+  } finally { clearInterval(pulse); await holder.close(); registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});

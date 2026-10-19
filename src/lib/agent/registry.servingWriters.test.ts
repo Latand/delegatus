@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { createManagedClaudeAccount, activeClaudeAccountId } from "@/lib/accounts/claude";
+import { listCodexAccounts } from "@/lib/accounts/codex";
+import { loadTasks } from "@/lib/tasks/store";
+import { createManagedClaudeAccount, activeClaudeAccountId, listClaudeAccounts } from "@/lib/accounts/claude";
 import { selectAccount } from "@/lib/accounts/manager";
 import { successorCapability } from "@/lib/accounts/migration/provider";
 import { admitTranscriptConversationOffLoop } from "@/lib/conversation/transcriptAdmission";
@@ -38,6 +40,10 @@ afterEach(() => {
 });
 
 function fixture() {
+  // Serving commands have already resolved their account and board catalogs.
+  // Initialize those prerequisites in this private installation, before timing
+  // the registry wait and its recovery; no measured registry operation is warmed.
+  listClaudeAccounts(); listCodexAccounts(); loadTasks();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "registry-serving-"));
   roots.push(root);
   const registry = new AgentRegistry(path.join(root, "registry.json"), () => false, undefined, { sqliteMode: "sqlite" });
@@ -78,12 +84,12 @@ async function held<T>(f: ReturnType<typeof fixture>, operation: () => Promise<T
     const sample = await progress;
     await new Promise<void>(resolve => setTimeout(resolve, 5));
     maxGap = Math.max(maxGap, performance.now() - previousTick);
+    console.info(`[registry serving timer] first=${sample.elapsed.toFixed(2)} ms maxGap=${maxGap.toFixed(2)} ms`);
     expect(maxGap).toBeLessThan(50);
     if (!revoke) expect(sample.pending).toBe(true);
     expect(sample.elapsed).toBeLessThan(50);
     expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
     expect(blockingWaitDiagnostics().sites["registry-revision-retry"]).toBeUndefined();
-    console.info(`[registry serving timer] first=${sample.elapsed.toFixed(2)} ms maxGap=${maxGap.toFixed(2)} ms`);
     if ("error" in result) throw result.error;
     return result.value;
   } finally {
@@ -300,18 +306,16 @@ test("dead host and startup demotion callbacks take admission on each pass", asy
   } finally { f.registry.close(); }
 });
 
-for (const missingConversation of [false, true]) test(`demotion handoff admits its marker and obligation (missingConversation=${missingConversation})`, async () => {
+for (const noOwedTurn of [false, true]) test(`demotion handoff admits its marker and obligation (noOwedTurn=${noOwedTurn})`, async () => {
   const f = fixture();
-  const state = { ...seedHost(f), status: "active" as const, activeTurnRef: "fixed-turn" };
+  const state = { ...seedHost(f), status: "active" as const, activeTurnRef: noOwedTurn ? null : "fixed-turn" };
   const entry = f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]!;
-  const artifactPath = missingConversation ? "/sessions/uninventoried.jsonl" : f.artifactPath;
-  f.registry.upsert({ ...entry, artifactPath, structuredHost: { ...entry.structuredHost!,
+  f.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!,
     process: captureProcessIdentity(state.pid!, undefined, state.processStartIdentity) } });
-  if (missingConversation) f.registry.restoreSnapshot({ ...f.registry.snapshot(), conversations: {}, conversationAliases: {} });
   try {
     expect(await held(f, () => handOverHostForDemotion(f.registry, KEY, state, { seats: () => [] }, async () => state))).toBe(true);
     expect(f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]?.pendingAction).toBe("handoff");
-    expect(interruptionObligationStore(interruptionObligationDirectory(f.registry.filename)).list()).toHaveLength(missingConversation ? 0 : 1);
+    expect(interruptionObligationStore(interruptionObligationDirectory(f.registry.filename)).list()).toHaveLength(noOwedTurn ? 0 : 1);
   } finally { f.registry.close(); }
 });
 
@@ -324,8 +328,10 @@ for (const pass of [false, true]) test(`dead-host reconciliation preserves custo
   const replace = () => f.registry.upsert({ ...entry, claimOwner: "replacement", claimEpoch: 8,
     structuredHost: { ...entry.structuredHost!, writerClaimEpoch: 8 } });
   try {
-    await held(f, () => pass ? reconcileDeadStructuredRegistryHostsOffLoop(f.registry, () => false, replace)
-      : reconcileDeadStructuredRegistryHostOffLoop(f.registry, conversation.id, KEY, replace));
+    await held(f, async () => {
+      if (pass) await reconcileDeadStructuredRegistryHostsOffLoop(f.registry, () => false, replace);
+      else await reconcileDeadStructuredRegistryHostOffLoop(f.registry, conversation.id, KEY, replace);
+    });
     expect(f.registry.readOnlySnapshot().entries[`codex:${SESSION}`]).toMatchObject({ claimOwner: "replacement", claimEpoch: 8 });
   } finally { f.registry.close(); }
 });

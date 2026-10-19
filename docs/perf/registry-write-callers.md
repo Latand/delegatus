@@ -175,8 +175,13 @@ The exact columns were read against the retained compiled chunks of those
 revisions. The corresponding loop-gap payloads have no JS profile, so there is
 no profiler frame to strengthen the third attribution. The first two stacks
 identify the actual mutation, independent of the minified subject `l`.
-The third row records the proven callback boundary and the limit of the evidence;
-it does not assign a minified subject to an unrecorded method.
+The third row's caller family is resolved by the matching startup chunk:
+`63573.js:7:38541` ends the demotion admission callback in a synchronous
+`b()` (`mutation()` in source). The other callbacks under that boundary read
+pipeline evidence or use the already-admitted `claimStructuredHost`. This is a
+reachability inference from the retained code and the exact logged boundary;
+the stack cannot distinguish the demotion helper's dead-row reconciliation,
+claim and terminal-checkpoint mutations.
 
 The seat's post-deploy acceptance query is a complete 24-hour window of
 `[blocking-wait]` payloads with `role == "viewer"`, `synchronous == true`
@@ -363,7 +368,10 @@ The synchronous store remains available to CLI/helper processes and admitted
 callback bodies. The serving-caller completion above records their production
 entry points. `src/lib/agent/registry.servingWriters.test.ts` holds the writer in a
 child process for each moved family and requires a 10 ms timer to run within
-50 ms while the operation remains pending. Revocation cases repeat the guards
+50 ms while the operation remains pending. A 5 ms observer also bounds gaps
+through recovery. These serving fixtures initialize their private account and
+board catalogs before timing, as the production command prerequisites do;
+registry operations are not prewarmed. Revocation cases repeat the guards
 after admission. `src/lib/runtime/registryPersistence.test.ts` retains its
 coalescing, ordered transition and terminal-custody assertions.
 

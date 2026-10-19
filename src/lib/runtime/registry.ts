@@ -1,3 +1,4 @@
+import { CODEX_MISSING_ROLLOUT_REASON, isMissingCodexRolloutError } from "./hostEndCause";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import type {
   AgentHostStatus,
@@ -823,6 +824,12 @@ export async function demoteSkippedStructuredRegistryHosts(
   }
 }
 
+/** A terminal boot refusal remains on the row until an explicit resume replaces it. */
+export function codexBootAdoptionRetired(entry: AgentRegistryEntry): boolean {
+  return entry.key.engine === "codex" && entry.structuredHost?.kind === "codex-app-server"
+    && entry.structuredHost.ended?.reason === CODEX_MISSING_ROLLOUT_REASON;
+}
+
 /** Boot seam: resume selected durable Codex rows when structured hosting is enabled. */
 export async function adoptCodexRegistryHosts(
   registry: AgentRegistry,
@@ -842,10 +849,11 @@ export async function adoptCodexRegistryHosts(
   } = {},
 ): Promise<AdoptedCodexHost[]> {
   if (!structuredHostsEnabled(env)) return [];
+  const candidate: StructuredHostAdoptionFilter = entry => !codexBootAdoptionRetired(entry) && shouldAdopt(entry);
   const rows = registry.structuredHostEntries().filter((entry) =>
     entry.key.engine === "codex"
     && entry.structuredHost?.kind === "codex-app-server"
-    && shouldAdopt(entry));
+    && candidate(entry));
   const adopted: AdoptedCodexHost[] = [];
   for (const [index, entry] of rows.entries()) {
     if (index > 0 && index % 16 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -853,7 +861,7 @@ export async function adoptCodexRegistryHosts(
     try {
       await registry.withOperationLock(entry.key, owner, async () => {
         const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
-        if (!current?.structuredHost || !shouldAdopt(current)) return;
+        if (!current?.structuredHost || !candidate(current)) return;
         const socketOwner = current.structuredHost.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
           ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process } : undefined;
         let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner }))));
@@ -864,15 +872,15 @@ export async function adoptCodexRegistryHosts(
             : null;
           if (orphan
             && current
-            && shouldAdopt(current)
+            && candidate(current)
             && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, dependencies.orphanStop)) {
             const retry = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
-            if (!retry?.structuredHost || !shouldAdopt(retry)) return;
+            if (!retry?.structuredHost || !candidate(retry)) return;
             claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
           }
         }
         if (!claimed?.structuredHost) return;
-        if (!shouldAdopt(claimed)) {
+        if (!candidate(claimed)) {
           (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
           return;
         }
@@ -908,7 +916,7 @@ export async function adoptCodexRegistryHosts(
           const fresh = registry.readOnlySnapshot();
           const current = fresh.entries[sessionKeyId(entry.key)];
           if (!current || !registry.ownsStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch)
-            || !shouldAdopt(current) || (dependencies.admit ?? adoptionRefusal)(current, fresh)) {
+            || !candidate(current) || (dependencies.admit ?? adoptionRefusal)(current, fresh)) {
             (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
             options.releaseCleanup?.();
             return;
@@ -937,10 +945,12 @@ export async function adoptCodexRegistryHosts(
             } catch { /* retain the live process and claim until its late reap is observed */ }
             return;
           }
-          // A refused cell (work that cannot be contained) or a failed open; the next message relaunches it.
+          // The thread is terminal only on an explicit native missing-rollout refusal.
+          // Dropping its socket reference leaves a shared app-server alive.
           dependencies.onFailure?.(entry, error);
-          console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
-          if (socketOwner && !processIdentityProvenDead(socketOwner.process)) {
+          const missingRollout = isMissingCodexRolloutError(error);
+          console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${missingRollout ? CODEX_MISSING_ROLLOUT_REASON : error instanceof Error ? error.message : String(error)}`);
+          if (!missingRollout && socketOwner && !processIdentityProvenDead(socketOwner.process)) {
             (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
             return;
           }
@@ -951,7 +961,11 @@ export async function adoptCodexRegistryHosts(
             activeTurnRef: null,
             pendingAttention: [],
             activeFlags: [],
-          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true)));
+            ...(missingRollout ? { ended: {
+              kind: "host-fault" as const, reason: CODEX_MISSING_ROLLOUT_REASON,
+              code: null, signal: null, signalledByHost: false, at: new Date().toISOString(),
+            } } : {}),
+          }, missingRollout ? "unhosted" : "dead", claimed.claimOwner!, claimed.claimEpoch, true)));
         }
       });
     } catch (error) {

@@ -79,6 +79,27 @@ test("a failed batch member rolls back its draft and subsequent members still co
   } finally { reopened.close(); }
 });
 
+test("a refused batch commit discards cached drafts and permits a fresh writer", async () => {
+  const f = store("batch-commit-refusal");
+  const before = structuredClone(f.store.readOnlySnapshot().file.engineRouting);
+  const execute = Database.prototype.exec;
+  let refuse = false;
+  const fault = spyOn(Database.prototype, "exec").mockImplementation(function (this: Database, sql: string) {
+    if (refuse && sql === "COMMIT") { refuse = false; throw new Error("batch commit refused"); }
+    return execute.call(this, sql);
+  });
+  try {
+    await expect(f.store.withWriter(() => f.store.withMutationBatch(() => {
+      f.store.mutate(file => { file.engineRouting.codex.activeAccountId = "discarded"; }, false);
+      expect(f.store.readOnlySnapshot().file.engineRouting.codex.activeAccountId).toBe("discarded");
+      refuse = true;
+    }))).rejects.toThrow("batch commit refused");
+    expect(f.store.readOnlySnapshot().file.engineRouting).toEqual(before);
+    await f.store.withWriter(() => f.store.mutate(file => { file.engineRouting.codex.activeAccountId = "accepted"; }, false));
+    expect(f.store.readOnlySnapshot().file.engineRouting.codex.activeAccountId).toBe("accepted");
+  } finally { fault.mockRestore(); f.store.close(); }
+});
+
 function store(name: string): { store: SqliteAgentRegistryStore; filename: string } {
   const registry = new AgentRegistry(path.join(root, `${name}.json`), undefined, undefined, { sqliteMode: "off" });
   registry.reconcileConversations([{ engine: "codex", path: `/sessions/${name}.jsonl`, accountId: "default",

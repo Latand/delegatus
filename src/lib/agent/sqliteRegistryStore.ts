@@ -3274,7 +3274,12 @@ export class SqliteAgentRegistryStore {
     finally {
       this.mutationBatch = false;
       try { this.db.exec("COMMIT"); }
-      finally { this.writerHeld = false; }
+      catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* SQLite may already have ended the transaction. */ }
+        // Batch reads may have cached drafts of earlier successful members.
+        this.onDatabaseReopened(this.db);
+        throw error;
+      } finally { this.writerHeld = false; }
       this.rememberRevision(Number(this.meta("revision") ?? 0));
     }
   }
