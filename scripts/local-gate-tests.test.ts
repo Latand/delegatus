@@ -590,7 +590,7 @@ test("stable", () => { record("stable"); expect(side === "base").toBe(true); });
   }
 });
 
-test.each(["recovers", "stable"] as const)("real confirmation processes rendezvous on both sides: %s", async mode => {
+test.each(["recovers", "stable", "missing-peer"] as const)("real confirmation processes rendezvous on both sides: %s", async mode => {
   const f = fixture(source(true));
   const marker = path.join(f.dir, "paired-samples");
   const scheduled = `import { test, expect } from "bun:test";
@@ -602,17 +602,16 @@ const prefix = ${JSON.stringify(marker)} + "-" + process.env.GATE_CONFIRMATION_F
 const counter = prefix + "-" + side;
 const run = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
 writeFileSync(counter, String(run));
-test("paired target", async () => {
-  if (run > 1) {
-    await new Promise<void>((resolve, reject) => {
-      const socket = createConnection({ host: "127.0.0.1", port: Number(process.env.GATE_RENDEZVOUS_PORT) });
-      socket.once("error", reject);
-      socket.once("connect", () => socket.write(JSON.stringify({ side, run }) + "\\n"));
-      socket.once("data", chunk => { socket.end(); if (chunk.toString() === "release") resolve(); else reject(new Error("invalid rendezvous release")); });
-    });
-  }
-  expect(side === "base" || (${JSON.stringify(mode)} === "recovers" && run > 1)).toBe(true);
-}, 30000);`;
+if (run === 2 && side === "head" && process.env.GATE_CONFIRMATION_FIXTURE_RUN === "0" && ${JSON.stringify(mode)} !== "missing-peer") await Bun.sleep(31000);
+if (run > 1) {
+  await new Promise<void>((resolve, reject) => {
+    const socket = createConnection({ host: "127.0.0.1", port: Number(process.env.GATE_RENDEZVOUS_PORT) });
+    socket.once("error", reject);
+    socket.once("connect", () => socket.write(JSON.stringify({ side, run }) + "\\n"));
+    socket.once("data", chunk => { socket.end(); if (chunk.toString() === "release") resolve(); else reject(new Error("invalid rendezvous release")); });
+  });
+}
+test("paired target", () => expect(side === "base" || (${JSON.stringify(mode)} === "recovers" && run > 1)).toBe(true));`;
   writeFileSync(path.join(f.dir, "example.test.ts"), scheduled);
   f.git("add", "example.test.ts"); f.git("commit", "-m", "paired process schedule");
   const base = f.git("rev-parse", "HEAD");
@@ -620,7 +619,10 @@ test("paired target", async () => {
     f.env.GATE_CONFIRMATION_FIXTURE_RUN = String(attempt);
     const server = createServer();
     const ready = new Map<number, Map<string, import("node:net").Socket>>();
+    const sockets = new Set<import("node:net").Socket>();
     server.on("connection", socket => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
       let buffered = "";
       socket.on("data", chunk => {
         buffered += chunk.toString();
@@ -630,7 +632,7 @@ test("paired target", async () => {
         const peers = ready.get(message.run) ?? new Map<string, import("node:net").Socket>();
         ready.set(message.run, peers);
         peers.set(message.side, socket);
-        if (peers.has("base") && peers.has("head")) {
+        if (peers.has("base") && peers.has("head") && mode !== "missing-peer") {
           for (const peer of peers.values()) peer.end("release");
           ready.delete(message.run);
         }
@@ -645,7 +647,9 @@ test("paired target", async () => {
     child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
     child.stderr.setEncoding("utf8").on("data", chunk => { stderr += chunk; });
     let watchdog: ReturnType<typeof setTimeout> | undefined;
-    const outcome = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+    let outcome: { status: number | null; stdout: string; stderr: string } | undefined;
+    let watchdogError: unknown;
+    try { outcome = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
       let settled = false;
       let timedOut = false;
       const finish = (error?: Error, status: number | null = null) => {
@@ -660,11 +664,25 @@ test("paired target", async () => {
         timedOut = true;
         if (child.pid && process.platform !== "win32") process.kill(-child.pid, "SIGTERM");
         else child.kill("SIGTERM");
-      }, 45000);
-    }).finally(() => new Promise<void>(resolve => server.close(() => resolve())));
-    expect(outcome.status, outcome.stdout + outcome.stderr).toBe(mode === "recovers" ? 0 : 1);
-    expect(outcome.stderr).not.toContain("gate error");
-    expect(outcome.stdout).toContain(mode === "recovers" ? "FLAKY example.test.ts: paired target (base 2 pass/0 fail; head 1 pass/1 fail)" : "NEW example.test.ts: paired target");
+      }, mode === "missing-peer" ? 1000 : 45000);
+    }); } catch (error) { watchdogError = error; }
+    finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+    if (mode === "missing-peer") {
+      expect(watchdogError).toBeInstanceOf(Error);
+      expect((watchdogError as Error).message).toContain("outer watchdog");
+      expect(outcome).toBeUndefined();
+      expect(stdout).not.toContain("NEW example.test.ts");
+      expect(stdout).not.toContain("PRE-EXISTING example.test.ts");
+      expect(ready.size).toBeGreaterThan(0);
+      break;
+    }
+    expect(watchdogError).toBeUndefined();
+    expect(outcome?.status, (outcome?.stdout ?? "") + (outcome?.stderr ?? "")).toBe(mode === "recovers" ? 0 : 1);
+    expect(outcome?.stderr).not.toContain("gate error");
+    expect(outcome?.stdout).toContain(mode === "recovers" ? "FLAKY example.test.ts: paired target (base 2 pass/0 fail; head 1 pass/1 fail)" : "NEW example.test.ts: paired target");
     expect(ready.size).toBe(0);
     for (const side of ["base", "head"]) expect(readFileSync(`${marker}-${attempt}-${side}`, "utf8")).toBe(mode === "recovers" ? "2" : "4");
   }
