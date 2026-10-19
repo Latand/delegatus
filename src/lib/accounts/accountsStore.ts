@@ -848,7 +848,7 @@ function accountsLegacyCollection(directory: string): LegacyCollectionSpec<unkno
       const collection = openAccountCollection(accountsDatabasePath(directory));
       const summary = emptySummary();
       mergeRows(collection, claudeAccountsSource, claudeAccountsSource.toRows(body), baseline,
-        descendsFromMirror(directory, baseline), options, summary);
+        descendsFromMirror(directory, baseline), options, summary, options.consumedSha256);
       return summary;
     },
     mirrorBody: () => {
@@ -1023,6 +1023,7 @@ function mergeRows(
   descends: boolean,
   options: { fenceOwner: boolean },
   summary: LegacyReconcileSummary,
+  consumedSha256?: string,
 ): void {
   const since = legacyBaselineRevision(baseline);
   collection.patchSync(() => {
@@ -1065,7 +1066,14 @@ function mergeRows(
       summary.keys.push(key);
     }
     return { records, deleteKeys };
-  }, { fenceOwner: options.fenceOwner });
+  }, {
+    fenceOwner: options.fenceOwner,
+    ...(consumedSha256 ? { afterPersist: (db) => {
+      const result = db.query("UPDATE state_imports SET reconciled_sha256 = ? WHERE collection = ?")
+        .run(consumedSha256, ACCOUNTS_COLLECTION);
+      if (result.changes !== 1) throw new Error(`missing import evidence for ${ACCOUNTS_COLLECTION} reconciliation`);
+    } } : {}),
+  });
 }
 
 /* ── Rollback mirror (§6.4) ────────────────────────────────────────────── */

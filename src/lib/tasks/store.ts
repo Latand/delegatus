@@ -401,7 +401,7 @@ function parseLegacyBody(raw: unknown): LegacyTasksBody {
     unioned: one the file lacks is never deleted, since a replay or a one-time
     transition must not run twice. A file that does not carry the recorded
     mirror's marker deletes nothing: its missing rows are listed as spared. */
-function mergeLegacyTasks(filePath: string, body: LegacyTasksBody, baseline: StateImportRecord, options: { fenceOwner: boolean }): LegacyReconcileSummary {
+function mergeLegacyTasks(filePath: string, body: LegacyTasksBody, baseline: StateImportRecord, options: { fenceOwner: boolean; consumedSha256?: string }): LegacyReconcileSummary {
   const collection = openTaskCollection(legacyDatabasePath(filePath));
   const since = legacyBaselineRevision(baseline);
   const descends = baseline.mirrorRevision !== null && body.mirrorOf === baseline.mirrorRevision;
@@ -452,7 +452,14 @@ function mergeLegacyTasks(filePath: string, body: LegacyTasksBody, baseline: Sta
       summary.keys.push(key);
     }
     return { records, deleteKeys };
-  }, { fenceOwner: options.fenceOwner });
+  }, {
+    fenceOwner: options.fenceOwner,
+    ...(options.consumedSha256 ? { afterPersist: (db) => {
+      const result = db.query("UPDATE state_imports SET reconciled_sha256 = ? WHERE collection = ?")
+        .run(options.consumedSha256, TASK_COLLECTION);
+      if (result.changes !== 1) throw new Error("missing import evidence for tasks reconciliation");
+    } } : {}),
+  });
   return summary;
 }
 
