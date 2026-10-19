@@ -298,7 +298,7 @@ test("read-only stages preserve declared outputs and tell the agent their write 
   expect(h.spawnInputs[0]?.prompt).toContain("Do not commit");
 });
 
-test.skip("declared outputs reject traversal, Git metadata, and duplicate normalized paths", async () => {
+test("declared outputs reject traversal, Git metadata, and duplicate normalized paths", async () => {
   const h = harness();
   savePipelines([]);
   const result = await createPipelineFromRequest({
