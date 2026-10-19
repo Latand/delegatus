@@ -325,6 +325,25 @@ function flowRevisionCurrent(flow: Flow): boolean {
   return Boolean(current && (current.revision ?? 0) === (flow.revision ?? 0));
 }
 
+type FlowRoundFence = { revision: number; reviewerBindingId: string | null | undefined };
+
+/** Capture the persisted owner immediately before an awaited reviewer action. */
+function flowRoundFence(flow: Flow, round: Round): FlowRoundFence | null {
+  const current = loadFlow(flow.id);
+  const currentRound = current?.rounds.find((item) => item.n === round.n);
+  if (!current || (current.revision ?? 0) !== (flow.revision ?? 0)
+    || !currentRound || currentRound.reviewerBindingId !== round.reviewerBindingId) return null;
+  return { revision: current.revision ?? 0, reviewerBindingId: currentRound.reviewerBindingId };
+}
+
+function flowRoundFenceCurrent(flow: Flow, round: Round, fence: FlowRoundFence): boolean {
+  const current = loadFlow(flow.id);
+  const currentRound = current?.rounds.find((item) => item.n === round.n);
+  return Boolean(current && (current.revision ?? 0) === fence.revision
+    && currentRound?.reviewerBindingId === fence.reviewerBindingId
+    && round.reviewerBindingId === fence.reviewerBindingId);
+}
+
 async function withFlowGitFence<T>(flow: Flow, observe: (signal: AbortSignal) => Promise<T>): Promise<
   { current: true; value: T } | { current: false }
 > {
@@ -763,12 +782,14 @@ function adoptReviewerReceipt(flow: Flow, round: Round, receipt: SpawnReceipt): 
   return receipt.state !== "starting" || Boolean(receipt.artifactPath || receipt.pane || receipt.verifiedHost);
 }
 
-async function settleReviewerSpawn(flow: Flow, round: Round, role: RoleConfig, accountId: string | null, host: TmuxHostEvidence | null = null): Promise<void> {
-  if (!round.launchId || !round.reviewerPath) return;
+async function settleReviewerSpawn(flow: Flow, round: Round, role: RoleConfig, accountId: string | null, host: TmuxHostEvidence | null = null): Promise<boolean> {
+  if (!round.launchId || !round.reviewerPath) return true;
   const registry = agentRegistry();
   const launchId = round.launchId;
+  const fence = flowRoundFence(flow, round);
+  if (!fence) return false;
   await registry.deliveryWriteOrBusy({ label: "registry.flow-settlement", operationId: launchId }, () => {
-    if (!flowRevisionCurrent(flow) || round.launchId !== launchId) return;
+    if (!flowRoundFenceCurrent(flow, round, fence) || round.launchId !== launchId) return;
     const receipt = registry.readOnlySnapshot().receipts[launchId];
     if (!receipt) return;
     if (receipt?.state === "completed") {
@@ -791,6 +812,7 @@ async function settleReviewerSpawn(flow: Flow, round: Round, role: RoleConfig, a
     if (settled.kind === "conflict") throw new Error(settled.code);
     round.reviewerConversationId = settled.conversation.id;
   });
+  return flowRoundFenceCurrent(flow, round, fence) && round.launchId === launchId;
 }
 
 function reviewerTierForAccount(role: RoleConfig, account: AccountContext): RoleConfig {
@@ -920,7 +942,11 @@ async function launchReviewer(
       codexSessionsDir: account.engine === "codex" ? account.transcriptRoot : null,
     });
     if (transcript) round.reviewerPath = transcript;
-    await settleReviewerSpawn(flow, round, role, account.accountId, pane.host ?? null);
+    const settled = await settleReviewerSpawn(flow, round, role, account.accountId, pane.host ?? null);
+    if (!settled) {
+      await stopOrphanPane(round);
+      return;
+    }
     if (!round.reviewerPath && pane.panePid) round.error = null;
     round.launchLeaseUntil = null;
     /* Persist the pane handle NOW so a close that races the tail of this spawn can
@@ -951,7 +977,11 @@ async function launchReviewer(
     flow.reviewerSandbox === "restricted" ? "read-only" : "bypass",
   );
   recordHeadlessLaunch(round, launched);
-  await settleReviewerSpawn(flow, round, role, account.accountId);
+  const settled = await settleReviewerSpawn(flow, round, role, account.accountId);
+  if (!settled) {
+    await stopHeadlessReviewAndWait(flow.id, round.n, round);
+    return;
+  }
   /* Same ownership guard as the pane branch: persist the pid, and if a concurrent
      close/pause/retry took the flow over, terminate the orphan (forgetHeadlessReview
      SIGTERM/SIGKILLs the detached group) and clear the abandoned spawn markers so
@@ -1532,6 +1562,10 @@ export async function tickFlow(
   }
 
   if (flow.state === "reviewing") {
+    const reviewerBindingId = round.reviewerBindingId;
+    const reviewerFence = flowRoundFence(flow, round);
+    if (!reviewerFence || reviewerFence.reviewerBindingId !== reviewerBindingId) return false;
+    const reviewerStillCurrent = () => flowRoundFenceCurrent(flow, round, reviewerFence);
     const fileVerdict = readFindingsFile(round);
     if (fileVerdict) {
       applyVerdict(flow, round, fileVerdict);
@@ -1553,19 +1587,24 @@ export async function tickFlow(
       }
       maybeClaimReviewerPathBySession(entries, round, round.sessionId ?? null);
       if (!round.reviewerPath && !round.sessionId) maybeClaimReviewerPathByHeuristic(flow, entries, round);
-      await settleReviewerSpawn(flow, round, reviewerRoleFor(flow, round), round.accountId ?? null);
+      if (!await settleReviewerSpawn(flow, round, reviewerRoleFor(flow, round), round.accountId ?? null)
+        || !reviewerStillCurrent()) return false;
       if (status?.status === "lost" && launchLeaseActive(round)) return JSON.stringify(flow) !== before;
       if (status?.status === "running") return JSON.stringify(flow) !== before;
       if (status?.status === "lost") {
-        if (headlessReviewerProvenDead(round)) await endHeadlessReviewerMarker(round, agentRegistry(), () => flowRevisionCurrent(flow));
+        if (headlessReviewerProvenDead(round)) {
+          await endHeadlessReviewerMarker(round, agentRegistry(), reviewerStillCurrent);
+          if (!reviewerStillCurrent()) return false;
+        }
         const fallback = fallbackReviewFromTranscript(round, entriesByPath, reviewerRoleFor(flow, round).engine);
         if (fallback) applyVerdict(flow, round, fallback);
         else markNeedsDecision(flow, "reviewer tracking was lost before a verdict could be recovered");
         return JSON.stringify(flow) !== before;
       }
       if (status) {
+        await endHeadlessReviewerMarker(round, agentRegistry(), reviewerStillCurrent);
+        if (!reviewerStillCurrent()) return false;
         forgetHeadlessReview(flow.id, round.n, round);
-        await endHeadlessReviewerMarker(round, agentRegistry(), () => flowRevisionCurrent(flow));
         /* The last-message artifact can lag or contain only an interim Codex
            message. The persisted rollout is authoritative once it carries a
            verdict, and consulting it before retry prevents duplicate reviewers. */
@@ -1576,6 +1615,7 @@ export async function tickFlow(
           const terminal = round.reviewerPath
             ? (await durableStageTurnEvidence(reviewerRoleFor(flow, round).engine, round.reviewerPath))?.terminalProviderMessage
             : null;
+          if (!reviewerStillCurrent()) return false;
           // A standalone CLI failure is admissible; ordinary reviewer prose is not.
           const standaloneRace = [status.stderr, status.finalOutput, status.stdout].find((output) =>
             /^Failed to refresh OAuth token[^\n]*$/i.test(output.trim()));
@@ -1596,14 +1636,16 @@ export async function tickFlow(
                   ? isoNow() : round.providerLimitWait?.startedAt ?? isoNow(),
                 capacityProbes: round.providerLimitWait?.capacityProbes ?? 0,
               };
-              await endHeadlessReviewerMarker(round, agentRegistry(), () => flowRevisionCurrent(flow));
+              await endHeadlessReviewerMarker(round, agentRegistry(), reviewerStillCurrent);
+              if (!reviewerStillCurrent()) return false;
               retryHeadlessRound(flow, round, condition.label, resumeAt);
               // Provider recovery stays on the engine that was cut.
               round.reviewerRole = { ...role };
             }
             else markNeedsDecision(flow, markRoundError(round, `reviewer cut by ${condition.label} after 3 retries`));
           } else if ((round.autoRetryCount ?? 0) < MAX_HEADLESS_NO_VERDICT_RETRIES) {
-            await endHeadlessReviewerMarker(round, agentRegistry(), () => flowRevisionCurrent(flow));
+            await endHeadlessReviewerMarker(round, agentRegistry(), reviewerStillCurrent);
+            if (!reviewerStillCurrent()) return false;
             retryHeadlessRound(flow, round);
           } else {
             const rawPath = round.findingsPath ?? findingsPathFor(flow.id, round.n);
@@ -1623,9 +1665,9 @@ export async function tickFlow(
       return JSON.stringify(flow) !== before;
     }
     maybeClaimReviewerPathByHeuristic(flow, entries, round);
-    await settleReviewerSpawn(flow, round, reviewerRoleFor(flow, round), round.accountId ?? null, round.reviewerPane
+    if (!await settleReviewerSpawn(flow, round, reviewerRoleFor(flow, round), round.accountId ?? null, round.reviewerPane
       ? agentRegistry().readOnlySnapshot().receipts[round.launchId ?? ""]?.verifiedHost ?? null
-      : null);
+      : null) || !reviewerStillCurrent()) return false;
     if (round.reviewerPath) {
       const reviewer = entriesByPath.get(round.reviewerPath);
       const fallback = fallbackReviewFromTranscript(round, entriesByPath, reviewerRoleFor(flow, round).engine);

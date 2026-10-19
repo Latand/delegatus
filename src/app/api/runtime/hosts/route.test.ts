@@ -87,26 +87,28 @@ test("operator termination awaits captured-tree persistence while a child holds 
   const target = `structured:pid:${tree.pid}`;
   noteSessionTargets([{ target, ref: ref({ pid: tree.pid, startIdentity: tree.startIdentity, sessionId }) }]);
   const holder = registryLockHolder(path.join(directory, "registry.sqlite"));
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let waitSample: Promise<number> | null = null;
+  const record = registry.recordStructuredTerminationSurvivors.bind(registry);
+  // This method sits just after census on the old path, and after async writer
+  // admission on the fixed path; the timer therefore isolates the lock wait.
+  const writerObservation = spyOn(registry, "recordStructuredTerminationSurvivors").mockImplementation((...args) => {
+    const startedAt = performance.now();
+    waitSample = new Promise(resolve => {
+      setTimeout(() => resolve(performance.now() - startedAt), 5);
+    });
+    return record(...args);
+  });
   try {
     await holder.hold(1_500);
-    let finished = false;
-    const work = POST(post({ action: "kill", target, intent: "row" })).finally(() => { finished = true; });
-    // The process census precedes registry admission and scales with the host's
-    // process table. Observe the registry wait after that preparation yields.
-    await new Promise<void>(resolve => setImmediate(resolve));
-    const start = performance.now();
-    const tick = new Promise<{ elapsed: number; pending: boolean }>(resolve => {
-      timer = setTimeout(() => resolve({ elapsed: performance.now() - start, pending: !finished }), 10);
-    });
-    const response = await work;
-    const sample = await tick;
-    expect(sample.pending).toBe(true);
-    expect(sample.elapsed).toBeLessThan(50);
+    const startedAt = performance.now();
+    const response = await POST(post({ action: "kill", target, intent: "row" }));
+    expect(waitSample).not.toBeNull();
+    expect(await waitSample!).toBeLessThan(50);
+    expect(performance.now() - startedAt).toBeLessThan(1_800);
     expect(response.status).toBe(200);
     expect(registry.readOnlySnapshot().entries[`claude:${sessionId}`]).toMatchObject({ status: "dead", claimOwner: null });
   } finally {
-    clearTimeout(timer); await holder.close(); registryModule.setAgentRegistryForTests(null); registry.close();
+    writerObservation.mockRestore(); await holder.close(); registryModule.setAgentRegistryForTests(null); registry.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
