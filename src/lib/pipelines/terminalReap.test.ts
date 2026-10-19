@@ -16,7 +16,7 @@ process.env.LLV_STRUCTURED_HOSTS = "0";
 const { tickPipelines, adoptAttempt } = await import("./engine");
 const { registerPipelineTick } = await import("./controllerSignal");
 const { tickPipelinesController } = await import("./controllerPass");
-const { archiveSettledPipelines, loadPipelines, pipelineIdentity, pipelineRevision, savePipelines } = await import("./store");
+const { archiveSettledPipelines, loadPipelines, pipelineIdentity, pipelineRevision, savePipelines, selectPipelineControllerWork } = await import("./store");
 type Pipeline = import("./types").Pipeline;
 type PipelineStageAttempt = import("./types").PipelineStageAttempt;
 type PipelinePorts = import("./engine").PipelinePorts;
@@ -274,6 +274,16 @@ test.each(["completed", "closed"] as const)("an unstamped adopted host in a %s l
   await tickPipelinesController([], h.ports);
   expect(h.stops).toEqual(["implement:1:conversation_helper"]);
   expect(h.idleEvidenceRequired).toEqual([false]);
+});
+
+test.each([false, true])("a closed lane with no recorded host carries no retirement obligation (unlaunched attempt: %s)", async unlaunched => {
+  const h = harness();
+  const pending = { ...attempt(1, "unlaunched", false), conversationId: null, agentPath: null, paneId: null, launchId: null };
+  savePipelines([pipelineRecord({ id: "closed-without-host", state: "closed", attempts: unlaunched ? [pending] : [] })]);
+  expect(await selectPipelineControllerWork(0, [])).toEqual([]);
+  await tickPipelines([], h.ports);
+  expect(h.stops).toEqual([]);
+  expect(loadPipelines()[0]!.terminalReap).toBeUndefined();
 });
 
 test("an old terminal lane remains scheduled and unarchived until its open turn settles", async () => {

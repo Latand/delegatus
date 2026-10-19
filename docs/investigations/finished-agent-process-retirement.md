@@ -29,7 +29,8 @@ requires the runtime's conditional idle protocol; an open turn, publication
 custody, a replacement writer, pending
 work or unreadable evidence keeps the host alive and cleanup pending. Explicit
 close obligations continue to drain their frozen targets. Closed lanes without
-an obligation use the automatic idle reap. Archiving waits for outstanding
+an obligation use the automatic idle reap when they have a recorded host.
+Closed records without hosts stay out of retirement work. Archiving waits for outstanding
 retirement and unconfirmed hosts.
 
 An unstamped attempt also requires positive runtime idle evidence when its

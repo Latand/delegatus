@@ -1,13 +1,17 @@
 import type { Database } from "bun:sqlite";
 import { mayRunStateStartupMutation } from "@/lib/stateOwnership";
 
+function someAttempt(value: string, predicate: string): string {
+  return `EXISTS (SELECT 1 FROM json_each(${value}, '$.runs') run,
+    json_each(CASE WHEN run.type = 'object' THEN run.value ELSE '{}' END, '$.attempts') attempt
+    WHERE ${predicate.replaceAll("attempt.value", "(CASE WHEN attempt.type = 'object' THEN attempt.value ELSE '{}' END)")})`;
+}
+
 /** These are candidate sets. Callers still apply their original admission
     predicates and revalidate the selected row before writing or acting. */
 const predicates = (value: string) => {
   const at = (field: string) => `json_extract(${value}, '$.${field}')`;
-  const attempt = (predicate: string) => `EXISTS (SELECT 1 FROM json_each(${value}, '$.runs') run,
-    json_each(CASE WHEN run.type = 'object' THEN run.value ELSE '{}' END, '$.attempts') attempt
-    WHERE ${predicate.replaceAll("attempt.value", "(CASE WHEN attempt.type = 'object' THEN attempt.value ELSE '{}' END)")})`;
+  const attempt = (predicate: string) => someAttempt(value, predicate);
   return {
     admission: `${at("delivery")} IS NULL AND ${at("publicationAdmission.state")} = 'pending'`,
     provisioning: `${at("state")} = 'provisioning'`,
@@ -29,11 +33,14 @@ const predicates = (value: string) => {
   };
 };
 export function pipelineControllerObligationSql(value: string): string {
+  const hasHost = someAttempt(value, ["conversationId", "agentPath", "paneId"]
+    .map(field => `COALESCE(json_extract(attempt.value,'$.${field}'),'')!=''`).join(" OR "));
   return `CASE WHEN NOT json_valid(${value}) THEN 1 ELSE (
     json_extract(${value},'$.state') NOT IN ('closed','completed')
     OR json_array_length(${value},'$.unconfirmedHosts')>0
     OR (json_extract(${value},'$.state') IN ('completed','closed') AND json_extract(${value},'$.closeTeardown') IS NULL
-      AND json_extract(${value},'$.terminalReap.settledAt') IS NULL)
+      AND json_extract(${value},'$.terminalReap.settledAt') IS NULL
+      AND (json_extract(${value},'$.state')='completed' OR ${hasHost}))
     OR (${Object.values(predicates(value)).join(" OR ")})
   ) END`;
 }
