@@ -573,4 +573,8 @@ test("instruction attribution keeps the existing authority of unrelated settings
   const stored = readSeatTickSettings(PROJECT, settingsFile);
   expect(stored.autoRotate).toMatchObject({ enabled: true, thresholdPercent: 60, setBy: { kind: "gateway" } });
   expect(stored.instructionLines![0]!.author).toMatchObject({ kind: "manager", seatEpoch: 12 });
+  const scriptControl = await put({ project: PROJECT, autoRotate: { enabled: false } }, { "content-type": "application/json", host: "127.0.0.1:8898" });
+  expect(scriptControl.status).toBe(200);
+  expect(readSeatTickSettings(PROJECT, settingsFile).autoRotate?.enabled).toBe(false);
+  expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual(stored.instructionLines!);
 });

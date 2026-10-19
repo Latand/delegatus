@@ -36,13 +36,14 @@ export const dynamic = "force-dynamic";
  *   read, as the tool's is.
  * - **Every change is attributed.** Guarded sub-settings apply their actor rules.
  *   Controls are a capability
- *   (`rotationActor`, #1402): a same-origin browser fetch records as `gateway` — the
+ *   (`rotationActor`, #1402): the browser records as `gateway` — the
  *   operator's own session, which is what the board card already calls it — a
  *   caller that named itself with the target project's active seat records as
  *   `manager` with that seat's epoch, and any other identified caller records
  *   as `agent` with its conversation. Nothing in the body can name who made a
- *   change. Unverified scripts and unresolved capabilities stay unidentified
- *   and cannot author instruction lines. The perimeter is `rejectCrossOrigin`, which runs first on the
+ *   change. Instruction authorship separately requires an identified session
+ *   or a browser fetch; unverified scripts cannot author lines. The perimeter
+ *   is `rejectCrossOrigin`, which runs first on the
  *   write, as it does on every other mutating route here.
  */
 
@@ -80,7 +81,7 @@ function callerOwnProject(conversationId: string): string | null {
  */
 function settingsActor(req: NextRequest, project: string): SeatTickSettingsActor {
   const conversationId = callerConversationId(req);
-  if (!conversationId) return { kind: !req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER) && operatorBrowserRequest(req) ? "gateway" : "unidentified", conversationId: null, project: null, seatEpoch: null };
+  if (!conversationId) return { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
   const active = orchestratorSeatFor(project).active ?? null;
   if (active && active.conversationId === conversationId) {
     return { kind: "manager", conversationId, project, seatEpoch: active.seatEpoch };
@@ -146,7 +147,9 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
     if (Object.keys(change).length === 0) {
       return NextResponse.json(seatTickSettingsAnswer(project, false, actor), { headers: NO_STORE });
     }
-    const applied = changeSeatTickSettings(project, change, { at: new Date().toISOString(), actor });
+    const instructionActor = actor.kind === "gateway" && (req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER) || !operatorBrowserRequest(req))
+      ? { ...actor, kind: "unidentified" as const } : actor;
+    const applied = changeSeatTickSettings(project, change, { at: new Date().toISOString(), actor, instructionActor });
     if (!applied.ok) return NextResponse.json({ error: applied.error }, { status: 400 });
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
     return NextResponse.json({ ...seatTickSettingsAnswer(project, true, actor), ...(applied.notes ? { notes: applied.notes } : {}) }, { headers: NO_STORE });
