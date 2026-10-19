@@ -1787,9 +1787,16 @@ export class SelfUpdateService {
       if (preceding) await preceding.catch(() => {});
       if (!/^[A-Za-z0-9_.:-]{1,200}$/.test(request.idempotencyKey)) throw new Error("Invalid deployment idempotency key");
       const rows = checkoutDeployments(this.deps.dir);
-      const previous = rows.find(row => row.idempotencyKey === request.idempotencyKey);
+      const previous = rows.find(row => row.idempotencyKey === request.idempotencyKey
+        || row.idempotencyKeys?.includes(request.idempotencyKey));
       if (previous) {
-        if ((request.revision && previous.requestedRevision !== request.revision) || (request.ref && previous.requestedRevision !== request.ref)) throw new Error("idempotency-conflict");
+        const isJoinedKey = previous.idempotencyKey !== request.idempotencyKey;
+        const sameJoinedRevision = isJoinedKey && Boolean(request.revision)
+          && /^[0-9a-f]{7,40}$/i.test(request.revision!)
+          && previous.revision.toLowerCase().startsWith(request.revision!.toLowerCase());
+        if (isJoinedKey ? !sameJoinedRevision
+          : (request.revision && previous.requestedRevision !== request.revision)
+            || (request.ref && previous.requestedRevision !== request.ref)) throw new Error("idempotency-conflict");
         return { state: "accepted" as const, deploymentId: previous.deploymentId, revision: previous.revision, replayed: true };
       }
       const decision = await this.decide();
@@ -1799,7 +1806,21 @@ export class SelfUpdateService {
         return { state: "action-required" as const, code: "self-update-action-required" as const, action, error: "Restore or upgrade launcher supervision using the install action" };
       const snapshot = await this.snapshot();
       const active = rows.find(row => !row.terminal);
-      if (snapshot.busy || active) return { state: "busy" as const, deploymentId: active?.deploymentId ?? this.apply.current?.deploymentId ?? "checkout-update", revision: active?.revision ?? snapshot.update.target ?? "" };
+      if (active) {
+        const requested = request.revision?.toLowerCase() ?? "";
+        if (/^[0-9a-f]{7,40}$/.test(requested) && active.revision.toLowerCase().startsWith(requested)) {
+          const joinTarget = checkoutDeployments(this.deps.dir).find(row => row.deploymentId === active.deploymentId);
+          if (joinTarget && joinTarget.revision.toLowerCase().startsWith(requested)) {
+            const idempotencyKeys = [...new Set([...(joinTarget.idempotencyKeys ?? []), request.idempotencyKey])];
+            const idempotencyRequests = [...(joinTarget.idempotencyRequests ?? []).filter(row => row.idempotencyKey !== request.idempotencyKey),
+              { idempotencyKey: request.idempotencyKey, requestedRevision: request.revision! }];
+            saveCheckoutDeployment(this.deps.dir, { ...joinTarget, idempotencyKeys, idempotencyRequests });
+            return { state: "accepted" as const, deploymentId: joinTarget.deploymentId, revision: joinTarget.revision, replayed: false };
+          }
+        }
+        return { state: "busy" as const, deploymentId: active.deploymentId, revision: active.revision };
+      }
+      if (snapshot.busy) return { state: "busy" as const, deploymentId: this.apply.current?.deploymentId ?? "checkout-update", revision: snapshot.update.target ?? "" };
       let target = request.revision ?? "";
       if (/^[a-f0-9]{7,39}$/i.test(target)) {
         if (!record.checkout) throw new Error("pass the full SHA or a ref");
