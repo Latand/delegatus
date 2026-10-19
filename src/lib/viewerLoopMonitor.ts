@@ -20,6 +20,7 @@ export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.r
   | "memory.curation-authority"
   | "pipelines.retirement-evidence" | "pipelines.retirement-check" | "pipelines.evidence" | "pipelines.get" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
   | "runtime-journal.maintenance"
+  | "orchestrator.deploy-attribution" | "orchestrator.deploy-attribution.write"
   | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
   | "agent.stdin-file" | "relay.media-input" | "relay.attachments" | "relay.attachments.read" | "relay.attachments.upload"
   | "external-relay.owner-history" | "mcp.project-prefix" | "issue-report.resolve" | "self-update.revision-prefix"
