@@ -7,7 +7,9 @@ import path from "node:path";
 import { expect, spyOn, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, type AgentRegistryEntry } from "@/lib/agent/registry";
+import type { BoardTask } from "@/lib/tasks/types";
+import type { StartupRowRetry } from "./startupRowRetries";
 import { procBackend } from "@/lib/proc";
 import { RuntimeJournal } from "@/runtime-host/journal";
 
@@ -103,7 +105,7 @@ test("one blocked row completes boot and sixty subsequent admissions reuse it", 
   }
 });
 
-test.skipIf(process.platform === "win32")("missing rollout with a live socket owner is quarantined, then recovered alone", async () => {
+test.skipIf(process.platform === "win32").each(["missing-rollout", "transient"])("%s with a live socket owner settles safely", async refusal => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-q-"));
   fs.chmodSync(directory, 0o700);
   const socket = path.join(directory, "rpc.sock");
@@ -133,7 +135,7 @@ test.skipIf(process.platform === "win32")("missing rollout with a live socket ow
     resolveCodexOwner: () => null, resolveClaudeOwner: () => null, adoptClaude: async () => [],
     schedule: (callback, delay) => { scheduled.push({ callback, delay }); return { unref() {} }; },
     pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
-    adoptCodexHost: async () => { attempts++; if (!recover) throw new Error("no rollout found for thread id fixture"); return host as never; },
+    adoptCodexHost: async () => { attempts++; if (!recover) throw new Error(refusal === "missing-rollout" ? "no rollout found for thread id fixture" : "temporary app-server failure"); return host as never; },
   };
   const retryRecord = () => {
     try {
@@ -153,16 +155,27 @@ test.skipIf(process.platform === "win32")("missing rollout with a live socket ow
   try {
     await adoptStructuredHostsAtStartup(dependencies);
     expect(attempts).toBe(1);
-    expect(retryRecord()).toMatchObject({ reason: "missing-rollout", attempts: 1, quarantined: false });
+    if (refusal === "missing-rollout") {
+      expect(registry.readOnlySnapshot().entries[key]).toMatchObject({ status: "unhosted", claimOwner: null,
+        structuredHost: { process: null, ended: { reason: "missing-rollout" } } });
+      expect(retryRecord()).toBeUndefined();
+      expect(scheduled).toHaveLength(0);
+      // The app-server may serve other threads. Retirement sends it no signal.
+      expect(procBackend.processIdentity(process.pid)).toBeTruthy();
+      for (let read = 0; read < 5; read++) await adoptStructuredHostsAtStartup(dependencies);
+      expect(attempts).toBe(1);
+      return;
+    }
+    expect(retryRecord()).toMatchObject({ reason: "adoption-failed", attempts: 1, quarantined: false });
     await tick(); await tick();
-    expect(retryRecord()).toMatchObject({ reason: "missing-rollout", attempts: 3, quarantined: true });
+    expect(retryRecord()).toMatchObject({ reason: "adoption-failed", attempts: 3, quarantined: true });
     expect(logs.mock.calls.some(([message, detail]) => String(message).includes("row quarantined")
       && (detail as { key?: string; reason?: string } | undefined)?.key === key
-      && (detail as { reason?: string }).reason === "missing-rollout")).toBe(true);
+      && (detail as { reason?: string }).reason === "adoption-failed")).toBe(true);
     const { loadTasks } = await import("@/lib/tasks/store");
     const { statePath } = await import("@/lib/configDir");
     const card = loadTasks(statePath("tasks.json")).find(task => task.text.includes(key));
-    expect(card?.text).toContain("missing-rollout");
+    expect(card?.text).toContain("adoption-failed");
     expect(refreshes).toBe(1);
     // Neither quarantine nor a failed attach retires the live owner.
     expect(registry.readOnlySnapshot().entries[key]!.structuredHost?.process?.pid).toBe(process.pid);
@@ -469,3 +482,91 @@ test("an unreadable restart-cut row installs capped pending-work admission on it
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test.each(["fresh", "legacy"])("%s missing rollout retires after one app-server refusal and stays retired across boot", async mode => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rollout-terminal-"));
+  try {
+    const first = await rolloutBoot(directory, mode);
+    expect(first.attempts, JSON.stringify(first)).toBe(1);
+    expect(first.entry).toMatchObject({ status: "unhosted", claimOwner: null, structuredHost: {
+      process: null, endpoint: "stdio:released", ended: { reason: "missing-rollout" },
+    } });
+    expect(first.timers).toEqual([]);
+    expect(first.tasks.every((task: { status: string }) => task.status === "done")).toBe(true);
+    expect(first.tasks).toHaveLength(mode === "legacy" ? 1 : 0);
+    const restarted = await rolloutBoot(directory, mode);
+    expect(restarted.attempts).toBe(1);
+    expect(restarted.timers).toEqual([]);
+    expect(restarted.stderr).not.toContain("boot adoption of");
+    expect(restarted.entry.status).toBe("unhosted");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+}, 20000);
+
+interface RolloutBootResult {
+  entry: AgentRegistryEntry;
+  retry?: StartupRowRetry;
+  tasks: BoardTask[];
+  attempts: number;
+  timers: number[];
+  stderr: string;
+}
+
+async function rolloutBoot(directory: string, mode: string, reason = "missing", clock = Date.parse("2026-10-19T00:00:00Z")): Promise<RolloutBootResult> {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures/startupRollout.ts"), mode, directory, reason, String(clock)], {
+    env: { ...process.env, LLV_STATE_OWNER: undefined, LLV_STATE_DIR: path.join(directory, "state"),
+      HOME: path.join(directory, "home"), XDG_CONFIG_HOME: path.join(directory, "config"), TMPDIR: directory,
+      LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exit, stderr).toBe(0);
+  return { ...JSON.parse(stdout.trim().split("\n").at(-1)!), stderr };
+}
+
+test("a transient app-server refusal keeps its durable retry across process restarts", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rollout-transient-"));
+  const clock = Date.parse("2026-10-19T00:00:00Z");
+  try {
+    const first = await rolloutBoot(directory, "fresh", "transient", clock);
+    expect(first.attempts, first.stderr).toBe(1);
+    expect(first.entry.status).toBe("dead");
+    expect(first.entry.structuredHost?.ended).toBeUndefined();
+    expect(first.timers).toEqual([1000]);
+    const early = await rolloutBoot(directory, "fresh", "transient", clock);
+    expect(early.attempts).toBe(1);
+    expect(early.timers).toEqual([1000]);
+    const due = await rolloutBoot(directory, "fresh", "transient", clock + 1000);
+    expect(due.attempts).toBe(2);
+    expect(due.timers).toEqual([2000]);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+}, 20000);
+
+test("a refused terminal notice closure survives restart and retries only cleanup", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rollout-notice-"));
+  try {
+    const refused = await rolloutBoot(directory, "refused-notice");
+    expect(refused.attempts).toBe(1);
+    expect(refused.entry.status).toBe("unhosted");
+    expect(refused.retry).toMatchObject({ reason: "missing-rollout", resolved: true });
+    expect(refused.tasks).toHaveLength(1);
+    expect(refused.tasks[0]!.status).toBe("inbox");
+    expect(refused.timers).toEqual([1000]);
+    const restarted = await rolloutBoot(directory, "resolve-notice");
+    expect(restarted.attempts).toBe(1);
+    expect(restarted.entry.status).toBe("unhosted");
+    expect(restarted.retry).toBeUndefined();
+    expect(restarted.tasks[0]!.status).toBe("done");
+    expect(restarted.timers).toEqual([]);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+}, 20000);
+
+test("a missing-rollout reply cannot retire a replacement writer admitted during the await", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rollout-replaced-"));
+  try {
+    const result = await rolloutBoot(directory, "replaced");
+    expect(result.attempts).toBe(1);
+    expect(result.entry).toMatchObject({ status: "live", claimOwner: "replacement-writer", claimEpoch: 2,
+      structuredHost: { endpoint: "fixture:replacement", writerClaimEpoch: 2 } });
+    expect(result.entry.structuredHost?.ended).toBeUndefined();
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+}, 20000);
