@@ -312,38 +312,52 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   /* The successor runs in the cell a fresh launch of this conversation gets;
      work that cannot be contained is refused here, before anything starts. */
   const memoryCell = structuredHostCell(input.registry, "codex", input.receipt.operationId, input.conversationId as ViewerConversationId | undefined);
-  const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
-  const entry = (await input.registry.deliveryWriteOrBusy({ label: "registry.upsert" }, input.registry.upsert.bind(input.registry, {
-    ...(existing ?? {
+  const entry = await input.registry.deliveryWriteOrBusy({ label: "registry.upsert" }, () => {
+    const refused = successorRefusal(input, "codex", input.registry.readOnlySnapshot());
+    if (refused) throw new Error(refused.error);
+    const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    return input.registry.upsert({
+      ...(existing ?? {
+        key,
+        status: "unhosted" as const,
+        host: null,
+        claimEpoch: 0,
+        claimOwner: null,
+        pendingAction: null,
+      }),
       key,
-      status: "unhosted" as const,
-      host: null,
-      claimEpoch: 0,
-      claimOwner: null,
-      pendingAction: null,
-    }),
-    key,
-    artifactPath: input.receipt.path,
-    cwd: input.profile.cwd,
-    accountId: input.target.accountId,
-    launchProfile: input.profile,
-    structuredHostOperationId: input.receipt.operationId,
-  })));
+      artifactPath: input.receipt.path,
+      cwd: input.profile.cwd,
+      accountId: input.target.accountId,
+      launchProfile: input.profile,
+      structuredHostOperationId: input.receipt.operationId,
+    });
+  });
   if (!entry.structuredHost) {
-    (await input.registry.deliveryWriteOrBusy({ label: "registry.setStructuredHost" }, input.registry.setStructuredHost.bind(input.registry, key, {
-      kind: "codex-app-server",
-      endpoint: "stdio:pending",
-      process: null,
-      eventCursor: 0,
-      protocolVersion: null,
-      writerClaimEpoch: entry.claimEpoch,
-      activeTurnRef: null,
-      pendingAttention: [],
-      activeFlags: [],
-    }, "unhosted")));
+    await input.registry.deliveryWriteOrBusy({ label: "registry.setStructuredHost" }, () => {
+      const refused = successorRefusal(input, "codex", input.registry.readOnlySnapshot());
+      if (refused) throw new Error(refused.error);
+      if (!input.registry.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredHost) {
+        input.registry.setStructuredHost(key, {
+          kind: "codex-app-server",
+          endpoint: "stdio:pending",
+          process: null,
+          eventCursor: 0,
+          protocolVersion: null,
+          writerClaimEpoch: entry.claimEpoch,
+          activeTurnRef: null,
+          pendingAttention: [],
+          activeFlags: [],
+        }, "unhosted");
+      }
+    });
   }
   const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
-  const claimed = (await input.registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, input.registry.claimStructuredHost.bind(input.registry, key, owner, { allowUnhosted: true })));
+  const claimed = await input.registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, () => {
+    const refused = successorRefusal(input, "codex", input.registry.readOnlySnapshot());
+    if (refused) throw new Error(refused.error);
+    return input.registry.claimStructuredHost(key, owner, { allowUnhosted: true });
+  });
   if (!claimed?.claimOwner) throw new Error("successor Codex structured host claim is unavailable");
 
   const approvalPolicy = input.profile.permissionMode
@@ -455,38 +469,52 @@ async function publishClaudeSuccessorHost(
   /* The successor runs in the cell a fresh launch of this conversation gets;
      work that cannot be contained is refused here, before anything starts. */
   const memoryCell = structuredHostCell(input.registry, "claude", input.receipt.operationId, input.conversationId as ViewerConversationId | undefined);
-  const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
-  const entry = (await input.registry.deliveryWriteOrBusy({ label: "registry.upsert" }, input.registry.upsert.bind(input.registry, {
-    ...(existing ?? {
+  const entry = await input.registry.deliveryWriteOrBusy({ label: "registry.upsert" }, () => {
+    const refused = successorRefusal(input, "claude", input.registry.readOnlySnapshot());
+    if (refused) throw new Error(refused.error);
+    const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    return input.registry.upsert({
+      ...(existing ?? {
+        key,
+        status: "unhosted" as const,
+        host: null,
+        claimEpoch: 0,
+        claimOwner: null,
+        pendingAction: null,
+      }),
       key,
-      status: "unhosted" as const,
-      host: null,
-      claimEpoch: 0,
-      claimOwner: null,
-      pendingAction: null,
-    }),
-    key,
-    artifactPath: input.receipt.path,
-    cwd: input.profile.cwd,
-    accountId: input.target.accountId,
-    launchProfile: input.profile,
-    structuredHostOperationId: input.receipt.operationId,
-  })));
+      artifactPath: input.receipt.path,
+      cwd: input.profile.cwd,
+      accountId: input.target.accountId,
+      launchProfile: input.profile,
+      structuredHostOperationId: input.receipt.operationId,
+    });
+  });
   if (!entry.structuredHost) {
-    (await input.registry.deliveryWriteOrBusy({ label: "registry.setStructuredHost" }, input.registry.setStructuredHost.bind(input.registry, key, {
-      kind: "claude-broker",
-      endpoint: "stdio:pending",
-      process: null,
-      eventCursor: 0,
-      protocolVersion: null,
-      writerClaimEpoch: entry.claimEpoch,
-      activeTurnRef: null,
-      pendingAttention: [],
-      activeFlags: [],
-    }, "unhosted")));
+    await input.registry.deliveryWriteOrBusy({ label: "registry.setStructuredHost" }, () => {
+      const refused = successorRefusal(input, "claude", input.registry.readOnlySnapshot());
+      if (refused) throw new Error(refused.error);
+      if (!input.registry.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredHost) {
+        input.registry.setStructuredHost(key, {
+          kind: "claude-broker",
+          endpoint: "stdio:pending",
+          process: null,
+          eventCursor: 0,
+          protocolVersion: null,
+          writerClaimEpoch: entry.claimEpoch,
+          activeTurnRef: null,
+          pendingAttention: [],
+          activeFlags: [],
+        }, "unhosted");
+      }
+    });
   }
   const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
-  const claimed = (await input.registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, input.registry.claimStructuredHost.bind(input.registry, key, owner, { allowUnhosted: true })));
+  const claimed = await input.registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, () => {
+    const refused = successorRefusal(input, "claude", input.registry.readOnlySnapshot());
+    if (refused) throw new Error(refused.error);
+    return input.registry.claimStructuredHost(key, owner, { allowUnhosted: true });
+  });
   if (!claimed?.claimOwner) throw new Error("successor Claude structured host claim is unavailable");
 
   let host: ClaudeStreamBrokerHost | null = null;

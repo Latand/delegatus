@@ -784,7 +784,10 @@ async function actuateCandidate(
       const killed = await killHost(expectedEvidence);
       const registeredHost = registry.readOnlySnapshot().entries[`${entry.key.engine}:${entry.key.sessionId}`]?.host;
       if (killed && registeredHost && sameTmuxEvidence(registeredHost, expectedEvidence)) {
-        (await registry.deliveryWriteOrBusy({ label: "registry.markUnhosted" }, registry.markUnhosted.bind(registry, entry.key)));
+        await registry.deliveryWriteOrBusy({ label: "registry.markUnhosted" }, () => {
+          const current = registry.readOnlySnapshot().entries[`${entry.key.engine}:${entry.key.sessionId}`]?.host;
+          if (current && sameTmuxEvidence(current, expectedEvidence)) registry.markUnhosted(entry.key);
+        });
       }
       return killed;
     } finally {

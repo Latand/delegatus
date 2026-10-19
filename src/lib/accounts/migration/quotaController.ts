@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { retainCreditGuardEvidence } from "@/lib/accounts/creditGuard";
@@ -318,7 +319,7 @@ export class QuotaController {
     const currentRevision = accountsCollectionRevision();
     const current = new Map(this.probe.list(engine).map((account) => [account.id, account]));
     const active = this.probe.active(engine);
-    const accepted = await this.registry.accountMutationWrite("quota.commit", () => {
+    const accepted = await withViewerOperation("registry.write", () => this.registry.accountMutationWrite("quota.commit", () => {
       // A switch (including switch-away-and-back), removal or login mutation
       // invalidates the read. Never let an old probe restore retired state.
       if (currentRevision !== accountsCollectionRevision() || snapshot.revision !== currentRevision
@@ -364,7 +365,7 @@ export class QuotaController {
         });
       }
       return observations;
-    });
+    }));
     if (!accepted.acquired) throw new RegistryWriterBusyError("quota.commit");
     const observations = accepted.value;
     const accounts = new Map(snapshot.accounts.map(({ account }) => [account.id, account]));

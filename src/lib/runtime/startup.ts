@@ -2305,7 +2305,10 @@ async function adoptStructuredHostsPass(
       async (entry) => {
         const memoryCell = adoptionCell(entry);
         const conversation = registry.conversationForPath(entry.artifactPath) ?? await withViewerOperation("memory.engine-start", () =>
-          waitForStateLock("memory.start-identity", () => registry.ensureConversation(entry.key.engine, entry.artifactPath, entry.accountId)));
+          waitForStateLock("memory.start-identity", () => registry.deliveryWriteOrBusy({ label: "registry.ensureConversation" }, () => {
+            assertActive();
+            return registry.ensureConversation(entry.key.engine, entry.artifactPath, entry.accountId);
+          })));
         const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
           ? conversation.agentRole
           : null;
@@ -2375,7 +2378,10 @@ async function adoptStructuredHostsPass(
       async (entry) => {
         const memoryCell = adoptionCell(entry);
         const conversation = registry.conversationForPath(entry.artifactPath) ?? await withViewerOperation("memory.engine-start", () =>
-          waitForStateLock("memory.start-identity", () => registry.ensureConversation(entry.key.engine, entry.artifactPath, entry.accountId)));
+          waitForStateLock("memory.start-identity", () => registry.deliveryWriteOrBusy({ label: "registry.ensureConversation" }, () => {
+            assertActive();
+            return registry.ensureConversation(entry.key.engine, entry.artifactPath, entry.accountId);
+          })));
         const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
           ? conversation.agentRole
           : null;

@@ -102,7 +102,7 @@ TypeScript resolved 387 external calls to 154 transitively mutating methods (inc
 | `src/lib/runtime/sendSettlement.ts` | `settleDeliveryRetryAttemptOffLoop` :1003; `recordDeliveryOutcomeForOperationOffLoop` :1013; `recordDeliveryOutcomeOffLoop` :1015; `recordDeliveryOutcomeForOperationOffLoop` :1022 | existing admission |
 | `src/lib/runtime/startup.ts` | `reconcileConversations` :1488; `claimStructuredHost` :2269; `rotateSpawnCapabilityForPath` :2329; `rotateSpawnCapabilityForPath` :2397 | async admission in L7 |
 | `src/lib/runtime/startup.ts` | `recordDirectAdmission` :1304; `settleDirectAdmission` :1355; `drainDeadSupersededHeldDeliveryCandidates` :2167 | existing admission |
-| `src/lib/runtime/startup.ts` | `ensureConversation` :2308; `ensureConversation` :2378 | synchronous callback retained |
+| `src/lib/runtime/startup.ts` | `ensureConversation` :2308; `ensureConversation` :2378 | async admission in L7 |
 | `src/lib/runtime/structuredControls.ts` | `releaseSwitchHold` :453; `withdrawConversationReconfigure` :463 | existing admission |
 | `src/lib/runtime/structuredDeliveryController.ts` | `terminateInactiveStructuredHost` :1224; `recordStructuredTerminationSurvivors` :1273; `terminateStructuredHost` :1919; `terminateStructuredHost` :1926; `repairCompletedStructuredSpawnMarkers` :2010 | async admission in L7 |
 | `src/lib/runtime/structuredDeliveryController.ts` | `recordDeliveryOutcomeForOperationOffLoop` :443; `recordDeliveryOutcomesForOperations` :480; `bindDeliveryBatchOffLoop` :912; `holdForFailedSwitch` :940; `bindDeliveryOperationGenerationOffLoop` :960; `recordDeliveryOutcomeForOperation` :1074; `failStructuredSpawnOffLoop` :1214 | existing admission |
@@ -145,7 +145,6 @@ seat must check the 24-hour production target against these explicit exceptions.
 | `src/lib/orchestrator/deputyCommandPorts.ts` | `ensureForkedConversation` :74 (callback) | Conversation registration returns an identity synchronously to the deputy command port. Moving it requires that port and its checkpoint consumers to await. |
 | `src/lib/orchestrator/seatCommand.ts` | `stampOrchestratorSeatIdentity` :422 (callback) | Seat designation synchronously stamps registry identity before publishing the designation. Moving it requires an awaited designation contract. |
 | `src/lib/runtime/registry.ts` | `setStructuredHostClaimed` :188 (callback); `captureStructuredTerminationSurvivors` :249 (callback); `releaseStructuredHostClaim` :266 (callback); `terminateInactiveStructuredHost` :536 (reconcileDeadStructuredRegistryHost); `captureStructuredTerminationSurvivors` :645 (callback); `withdrawStructuredTerminationSurvivors` :649 (callback); `settleStructuredTerminationSurvivors` :652 (callback); `claimStructuredHost` :750 (callback); `claimStructuredHost` :762 (callback); `setStructuredHostClaimed` :771 (callback) | Host state listeners, claim-release and termination-capture callbacks synchronously return durable ownership/boolean decisions before engine signalling. They require an awaited shared engine callback protocol; startup demotion callbacks are separately retried by their admit helper. |
-| `src/lib/runtime/startup.ts` | `ensureConversation` :2308 (callback); `ensureConversation` :2378 (callback) | The synchronous ensure-conversation callbacks sit inside startup state admission; their generation/activation checks and the callback contract must be migrated together. |
 | `src/lib/runtime/structuredDeliveryController.ts` | `recordStructuredTerminationSurvivors` :1262 (callback); `terminateStructuredHost` :1269 (callback); `markStructuredHostHandoff` :2481 (callback) | Termination capture and terminal callbacks must acknowledge persistence before signalling; demotion handoff marks the row before releasing ownership. Those callback contracts are synchronous. |
 | `src/lib/runtime/structuredHostRetirement.ts` | `recordStructuredTerminationSurvivors` :1158 (callback) | The termination ladder requires a synchronous durable capture acknowledgement before its first signal; changing it requires the engine termination-capture callback protocol to await. |
 | `src/lib/runtime/structuredSpawn.ts` | `setStructuredHostClaimed` :1360 (releaseAdoptionClaim); `releaseStructuredHostClaim` :1370 (releaseAdoptionClaim); `preserveSpawnArtifactOwnership` :2255 (writeStagedRecovery); `claimStructuredHost` :2578 (callback) | Adoption cleanup, staged recovery and the resume-claim callback synchronously transfer custody. Moving them requires awaited custody callbacks and renewed admission evidence. |
@@ -308,6 +307,12 @@ seat must check the 24-hour production target against these explicit exceptions.
 | `placeDeliveryForRetry` :11275 | `mutate` |
 | `rollbackConversationMigration` :11283 | `mutate` |
 | `clearRolledBackConversationMigration` :11312 | `mutate` |
+
+Full snapshot loads and incremental snapshot refreshes also share an admitted
+writer transaction. Their standalone readers still own their transactions;
+borrowed readers never commit or roll back the writer. Regression coverage
+includes cold, warm and prepared readers, peer commits, detached snapshots,
+refusal cleanup, and replacement-host preservation during admission.
 
 ## Verification scope
 
