@@ -1,3 +1,5 @@
+import { shortId } from "@/lib/shortIds";
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { classifyProviderCondition } from "@/lib/pipelines/providerConditions";
 import { durableStageTurnEvidence } from "@/lib/pipelines/durableEvidence";
 import { accountProbeIdentity, accountProbeSnapshot, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
@@ -13,6 +15,9 @@ import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, stepBackgroundWait } from "@/lib/pi
 import { loadPipelines } from "@/lib/pipelines/store";
 import { freshSpecFor, resumeSpecFor } from "@/lib/agent/cli";
 import { accountManager, resolveResumeAccountId } from "@/lib/accounts/manager";
+import { creditGuardBlock } from "@/lib/accounts/creditGuard";
+import { interruptionObligationDirectory, accountGuardObligationStore, REVIEWER_CUT_RESOLUTION } from "@/lib/runtime/interruptionObligations";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { allowedAccountIdsForProject, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
@@ -40,6 +45,7 @@ import {
   forgetHeadlessReview,
   headlessReviewStatus,
   startHeadlessReview,
+  stopHeadlessReviewAndWait,
   type HeadlessReviewLaunch,
 } from "./exec";
 import { resolveCleanFlowHead, resolveFlowRemoteHead } from "./git";
@@ -52,7 +58,7 @@ import {
   type ParsedFindings,
 } from "./findings";
 import { relayPrompt, reviewerPrompt } from "./prompts";
-import { atomicWriteText, findingsPathFor, loadFlows, loadFlowsForTick, loadPresets, patchFlowRows, saveFlows } from "./store";
+import { atomicWriteText, findingsPathFor, loadFlow, loadFlows, loadFlowsForTick, loadPresets, patchFlowRowsAsync as patchFlowRows, saveFlows } from "./store";
 import type { Flow, FlowPreset, FlowState, RelayDeliveryTransport, RoleConfig, Round } from "./types";
 import { chooseHeadlessReviewer, rateLimitStateDetail } from "./reviewerPolicy";
 
@@ -66,6 +72,7 @@ const store = globalThis as unknown as {
   __llvFlowTick?: boolean;
   __llvHostlessReviewerMarkersRepaired?: boolean;
   __llvFlowRelayLeases?: Map<string, Promise<void>>;
+  __llvHeadlessCreditGuardPasses?: WeakMap<AgentRegistry, Promise<void>>;
 };
 const relayStartedThisProcess = new Set<string>();
 const relayLeases = store.__llvFlowRelayLeases ??= new Map<string, Promise<void>>();
@@ -333,14 +340,14 @@ export async function captureReviewHead(flow: Flow, round: Round, signal?: Abort
     const remoteSha = (await resolveFlowRemoteHead(flow.cwd, flow.headRef, signal));
     if (remoteSha !== headSha) {
       const detail = remoteSha
-        ? `review remote head mismatch before launch: local ${headSha}, origin/${flow.headRef} ${remoteSha}`
+        ? `review remote head mismatch before launch: local ${shortId(headSha)}, origin/${flow.headRef} ${shortId(remoteSha)}`
         : `review remote head is unavailable before launch: origin/${flow.headRef}`;
       markNeedsDecision(flow, detail);
       throw new Error(detail);
     }
   }
   if (round.n === 1 && flow.targetSha && headSha.toLowerCase() !== flow.targetSha.toLowerCase()) {
-    const detail = `review target changed before launch: expected ${flow.targetSha}, found ${headSha}`;
+    const detail = `review target changed before launch: expected ${shortId(flow.targetSha)}, found ${shortId(headSha)}`;
     markNeedsDecision(flow, detail);
     throw new Error(detail);
   }
@@ -455,7 +462,7 @@ export interface RelayDeliveryOverrides {
   requireIdempotentDelivery?: boolean;
   /** Reports the selected transport before either structured or legacy
       actuation can begin, allowing the caller to checkpoint it. */
-  onTransportSelected?: (transport: RelayDeliveryTransport) => void;
+  onTransportSelected?: (transport: RelayDeliveryTransport) => void | Promise<void>;
 }
 
 export async function sendToImplementer(
@@ -495,7 +502,7 @@ export async function sendToImplementer(
          and the round keeps its durable client-message identity, so the relay
          that runs after the park lapses is the same one, not a duplicate. */
       if (overrides.holdWhenParked && recovered.hold) throw new RelayHeldByProviderLimitError(recovered.hold);
-      overrides.onTransportSelected?.("structured");
+      await overrides.onTransportSelected?.("structured");
       const structured = await (overrides.enqueueStructured ?? enqueueStructuredMessage)(
         {
           path: recovered.path,
@@ -551,7 +558,7 @@ export async function sendToImplementer(
     plugins: profile?.plugins,
   });
   if (!spec) throw new Error("implementer session cannot be resumed");
-  overrides.onTransportSelected?.("legacy");
+  await overrides.onTransportSelected?.("legacy");
   const outcome = await (overrides.deliver ?? deliverToTranscriptHost)({ entry, spec, payload: text });
   if (!outcome.ok) {
     if (outcome.actuation === "started") {
@@ -789,7 +796,7 @@ function withoutPreferredReviewerTier(role: RoleConfig): RoleConfig {
 
 /* Freeze the role actually admitted on the selected account for this round. */
 function prepareReviewerLaunch(flow: Flow, round: Round): PreparedReviewerLaunch {
-  let role = round.accountId || round.providerRetryCount ? reviewerRoleFor(flow, round) : flow.roles.reviewer;
+  let role = round.accountId || round.providerRetryCount || round.providerLimitWait ? reviewerRoleFor(flow, round) : flow.roles.reviewer;
   const required = role.serviceTierSource !== "role-default";
   let lacking: string[] = [];
   if (role.serviceTier) {
@@ -865,10 +872,10 @@ async function launchReviewer(
   round: Round,
   prepared: PreparedReviewerLaunch,
   reservation: Exclude<SpawnBeginResult, { kind: "conflict" }>,
-  persistCheckpoint: () => void,
+  persistCheckpoint: () => void | Promise<void>,
 ): Promise<void> {
   if (reservation.kind === "replay" && adoptReviewerReceipt(flow, round, reservation.receipt)) return;
-  persistCheckpoint();
+  await persistCheckpoint();
   const prompt = reviewerPrompt(flow, round);
   const { role, account } = prepared;
   flow.state = "reviewing";
@@ -905,16 +912,16 @@ async function launchReviewer(
        find and stop it. If a concurrent close/pause/retry took the flow over, the
        merge dropped our handle — the pane is an orphan, so kill it, and let a
        resume/retry re-spawn cleanly rather than parking as interrupted. */
-    persistCheckpoint();
+    await persistCheckpoint();
     const paneDisk = loadFlows().find((item) => item.id === flow.id);
     if (!reviewerLaunchPersisted(paneDisk, round)) {
-      if (adoptSyntheticLaunchTakeover(flow.id, round)) return;
+      if (await waitForStateLock("flows.adoptLaunch", () => adoptSyntheticLaunchTakeover(flow.id, round))) return;
       await stopOrphanPane(round);
-      if (paneDisk && paneDisk.state !== "closed") abandonLaunch(flow.id, round.n);
+      if (paneDisk && paneDisk.state !== "closed") await waitForStateLock("flows.abandonLaunch", () => abandonLaunch(flow.id, round.n));
     }
     return;
   }
-  const spawnCapability = agentRegistry().rotateSpawnCapabilityForReceipt(reservation.receipt.launchId);
+  const spawnCapability = (await agentRegistry().deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForReceipt" }, agentRegistry().rotateSpawnCapabilityForReceipt.bind(agentRegistry(), reservation.receipt.launchId)));
   const launched = await startHeadlessReview(
     flow.id,
     round.n,
@@ -934,12 +941,12 @@ async function launchReviewer(
      close/pause/retry took the flow over, terminate the orphan (forgetHeadlessReview
      SIGTERM/SIGKILLs the detached group) and clear the abandoned spawn markers so
      resume/retry re-spawns fresh. */
-  persistCheckpoint();
+  await persistCheckpoint();
   const headlessDisk = loadFlows().find((item) => item.id === flow.id);
   if (!reviewerLaunchPersisted(headlessDisk, round)) {
-    if (adoptSyntheticLaunchTakeover(flow.id, round)) return;
+    if (await waitForStateLock("flows.adoptLaunch", () => adoptSyntheticLaunchTakeover(flow.id, round))) return;
     forgetHeadlessReview(flow.id, round.n, round);
-    if (headlessDisk && headlessDisk.state !== "closed") abandonLaunch(flow.id, round.n);
+    if (headlessDisk && headlessDisk.state !== "closed") await waitForStateLock("flows.abandonLaunch", () => abandonLaunch(flow.id, round.n));
   }
 }
 
@@ -956,8 +963,8 @@ export function recordHeadlessLaunch(round: Round, launched: HeadlessReviewLaunc
 /** #2020: a headless reviewer that is gone stops fencing its conversation.
     Its row otherwise stays `starting` with a publication marker for good, and
     every message to the finished reviewer is refused as synchronizing. */
-function endHeadlessReviewerMarker(round: Round): void {
-  if (round.launchId) agentRegistry().endHostlessSpawn(round.launchId);
+function endHeadlessReviewerMarker(round: Round, registry: AgentRegistry = agentRegistry()): void {
+  if (round.launchId) registry.endHostlessSpawn(round.launchId);
 }
 
 /** Proof that a round's recorded reviewer process is gone: its pid vanished
@@ -984,10 +991,10 @@ function headlessReviewerMayRun(flows: readonly Flow[], launchId: string): boole
   return false;
 }
 
-function retryHeadlessRound(flow: Flow, round: Round, providerLabel: string | null = null, resumeAt?: number): void {
+function retryHeadlessRound(flow: Flow, round: Round, providerLabel: string | null = null, resumeAt?: number, registry: AgentRegistry | null = agentRegistry()): void {
   const provider = providerLabel !== null;
   forgetHeadlessReview(flow.id, round.n, round);
-  endHeadlessReviewerMarker(round);
+  if (registry) endHeadlessReviewerMarker(round, registry);
   clearHeadlessReviewArtifacts(flow.id, round.n);
   Object.assign(round, {
     reviewerPath: null,
@@ -1027,6 +1034,83 @@ function retryHeadlessRound(flow: Flow, round: Round, providerLabel: string | nu
     return;
   }
   flow.stateDetail = `reviewer produced no verdict; retrying automatically (${round.autoRetryCount}/${MAX_HEADLESS_NO_VERDICT_RETRIES})`;
+}
+
+const headlessGuardPasses = store.__llvHeadlessCreditGuardPasses ??= new WeakMap<AgentRegistry, Promise<void>>();
+
+/** Detached reviewers have no structured host. Their flow owns termination
+ * and retry, including across a Viewer restart with only a persisted PID. */
+export function enforceHeadlessAccountCreditGuard(registry: AgentRegistry, blockedAccounts: ReadonlySet<string>): Promise<void> {
+  const pending = headlessGuardPasses.get(registry);
+  if (pending) return pending;
+  const pass = withViewerOperation("controller.flows", async () => {
+    const cuts = accountGuardObligationStore(interruptionObligationDirectory(registry.filename));
+    const failures: unknown[] = [];
+    for (const flow of loadFlowsForTick()) {
+      try {
+        const round = lastRound(flow);
+        if (flow.reviewerMode !== "headless" || !round?.spawnStartedAt || !round.accountId
+          || !["reviewing", "spawning"].includes(flow.state === "paused" ? flow.pausedState ?? "" : flow.state)
+          || !round.reviewerPid && !round.reviewerPath
+          || reviewerRoleFor(flow, round).engine !== "codex" || !blockedAccounts.has(round.accountId)) continue;
+        const current = loadFlow(flow.id);
+        const currentRound = current && lastRound(current);
+        if (!currentRound || currentRound.reviewerBindingId !== round.reviewerBindingId
+          || currentRound.launchId !== round.launchId) continue;
+        const conversation = round.reviewerConversationId?.startsWith("conversation_")
+          ? registry.conversation(round.reviewerConversationId as `conversation_${string}`)
+          : round.reviewerPath ? registry.conversationForPath(round.reviewerPath) : null;
+        const generation = conversation?.generations.at(-1);
+        if (conversation && generation) await cuts.record({
+          conversationId: conversation.id, engine: "codex", hostKey: sessionKeyId({ engine: "codex", sessionId: generation.id }),
+          path: round.reviewerPath ?? generation.path,
+          owner: round.reviewerPid ? { pid: round.reviewerPid, startIdentity: round.reviewerIdentity ?? null } : null,
+          claimEpoch: null, turnRef: round.launchId ?? round.reviewerBindingId ?? null,
+          boundary: "paid-credit-guard", reason: "account-guard", checkpoint: { lastEventKind: null, lastEventAt: Date.now() },
+          seat: null, answeredBy: REVIEWER_CUT_RESOLUTION,
+        });
+        if (!await stopHeadlessReviewAndWait(flow.id, round.n, round)) {
+          throw new Error("paid-credit guard could not confirm reviewer termination");
+        }
+        if (round.launchId) {
+          const receipt = registry.readOnlySnapshot().receipts[round.launchId];
+          if (receipt && ["starting", "path-pending"].includes(receipt.state)) {
+            await registry.failSpawnOffLoop(receipt.launchId, "paid-credit guard stopped reviewer before transcript attribution");
+          }
+          await waitForStateLock("flows.creditGuardMarker", () => endHeadlessReviewerMarker(round, registry), { subject: "flows" });
+        }
+        // A concurrent pause/close or retry owns its new state. Only the stopped
+        // binding may be reset, and a paused round remains paused.
+        await patchFlowRows([flow.id], rows => rows.filter(row => {
+          const latest = lastRound(row);
+          if (!latest || latest.reviewerBindingId !== round.reviewerBindingId || latest.launchId !== round.launchId
+            || !["reviewing", "spawning"].includes(row.state === "paused" ? row.pausedState ?? "" : row.state)) return false;
+          const paused = row.state === "paused";
+          const role = reviewerRoleFor(row, latest);
+          const status = headlessReviewStatus(row.id, latest.n, latest, role.engine);
+          const parsed = readFindingsFile(latest) ?? (status?.status === "done" ? parseFindings(status.finalOutput) : null)
+            ?? fallbackReviewFromTranscript(latest, new Map(), role.engine);
+          if (parsed) {
+            applyVerdict(row, latest, parsed);
+            if (paused) { row.pausedState = row.state; row.state = "paused"; }
+            return true;
+          }
+          const retries = latest.autoRetryCount ?? 0;
+          retryHeadlessRound(row, latest, null, undefined, null);
+          latest.autoRetryCount = retries;
+          latest.reviewerRole = { ...role };
+          latest.providerLimitWait = { resetsAt: null, startedAt: isoNow(), capacityProbes: 0 };
+          if (paused) { row.state = "paused"; row.pausedState = "spawning"; }
+          row.stateDetail = "paid-credit guard stopped reviewer; waiting to relaunch on an allowed account";
+          return true;
+        }));
+      } catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, "paid-credit reviewer termination remains pending");
+  });
+  headlessGuardPasses.set(registry, pass);
+  void pass.then(() => { headlessGuardPasses.delete(registry); }, () => { headlessGuardPasses.delete(registry); });
+  return pass;
 }
 
 /**
@@ -1205,7 +1289,7 @@ export async function tickFlow(
   flow: Flow,
   entries: FileEntry[],
   entriesByPath: Map<string, FileEntry>,
-  persistCheckpoint: () => void,
+  persistCheckpoint: () => void | Promise<void>,
 ): Promise<boolean> {
   const before = JSON.stringify(flow);
   flow.implementerPath = currentConversationPath(flow.implementerConversationId, flow.implementerPath);
@@ -1400,7 +1484,7 @@ export async function tickFlow(
       );
       if (!reservation || !flowRevisionCurrent(flow)) return false;
       round.launchLeaseUntil = new Date(Date.now() + REVIEWER_LAUNCH_LEASE_MS).toISOString();
-      persistCheckpoint();
+      await persistCheckpoint();
       /* launchReviewer persists again after spawning (for the ownership/orphan
          check), so no extra checkpoint is needed here. */
       await launchReviewer(flow, round, prepared, reservation, persistCheckpoint);
@@ -1582,15 +1666,15 @@ export async function tickFlow(
         round.relayDeliveryTransport = null;
         round.relayStartedAt = isoNow();
         relayStartedThisProcess.add(relayKey);
-        persistCheckpoint();
+        await persistCheckpoint();
         await relayFindings(flow, entriesByPath, round, {
           requireIdempotentDelivery: round.relayRetryRequiresIdempotency ?? false,
-          onTransportSelected: (transport) => {
+          onTransportSelected: async (transport) => {
             round.relayDeliveryTransport = transport;
-            persistCheckpoint();
+            await persistCheckpoint();
           },
         });
-        persistCheckpoint();
+        await persistCheckpoint();
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         if (error instanceof RelayHeldByProviderLimitError) {
@@ -1605,7 +1689,7 @@ export async function tickFlow(
           scheduleRelayRetry(flow, round, detail, false);
         }
         relayStartedThisProcess.delete(relayKey);
-        persistCheckpoint();
+        await persistCheckpoint();
       }
     })();
     relayLeases.set(relayKey, lease);
@@ -1653,16 +1737,16 @@ export function flowTickBase(flows: Flow[]): Map<string, FlowTickBase> {
  *     disk: top-level roles/roundLimit/mode, and each unstarted round's
  *     reviewerRole (the tick never edits an unspawned round's snapshot — only
  *     set-roles does), so a config change without a lifecycle change survives.
- * Fully synchronous, so no patchFlow can interleave between the read and write.
+ * Preparation and SQL commit run together after asynchronous admission.
  */
-export function persistTickFlows(
+export async function persistTickFlows(
   flows: Flow[],
   base: Map<string, FlowTickBase>,
   candidateIds?: ReadonlySet<string>,
-): void {
+): Promise<void> {
   const tickById = new Map(flows.map((flow) => [flow.id, flow] as const));
   const ids = candidateIds ?? new Set(tickById.keys());
-  patchFlowRows(ids, (diskFlows) => {
+  await patchFlowRows(ids, (diskFlows) => {
     const changed: Flow[] = [];
     for (const diskFlow of diskFlows) {
       const tick = tickById.get(diskFlow.id);
@@ -1740,6 +1824,14 @@ export async function tickFlows(entries: FileEntry[]): Promise<TickResult> {
     return { flows, changed: false };
   }
   store.__llvFlowTick = true;
+  try {
+    const registry = agentRegistry();
+    const blocked = new Set(registry.quotaObservations("codex").filter(row => creditGuardBlock("codex", row.limits)).map(row => row.accountId));
+    if (blocked.size) await enforceHeadlessAccountCreditGuard(registry, blocked);
+  } catch (error) {
+    store.__llvFlowTick = false;
+    throw error;
+  }
   const flows = cloneFlows(loadFlowsForTick());
   const base = flowTickBase(flows);
   if (!store.__llvHostlessReviewerMarkersRepaired) {
@@ -1747,7 +1839,7 @@ export async function tickFlows(entries: FileEntry[]): Promise<TickResult> {
        (#2020). Once per process: nothing writes the old shape any more. */
     try {
       const persistedFlows = loadFlows();
-      agentRegistry().repairHostlessSpawnMarkers((launchId) => headlessReviewerMayRun(persistedFlows, launchId));
+      (await agentRegistry().deliveryWriteOrBusy({ label: "registry.repairHostlessSpawnMarkers" }, agentRegistry().repairHostlessSpawnMarkers.bind(agentRegistry(), (launchId) => headlessReviewerMayRun(persistedFlows, launchId))));
       store.__llvHostlessReviewerMarkersRepaired = true;
     } catch (error) {
       console.error("[flows] hostless reviewer marker repair failed", error);
@@ -1759,16 +1851,16 @@ export async function tickFlows(entries: FileEntry[]): Promise<TickResult> {
     let changed = false;
     for (const flow of flows) {
       if (TERMINAL_STATES.has(flow.state)) continue;
-      const flowChanged = await tickFlow(flow, entries, entriesByPath, () => {
-        persistTickFlows(flows, base, new Set([...changedIds, flow.id]));
+      const flowChanged = await tickFlow(flow, entries, entriesByPath, async () => {
+        await persistTickFlows(flows, base, new Set([...changedIds, flow.id]));
       });
       if (flowChanged) {
         changed = true;
         changedIds.add(flow.id);
-        persistTickFlows(flows, base, changedIds);
+        await persistTickFlows(flows, base, changedIds);
       }
     }
-    if (changed) persistTickFlows(flows, base, changedIds);
+    if (changed) await persistTickFlows(flows, base, changedIds);
     const projected = cloneFlows(loadFlows());
     annotateFlowEntries(entries, projected);
     return { flows: projected, changed };

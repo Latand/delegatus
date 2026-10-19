@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties, ReactNode } from "react";
 
 import { ChevronDown, Loader2, Mic, Play, Square, X } from "@/components/icons";
 import type { LucideIcon } from "lucide-react";
+import { useAutosizePinned } from "@/hooks/useAutosizePinned";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { watchComposerFocus } from "@/lib/composerFocus";
 import { useLocale } from "@/lib/i18n";
+import { watchTypingLatency } from "@/lib/typingLatencyBeacon";
 import type { UseComposerReturn } from "@/hooks/useComposer";
 import { prewarmLiveToken } from "@/hooks/useDictation";
 import { useMicPermissionHint } from "@/hooks/useMicPermissionHint";
@@ -17,6 +20,37 @@ import { Hint } from "./Hint";
 import { ImagePickerButton, ImagePreviewStrip } from "./imageAttachments";
 import { MicButtonView } from "./MicButton";
 import { Z } from "@/components/layers";
+
+/**
+ * The composer's field. It owns the text it shows: the draft lives in the
+ * composer's ref and this component subscribes to it, so a keystroke renders
+ * this one element instead of the bar and the pane composer around it.
+ *
+ * The callback ref keeps `inputRef` current and re-attaches the IME mirror when
+ * the field remounts — which it does whenever the bar moves between the card and
+ * the floating PiP document. Realtime dictation overlays its in-flight
+ * transcript on the draft here, and the grow-and-pin measurement runs beside
+ * the text it measures.
+ */
+function ComposerTextarea({ composer, ...props }: Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "ref"> & { composer: UseComposerReturn }) {
+  const { subscribeText, getText, attachInput, autosize, dictation } = composer;
+  const draft = useSyncExternalStore(subscribeText, getText, getText);
+  const value = dictation.liveText ? (draft ? draft.trimEnd() + " " : "") + dictation.liveText : draft;
+  const fieldRef = useRef<HTMLTextAreaElement | null>(null);
+  const focusWatch = useRef<{ document: Document; stop: () => void } | null>(null);
+  const attach = useCallback((el: HTMLTextAreaElement | null) => {
+    fieldRef.current = el;
+    attachInput(el);
+    /* The focus watch follows the document the field is in: a bar portalled
+       into the floating PiP window remounts its field there. */
+    const document = el?.ownerDocument ?? null;
+    if (focusWatch.current?.document === document) return;
+    focusWatch.current?.stop();
+    focusWatch.current = document ? { document, stop: watchComposerFocus(document) } : null;
+  }, [attachInput]);
+  useAutosizePinned(fieldRef, value, autosize);
+  return <textarea ref={attach} value={value} data-composer-field="" {...props} />;
+}
 
 export interface SendMenuAction {
   id: string;
@@ -354,9 +388,7 @@ export function ComposerBar({
   statusLine,
 }: ComposerBarProps) {
   const {
-    displayText,
     inputRef,
-    attachInput,
     dictation,
     setText,
     attachments,
@@ -374,6 +406,10 @@ export function ComposerBar({
   } = composer;
   const { t } = useLocale();
   const isMobile = useIsMobile();
+  /* A slow keystroke is recorded (numbers only) for the Viewer's journal. The
+     matching pause of the main-thread attention animations while a field has
+     the focus is registered by the field itself, per document. */
+  useEffect(() => watchTypingLatency(), []);
   const micHint = useMicPermissionHint();
   const [sendMenuOpen, setSendMenuOpen] = useState(false);
   /* Where the menu goes when it opens: measured off the send control, because
@@ -471,6 +507,8 @@ export function ComposerBar({
         <button
           type={slotActs || (dictationRecording && !sendBlocked) ? "button" : "submit"}
           data-mobile2-send={isMobile ? slotKind : undefined}
+          data-composer-send={dictationRecording ? "recording" : slotKind}
+          data-composer-send-tone={mode === "context" ? "info" : undefined}
           onClick={
             slotActs
               ? () => sendSlot?.onAct?.()
@@ -507,6 +545,7 @@ export function ComposerBar({
         >
           {isMobile ? (
             <span
+              data-composer-send-visual={dictationRecording ? "recording" : slotKind === "stop" || slotKind === "respawn" ? slotKind : slotSubmits && !effectiveCanSend && !hasSendMenu ? "idle" : "ready"}
               style={slotSubmits && !dictationRecording && effectiveCanSend ? sendIdleStyle : undefined}
               className={`inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-control border text-ui font-semibold transition-[scale] duration-[120ms] ease-out motion-safe:group-enabled/send:group-active/send:scale-[0.96] ${slotWide ? "px-2.5" : ""} ${
                 dictationRecording ? "border-danger bg-danger text-white" : slotFill
@@ -529,7 +568,7 @@ export function ComposerBar({
           aria-expanded={sendMenuOpen}
           onPointerDown={(event) => event.stopPropagation()}
           onClick={toggleSendMenu}
-          className={`inline-flex shrink-0 items-center justify-center rounded-control text-secondary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${isMobile ? "h-11 w-11" : "ml-1 p-2"}`}
+          className={`composer-ghost inline-flex shrink-0 items-center justify-center rounded-control text-secondary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${isMobile ? "h-11 w-11" : "ml-1 p-2"}`}
         >
           <ChevronDown className="h-4 w-4" aria-hidden />
         </button>
@@ -554,7 +593,7 @@ export function ComposerBar({
       <ImagePickerButton
         acceptFiles={attachments.acceptsFiles}
         ariaLabel={imageAriaLabel}
-        className={`inline-flex shrink-0 items-center justify-center rounded-control text-muted hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${iconBtn}`}
+        className={`composer-ghost inline-flex shrink-0 items-center justify-center rounded-control text-muted hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${iconBtn}`}
         onFiles={onAttachFiles ?? attachments.addFiles}
         /* An unavailable image capability no longer closes the picker
            outright where files are deliverable (#1224) — a document
@@ -712,12 +751,8 @@ export function ComposerBar({
                 }`
           }
         >
-          <textarea
-            /* The callback ref keeps `inputRef` current and re-attaches the IME
-               mirror when the field remounts — which it does whenever this bar
-               moves between the card and the floating PiP document. */
-            ref={attachInput}
-            value={displayText}
+          <ComposerTextarea
+            composer={composer}
             /* Native spelling can block Chromium's renderer on pasted transcripts. */
             spellCheck={false}
             rows={1}
@@ -768,7 +803,7 @@ export function ComposerBar({
                  recalled multi-line message can be stepped past; the first edit
                  releases the arrows back to caret movement. */
               if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !dictationRecording && !event.metaKey && !event.ctrlKey && !event.altKey) {
-                const recall = recallHistory(historyIndex, event.key, history, displayText.length === 0);
+                const recall = recallHistory(historyIndex, event.key, history, event.currentTarget.value.length === 0);
                 if (recall) {
                   event.preventDefault();
                   setHistoryIndex(recall.index);

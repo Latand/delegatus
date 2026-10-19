@@ -2,9 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 
-import { loadTasks, loadTasksForList, mutateTasks } from "./store";
+import { loadTasks, loadTasksForList, mutateTasks, saveTasks } from "./store";
 import type { BoardTask } from "./types";
 
 /* The shared task list (viewer-hot-path-clones): the board, the task route and
@@ -100,4 +100,49 @@ test("every write reaches the next list, and the list a reader already holds sta
   mutateTasks((current) => ({ tasks: current.filter((row) => row.id !== "b"), result: null }), file);
   expect(loadTasksForList(file).map((row) => row.id)).toEqual(["a", "c", "d"]);
   expect(before.map((row) => row.id)).toEqual(["a", "b", "c"]);
+});
+
+test("task row batches refresh project aliases between reads and mutations", () => {
+  const file = store();
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.dirname(file);
+  const aliases = path.join(path.dirname(file), "project-aliases.json");
+  const replaceAliases = (value: Record<string, string>) => fs.writeFileSync(aliases,
+    JSON.stringify({ schemaVersion: 1, aliases: value, displayNames: {} }));
+  try {
+    replaceAliases({ proj: "first-project" });
+    const first = loadTasksForList(file);
+    expect(first.filter(row => row.id !== "c").map(row => row.project)).toEqual(["first-project", "first-project"]);
+    replaceAliases({ proj: "first-project", "first-project": "second-project-name" });
+    mutateTasks(current => {
+      expect(current[0]!.project).toBe("second-project-name");
+      current[0]!.text = "Updated in the current project";
+      return { tasks: current, result: null };
+    }, file);
+    expect(loadTasks(file).filter(row => row.id !== "c").map(row => row.project)).toEqual(["second-project-name", "second-project-name"]);
+    expect(first[0]!.project).toBe("first-project");
+    expect(loadTasks(file).find(row => row.id === "c")?.project).toBe("other");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+test("warm list reads reuse project membership instead of resolving aliases per retained task", () => {
+  const file = store();
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.dirname(file);
+  try {
+    saveTasks(Array.from({ length: 1000 }, (_, index) => task(`scaled-${index}`, { project: `project-${index % 5}` })), file);
+    const expected = loadTasksForList(file);
+    const stat = spyOn(fs, "statSync");
+    try {
+      for (let pass = 0; pass < 3; pass++) expect(loadTasksForList(file)).toBe(expected);
+      const aliasChecks = stat.mock.calls.filter(([filename]) => String(filename).endsWith("project-aliases.json"));
+      expect(aliasChecks.length).toBeLessThanOrEqual(3);
+    } finally { stat.mockRestore(); }
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+  }
 });

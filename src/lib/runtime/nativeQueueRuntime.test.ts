@@ -6,7 +6,8 @@ import { NextRequest } from "next/server";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { NativeCodexQueue, NativeQueueProtocolRefusal, type NativeQueuedSubmission } from "./nativeCodexQueue";
-import { NativeQueueExecutor } from "./nativeQueueExecutor";
+import { NativeQueueExecutor, withdrawNativeSeatMessage } from "./nativeQueueExecutor";
+import { StructuredSendRefusedError } from "./engineHost";
 import type { EngineHost } from "./engineHost";
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import type { NativeQueueCommand, NativeQueueProof, NativeQueueRecord } from "./nativeQueueContracts";
@@ -44,12 +45,19 @@ function fixture(journal = makeJournal()) {
   let refuseDelete = false;
   let refuseUpdate = false;
   let proof: NativeQueueProof | null = null;
+  let holdAdd = false;
+  let addStarted: (() => void) | null = null;
+  let releaseAdd: (() => void) | null = null;
   const queue = new NativeCodexQueue({ rpc: async (method, params) => {
     calls.push(method);
     if (method === "thread/queue/list") return { data: items, nextCursor: null };
     if (method === "thread/queue/add") {
       const queuedSubmission = { id: `native-${++next}`, clientUserMessageId: params.clientUserMessageId as string, input: params.input as NativeQueuedSubmission["input"] };
       items.push(queuedSubmission);
+      if (holdAdd) {
+        addStarted?.();
+        await new Promise<void>(resolve => { releaseAdd = resolve; });
+      }
       if (loseAdd) throw new Error("lost add reply");
       return { queuedSubmission };
     }
@@ -95,6 +103,9 @@ function fixture(journal = makeJournal()) {
   } as unknown as EngineHost;
   const executor = new NativeQueueExecutor({ client, resolveHost: () => host, binding: () => liveBinding });
   return { journal, client, executor, host, calls, queue, startedSubmissionIds, get items() { return items; },
+    holdAdd: () => { holdAdd = true; },
+    waitAddStarted: () => new Promise<void>(resolve => { addStarted = resolve; }),
+    releaseAdd: () => releaseAdd?.(),
     loseAdd: () => { loseAdd = true; }, race: () => { raceDelete = true; }, refuseDelete: () => { refuseDelete = true; },
     refuseUpdate: (value = true) => { refuseUpdate = value; },
     /* The host goes idle AND the journal's session projection says so: the
@@ -114,6 +125,33 @@ function fixture(journal = makeJournal()) {
         turnId: "canonical-turn", itemId: "canonical-item", input: entry.versions.at(-1)!.input! };
     } };
 }
+
+test.each(["add", "start", "update", "send-now"] as const)("native %s checks account admission after the prepared journal write", async action => {
+  const f = fixture();
+  try {
+    const seed = command("seed");
+    if (action !== "add") { f.journal.executeOperation(seed); await f.executor.execute(seed); }
+    if (action === "start") f.idle();
+    const c = command("guarded", action === "add" ? {} : action === "start" ? { action, turnId: null }
+      : { action, entryId: seed.operationId, expectedRevision: 1, ...(action === "send-now" ? { turnId: "active-a" } : {}) });
+    let guarded = false;
+    const transition = f.client.nativeQueueTransition!.bind(f.client);
+    f.client.nativeQueueTransition = async (id, change) => {
+      if (id === c.operationId && change.phase === "prepared") guarded = true;
+      return transition(id, change);
+    };
+    const executor = new NativeQueueExecutor({ client: f.client, resolveHost: () => f.host, binding: () => binding,
+      authorizeDispatch: () => { if (guarded) throw new StructuredSendRefusedError("paid-credit guard"); } });
+    const before = f.calls.length;
+    f.journal.executeOperation(c); await executor.execute(c);
+    expect(f.calls).toHaveLength(before);
+    expect(f.journal.operationResult(c.operationId)?.receipt).toMatchObject({ status: "failed", reason: "paid-credit guard" });
+    guarded = false;
+    const peer = command("after-reset");
+    f.journal.executeOperation(peer); await executor.execute(peer);
+    expect(f.calls.at(-1)).toBe("thread/queue/add");
+  } finally { f.journal.close(); }
+});
 
 test("native add keeps Viewer/client/native IDs distinct; duplicate Viewer admission never adds twice", async () => {
   const f = fixture();
@@ -1299,4 +1337,88 @@ test.each([
   expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(0);
   expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("refused");
   f.journal.close();
+});
+
+for (const refusal of [false, true]) test(`seat channel native withdrawal proves deletion (native refusal: ${refusal})`, async () => {
+  const f = fixture();
+  try {
+    const add = command("seat-channel-native");
+    f.journal.executeOperation(add);
+    await f.executor.execute(add);
+    expect(f.items).toHaveLength(1);
+    if (refusal) f.refuseDelete();
+    const removed = await withdrawNativeSeatMessage(conversationId, add.operationId, f.client, f.executor);
+    expect(removed).toBe(!refusal);
+    expect(f.items).toHaveLength(refusal ? 1 : 0);
+    expect(f.calls).toContain("thread/queue/delete");
+    if (!refusal) {
+      expect(f.journal.nativeQueueRead(conversationId)[0]!.state).toBe("removed");
+      expect(await withdrawNativeSeatMessage(conversationId, add.operationId, f.client, f.executor)).toBe(true);
+      expect(f.calls.filter(method => method === "thread/queue/delete")).toHaveLength(1);
+    }
+  } finally { f.journal.close(); }
+});
+
+test("seat withdrawal keeps custody while an accepted native add is awaiting its acknowledgement", async () => {
+  const f = fixture();
+  let dispatch: Promise<void | false> | undefined;
+  try {
+    const add = command("seat-channel-add-in-flight");
+    f.journal.executeOperation(add);
+    f.holdAdd();
+    const started = f.waitAddStarted();
+    dispatch = f.executor.execute(add);
+    await started;
+
+    expect(f.items).toHaveLength(1);
+    expect(f.journal.operationResult(add.operationId)?.receipt.status).toBe("delivering");
+    expect(await withdrawNativeSeatMessage(conversationId, add.operationId, f.client, f.executor)).toBe(false);
+    expect(f.journal.operationResult(add.operationId)?.receipt.status).toBe("delivering");
+    expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("admitted");
+    expect(f.items).toHaveLength(1);
+
+    f.releaseAdd();
+    await dispatch;
+    expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("queued");
+    expect(await withdrawNativeSeatMessage(conversationId, add.operationId, f.client, f.executor)).toBe(true);
+    expect(f.items).toHaveLength(0);
+    expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("removed");
+  } finally { f.releaseAdd(); await dispatch; f.journal.close(); }
+});
+
+test("seat withdrawal wins atomically before native add preparation", async () => {
+  const f = fixture();
+  try {
+    const add = command("seat-channel-before-prepare");
+    f.journal.executeOperation(add);
+
+    expect(await withdrawNativeSeatMessage(conversationId, add.operationId, f.client, f.executor)).toBe(true);
+    await f.executor.execute(add);
+
+    expect(f.journal.operationResult(add.operationId)?.receipt).toMatchObject({ status: "failed", reason: expect.stringContaining("orchestrator seat") });
+    expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("refused");
+    expect(f.items).toHaveLength(0);
+    expect(f.calls).not.toContain("thread/queue/add");
+  } finally { f.journal.close(); }
+});
+
+test("the native add settled fence refuses a seat revoked after the drain check", async () => {
+  const f = fixture();
+  const add = command("seat-channel-native-race");
+  f.journal.executeOperation(add);
+  let reads = 0;
+  const reason = "the orchestrator seat was replaced before this reached it; it was not delivered there";
+  const queue = new StructuredDeliveryQueue({
+    effects: async (kinds, after) => f.journal.effectBatch(100, kinds, after),
+    status: async id => f.journal.operationResult(id)?.receipt ?? null,
+    transition: async (id, status, details) => { f.journal.transitionOperation(id, status, details); },
+    seatRecipient: () => ++reads === 1 ? { kind: "open" } : { kind: "revoked", reason },
+    nativeQueueExecute: (command, refusal, note, step, settled) => f.executor.execute(command, refusal, note, step, settled),
+  }, () => f.host);
+  try {
+    await queue.drain();
+    expect(f.items).toHaveLength(0);
+    expect(f.calls).not.toContain("thread/queue/add");
+    expect(f.journal.operationResult(add.operationId)?.receipt).toMatchObject({ status: "failed", reason });
+  } finally { f.journal.close(); }
 });

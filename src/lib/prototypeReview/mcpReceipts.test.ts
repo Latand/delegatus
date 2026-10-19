@@ -10,10 +10,15 @@ import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
 import * as bot from "@/lib/telegram/bot/service";
 import fs from "node:fs/promises";
 import path from "node:path";
+import sharp from "sharp";
+import { Database } from "bun:sqlite";
 import { NextRequest } from "next/server";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
-import { viewerMcpBindings } from "@/lib/mcp/bindings";
+import { viewerMcpBindings, productionViewerControlDependencies } from "@/lib/mcp/bindings";
+import { deadlineSignal } from "@/lib/deadline";
+import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
+import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
 import { runAsMcpHttpCaller } from "@/lib/mcp/callerContext";
 import { createMcpToolService, SqliteMcpReceiptStore, type McpReceiptStore, type McpToolResult } from "@/lib/mcp/server";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -85,6 +90,13 @@ async function input(key: string, taskId?: string) {
   ] };
 }
 const rounds = (taskId: string) => loadTasks().find(t => t.id === taskId)?.prototypeReviews ?? [];
+
+async function reached(phase: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout>;
+  try {
+    await Promise.race([phase, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("publication phase was not reached")), 5_000); })]);
+  } finally { clearTimeout(timer!); }
+}
 
 beforeEach(async () => {
   sandbox = await fs.mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "prototype-receipts-")); roots.push(sandbox);
@@ -234,3 +246,203 @@ test("a publication whose process stopped before dispatch publishes once on the 
   expect(second).toMatchObject({ ok: true, replayed: true, reviewId: first.reviewId });
   expect(rounds("task-a")).toHaveLength(1);
 });
+
+/** Real fetch/abort handling, an ephemeral listener, and the production route
+    and SQLite receipts. No request can reach an installed Viewer. */
+async function overHttp(run: (call: (args: Record<string, unknown>, budgetMs: number) => Promise<Record<string, unknown>>) => Promise<void>,
+  respond: (url: string, answer: Record<string, unknown>) => Response = (_url, answer) => Response.json(answer)) {
+  const previous = process.env.LLV_VIEWER_CONTROL_URL;
+  const pending = new Set<Promise<Response>>();
+  const routes = control();
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 60, fetch(req) {
+    const response = (async () => {
+      const body = await req.json() as Record<string, unknown>;
+      const url = new URL(req.url).pathname;
+      try { return respond(url, await routes.post(url, body, Object.fromEntries(req.headers))); }
+      catch (error) { return Response.json({ error: String(error) }, { status: 500 }); }
+    })();
+    pending.add(response);
+    void response.finally(() => pending.delete(response));
+    return response;
+  } });
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  const stores: SqliteMcpReceiptStore[] = [];
+  try {
+    await run(async (args, budgetMs) => {
+      const deadline = deadlineSignal(budgetMs);
+      const store = new SqliteMcpReceiptStore(receiptFile()); stores.push(store);
+      // Each retry reopens the durable receipt, like a reconnected MCP client.
+      const client = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), store);
+      try { return await as(CAPABILITY.a, () => client.callTool("publish_prototype_review", args, { deadlineAt: Date.now() + budgetMs, signal: deadline.signal })); }
+      finally { deadline.release(); }
+    });
+  } finally {
+    await Promise.all(pending);
+    await server.stop(true);
+    for (const store of stores) store.close();
+    if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = previous;
+  }
+}
+
+async function largeInput() {
+  const root = await frames();
+  const raw = Buffer.alloc(256 * 200 * 3);
+  let seed = 123456;
+  for (let i = 0; i < raw.length; i++) { seed = (Math.imul(seed, 1664525) + 1013904223) | 0; raw[i] = seed >>> 24; }
+  const variants = Array.from({ length: 4 }, (_, i) => ({ number: i + 1, name: `Layout ${i + 1}`, description: "A complete layout.", frames: [] as { path: string; caption: string }[] }));
+  let bytes = 0;
+  for (let i = 0; i < 135; i++) {
+    raw.writeUInt32LE(i, 0);
+    const png = await sharp(raw, { raw: { width: 256, height: 200, channels: 3 } }).png({ compressionLevel: 0 }).toBuffer();
+    const filename = path.join(root, `frame-${i}.png`);
+    await fs.writeFile(filename, png); bytes += png.length;
+    variants[i % 4]!.frames.push({ path: filename, caption: `Frame ${i + 1}` });
+  }
+  expect(bytes).toBeGreaterThanOrEqual(20_000_000);
+  return { clientRequestId: "large-publication", taskId: "task-a", title: "Large layout review", variants };
+}
+
+test("135 PNG frames totaling 20 MB publish successfully while Telegram takes longer than the old control budget", async () => {
+  const args = await largeInput();
+  let sends = 0, pulses = 0;
+  let phase: string | undefined;
+  const pulse = setInterval(() => { pulses++; }, 10);
+  const sender = spyOn(bot.TelegramBotService.prototype, "sendOwnerReview").mockImplementation(async () => {
+    sends++; phase = viewerLoopMonitor.current();
+    await Bun.sleep(13_000);
+    return { alreadySent: false, sentAt: "2026-10-15T00:00:00Z", parts: 1, messageIds: [10], chat: "fixture", chatId: "41", attributedTo: { unidentified: true } };
+  });
+  try {
+    await overHttp(async call => {
+      const first = await call(args, 30_000);
+      expect(first).toMatchObject({ ok: true, frames: 135, variants: 4 });
+      expect(first.reviewId).toBe(rounds("task-a")[0]!.id);
+      expect(rounds("task-a")).toHaveLength(1);
+      expect(rounds("task-a")[0]!.telegramPost?.state).toBe("sent");
+      expect(await call(args, 30_000)).toMatchObject({ ok: true, replayed: true, reviewId: first.reviewId });
+    });
+    expect(sends).toBe(1);
+    expect(phase).toBe("prototype.telegram");
+    expect(pulses).toBeGreaterThan(0);
+  } finally { clearInterval(pulse); sender.mockRestore(); }
+}, 40_000);
+
+test("a timed out publication stays recoverable under its original key and returns exactly one review", async () => {
+  const args = await input("wait-expired", "task-a");
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const sending = new Promise<void>(resolve => { entered = resolve; });
+  const sender = spyOn(bot.TelegramBotService.prototype, "sendOwnerReview").mockImplementation(async () => {
+    entered(); await held;
+    return { alreadySent: false, sentAt: "2026-10-15T00:00:00Z", parts: 1, messageIds: [10], chat: "fixture", chatId: "41", attributedTo: { unidentified: true } };
+  });
+  try {
+    await overHttp(async call => {
+      try {
+        const first = call(args, 1_000);
+        await reached(sending);
+        const waiting = await first;
+        expect(waiting).toMatchObject({ ok: false, code: "publication_in_progress", retryable: true, details: { nextAction: "retry-same-key", outcome: "unknown" } });
+        const recorded = rounds("task-a")[0]!.id;
+        // A retry while the same send is still held remains open too.
+        expect(await call(args, 1_000)).toMatchObject({ ok: false, code: "publication_in_progress", retryable: true });
+        const db = new Database(receiptFile(), { readonly: true });
+        try { expect(db.query("SELECT result_json FROM mcp_receipts").all()).toEqual([{ result_json: null }]); }
+        finally { db.close(); }
+        release();
+        const retry = await call(args, 30_000);
+        expect(retry).toMatchObject({ ok: true, reviewId: recorded });
+        expect(await call(args, 30_000)).toMatchObject({ ok: true, replayed: true, reviewId: recorded });
+        expect(rounds("task-a")).toHaveLength(1);
+        expect(sender).toHaveBeenCalledTimes(1);
+      } finally { release(); }
+    });
+  } finally { sender.mockRestore(); }
+}, 15_000);
+
+test("a wait expiring during media copy is recovered after the original request commits", async () => {
+  const args = await input("copy-wait-expired", "task-a");
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const copying = new Promise<void>(resolve => { entered = resolve; });
+  const write = fs.writeFile.bind(fs);
+  let copies = 0;
+  const slowCopy = spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+    if (String(file).includes(`${path.sep}.publish-`) && String(file).endsWith(".png")) { copies++; entered(); await held; }
+    return write(file, data, options);
+  });
+  const sender = spyOn(bot.TelegramBotService.prototype, "sendOwnerReview").mockResolvedValue(null);
+  try {
+    await overHttp(async call => {
+      try {
+        const first = call(args, 1_000);
+        await reached(copying);
+        expect(await first).toMatchObject({ ok: false, code: "publication_in_progress" });
+        expect(rounds("task-a")).toHaveLength(0);
+        const retry = call(args, 30_000);
+        release();
+        const result = await retry;
+        expect(result).toMatchObject({ ok: true });
+        expect(rounds("task-a")).toHaveLength(1);
+        expect(result.reviewId).toBe(rounds("task-a")[0]!.id);
+        expect(copies).toBe(1);
+      } finally { release(); }
+    });
+  } finally { slowCopy.mockRestore(); sender.mockRestore(); }
+}, 15_000);
+
+test("legacy retryable publication errors recover the stored round without its source files", async () => {
+  const args = await input("legacy-wait-expired", "task-a");
+  const store = new SqliteMcpReceiptStore(receiptFile());
+  const complete = store.complete.bind(store);
+  store.complete = (key, digest, result, retention) => complete(key, digest, {
+    ok: false, toolName: "publish_prototype_review", clientRequestId: args.clientRequestId, replayed: false,
+    code: "tool_failed", error: "Viewer control did not reconnect after 3 attempts (attempt timed out)", retryable: true,
+  }, retention);
+  const original = await as(CAPABILITY.a, () => service(store).callTool("publish_prototype_review", args));
+  store.close();
+  for (const root of roots.filter(root => root !== sandbox)) await fs.rm(root, { recursive: true, force: true });
+  expect(await as(CAPABILITY.a, () => service().callTool("publish_prototype_review", args))).toMatchObject({ ok: true, reviewId: original.reviewId });
+  expect(await as(CAPABILITY.a, () => service().callTool("publish_prototype_review", args))).toMatchObject({ ok: true, replayed: true, reviewId: original.reviewId });
+  expect(rounds("task-a")).toHaveLength(1);
+});
+
+test("a lost publication response remains open until a retry receives the real review id", async () => {
+  const args = await input("lost-publication-response", "task-a");
+  let loseResponse = true;
+  await overHttp(async call => {
+    expect(await call(args, 30_000)).toMatchObject({ ok: false, code: "publication_in_progress" });
+    const recorded = rounds("task-a")[0]!.id;
+    expect(await call(args, 30_000)).toMatchObject({ ok: true, reviewId: recorded });
+    expect(rounds("task-a")).toHaveLength(1);
+  }, (url, answer) => {
+    if (url === "/api/prototype-reviews" && loseResponse) { loseResponse = false; return Response.json(null); }
+    return Response.json(answer);
+  });
+});
+
+test("publication state writes wait for a peer SQLite lock while an independent timer advances", async () => {
+  const args = await input("contended-publication", "task-a");
+  const ready = path.join(sandbox, "holder.ready");
+  const child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "../state/lockWait.fixture.ts"), "hold",
+    path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), ready, path.join(sandbox, "go"), "500"],
+  { env: { ...process.env, NODE_ENV: "test", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, stdout: "pipe", stderr: "pipe" });
+  let waitingTicks = 0;
+  const timer = setInterval(() => { if (stateLockWaitsInFlight().length) waitingTicks++; }, 5);
+  try {
+    const deadline = Date.now() + 5_000;
+    while (!await fs.stat(ready).then(() => true, () => false)) {
+      if (child.exitCode !== null || Date.now() > deadline) throw new Error("SQLite peer did not become ready");
+      await Bun.sleep(5);
+    }
+    const result = await as(CAPABILITY.a, () => service().callTool("publish_prototype_review", args));
+    expect(result).toMatchObject({ ok: true });
+    expect(waitingTicks).toBeGreaterThan(5);
+    expect(await child.exited).toBe(0);
+  } finally {
+    clearInterval(timer);
+    if (child.exitCode === null) child.kill();
+    await child.exited;
+  }
+}, 10_000);

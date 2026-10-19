@@ -135,6 +135,19 @@
  * opens the owner's `?member=all` link lands on their own page with `member`
  * gone from the address.
  *
+ * With BOARD_CAPTURE_CASE=activity-tokens it frames the Activity page's
+ * Tokens tab (docs/design/activity-token-usage.md §9.2) over a token store
+ * seeded through the ingest's own commit (src/lib/activity/tokenEvidence.fixture.ts):
+ * seven days, the free range open and applied, one project, by member, by
+ * account, by kind, the amber coverage popover, the drawer, a range wholly
+ * before counting, the loading and error states, nothing counted yet, and the
+ * Time tab on the same free range over a seeded history of your input and
+ * agent runs, at 1440, 1024 and 390 px, light and dark,
+ * uk and en. It measures overflow, cut text, chart text, the range control and
+ * its fields, the optional extras, the kinds and target sizes, and times the
+ * Time tab's read and render over 366 days. With ACTIVITY_RENDER_DIR set, the
+ * frames are copied there.
+ *
  * With BOARD_CAPTURE_CASE=lightbox it walks the full-screen image viewer
  * through one conversation's 26 invented pictures (#2144): inbox attachments,
  * markdown images and pictures a tool showed its agent, interleaved. It opens
@@ -189,7 +202,7 @@
  * with neither archived row drawn beside it, at 1440 × 900 in en and uk.
  *
  * With BOARD_CAPTURE_CASE=registry-history it opens the board over the
- * candidate performance gate's synthetic registry, about 30,000 rows of
+ * candidate performance gate's synthetic registry, 53,299 rows of
  * retained history (#2761), in eight real browser views that each pin their
  * own conversation, while two writer processes keep writing grant-bearing
  * rows. From navigation, every view must draw its board within ten seconds,
@@ -227,7 +240,7 @@ import { nestProcessTempUnder } from "../src/lib/tempDirs";
 import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
 import { createCaptureDirectory } from "./capture-directory";
-import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "../src/lib/selfUpdate/types";
+import { idleCheck, idleUpdate, stoppedProcess, MANAGED_STEPS, pendingSteps, type Snapshot } from "../src/lib/selfUpdate/types";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 /* The commit the record was captured from. A `git archive` export has no repository, so the caller
@@ -7181,6 +7194,36 @@ async function selfUpdateInstallMain(): Promise<void> {
       update: { ...idleUpdate(), state: "failed", rolledBack: rollback, target: next, targetShort: next.slice(0, 7), startedAt: "2026-01-02T00:00:00Z", finishedAt: "2026-01-02T00:01:00Z",
         steps: [...idleUpdate().steps.map(step => ({ ...step, state: "done" as const })), { name: "switch", state: "failed", startedAt: "2026-01-02T00:00:00Z", durationMs: 60_000, exitCode: null, tail: [], failure: { kind: "error", text: rollback ? "The replacement rolled back to the previous release" : "Runtime host health is unavailable" } }] } };
   }
+  const managedEvidence = process.env.BOARD_CAPTURE_CASE === "managed-update";
+  const failed = { ...idleUpdate(MANAGED_STEPS), state: "failed" as const, target: next, targetShort: next.slice(0, 7),
+    startedAt: "2026-01-02T00:00:00Z", finishedAt: "2026-01-02T00:01:00Z",
+    steps: pendingSteps(MANAGED_STEPS).map(step => step.name === "health" ? { ...step, state: "failed" as const,
+      failure: { kind: "error" as const, text: "adoption 2 of 2 - recovering pending spawns timed out" } } : step) };
+  const newer = "c".repeat(40);
+  const servingWeb = "d".repeat(40);
+  const managed: Snapshot = { ...base, mode: "managed", installed: revision(servingWeb), available: revision(newer),
+    processes: { web: processView(servingWeb), runtimeHost: processView(old) },
+    serving: { web: revision(servingWeb), runtimeHost: revision(old) }, check: { ...base.check, state: "update-available", relation: "behind", behind: 3 },
+    auto: idleAuto, update: failed };
+  states["managed-failed"] = managed;
+  states["managed-rolling-back"] = { ...managed, busy: "update", update: { ...failed, rollback: "running" } };
+  states["managed-rollback-failed"] = { ...managed, update: { ...failed, steps: failed.steps.map(step =>
+    step.state === "failed" ? { ...step, failure: { kind: "error", text: "recovering pending spawns timed out; rollback could not prove owner death" } } : step) } };
+  states["managed-rolled-back"] = { ...managed, installed: revision(old),
+    serving: { web: revision(old), runtimeHost: revision(old) }, processes: { web: processView(old), runtimeHost: processView(old) },
+    update: { ...failed, rolledBack: true, rollback: "done" } };
+  states["managed-external-success"] = { ...managed, available: null, installed: revision(newer),
+    serving: { web: revision(newer), runtimeHost: revision(newer) },
+    processes: { web: processView(newer), runtimeHost: processView(newer) },
+    check: { ...base.check, state: "up-to-date", relation: "equal" }, previousAttempt: failed,
+    update: { ...idleUpdate(MANAGED_STEPS), state: "done", target: newer, targetShort: newer.slice(0, 7),
+      startedAt: "2026-01-02T00:02:00Z", finishedAt: "2026-01-02T00:03:00Z",
+      steps: pendingSteps(MANAGED_STEPS).map(step => ({ ...step, state: "done" as const })) } };
+  states["managed-external-success-unknown-host"] = { ...states["managed-external-success"]!,
+    serving: { web: revision(newer), runtimeHost: null },
+    processes: { web: processView(newer), runtimeHost: { ...stoppedProcess(), state: "failed", tail: [] } } };
+  states["managed-unknown-host"] = { ...managed, serving: { web: revision(next), runtimeHost: null },
+    processes: { ...managed.processes, runtimeHost: { ...stoppedProcess(), state: "failed", tail: [] } } };
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
   const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
@@ -7192,11 +7235,14 @@ async function selfUpdateInstallMain(): Promise<void> {
     // The isolated install's first-run toast otherwise covers phone choices.
     const telemetry = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
     if (!telemetry.ok) throw new Error(`dismissing the capture notice answered ${telemetry.status}`);
-    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
-    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const [name, snapshot] of Object.entries(states)) {
+    browser = await chromium.launch({ ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    for (const width of managedEvidence ? [1440, 1000, 390] : [1440, 390]) for (const lang of ["en", "uk"] as const)
+      for (const colorScheme of managedEvidence ? ["light", "dark"] as const : ["light"] as const)
+      for (const [name, snapshot] of Object.entries(states).filter(([name]) => managedEvidence ? name.startsWith("managed-") : !name.startsWith("managed-"))) {
       const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
       if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
-      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce" });
+      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, colorScheme, reducedMotion: "reduce",
+        ...(managedEvidence && width === 390 ? { isMobile: true, hasTouch: true } : {}) });
       await context.addInitScript(seedInit);
       await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
       const page = await context.newPage();
@@ -7208,7 +7254,23 @@ async function selfUpdateInstallMain(): Promise<void> {
         window.dispatchEvent(new Event("llv:open-self-update"));
         return false;
       }, undefined, { timeout: 60_000 });
-      const tag = `${width}-${lang}-${name}`;
+      const tag = `${width}-${lang}-${name}${managedEvidence ? `-${colorScheme}` : ""}`;
+      const externalSuccess = snapshot.update.state === "done" && snapshot.previousAttempt?.state === "failed";
+      if (managedEvidence) {
+        const header = page.locator('[data-section="header"]');
+        await header.scrollIntoViewIfNeeded();
+        const text = await header.innerText();
+        if (!snapshot.serving.web || !text.includes(snapshot.serving.web.short)) report.failures.push(`${tag}: serving web revision is absent`);
+        if (!snapshot.serving.runtimeHost && !text.includes(lang === "uk" ? "ревізія невідома" : "unknown revision")) report.failures.push(`${tag}: unknown host is hidden`);
+        const unconfirmed = messages[lang]["selfUpdate.applied.managedUnconfirmed"];
+        if (externalSuccess && !snapshot.serving.runtimeHost && (typeof unconfirmed !== "string"
+          || !(await page.locator('[data-outcome="done"]').innerText()).includes(unconfirmed)))
+          report.failures.push(`${tag}: completion claims an unconfirmed host revision`);
+        report.frames[`${tag}-header`] = { text };
+        const frame = path.join(OUT_DIR, `${tag}-header.png`);
+        await page.screenshot({ path: frame });
+        if (evidenceDir) { fs.mkdirSync(evidenceDir, { recursive: true }); fs.copyFileSync(frame, path.join(evidenceDir, `${tag}-header.png`)); }
+      }
       const primarySection = snapshot.mode === "unsupported" ? "install-action" : "auto";
       await page.waitForSelector(`[data-section="${primarySection}"]`, { timeout: 30_000 });
       if (snapshot.mode !== "unsupported") {
@@ -7289,6 +7351,32 @@ async function selfUpdateInstallMain(): Promise<void> {
             report.failures.push(`${tag}: partial restart contradicts the installation action`);
         }
         if (name === "install-switch" && !installation.text?.includes(lang === "uk" ? "Замінити" : "Replace")) report.failures.push(`${tag}: switch is missing`);
+      }
+      if (managedEvidence) {
+        const failedSection = page.locator(externalSuccess ? '[data-section="previous-attempt"]' : '[data-section="update"]');
+        await failedSection.scrollIntoViewIfNeeded();
+        const text = await failedSection.innerText();
+        if (!text.includes(next.slice(0, 7)) || !text.includes("recovering pending spawns")) report.failures.push(`${tag}: failed target or cause is absent`);
+        if (externalSuccess && await page.locator('[data-action="retry"]').count()) report.failures.push(`${tag}: stale retry remains visible`);
+        const rect = await failedSection.boundingBox();
+        if (!rect || rect.x < 0 || rect.x + rect.width > width) report.failures.push(`${tag}: failed attempt overflows`);
+        report.frames[`${tag}-failure`] = { text, rect };
+        if (externalSuccess) {
+          await Promise.all([
+            // seedInit uses polling; install the observer before reloading.
+            page.waitForRequest(request => new URL(request.url()).pathname === "/api/self-update", { timeout: 15_000 }),
+            page.reload().then(() => page.waitForFunction(() => {
+              if (document.querySelector('[data-section="previous-attempt"]')) return true;
+              window.dispatchEvent(new Event("llv:open-self-update"));
+              return false;
+            })),
+          ]);
+          const previous = page.locator('[data-section="previous-attempt"]');
+          await previous.scrollIntoViewIfNeeded();
+          if (!(await previous.innerText()).includes(next.slice(0, 7)) || await page.locator('[data-action="retry"]').count())
+            report.failures.push(`${tag}: polling or reload restored the stale retry`);
+          report.frames[`${tag}-reloaded`] = { previous: await previous.innerText() };
+        }
       }
       const frame = path.join(OUT_DIR, `${tag}.png`);
       await page.screenshot({ path: frame });
@@ -7859,16 +7947,571 @@ async function registryHistoryMain(): Promise<void> {
   if (report.failures.length) throw new Error(report.failures.join("; "));
 }
 
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=activity-tokens: the Activity page's Tokens tab          */
+/* ------------------------------------------------------------------------- */
+
+/* The Tokens tab (docs/design/activity-token-usage.md §9.2) over a token
+   store written through the ingest's own commit before the Viewer starts
+   (src/lib/activity/tokenEvidence.fixture.ts), with the team of the members
+   case signed in as its owner. Each state is framed at 1440 × 900, 1024 × 768
+   (between the named widths) and 390 × 844, light and dark, uk and en. Frames
+   are full-page (the viewport grows to the page's scroll height) and named
+   <state>-<width>-<theme>-<lang>.png. The amber coverage frames mark the
+   store's backfill as still pending right before they load and require the
+   page to read it; «nothing counted» moves the store aside. Each frame is measured from the DOM: no sideways overflow, no cut
+   text (chart text included), header controls apart, the range segments
+   whole, the date fields and popovers inside the viewport and over no text on
+   the phone, the four kinds printed, the three extras labelled optional, no
+   kind segment under 6 px, fresh input at 3:1 on its card, and on the phone
+   every control at least 44 px tall. The Time tab's read and render over 366
+   days are timed in the same run. */
+const TOKEN_SIZES: ReadonlyArray<{ width: number; height: number; phone: boolean }> = [
+  { width: 1440, height: 900, phone: false },
+  { width: 1024, height: 768, phone: false },
+  { width: 390, height: 844, phone: true },
+];
+const TOKEN_STATES = ["7d", "range-open", "range-applied", "project", "by-member", "by-account", "by-kind", "coverage", "drawer", "empty-range", "loading", "error", "time-range", "nothing"] as const;
+type TokenState = typeof TOKEN_STATES[number];
+
+function readTokenFrame() {
+  const page = document.querySelector<HTMLElement>("[data-activity-page]")!;
+  const inView = (el: Element | null) => {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), bottom: Math.round(r.bottom), inside: r.left >= -0.5 && r.right <= window.innerWidth + 0.5 && r.top >= -0.5 && r.bottom <= window.innerHeight + 0.5 };
+  };
+  const visible = (el: Element) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden"; };
+  /* Text cut by its own box, measured from the text's own ranges. */
+  const cut: string[] = [];
+  const offscreen: string[] = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = (node.textContent ?? "").trim();
+    const parent = node.parentElement;
+    if (!text || !parent || parent.closest("svg, [aria-hidden=true], .sr-only, title, script, style") || !visible(parent)) continue;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0);
+    if (!rects.length) continue;
+    let clip: Element | null = parent;
+    while (clip && getComputedStyle(clip).overflow === "visible" && getComputedStyle(clip).overflowX === "visible") clip = clip.parentElement;
+    const box = clip?.getBoundingClientRect();
+    if (box && clip !== document.body && clip !== document.documentElement && rects.some((r) => r.right > box.right + 1 || r.left < box.left - 1 || r.bottom > box.bottom + 1.5 || r.top < box.top - 1.5)) cut.push(text);
+    if (rects.some((r) => r.right > window.innerWidth + 0.5 || r.left < -0.5)) offscreen.push(text);
+  }
+  const segments = Array.from(document.querySelectorAll<HTMLElement>("[data-activity-range] [data-activity-option]")).map((button) => {
+    const range = document.createRange();
+    range.selectNodeContents(button);
+    const text = Array.from(range.getClientRects()).filter((r) => r.width > 0);
+    const box = button.getBoundingClientRect();
+    return { option: button.dataset.activityOption ?? "", text: (button.textContent ?? "").trim(), whole: text.every((r) => r.left >= box.left - 0.5 && r.right <= box.right + 0.5), width: Math.round(box.width), pressed: button.getAttribute("aria-pressed") };
+  });
+  /* Header controls: no two leaf controls overlap. */
+  const header = document.querySelector("[data-activity-header]") ?? page.querySelector("header");
+  const leaves = header ? Array.from(header.querySelectorAll<HTMLElement>("a, h1, button, [data-activity-range-label]")).filter(visible) : [];
+  const overlaps: string[] = [];
+  for (let i = 0; i < leaves.length; i++) for (let j = i + 1; j < leaves.length; j++) {
+    const a = leaves[i]!, b = leaves[j]!;
+    if (a.contains(b) || b.contains(a)) continue;
+    const p = a.getBoundingClientRect(), q = b.getBoundingClientRect();
+    if (p.right > q.left + 0.5 && q.right > p.left + 0.5 && p.bottom > q.top + 0.5 && q.bottom > p.top + 0.5) overlaps.push(`${(a.textContent ?? "").trim() || a.getAttribute("aria-label")}|${(b.textContent ?? "").trim() || b.getAttribute("aria-label")}`);
+  }
+  /* SVG text outside its own drawing is cut; tick labels need 4 px of air. */
+  const svgCut: string[] = [];
+  const tickGaps: Array<{ gap: number; between: string }> = [];
+  for (const svg of Array.from(page.querySelectorAll<SVGSVGElement>("svg"))) {
+    const box = svg.getBoundingClientRect();
+    if (box.width < 1 || box.height < 1) continue;
+    for (const text of Array.from(svg.querySelectorAll("text"))) {
+      const r = text.getBoundingClientRect();
+      if (r.width && (r.left < box.left - 0.5 || r.right > box.right + 0.5 || r.top < box.top - 0.5 || r.bottom > box.bottom + 0.5)) svgCut.push((text.textContent ?? "").trim());
+    }
+    const ticks = Array.from(svg.querySelectorAll("text[data-token-tick]")).map((text) => ({ text: text.textContent ?? "", rect: text.getBoundingClientRect() })).sort((a, b) => a.rect.left - b.rect.left);
+    for (let index = 1; index < ticks.length; index++) {
+      const gap = ticks[index]!.rect.left - ticks[index - 1]!.rect.right;
+      if (gap < 4) tickGaps.push({ gap: Math.round(gap * 10) / 10, between: `${ticks[index - 1]!.text}|${ticks[index]!.text}` });
+    }
+  }
+  /* The phone's range fields open inline: nothing they are drawn over holds text. */
+  const popoverEl = document.querySelector("[data-activity-range-popover]");
+  const covered: string[] = [];
+  if (popoverEl) {
+    const p = popoverEl.getBoundingClientRect();
+    const texts = document.createTreeWalker(page, NodeFilter.SHOW_TEXT);
+    for (let node = texts.nextNode(); node; node = texts.nextNode()) {
+      if (!(node.textContent ?? "").trim() || popoverEl.contains(node)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const r of Array.from(range.getClientRects())) {
+        if (r.width && r.right > p.left && r.left < p.right && r.bottom > p.top && r.top < p.bottom) { covered.push((node.textContent ?? "").trim()); break; }
+      }
+    }
+  }
+  const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+  const luminance = (value: string) => {
+    const [r = 0, g = 0, b = 0] = rgb(value).map((channel) => { const c = channel / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a: string, b: string) => { const [x, y] = [luminance(a), luminance(b)].sort((m, n) => n - m); return Math.round(((x! + 0.05) / (y! + 0.05)) * 100) / 100; };
+  const cardColor = (el: Element) => getComputedStyle(el.closest("[data-token-card]") ?? page).backgroundColor;
+  /* Phone targets: every control at least 44 px tall (the chip's clear button is 32 px and grows its hit area). */
+  const small = Array.from(page.querySelectorAll<HTMLElement>("button, a[href], input, [role=tab]")).filter(visible)
+    .filter((el) => !el.matches("[data-activity-scope-clear]") && !el.closest("svg"))
+    .map((el) => ({ el, r: el.getBoundingClientRect() })).filter(({ r }) => r.height < 43.5)
+    .map(({ el, r }) => `${(el.textContent ?? "").trim() || el.getAttribute("aria-label") || el.tagName}:${Math.round(r.height)}`);
+  const tooltip = document.querySelector("[role=tooltip]");
+  const drawer = document.querySelector("[data-activity-drawer] [role=dialog]");
+  /* The rows the header's controls sit in: centres closer than 14 px share one. */
+  const centres = leaves.map((el) => { const r = el.getBoundingClientRect(); return r.top + r.height / 2; }).sort((a, b) => a - b);
+  const headerRows = centres.reduce((rows, centre, index) => (index === 0 || centre - centres[index - 1]! > 14 ? rows + 1 : rows), 0);
+  /* The «Other» colour wherever the page draws it, against its card. */
+  const otherContrast = Array.from(page.querySelectorAll<Element>('[style*="mark-series-other"], [fill*="mark-series-other"]')).map((el) => {
+    const colour = el instanceof SVGElement ? getComputedStyle(el).fill : getComputedStyle(el).backgroundColor;
+    return { where: el.tagName.toLowerCase(), ratio: contrast(colour, cardColor(el)) };
+  });
+  const plot = document.querySelector("[data-token-chart] svg");
+  const bands = Array.from(document.querySelectorAll<SVGRectElement>("rect[data-token-unread]")).map((el) => el.getBoundingClientRect().height);
+  const gridlines = Array.from(document.querySelectorAll<SVGLineElement>("[data-token-chart] svg line")).map((el) => el.getBoundingClientRect().top);
+  const mainCard = document.querySelector('[data-token-card="main"]')?.getBoundingClientRect();
+  const tabEl = document.querySelector("[data-token-tab]")?.getBoundingClientRect();
+  return {
+    headerRows,
+    otherContrast,
+    /* A band is drawn over the plot's whole height (gridline to gridline). */
+    bandCoversPlot: plot && gridlines.length > 1 ? bands.map((height) => Math.round((height / (Math.max(...gridlines) - Math.min(...gridlines))) * 100) / 100) : [],
+    legendUncounted: document.querySelector("[data-token-legend-uncounted]")?.textContent ?? null,
+    chartDrawn: document.querySelector("[data-token-chart]") !== null,
+    countedFrom: document.querySelector("[data-token-counted-from]")?.textContent ?? null,
+    mainCardShare: mainCard && tabEl ? Math.round((mainCard.width / tabEl.width) * 100) / 100 : null,
+    zeroShares: Array.from(document.querySelectorAll<HTMLElement>("[data-token-row]")).filter((row) => Number(row.querySelector("[data-token-row-value]")?.getAttribute("data-token-row-value") ?? 0) > 0 && /(^|[^\d.,<])0\s?%/.test(row.querySelector("[data-token-row-share]")?.textContent ?? "")).map((row) => row.dataset.tokenRow ?? ""),
+    retry: (() => { const button = document.querySelector<HTMLElement>("[data-activity-failed] button"); return button ? { text: (button.textContent ?? "").trim(), height: Math.round(button.getBoundingClientRect().height) } : null; })(),
+    unreadSpan: document.querySelector("[data-activity-unread-span]")?.textContent ?? null,
+    questionCaps: Array.from(document.querySelectorAll("[data-activity-cap]")).filter((cap) => cap.textContent === "?").length,
+    rhythmRowCount: document.querySelectorAll("[data-activity-rhythm-row]").length,
+    rhythmNote: document.querySelector("[data-activity-rhythm-capped]")?.textContent ?? null,
+    dayRows: document.querySelectorAll("[data-activity-day]").length,
+    daysNote: document.querySelector("[data-activity-days-capped]")?.textContent ?? null,
+    loading: document.querySelector("[data-activity-skeleton]") !== null,
+    alert: document.querySelector("[role=alert]")?.textContent ?? null,
+    scaleLabels: Array.from(document.querySelectorAll("[data-token-chart] svg text:not([data-token-tick])")).map((text) => (text.textContent ?? "").trim()),
+    empty: document.querySelector("[data-token-empty]")?.textContent ?? null,
+    weekColumns: document.querySelectorAll("[data-activity-pair]").length,
+    cappedColumns: Array.from(document.querySelectorAll("[data-activity-pair] text")).map((text) => (text.textContent ?? "").trim()).filter((text) => text !== ""),
+    tokensSelected: document.querySelector('[data-activity-option="tokens"][aria-selected="true"]')?.getAttribute("aria-selected") === "true",
+    tab: document.querySelector("[data-activity-tab]")?.getAttribute("data-activity-tab") ?? (document.querySelector("[data-token-tab]") ? "tokens" : "time"),
+    layout: page.dataset.activityLayout ?? "phone",
+    width: window.innerWidth,
+    scrollWidth: Math.max(document.documentElement.scrollWidth, page.scrollWidth),
+    scrollHeight: page.scrollHeight,
+    hero: document.querySelector("[data-token-hero]")?.textContent ?? null,
+    coverage: document.querySelector("[data-token-coverage]")?.getAttribute("data-token-coverage") ?? null,
+    none: document.querySelector("[data-token-none]")?.textContent ?? null,
+    extras: Array.from(document.querySelectorAll<HTMLElement>("[data-token-extra]")).map((el) => ({ key: el.dataset.tokenExtra ?? "", text: el.textContent ?? "", optional: el.querySelector("[data-token-optional]")?.textContent ?? null })),
+    meterValues: Array.from(document.querySelectorAll<HTMLElement>("[data-token-meter] [data-token-kind]")).map((el) => ({ kind: el.dataset.tokenKind ?? "", text: (el.textContent ?? "").replace(/\s+/g, " ").trim() })),
+    narrowSegments: Array.from(document.querySelectorAll<HTMLElement>("[data-token-segment]")).map((el) => el.getBoundingClientRect().width).filter((w) => w < 6).map((w) => Math.round(w * 10) / 10),
+    segmentContrast: Array.from(document.querySelectorAll<HTMLElement>("[data-token-segment]")).map((el) => ({ kind: el.dataset.tokenSegment ?? "", ratio: contrast(getComputedStyle(el).backgroundColor, cardColor(el)) })),
+    rows: Array.from(document.querySelectorAll<HTMLElement>("[data-token-row]")).map((el) => el.dataset.tokenRow ?? ""),
+    rowNames: Array.from(document.querySelectorAll<HTMLElement>("[data-token-row]")).map((el) => (el.querySelector("button")?.textContent ?? "").split(/\d/)[0]!.trim()),
+    rowCosts: Array.from(document.querySelectorAll<HTMLElement>("[data-token-row-cost]")).map((el) => el.textContent ?? ""),
+    rowCostByKey: Object.fromEntries(Array.from(document.querySelectorAll<HTMLElement>("[data-token-row]")).map((el) => [el.dataset.tokenRow ?? "", el.querySelector("[data-token-row-cost]")?.textContent ?? null])),
+    uncounted: document.querySelector("[data-token-uncounted]")?.textContent ?? null,
+    cardText: document.querySelector('[data-token-card="main"]')?.textContent ?? "",
+    by: document.querySelector("[data-token-by] [aria-selected=true]")?.getAttribute("data-activity-option") ?? null,
+    chips: Array.from(document.querySelectorAll("[data-activity-scope-chip]")).map((chip) => chip.textContent ?? ""),
+    popover: inView(popoverEl),
+    inputs: Array.from(document.querySelectorAll<HTMLInputElement>("[data-activity-range-input]")).map((input) => input.value),
+    tooltip: inView(tooltip),
+    tooltipText: tooltip?.textContent ?? null,
+    drawer: inView(drawer),
+    drawerText: drawer?.textContent ?? null,
+    timeChart: document.querySelector("[data-activity-chart]") !== null,
+    /* Uncounted days drawn with a hatch the page defines, so they are seen. */
+    unread: Array.from(document.querySelectorAll("[data-token-unread]")).filter((rect) => {
+      const id = /url\(["']?#([^"')]+)/.exec(rect.getAttribute("fill") ?? "")?.[1];
+      return id !== undefined && document.getElementById(id) !== null;
+    }).length,
+    segments,
+    overlaps,
+    svgCut,
+    tickGaps,
+    covered,
+    small,
+    cut,
+    offscreen,
+  };
+}
+
+async function activityTokensMain(): Promise<void> {
+  for (const dir of [OUT_DIR, path.join(BASE, "tmp"), path.join(BASE, "tmux"), STATE_DIR, path.join(HOME, ".codex/sessions"), path.join(HOME, ".claude/projects")]) fs.mkdirSync(dir, { recursive: true });
+  /* The Viewer control URL on a closed port: nothing this run starts can reach a live Viewer. */
+  SERVER_EXTRA_ENV.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:9";
+  process.env.LLV_STATE_DIR = STATE_DIR;
+  const { seedTokenEvidence, markTokenBackfill, evidenceRange, evidenceUncountedRange, EVIDENCE_TZ } = await import("../src/lib/activity/tokenEvidence.fixture");
+  const { zonedDays } = await import("../src/lib/activity/method");
+  const { exportLines, ledgerRowKey } = await import("../src/lib/activity/humanInput");
+  const activityDir = path.join(STATE_DIR, "activity");
+  fs.mkdirSync(activityDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(activityDir, "settings.json"), JSON.stringify({ v: 1, tz: EVIDENCE_TZ, billable: [] }));
+  const store = path.join(activityDir, "records.sqlite");
+  const now = Date.now();
+  const seeded = seedTokenEvidence(store, now);
+  const free = evidenceRange(now);
+  const uncounted = evidenceUncountedRange(now);
+  /* Your input and agent runs for the Time tab over the free range and the year: a request ledger and one invented
+     Claude conversation per workday over the last 200 days, the workstation's export covering all of them. */
+  const history = zonedDays(now, 200, EVIDENCE_TZ);
+  const historyRepo = path.join(HOME, "Projects", "orchard-client");
+  const historyFolder = path.join(HOME, ".claude/projects", projectSlug(historyRepo));
+  fs.mkdirSync(historyFolder, { recursive: true });
+  const HISTORY_INPUT_DAYS = 85;
+  let historyInputs = 0;
+  let historyRuns = 0;
+  for (const [index, day] of history.entries()) {
+    const weekday = new Date(`${day.date}T12:00:00Z`).getUTCDay();
+    if (weekday === 0 || weekday === 6 || day.end > now) continue;
+    const turns: Array<{ start: number; minutes: number }> = [];
+    for (const [hour, minutes] of [[9, 120], [13, 150]] as const) {
+      const start = day.start + hour * 3_600_000;
+      turns.push({ start, minutes });
+      /* The request ledger keeps 90 days, so older days carry agent runs and no read input. */
+      if (index < history.length - HISTORY_INPUT_DAYS) continue;
+      for (let offset = 0; offset <= minutes - 10; offset += 6) {
+        const at = start + offset * 60_000;
+        fs.appendFileSync(path.join(activityDir, `requests-${new Date(at).toISOString().slice(0, 10)}.jsonl`), JSON.stringify({ v: 2, key: ledgerRowKey(`history-${index}-${offset}-${hour}`), at, kind: "message", surface: "desktop", project: "orchard-client", author: TEAM_MEMBERS[0]!.id }) + "\n", { mode: 0o600 });
+        historyInputs += 1;
+      }
+    }
+    const id = `${String(index + 1).padStart(8, "0")}-2026-4000-8000-000000000000`;
+    const lines: unknown[] = [];
+    for (const [turn, { start, minutes }] of turns.entries()) {
+      const stamp = (minute: number) => new Date(start + minute * 60_000).toISOString();
+      lines.push({ type: "user", uuid: `${id}-u${turn}`, timestamp: stamp(0), cwd: historyRepo, sessionId: id, message: { role: "user", content: `Next step ${turn + 1}.` } });
+      for (let minute = 2; minute < minutes; minute += 17) lines.push({ type: "assistant", uuid: `${id}-a${turn}-${minute}`, timestamp: stamp(minute), cwd: historyRepo, sessionId: id, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text: `Progress, minute ${minute}.` }] } });
+      lines.push({ type: "assistant", uuid: `${id}-a${turn}-end`, timestamp: stamp(minutes), cwd: historyRepo, sessionId: id, message: { role: "assistant", model: "claude-sonnet-4-5", content: [{ type: "text", text: `Done with step ${turn + 1}.` }] } });
+    }
+    fs.writeFileSync(path.join(historyFolder, `${id}.jsonl`), lines.map((line) => JSON.stringify(line)).join("\n") + "\n", "utf8");
+    historyRuns += 1;
+  }
+  const localHistory = path.join(activityDir, "hosts", "workstation");
+  fs.mkdirSync(localHistory, { recursive: true });
+  fs.writeFileSync(path.join(localHistory, "human-input.jsonl"), exportLines({ host: "workstation", coveredFrom: history[history.length - HISTORY_INPUT_DAYS]!.start, coveredUntil: history.at(-1)!.end, exportedAt: now, records: 0, excluded: {} }, []));
+  fs.writeFileSync(path.join(activityDir, "hosts.json"), JSON.stringify({ v: 1, local: { id: "workstation", label: "Workstation" }, hosts: [] }));
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const report: Record<string, unknown> = { commit: captureCommit(), case: "activity-tokens", seeded: { records: seeded.records, countedFrom: new Date(seeded.countedFrom).toISOString(), range: free, uncountedRange: uncounted, timeHistory: { workdays: historyRuns, inputs: historyInputs } }, frames: {} as Record<string, unknown> };
+  const frames = report.frames as Record<string, unknown>;
+  const shots: string[] = [];
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const launch = () => chromium.launch({
+    /* Native date fields draw in the browser's own language. */
+    args: ["--no-sandbox", "--disable-dev-shm-usage", "--lang=uk"],
+    env: { ...process.env, LANGUAGE: "uk", LANG: "uk_UA.UTF-8" },
+    ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}),
+  });
+  const queries: Record<TokenState, string> = {
+    "7d": "view=tokens&range=7d&stack=model&list=model",
+    "range-open": "view=tokens&range=7d&stack=model&list=model",
+    "range-applied": `view=tokens&from=${free.from}&to=${free.to}&stack=model&list=model`,
+    project: `view=tokens&from=${free.from}&to=${free.to}&stack=model&list=model&project=orchard-client`,
+    "by-member": "view=tokens&range=30d&stack=member&list=member",
+    "by-kind": "view=tokens&range=7d&stack=kind&list=model",
+    coverage: "view=tokens&range=7d&stack=model&list=model",
+    drawer: "view=tokens&range=7d&stack=model&list=model",
+    "by-account": "view=tokens&range=30d&stack=account&list=account",
+    "empty-range": `view=tokens&from=${uncounted.from}&to=${uncounted.to}&stack=model&list=model`,
+    loading: "view=tokens&range=7d&stack=model&list=model",
+    error: "view=tokens&range=7d&stack=model&list=model",
+    "time-range": `view=days&from=${free.from}&to=${free.to}`,
+    nothing: "view=tokens&range=7d&stack=model&list=model",
+  };
+  try {
+    const port = await freePort();
+    const baseUrl = `http://127.0.0.1:${port}`;
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    /* The team of the members case, written once the server is up. */
+    const { teamStore } = await import("../src/lib/team/store");
+    const { mintSession } = await import("../src/lib/team/sessions");
+    const team = teamStore();
+    for (const member of TEAM_MEMBERS.slice(0, 3)) {
+      team.insertMember({ id: member.id, name: member.name, role: member.role, status: "active", color: member.color, telegram: null,
+        createdAt: new Date(now - 30 * 86_400_000).toISOString(), createdBy: member.role === "owner" ? "claim" : "join", revokedAt: null });
+    }
+    const owner = mintSession(team, TEAM_MEMBERS[0]!.id, "claim", { surface: "desktop", browser: "chrome" }, now).value;
+    const headers = { cookie: `llv_member=${owner}` };
+    const tokens = async (query: string) => (await (await fetch(`${baseUrl}/api/activity/tokens?${query}`, { headers })).json()) as { coverage: { countedFrom: number | null; complete: boolean }; member: { canChoose: boolean; members: unknown[] }; totals: Record<string, number> };
+    const first = await tokens("range=7d");
+    must(first.coverage.countedFrom !== null && first.member.canChoose && first.member.members.length === 3, `the seeded store reads ${JSON.stringify({ coverage: first.coverage, member: first.member })}`);
+    report.api = { totals7d: first.totals };
+
+    /* The Time tab's read over 366 days, five times, as the page asks it. */
+    const { todayIn } = await import("../src/components/activity/pageParams");
+    const { shiftDay } = await import("../src/lib/activity/range");
+    const today = todayIn(EVIDENCE_TZ, now);
+    const year = `from=${shiftDay(today, -365)}&to=${today}`;
+    /* The Viewer's own index must carry the invented conversations before anything is framed. */
+    {
+      const deadline = Date.now() + 420_000;
+      let indexed = 0;
+      while (Date.now() < deadline) {
+        const body = await (await fetch(`${baseUrl}/api/activity?${year}`, { headers })).json() as { coverage?: { agentIndex?: string }; projects?: Array<{ conversations: number }> };
+        indexed = body.coverage?.agentIndex === "ok" ? (body.projects ?? []).reduce((sum, row) => sum + row.conversations, 0) : 0;
+        if (indexed >= historyRuns) break;
+        await Bun.sleep(3_000);
+      }
+      must(indexed >= historyRuns, `the agent axis carries ${indexed} of ${historyRuns} seeded conversations`);
+      const seen = await (await fetch(`${baseUrl}/api/activity?${year}`, { headers })).json() as { totals: { humanHours: number; agentHoursMs: number } };
+      must(seen.totals.humanHours > 0 && seen.totals.agentHoursMs > 0, `the year reads ${JSON.stringify(seen.totals)} of your time and agent hours`);
+    }
+    const timeReads: Array<{ ms: number; bytes: number; days: number }> = [];
+    for (let run = 0; run < 5; run++) {
+      const started = performance.now();
+      const response = await fetch(`${baseUrl}/api/activity?${year}`, { headers });
+      const text = await response.text();
+      timeReads.push({ ms: Math.round((performance.now() - started) * 10) / 10, bytes: text.length, days: (JSON.parse(text) as { days: unknown[] }).days.length });
+    }
+    report.timeYear = { query: year, reads: timeReads };
+    must(timeReads.every((read) => read.days === 366), `the Time tab's year read answered ${JSON.stringify(timeReads.map((read) => read.days))} days`);
+
+    browser = await launch();
+    const frame = async (state: TokenState, size: typeof TOKEN_SIZES[number], theme: "light" | "dark", lang: "uk" | "en") => {
+      const name = `${state}-${size.width}-${theme}-${lang}`;
+      if (!browser!.isConnected()) browser = await launch();
+      const context = await browser!.newContext({
+        viewport: { width: size.width, height: size.height },
+        colorScheme: theme,
+        locale: lang === "uk" ? "uk-UA" : "en-GB",
+        reducedMotion: "reduce",
+        ...(size.phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
+      });
+      await context.addCookies([{ name: "llv_member", value: owner, url: baseUrl }]);
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+      const page = await context.newPage();
+      /* Loading holds the tokens request open; the error answers it with a 500. */
+      if (state === "loading") await page.route("**/api/activity/tokens**", () => new Promise(() => undefined));
+      if (state === "error") await page.route("**/api/activity/tokens**", (route) => route.fulfill({ status: 500, contentType: "application/json", body: "{\"error\":\"fixture\"}" }));
+      await page.goto(`${baseUrl}/activity?${queries[state]}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      await page.waitForSelector(state === "time-range" ? "[data-activity-layout], [data-activity-days]" : state === "nothing" ? "[data-token-none]" : state === "empty-range" ? "[data-token-uncounted]" : state === "loading" ? "[data-activity-skeleton]" : state === "error" ? "[role=alert]" : "[data-token-hero]", { timeout: 120_000 });
+      if (state === "time-range") await page.waitForSelector("[data-activity-loaded]", { timeout: 120_000 });
+      await page.waitForTimeout(400);
+      if (state === "range-open") {
+        await page.click('[data-activity-range] [data-activity-option="custom"]');
+        await page.fill('[data-activity-range-input="from"]', free.from);
+        await page.fill('[data-activity-range-input="to"]', free.to);
+        await page.waitForFunction((label: string) => document.querySelector('[data-activity-range] [data-activity-option="custom"]')?.getAttribute("aria-pressed") === "true"
+          && !document.querySelector("[data-token-tab].opacity-60") && (document.querySelector("[data-token-hero]")?.textContent ?? "") !== label, "", { timeout: 60_000 });
+        await page.waitForTimeout(600);
+      }
+      if (state === "coverage") {
+        await page.focus("[data-token-coverage]");
+        await page.waitForSelector("[role=tooltip]", { timeout: 10_000 });
+      }
+      if (state === "drawer") {
+        await page.click("[data-activity-how]");
+        await page.waitForSelector("[data-token-drawer-lines]", { timeout: 10_000 });
+      }
+      const firstReading = await page.evaluate(readTokenFrame);
+      /* Every frame is full-page: the popovers, the drawer and the tooltips are fixed or anchored, and no text is left under the window's edge. */
+      if (firstReading.scrollHeight > size.height) {
+        await page.setViewportSize({ width: size.width, height: Math.min(firstReading.scrollHeight, 7_000) });
+        await page.waitForTimeout(300);
+      }
+      const reading = await page.evaluate(readTokenFrame);
+      const file = path.join(OUT_DIR, `${name}.png`);
+      await page.screenshot({ path: file });
+      shots.push(file);
+      frames[name] = reading;
+      const tokensTab = state !== "time-range";
+      const figured = tokensTab && state !== "nothing" && state !== "loading" && state !== "error" && state !== "empty-range";
+      must(reading.layout === (size.phone ? "phone" : "desktop"), `${name}: the ${reading.layout} layout at ${size.width}px`);
+      must(reading.tab === (tokensTab ? "tokens" : "time") || (tokensTab && (state === "loading" || state === "error") && reading.tokensSelected), `${name}: the ${reading.tab} tab`);
+      must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
+      must(reading.cut.length === 0, `${name}: text cut by its box: ${JSON.stringify(reading.cut)}`);
+      must(reading.offscreen.length === 0, `${name}: text past the window's edge: ${JSON.stringify(reading.offscreen)}`);
+      must(reading.svgCut.length === 0, `${name}: chart text cut by its drawing: ${JSON.stringify(reading.svgCut)}`);
+      must(reading.tickGaps.length === 0, `${name}: axis labels closer than 4px: ${JSON.stringify(reading.tickGaps)}`);
+      must(reading.overlaps.length === 0, `${name}: header controls overlap: ${JSON.stringify(reading.overlaps)}`);
+      must(reading.segments.length === 5 && reading.segments.every((segment) => segment.whole), `${name}: range segments ${JSON.stringify(reading.segments)}`);
+      /* One header row at 1440 on both tabs, in both languages. */
+      if (size.width === 1440 && state !== "loading" && state !== "error" && state !== "range-open") must(reading.headerRows === 1, `${name}: the header runs over ${reading.headerRows} rows`);
+      must(reading.otherContrast.every((entry) => entry.ratio >= 3), `${name}: «Other» against its card ${JSON.stringify(reading.otherContrast)}`);
+      must(reading.zeroShares.length === 0, `${name}: rows with tokens read 0%: ${JSON.stringify(reading.zeroShares)}`);
+      if (reading.unread > 0 && state !== "empty-range") {
+        const word = lang === "uk" ? "Не пораховано" : "Not counted";
+        must(reading.legendUncounted === word, `${name}: the legend names the hatch ${JSON.stringify(reading.legendUncounted)}`);
+        must(reading.bandCoversPlot.length > 0 && reading.bandCoversPlot.every((ratio) => ratio >= 0.95), `${name}: uncounted bands cover ${JSON.stringify(reading.bandCoversPlot)} of the plot, so an edge could read as a value`);
+      }
+      if (size.phone) {
+        must(reading.covered.length === 0, `${name}: the range fields cover ${JSON.stringify(reading.covered)}`);
+        must(reading.small.length === 0, `${name}: controls under 44px: ${JSON.stringify(reading.small)}`);
+      }
+      if (figured) {
+        for (const kind of ["cacheRead", "input", "cacheWrite", "output"]) must(reading.meterValues.some((entry) => entry.kind === kind && /(\d|—)/.test(entry.text)), `${name}: no printed ${kind} value in ${JSON.stringify(reading.meterValues)}`);
+        const optional = lang === "uk" ? "Додатково" : "Optional";
+        must(reading.extras.length === 3 && reading.extras.every((extra) => extra.optional === optional), `${name}: the extras read ${JSON.stringify(reading.extras)}`);
+        must(reading.extras.some((extra) => extra.key === "cost" && /≈ \$[\d\s ,.]+/.test(extra.text)), `${name}: no cost estimate in ${JSON.stringify(reading.extras)}`);
+        must(reading.narrowSegments.length === 0, `${name}: kind segments under 6px: ${JSON.stringify(reading.narrowSegments)}`);
+        for (const segment of reading.segmentContrast) must(segment.kind !== "input" || segment.ratio >= 3, `${name}: the ${segment.kind} segment has ${segment.ratio}:1 against its card`);
+      }
+      if (state === "range-open") {
+        must(reading.popover !== null && reading.popover.inside, `${name}: the range fields ${JSON.stringify(reading.popover)} leave the viewport`);
+        must(reading.inputs.join(" ") === `${free.from} ${free.to}`, `${name}: the date fields hold ${reading.inputs.join(" ")}`);
+      } else must(reading.popover === null, `${name}: the range fields are open`);
+      if (figured && state !== "range-open") {
+        /* A range that reaches back before counting is a lower bound wherever the page draws it. */
+        const partly = state === "range-applied" || state === "project";
+        must(reading.coverage === (partly ? "lower" : "ok") || (state === "coverage" && reading.coverage === "lower"), `${name}: coverage ${reading.coverage}`);
+        must((reading.hero ?? "").startsWith("≥") === (partly || state === "coverage"), `${name}: figure ${reading.hero}`);
+      }
+      if (state === "empty-range") {
+        /* The main card states that the period is not counted and names the first counted day; no figure, share, cost, meter or chart stands beside it. */
+        must(reading.hero === null && reading.unread === 0 && !reading.chartDrawn && reading.coverage === "lower", `${name}: figure ${reading.hero}, coverage ${reading.coverage}, ${reading.unread} uncounted marks, chart ${reading.chartDrawn}`);
+        must(reading.uncounted === (lang === "uk" ? "Цей період ще не пораховано." : "This range is not counted yet."), `${name}: the main card reads ${reading.uncounted}`);
+        must(/\d/.test(reading.countedFrom ?? ""), `${name}: the card does not name the first counted day: ${reading.countedFrom}`);
+        must(reading.empty === null && reading.extras.length === 0 && reading.meterValues.length === 0, `${name}: the card still draws ${JSON.stringify({ empty: reading.empty, extras: reading.extras.length, meter: reading.meterValues.length })}`);
+        must(!/≥|≈ \$|\b0\s?%/.test(reading.cardText), `${name}: the card prints a number for nothing: ${reading.cardText}`);
+        must(!/немає|No tokens in this range/.test(`${reading.uncounted}`), `${name}: claims there are no tokens`);
+        must(!size.phone ? (reading.mainCardShare ?? 0) >= 0.99 : true, `${name}: the card spans ${reading.mainCardShare} of the row, leaving a blank column`);
+      }
+      if (state === "loading") must(reading.loading && reading.hero === null && reading.alert === null, `${name}: loading ${reading.loading}, figure ${reading.hero}, alert ${reading.alert}`);
+      if (state === "error") {
+        must(reading.alert !== null && reading.hero === null && !reading.loading, `${name}: error alert ${reading.alert}, figure ${reading.hero}`);
+        must(reading.retry !== null && reading.retry.text === (lang === "uk" ? "Повторити" : "Retry") && (!size.phone || reading.retry.height >= 44), `${name}: the error offers ${JSON.stringify(reading.retry)}`);
+      }
+      if (state === "by-account") {
+        must(reading.by === "account" && reading.rows.includes("claude:default") && reading.rows.includes("codex:default"), `${name}: by ${reading.by}, rows ${JSON.stringify(reading.rows)}`);
+        must(new Set(reading.rowNames).size === reading.rowNames.length, `${name}: two accounts share a name: ${JSON.stringify(reading.rowNames)}`);
+      }
+      if (state === "range-applied" || state === "project" || state === "range-open") {
+        must(reading.segments.find((segment) => segment.option === "custom")?.pressed === "true", `${name}: the free range is not the pressed segment`);
+        if (state !== "range-open") must(reading.unread > 0, `${name}: no uncounted day is drawn before ${new Date(seeded.countedFrom).toISOString()}`);
+      }
+      if (state === "project") must(reading.chips.some((chip) => chip.includes("orchard-client")), `${name}: no orchard-client chip (${JSON.stringify(reading.chips)})`);
+      if (state === "by-member") must(reading.by === "member" && reading.rows.includes(TEAM_MEMBERS[0]!.id), `${name}: by ${reading.by}, rows ${JSON.stringify(reading.rows)}`);
+      if (state === "by-kind") must(reading.by === "kind" && reading.rowCosts.length === 4, `${name}: by ${reading.by}, costs ${JSON.stringify(reading.rowCosts)}`);
+      if (state === "7d") {
+        must(reading.rowCostByKey["gpt-5.3-codex-spark"] === "—", `${name}: the unpriced model reads ${reading.rowCostByKey["gpt-5.3-codex-spark"]}`);
+        must(/^≈ \$/.test(reading.rowCostByKey["claude-opus-4-1"] ?? ""), `${name}: Opus 4.1 has a published price but reads ${reading.rowCostByKey["claude-opus-4-1"]}`);
+      }
+      if (state === "coverage") {
+        must(reading.coverage === "lower" && (reading.hero ?? "").startsWith("≥"), `${name}: coverage ${reading.coverage}, figure ${reading.hero}`);
+        must(reading.tooltip !== null && reading.tooltip.inside && /2[,.]1/.test(reading.tooltipText ?? ""), `${name}: the coverage popover ${JSON.stringify(reading.tooltip)} reads ${reading.tooltipText}`);
+      }
+      if (state === "drawer") must(reading.drawer !== null && reading.drawer.inside && (reading.drawerText ?? "").includes("2026-10-18"), `${name}: the drawer ${JSON.stringify(reading.drawer)}`);
+      if (state === "time-range") {
+        must(reading.timeChart || size.phone, `${name}: the Time tab draws no chart over the free range`);
+        must(size.phone || !reading.cappedColumns.every((text) => text === "?"), `${name}: every column cap reads «?»: ${JSON.stringify(reading.cappedColumns)}`);
+      }
+      if (state === "nothing") must(reading.none !== null && reading.coverage === "none" && reading.by === null, `${name}: nothing counted reads ${reading.none} (${reading.coverage}), breakdown ${reading.by}`);
+      await context.close();
+    };
+    const sizes = TOKEN_SIZES.flatMap((size) => (["light", "dark"] as const).flatMap((theme) => (["uk", "en"] as const).map((lang) => ({ size, theme, lang }))));
+    for (const state of TOKEN_STATES.filter((entry) => entry !== "nothing")) {
+      if (state === "coverage") markTokenBackfill(store, 2.1e9);
+      for (const { size, theme, lang } of sizes) {
+        if (state === "coverage") markTokenBackfill(store, 2.1e9);
+        await frame(state, size, theme, lang);
+      }
+      if (state === "coverage") markTokenBackfill(store, 0);
+    }
+
+    /* The Time tab over 366 days in a real browser: read, render and long tasks. The desktop page and the phone's list
+       must end within a few screens, and the history before the ledger is one labelled span, never a mark per week. */
+    for (const { width, height, phone, theme, lang } of [
+      { width: 1440, height: 900, phone: false, theme: "light" as const, lang: "en" as const },
+      { width: 1440, height: 900, phone: false, theme: "dark" as const, lang: "uk" as const },
+      { width: 390, height: 844, phone: true, theme: "light" as const, lang: "uk" as const },
+      { width: 390, height: 844, phone: true, theme: "dark" as const, lang: "en" as const },
+    ]) {
+      const name = `time-year-${width}-${theme}-${lang}`;
+      const context = await browser!.newContext({
+        viewport: { width, height },
+        colorScheme: theme,
+        locale: lang === "uk" ? "uk-UA" : "en-GB",
+        reducedMotion: "reduce",
+        ...(phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
+      });
+      await context.addCookies([{ name: "llv_member", value: owner, url: baseUrl }]);
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+      const page = await context.newPage();
+      await page.addInitScript(() => {
+        const tasks: number[] = [];
+        (globalThis as unknown as { __longTasks: number[] }).__longTasks = tasks;
+        new PerformanceObserver((list) => { for (const entry of list.getEntries()) tasks.push(Math.round(entry.duration)); }).observe({ type: "longtask", buffered: true });
+      });
+      const started = Date.now();
+      await page.goto(`${baseUrl}/activity?view=days&${year}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      await page.waitForSelector("[data-activity-loaded]", { timeout: 120_000 });
+      const loadedMs = Date.now() - started;
+      await page.waitForTimeout(1_000);
+      const measured = await page.evaluate(() => ({
+        longTasks: (globalThis as unknown as { __longTasks: number[] }).__longTasks,
+        pairs: document.querySelectorAll("[data-activity-pair]").length,
+        caps: Array.from(document.querySelectorAll("[data-activity-pair] text")).map((text) => (text.textContent ?? "").trim()),
+        nodes: document.querySelectorAll("*").length,
+      }));
+      const firstReading = await page.evaluate(readTokenFrame);
+      await page.setViewportSize({ width, height: Math.min(firstReading.scrollHeight, 7_000) });
+      await page.waitForTimeout(300);
+      const reading = await page.evaluate(readTokenFrame);
+      frames[name] = { loadedMs, ...measured, reading };
+      if (!phone && theme === "light") report.timeYearRender = { loadedMs, ...measured };
+      must(reading.scrollWidth <= reading.width + 1, `${name}: the page runs ${reading.scrollWidth - reading.width}px sideways`);
+      must(reading.cut.length === 0 && reading.offscreen.length === 0 && reading.svgCut.length === 0, `${name}: cut text ${JSON.stringify({ cut: reading.cut, offscreen: reading.offscreen, svgCut: reading.svgCut })}`);
+      must(reading.scrollHeight <= height * (phone ? 6 : 4), `${name}: the page is ${reading.scrollHeight}px tall, over ${phone ? 6 : 4} screens`);
+      if (phone) {
+        must(reading.dayRows > 0 && reading.dayRows <= 14 && reading.daysNote === (lang === "uk" ? "Показано останні 14 днів" : "Showing the last 14 days"), `${name}: ${reading.dayRows} day rows, note ${reading.daysNote}`);
+      } else {
+        must(measured.pairs > 0 && measured.pairs <= 54, `${name}: the Time chart over 366 days draws ${measured.pairs} columns`);
+        must(measured.caps.some((text) => text !== "?" && text !== ""), `${name}: the year's column caps read ${JSON.stringify(measured.caps.slice(0, 12))}`);
+        must(reading.questionCaps <= 2, `${name}: ${reading.questionCaps} weeks print «?»`);
+        must(reading.unreadSpan !== null && /\d/.test(reading.unreadSpan), `${name}: the unread history is not stated once in words (${reading.unreadSpan})`);
+        must(reading.rhythmRowCount > 0 && reading.rhythmRowCount <= 92 && reading.rhythmNote === (lang === "uk" ? "Показано останні 92 дні" : "Showing the last 92 days"), `${name}: Rhythm draws ${reading.rhythmRowCount} rows, note ${reading.rhythmNote}`);
+        must(reading.headerRows === 1, `${name}: the header runs over ${reading.headerRows} rows`);
+      }
+      await page.screenshot({ path: path.join(OUT_DIR, `${name}.png`) });
+      shots.push(path.join(OUT_DIR, `${name}.png`));
+      await context.close();
+    }
+
+    /* Nothing counted yet: the store moved aside, which the route reads as
+       no store at all (an ingest pass that recreates it finds no usage). */
+    for (const suffix of ["", "-wal", "-shm"]) if (fs.existsSync(`${store}${suffix}`)) fs.renameSync(`${store}${suffix}`, `${store}${suffix}.seeded`);
+    const empty = await tokens("range=7d");
+    must(empty.coverage.countedFrom === null, `the empty store reads countedFrom ${empty.coverage.countedFrom}`);
+    for (const { size, theme, lang } of sizes) await frame("nothing", size, theme, lang);
+  } finally {
+    await browser?.close().catch(() => undefined);
+    await stop(server);
+  }
+  report.failures = failures;
+  const scrub = (value: unknown) => JSON.parse(JSON.stringify(value).split(HOME).join("$HOME"));
+  fs.writeFileSync(path.join(OUT_DIR, "activity-tokens.json"), JSON.stringify(scrub(report), null, 2) + "\n", "utf8");
+  const target = process.env.ACTIVITY_RENDER_DIR?.trim();
+  if (target) {
+    fs.mkdirSync(target, { recursive: true });
+    for (const file of [...shots, path.join(OUT_DIR, "activity-tokens.json")]) fs.copyFileSync(file, path.join(target, path.basename(file)));
+  }
+  console.log(`activity-tokens: ${shots.length} frames in ${target || OUT_DIR}; ${failures.length} failures`);
+  for (const failure of failures) console.log(`  - ${failure}`);
+  if (failures.length) process.exitCode = 1;
+}
+
 if (process.env.BOARD_CAPTURE_CASE === "registry-history") await registryHistoryMain();
 else if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
 else if (process.env.BOARD_CAPTURE_CASE === "twice-switched-link") await twiceSwitchedLinkMain();
 else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "self-update-auto") await selfUpdateAutoMain();
-else if (process.env.BOARD_CAPTURE_CASE === "self-update-install") await selfUpdateInstallMain();
+else if (["self-update-install", "managed-update"].includes(process.env.BOARD_CAPTURE_CASE ?? "")) await selfUpdateInstallMain();
 else if (process.env.BOARD_CAPTURE_CASE === "linking") await linkingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity") await activityMain();
 else if (process.env.BOARD_CAPTURE_CASE === "activity-members") await activityMembersMain();
+else if (process.env.BOARD_CAPTURE_CASE === "activity-tokens") await activityTokensMain();
 else if (process.env.BOARD_CAPTURE_CASE === "lightbox") await lightboxMain();
 else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();

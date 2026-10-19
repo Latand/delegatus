@@ -1,0 +1,2743 @@
+{
+  "baseline": "5a8e7de511d16ddb88f59c94f98c2e8781dda04a",
+  "fixture": {
+    "rows": 53299,
+    "conversations": 11870,
+    "entries": 8428,
+    "receipts": 10971,
+    "failedStructured": 892,
+    "failedLegacy": 122,
+    "conflicted": 133,
+    "deliveryOwners": 14218,
+    "retainedDeliveries": 666,
+    "pendingReceipts": 20,
+    "sha256": "060a4047f92a3d45078d1876d0beeb9459ae88a4ebc576ce881202452d37cb04"
+  },
+  "method": "Fresh source processes, identical SQLite bytes and old schema, real isolated Unix runtime host, no artificial RPC delay; recovery clock pinned to the seeded pending receipt time. Full candidate qualification is recorded separately.",
+  "paired": [
+    {
+      "version": "before",
+      "sample": 1,
+      "openMs": 512.053541,
+      "viewMs": 658.6194939999999,
+      "bootLoop": {
+        "p95Ms": 1172.074774,
+        "maxMs": 1172.074774,
+        "stalls": [
+          {
+            "at": 1792073588666,
+            "ms": 1172
+          }
+        ]
+      },
+      "recoveryMs": 10965.118598000001,
+      "recoveryLoop": {
+        "p95Ms": 501.688674,
+        "maxMs": 1287.0424939999998,
+        "stalls": [
+          {
+            "at": 1792073589617,
+            "ms": 617
+          },
+          {
+            "at": 1792073590108,
+            "ms": 480
+          },
+          {
+            "at": 1792073592123,
+            "ms": 1287
+          },
+          {
+            "at": 1792073592634,
+            "ms": 501
+          },
+          {
+            "at": 1792073593146,
+            "ms": 502
+          },
+          {
+            "at": 1792073593429,
+            "ms": 274
+          },
+          {
+            "at": 1792073593785,
+            "ms": 346
+          },
+          {
+            "at": 1792073594136,
+            "ms": 341
+          },
+          {
+            "at": 1792073594496,
+            "ms": 350
+          },
+          {
+            "at": 1792073594796,
+            "ms": 290
+          },
+          {
+            "at": 1792073595243,
+            "ms": 436
+          },
+          {
+            "at": 1792073595604,
+            "ms": 351
+          },
+          {
+            "at": 1792073596028,
+            "ms": 414
+          },
+          {
+            "at": 1792073596360,
+            "ms": 322
+          },
+          {
+            "at": 1792073596752,
+            "ms": 382
+          },
+          {
+            "at": 1792073597119,
+            "ms": 356
+          },
+          {
+            "at": 1792073597620,
+            "ms": 492
+          },
+          {
+            "at": 1792073598216,
+            "ms": 586
+          },
+          {
+            "at": 1792073598781,
+            "ms": 554
+          },
+          {
+            "at": 1792073599164,
+            "ms": 374
+          }
+        ]
+      },
+      "counts": {
+        "effect-batch": 1,
+        "operation-status": 1804,
+        "session-read": 1784
+      },
+      "loads": 1,
+      "retained": 686,
+      "preserved": true,
+      "longest": [
+        {
+          "site": "registry.snapshot",
+          "ms": 129.033551
+        },
+        {
+          "site": "registry.headers",
+          "ms": 65.39930400000003
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 64.53456899999992
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 19.528996000000006
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 18.96832900000004
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 17.81061999999997
+        }
+      ]
+    },
+    {
+      "version": "after",
+      "sample": 1,
+      "openMs": 306.93455,
+      "viewMs": 1363.0407380000001,
+      "bootLoop": {
+        "p95Ms": 68.49264099999994,
+        "maxMs": 382.672569,
+        "stalls": [
+          {
+            "at": 1792073613084,
+            "ms": 383
+          },
+          {
+            "at": 1792073613657,
+            "ms": 115
+          }
+        ]
+      },
+      "recoveryMs": 335.94269399999985,
+      "recoveryLoop": {
+        "p95Ms": 257.407518,
+        "maxMs": 257.407518,
+        "stalls": [
+          {
+            "at": 1792073615008,
+            "ms": 257
+          }
+        ]
+      },
+      "counts": {
+        "effect-batch": 1,
+        "snapshot": 1,
+        "operation-status": 20
+      },
+      "loads": 1,
+      "retained": 686,
+      "preserved": true,
+      "longest": [
+        {
+          "site": "registry.keyed",
+          "ms": 114.57563100000016
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 106.63273899999967
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 14.18225399999983
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 13.941913999999997
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 1.6413790000001427
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 1.5799529999999322
+        }
+      ]
+    },
+    {
+      "version": "before",
+      "sample": 2,
+      "openMs": 295.58290800000003,
+      "viewMs": 665.2699990000001,
+      "bootLoop": {
+        "p95Ms": 959.838657,
+        "maxMs": 959.838657,
+        "stalls": [
+          {
+            "at": 1792073640783,
+            "ms": 960
+          }
+        ]
+      },
+      "recoveryMs": 9492.736837,
+      "recoveryLoop": {
+        "p95Ms": 389.5493980000001,
+        "maxMs": 1063.0420449999997,
+        "stalls": [
+          {
+            "at": 1792073641906,
+            "ms": 820
+          },
+          {
+            "at": 1792073642305,
+            "ms": 390
+          },
+          {
+            "at": 1792073644256,
+            "ms": 1063
+          },
+          {
+            "at": 1792073644541,
+            "ms": 275
+          },
+          {
+            "at": 1792073644823,
+            "ms": 272
+          },
+          {
+            "at": 1792073645118,
+            "ms": 284
+          },
+          {
+            "at": 1792073645483,
+            "ms": 355
+          },
+          {
+            "at": 1792073645811,
+            "ms": 319
+          },
+          {
+            "at": 1792073646107,
+            "ms": 285
+          },
+          {
+            "at": 1792073646432,
+            "ms": 315
+          },
+          {
+            "at": 1792073646706,
+            "ms": 265
+          },
+          {
+            "at": 1792073647047,
+            "ms": 330
+          },
+          {
+            "at": 1792073647432,
+            "ms": 375
+          },
+          {
+            "at": 1792073647847,
+            "ms": 405
+          },
+          {
+            "at": 1792073648236,
+            "ms": 379
+          },
+          {
+            "at": 1792073648596,
+            "ms": 349
+          },
+          {
+            "at": 1792073648959,
+            "ms": 354
+          },
+          {
+            "at": 1792073649401,
+            "ms": 432
+          },
+          {
+            "at": 1792073649721,
+            "ms": 310
+          },
+          {
+            "at": 1792073650011,
+            "ms": 280
+          }
+        ]
+      },
+      "counts": {
+        "effect-batch": 1,
+        "operation-status": 1804,
+        "session-read": 1784
+      },
+      "loads": 1,
+      "retained": 686,
+      "preserved": true,
+      "longest": [
+        {
+          "site": "registry.snapshot",
+          "ms": 141.280757
+        },
+        {
+          "site": "registry.headers",
+          "ms": 74.90825199999995
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 61.48547699999972
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 38.39398700000015
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 33.949648000000025
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 33.535454999999956
+        }
+      ]
+    },
+    {
+      "version": "after",
+      "sample": 2,
+      "openMs": 431.83289199999996,
+      "viewMs": 1254.557346,
+      "bootLoop": {
+        "p95Ms": 68.32039099999997,
+        "maxMs": 520.938053,
+        "stalls": [
+          {
+            "at": 1792073693765,
+            "ms": 521
+          },
+          {
+            "at": 1792073694354,
+            "ms": 109
+          }
+        ]
+      },
+      "recoveryMs": 289.62007900000026,
+      "recoveryLoop": {
+        "p95Ms": 201.76915400000007,
+        "maxMs": 201.76915400000007,
+        "stalls": [
+          {
+            "at": 1792073695535,
+            "ms": 202
+          }
+        ]
+      },
+      "counts": {
+        "effect-batch": 1,
+        "snapshot": 1,
+        "operation-status": 20
+      },
+      "loads": 1,
+      "retained": 686,
+      "preserved": true,
+      "longest": [
+        {
+          "site": "registry.keyed",
+          "ms": 108.20534399999997
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 73.21832900000027
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 15.673389999999927
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 11.210539000000153
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 1.550684000000274
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 1.5345139999999446
+        }
+      ]
+    },
+    {
+      "version": "before",
+      "sample": 3,
+      "openMs": 358.90656,
+      "viewMs": 773.317291,
+      "bootLoop": {
+        "p95Ms": 1145.283166,
+        "maxMs": 1145.283166,
+        "stalls": [
+          {
+            "at": 1792073713572,
+            "ms": 1145
+          }
+        ]
+      },
+      "recoveryMs": 11761.157883,
+      "recoveryLoop": {
+        "p95Ms": 444.5064709999997,
+        "maxMs": 1777.9522469999997,
+        "stalls": [
+          {
+            "at": 1792073714818,
+            "ms": 844
+          },
+          {
+            "at": 1792073715312,
+            "ms": 485
+          },
+          {
+            "at": 1792073718032,
+            "ms": 1778
+          },
+          {
+            "at": 1792073718389,
+            "ms": 347
+          },
+          {
+            "at": 1792073718801,
+            "ms": 402
+          },
+          {
+            "at": 1792073719167,
+            "ms": 356
+          },
+          {
+            "at": 1792073719611,
+            "ms": 434
+          },
+          {
+            "at": 1792073719976,
+            "ms": 356
+          },
+          {
+            "at": 1792073720292,
+            "ms": 305
+          },
+          {
+            "at": 1792073720746,
+            "ms": 445
+          },
+          {
+            "at": 1792073721177,
+            "ms": 421
+          },
+          {
+            "at": 1792073721523,
+            "ms": 336
+          },
+          {
+            "at": 1792073721971,
+            "ms": 437
+          },
+          {
+            "at": 1792073722391,
+            "ms": 410
+          },
+          {
+            "at": 1792073723085,
+            "ms": 684
+          },
+          {
+            "at": 1792073723532,
+            "ms": 437
+          },
+          {
+            "at": 1792073723928,
+            "ms": 386
+          },
+          {
+            "at": 1792073724261,
+            "ms": 322
+          },
+          {
+            "at": 1792073724609,
+            "ms": 338
+          },
+          {
+            "at": 1792073724944,
+            "ms": 325
+          }
+        ]
+      },
+      "counts": {
+        "effect-batch": 1,
+        "operation-status": 1804,
+        "session-read": 1784
+      },
+      "loads": 1,
+      "retained": 686,
+      "preserved": true,
+      "longest": [
+        {
+          "site": "registry.snapshot",
+          "ms": 198.1402290000001
+        },
+        {
+          "site": "registry.headers",
+          "ms": 96.55491500000016
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 77.62861699999985
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 29.529134000000113
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 28.356446000000005
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 26.90045699999996
+        }
+      ]
+    },
+    {
+      "version": "after",
+      "sample": 3,
+      "openMs": 411.41150100000004,
+      "viewMs": 1556.310309,
+      "bootLoop": {
+        "p95Ms": 90.59647900000004,
+        "maxMs": 522.5426170000001,
+        "stalls": [
+          {
+            "at": 1792073885244,
+            "ms": 523
+          },
+          {
+            "at": 1792073885979,
+            "ms": 139
+          }
+        ]
+      },
+      "recoveryMs": 307.64320599999974,
+      "recoveryLoop": {
+        "p95Ms": 218.43903200000022,
+        "maxMs": 218.43903200000022,
+        "stalls": [
+          {
+            "at": 1792073887306,
+            "ms": 218
+          }
+        ]
+      },
+      "counts": {
+        "effect-batch": 1,
+        "snapshot": 1,
+        "operation-status": 20
+      },
+      "loads": 1,
+      "retained": 686,
+      "preserved": true,
+      "longest": [
+        {
+          "site": "registry.keyed",
+          "ms": 107.41003799999999
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 97.09723500000018
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 16.237120000000232
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 8.043047999999999
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 1.6470060000001467
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 1.5979749999996784
+        }
+      ]
+    }
+  ],
+  "discardedQualification": [
+    {
+      "reason": "Synchronous receipt index creation accumulated with constructor work",
+      "bootLoopMaxMs": [
+        1015.939157,
+        1020.82718,
+        1026.007882
+      ]
+    },
+    {
+      "reason": "Requiring an unchanged revision across cooperative preparation failed with sustained writers; replaced with a pinned transaction and journal replay",
+      "fullCandidatePassed": false
+    }
+  ],
+  "qualification": [
+    {
+      "scopeCpuPercent": 300,
+      "memoryMax": "8G",
+      "checkedAt": "2026-10-15T13:39:35.411Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": {
+        "dataset": {
+          "scale": 1,
+          "rows": 53299,
+          "coldRows": 51099,
+          "payloadBytes": 216998648,
+          "transcripts": 320,
+          "seedMs": 15133,
+          "receipts": {
+            "total": 10971,
+            "failedStructured": 892,
+            "failedLegacy": 122,
+            "conflicted": 133
+          }
+        },
+        "firstBoot": {
+          "registryOpenMs": 369,
+          "firstSnapshotMs": 864,
+          "coldProjectionMs": 5657,
+          "firstUsableMs": 7040,
+          "eventLoopMaxMs": 391,
+          "coldBuild": {
+            "sequence": 1,
+            "buildMs": 3180.5
+          }
+        },
+        "activation": {
+          "incumbentMs": 3477,
+          "successorMs": 30022,
+          "eventLoopMaxMs": 548
+        },
+        "grantWrites": {
+          "count": 319,
+          "p50Ms": 3.3,
+          "p95Ms": 8,
+          "maxMs": 17.3,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "externalWrites": {
+          "count": 953,
+          "p50Ms": 3,
+          "p95Ms": 8.6,
+          "maxMs": 32.2,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedOperationReads": {
+          "count": 139,
+          "p50Ms": 0.9,
+          "p95Ms": 4.9,
+          "maxMs": 20.3
+        },
+        "eventLoop": {
+          "p95Ms": 4.1,
+          "maxMs": 514.8
+        },
+        "projection": {
+          "warmBuilds": {
+            "count": 164,
+            "p50Ms": 322.1,
+            "p95Ms": 942.4,
+            "maxMs": 3943
+          },
+          "queueWait": {
+            "count": 166,
+            "p50Ms": 1781.3,
+            "p95Ms": 3541.7,
+            "maxMs": 6163.5
+          }
+        },
+        "scopeRequests": {
+          "count": 336,
+          "p50Ms": 127.5,
+          "p95Ms": 1020,
+          "maxMs": 3855.4,
+          "scopes": 8,
+          "failures": 0,
+          "maxQueueDepth": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "worker": {
+          "spawns": 1,
+          "timeoutRetirements": 0,
+          "pidStable": true
+        },
+        "stability": {
+          "rounds": 40,
+          "responses": 320,
+          "emptyResponses": 0,
+          "missingRows": 0,
+          "extraRows": 0,
+          "reattributedRows": 0,
+          "missingPins": 0
+        },
+        "handover": {
+          "successor": {
+            "completed": true,
+            "exitCode": 0,
+            "signal": null,
+            "readyMs": 8943,
+            "registryOpenMs": 122,
+            "snapshotMs": 1066,
+            "firstProjectionMs": 5439,
+            "archived": 250,
+            "grantMismatches": 0,
+            "adoptionMs": 30004,
+            "adopted": 4
+          },
+          "switched": true,
+          "demotionExitCode": 1,
+          "servingRelease": "successor",
+          "serving": {
+            "requests": 256,
+            "failures": 0
+          }
+        },
+        "workers": {
+          "count": 4,
+          "rehosted": 4,
+          "answering": 4,
+          "progressGapMaxMs": 5242,
+          "lostProgress": 0,
+          "repeatedProgress": 0,
+          "failedPings": 0
+        },
+        "sqliteBusy": 0,
+        "runtimeTimeouts": 0,
+        "runtimeRpc": {
+          "requests": 866,
+          "p95Ms": 31.9,
+          "maxMs": 1769,
+          "timeouts": 0,
+          "failures": 0,
+          "hostAlive": true
+        },
+        "deliveryEvidence": {
+          "pending": 16,
+          "uncertain": 8,
+          "retained": 666,
+          "pendingLaunches": 20,
+          "preserved": true
+        },
+        "browser": {
+          "views": 8,
+          "writes": {
+            "count": 947,
+            "p95Ms": 10,
+            "maxMs": 122,
+            "failures": 0
+          },
+          "readyMaxMs": 8461,
+          "filesP95Ms": 1795,
+          "filesMaxMs": 1795,
+          "filesErrors": 0,
+          "viewsWithoutAnswerDuringWrites": 0,
+          "apiMaxMs": 2342,
+          "apiMaxRoute": "/api/tmux/targets",
+          "apiErrors": 0,
+          "apiFirstError": null,
+          "apiUnfinished": 0,
+          "bootLagMaxMs": 682,
+          "lagP95Ms": 3,
+          "lagMaxMs": 202,
+          "inputMaxMs": 127,
+          "inputsMin": 2,
+          "selectionsLost": 0,
+          "staleNotices": 0,
+          "server": {
+            "samples": 2216,
+            "bootMaxMs": 932,
+            "p95Ms": 8.9,
+            "maxMs": 233.2
+          }
+        }
+      },
+      "breaches": [
+        "successor release activation 30022ms exceeds 15000ms",
+        "Viewer event-loop delay max 514.8ms exceeds 500ms",
+        "warm projection build max 3943ms exceeds 2000ms",
+        "successor re-hosting every live worker 30004ms exceeds 15000ms",
+        "the incumbent's demotion ended 1"
+      ],
+      "ok": false
+    },
+    {
+      "scopeCpuPercent": 1200,
+      "memoryMax": "8G",
+      "checkedAt": "2026-10-15T13:43:28.584Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": {
+        "dataset": {
+          "scale": 1,
+          "rows": 53299,
+          "coldRows": 51099,
+          "payloadBytes": 216998648,
+          "transcripts": 320,
+          "seedMs": 10380,
+          "receipts": {
+            "total": 10971,
+            "failedStructured": 892,
+            "failedLegacy": 122,
+            "conflicted": 133
+          }
+        },
+        "firstBoot": {
+          "registryOpenMs": 351,
+          "firstSnapshotMs": 1203,
+          "coldProjectionMs": 7169,
+          "firstUsableMs": 8909,
+          "eventLoopMaxMs": 410,
+          "coldBuild": {
+            "sequence": 1,
+            "buildMs": 3083.7
+          }
+        },
+        "activation": {
+          "incumbentMs": 3858,
+          "successorMs": 35834,
+          "eventLoopMaxMs": 675
+        },
+        "grantWrites": {
+          "count": 345,
+          "p50Ms": 3,
+          "p95Ms": 7,
+          "maxMs": 32.5,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "externalWrites": {
+          "count": 928,
+          "p50Ms": 2.7,
+          "p95Ms": 4.6,
+          "maxMs": 34.9,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedOperationReads": {
+          "count": 149,
+          "p50Ms": 0.8,
+          "p95Ms": 1.2,
+          "maxMs": 2.6
+        },
+        "eventLoop": {
+          "p95Ms": 3.1,
+          "maxMs": 160.1
+        },
+        "projection": {
+          "warmBuilds": {
+            "count": 144,
+            "p50Ms": 342.5,
+            "p95Ms": 1507,
+            "maxMs": 3687.1
+          },
+          "queueWait": {
+            "count": 146,
+            "p50Ms": 1927.7,
+            "p95Ms": 3968.6,
+            "maxMs": 6828.7
+          }
+        },
+        "scopeRequests": {
+          "count": 312,
+          "p50Ms": 132.4,
+          "p95Ms": 1189.5,
+          "maxMs": 6208.7,
+          "scopes": 8,
+          "failures": 0,
+          "maxQueueDepth": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "worker": {
+          "spawns": 1,
+          "timeoutRetirements": 0,
+          "pidStable": true
+        },
+        "stability": {
+          "rounds": 37,
+          "responses": 296,
+          "emptyResponses": 0,
+          "missingRows": 0,
+          "extraRows": 0,
+          "reattributedRows": 0,
+          "missingPins": 0
+        },
+        "handover": {
+          "successor": {
+            "completed": true,
+            "exitCode": 0,
+            "signal": null,
+            "readyMs": 6146,
+            "registryOpenMs": 80,
+            "snapshotMs": 783,
+            "firstProjectionMs": 2943,
+            "archived": 250,
+            "grantMismatches": 0,
+            "adoptionMs": 103610,
+            "adopted": 0
+          },
+          "switched": true,
+          "demotionExitCode": 1,
+          "servingRelease": "successor",
+          "serving": {
+            "requests": 232,
+            "failures": 0
+          }
+        },
+        "workers": {
+          "count": 4,
+          "rehosted": 0,
+          "answering": 4,
+          "progressGapMaxMs": 2631,
+          "lostProgress": 0,
+          "repeatedProgress": 0,
+          "failedPings": 2
+        },
+        "sqliteBusy": 0,
+        "runtimeTimeouts": 0,
+        "runtimeRpc": {
+          "requests": 900,
+          "p95Ms": 251.9,
+          "maxMs": 3664,
+          "timeouts": 0,
+          "failures": 0,
+          "hostAlive": true
+        },
+        "deliveryEvidence": {
+          "pending": 16,
+          "uncertain": 8,
+          "retained": 666,
+          "pendingLaunches": 20,
+          "preserved": true
+        },
+        "browser": {
+          "views": 8,
+          "writes": {
+            "count": 959,
+            "p95Ms": 6,
+            "maxMs": 42,
+            "failures": 0
+          },
+          "readyMaxMs": 2974,
+          "filesP95Ms": 1188,
+          "filesMaxMs": 1188,
+          "filesErrors": 0,
+          "viewsWithoutAnswerDuringWrites": 0,
+          "apiMaxMs": 1683,
+          "apiMaxRoute": "/api/accounts",
+          "apiErrors": 0,
+          "apiFirstError": null,
+          "apiUnfinished": 3,
+          "bootLagMaxMs": 177,
+          "lagP95Ms": 1,
+          "lagMaxMs": 41,
+          "inputMaxMs": 60,
+          "inputsMin": 2,
+          "selectionsLost": 0,
+          "staleNotices": 0,
+          "server": {
+            "samples": 2333,
+            "bootMaxMs": 846.2,
+            "p95Ms": 4.8,
+            "maxMs": 157.9
+          }
+        }
+      },
+      "breaches": [
+        "successor release activation 35834ms exceeds 15000ms",
+        "warm projection build p95 1507ms exceeds 1000ms",
+        "warm projection build max 3687.1ms exceeds 2000ms",
+        "successor re-hosting every live worker 103610ms exceeds 15000ms",
+        "the incumbent's demotion ended 1",
+        "4 of 4 live worker(s) were not re-hosted by the successor",
+        "2 live-worker ping(s) went unanswered outside the transition",
+        "runtime-host call p95 251.9ms exceeds 250ms",
+        "runtime-host call max 3664ms exceeds 2000ms"
+      ],
+      "ok": false
+    },
+    {
+      "scopeCpuPercent": 1200,
+      "memoryMax": "8G",
+      "checkedAt": "2026-10-15T13:50:51.905Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": {
+        "dataset": {
+          "scale": 1,
+          "rows": 53299,
+          "coldRows": 51099,
+          "payloadBytes": 216998648,
+          "transcripts": 320,
+          "seedMs": 11387,
+          "receipts": {
+            "total": 10971,
+            "failedStructured": 892,
+            "failedLegacy": 122,
+            "conflicted": 133
+          }
+        },
+        "firstBoot": {
+          "registryOpenMs": 399,
+          "firstSnapshotMs": 1089,
+          "coldProjectionMs": 6525,
+          "firstUsableMs": 8277,
+          "eventLoopMaxMs": 464,
+          "coldBuild": {
+            "sequence": 1,
+            "buildMs": 3552.5
+          }
+        },
+        "activation": {
+          "incumbentMs": 3487,
+          "successorMs": 8682,
+          "eventLoopMaxMs": 1086
+        },
+        "grantWrites": {
+          "count": 328,
+          "p50Ms": 3.2,
+          "p95Ms": 5.3,
+          "maxMs": 7.9,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "externalWrites": {
+          "count": 630,
+          "p50Ms": 3,
+          "p95Ms": 4.8,
+          "maxMs": 32.6,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedOperationReads": {
+          "count": 141,
+          "p50Ms": 0.9,
+          "p95Ms": 1.4,
+          "maxMs": 7.4
+        },
+        "eventLoop": {
+          "p95Ms": 3.4,
+          "maxMs": 232.5
+        },
+        "projection": {
+          "warmBuilds": {
+            "count": 112,
+            "p50Ms": 366.3,
+            "p95Ms": 592,
+            "maxMs": 3143.1
+          },
+          "queueWait": {
+            "count": 114,
+            "p50Ms": 1807.9,
+            "p95Ms": 3716.5,
+            "maxMs": 5027.8
+          }
+        },
+        "scopeRequests": {
+          "count": 224,
+          "p50Ms": 117.5,
+          "p95Ms": 1532,
+          "maxMs": 4137.6,
+          "scopes": 8,
+          "failures": 0,
+          "maxQueueDepth": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "worker": {
+          "spawns": 1,
+          "timeoutRetirements": 0,
+          "pidStable": true
+        },
+        "stability": {
+          "rounds": 26,
+          "responses": 208,
+          "emptyResponses": 0,
+          "missingRows": 0,
+          "extraRows": 0,
+          "reattributedRows": 0,
+          "missingPins": 0
+        },
+        "handover": {
+          "successor": {
+            "completed": true,
+            "exitCode": 0,
+            "signal": null,
+            "readyMs": 7576,
+            "registryOpenMs": 72,
+            "snapshotMs": 934,
+            "firstProjectionMs": 3736,
+            "archived": 250,
+            "grantMismatches": 0,
+            "adoptionMs": 8679,
+            "adopted": 4
+          },
+          "switched": true,
+          "demotionExitCode": 0,
+          "servingRelease": "successor",
+          "serving": {
+            "requests": 144,
+            "failures": 0
+          }
+        },
+        "workers": {
+          "count": 4,
+          "rehosted": 4,
+          "answering": 4,
+          "progressGapMaxMs": 4785,
+          "lostProgress": 0,
+          "repeatedProgress": 0,
+          "failedPings": 0
+        },
+        "sqliteBusy": 0,
+        "runtimeTimeouts": 0,
+        "runtimeRpc": {
+          "requests": 520,
+          "p95Ms": 6.6,
+          "maxMs": 2064,
+          "timeouts": 0,
+          "failures": 0,
+          "hostAlive": true
+        },
+        "deliveryEvidence": {
+          "pending": 16,
+          "uncertain": 8,
+          "retained": 666,
+          "pendingLaunches": 20,
+          "preserved": true
+        },
+        "browser": {
+          "views": 8,
+          "writes": {
+            "count": 957,
+            "p95Ms": 5,
+            "maxMs": 16,
+            "failures": 0
+          },
+          "readyMaxMs": 3927,
+          "filesP95Ms": 1400,
+          "filesMaxMs": 1400,
+          "filesErrors": 0,
+          "viewsWithoutAnswerDuringWrites": 0,
+          "apiMaxMs": 1864,
+          "apiMaxRoute": "/api/files",
+          "apiErrors": 0,
+          "apiFirstError": null,
+          "apiUnfinished": 0,
+          "bootLagMaxMs": 172,
+          "lagP95Ms": 0,
+          "lagMaxMs": 39,
+          "inputMaxMs": 45,
+          "inputsMin": 2,
+          "selectionsLost": 0,
+          "staleNotices": 0,
+          "server": {
+            "samples": 2283,
+            "bootMaxMs": 584.7,
+            "p95Ms": 6.9,
+            "maxMs": 156.2
+          }
+        }
+      },
+      "breaches": [
+        "warm projection build max 3143.1ms exceeds 2000ms",
+        "runtime-host call max 2064ms exceeds 2000ms"
+      ],
+      "ok": false
+    },
+    {
+      "scopeCpuPercent": 1200,
+      "memoryMax": "8G",
+      "checkedAt": "2026-10-15T14:22:12.892Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": {
+        "dataset": {
+          "scale": 1,
+          "rows": 53299,
+          "coldRows": 51099,
+          "payloadBytes": 216998648,
+          "transcripts": 320,
+          "seedMs": 10999,
+          "receipts": {
+            "total": 10971,
+            "failedStructured": 892,
+            "failedLegacy": 122,
+            "conflicted": 133
+          }
+        },
+        "firstBoot": {
+          "registryOpenMs": 328,
+          "firstSnapshotMs": 1157,
+          "coldProjectionMs": 4697,
+          "firstUsableMs": 6401,
+          "eventLoopMaxMs": 420,
+          "coldBuild": {
+            "sequence": 1,
+            "buildMs": 2261.7
+          }
+        },
+        "activation": {
+          "incumbentMs": 2718,
+          "successorMs": 6812,
+          "eventLoopMaxMs": 880
+        },
+        "grantWrites": {
+          "count": 304,
+          "p50Ms": 3.2,
+          "p95Ms": 4.5,
+          "maxMs": 7.8,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "externalWrites": {
+          "count": 576,
+          "p50Ms": 2.9,
+          "p95Ms": 4.9,
+          "maxMs": 29.2,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedOperationReads": {
+          "count": 130,
+          "p50Ms": 0.9,
+          "p95Ms": 1.3,
+          "maxMs": 5.2
+        },
+        "eventLoop": {
+          "p95Ms": 3.1,
+          "maxMs": 278.1
+        },
+        "projection": {
+          "warmBuilds": {
+            "count": 114,
+            "p50Ms": 312,
+            "p95Ms": 695.9,
+            "maxMs": 2472.1
+          },
+          "queueWait": {
+            "count": 116,
+            "p50Ms": 1523.4,
+            "p95Ms": 3215.4,
+            "maxMs": 4351.6
+          }
+        },
+        "scopeRequests": {
+          "count": 208,
+          "p50Ms": 121.6,
+          "p95Ms": 1302.5,
+          "maxMs": 3612.8,
+          "scopes": 8,
+          "failures": 0,
+          "maxQueueDepth": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "worker": {
+          "spawns": 1,
+          "timeoutRetirements": 0,
+          "pidStable": true
+        },
+        "stability": {
+          "rounds": 24,
+          "responses": 192,
+          "emptyResponses": 0,
+          "missingRows": 0,
+          "extraRows": 0,
+          "reattributedRows": 0,
+          "missingPins": 0
+        },
+        "handover": {
+          "successor": {
+            "completed": true,
+            "exitCode": 0,
+            "signal": null,
+            "readyMs": 7170,
+            "registryOpenMs": 88,
+            "snapshotMs": 931,
+            "firstProjectionMs": 3663,
+            "archived": 250,
+            "grantMismatches": 0,
+            "adoptionMs": 6808,
+            "adopted": 4
+          },
+          "switched": true,
+          "demotionExitCode": 0,
+          "servingRelease": "successor",
+          "serving": {
+            "requests": 128,
+            "failures": 0
+          }
+        },
+        "workers": {
+          "count": 4,
+          "rehosted": 4,
+          "answering": 4,
+          "progressGapMaxMs": 5808,
+          "lostProgress": 0,
+          "repeatedProgress": 0,
+          "failedPings": 0
+        },
+        "sqliteBusy": 0,
+        "runtimeTimeouts": 0,
+        "runtimeRpc": {
+          "requests": 507,
+          "p95Ms": 36.3,
+          "maxMs": 1336,
+          "timeouts": 0,
+          "failures": 0,
+          "hostAlive": true
+        },
+        "deliveryEvidence": {
+          "pending": 16,
+          "uncertain": 8,
+          "retained": 666,
+          "pendingLaunches": 20,
+          "preserved": true
+        },
+        "browser": {
+          "views": 8,
+          "writes": {
+            "count": 966,
+            "p95Ms": 4,
+            "maxMs": 24,
+            "failures": 0
+          },
+          "readyMaxMs": 3518,
+          "filesP95Ms": 1004,
+          "filesMaxMs": 1004,
+          "filesErrors": 0,
+          "viewsWithoutAnswerDuringWrites": 0,
+          "apiMaxMs": 1769,
+          "apiMaxRoute": "/api/tmux/targets",
+          "apiErrors": 0,
+          "apiFirstError": null,
+          "apiUnfinished": 3,
+          "bootLagMaxMs": 167,
+          "lagP95Ms": 0,
+          "lagMaxMs": 40,
+          "inputMaxMs": 33,
+          "inputsMin": 2,
+          "selectionsLost": 0,
+          "staleNotices": 0,
+          "server": {
+            "samples": 2410,
+            "bootMaxMs": 736.2,
+            "p95Ms": 3.3,
+            "maxMs": 94
+          }
+        }
+      },
+      "breaches": [
+        "warm projection build max 2472.1ms exceeds 2000ms"
+      ],
+      "ok": false
+    },
+    {
+      "scopeCpuPercent": 1200,
+      "memoryMax": "8G",
+      "checkedAt": "2026-10-15T14:43:05.399Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": {
+        "dataset": {
+          "scale": 1,
+          "rows": 53299,
+          "coldRows": 51099,
+          "payloadBytes": 216998648,
+          "transcripts": 320,
+          "seedMs": 9872,
+          "receipts": {
+            "total": 10971,
+            "failedStructured": 892,
+            "failedLegacy": 122,
+            "conflicted": 133
+          }
+        },
+        "firstBoot": {
+          "registryOpenMs": 368,
+          "firstSnapshotMs": 892,
+          "coldProjectionMs": 4768,
+          "firstUsableMs": 6167,
+          "eventLoopMaxMs": 416,
+          "coldBuild": {
+            "sequence": 1,
+            "buildMs": 2439.6
+          }
+        },
+        "activation": {
+          "incumbentMs": 3481,
+          "successorMs": 3698,
+          "eventLoopMaxMs": 551
+        },
+        "grantWrites": {
+          "count": 322,
+          "p50Ms": 3.1,
+          "p95Ms": 5.4,
+          "maxMs": 23.9,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "externalWrites": {
+          "count": 525,
+          "p50Ms": 2.7,
+          "p95Ms": 4.8,
+          "maxMs": 25.4,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedOperationReads": {
+          "count": 137,
+          "p50Ms": 0.9,
+          "p95Ms": 1.3,
+          "maxMs": 4.8
+        },
+        "eventLoop": {
+          "p95Ms": 3.3,
+          "maxMs": 373
+        },
+        "projection": {
+          "warmBuilds": {
+            "count": 110,
+            "p50Ms": 308.5,
+            "p95Ms": 553,
+            "maxMs": 751.3
+          },
+          "queueWait": {
+            "count": 112,
+            "p50Ms": 1461.4,
+            "p95Ms": 2792.5,
+            "maxMs": 3226.5
+          }
+        },
+        "scopeRequests": {
+          "count": 192,
+          "p50Ms": 121.1,
+          "p95Ms": 1431.9,
+          "maxMs": 3252.4,
+          "scopes": 8,
+          "failures": 0,
+          "maxQueueDepth": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "worker": {
+          "spawns": 1,
+          "timeoutRetirements": 0,
+          "pidStable": true
+        },
+        "stability": {
+          "rounds": 22,
+          "responses": 176,
+          "emptyResponses": 0,
+          "missingRows": 0,
+          "extraRows": 0,
+          "reattributedRows": 0,
+          "missingPins": 0
+        },
+        "handover": {
+          "successor": {
+            "completed": true,
+            "exitCode": 0,
+            "signal": null,
+            "readyMs": 7936,
+            "registryOpenMs": 66,
+            "snapshotMs": 709,
+            "firstProjectionMs": 4354,
+            "archived": 250,
+            "grantMismatches": 0,
+            "adoptionMs": 2550,
+            "adopted": 4
+          },
+          "switched": true,
+          "demotionExitCode": 0,
+          "servingRelease": "successor",
+          "serving": {
+            "requests": 112,
+            "failures": 0
+          }
+        },
+        "workers": {
+          "count": 4,
+          "rehosted": 4,
+          "answering": 4,
+          "progressGapMaxMs": 3187,
+          "lostProgress": 0,
+          "repeatedProgress": 0,
+          "failedPings": 0
+        },
+        "sqliteBusy": 0,
+        "runtimeTimeouts": 0,
+        "runtimeRpc": {
+          "requests": 458,
+          "p95Ms": 4.5,
+          "maxMs": 415,
+          "timeouts": 0,
+          "failures": 0,
+          "hostAlive": true
+        },
+        "deliveryEvidence": {
+          "pending": 16,
+          "uncertain": 8,
+          "retained": 666,
+          "pendingLaunches": 20,
+          "preserved": true
+        },
+        "browser": {
+          "views": 8,
+          "writes": {
+            "count": 954,
+            "p95Ms": 6,
+            "maxMs": 63,
+            "failures": 0
+          },
+          "readyMaxMs": 4644,
+          "filesP95Ms": 2063,
+          "filesMaxMs": 2063,
+          "filesErrors": 0,
+          "viewsWithoutAnswerDuringWrites": 0,
+          "apiMaxMs": 2063,
+          "apiMaxRoute": "/api/files",
+          "apiErrors": 0,
+          "apiFirstError": null,
+          "apiUnfinished": 0,
+          "bootLagMaxMs": 211,
+          "lagP95Ms": 1,
+          "lagMaxMs": 46,
+          "inputMaxMs": 37,
+          "inputsMin": 2,
+          "selectionsLost": 0,
+          "staleNotices": 0,
+          "server": {
+            "samples": 2291,
+            "bootMaxMs": 621.5,
+            "p95Ms": 5,
+            "maxMs": 190.5
+          }
+        }
+      },
+      "breaches": [],
+      "ok": true
+    },
+    {
+      "scopeCpuPercent": 1200,
+      "memoryMax": "8G",
+      "integratedMain": "d6f3669ed",
+      "checkedAt": "2026-10-15T14:52:39.374Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": {
+        "dataset": {
+          "scale": 1,
+          "rows": 53299,
+          "coldRows": 51099,
+          "payloadBytes": 216998648,
+          "transcripts": 320,
+          "seedMs": 12599,
+          "receipts": {
+            "total": 10971,
+            "failedStructured": 892,
+            "failedLegacy": 122,
+            "conflicted": 133
+          }
+        },
+        "firstBoot": {
+          "registryOpenMs": 345,
+          "firstSnapshotMs": 1041,
+          "coldProjectionMs": 4541,
+          "firstUsableMs": 6114,
+          "eventLoopMaxMs": 367,
+          "coldBuild": {
+            "sequence": 1,
+            "buildMs": 2075.4
+          }
+        },
+        "activation": {
+          "incumbentMs": 3260,
+          "successorMs": 3127,
+          "eventLoopMaxMs": 387
+        },
+        "grantWrites": {
+          "count": 309,
+          "p50Ms": 2.8,
+          "p95Ms": 4.8,
+          "maxMs": 27.9,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "externalWrites": {
+          "count": 488,
+          "p50Ms": 2.6,
+          "p95Ms": 4.4,
+          "maxMs": 27.1,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedOperationReads": {
+          "count": 130,
+          "p50Ms": 0.7,
+          "p95Ms": 1.1,
+          "maxMs": 4.2
+        },
+        "eventLoop": {
+          "p95Ms": 2.8,
+          "maxMs": 102.4
+        },
+        "projection": {
+          "warmBuilds": {
+            "count": 126,
+            "p50Ms": 250.3,
+            "p95Ms": 446.9,
+            "maxMs": 760.7
+          },
+          "queueWait": {
+            "count": 128,
+            "p50Ms": 1170.9,
+            "p95Ms": 2221.9,
+            "maxMs": 2562.1
+          }
+        },
+        "scopeRequests": {
+          "count": 184,
+          "p50Ms": 127.5,
+          "p95Ms": 1455.6,
+          "maxMs": 2461.5,
+          "scopes": 8,
+          "failures": 0,
+          "maxQueueDepth": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "worker": {
+          "spawns": 1,
+          "timeoutRetirements": 0,
+          "pidStable": true
+        },
+        "stability": {
+          "rounds": 21,
+          "responses": 168,
+          "emptyResponses": 0,
+          "missingRows": 0,
+          "extraRows": 0,
+          "reattributedRows": 0,
+          "missingPins": 0
+        },
+        "handover": {
+          "successor": {
+            "completed": true,
+            "exitCode": 0,
+            "signal": null,
+            "readyMs": 7045,
+            "registryOpenMs": 67,
+            "snapshotMs": 1084,
+            "firstProjectionMs": 3188,
+            "archived": 250,
+            "grantMismatches": 0,
+            "adoptionMs": 1800,
+            "adopted": 4
+          },
+          "switched": true,
+          "demotionExitCode": 0,
+          "servingRelease": "successor",
+          "serving": {
+            "requests": 104,
+            "failures": 0
+          }
+        },
+        "workers": {
+          "count": 4,
+          "rehosted": 4,
+          "answering": 4,
+          "progressGapMaxMs": 2790,
+          "lostProgress": 0,
+          "repeatedProgress": 0,
+          "failedPings": 0
+        },
+        "sqliteBusy": 0,
+        "runtimeTimeouts": 0,
+        "runtimeRpc": {
+          "requests": 447,
+          "p95Ms": 14.5,
+          "maxMs": 1469,
+          "timeouts": 0,
+          "failures": 0,
+          "hostAlive": true
+        },
+        "deliveryEvidence": {
+          "pending": 16,
+          "uncertain": 8,
+          "retained": 666,
+          "pendingLaunches": 20,
+          "preserved": true
+        },
+        "browser": {
+          "views": 8,
+          "writes": {
+            "count": 964,
+            "p95Ms": 4,
+            "maxMs": 33,
+            "failures": 0
+          },
+          "readyMaxMs": 3015,
+          "filesP95Ms": 1201,
+          "filesMaxMs": 1201,
+          "filesErrors": 0,
+          "viewsWithoutAnswerDuringWrites": 0,
+          "apiMaxMs": 1358,
+          "apiMaxRoute": "/api/resources",
+          "apiErrors": 0,
+          "apiFirstError": null,
+          "apiUnfinished": 2,
+          "bootLagMaxMs": 147,
+          "lagP95Ms": 0,
+          "lagMaxMs": 42,
+          "inputMaxMs": 60,
+          "inputsMin": 2,
+          "selectionsLost": 0,
+          "staleNotices": 0,
+          "server": {
+            "samples": 2368,
+            "bootMaxMs": 715.1,
+            "p95Ms": 4.4,
+            "maxMs": 146.1
+          }
+        }
+      },
+      "breaches": [],
+      "ok": true
+    }
+  ],
+  "intermediatePaired": [
+    {
+      "version": "before",
+      "sample": 1,
+      "openMs": 523.9555009999999,
+      "viewMs": 651.658673,
+      "bootLoop": {
+        "p95Ms": 1174.414084,
+        "maxMs": 1174.414084,
+        "stalls": [
+          {
+            "at": 1792070067930,
+            "ms": 1174
+          }
+        ]
+      },
+      "recoveryMs": 7740.189608999999,
+      "recoveryLoop": {
+        "p95Ms": 311.547297000001,
+        "maxMs": 1037.87984,
+        "stalls": [
+          {
+            "at": 1792070068769,
+            "ms": 580
+          },
+          {
+            "at": 1792070069185,
+            "ms": 406
+          },
+          {
+            "at": 1792070070912,
+            "ms": 1038
+          },
+          {
+            "at": 1792070071216,
+            "ms": 294
+          },
+          {
+            "at": 1792070071531,
+            "ms": 305
+          },
+          {
+            "at": 1792070071783,
+            "ms": 242
+          },
+          {
+            "at": 1792070072026,
+            "ms": 232
+          },
+          {
+            "at": 1792070072302,
+            "ms": 267
+          },
+          {
+            "at": 1792070072548,
+            "ms": 235
+          },
+          {
+            "at": 1792070072827,
+            "ms": 269
+          },
+          {
+            "at": 1792070073071,
+            "ms": 233
+          },
+          {
+            "at": 1792070073311,
+            "ms": 230
+          },
+          {
+            "at": 1792070073562,
+            "ms": 241
+          },
+          {
+            "at": 1792070073807,
+            "ms": 235
+          },
+          {
+            "at": 1792070074063,
+            "ms": 246
+          },
+          {
+            "at": 1792070074334,
+            "ms": 261
+          },
+          {
+            "at": 1792070074582,
+            "ms": 238
+          },
+          {
+            "at": 1792070074825,
+            "ms": 234
+          },
+          {
+            "at": 1792070075062,
+            "ms": 226
+          },
+          {
+            "at": 1792070075328,
+            "ms": 257
+          }
+        ]
+      },
+      "counts": {
+        "effect-batch": 1,
+        "operation-status": 1804,
+        "session-read": 1784
+      },
+      "loads": 1,
+      "retained": 686,
+      "preserved": true,
+      "longest": [
+        {
+          "site": "registry.snapshot",
+          "ms": 122.95593499999995
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 82.65326499999992
+        },
+        {
+          "site": "registry.headers",
+          "ms": 64.74406500000009
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 15.592963999999938
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 15.184741000000031
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 14.424848000000111
+        }
+      ]
+    },
+    {
+      "version": "after",
+      "sample": 1,
+      "openMs": 530.291806,
+      "viewMs": 807.870376,
+      "bootLoop": {
+        "p95Ms": 62.66457600000001,
+        "maxMs": 589.9984010000001,
+        "stalls": [
+          {
+            "at": 1792070083053,
+            "ms": 590
+          }
+        ]
+      },
+      "recoveryMs": 142.9826579999999,
+      "recoveryLoop": {
+        "p95Ms": 101.46438599999988,
+        "maxMs": 101.46438599999988,
+        "stalls": [
+          {
+            "at": 1792070084148,
+            "ms": 101
+          }
+        ]
+      },
+      "counts": {
+        "effect-batch": 1,
+        "snapshot": 1,
+        "operation-status": 20
+      },
+      "loads": 1,
+      "retained": 686,
+      "preserved": true,
+      "longest": [
+        {
+          "site": "registry.keyed",
+          "ms": 49.7976450000001
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 47.60599100000013
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 5.606944000000112
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 5.085603999999876
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 0.5111939999999322
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 0.4831379999998262
+        }
+      ]
+    },
+    {
+      "version": "before",
+      "sample": 2,
+      "openMs": 560.302191,
+      "viewMs": 523.4350060000002,
+      "bootLoop": {
+        "p95Ms": 1082.295075,
+        "maxMs": 1082.295075,
+        "stalls": [
+          {
+            "at": 1792070089815,
+            "ms": 1082
+          }
+        ]
+      },
+      "recoveryMs": 8062.6876090000005,
+      "recoveryLoop": {
+        "p95Ms": 399.825339,
+        "maxMs": 913.2302589999999,
+        "stalls": [
+          {
+            "at": 1792070090458,
+            "ms": 429
+          },
+          {
+            "at": 1792070090740,
+            "ms": 271
+          },
+          {
+            "at": 1792070092163,
+            "ms": 913
+          },
+          {
+            "at": 1792070092431,
+            "ms": 258
+          },
+          {
+            "at": 1792070092731,
+            "ms": 290
+          },
+          {
+            "at": 1792070092990,
+            "ms": 249
+          },
+          {
+            "at": 1792070093291,
+            "ms": 291
+          },
+          {
+            "at": 1792070093589,
+            "ms": 287
+          },
+          {
+            "at": 1792070093907,
+            "ms": 308
+          },
+          {
+            "at": 1792070094317,
+            "ms": 400
+          },
+          {
+            "at": 1792070094616,
+            "ms": 289
+          },
+          {
+            "at": 1792070094946,
+            "ms": 320
+          },
+          {
+            "at": 1792070095386,
+            "ms": 430
+          },
+          {
+            "at": 1792070095692,
+            "ms": 297
+          },
+          {
+            "at": 1792070095949,
+            "ms": 246
+          },
+          {
+            "at": 1792070096263,
+            "ms": 304
+          },
+          {
+            "at": 1792070096569,
+            "ms": 296
+          },
+          {
+            "at": 1792070096877,
+            "ms": 298
+          },
+          {
+            "at": 1792070097178,
+            "ms": 292
+          },
+          {
+            "at": 1792070097479,
+            "ms": 291
+          }
+        ]
+      },
+      "counts": {
+        "effect-batch": 1,
+        "operation-status": 1804,
+        "session-read": 1784
+      },
+      "loads": 1,
+      "retained": 686,
+      "preserved": true,
+      "longest": [
+        {
+          "site": "registry.snapshot",
+          "ms": 97.08131599999979
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 60.04909100000009
+        },
+        {
+          "site": "registry.headers",
+          "ms": 53.796326000000136
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 11.6429270000001
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 10.640431000000035
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 10.372965000000022
+        }
+      ]
+    },
+    {
+      "version": "after",
+      "sample": 2,
+      "openMs": 760.529585,
+      "viewMs": 1037.993938,
+      "bootLoop": {
+        "p95Ms": 104.95504399999993,
+        "maxMs": 843.43059,
+        "stalls": [
+          {
+            "at": 1792070101586,
+            "ms": 843
+          },
+          {
+            "at": 1792070101701,
+            "ms": 105
+          }
+        ]
+      },
+      "recoveryMs": 294.313662,
+      "recoveryLoop": {
+        "p95Ms": 224.69964000000027,
+        "maxMs": 224.69964000000027,
+        "stalls": [
+          {
+            "at": 1792070103155,
+            "ms": 225
+          }
+        ]
+      },
+      "counts": {
+        "effect-batch": 1,
+        "snapshot": 1,
+        "operation-status": 20
+      },
+      "loads": 1,
+      "retained": 686,
+      "preserved": true,
+      "longest": [
+        {
+          "site": "registry.keyed",
+          "ms": 103.8851279999999
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 100.14294699999982
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 12.96452999999974
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 12.398809000000256
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 1.343728000000283
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 1.3333899999997811
+        }
+      ]
+    },
+    {
+      "version": "before",
+      "sample": 3,
+      "openMs": 630.108568,
+      "viewMs": 617.9756800000001,
+      "bootLoop": {
+        "p95Ms": 1248.6777160000001,
+        "maxMs": 1248.6777160000001,
+        "stalls": [
+          {
+            "at": 1792070109240,
+            "ms": 1249
+          }
+        ]
+      },
+      "recoveryMs": 10821.567267999999,
+      "recoveryLoop": {
+        "p95Ms": 564.8890890000002,
+        "maxMs": 1461.9158899999998,
+        "stalls": [
+          {
+            "at": 1792070110114,
+            "ms": 613
+          },
+          {
+            "at": 1792070110438,
+            "ms": 314
+          },
+          {
+            "at": 1792070112615,
+            "ms": 1462
+          },
+          {
+            "at": 1792070113018,
+            "ms": 393
+          },
+          {
+            "at": 1792070113472,
+            "ms": 444
+          },
+          {
+            "at": 1792070113813,
+            "ms": 330
+          },
+          {
+            "at": 1792070114135,
+            "ms": 312
+          },
+          {
+            "at": 1792070114522,
+            "ms": 377
+          },
+          {
+            "at": 1792070115096,
+            "ms": 565
+          },
+          {
+            "at": 1792070115848,
+            "ms": 742
+          },
+          {
+            "at": 1792070116411,
+            "ms": 552
+          },
+          {
+            "at": 1792070116894,
+            "ms": 473
+          },
+          {
+            "at": 1792070117222,
+            "ms": 318
+          },
+          {
+            "at": 1792070117614,
+            "ms": 382
+          },
+          {
+            "at": 1792070117917,
+            "ms": 293
+          },
+          {
+            "at": 1792070118235,
+            "ms": 308
+          },
+          {
+            "at": 1792070118516,
+            "ms": 272
+          },
+          {
+            "at": 1792070119097,
+            "ms": 571
+          },
+          {
+            "at": 1792070119416,
+            "ms": 309
+          },
+          {
+            "at": 1792070119703,
+            "ms": 276
+          }
+        ]
+      },
+      "counts": {
+        "effect-batch": 1,
+        "operation-status": 1804,
+        "session-read": 1784
+      },
+      "loads": 1,
+      "retained": 686,
+      "preserved": true,
+      "longest": [
+        {
+          "site": "registry.snapshot",
+          "ms": 185.5995600000001
+        },
+        {
+          "site": "registry.headers",
+          "ms": 89.76323200000002
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 49.70517999999993
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 22.60879
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 20.7902610000001
+        },
+        {
+          "site": "registry.snapshot",
+          "ms": 19.018422999999984
+        }
+      ]
+    },
+    {
+      "version": "after",
+      "sample": 3,
+      "openMs": 537.421967,
+      "viewMs": 794.3886729999999,
+      "bootLoop": {
+        "p95Ms": 60.245649999999955,
+        "maxMs": 592.3945540000001,
+        "stalls": [
+          {
+            "at": 1792070121512,
+            "ms": 592
+          }
+        ]
+      },
+      "recoveryMs": 136.20563199999992,
+      "recoveryLoop": {
+        "p95Ms": 100.9804180000001,
+        "maxMs": 100.9804180000001,
+        "stalls": [
+          {
+            "at": 1792070122599,
+            "ms": 101
+          }
+        ]
+      },
+      "counts": {
+        "effect-batch": 1,
+        "snapshot": 1,
+        "operation-status": 20
+      },
+      "loads": 1,
+      "retained": 686,
+      "preserved": true,
+      "longest": [
+        {
+          "site": "registry.keyed",
+          "ms": 49.41407299999992
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 48.63863700000002
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 5.83064400000012
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 5.252771000000166
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 0.5276329999999234
+        },
+        {
+          "site": "registry.keyed",
+          "ms": 0.5077839999999014
+        }
+      ]
+    }
+  ],
+  "rollback": [
+    {
+      "adapter": "candidate",
+      "adapterMs": 15930.364908,
+      "protectedRows": 687,
+      "receiptCensus": 10971,
+      "owner": "dead",
+      "native": "alive",
+      "exit": 0
+    },
+    {
+      "adapter": "baseline",
+      "adapterMs": 9595.216058999998,
+      "protectedRows": 687,
+      "receiptCensus": 10971,
+      "owner": "dead",
+      "native": "alive",
+      "exit": 0
+    }
+  ],
+  "diagnosticProfile": {
+    "purpose": "diagnostic worker-stall control, not qualification",
+    "viewerA": {
+      "samples": 8087,
+      "diagnosticAttributionInclusive": 1633
+    },
+    "viewerB": {
+      "samples": 6859,
+      "diagnosticAttributionInclusive": 1227
+    }
+  },
+  "pairedCandidate": "b59f03ac3",
+  "integratedMain": "d6f3669ed",
+  "rollbackFixtureHistory": "The original rollback samples used a native worker started outside Docker.",
+  "candidateCreatedNativeRollback": {
+    "date": "2026-10-15",
+    "method": "Candidate Viewer is container init; detached native worker launched through the production Dockerfile namespace shim; equal cgroups verified before retirement; same worker process identity and protected registry rows required afterwards.",
+    "fixture": {
+      "receiptCensus": 10971,
+      "protectedRows": 687
+    },
+    "samples": [
+      {
+        "adapter": "candidate",
+        "adapterMs": 15665.997667999996,
+        "owner": "dead",
+        "native": "alive",
+        "exit": 0
+      },
+      {
+        "adapter": "baseline",
+        "adapterMs": 9169.621885,
+        "owner": "dead",
+        "native": "alive",
+        "exit": 0
+      }
+    ]
+  }
+}

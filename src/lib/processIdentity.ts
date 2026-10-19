@@ -39,6 +39,7 @@ export function systemBootEpoch(): string | null {
     return cachedBootEpoch;
   }
   if (process.platform === "darwin") {
+    // eslint-disable-next-line no-restricted-syntax -- Legacy macOS boot-epoch probe on first identity read while serving; cached thereafter.
     const result = spawnSync("sysctl", ["-n", "kern.boottime"], { encoding: "utf8", timeout: 2_000 });
     const match = typeof result.stdout === "string"
       ? /sec\s*=\s*(\d+)\s*,\s*usec\s*=\s*(\d+)/.exec(result.stdout)

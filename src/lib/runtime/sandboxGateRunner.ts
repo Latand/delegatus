@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { cpuSlotForOwner, inheritedCpuSlot } from "./cpuAdmission";
 import { cpuOwnerIdentity, signalSandboxContext } from "./signalSandboxContext";
@@ -129,7 +129,11 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
     if (slot) budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
     const cgroup = context.scope + work.slice(context.cgroupRoot.length);
     const barrier = path.join(directory, "exec");
-    if (spawnSync("mkfifo", ["-m", "600", barrier], { stdio: "ignore" }).status !== 0) throw new Error("owned runner could not create its exec barrier");
+    await new Promise<void>((resolve, reject) => {
+      const fifo = spawn("mkfifo", ["-m", "600", barrier], { stdio: "ignore" });
+      fifo.once("error", reject);
+      fifo.once("exit", code => code === 0 ? resolve() : reject(new Error("owned runner could not create its exec barrier")));
+    });
     child = spawn("/bin/bash", ["-c", 'barrier=$1; shift; read -r < "$barrier" || exit 69; export LLV_OWNED_TEST_RUNNER_PID=$$; exec "$@"', "owned-command", barrier, ...command], {
       stdio: ["inherit", "inherit", "inherit"], env: { ...budget.env, LLV_OWNED_TEST_RUN_CGROUP: cgroup },
     });

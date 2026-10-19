@@ -1,4 +1,7 @@
+import * as pipelineStore from "@/lib/pipelines/store";
+import { chooseSource } from "../fixtures/source";
 import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,9 +10,10 @@ import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
 import { input as tickInput } from "@/lib/boardMaintenance/testFixture";
 import { roleIsClean } from "../eligibility";
 import { ROLE_MEMORY_BOUND, CURATION_INTERVAL_MS, type RoleMemoryRule, type RuleSource } from "../roleTypes";
+import { scopeChars } from "../roleConsolidate";
 import { canonicalScope, leaveLessons, newRuleId, projectView, recordLessonRequest, learnedRulesBlock, roleMemoryCollection, roleScope, projectScope, restoreRule, deleteRule, storedLessonTexts } from "../roleStore";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
-import { claimPass, currentPass, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
+import { claimPass, currentPass, curationPanelRuns, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
 import { curatorCallerOf } from "./guard";
 import { readCuration } from "./read";
 import { productionCurationController } from "./run";
@@ -25,6 +29,10 @@ import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projec
 import { seatTickWakeCommit, seatTickWakeCommitPlan } from "@/lib/monitor/seatTick";
 import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
+import { loadTasks } from "@/lib/tasks/store";
+import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
+import { groupHideState } from "@/lib/tasks/groupHide";
+import { commitTaskMembership } from "@/lib/tasks/membership";
 
 const PROJECT = "curation-fixture";
 const NOW = Date.parse("2026-10-11T00:00:00Z");
@@ -92,6 +100,32 @@ test("current curation selection and history ordering never copy the role archiv
     expect(currentPass(PROJECT)).toBeNull();
   } finally { copied.mockRestore(); }
 });
+
+test("the panel keeps the most recent completed pass beside a newer live pass", () => {
+  fixture();
+  const completed = pass();
+  patchPass(completed.id, { state: "succeeded", endedAt: at(1000), conversationId: "conversation_previous" });
+  const live = pass(NOW + CURATION_INTERVAL_MS + 2000);
+  patchPass(live.id, { state: "running", conversationId: "conversation_live" });
+
+  expect(curationPanelRuns(PROJECT)).toMatchObject({
+    live: { id: live.id, state: "running", conversationId: "conversation_live" },
+    last: { id: completed.id, state: "succeeded", conversationId: "conversation_previous" },
+  });
+});
+
+test("a successful no-op pass leaves pressure as the trigger but cannot claim again before the interval", () => {
+  const scope = roleScope(PROJECT, "builder");
+  Array.from({ length: 30 }, (_, i) => fixture(scope, {
+    rule: `Preserve the complete operational guidance for category ${i} before changing shared state. ${"additional guidance ".repeat(25)}`.slice(0, 300),
+  }));
+  const initial = pass();
+  ended(initial);
+
+  expect(curationStatus(PROJECT, NOW + 31 * 60_000)).toMatchObject({ due: false, trigger: "pressure", pressure: true, newLessons: 0 });
+  expect(pass(NOW + 31 * 60_000)).toBeNull();
+  expect(curationStatus(PROJECT, NOW + CURATION_INTERVAL_MS + 1001)).toMatchObject({ due: true, trigger: "pressure", pressure: true, newLessons: 0 });
+});
 function hostingFixture() {
   const registry = new AgentRegistry(path.join(dir, "registry.json"));
   const seats = new Map<string, { conversationId: string; seatEpoch: number; designatedAt: string; path: null }>();
@@ -117,6 +151,35 @@ function hostingFixture() {
     observe: async () => ({ state: "running" as const }), archive: () => {} };
   return { sources, seats, lives, bodies, seat, ports, controller: productionCurationController(sources, ports), tick: { ...tickInput(), project: PROJECT, now: NOW } };
 }
+test("curator admission joins a hidden system task without an open board task", async () => {
+  fixture(); const f = hostingFixture(); f.seat();
+  expect(await f.controller.launchIfDue(f.tick)).toContain("launched");
+  const body = f.bodies[0];
+  expect(body.taskId).toBeString();
+  // Exercise the real shared reservation membership prerequisite, including
+  // the conversation which makes board:hidden alone insufficient.
+  admitReservedLaunch({ engine: "codex", cwd: dir, explicitProject: PROJECT, clientAttemptId: String(body.clientAttemptId), role: "curator", taskIds: [String(body.taskId)] },
+    { conversationId: "conversation_fixture_curator", launchId: "launch_fixture_curator" }, reason => { throw new Error(reason); }, {
+      commit: input => commitTaskMembership(input, path.join(dir, "tasks.json")), pipelineContext: () => null, projectForCwd: () => PROJECT,
+    });
+  const tasks = loadTasks(path.join(dir, "tasks.json"));
+  expect(tasks).toHaveLength(1);
+  expect(tasks.filter(task => task.status !== "done")).toHaveLength(0);
+  expect(tasks[0].assignments[0].conversationId).toBe("conversation_fixture_curator");
+  expect(groupHideState(tasks[0], { members: [], pipelines: [] }).hidden).toBe(true);
+  expect(readPass(String(body.clientAttemptId))?.conversationId).toBe("conversation_fixture_curator");
+  expect(await f.controller.reconcile(PROJECT)).toBeNull();
+  expect(loadTasks(path.join(dir, "tasks.json"))).toHaveLength(1);
+});
+test("the engines memory source pauses curator admission and preserves its store", async () => {
+  fixture(); const f = hostingFixture(); f.seat();
+  chooseSource("engines");
+  const before = machinePass();
+  expect(await f.controller.launchIfDue(f.tick)).toContain("paused, memory off");
+  expect(f.bodies).toHaveLength(0); expect(machinePass()).toEqual(before);
+  chooseSource("unchosen");
+});
+
 test("enabled settings with a gone designated host never launch or resume curation", async () => {
   fixture(); const f = hostingFixture(), id = f.seat();
   f.lives.set(id, { ...f.lives.get(id)!, host: { state: "gone", kind: "none", pid: null }, lifecycle: "gone" });
@@ -254,7 +317,7 @@ function refusal(p: CuratorPass, edit: CurationApply, code: string) {
   expect(JSON.stringify(roleMemoryCollection()!.snapshot())).toBe(before);
 }
 
-test("first pass, timed quiet pass, early ten lessons and failed-pass cooldown", () => {
+test("first pass, timed quiet pass, ten lessons and failed passes share the interval", () => {
   expect(curationStatus(PROJECT, NOW).due).toBe(false);
   fixture(); const p = pass(); expect(p).not.toBeNull(); expect(pass()).toBeNull();
   ended(p);
@@ -264,13 +327,13 @@ test("first pass, timed quiet pass, early ten lessons and failed-pass cooldown",
     const source: RuleSource = { project: PROJECT, pipelineId: "early", stageId: "build", attempt: n, roleId: "builder", fixRound: false, conversationId: ["conversation", "early"].join("_") };
     recordLessonRequest({ ...source, at: at(2000 + n) });
     leaveLessons({ request: source, source, lessons: [{ scope: "role", rule: `Inspect scope guidance before changing stored item ${n}.`, why }], none: null, now: at(2000 + n) });
-    expect(curationStatus(PROJECT, NOW + 3000).due).toBe(n === 9);
+    expect(curationStatus(PROJECT, NOW + 3000).due).toBe(false);
   }
   expect(pass(NOW + 3000)).toBeNull();
-  const early = pass(NOW + 31 * 60_000); expect(early).not.toBeNull();
-  patchPass(early.id, { state: "failed", endedAt: at(32 * 60_000), failure: "no-account" });
+  const early = pass(NOW + CURATION_INTERVAL_MS + 1000); expect(early).not.toBeNull();
+  patchPass(early.id, { state: "failed", endedAt: at(CURATION_INTERVAL_MS + 2000), failure: "no-account" });
   expect(curationStatus(PROJECT, NOW + 33 * 60_000).due).toBe(false);
-  expect(curationStatus(PROJECT, NOW + 32 * 60_000 + CURATION_INTERVAL_MS).due).toBe(true);
+  expect(curationStatus(PROJECT, NOW + 2 * CURATION_INTERVAL_MS + 2000).due).toBe(true);
 });
 test("claims serialize projects sharing a machine, with no live rules there is no pass", () => {
   fixture(); const first = pass();
@@ -292,13 +355,13 @@ test.each(["succeeded", "failed"] as const)("a %s pass counts later lessons and 
       ...(n % 2 ? { rewrite: { id: one, rule: `Inspect the current scope before applying condition ${n}.`, why } } : {}), none: null, now: at() });
     const status = curationStatus(PROJECT, NOW + 2000);
     expect(status.newLessons).toBe(n + 1);
-    expect(status.due).toBe(n === 9);
+    expect(status.due).toBe(false);
   }
   expect(pass(NOW + 2000)).toBeNull();
-  expect(pass(NOW + 31 * 60_000)).not.toBeNull();
-  expect(curationStatus(PROJECT, NOW + 31 * 60_000).newLessons).toBe(0);
+  expect(pass(NOW + CURATION_INTERVAL_MS + 1000)).not.toBeNull();
+  expect(curationStatus(PROJECT, NOW + CURATION_INTERVAL_MS + 1000).newLessons).toBe(0);
 });
-test("curator reads and the window distinguish rewrites across the same clock instant", () => {
+test("curator reads and the window distinguish rewrites across the same clock instant", async () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
   const shown = () => projectView(PROJECT).scopes.find(item => item.scope === scope)!.active.find(item => item.id === one)!;
   expect(shown().awaitingCuration).toBe(true);
@@ -308,13 +371,13 @@ test("curator reads and the window distinguish rewrites across the same clock in
   recordLessonRequest({ ...source, at: at() });
   leaveLessons({ request: source, source, lessons: [], rewrite: { id: one, rule: "Inspect the current readers before changing stored guidance.", why }, none: null, now: at() });
   expect(shown().awaitingCuration).toBe(true);
-  const page = readCuration(p, scope);
+  const page = await readCuration(p, scope);
   expect("rules" in page && page.rules.find(item => item.id === one)?.newSincePass).toBe(true);
   ended(p);
   const next = pass(NOW + CURATION_INTERVAL_MS + 1000);
   applyCuration(next, input({ [scope]: [one] }), at());
   expect(shown().awaitingCuration).toBe(false);
-  const reread = readCuration(next, scope);
+  const reread = await readCuration(next, scope);
   expect("rules" in reread && reread.rules.find(item => item.id === one)?.newSincePass).toBe(false);
 });
 test.each([roleScope(PROJECT, "builder"), "role:*:builder"])("pass undo preserves a later agent rewrite at the same clock instant in %s", to => {
@@ -341,26 +404,26 @@ test("pass undo preserves another curator's ranking at the same clock instant", 
   expect(revertCuratorPass(p.id, at(CURATION_INTERVAL_MS + 3000)).skipped.sort()).toEqual([one, two, three].sort());
   expect(projectView(PROJECT).scopes.find(item => item.scope === scope)!.active.map(item => item.id)).toEqual([three, one, two]);
 });
-test("scope rereads retain departures from every call of the current pass", () => {
+test("scope rereads retain departures from every call of the current pass", async () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), two = fixture(scope), p = pass();
   applyCuration(p, input({ [scope]: [two] }, { archive: [{ id: one, reason: "stale", note: "The first old command was replaced." }] }), at(100));
   applyCuration(p, input({ [scope]: [] }, { archive: [{ id: two, reason: "task-specific", note: "The second row records one completed task." }] }), at(200));
-  const page = readCuration(p, scope);
+  const page = await readCuration(p, scope);
   expect("rules" in page && page.rules.map(r => r.id).sort()).toEqual([one, two].sort());
 });
-test("read pages are revision bound and include scaffold, budget archives and prior text", () => {
+test("read pages are revision bound and include scaffold, budget archives and prior text", async () => {
   const scope = roleScope(PROJECT, "builder");
   for (let n = 0; n < 80; n++) fixture(scope, { rule: `${text} ${"Read the stored record. ".repeat(8)} ${n}` });
   const archive = fixture(scope, { state: "archived", reason: "budget" });
-  const p = pass(); const first = readCuration(p, scope);
+  const p = pass(); const first = await readCuration(p, scope);
   if (!("cursor" in first)) throw Error("expected a scope page");
   expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(24_000);
   expect(first).toHaveProperty("scaffold"); expect(first.cursor).toBeTruthy();
   let cursor = first.cursor; const ids = first.rules.map(r => r.id);
-  while (cursor) { const next = readCuration(p, scope, cursor); if (!("rules" in next)) throw Error("expected a scope page"); ids.push(...next.rules.map(r => r.id)); cursor = next.cursor; }
+  while (cursor) { const next = await readCuration(p, scope, cursor); if (!("rules" in next)) throw Error("expected a scope page"); ids.push(...next.rules.map(r => r.id)); cursor = next.cursor; }
   expect(ids).toContain(archive); expect(new Set(ids).size).toBe(ids.length);
   fixture(scope);
-  expect(() => readCuration(p, scope, first.cursor!)).toThrow(/changed/);
+  await expect(readCuration(p, scope, first.cursor!)).rejects.toThrow(/changed/);
 });
 test("stale revisions and total-partition failures refuse atomically", () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), two = fixture(scope), p = pass();
@@ -544,7 +607,7 @@ test("project succession keeps completed pass history, undo and the next-run coo
     recordLessonRequest({ ...source, at: at(100) });
     leaveLessons({ request: source, source, lessons: [{ scope: "role", rule: `Check stored guidance before changing condition ${attempt}.`, why }], none: null, now: at(100) });
   }
-  expect(curationStatus("curation-renamed", NOW + 20 * 60_000).due).toBe(true);
+  expect(curationStatus("curation-renamed", NOW + 20 * 60_000).due).toBe(false);
   expect(claimPass({ project: "curation-renamed", repoDir: dir, now: NOW + 20 * 60_000 })).toBeNull();
   expect(revertCuratorPass(p.id, at(2000))).toEqual({ skipped: [] });
 });
@@ -608,7 +671,7 @@ test("project succession counts destination lessons against their own claim hist
 
   const status = curationStatus(targetProject, NOW + 31 * 60_000);
   expect(status.newLessons).toBe(10);
-  expect(status.due).toBe(true);
+  expect(status.due).toBe(false);
 });
 test("post-succession same-time curator rankings remain a later undo guard", () => {
   const sourceScope = roleScope(PROJECT, "builder"), targetProject = "curation-renamed";
@@ -636,22 +699,22 @@ test("post-succession same-time curator rankings remain a later undo guard", () 
   expect(revertCuratorPass(targetPass.id, at(CURATION_INTERVAL_MS + 7000))).toEqual({ skipped: [targetRule] });
   expect(row(targetRule).rule).toBe(rewritten);
 });
-test("a live pass reads and applies canonical scopes after project succession", () => {
+test("a live pass reads and applies canonical scopes after project succession", async () => {
   const originalScope = roleScope(PROJECT, "builder"), one = fixture(originalScope), p = pass();
   const staleCursor = Buffer.from(JSON.stringify({ scope: originalScope, revision: 1, offset: 0 })).toString("base64url");
   expect(persistProjectAliases([{ source: PROJECT, target: "curation-renamed", displayName: "curation-renamed" }])).toBe(true);
 
   const renamedScope = roleScope("curation-renamed", "builder");
-  const overview = readCuration(p);
+  const overview = await readCuration(p);
   if (!("scopes" in overview) || !overview.scopes) throw Error("expected the pass scope list");
   const listed = overview.scopes.find(item => item.scope === renamedScope);
   if (!listed) throw Error("successor scope is missing from the live pass");
   const current = roleMemoryCollection()?.get(`s:${renamedScope}`);
   expect(listed.revision).toBe(current?.kind === "scope" ? current.revision : -1);
-  const read = readCuration(p, renamedScope);
+  const read = await readCuration(p, renamedScope);
   if (!("rules" in read)) throw Error("expected the successor scope rules");
   expect(read.rules.some(rule => rule.kind === "active" && rule.id === one)).toBe(true);
-  try { readCuration(p, originalScope, staleCursor); throw Error("accepted a cursor from before succession"); }
+  try { await readCuration(p, originalScope, staleCursor); throw Error("accepted a cursor from before succession"); }
   catch (error) { expect((error as { code?: string }).code).toBe("CURATE_STALE"); }
 
   const edit = input({ [renamedScope]: [one] }, { rewrite: [{ id: one, rule: text + " Follow the current scope revision.", note: "This remains useful to builders in every task." }] });
@@ -795,7 +858,234 @@ test("stubbed launch, restart reconcile and settle keep no board card", async ()
   expect(await controller.launchIfDue(tick)).toContain("deployment"); expect(machinePass()).toBeNull();
   sources.latestDeployment = () => ({ state: "ok", value: null });
   expect(await controller.launchIfDue(tick)).toContain("launched"); await controller.launchIfDue(tick); expect(bodies).toHaveLength(1);
-  expect(bodies[0]).toMatchObject({ role: "curator", cwd: dir, mcpServers: ["viewer"] }); expect(bodies[0]).not.toHaveProperty("taskId");
+  expect(bodies[0]).toMatchObject({ role: "curator", cwd: dir, mcpServers: ["viewer"] }); expect(bodies[0].taskId).toBeString();
+  expect(loadTasks(path.join(dir, "tasks.json")).find(task => task.id === bodies[0].taskId)).toMatchObject({ status: "done", board: "hidden" });
   now += 1000; endedTurn = true; expect(await controller.reconcile(PROJECT)).toContain("settled"); expect(archived).toHaveLength(1); expect(machinePass()).toBeNull();
   expect(projectView(PROJECT).curation?.passes[0].state).toBe("succeeded");
+});
+
+test("pressure survives a failed pass, and the durable interval bounds retries after restart", async () => {
+  const scope = roleScope(PROJECT, "builder");
+  const ids = Array.from({ length: 26 }, (_, i) => fixture(scope, { rule: `Check ownership category ${i} before publication. ${"guidance ".repeat(29)}`.slice(0, 300), curatedAt: at() }));
+  const initial = pass(); ended(initial);
+  expect(curationStatus(PROJECT, NOW + 31 * 60_000).due).toBe(false);
+  const added: string[] = [];
+  for (let i = 0; i < 10; i++) {
+    const source: RuleSource = { project: PROJECT, pipelineId: "pressure", stageId: "build", attempt: i + 1, roleId: "builder", fixRound: false, conversationId: "conversation_pressure" };
+    recordLessonRequest({ ...source, at: at(2000 + i) });
+    const lesson = leaveLessons({ request: source, source, lessons: [{ scope: "role", rule: `Inspect pending ownership category ${i} before writing. ${"guidance ".repeat(29)}`.slice(0, 300), why }], none: null, now: at(2000 + i) }).left[0]!;
+    added.push(lesson.id);
+    expect(lesson.archived.some(id => added.includes(id))).toBe(false);
+    if (i === 0) expect(curationStatus(PROJECT, NOW + 31 * 60_000).due).toBe(false);
+    if (i === 1) expect(curationStatus(PROJECT, NOW + 31 * 60_000)).toMatchObject({ due: false, pressure: true });
+  }
+  // Real write paths must never archive a never-curated rule for budget.
+  expect(roleMemoryCollection()!.snapshot().filter(row => row.kind === "rule" && row.reason === "budget" && !row.curatedAt)).toEqual([]);
+  const early = pass(NOW + CURATION_INTERVAL_MS + 1000);
+  expect(early).not.toBeNull();
+  patchPass(early.id, { state: "failed", endedAt: at(CURATION_INTERVAL_MS + 2000), failure: "fixture failure" });
+  for (const id of added) expect(row(id).state).toBe("active");
+  expect(pass(NOW + CURATION_INTERVAL_MS + 33 * 60_000)).toBeNull();
+  const script = `import { curationStatus, claimPass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify({ due: curationStatus(${JSON.stringify(PROJECT)}, ${NOW + CURATION_INTERVAL_MS + 33 * 60_000}).due, claimed: !!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + CURATION_INTERVAL_MS + 33 * 60_000} }) }));`;
+  const restarted = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [exit, output, error] = await Promise.all([restarted.exited, new Response(restarted.stdout).text(), new Response(restarted.stderr).text()]);
+  expect(exit).toBe(0); expect(error).toBe("");
+  expect(JSON.parse(output)).toEqual({ due: false, claimed: false });
+  const retried = pass(NOW + 2 * CURATION_INTERVAL_MS + 2000);
+  expect(retried).not.toBeNull();
+  const active = [...ids, ...added].filter(id => row(id).state === "active");
+  applyCuration(retried, input({ [scope]: active }), at(2 * CURATION_INTERVAL_MS + 3000));
+  for (const id of added) expect(row(id).curatedAt).toBeTruthy();
+  expect(curationStatus(PROJECT, NOW + 2 * CURATION_INTERVAL_MS + 63 * 60_000).due).toBe(false);
+});
+
+test("aliased physical scopes share the pressure threshold within the interval", () => {
+  const oldScope = roleScope(PROJECT, "builder");
+  const currentProject = "curation-pressure-renamed";
+  const currentScope = roleScope(currentProject, "builder");
+  const rulesFor = (scope: string, prefix: string) => Array.from({ length: 15 }, (_, i) => fixture(scope, {
+    rule: `${prefix} ${i}: ${"preserve the scoped operational guidance and verify ownership before applying changes. ".repeat(4)}`.slice(0, 300),
+    curatedAt: at(),
+  }));
+  const oldRules = rulesFor(oldScope, "Retained prior rule");
+  const currentRules = rulesFor(currentScope, "Current canonical rule");
+  const priorPass = pass();
+  ended(priorPass);
+
+  const newLesson: RuleSource = { project: PROJECT, pipelineId: "alias-pressure", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_alias_pressure" };
+  recordLessonRequest({ ...newLesson, at: at(2000) });
+  leaveLessons({ request: newLesson, source: newLesson, lessons: [{ scope: "role", rule: "Inspect the merged role scope before the next write.", why }], none: null, now: at(2000) });
+
+  expect(persistProjectAliases([{ source: PROJECT, target: currentProject, displayName: currentProject }])).toBe(true);
+  const collection = roleMemoryCollection()!;
+  const oldActive = collection.get(`s:${oldScope}`);
+  const currentActive = collection.get(`s:${currentScope}`);
+  if (oldActive?.kind !== "scope" || currentActive?.kind !== "scope") throw Error("aliased scope rows missing");
+  const merged = [...oldActive.active, ...currentActive.active];
+  expect(merged).toHaveLength(31);
+  expect(scopeChars(oldActive.active.map(id => row(id)))).toBeLessThan(ROLE_MEMORY_BOUND * 0.9);
+  expect(scopeChars(currentActive.active.map(id => row(id)))).toBeLessThan(ROLE_MEMORY_BOUND * 0.9);
+  expect(scopeChars(merged.map(id => row(id)))).toBeGreaterThanOrEqual(ROLE_MEMORY_BOUND * 0.9);
+  expect(oldRules.every(id => row(id).state === "active")).toBe(true);
+  expect(currentRules.every(id => row(id).state === "active")).toBe(true);
+  expect(curationStatus(currentProject, NOW + 31 * 60_000)).toMatchObject({ due: false, pressure: true, newLessons: 1 });
+});
+
+test("a scope containing only unseen lessons may exceed budget until a bounded curator partition commits", () => {
+  const scope = roleScope(PROJECT, "builder");
+  const ids = Array.from({ length: 30 }, (_, i) => fixture(scope, { rule: `Check pending category ${i} before publication. ${"guidance ".repeat(30)}`.slice(0, 300) }));
+  const source: RuleSource = { project: PROJECT, pipelineId: "at-bound", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_bound" };
+  recordLessonRequest({ ...source, at: at(2000) });
+  const added = leaveLessons({ request: source, source, none: null, lessons: [{ scope: "role", rule: `Inspect new pending categories before writing. ${"guidance ".repeat(30)}`.slice(0, 300), why }], now: at(2000) }).left[0]!;
+  expect(added.archived).toEqual([]);
+  expect(added.scopeChars).toBeGreaterThan(ROLE_MEMORY_BOUND);
+  const p = pass();
+  refusal(p, input({ [scope]: [...ids, added.id] }), "CURATE_BOUND");
+  expect(row(added.id).curatedAt).toBeUndefined();
+  applyCuration(p, input({ [scope]: ids.slice(1).concat(added.id) }, { archive: [{ id: ids[0], reason: "stale", note: "An older obligation no longer applies to current readers." }] }));
+  expect(projectView(PROJECT).scopes.find(s => s.scope === scope)!.chars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND);
+});
+
+
+test("warm curation status skips payload reads and invalidates after a durable scope change", () => {
+  const scope = roleScope(PROJECT, "builder");
+  fixture(scope);
+  curationStatus(PROJECT, NOW);
+  const collection = roleMemoryCollection()!;
+  const snapshot = spyOn(collection, "snapshot");
+  const get = spyOn(collection, "get");
+  try {
+    curationStatus(PROJECT, NOW + 1);
+    expect(snapshot).not.toHaveBeenCalled(); expect(get).not.toHaveBeenCalled();
+    const writer = new Database(path.join(dir, "state.sqlite"));
+    try { writer.exec("CREATE TABLE unrelated_fixture (value INTEGER)"); writer.exec("INSERT INTO unrelated_fixture VALUES (1)"); } finally { writer.close(); }
+    curationStatus(PROJECT, NOW + 2);
+    expect(get).not.toHaveBeenCalled();
+    fixture(scope);
+    get.mockClear();
+    curationStatus(PROJECT, NOW + 2);
+    expect(snapshot).not.toHaveBeenCalled(); expect(get).toHaveBeenCalled();
+  } finally { snapshot.mockRestore(); get.mockRestore(); }
+});
+
+
+test("an interval-due pressured project is dispatched while a newer quiet project waits", async () => {
+  const quiet = "quiet-fixture";
+  fixture(roleScope(quiet, "builder"), { curatedAt: at() });
+  ended(pass(NOW - 2 * 60 * 60_000, quiet), -60 * 60_000);
+  const scope = roleScope(PROJECT, "builder");
+  for (let i = 0; i < 26; i++) fixture(scope, { rule: `Inspect ownership category ${i}. ${"guidance ".repeat(35)}`.slice(0, 300), curatedAt: at() });
+  ended(pass(NOW - 8 * 60 * 60_000), -7 * 60 * 60_000);
+  for (let i = 0; i < 2; i++) fixture(scope, { rule: `Inspect pending category ${i}. ${"guidance ".repeat(35)}`.slice(0, 300) });
+  expect(curationStatus(quiet, NOW).due).toBe(false);
+  expect(curationStatus(PROJECT, NOW)).toMatchObject({ due: true, newLessons: 0 });
+  const f = hostingFixture(); f.seat(PROJECT, at(-20_000)); f.seat(quiet, at(-1000));
+  expect(await f.controller.launchIfDue(f.tick)).toContain("launched");
+  expect(f.bodies).toHaveLength(1); expect(f.bodies[0].project).toBe(PROJECT);
+});
+
+
+test("a successful no-op leaves pressure but cannot relaunch at the old cooldown", async () => {
+  const scope = roleScope(PROJECT, "builder");
+  for (let i = 0; i < 32; i++) fixture(scope, { rule: `Inspect retained category ${i}. ${"guidance ".repeat(35)}`.slice(0, 300) });
+  const first = pass(); ended(first);
+  // Ending a turn does not rank scopes: only applyCuration stamps curatedAt.
+  expect(curationStatus(PROJECT, NOW + 31 * 60_000)).toMatchObject({ pressure: true, due: false });
+  expect(pass(NOW + 31 * 60_000)).toBeNull();
+  const script = `import { curationStatus, claimPass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify({ before: !!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + CURATION_INTERVAL_MS} }), at: !!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + CURATION_INTERVAL_MS + 1000} }) }));`;
+  const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [exit, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(exit).toBe(0); expect(error).toBe(""); expect(JSON.parse(output)).toEqual({ before: false, at: true });
+});
+
+test("curator off survives restart and is independent of board maintenance", async () => {
+  const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  fixture();
+  writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), curation: { enabled: false, intervalHours: 12, updatedAt: at(), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } } });
+  const f = hostingFixture(); f.seat();
+  expect(await f.controller.launchIfDue(f.tick)).toContain("curator off");
+  expect(f.bodies).toHaveLength(0); expect(pass()).toBeNull();
+  const script = `import { claimPass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify(!!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + 24 * 3600000} })));`;
+  const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [exit, output] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+  expect(exit).toBe(0); expect(JSON.parse(output)).toBe(false);
+});
+
+test("turning curator off while liveness is pending refuses deferred launch", async () => {
+  const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  fixture(); const f = hostingFixture(); f.seat();
+  const original = f.sources.liveness;
+  f.sources.liveness = async input => {
+    const records = await original(input);
+    writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), curation: { enabled: false, intervalHours: 6, updatedAt: at(), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } } });
+    return records;
+  };
+  expect(await f.controller.launchIfDue(f.tick)).toContain("curator off"); expect(f.bodies).toHaveLength(0);
+});
+
+
+test("the configured twelve-hour interval survives a fresh process", async () => {
+  const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  fixture(); const first = pass(); ended(first);
+  writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), curation: { enabled: true, intervalHours: 12, updatedAt: at(), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } } });
+  const script = `import { claimPass } from ${JSON.stringify(path.join(import.meta.dir, "store.ts"))}; console.log(JSON.stringify({ six: !!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + CURATION_INTERVAL_MS + 1000} }), twelve: !!claimPass({ project: ${JSON.stringify(PROJECT)}, repoDir: null, now: ${NOW + 2 * CURATION_INTERVAL_MS + 1000} }) }));`;
+  const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [exit, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(exit).toBe(0); expect(error).toBe(""); expect(JSON.parse(output)).toEqual({ six: false, twelve: true });
+});
+
+
+test("the panel reads persisted conversation, counts, last result and next eligibility", async () => {
+  const { curationAnswer } = await import("./answer");
+  const { defaultSeatTickSettings, effectiveSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  const id = fixture(); const p = pass();
+  applyCuration(p, input({ [roleScope(PROJECT, "builder")]: [id] }), at(500));
+  patchPass(p.id, { conversationId: "conversation_curator_result" }); ended(p);
+  const settings = effectiveSeatTickSettings(defaultSeatTickSettings(PROJECT), NOW + 2000, 3600000);
+  expect(curationAnswer(PROJECT, settings, NOW + 2000)).toMatchObject({ enabled: true, intervalHours: 6, live: null,
+    lastRun: { id: p.id, state: "succeeded", conversationId: "conversation_curator_result", endedAt: at(1000), counts: { calls: 1 } },
+    nextRunAt: at(1000 + CURATION_INTERVAL_MS), waitingOn: null });
+  expect(curationAnswer(PROJECT, { ...settings, enabled: false }, NOW + 2000)).toMatchObject({ waitingOn: "wakes-off", nextRunAt: null });
+});
+
+test("an unreadable curation store keeps its timer controls and reports an error", async () => {
+  const { curationAnswer } = await import("./answer");
+  const store = await import("./store");
+  const { defaultSeatTickSettings, effectiveSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  const broken = spyOn(store, "curationPanelRuns").mockImplementation(() => { throw Error("fixture curation store unavailable"); });
+  try {
+    expect(curationAnswer(PROJECT, effectiveSeatTickSettings(defaultSeatTickSettings(PROJECT), NOW, 3600000), NOW)).toMatchObject({
+      enabled: true, intervalHours: 6, nextRunAt: null, runsError: "fixture curation store unavailable" });
+  } finally { broken.mockRestore(); }
+});
+
+test.each(["off","sqlite"] as const)("curator authority is equivalent through the keyed %s registry view", mode => {
+  fixture(); const p = pass();
+  const registry = new AgentRegistry(path.join(dir,"keyed-registry.json"),undefined,undefined,{sqliteMode:mode});
+  const conversation = registry.ensureConversation("codex",path.join(dir,"curator.jsonl"),null);
+  const begun = registry.beginSpawnRequest({engine:"codex",cwd:dir,accountId:null,role:"curator" as never,
+    clientAttemptId:p.id,explicitProject:PROJECT,transport:"structured",conversationId:conversation.id,
+    launchProfile:{cwd:dir,project:PROJECT,role:"curator" as never,title:"Role memory curation"}});
+  if (begun.kind!=="created") throw new Error("fixture admission failed");
+  const old = curatorCallerOf(conversation.id,registry.readOnlySnapshot());
+  const full = spyOn(registry,"readOnlySnapshot");
+  try {
+    const narrowed = registry.curatorConversationSnapshot(conversation.id);
+    expect(curatorCallerOf(conversation.id,narrowed).id).toBe(old.id);
+    expect(Object.keys(narrowed.receipts)).toEqual([begun.receipt.launchId]);
+    if (mode==="sqlite") expect(full).not.toHaveBeenCalled();
+    narrowed.conversations[conversation.id].agentRole="builder";
+    expect(()=>curatorCallerOf(conversation.id,narrowed)).toThrow(/not a curator/);
+    expect(curatorCallerOf(conversation.id,registry.curatorConversationSnapshot(conversation.id)).id).toBe(old.id);
+  } finally {full.mockRestore();}
+});
+
+
+test("a foreign read scope refuses before requesting pipeline history",async () => {
+  fixture();const p=pass();
+  const history=spyOn(pipelineStore,"pipelineSelectionSource").mockImplementation(()=>{throw new Error("history is unavailable");});
+  try {
+    await expect(readCuration(p,roleScope("foreign-project","builder"))).rejects.toMatchObject({code:"CURATE_SCOPE"});
+    expect(history).not.toHaveBeenCalled();
+  } finally {history.mockRestore();}
 });

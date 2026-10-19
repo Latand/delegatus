@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { StateWriteHealth } from "@/lib/state/diskFull";
+import { startupDiagnostic } from "@/lib/startupDiagnostics";
 import { statePath } from "@/lib/configDir";
 
 import type { FileCatalogScan } from "./index";
@@ -12,37 +13,9 @@ import type { FileCatalogScan } from "./index";
 const FILES_RESPONSE_WORKER_TIMEOUT_MS = 60_000;
 const FILES_RESPONSE_WORKER_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
 const FILES_RESPONSE_WORKER_STDERR_MAX_BYTES = 4 * 1024;
-/**
- * The two thresholds that keep one resident worker from becoming a slow leak
- * (#1814). Both are measured on the worker itself, and either one retires it:
- *
- * - **size** — the resident set it reports after finishing a build. Production
- *   projections peaked at 1 349 MB inside a freshly forked worker, so a
- *   resident one that ends a build above 1 536 MB is carrying something it did
- *   not carry before and is replaced rather than trusted.
- * - **idle** — a worker nobody has asked for a projection in a minute holds a
- *   whole projection's heap for nothing, so it goes and the next poll forks a
- *   new one. A polled board never reaches this; a quiet Viewer always does.
- */
-const FILES_RESPONSE_WORKER_RSS_LIMIT_BYTES = 1_536 * 1024 * 1024;
-const FILES_RESPONSE_WORKER_IDLE_MS = 60_000;
-
-function positiveNumber(value: string | undefined): number | null {
-  if (value === undefined) return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-/** The size threshold, overridable so a test can cross it deliberately. */
-function residentLimitBytes(): number {
-  const configured = positiveNumber(process.env.LLV_FILES_RESPONSE_WORKER_RSS_LIMIT_MB);
-  return configured === null ? FILES_RESPONSE_WORKER_RSS_LIMIT_BYTES : configured * 1024 * 1024;
-}
-
-/** The idle threshold, overridable for the same reason. */
-function idleLimitMs(): number {
-  return positiveNumber(process.env.LLV_FILES_RESPONSE_WORKER_IDLE_MS) ?? FILES_RESPONSE_WORKER_IDLE_MS;
-}
+// Keep one warm projection process for this Viewer generation. RSS after a
+// build includes allocator headroom; cache hits can legitimately avoid builds
+// for minutes. Neither observation is evidence that the worker failed.
 
 export type FilesResponseRepresentation = {
   stateWrites?: StateWriteHealth;
@@ -68,7 +41,16 @@ export type FilesResponseWorkerRequest = {
   deltaScope?: string;
   /** The parent's certified base, which may differ from a discarded build. */
   deltaFrom?: { bodyFile: string; etag: string };
+  /** v2 structured base belongs to this Viewer epoch and deltaScope. */
+  boardEpoch?: string;
 };
+
+export type SeatSourceWorkerRequest =
+  | { type: "seat-liveness"; query: Parameters<import("@/lib/monitor/seatTickSources").SeatTickSources["liveness"]>[0]; scan: import("./scanCache").PersistedFileScanGeneration & { snapshotFile: string } }
+  | { type: "seat-agenda"; bodyFile: string; project: string; now: number }
+  | { type: "seat-reports"; project: string }
+  | { type: "seat-rule-reports"; project: string; at: string };
+type WorkerRequest = FilesResponseWorkerRequest | SeatSourceWorkerRequest;
 
 export interface FilesResponseWorkerRuntime {
   launch?: { executable: string; workerPath: string };
@@ -161,7 +143,7 @@ type PendingBuild = {
 
 type ResidentWorker = {
   child: ChildProcess;
-  /** Everything a reused worker has to match: launch, cwd and environment. */
+  /** Launch identity and storage roots a reused worker must match. */
   signature: string;
   /** Where its body files are allowed to be, checked on every answer. */
   resultDirectory: string;
@@ -169,10 +151,10 @@ type ResidentWorker = {
   bufferBytes: number;
   stderr: string;
   pending: PendingBuild | null;
-  idleTimer: ReturnType<typeof setTimeout> | null;
   rssBytes: number;
   nextId: number;
   retired: boolean;
+  drainReason?: string;
 };
 
 /* The Viewer loads this module through more than one bundle, and two pools
@@ -207,7 +189,10 @@ function workerSignature(
     launch,
     useNice,
     cwd,
-    env: Object.keys(env).sort().map((key) => [key, env[key]]),
+    // Ambient request/monitoring variables may change between builds. Storage
+    // roots define which installation the worker serves and must never mix.
+    roots: [env.LLV_STATE_DIR, env.HOME, env.XDG_CONFIG_HOME, env.CODEX_HOME,
+      env.LLV_CODEX_HOME, env.CLAUDE_CONFIG_DIR, env.LLV_CLAUDE_HOME, env.OPENCLAW_STATE_DIR, env.COPILOT_HOME],
   })).digest("hex");
 }
 
@@ -215,8 +200,10 @@ function retire(worker: ResidentWorker, reason: string): void {
   if (worker.retired) return;
   worker.retired = true;
   pool.__llvFilesResponseWorkerLastRetirement = reason;
-  if (worker.idleTimer) clearTimeout(worker.idleTimer);
-  worker.idleTimer = null;
+  const log = reason === "viewer exit" ? (...args: unknown[]) => startupDiagnostic("info", ...args) : console.warn;
+  log(`[files response worker] retired: ${reason}`, {
+    pid: worker.child.pid ?? null, rssBytes: worker.rssBytes,
+  });
   if (pool.__llvFilesResponseWorker === worker) pool.__llvFilesResponseWorker = null;
   const pending = worker.pending;
   worker.pending = null;
@@ -245,6 +232,7 @@ export async function drainFilesResponseWorker(reason = "drained", timeoutMs = 5
     if (worker.child.exitCode !== null || worker.child.signalCode !== null) resolve();
     else worker.child.once("exit", () => resolve());
   });
+  worker.drainReason = reason;
   try { worker.child.stdin?.end(); } catch { /* the pipe is already gone */ }
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([exited, new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); })]);
@@ -274,21 +262,6 @@ function holdEventLoop(worker: ResidentWorker, hold: boolean): void {
     if (hold) handle?.ref?.();
     else handle?.unref?.();
   }
-}
-
-function armIdleTimer(worker: ResidentWorker): void {
-  if (worker.idleTimer) clearTimeout(worker.idleTimer);
-  worker.idleTimer = setTimeout(() => retire(worker, "idle"), idleLimitMs());
-  /* An idle worker must not be what keeps the process alive — neither this
-     timer nor the pipes it is waiting on. */
-  (worker.idleTimer as unknown as { unref?: () => void }).unref?.();
-  holdEventLoop(worker, false);
-}
-
-function disarmIdleTimer(worker: ResidentWorker): void {
-  if (worker.idleTimer) clearTimeout(worker.idleTimer);
-  worker.idleTimer = null;
-  holdEventLoop(worker, true);
 }
 
 function answer(worker: ResidentWorker, frame: string): void {
@@ -353,7 +326,6 @@ function startWorker(
     bufferBytes: 0,
     stderr: "",
     pending: null,
-    idleTimer: null,
     rssBytes: 0,
     nextId: 0,
     retired: false,
@@ -386,7 +358,7 @@ function startWorker(
      event: unhandled, it takes the Viewer down with it. */
   child.stdin!.on("error", () => retire(worker, "stdin closed"));
   child.once("error", (error) => retire(worker, `launch failed: ${error.message}`));
-  child.once("close", (code, signal) => retire(worker, `exited (${signal ?? code ?? "unknown"})`));
+  child.once("close", (code, signal) => retire(worker, worker.drainReason ?? `exited (${signal ?? code ?? "unknown"})`));
   if (!pool.__llvFilesResponseWorkerExitHook) {
     pool.__llvFilesResponseWorkerExitHook = true;
     process.once("exit", () => shutdownFilesResponseWorker("viewer exit"));
@@ -405,7 +377,7 @@ function residentWorker(runtime: FilesResponseWorkerRuntime): ResidentWorker {
     : path.resolve(statePath("files-response-results"));
   const existing = pool.__llvFilesResponseWorker ?? null;
   if (existing && !existing.retired && existing.signature === signature) {
-    disarmIdleTimer(existing);
+    holdEventLoop(existing, true);
     return existing;
   }
   if (existing) retire(existing, existing.signature === signature ? "replaced" : "different launch");
@@ -416,7 +388,7 @@ function residentWorker(runtime: FilesResponseWorkerRuntime): ResidentWorker {
 
 function askWorker(
   worker: ResidentWorker,
-  request: FilesResponseWorkerRequest,
+  request: WorkerRequest,
   timeoutMs: number,
 ): Promise<FilesResponseWorkerWireRepresentation> {
   return new Promise<FilesResponseWorkerWireRepresentation>((resolve, reject) => {
@@ -451,14 +423,14 @@ async function readBody(worker: ResidentWorker, file: string): Promise<string> {
 }
 
 async function dispatch(
-  request: FilesResponseWorkerRequest,
+  request: WorkerRequest,
   runtime: FilesResponseWorkerRuntime,
   previous?: { body: string; etag: string },
 ): Promise<FilesResponseRepresentation> {
   const worker = residentWorker(runtime);
   let previousFile: string | undefined;
   try {
-    if (previous && request.deltaScope) {
+    if (previous && request.type === "project" && request.deltaScope) {
       previousFile = path.join(worker.resultDirectory, `${process.pid}-${crypto.randomUUID()}.base.json`);
       await fs.promises.mkdir(worker.resultDirectory, { recursive: true, mode: 0o700 });
       await fs.promises.writeFile(previousFile, previous.body, { encoding: "utf8", mode: 0o600 });
@@ -483,10 +455,7 @@ async function dispatch(
     return { ...metadata, body, ...(stateWrites ? { stateWrites, stateDataWrites: stateWrites } : {}), ...(delta ? { delta } : {}), ...(snapshotRead ? { snapshotRead } : {}) };
   } finally {
     if (previousFile) await fs.promises.rm(previousFile, { force: true }).catch(() => undefined);
-    if (!worker.retired) {
-      if (worker.rssBytes > residentLimitBytes()) retire(worker, "size");
-      else armIdleTimer(worker);
-    }
+    if (!worker.retired) holdEventLoop(worker, false);
   }
 }
 
@@ -505,4 +474,36 @@ export function buildFilesResponseInWorker(
   const current = previousBuild.catch(() => undefined).then(() => dispatch(request, runtime, previous));
   pool.__llvFilesResponseWorkerTail = current.then(() => undefined, () => undefined);
   return current;
+}
+
+
+/** Use the existing bounded worker queue and lifetime for seat source reads. */
+export function runSeatSourceInWorker(request: SeatSourceWorkerRequest, runtime: FilesResponseWorkerRuntime = testRuntime ?? {}): Promise<FilesResponseRepresentation> {
+  const deadline = Date.now() + (runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS);
+  const previous = pool.__llvFilesResponseWorkerTail ?? Promise.resolve();
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout>;
+  const current = previous.catch(() => undefined).then(() => {
+    const remaining = deadline - Date.now();
+    if (expired || remaining <= 0) throw new Error("seat source worker deadline exceeded in queue");
+    return dispatch(request, { ...runtime, timeoutMs: remaining });
+  });
+  pool.__llvFilesResponseWorkerTail = current.then(() => undefined, () => undefined);
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { expired = true; reject(new Error("seat source worker deadline exceeded")); }, Math.max(1, deadline - Date.now()));
+  });
+  return Promise.race([current, timeout]).finally(() => clearTimeout(timer));
+}
+
+export async function seatAgendaInWorker(body: string, project: string, now: number, runtime: FilesResponseWorkerRuntime = testRuntime ?? {}): Promise<import("@/lib/monitor/types").SeatTickWorkerAskInput[]> {
+  // The frame carries a filename. Serialising the whole board into the pipe
+  // would recreate the large synchronous encode on the Viewer.
+  const directory = runtime.env?.LLV_STATE_DIR ? path.resolve(runtime.env.LLV_STATE_DIR, "files-response-results") : statePath("files-response-results");
+  await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
+  const file = path.join(directory, `seat-agenda-${crypto.randomUUID()}.json`);
+  try {
+    await fs.promises.writeFile(file, body, { encoding: "utf8", mode: 0o600 });
+    const result = await runSeatSourceInWorker({ type: "seat-agenda", bodyFile: file, project, now }, runtime);
+    return JSON.parse(result.body);
+  } finally { await fs.promises.rm(file, { force: true }); }
 }

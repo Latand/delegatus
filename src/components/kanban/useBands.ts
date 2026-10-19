@@ -11,7 +11,7 @@ import { compactPipelineLayoutFlows } from "@/components/pipelines/pipelineModel
 import type { BranchGroup } from "@/components/projectModel";
 import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout";
 import { reconcileLayoutNodes } from "@/components/scheme/layoutIdentity";
-import { buildTaskBands } from "@/components/scheme/taskBands";
+import { createProjectBands } from "@/components/projectDashboardDerivation";
 import { isPlacedTask } from "@/components/scheme/taskGeometry";
 import { createTaskWorkflowProjector } from "@/components/tasks/taskWorkflowModel";
 import { createOverviewBands } from "./overviewBands";
@@ -68,18 +68,22 @@ export function useBands(input: BandsInput) {
     ? deriveOverview({ groups, files, flows, layoutFlows, pipelines, surface: surfacePipelines, tasks: allTasks, placed: placedTasks, now,
       untitled: t("bands.untitled"), reviewFlow: t("bands.reviewFlow") }) : null,
   [input.overview, input.layout, manual, drafts, favorites, isolatedManualPaths, draftBands, deriveOverview, groups, files, flows, layoutFlows, pipelines, surfacePipelines, allTasks, placedTasks, now, t]);
+  const standaloneLayout = useMemo(() => input.layout || overview ? null
+    : buildSchemeLayout(groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, EMPTY_SET, { now }),
+  [overview, input.layout, groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, now]);
+  const sourceLayout = input.layout ?? standaloneLayout;
   const previousLayout = useRef<SchemeLayout | null>(null);
   const layout = useMemo(() => {
-    if (overview) return null;
+    if (!sourceLayout) return null;
     const built = reconcileLayoutNodes(
       // eslint-disable-next-line react-hooks/refs -- Layout identity cache; never an input to task visibility.
       previousLayout.current,
-      input.layout ?? buildSchemeLayout(groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, EMPTY_SET, { now }),
+      sourceLayout,
     );
     // eslint-disable-next-line react-hooks/refs -- Retain geometry identity between projections without a state update.
     previousLayout.current = built;
     return built;
-  }, [overview, input.layout, groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, now]);
+  }, [sourceLayout]);
   /* The projection's `project` only fences its UNLINKED buckets to one
      project; omitting it is already the cross-project answer, so the Overview
      passes nothing rather than calling this once per project. */
@@ -89,9 +93,10 @@ export function useBands(input: BandsInput) {
     () => overview?.projection ?? projectTaskWorkflows(allTasks, pipelines, flows, files, projectionProject),
     [overview, projectTaskWorkflows, allTasks, pipelines, flows, files, projectionProject],
   );
+  const projectBands = useMemo(() => createProjectBands(), []);
   const bands = useMemo(
-    () => overview?.bands ?? buildTaskBands(layout!, { tasks: allTasks, projection, draftBands, untitled: t("bands.untitled"), reviewFlow: t("bands.reviewFlow"), deferDoneVisibility: true }),
-    [overview, layout, allTasks, projection, draftBands, t],
+    () => overview?.bands ?? projectBands(layout!, { tasks: allTasks, projection, draftBands, untitled: t("bands.untitled"), reviewFlow: t("bands.reviewFlow"), deferDoneVisibility: true }),
+    [overview, projectBands, layout, allTasks, projection, draftBands, t],
   );
   return { bands, projection };
 }

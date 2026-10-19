@@ -219,6 +219,42 @@ test("a refused create keeps the text on the new card and says why; Escape close
   expect(posts).toHaveLength(1);
 });
 
+/* Audit B7: the composer resets on the press; a refusal hands the words back. */
+test("a create resets the composer at once while the request is held, sends once, and a refusal puts the text back with the reason", async () => {
+  let release: (response: Response) => void = () => {};
+  taskAnswer = () => undefined as unknown as Response;
+  const { host } = mount([]);
+  const held = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/api/tasks" && init?.method === "POST") {
+      posts.push({ url: String(input), body: JSON.parse(String(init.body)) as Record<string, unknown> });
+      return await new Promise<Response>((resolve) => { release = resolve; });
+    }
+    return held(input, init);
+  }) as unknown as typeof fetch;
+  click(createItem(host, "New task"));
+  const field = () => host.querySelector<HTMLTextAreaElement>('[data-kanban-new-task] textarea[aria-label="Task text"]');
+  const submit = () => flushSync(() => host.querySelector("[data-kanban-new-task]")!.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+  type(field(), "Drawn before it is stored");
+  submit();
+  await settle(2);
+  expect(posts).toHaveLength(1);
+  expect(field()?.value).toBe("");
+  /* A second press on the emptied composer sends nothing more. */
+  submit();
+  await settle(2);
+  expect(posts).toHaveLength(1);
+  release(new Response(JSON.stringify({ error: "Project task limit reached" }), { status: 409, headers: { "content-type": "application/json" } }));
+  await settle();
+  expect(field()?.value).toBe("Drawn before it is stored");
+  expect(host.querySelector("[data-kanban-new-task]")?.textContent).toContain("Project task limit reached");
+  /* The retry reuses the refused create's request id, so a create that did land resolves to that one task. */
+  const firstId = posts[0]!.body.clientRequestId;
+  submit();
+  await settle(2);
+  expect(posts[1]!.body.clientRequestId).toBe(firstId);
+});
+
 test("the + menu's agent row asks for a draft once the board has loaded; a card's + Agent asks for one on that card", () => {
   const asked: string[] = [];
   const onCard: Array<{ id: string; taskId: string | null; title: string }> = [];

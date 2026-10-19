@@ -42,6 +42,17 @@ const { clearAccountFixture, seedAccountSource } = await import("./accountsStore
 const ATLAS = "project-atlas";
 const NOW = Date.now();
 
+test("paid guard fences pins, continuity and resume specs while another allowed account remains usable", async () => {
+  const paid = { ...observation(reserved, 99), limits: { ...observation(reserved, 99).limits,
+    credits: { hasCredits: true, balance: "10", unlimited: false } } };
+  registryWith(reserved, [paid, observation(spare, 20)]);
+  expect(accountManager.resolveProjectSpawn("codex", { project: null, requestedId: reserved }).kind).toBe("exhausted");
+  expect(() => resolveContinuityAccount("codex", reserved, null)).toThrow("paid-credit guard");
+  expect(() => resolveResumeAccountId("codex", reserved, null)).toThrow("paid-credit guard");
+  await expect(resolveHealthySpawnAccount("codex", reserved, null)).rejects.toThrow();
+  expect(accountManager.resolveProjectSpawn("codex", { project: null })).toMatchObject({ kind: "available", account: { accountId: spare } });
+});
+
 let reserved = "";
 let spare = "";
 let claudeReserved = "";
@@ -94,7 +105,7 @@ function registryWith(
   observations: (ReturnType<typeof observation> | ReturnType<typeof transcriptExhaustion>)[],
   claudeRoutedTo?: string,
 ): void {
-  const registry = new AgentRegistry(path.join(SANDBOX, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const registry = new AgentRegistry(path.join(STATE, "registry.json"), undefined, undefined, { sqliteMode: "off" });
   registry.setEngineRouting("codex", routedTo);
   if (claudeRoutedTo) registry.setEngineRouting("claude", claudeRoutedTo);
   if (observations.length) {

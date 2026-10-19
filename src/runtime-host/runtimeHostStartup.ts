@@ -3,6 +3,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
+import { startupDiagnostic } from "@/lib/startupDiagnostics";
 import { procBackend } from "@/lib/proc";
 import type { RuntimeJournalStartupProgress } from "./journal";
 
@@ -162,7 +163,7 @@ export class RuntimeHostStartupStore {
   progress(progress: RuntimeJournalStartupProgress): void {
     const record = recordFromDisk(this.filename);
     if (record.journal?.subphase !== progress.subphase) {
-      console.error(`[runtime host] journal ${progress.subphase}: ${progress.done}/${progress.total}, committed batches ${progress.committedBatches}`);
+      startupDiagnostic("info", `[runtime host] journal ${progress.subphase}: ${progress.done}/${progress.total}, committed batches ${progress.committedBatches}`);
     }
     record.journal = { ...progress, updatedAt: this.identity?.now() ?? new Date().toISOString() };
     durableWrite(this.filename, record);

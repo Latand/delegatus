@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -5,10 +6,13 @@ import path from "node:path";
 import type { Database as BunDatabase } from "bun:sqlite";
 
 import { statePath } from "@/lib/configDir";
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
+import { stateDatabaseBusy, StateLockDeferredError, stateLockAttempt } from "@/lib/state/lockWait";
 
 import { EXCLUSION_REASONS, type ExclusionReason, type InputCandidate } from "./humanInput";
 import type { AgentTurn, TranscriptFactsState } from "./transcriptExport";
 import type { RequestKind, Surface } from "./method";
+import { commitUsage, migrateUsage, type UsageBatch } from "./tokenStore";
 
 /*
  * Delegatus's own record of human input (docs/design/activity-dashboard.md,
@@ -96,6 +100,8 @@ export interface FileCursor {
   mtimeMs: number;
   facts: TranscriptFactsState;
   prompted: boolean;
+  usageOffset?: number;
+  usageFacts?: TranscriptFactsState;
 }
 
 export interface HostState {
@@ -150,19 +156,19 @@ type HostRow = {
   remote_mode: "solo" | "team" | null; team_history: number; pulled_member: string | null; unknown_authors: number;
 };
 
-function parseIds(value: string): string[] {
+function parseIds(value: string, db: BunDatabase): string[] {
   try {
-    const ids = JSON.parse(value) as unknown;
+    const ids = parseSqliteJson(value, db) as unknown;
     return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
   } catch {
     return [];
   }
 }
 
-function parseExcluded(value: string): Partial<Record<ExclusionReason, number>> {
+function parseExcluded(value: string, db: BunDatabase): Partial<Record<ExclusionReason, number>> {
   const out: Partial<Record<ExclusionReason, number>> = {};
   try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
+    const parsed = parseSqliteJson(value, db) as Record<string, unknown>;
     for (const reason of EXCLUSION_REASONS) {
       const count = parsed?.[reason];
       if (typeof count === "number" && Number.isSafeInteger(count) && count > 0) out[reason] = count;
@@ -173,7 +179,7 @@ function parseExcluded(value: string): Partial<Record<ExclusionReason, number>> 
   return out;
 }
 
-function storedInput(row: InputRow): StoredInput {
+function storedInput(row: InputRow, db: BunDatabase): StoredInput {
   return {
     key: row.key,
     version: row.version,
@@ -183,7 +189,7 @@ function storedInput(row: InputRow): StoredInput {
     surface: row.surface as Surface,
     hash: row.hash,
     conversation: row.conversation,
-    ids: parseIds(row.ids),
+    ids: parseIds(row.ids, db),
     author: row.author,
   };
 }
@@ -204,11 +210,14 @@ export class ActivityStore {
 
   /** The writer: creates the file and its schema. */
   static open(file: string = activityStorePath()): ActivityStore {
+    assertStateStartupMutation(path.dirname(file), "activity schema");
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const Database = sqliteDatabase();
-    const db = new Database(file, { create: true, strict: true });
+    const db = observeSqlite(new Database(file, { create: true, strict: true }), "activity");
     try {
-      db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+      db.exec("PRAGMA busy_timeout = 0");
+      db.exec("PRAGMA journal_mode = WAL");
+      db.exec("PRAGMA synchronous = NORMAL");
       db.exec(`
         CREATE TABLE IF NOT EXISTS activity_inputs (
           host TEXT NOT NULL,
@@ -285,6 +294,9 @@ export class ActivityStore {
       }
       if (!hostColumns.has("pulled_member")) db.exec("ALTER TABLE activity_hosts ADD COLUMN pulled_member TEXT");
       if (!hostColumns.has("unknown_authors")) db.exec("ALTER TABLE activity_hosts ADD COLUMN unknown_authors INTEGER NOT NULL DEFAULT 0");
+      db.exec("BEGIN IMMEDIATE");
+      try { migrateUsage(db); db.exec("COMMIT"); }
+      catch (error) { db.exec("ROLLBACK"); throw error; }
       db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
       for (const candidate of [file, `${file}-wal`, `${file}-shm`]) {
         try { fs.chmodSync(candidate, 0o600); } catch { /* Not created yet. */ }
@@ -292,6 +304,7 @@ export class ActivityStore {
       return new ActivityStore(db, false);
     } catch (error) {
       db.close();
+      if (stateDatabaseBusy(error)) throw new StateLockDeferredError("activity.open");
       throw error;
     }
   }
@@ -300,9 +313,13 @@ export class ActivityStore {
   static openReadOnly(file: string = activityStorePath()): ActivityStore | null {
     if (!fs.existsSync(file)) return null;
     const Database = sqliteDatabase();
-    const db = new Database(file, { readonly: true, strict: true });
+    const db = observeSqlite(new Database(file, { readonly: true, strict: true }), "activity");
     try {
-      db.exec("PRAGMA busy_timeout = 250; PRAGMA query_only = ON;");
+      db.exec("PRAGMA busy_timeout = 0");
+      db.exec("PRAGMA query_only = ON");
+      db.exec("PRAGMA temp_store = MEMORY");
+      db.exec("PRAGMA cache_size = -8192");
+      db.exec("PRAGMA mmap_size = 134217728");
       if ((db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0) < SCHEMA_VERSION) {
         db.close();
         return null;
@@ -319,7 +336,7 @@ export class ActivityStore {
   }
 
   transaction<T>(work: () => T): T {
-    this.db.exec("BEGIN IMMEDIATE");
+    stateLockAttempt("activity.transaction", () => this.db.exec("BEGIN IMMEDIATE"));
     try {
       const result = work();
       this.db.exec("COMMIT");
@@ -335,17 +352,20 @@ export class ActivityStore {
   }
 
   fileCursor(file: string): FileCursor | null {
-    const row = this.db.query<{ offset: number; size: number; mtime_ms: number; facts: string; prompted: number }, [string]>(
-      "SELECT offset, size, mtime_ms, facts, prompted FROM activity_files WHERE path = ?",
+    const row = this.db.query<{ offset: number; size: number; mtime_ms: number; facts: string; prompted: number; usage_offset?: number; usage_facts?: string | null }, [string]>(
+      "SELECT * FROM activity_files WHERE path = ?",
     ).get(file);
     if (!row) return null;
     let facts: TranscriptFactsState;
     try {
-      facts = JSON.parse(row.facts) as TranscriptFactsState;
+      facts = parseSqliteJson(row.facts, this.db) as TranscriptFactsState;
     } catch {
       return null;
     }
-    return { offset: row.offset, size: row.size, mtimeMs: row.mtime_ms, facts, prompted: row.prompted === 1 };
+    let usageFacts: TranscriptFactsState | undefined;
+    try { usageFacts = row.usage_facts ? parseSqliteJson(row.usage_facts, this.db) as TranscriptFactsState : undefined; }
+    catch { /* A missing token cursor is replayed through durable dedupe. */ }
+    return { offset: row.offset, size: row.size, mtimeMs: row.mtime_ms, facts, prompted: row.prompted === 1, usageOffset: row.usage_offset ?? 0, usageFacts };
   }
 
   /** Every cursor path, for the pass that forgets transcripts gone from disk. */
@@ -370,16 +390,21 @@ export class ActivityStore {
     earliest: number | null,
     turns: { owner: TurnOwner; turns: readonly AgentTurn[] } | null = null,
     teamHistory = false,
+    usage: UsageBatch | null = null,
   ): number {
     return this.transaction(() => {
       let written = 0;
       for (const candidate of candidates) if (this.recordLocal(candidate)) written += 1;
       if (turns) for (const turn of turns.turns) this.recordTurn(turns.owner, turn);
+      if (usage) commitUsage(this.db, usage);
       this.db.query(`
         INSERT INTO activity_files(path, offset, size, mtime_ms, facts, prompted) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET offset = excluded.offset, size = excluded.size, mtime_ms = excluded.mtime_ms,
           facts = excluded.facts, prompted = excluded.prompted
       `).run(file, cursor.offset, cursor.size, cursor.mtimeMs, JSON.stringify(cursor.facts), cursor.prompted ? 1 : 0);
+      // Callers without token state have the older writer's semantics.
+      if (cursor.usageOffset !== undefined) this.db.query("UPDATE activity_files SET usage_offset=?, usage_facts=? WHERE path=?")
+        .run(cursor.usageOffset, JSON.stringify(cursor.usageFacts ?? cursor.facts), file);
       const current = this.hostState(LOCAL_HOST_KEY);
       const counts = { ...(current?.excluded ?? {}) };
       for (const [reason, count] of Object.entries(excluded) as Array<[ExclusionReason, number]>) counts[reason] = (counts[reason] ?? 0) + count;
@@ -413,10 +438,10 @@ export class ActivityStore {
     if (existing) {
       const row = this.db.query<InputRow, [string, string]>("SELECT * FROM activity_inputs WHERE host = ? AND key = ?").get(LOCAL_HOST_KEY, existing);
       if (!row) return false;
-      const ids = [...new Set([...parseIds(row.ids), ...candidate.ids])].sort();
+      const ids = [...new Set([...parseIds(row.ids, this.db), ...candidate.ids])].sort();
       const at = Math.min(row.at, candidate.at);
       const author = row.author ?? candidate.author ?? null;
-      if (ids.length !== parseIds(row.ids).length || at !== row.at || author !== row.author) {
+      if (ids.length !== parseIds(row.ids, this.db).length || at !== row.at || author !== row.author) {
         this.db.query("UPDATE activity_inputs SET ids = ?, at = ?, author = ?, version = ? WHERE host = ? AND key = ?")
           .run(JSON.stringify(ids), at, author, this.nextVersion(), LOCAL_HOST_KEY, existing);
       }
@@ -510,7 +535,7 @@ export class ActivityStore {
     return this.db.query<InputRow, [string, number, number]>(
       "SELECT key, version, at, project, kind, surface, hash, conversation, ids, author FROM activity_inputs WHERE host = ? AND at >= ? AND at <= ? ORDER BY at",
     ).all(host, start, end).map((row) => {
-      const input = storedInput(row);
+      const input = storedInput(row, this.db);
       return {
         at: input.at, host: label, project: input.project, kind: input.kind, surface: input.surface,
         ids: input.ids, textHash: input.hash, conversation: input.conversation, author: input.author,
@@ -522,7 +547,7 @@ export class ActivityStore {
   localRowsAfter(version: number, limit: number): StoredInput[] {
     return this.db.query<InputRow, [string, number, number]>(
       "SELECT key, version, at, project, kind, surface, hash, conversation, ids, author FROM activity_inputs WHERE host = ? AND version > ? ORDER BY version LIMIT ?",
-    ).all(LOCAL_HOST_KEY, version, limit).map(storedInput);
+    ).all(LOCAL_HOST_KEY, version, limit).map(row => storedInput(row, this.db));
   }
 
   /** Drop everything pulled from `host`, before it is read again whole. */
@@ -549,7 +574,7 @@ export class ActivityStore {
       attemptAt: row.attempt_at,
       error: row.error,
       cursor: row.cursor,
-      excluded: parseExcluded(row.excluded),
+      excluded: parseExcluded(row.excluded, this.db),
       remoteMode: row.remote_mode,
       teamHistory: row.team_history === 1,
       pulledMember: row.pulled_member,

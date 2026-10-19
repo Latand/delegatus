@@ -1,3 +1,5 @@
+import { settleStageAttemptPush } from "./stageAttemptPush";
+import { performanceSpans } from "@/lib/performanceSpans";
 import type { ExecPort } from "@/lib/workflows/provision";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import path from "node:path";
@@ -12,11 +14,11 @@ export type StageBranchProtection = { branch: string; head: string; error: strin
 /** Other lanes can acquire branch claims while this lane is outside its lease.
     Ignore their turn progress, but fence every change to repository/branch authority. */
 export function stageBranchOwnershipFence(pipelines: readonly Pipeline[], ownerId: string): string {
-  return JSON.stringify(pipelines.filter((pipeline) => pipeline.id !== ownerId).map((pipeline) => [
+  return performanceSpans.sync("controller.ownership", () => JSON.stringify(pipelines.filter((pipeline) => pipeline.id !== ownerId).map((pipeline) => [
     pipeline.id, pipeline.repoDir, pipeline.worktreeDir, pipeline.branch,
     pipeline.delivery?.target, pipeline.delivery?.active, pipeline.delivery?.ownerId,
     pipeline.delivery?.epoch, pipeline.delivery?.publish, pipelineTerminal(pipeline),
-  ]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+  ]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))));
 }
 
 /** Forge reads run before the controller mutation. Pin the observation to the
@@ -64,6 +66,8 @@ export async function commitAndAdoptStageBranch(
   protection: StageBranchProtection | null | undefined,
   receiptFile?: string,
   control?: StageCommitControl,
+  attempt?: PipelineStageAttempt,
+  now?: string,
 ): Promise<PipelineGitResult> {
   const ownership = stageBranchOwnershipFence(pipelines(), pipeline.id);
   const execute = exec;
@@ -116,6 +120,14 @@ export async function commitAndAdoptStageBranch(
     ? other.branch === name || other.delivery.target.branch === `refs/heads/${name}`
     : other.branch === name && !pipelineTerminal(other));
   if (ownedByOther(source)) return refused("another pipeline owns the stage branch");
+  if (!adoption && attempt && now && (source === pipeline.branch || source === deliveryBranch)) {
+    const pushed = await performanceSpans.wait("pipeline.attempt-push-proof", () => settleStageAttemptPush(pipeline, attempt, exec, now));
+    if (pushed) {
+      if (!pushed.ok && pushed.deferred) pipeline.stateDetail = pushed.error;
+      if (pushed.ok && attempt.report) attempt.report.provenance = { ...attempt.report.provenance, head: pushed.sha };
+      return pushed;
+    }
+  }
   if (!adoption && source === pipeline.branch) return (await commitPipelineStage(pipeline, stageId, true, exec, undefined, undefined, receiptFile, control));
   if (!adoption && source === deliveryBranch) {
     if (!pipeline.delivery?.active || pipeline.delivery.publish !== "enabled" || pipeline.delivery.ownerId !== pipeline.id) return refused("the delivery branch claim was released");

@@ -19,8 +19,9 @@ export interface AgentSignalDomain {
   retired?: true;
 }
 
-const domains = new WeakMap<ChildProcess, AgentSignalDomain>();
-const pendingReceipts = new WeakMap<ChildProcess, string>();
+type SignalDomainHandle = { pid?: number };
+const domains = new WeakMap<SignalDomainHandle, AgentSignalDomain>();
+const pendingReceipts = new WeakMap<SignalDomainHandle, string>();
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 let fixtureHeadlessSpawn: typeof spawn | null = null;
 /** Test preload supplies a transport for protocol fixtures; native
@@ -33,10 +34,11 @@ export function headlessFixtureTransport(): typeof spawn | null { return fixture
 
 type EngineSpawn = (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
 export async function spawnManagedEngine(command: string, args: string[], options: SpawnOptionsWithoutStdio,
-  memory: AgentMemoryCell | null | undefined, injected?: EngineSpawn, sourceEnv = options.env ?? process.env): Promise<ChildProcessWithoutNullStreams> {
+  memory: AgentMemoryCell | null | undefined, injected?: EngineSpawn, sourceEnv = options.env ?? process.env,
+  transportSpawn?: EngineSpawn): Promise<ChildProcessWithoutNullStreams> {
   if (injected) return (memory?.wrapSpawn(injected) ?? injected)(command, args, options);
   if (sourceEnv.LLV_GATE_SLOT_LEASE) throw new Error("agent signal sandbox unavailable: cross-user-namespace gate lease transfer is unsupported");
-  const base = memory?.wrapSpawn() ?? ((cmd, argv, opts) => spawn(cmd, argv, { ...opts, stdio: ["pipe", "pipe", "pipe"] }));
+  const base = memory?.wrapSpawn(transportSpawn) ?? transportSpawn ?? ((cmd, argv, opts) => spawn(cmd, argv, { ...opts, stdio: ["pipe", "pipe", "pipe"] }));
   const scope = memory && (memory.plan.mechanism === "scope" || memory.plan.cpu) ? memory.plan.unit : null;
   return await spawnSignalSandbox(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] }, base as typeof spawn, scope) as ChildProcessWithoutNullStreams;
 }
@@ -60,7 +62,14 @@ export function normalizeAgentSignalDomain(value: unknown): AgentSignalDomain | 
   const identities = [domain.monitor, domain.bubblewrap, domain.init, domain.native];
   if (new Set(identities.map(identity => identity.pid)).size !== identities.length
     || identities.some(identity => identity.bootEpoch !== domain.monitor.bootEpoch)) throw new Error("agent signal sandbox identity is contradictory");
-  return structuredClone(domain);
+  // Collection readers expose immutable proxies. Copy the validated fields
+  // rather than asking structuredClone to clone a reader's proxy.
+  const copy = (identity: ProcessIdentity): ProcessIdentity => ({ pid: identity.pid,
+    startIdentity: identity.startIdentity, bootEpoch: identity.bootEpoch });
+  return { policyVersion: 1, monitor: copy(domain.monitor), bubblewrap: copy(domain.bubblewrap),
+    init: copy(domain.init), native: copy(domain.native), pidNamespace: domain.pidNamespace,
+    userNamespace: domain.userNamespace, scope: domain.scope, directory: domain.directory,
+    ...(domain.retired ? { retired: true } : {}) };
 }
 
 function namespaceOf(pid: number, kind: "pid" | "user"): string | null {
@@ -88,7 +97,14 @@ export function verifiedSignalDomainProcesses(domain: AgentSignalDomain): Proces
   return living;
 }
 
-export function signalDomain(child: ChildProcess): AgentSignalDomain | undefined {
+/** Reconnected transports retain the original invocation's signal authority. */
+export function bindSignalDomain(handle: SignalDomainHandle, value: AgentSignalDomain): void {
+  const domain = normalizeAgentSignalDomain(value)!;
+  if (handle.pid !== domain.native.pid || !agentSignalDomainAlive(domain)) throw new Error("agent signal sandbox reconnect identity could not be verified");
+  domains.set(handle, domain);
+}
+
+export function signalDomain(child: SignalDomainHandle): AgentSignalDomain | undefined {
   const receipt = pendingReceipts.get(child);
   if (receipt && fs.existsSync(receipt)) {
     try {
@@ -103,15 +119,14 @@ export function signalDomain(child: ChildProcess): AgentSignalDomain | undefined
   const domain = domains.get(child);
   if (!domain) return undefined;
   const result = structuredClone(domain);
-  if ((child.exitCode !== null || child.signalCode !== null)
-    && [domain.monitor, domain.bubblewrap, domain.init, domain.native].every(identity => processIdentityStatus(identity) === "dead")) result.retired = true;
+  if ([domain.monitor, domain.bubblewrap, domain.init, domain.native].every(identity => processIdentityStatus(identity) === "dead")) result.retired = true;
   return result;
 }
-export function nativeProcessId(child: ChildProcess): number | undefined { return domains.get(child)?.native.pid ?? child.pid; }
+export function nativeProcessId(child: SignalDomainHandle): number | undefined { return domains.get(child)?.native.pid ?? child.pid; }
 
 /** TERM reaches the verified native process. Escalation ends the owned PID
  * namespace, including descendants that changed session or were reparented. */
-export function signalAgentDomain(child: ChildProcess, signal: NodeJS.Signals): boolean | undefined {
+export function signalAgentDomain(child: SignalDomainHandle, signal: NodeJS.Signals): boolean | undefined {
   const domain = signalDomain(child);
   if (!domain) return undefined;
   const target = signal === "SIGKILL" ? domain.init : domain.native;
@@ -130,7 +145,7 @@ export function spawnHeadlessSignalSandbox(command: string, args: string[], opti
   start: typeof spawn = spawn, scope?: string | null): ChildProcess {
   if (process.platform !== "linux") throw new Error("agent signal sandbox unavailable: Linux namespaces are required");
   const launcher = launcherFile();
-  const directory = fs.mkdtempSync(path.join(options.env?.TMPDIR || os.tmpdir(), "delegatus-signal-"));
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(options.env?.TMPDIR || os.tmpdir(), "delegatus-signal-")));
   const receipt = path.join(directory, "ready.json");
   const env: NodeJS.ProcessEnv = { ...(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt, LLV_SIGNAL_AUTOMATIC: "1" };
   const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || env.LLV_DOCKER_NSENTER_SHIMS === "1";
@@ -225,9 +240,11 @@ export async function spawnSignalSandbox(command: string, args: string[], option
   if (process.platform !== "linux") throw new Error("agent signal sandbox unavailable: Linux namespaces are required");
   if (options.env?.LLV_GATE_SLOT_LEASE) throw new Error("agent signal sandbox unavailable: cross-user-namespace gate lease transfer is unsupported");
   const launcher = launcherFile();
-  const directory = fs.mkdtempSync(path.join(options.env?.TMPDIR || os.tmpdir(), "delegatus-signal-"));
+  const directory = fs.realpathSync(fs.mkdtempSync(path.join(options.env?.TMPDIR || os.tmpdir(), "delegatus-signal-")));
   const receipt = path.join(directory, "ready.json");
-  const env: NodeJS.ProcessEnv = { ...(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt };
+  const diagnosticFile = options.env?.LLV_SIGNAL_IGNORE_NATIVE_STDIO === "1" ? `${directory}.stderr` : undefined;
+  const env: NodeJS.ProcessEnv = { ...(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt,
+    ...(diagnosticFile ? { LLV_SIGNAL_DIAGNOSTIC: diagnosticFile } : {}) };
   const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || env.LLV_DOCKER_NSENTER_SHIMS === "1";
   const child = bridged ? start(command, args, { ...options, env })
     : start("python3", [launcher, "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...options, env });
@@ -248,6 +265,14 @@ export async function spawnSignalSandbox(command: string, args: string[], option
         return child;
       }
       if (child.exitCode !== null || child.signalCode !== null || Date.now() >= deadline) {
+        if (!stderr.trim() && diagnosticFile && fs.existsSync(diagnosticFile)) {
+          const fd = fs.openSync(diagnosticFile, "r");
+          try {
+            const size = fs.fstatSync(fd).size, bytes = Buffer.alloc(Math.min(size, 2048));
+            fs.readSync(fd, bytes, 0, bytes.length, Math.max(0, size - bytes.length));
+            stderr = bytes.toString("utf8");
+          } finally { fs.closeSync(fd); }
+        }
         throw new Error(`agent signal sandbox unavailable: ${stderr.trim() || "readiness was not proved before the launch deadline"}`);
       }
       await pause(10);
@@ -264,5 +289,6 @@ export async function spawnSignalSandbox(command: string, args: string[], option
     throw error;
   } finally {
     child.stderr?.off("data", diagnostic);
+    if (diagnosticFile) fs.rmSync(diagnosticFile, { force: true });
   }
 }

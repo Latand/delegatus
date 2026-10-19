@@ -1,3 +1,4 @@
+import { engineMemoryOff } from "@/lib/memory/source";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { codexOperatorQuestionPolicy } from "./operatorQuestionPolicy";
 import crypto from "node:crypto";
@@ -180,6 +181,7 @@ export function withSpawnCapability(spec: ResumeSpec, capability: string, source
 }
 
 export interface FreshSpecOptions {
+  cleanMemory?: boolean;
   /** Durable human-readable identity for a viewer-controlled fresh launch. */
   title?: string | null;
   model?: string | null;
@@ -246,6 +248,7 @@ function codexEnvPrefix(home: string, mcpServers: readonly string[]): string {
 }
 
 export interface ResumeSpecOptions {
+  cleanMemory?: boolean;
   model?: string | null;
   effort?: string | null;
   /** Codex only: override the service tier when reopening a conversation. */
@@ -289,6 +292,7 @@ function normalizedMcpServers(value: readonly string[] | undefined): string[] {
 function configuredCodexMcpServers(home: string, cwd: string): string[] {
   const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: home };
   delete env.LLV_TOKEN;
+  // eslint-disable-next-line no-restricted-syntax -- Legacy terminal-launch MCP discovery invoked by serving launch controls.
   const listed = spawnSync(process.env.LLV_CODEX_BINARY ?? resolveBinary("codex"), ["-c", "features.plugins=false", "mcp", "list", "--json"], {
     cwd,
     env,
@@ -370,6 +374,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
         : applyClaudeSpawnPolicy(options.claudeConfigDir, {
           providerAccount: Boolean(claudeProviderForHome(options.claudeConfigDir)),
           allowSubagents: options.allowSubagents,
+          cleanMemory: options.cleanMemory,
           cwd,
           mcpServers,
           baseSettingsPath: managed ? claudeSettingsPath() : null,
@@ -377,7 +382,10 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
         })
       : null;
     if (installedPolicy) pushClaudePolicyArgs(args, installedPolicy);
-    else args.push("--settings", JSON.stringify({ env: agentPublicationIdentityEnv(process.env) }), "--strict-mcp-config");
+    else args.push("--settings", JSON.stringify({
+      ...(engineMemoryOff(options) ? { autoMemoryEnabled: false } : {}),
+      env: { ...agentPublicationIdentityEnv(process.env), ...(engineMemoryOff(options) ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}) },
+    }), "--strict-mcp-config");
     const command = args.map(shellQuote).join(" ");
     return {
       command: telegramScopedCommand(`${claudeEnvPrefix(options.claudeConfigDir ?? legacyClaudeHome(), mcpServers)} ${command}`, mcpServers),
@@ -385,12 +393,13 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
       windowName: "claude-new",
       engine: "claude",
       claudeTerminalPolicy: options.claudeConfigDir ? { home: options.claudeConfigDir, options: {
-        providerAccount: Boolean(claudeProviderForHome(options.claudeConfigDir)), allowSubagents: options.allowSubagents,
+        providerAccount: Boolean(claudeProviderForHome(options.claudeConfigDir)), allowSubagents: options.allowSubagents, cleanMemory: options.cleanMemory,
         cwd, mcpServers, baseSettingsPath: managed ? claudeSettingsPath() : null, profileId: sid,
         mcpStatePath: managed ? path.join(options.claudeConfigDir, ".claude.json") : path.join(path.dirname(options.claudeConfigDir), ".claude.json"),
       } } : undefined,
       ["transcript"]: claudeTranscriptPath(cwd, sid, options.claudeProjectsDir ?? path.join(legacyClaudeHome(), "projects")),
       launchProfile: {
+        ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}),
         cwd,
         model: options.model ?? null,
         effort: options.effort ?? null,
@@ -429,6 +438,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
       windowName: "copilot-new",
       engine: "copilot",
       launchProfile: {
+        ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}),
         cwd,
         model: options.model ?? null,
         effort: options.effort ?? null,
@@ -448,6 +458,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
     };
   }
   const args = [resolveBinary("codex")];
+  if (engineMemoryOff(options)) args.push("-c", "features.memories=false");
   const home = options.codexHome ?? accountForSpawn().home;
   args.push(...agentCodexPublicationArgs({}, process.env));
   if (isManagedCodexHome(home)) args.push("-c", "cli_auth_credentials_store=file");
@@ -468,6 +479,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
     windowName: "codex-new",
     engine: "codex",
     launchProfile: {
+      ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}),
       cwd,
       model: options.model ?? null,
       effort: options.effort ?? null,
@@ -566,6 +578,7 @@ export function resumeSpecForSession(
     const policy = applyClaudeSpawnPolicy(home, {
       providerAccount: Boolean(claudeProviderForHome(home)),
       allowSubagents: options.allowSubagents,
+      cleanMemory: options.cleanMemory,
       baseSettingsPath: managed ? claudeSettingsPath() : null,
       profileId: `resume-${sessionId}`,
       cwd,
@@ -594,14 +607,15 @@ export function resumeSpecForSession(
       windowName: "claude-resume",
       engine: "claude",
       claudeTerminalPolicy: { home, options: {
-        providerAccount: Boolean(claudeProviderForHome(home)), allowSubagents: options.allowSubagents,
+        providerAccount: Boolean(claudeProviderForHome(home)), allowSubagents: options.allowSubagents, cleanMemory: options.cleanMemory,
         cwd, mcpServers, baseSettingsPath: managed ? claudeSettingsPath() : null, profileId: `resume-${sessionId}`,
         mcpStatePath: managed ? path.join(home, ".claude.json") : path.join(path.dirname(home), ".claude.json"),
       } },
-      launchProfile: { ...emptyLaunchProfileForResume(cwd, launchModel, options.effort ?? null), readOnly: options.readOnly ?? null, permissionMode, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
+      launchProfile: { ...emptyLaunchProfileForResume(cwd, launchModel, options.effort ?? null), ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), readOnly: options.readOnly ?? null, permissionMode, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
     };
   }
   let command = `${(options.hostTerminal ? resolveHostBinary : resolveBinary)("codex")}`;
+  if (engineMemoryOff(options)) command += " -c features.memories=false";
   const publicationArgs = agentCodexPublicationArgs({}, process.env);
   command += ` ${publicationArgs.map(shellQuote).join(" ")}`;
   if (isManagedCodexHome(home)) command += " -c cli_auth_credentials_store=file";
@@ -625,7 +639,8 @@ export function resumeSpecForSession(
     cwd,
     windowName: "codex-resume",
     engine: "codex",
-    launchProfile: { ...emptyLaunchProfileForResume(cwd, options.model ?? null, options.effort ?? null), fast: options.serviceTier ? !["default", "standard"].includes(options.serviceTier) : options.fast ?? null, serviceTier: options.serviceTier ?? null, readOnly: options.readOnly ?? null, permissionMode: options.permissionMode ?? null, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
+    launchProfile: { ...emptyLaunchProfileForResume(cwd, options.model ?? null, options.effort ?? null),
+      ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), fast: options.serviceTier ? !["default", "standard"].includes(options.serviceTier) : options.fast ?? null, serviceTier: options.serviceTier ?? null, readOnly: options.readOnly ?? null, permissionMode: options.permissionMode ?? null, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
   };
 }
 

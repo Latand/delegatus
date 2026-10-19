@@ -4,7 +4,7 @@ import { useRef, useState, type KeyboardEvent } from "react";
 
 import type { DayActivity, HourActivity } from "@/lib/activity/method";
 
-import { useWidth } from "./ActivityDayChart";
+import { DAILY_LIMIT, useWidth } from "./ActivityDayChart";
 import { dayMonth, dayShort, hoursText } from "./format";
 import { MARK_FILL, Swatch, Tooltip, type MarkKind, type TipAnchor } from "./marks";
 import { HourTip, type TipContext } from "./tips";
@@ -47,13 +47,17 @@ export function ActivityRhythm({ context }: { context: TipContext }) {
   const [active, setActive] = useState<{ row: number; hour: number } | null>(null);
   const tz = data.params.tz;
   const halfHour = data.params.rounding === "half-hour";
-  const dense = data.days.length > 7;
+  /* Past 92 days the chart folds days into weeks; a row per day would be a
+     page of its own, so the card keeps the newest 92 and says so. */
+  const capped = data.days.length > DAILY_LIMIT;
+  const days = capped ? data.days.slice(-DAILY_LIMIT) : data.days;
+  const dense = days.length > 7;
   const labelW = 60;
   const cellGap = 2;
   const cellW = Math.max(1, (width - labelW - cellGap * 23) / 24);
   const lane = dense ? 7 : 18;
   const rowGap = dense ? 3 : 6;
-  const height = data.days.length * (lane + rowGap) - rowGap + 24;
+  const height = days.length * (lane + rowGap) - rowGap + 24;
   const now = data.range.now;
 
   const legend: Array<{ kind: MarkKind; label: string }> = unread
@@ -76,11 +80,11 @@ export function ActivityRhythm({ context }: { context: TipContext }) {
     return { left, right: left + cellW, top, bottom: top + lane };
   };
   const anchor = active ? anchorOf(active) : null;
-  const activeDay = active ? data.days[active.row] : undefined;
+  const activeDay = active ? days[active.row] : undefined;
   const activeHour = active && activeDay ? activeDay.hours[active.hour] : undefined;
 
   const onKey = (row: number) => (event: KeyboardEvent<SVGGElement>) => {
-    const day = data.days[row]!;
+    const day = days[row]!;
     const last = Math.min(23, day.hours.filter((hour) => hour.start < now).length - 1);
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
@@ -102,10 +106,11 @@ export function ActivityRhythm({ context }: { context: TipContext }) {
           ))}
         </div>
       </div>
+      {capped ? <p className="mt-1 text-[11px] text-muted" data-activity-rhythm-capped="">{t("activity.rhythm.capped")}</p> : null}
       <div ref={wrap} className="mt-2.5">
         {width > 0 ? (
           <svg ref={svg} width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="group" aria-label={t("activity.rhythm.aria")} className="block" onMouseLeave={() => setActive(null)}>
-            {data.days.map((day, row) => {
+            {days.map((day, row) => {
               const isToday = day.start <= now && now < day.end;
               const monday = new Date(`${day.date}T12:00:00Z`).getUTCDay() === 1;
               const label = !dense || isToday || monday ? (isToday ? t("activity.range.today") : dense ? dayMonth(day, locale, tz) : dayShort(day, locale, tz)) : null;

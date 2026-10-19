@@ -2,6 +2,7 @@ import dns from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import { Readable } from "node:stream";
 import {
   descriptorSchema,
   targetsSchema,
@@ -9,6 +10,7 @@ import {
   type ExternalRelayTarget,
 } from "./protocol";
 import type { PairedRelay } from "./store";
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { recordPublishedRelayReference } from "./publishedReferences";
 
 export class ExternalRelayError extends Error {
@@ -28,7 +30,7 @@ export function isUnknownFeatureRefusal(error: unknown): error is ExternalRelayE
 const bare = (host: string) => host.replace(/^\[|\]$/g, "");
 const loopback = (address: string) =>
   address === "::1" || (net.isIP(address) === 4 && address.startsWith("127."));
-async function target(input: string, options: { query?: boolean } = {}): Promise<{ url: URL; address: string }> {
+async function target(input: string, options: { query?: boolean; detailedErrors?: boolean } = {}): Promise<{ url: URL; address: string }> {
   let url: URL;
   try {
     url = new URL(input);
@@ -51,7 +53,7 @@ async function target(input: string, options: { query?: boolean } = {}): Promise
           (item) => item.address,
         );
   } catch {
-    throw new ExternalRelayError("unreachable");
+    throw new ExternalRelayError(options.detailedErrors ? "dns_error" : "unreachable");
   }
   if (
     !addresses.length ||
@@ -59,6 +61,19 @@ async function target(input: string, options: { query?: boolean } = {}): Promise
   )
     throw new ExternalRelayError("http_public");
   return { url, address: addresses[0]! };
+}
+/** A publication deadline covers name resolution as well as the socket. Late
+ * DNS completion cannot prepare a body or start an HTTP request. */
+async function targetWithSignal(input: string, signal?: AbortSignal, detailedErrors = false) {
+  if (!signal) return target(input, { detailedErrors });
+  signal.throwIfAborted();
+  let onAbort: (() => void) | undefined;
+  try {
+    return await Promise.race([target(input, { detailedErrors }), new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+    })]);
+  } finally { if (onAbort) signal.removeEventListener("abort", onAbort); }
 }
 export async function relayOrigin(value: string): Promise<string> {
   const { url } = await target(value);
@@ -72,15 +87,25 @@ export async function relayCall<T = unknown>(
   body?: unknown,
   credential?: string,
   options: { timeoutMs?: number; maxBytes?: number; signal?: AbortSignal;
+    /** Preserve DNS failures for readers that report transport causes. */
+    detailedErrors?: boolean;
+    onResponseStatus?: (status: number) => void;
     /** Trusted caller rechecks its body after DNS, immediately before emission. */
     prepareBody?: () => unknown;
+    binary?: { bytes: Buffer; headers: Record<string, string> };
+    /** Trusted request authority is rechecked after DNS, before every send. */
+    beforeSend?: () => void | Promise<void>;
   } = {},
 ): Promise<{ status: number; body: T | null }> {
-  const { url, address } = await target(apiBase);
+  const { url, address } = await targetWithSignal(apiBase, options.signal, options.detailedErrors);
+  options.signal?.throwIfAborted();
+  await options.beforeSend?.();
+  options.signal?.throwIfAborted();
   if (!url.pathname.endsWith("/v1") || !route.startsWith("/"))
     throw new ExternalRelayError("invalid_address");
   const outgoing = options.prepareBody ? options.prepareBody() : body;
-  const encoded = outgoing === undefined ? null : Buffer.from(JSON.stringify(outgoing));
+  options.signal?.throwIfAborted();
+  const encoded = options.binary?.bytes ?? (outgoing === undefined ? null : Buffer.from(JSON.stringify(outgoing)));
   const transport = url.protocol === "https:" ? https : http;
   return await new Promise((resolve, reject) => {
     const request = transport.request(
@@ -103,22 +128,27 @@ export async function relayCall<T = unknown>(
                 "Content-Length": String(encoded.length),
               }
             : {}),
+          ...options.binary?.headers,
           ...(credential ? { Authorization: `Bearer ${credential}` } : {}),
         },
       },
       (response) => {
+        options.onResponseStatus?.(response.statusCode ?? 0);
         response.on("error", reject);
         const chunks: Buffer[] = [];
         let size = 0;
         response.on("data", (chunk: Buffer) => {
           size += chunk.length;
           if (size > (options.maxBytes ?? 1_048_576)) {
-            response.destroy(new ExternalRelayError("too_large"));
+            response.destroy(new ExternalRelayError("too_large", options.detailedErrors ? response.statusCode : 0));
             return;
           }
           chunks.push(chunk);
         });
-        response.on("end", () => {
+        response.on("end", async () => {
+          // A binary refusal can arrive before the body has drained. Close
+          // that owned upload before a retry starts another transfer.
+          if (options.binary) request.destroy();
           if (!response.complete) {
             reject(new ExternalRelayError("unreachable"));
             return;
@@ -159,7 +189,7 @@ export async function relayCall<T = unknown>(
             );
             return;
           }
-          try { recordPublishedRelayReference(apiBase, route, method, outgoing, status, parsed); }
+          try { if (!options.binary) await waitForStateLock("relay.publication-reference", () => recordPublishedRelayReference(apiBase, route, method, outgoing, status, parsed), { waitMs: 5000 }); }
           catch { reject(new ExternalRelayError("publication_context_unavailable")); return; }
           resolve({ status, body: parsed as T });
         });
@@ -169,7 +199,13 @@ export async function relayCall<T = unknown>(
     request.setTimeout(options.timeoutMs ?? 5_000, () =>
       request.destroy(new ExternalRelayError("unreachable")),
     );
-    request.end(encoded ?? undefined);
+    if (options.binary && encoded) {
+      const bytes = encoded;
+      const source = Readable.from((function* () { for (let offset = 0; offset < bytes.length; offset += 65536) yield bytes.subarray(offset, offset + 65536); })());
+      request.once("close", () => source.destroy());
+      source.on("error", error => request.destroy(error));
+      source.pipe(request);
+    } else request.end(encoded ?? undefined);
   });
 }
 /**
@@ -275,4 +311,12 @@ export async function fetchRelayTargets(
   if (result.status !== 200 || !parsed.success)
     throw new ExternalRelayError("malformed", result.status);
   return parsed.data.targets;
+}
+
+/** Raw lease upload, sharing the JSON transport's DNS pin, redirect refusal,
+ * response cap and error parser. It never records a publish-route receipt. */
+export function relayPutBytes<T = unknown>(apiBase: string, route: string, bytes: Buffer, headers: Record<string, string>, credential?: string,
+  options: { signal?: AbortSignal; maxBytes?: number; timeoutMs?: number; prepareBody?: () => unknown } = {}) {
+  return relayCall<T>(apiBase, route, "PUT", undefined, credential, { ...options,
+    binary: { bytes, headers: { ...headers, "Content-Length": String(bytes.length) } } });
 }

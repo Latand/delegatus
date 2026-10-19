@@ -709,7 +709,7 @@ export function writeAttentionEscalation(
 /** Production ports, loaded on first use so this module stays free of the
     engine's import graph until a dismissal is actually written. */
 async function productionDismissalPorts(): Promise<DismissalPorts> {
-  const [{ agentRegistry }, { loadTasks }, { getPipeline, setPipelineDismissal }, { loadPipelinesForList }, { resolveBridgeAsks }] = await Promise.all([
+  const [{ agentRegistry }, { loadTasksByIds }, { getPipeline, setPipelineDismissal }, { loadPipelinesForList }, { resolveBridgeAsks }] = await Promise.all([
     import("@/lib/agent/registry"),
     import("@/lib/tasks/store"),
     import("@/lib/pipelines/engine"),
@@ -727,7 +727,7 @@ async function productionDismissalPorts(): Promise<DismissalPorts> {
          path names it. */
       return ref.path ? { conversationId: null, path: ref.path } : null;
     },
-    task: (taskId) => loadTasks().find((task) => task.id === taskId) ?? null,
+    task: (taskId) => loadTasksByIds(new Set([taskId]))[0] ?? null,
     pipelines: () => loadPipelinesForList(),
     pipeline: (pipelineId) => getPipeline(pipelineId) ?? null,
     setPipelineDismissal: (pipelineId, dismiss, by, drawnMovedAt, note) => setPipelineDismissal(pipelineId, dismiss, by, undefined, drawnMovedAt, note),

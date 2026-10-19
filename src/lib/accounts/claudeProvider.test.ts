@@ -73,9 +73,9 @@ test("provider account token is private and scoped through manager and productio
   expect(mcpConfigPath).toBeTruthy();
   expect(fs.readFileSync(mcpConfigPath!, "utf8")).not.toContain(token);
 
-  const launch = claudeStructuredHostOptions({ spec: fresh, account: context }, { env: context.env, host: {} });
-  const resumeLaunch = claudeStructuredHostOptions({ spec: { ...fresh, launchProfile: { ...fresh.launchProfile, model: "haiku" } }, account: context }, { env: context.env, host: {} });
-  const oauthLaunch = claudeStructuredHostOptions({ spec: fresh, account: other }, { env: other.env, host: {} });
+  const launch = await claudeStructuredHostOptions({ spec: fresh, account: context }, { env: context.env, host: {} });
+  const resumeLaunch = await claudeStructuredHostOptions({ spec: { ...fresh, launchProfile: { ...fresh.launchProfile, model: "haiku" } }, account: context }, { env: context.env, host: {} });
+  const oauthLaunch = await claudeStructuredHostOptions({ spec: fresh, account: other }, { env: other.env, host: {} });
   expect(launch).toMatchObject({ providerAccount: true, model: "model-large", claudeConfigDir: added.home });
   expect(launch.mcpServers).toContain("viewer");
   expect(resumeLaunch).toMatchObject({ providerAccount: true, model: "model-small" });

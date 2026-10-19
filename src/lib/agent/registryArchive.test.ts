@@ -214,14 +214,6 @@ test("fleet liveness census skips archived dead entries and completed dead-host 
   try {
     expect(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM registry_cold WHERE collection='entries' AND row_key LIKE 'codex:%'").get()!.count).toBe(200);
     expect(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM registry_cold WHERE collection='receipts' AND row_key LIKE 'completed-dead-host-%'").get()!.count).toBe(200);
-    const plan = db.query<{ detail: string }, [string,string]>(`EXPLAIN QUERY PLAN SELECT r.row_key FROM registry_rows r INDEXED BY registry_liveness_receipt_session
-      JOIN registry_liveness_entries e ON e.row_key IN (?,?)
-      WHERE r.collection='receipts'
-        AND (json_extract(r.value_json,'$.key.engine')||':'||json_extract(r.value_json,'$.key.sessionId'))=e.row_key
-        AND (json_extract(r.value_json,'$.verifiedHost.agent') IS NOT NULL OR json_extract(r.value_json,'$.pane.panePid') IS NOT NULL)
-        AND NOT EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection='receipts' AND c.row_key=r.row_key)`)
-      .all(`codex:${id(0)}`,`codex:${id(1)}`).map(row => row.detail).join(" ");
-    expect(plan).toContain("registry_liveness_receipt_session");
   } finally { db.close(); }
   const snapshot = store.readOnlySnapshot().file;
   metrics.reads = metrics.loads = 0;
@@ -235,6 +227,98 @@ test("fleet liveness census skips archived dead entries and completed dead-host 
   expect(metrics.loads).toBe(0);
   expect(metrics.reads).toBeLessThanOrEqual(8);
 });
+
+test("liveness receipt session probes seek selected keys with the old membership and order", () => {
+  const { open, initial, filename } = fixture();
+  const template = initial.receipts["archive-launch-0"]!;
+  const pane = { panePid: { pid: 42, startIdentity: "fixture" } } as NonNullable<typeof template.pane>;
+  const add = (launchId: string, session: number, hosted = true) => {
+    initial.receipts[launchId] = { ...structuredClone(template), launchId,
+      key: { engine: "codex", sessionId: id(session) }, state: "completed", verifiedHost: null,
+      pane: hosted ? pane : null };
+  };
+  initial.entries[`codex:${id(2)}`] = { ...structuredClone(initial.entries[`codex:${id(1)}`]!),
+    key: { engine: "codex", sessionId: id(2) } };
+  // Deliberately reverse insertion order and give one session several receipts.
+  add("session-two", 2);
+  add("session-one-first", 1);
+  add("session-one-second", 1);
+  add("without-host", 1, false);
+  add("dead-session", 0);
+  add("missing-entry", 99);
+  const store = open();
+  archiveAll(store);
+  const snapshot = store.readOnlySnapshot().file;
+  const querySpy = spyOn(Database.prototype, "query");
+  let sql: string;
+  try {
+    const rows = registryLivenessRows(snapshot);
+    expect(rows.receipts.map(row => row.launchId).filter(key => key.startsWith("session-")))
+      .toEqual(["session-one-first", "session-one-second", "session-two"]);
+    sql = querySpy.mock.calls.find(([query]) => query.includes("INDEXED BY registry_liveness_receipt_session"))![0];
+  } finally { querySpy.mockRestore(); }
+  const db = new Database(filename);
+  try {
+    // Keep these rows hot so entry membership and host presence each decide
+    // their exclusion independently of the cold-row filter.
+    db.run("DELETE FROM registry_cold WHERE collection='receipts' AND row_key IN ('missing-entry','dead-session','without-host')");
+    // Add a cold mapping to a hosted receipt, which the probe must exclude.
+    db.run("INSERT INTO registry_cold(collection,row_key,archive_id) SELECT 'receipts','session-one-second',archive_id FROM registry_cold WHERE collection='receipts' AND row_key='archive-launch-0'");
+    const old = (binds: string) => `SELECT r.row_key FROM registry_rows r INDEXED BY registry_liveness_receipt_session
+      JOIN registry_liveness_entries e ON e.row_key IN (${binds})
+      WHERE r.collection='receipts'
+        AND (json_extract(r.value_json,'$.key.engine')||':'||json_extract(r.value_json,'$.key.sessionId'))=e.row_key
+        AND (json_extract(r.value_json,'$.verifiedHost.agent') IS NOT NULL OR json_extract(r.value_json,'$.pane.panePid') IS NOT NULL)
+        AND NOT EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection='receipts' AND c.row_key=r.row_key)`;
+    for (const [values, expected] of [
+      [[`codex:${id(1)}`], ["session-one-first"]],
+      [[`codex:${id(2)}`, `codex:${id(1)}`], ["session-one-first", "session-two"]],
+      [[`codex:${id(1)}`, `codex:${id(1)}`], ["session-one-first"]],
+      [[`codex:${id(99)}`], []],
+      [[`codex:${id(0)}`], []],
+      [[`codex:${id(99)}`, `codex:${id(2)}`], ["session-two"]],
+    ] as [string[], string[]][]) {
+      const binds = values.map(() => "?").join(",");
+      const query = sql.replace(/IN \(\?(?:,\?)*\)/, `IN (${binds})`);
+      const actual = db.query<{ row_key: string }, string[]>(query).all(...values);
+      expect(actual).toEqual(db.query<{ row_key: string }, string[]>(old(binds)).all(...values));
+      expect(actual.map(row => row.row_key)).toEqual(expected);
+      const plan = db.query<{ detail: string }, string[]>(`EXPLAIN QUERY PLAN ${query}`).all(...values).map(row => row.detail);
+      expect(plan.some(detail => /SEARCH r USING INDEX registry_liveness_receipt_session \(.*<expr>=\?/.test(detail))).toBe(true);
+      expect(plan.some(detail => /SCAN (?:r|e|c)\b/.test(detail))).toBe(false);
+      expect(plan.some(detail => /SEARCH c .*collection=\? AND row_key=\?/.test(detail))).toBe(true);
+    }
+  } finally { db.close(); }
+});
+
+for (const transition of ["settled", "deleted", "rebound"] as const) {
+  test(`a held liveness snapshot keeps its receipt after a peer ${transition} it`, () => {
+    const { open, conversationId } = fixture();
+    const reader = open();
+    reader.mutate(file => {
+      const receipt = file.receipts["archive-launch-0"]!;
+      receipt.state = "starting";
+      receipt.createdAt = "2026-10-17T00:00:00.000Z";
+      receipt.verifiedHost = null;
+    });
+    const held = reader.readOnlySnapshot().file;
+    expect(registryLivenessRows(held).receipts.map(row => row.launchId)).toContain("archive-launch-0");
+
+    const writer = open();
+    writer.mutate(file => {
+      if (transition === "settled") file.receipts["archive-launch-0"]!.state = "completed";
+      else if (transition === "deleted") delete file.receipts["archive-launch-0"];
+      else file.receipts["archive-launch-0"]!.conversationId = conversationId(1);
+    });
+
+    const heldReceipt = registryLivenessRows(held).receipts.find(row => row.launchId === "archive-launch-0");
+    expect(heldReceipt?.conversationId).toBe(conversationId(0));
+    const fresh = reader.readOnlySnapshot().file;
+    const current = registryLivenessRows(fresh).receipts.find(row => row.launchId === "archive-launch-0");
+    if (transition === "settled" || transition === "deleted") expect(current).toBeUndefined();
+    else expect(current?.conversationId).toBe(conversationId(1));
+  });
+}
 
 for (const archived of [false,true]) {
   for (const external of [false,true]) {

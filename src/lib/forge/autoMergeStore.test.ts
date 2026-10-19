@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,7 +17,7 @@ process.env.LLV_STATE_DIR = sandbox;
 
 const { MERGE_POLL_MS, MERGE_REASONS, productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes } = await import("./autoMerge");
 const { patchPipeline } = await import("@/lib/pipelines/engine");
-const { loadPipelines, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
+const { loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
 const { mergeOnReviewSetting, resetProjectSettingsForTests, setMergeOnReview } = await import("@/lib/projects/settings");
 const { laneNeed } = await import("@/components/attention/needReason");
 const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
@@ -27,6 +27,9 @@ const { createTask } = await import("@/lib/tasks/commands");
 const { loadTasks, mutateTasks } = await import("@/lib/tasks/store");
 const { stampAttentionRoutes } = await import("@/lib/attention/routing");
 const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
+const { FlowPipelineController } = await import("@/lib/pipelines/controller");
+const { controllerPipelineKeys, withControllerPipelineScope } = await import("@/lib/pipelines/controllerScope");
+const { registerPipelineTick, requestPipelineTick } = await import("@/lib/pipelines/controllerSignal");
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -104,6 +107,229 @@ function completedLane(id: string): Pipeline {
     closedAt: iso(T0 - 1_000),
   } as unknown as Pipeline;
 }
+
+describe("global merge admission", () => {
+  const settingsFile = path.join(sandbox, "project-settings.json");
+  let previousSettings: Buffer | null;
+  beforeEach(() => { previousSettings = fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile) : null; });
+  afterEach(() => {
+    if (previousSettings === null) fs.rmSync(settingsFile, { force: true });
+    else fs.writeFileSync(settingsFile, previousSettings);
+    resetProjectSettingsForTests();
+  });
+
+  function spentReviewLane(id: string): Pipeline {
+    const lane = completedLane(id);
+    lane.stages[1]!.onFail = { to: "fix", maxRounds: 2 };
+    lane.stages.push({ ...lane.stages[0]!, id: "fix", next: null });
+    Object.assign(lane.runs[1]!.attempts[0]!, { state: "failed", budgetSpent: true });
+    lane.runs.push({ stageId: "fix", attempts: [{ ...lane.runs[0]!.attempts[0]!,
+      activatedBy: { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true },
+    }] });
+    return lane;
+  }
+
+  for (const trigger of ["signal", "direct"] as const) test(`a ${trigger} from an in-flight lane runs the global controller outside its scope and admits all five completed peers`, async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const lanes = [1, 2, 3, 4, 5].map(n => spentReviewLane(`eligible-${n}`));
+    savePipelines(lanes);
+    const ports = productionAutoMergePorts({
+      now: () => T0, loadPipelines, pullRequestOf: () => ({ repository: REPO, number: 7 }), cachedState: () => null,
+      run: async () => { throw new Error("offline fixture"); }, log: () => undefined,
+    });
+    let sweep = Promise.resolve();
+    const controller = new FlowPipelineController({
+      now: () => 0, tickPipelines: async () => ({ changed: false }), tickFlows: async () => ({ changed: false }),
+      sweepAutoMerge: () => { sweep = sweepAutoMerge(ports); },
+    }, { maxPasses: 1 });
+    let resolve!: () => void, reject!: (error: unknown) => void;
+    const finished = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+    const tick = async () => { await controller.tick(); await sweep; };
+    const unregister = registerPipelineTick(async () => { try { await tick(); resolve(); } catch (error) { reject(error); } });
+    try {
+      await withControllerPipelineScope(["signalling-lane"], async () => {
+        if (trigger === "signal") { requestPipelineTick(); await finished; }
+        else await tick();
+        // Clearing the global job must leave its caller's authority intact.
+        expect(controllerPipelineKeys()).toEqual(["signalling-lane"]);
+        expect(loadPipelines().toSorted((a, b) => a.id.localeCompare(b.id)).map(lane => [lane.id, lane.merge?.reviewedHead]))
+          .toEqual(lanes.map(lane => [lane.id, HEAD]));
+      });
+    } finally { for (let i = 0; i < 20; i++) await Promise.resolve(); unregister(); }
+  });
+
+  test("a missed admission is logged and the next sweep retries the persisted completed lane", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    savePipelines([spentReviewLane("missed-admission")]);
+    const logs: string[] = [];
+    const ports = productionAutoMergePorts({
+      now: () => T0, loadPipelines, pullRequestOf: () => ({ repository: REPO, number: 7 }), cachedState: () => null,
+      run: async () => { throw new Error("offline fixture"); }, log: message => { logs.push(message); },
+    });
+    const mutate = ports.mutate;
+    ports.mutate = async () => false;
+    await sweepAutoMerge(ports);
+    expect(loadPipelines()[0]!.merge).toBeUndefined();
+    expect(logs.some(message => message.includes("missed-admission") && message.includes("not admitted"))).toBe(true);
+    ports.mutate = mutate;
+    await sweepAutoMerge(ports);
+    expect(loadPipelines()[0]!.merge?.reviewedHead).toBe(HEAD);
+    const childRoot = fs.mkdtempSync(path.join(sandbox, "fresh-reader-"));
+    for (const directory of ["home", "config", "tmp"]) fs.mkdirSync(path.join(childRoot, directory));
+    const reader = Bun.spawn([process.execPath, "-e", 'const { loadPipelines } = await import("./src/lib/pipelines/store.ts"); console.log(JSON.stringify(loadPipelines().map(lane => [lane.id, lane.merge?.reviewedHead])));'], {
+      cwd: process.cwd(), env: { ...process.env, HOME: path.join(childRoot, "home"), XDG_CONFIG_HOME: path.join(childRoot, "config"),
+        TMPDIR: path.join(childRoot, "tmp"), LLV_STATE_DIR: sandbox, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [output, error, code] = await Promise.all([new Response(reader.stdout).text(), new Response(reader.stderr).text(), reader.exited]);
+    expect({ code, error }).toEqual({ code: 0, error: "" });
+    expect(JSON.parse(output)).toEqual([["missed-admission", HEAD]]);
+  });
+
+  test("retry-merge creates a missing record for a completed eligible lane and preserves it on a duplicate retry", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const lane = spentReviewLane("retry-missing");
+    lane.workLinks = [{ kind: "pr", repository: REPO, number: 7, addedAt: iso(T0), addedBy: "operator" }];
+    savePipelines([lane]);
+    const unregister = registerPipelineTick(async () => {});
+    try {
+      const result = await patchPipeline(lane.id, { action: "retry-merge" }, { now: () => iso(T0) } as never);
+      expect(result.error).toBeUndefined();
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "queued", prNumber: 7, repository: REPO, chain: [HEAD], attempts: 0 });
+      const recorded = loadPipelines()[0]!.merge;
+      expect((await patchPipeline(lane.id, { action: "retry-merge" }, { now: () => iso(T0 + 1) } as never)).status).toBe(409);
+      expect(loadPipelines()[0]!.merge).toEqual(recorded);
+    } finally { for (let i = 0; i < 20; i++) await Promise.resolve(); unregister(); }
+  });
+
+  test("retry-merge with no record and no implementation PR persists the visible missing-PR block", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const lane = spentReviewLane("retry-missing-pr");
+    lane.delivery = missingPrLane(lane.id).delivery;
+    savePipelines([lane]);
+    const result = await patchPipeline(lane.id, { action: "retry-merge" }, { now: () => iso(T0) } as never);
+    expect(result.error).toBeUndefined();
+    expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", prNumber: null, reason: MERGE_REASONS.noPr });
+  });
+
+  test("a missing record on a running lane cannot be retried", async () => {
+    const lane = completedLane("retry-running");
+    lane.state = "running";
+    lane.closedAt = null;
+    lane.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
+    savePipelines([lane]);
+    const result = await patchPipeline(lane.id, { action: "retry-merge" }, { now: () => iso(T0) } as never);
+    expect(result.status).toBe(409);
+    expect(result.error).toContain("only a completed pipeline");
+    expect(loadPipelines()[0]!.merge).toBeUndefined();
+  });
+
+  test("admission uses the passed head and linked PR read after awaiting the write lock", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const lane = spentReviewLane("rebound-admission");
+    lane.workLinks = [{ kind: "pr", repository: REPO, number: 7, addedAt: iso(T0), addedBy: "operator" }];
+    savePipelines([lane]);
+    const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, cachedState: () => null,
+      run: async () => { throw new Error("offline fixture"); }, log: () => undefined });
+    const mutate = ports.mutate;
+    let changed = false;
+    ports.mutate = async (id, change) => {
+      await Promise.resolve();
+      if (!changed) {
+        changed = true;
+        const current = loadPipelines()[0]!;
+        current.lastPassedCommit = "b".repeat(40);
+        current.workLinks![0]!.number = 8;
+        savePipelines([current]);
+      }
+      return mutate(id, change);
+    };
+    await sweepAutoMerge(ports);
+    expect(loadPipelines()[0]!.merge).toMatchObject({ reviewedHead: "b".repeat(40), prNumber: 8, chain: ["b".repeat(40)] });
+  });
+
+  const refusalCases = ["setting off", "completed before setting", "review failed", "no passed commit", "hidden", "comparison", "no repository", "no PR required"] as const;
+  type RefusalCase = typeof refusalCases[number];
+  function refuseAdmission(lane: Pipeline, reason: RefusalCase) {
+    if (reason === "setting off") setMergeOnReview(PROJECT, false, "operator", iso(T0));
+    if (reason === "completed before setting") lane.closedAt = iso(T0 - 8_000_000);
+    if (reason === "review failed") lane.runs.at(-1)!.attempts[0]!.state = "failed";
+    if (reason === "no passed commit") lane.lastPassedCommit = "";
+    if (reason === "hidden") lane.hiddenAt = iso(T0);
+    if (reason === "comparison") lane.delivery = { target: { repository: PROJECT, remote: `https://github.com/${REPO}.git`, branch: `refs/heads/${lane.branch}` },
+      disposition: "comparison", publish: "disabled", ownerId: "other-lane", epoch: 1, active: false, journal: [] };
+    if (reason === "no PR required") lane.baseRef = HEAD;
+  }
+
+  for (const reason of refusalCases) test(`missing-record admission refuses and logs ${reason} through sweep and retry`, async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const lane = spentReviewLane("refused-admission");
+    if (!["comparison", "no repository", "no PR required"].includes(reason)) lane.workLinks = [{ kind: "pr", repository: REPO, number: 7, addedAt: iso(T0), addedBy: "operator" }];
+    refuseAdmission(lane, reason);
+    savePipelines([lane]);
+    const logs: string[] = [];
+    const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, cachedState: () => null,
+      run: async () => { throw new Error("refused admission must not read GitHub"); }, log: message => { logs.push(message); } });
+    await sweepAutoMerge(ports);
+    expect(loadPipelines()[0]!.merge).toBeUndefined();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("refused-admission: not admitted:");
+    const result = await patchPipeline(lane.id, { action: "retry-merge" }, { now: () => iso(T0) } as never);
+    expect(result.status).toBe(409);
+    expect(logs[0]).toEndWith(result.error!);
+    expect(loadPipelines()[0]!.merge).toBeUndefined();
+  });
+
+  for (const reason of refusalCases) test(`admission rechecks ${reason} after awaiting its write lock`, async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const lane = spentReviewLane("changed-admission");
+    lane.workLinks = [{ kind: "pr", repository: REPO, number: 7, addedAt: iso(T0), addedBy: "operator" }];
+    savePipelines([lane]);
+    const logs: string[] = [];
+    const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, cachedState: () => null,
+      run: async () => { throw new Error("refused admission must not read GitHub"); }, log: message => { logs.push(message); } });
+    const mutate = ports.mutate;
+    ports.mutate = async (id, change) => {
+      await Promise.resolve();
+      const current = loadPipelines()[0]!;
+      if (["comparison", "no repository", "no PR required"].includes(reason)) delete current.workLinks;
+      refuseAdmission(current, reason);
+      savePipelines([current]);
+      return mutate(id, change);
+    };
+    await sweepAutoMerge(ports);
+    expect(loadPipelines()[0]!.merge).toBeUndefined();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("changed-admission: not admitted:");
+  });
+
+  test("an admission exception is logged without preventing eligible peers from getting records", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    savePipelines([spentReviewLane("exception-lane"), spentReviewLane("peer-lane")]);
+    const logs: Array<[string, unknown]> = [];
+    const failure = new Error("admission unavailable");
+    const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, pullRequestOf: () => ({ repository: REPO, number: 7 }), cachedState: () => null,
+      run: async () => { throw new Error("offline fixture"); }, log: (message, error) => { logs.push([message, error]); } });
+    const mutate = ports.mutate;
+    ports.mutate = (id, change) => id === "exception-lane" ? Promise.reject(failure) : mutate(id, change);
+    await sweepAutoMerge(ports);
+    expect(loadPipelines().find(lane => lane.id === "exception-lane")!.merge).toBeUndefined();
+    expect(loadPipelines().find(lane => lane.id === "peer-lane")!.merge?.reviewedHead).toBe(HEAD);
+    expect(logs).toContainEqual(["[auto merge] exception-lane: admission failed; will retry next sweep", failure]);
+    ports.mutate = mutate;
+    await sweepAutoMerge(ports);
+    expect(loadPipelines().find(lane => lane.id === "exception-lane")!.merge?.reviewedHead).toBe(HEAD);
+  });
+
+});
 
 test("the setting defaults off, and turning it on keeps its first changedAt on a repeat", () => {
   resetProjectSettingsForTests();
@@ -420,7 +646,20 @@ for (const kind of ["rebased", "nearby-rebase", "offset-rebase", "local-output",
       savePipelines([refreshing]);
     }
   }
+  let sharedMerge: Pipeline["merge"];
+  let sharedChain: string[];
+  if (kind === "local-output" && (initial === "blocked" || initial === "refreshing")) {
+    const shared = loadPipelinesForList().find((candidate) => candidate.id === lane.id)!;
+    sharedMerge = shared.merge;
+    sharedChain = [...shared.merge!.chain];
+    Object.freeze(shared.merge!.chain);
+    Object.freeze(shared.merge);
+    ports.loadPipelines = loadPipelinesForList;
+  }
   await sweepAutoMerge(ports);
+  if (kind === "local-output" && (initial === "blocked" || initial === "refreshing")) {
+    expect(sharedMerge!.chain).toEqual(sharedChain!);
+  }
   await sweepTaskFinishes(ports);
   const landed = loadPipelines()[0]!;
   expect(landed.merge).toMatchObject({ state: "merged", by: "outside", chain: [graph.head], mergedHead: graph.head, mergeCommit: landing, reason: null, blockedAt: null });

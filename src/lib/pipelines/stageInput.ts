@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { withoutStoredLessons } from "@/lib/memory/roleStore";
+import { storedLessonRevision, RoleMemoryRefusal } from "@/lib/memory/roleStore";
+import { withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import { prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "./controllerArtifacts";
@@ -27,54 +28,60 @@ export async function composeStageInput(
   exec: ExecPort = realExec,
   reserveBytes = 0,
 ): Promise<string> {
+  const revision = storedLessonRevision();
+  const assertPrivacy = () => {
+    if (storedLessonRevision() !== revision) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "Role-memory privacy changed; nothing was sent");
+  };
   const limit = MAX_STRUCTURED_TEXT_BYTES - reserveBytes;
   const workerLimit = effectiveWorkerLimit(pipeline.project).value;
   const testGuidance = resolveStageTestGuidance();
-  const inline = withoutStoredLessons(renderStagePrompt(pipeline, stage, role, previousOutput, workerLimit, testGuidance));
+  const inline = await withoutStoredLessonsAsync(renderStagePrompt(pipeline, stage, role, previousOutput, workerLimit, testGuidance));
   if (Buffer.byteLength(inline, "utf8") <= limit) {
     await protectExistingControllerArtifacts(worktreeDir, exec);
+    assertPrivacy();
     return inline;
   }
 
   const directory = await prepareControllerArtifactDirectory(worktreeDir, exec);
 
   const artifacts: Array<{ label: string; file: string; text: string }> = [];
-  const artifact = (label: string, text: string) => {
+  const artifact = async (label: string, text: string) => {
     const digest = crypto.createHash("sha256").update(text).digest("hex");
     const file = path.join(directory, `${label.replaceAll(" ", "-")}-${digest}.md`);
-    const part = { label, file, text: withoutStoredLessons(text) };
+    const part = { label, file, text: await withoutStoredLessonsAsync(text) };
     artifacts.push(part);
     return part;
   };
-  const previousFile = previousOutput ? artifact("previous output", previousOutput) : null;
-  const render = (headBytes: number, specFile: ReturnType<typeof artifact> | null) => withoutStoredLessons(renderStagePrompt(
+  const previousFile = previousOutput ? await artifact("previous output", previousOutput) : null;
+  const render = (headBytes: number, specFile: Awaited<ReturnType<typeof artifact>> | null) => withoutStoredLessonsAsync(renderStagePrompt(
     specFile ? { ...pipeline, spec: artifactReference(specFile, headBytes) } : pipeline, stage, role,
     previousFile ? artifactReference(previousFile, headBytes) : previousOutput,
     workerLimit,
     testGuidance,
   ));
-  const fit = (specFile: ReturnType<typeof artifact> | null) => {
+  const fit = async (specFile: Awaited<ReturnType<typeof artifact>> | null) => {
     let prompt = "";
     /* Count every substituted reference, labels and UTF-8 bytes too. Tight
        prompts retain a smaller head, while both full inputs stay on disk. */
     for (const headBytes of [512, 128, 32, 4]) {
-      prompt = render(headBytes, specFile);
+      prompt = await render(headBytes, specFile);
       if (Buffer.byteLength(prompt) <= limit) break;
     }
     return prompt;
   };
-  let prompt = fit(null);
+  let prompt = await fit(null);
   const specFile = Buffer.byteLength(prompt) > limit && pipeline.spec?.trim()
-    ? artifact("specification", pipeline.spec) : null;
-  if (specFile) prompt = fit(specFile);
+    ? await artifact("specification", pipeline.spec) : null;
+  if (specFile) prompt = await fit(specFile);
   if (Buffer.byteLength(prompt, "utf8") > limit) {
     // Preserve the original renderer's bytes, including every substitution,
     // role instruction, access fence and completion contract. The reference
     // replaces the whole message; unused part references need no files.
     artifacts.length = 0;
-    const fullPrompt = artifact("stage prompt", inline);
+    const fullPrompt = await artifact("stage prompt", inline);
     prompt = `Read the complete stage prompt below and carry out all of its instructions.\n${artifactReference(fullPrompt, 512)}`;
   }
+  assertPrivacy();
   for (const { file, text } of artifacts) {
     const directory = path.dirname(file);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });

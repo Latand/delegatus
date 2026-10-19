@@ -15,6 +15,25 @@ import { stopTerminalStructuredOrphan } from "./registry";
 
 const kernelTest = process.env.LLV_SIGNAL_SANDBOX_KERNEL_TEST === "1" ? test : test.skip;
 
+kernelTest("a symbolic temporary root retains the physical namespace mounts and owned cleanup", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-linked-root-"));
+  const physical = path.join(root, "physical"), link = path.join(root, "temporary");
+  fs.mkdirSync(physical); fs.symlinkSync(physical, link);
+  const sentinel = path.join(physical, "sentinel"); fs.writeFileSync(sentinel, "retained");
+  let child: ChildProcess | undefined;
+  try {
+    child = await spawnSignalSandbox("/bin/sleep", ["30"], { env: { ...fixtureEnv(root), TMPDIR: link }, detached: true, stdio: "ignore" });
+    const domain = signalDomain(child)!;
+    expect(domain.directory).toStartWith(fs.realpathSync(physical) + path.sep);
+    expect(processIdentityStatus(domain.native)).toBe("alive");
+    await close(child);
+    for (const identity of [domain.monitor, domain.bubblewrap, domain.init, domain.native]) expect(processIdentityStatus(identity)).toBe("dead");
+    expect(fs.existsSync(domain.directory)).toBeFalse();
+    expect(fs.readFileSync(sentinel, "utf8")).toBe("retained");
+    expect(fs.lstatSync(link).isSymbolicLink()).toBeTrue();
+  } finally { if (child) await close(child); fs.rmSync(root, { recursive: true, force: true }); }
+}, 20_000);
+
 kernelTest("the real orphan stop retains namespace custody until every supervisor and detached child is gone", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-orphan-stop-"));
   const marker = path.join(root, "descendant");

@@ -2,13 +2,11 @@ import type { KanbanCard, KanbanColumn, KanbanModel } from "./kanbanModel";
 import { KANBAN_STATUSES } from "./kanbanModel";
 
 /**
- * A catalog update rebuilds the whole model, and every card in it is a fresh
- * object even when nothing on it changed. A card is memoized on its props, so
- * a fresh object re-renders it, and one changed file row re-rendered all of the
- * board's cards (#2218). The rebuild stays: it is what keeps the model
- * correct. What this adds is identity. A card whose content equals its
- * namesake of the previous model is that namesake, so a card re-renders only
- * when something it shows changed.
+ * A rebuilt card may hold exactly what its predecessor held. Keeping that
+ * predecessor prevents a catalog update from re-rendering every card (#2218).
+ * The incremental projector also retains these reconciled objects in its
+ * cache, so later equal passes reach the reference-equality shortcut. A card
+ * re-renders when something it shows changed.
  */
 
 /** A level this deep in a card is not data the data layer produced. */
@@ -74,7 +72,7 @@ function reuseList(cards: readonly KanbanCard[], previousById: ReadonlyMap<strin
  * model is unchanged. Nothing in either model is mutated.
  */
 export function reuseKanbanModel(previous: KanbanModel | null, next: KanbanModel): KanbanModel {
-  if (!previous) return next;
+  if (!previous || previous === next) return next;
   const previousById = new Map<string, KanbanCard>();
   const remember = (cards: readonly KanbanCard[]) => { for (const card of cards) previousById.set(card.id, card); };
   for (const status of KANBAN_STATUSES) remember(previous.columns[status].cards);

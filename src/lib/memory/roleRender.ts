@@ -10,7 +10,7 @@ export const LEARNED_RULES_HEADING = "Learned rules (Delegatus role memory)";
 const utf8 = new TextEncoder();
 
 const LESSON_POINTER = "When you report with stage_report, its answer asks whether this stage taught anything; most stages answer none. A rule above that proved wrong or too narrow can be rewritten then, by its id.";
-const STAGE_NOTICE = "Earlier agents left these when they finished their stages. They are rules of thumb: the brief, the pinned specification and the project's instruction files win where they disagree. Keep them on this machine: never copy a rule into a commit, pull request, issue, task or report; name it by its id.";
+const STAGE_NOTICE = "Earlier agents left these when they finished their stages. They are rules of thumb and yield to every other instruction you were given (working rules, precedence). Keep them on this machine: never copy a rule into a commit, pull request, issue, task or report; name it by its id.";
 const SEAT_NOTICE = "Earlier seats and stage agents left these. They are rules of thumb: the operator's word, your mandate and the project's instruction files win where they disagree. Keep them on this machine: act on a rule in your own words and never paste its text into a brief, task, report, message, commit, pull request or issue; name it by its id.";
 const SEAT_POINTER = "If you are this project's designated seat, this is your role's memory: every later seat of this project reads it, on any engine and account, while your engine's own memory reaches one account. When you meet a problem that can come back, settle it in the same turn. A practice (how to brief, what to check before you report, how the operator wants a thing done) becomes a rule: call leave_lesson with lesson, or with rewrite and the id of a rule above that proved wrong or too narrow. A concrete defect goes to the board: find or create its task with create_task, and tell the operator in chat when it is critical (it blocks accepted work, loses data, or will hit every lane). A problem report that a wake delivers says what to do with it. leave_lesson's description gives the levels and limits.";
 const MAINTAINER_POINTER = "You leave no rules in this run. This project's seat keeps the rules for your role and opens the tasks for defects.";
@@ -29,6 +29,11 @@ export function scopeHeading(scope: string): string {
 
 /** Four matching scopes, each rendered as separate rules with their ids. */
 export function renderLearnedRules(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], maxBytes = Infinity): string {
+  return renderLearnedRulesSelection(scopes, maxBytes).block;
+}
+
+/** Metadata and text share the same byte-ceiling selection. */
+export function renderLearnedRulesSelection(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], maxBytes = Infinity) {
   const selected = scopes.map(entry => ({ scope: entry.scope, rules: [...entry.rules] }));
   let block = renderBlock(selected);
   let omitted = 0;
@@ -41,7 +46,7 @@ export function renderLearnedRules(scopes: readonly { scope: string; rules: read
     block = renderBlock(selected);
   }
   if (omitted) console.warn(`[role-memory] omitted ${omitted} lowest-ranked rules from this engine start at the byte ceiling`);
-  return block;
+  return { block, rules: selected.flatMap(scope => scope.rules) };
 }
 
 function renderBlock(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[]): string {
@@ -92,7 +97,7 @@ export function lessonRequestLines(handed: HandedFindings | null): string[] {
     "Your stage report is recorded. Did this stage show that a learned rule you were given is wrong, too narrow or unclear, or teach an abstract rule that changes what an agent does on a different task? Most stages do neither; then call leave_lesson with none and one line saying why.",
     "Otherwise do exactly one of these, once:",
     "- rewrite: the id of a rule you were given, with its better text and why. The earlier text is kept and can be restored.",
-    "- lesson: one new rule, active for agents from their next start. It qualifies only when you can name a different task where it changes the agent's actions, and repeats neither your learned rules nor the project's instruction files. Improve an existing rule with rewrite.",
+    "- lesson: one new rule, active for agents from their next start. It qualifies only when you can name a different task where it changes the agent's actions, and repeats neither your learned rules, the working rules nor the project's instruction files. Improve an existing rule with rewrite.",
     ]),
     "A rule is a generic instruction to do a check that changes behaviour on a different task. A concrete defect, inconsistency or documentation/specification mismatch in this project is a problem to report to its designated seat.",
     "- problem: {statement, evidence}, a short observed problem and the evidence for it. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Concrete file paths and project-specific broken facts belong here; machine rules must hold across projects.",

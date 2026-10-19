@@ -1,0 +1,785 @@
+{
+  "generatedAt": "2026-10-16T09:11:25.812808+00:00",
+  "baseCommit": "e7507d58863450a1f45b1a93d2b27a059ca13c6e",
+  "runtime": "Bun 1.4.0",
+  "source": {
+    "sha256": "288b6a12d2360179b3db8b48dea2fdbdd0e2ea3c9499b374ae6102aefa7b3886",
+    "files": [
+      {
+        "path": "src/components/decisions/DecisionCard.tsx",
+        "sha256": "227a9627066cec6ea742b86a9b4e80ad35d8c47ea5e460eb34f0eb9a729e2c63"
+      },
+      {
+        "path": "src/components/decisions/DecisionColumn.dom.test.tsx",
+        "sha256": "c9c210bfc34a1dc1e55631099dee22345340ccf576b9368a1d5d3cdb1ff50476"
+      },
+      {
+        "path": "src/components/decisions/DecisionColumn.tsx",
+        "sha256": "4039e957fbd93419536b5a6e883964b42041b1e05d1ee133817ea5ffdb4ee300"
+      },
+      {
+        "path": "src/components/decisions/useOperatorDecisions.ts",
+        "sha256": "132a7fe52b3bfe776e1709111a99d0d7c5bbf4ccb371cabfe5602fba723146e9"
+      },
+      {
+        "path": "src/components/kanban/issue1695Evidence.fixture.tsx",
+        "sha256": "a4781c52090af4b73ba515f17c6d9f449933f472269a4193c6204ef63fe48983"
+      },
+      {
+        "path": "src/components/kanban/kanbanBoard.browser.test.tsx",
+        "sha256": "c990485c6a0434804d23e29f8293ee4f2006e8d34edf79bbacb04f4fafd435dc"
+      },
+      {
+        "path": "src/lib/externalRelay/prototypeAnswer.ts",
+        "sha256": "e66f540e24a808d5c7ea86ca0d302670b14543881b0271f8f213d76c73eda12f"
+      },
+      {
+        "path": "src/lib/externalRelay/runner.ts",
+        "sha256": "6d6e152d5be5cc9b918811f71d1c555911a425616fd29e84826114aa8bedb1fa"
+      },
+      {
+        "path": "src/lib/monitor/seatTick.test.ts",
+        "sha256": "c2e742e462831239284811124f63f35f55dbd04681ac7201b6ee394f7e3ba474"
+      },
+      {
+        "path": "src/lib/monitor/seatTick.ts",
+        "sha256": "38347d4fec02644e0999331b6f2f1b547f8bfd19eda360d0a2c75ca91bbfd9cc"
+      },
+      {
+        "path": "src/lib/prototypeReview/answerDelivery.integration.test.ts",
+        "sha256": "3984aa02efaf22e59a6d3cfc88c94049336df3528f2f9dadbfec5ca86e8465fa"
+      },
+      {
+        "path": "src/lib/prototypeReview/answerDelivery.test.ts",
+        "sha256": "985897743c6cb6de4e3ddb8255bc61c265ec264da8374d01adce3abb14d1290c"
+      },
+      {
+        "path": "src/lib/prototypeReview/answerDeliveryChild.fixture.ts",
+        "sha256": "125f67894117d4f136c896d2745b3b361519ad0cada14688b73cfc7168bb2cc8"
+      },
+      {
+        "path": "src/lib/prototypeReview/decision.ts",
+        "sha256": "a9183a42155fc041d239b6cf2aa61eeffbadf912f374c27e691d73c5baf88f1b"
+      },
+      {
+        "path": "src/lib/prototypeReview/deliveryPolicy.ts",
+        "sha256": "e31a9d067b55cd2cc711f16eff377b8c5d0cbf8218e02f0d20c09b8a2effe36c"
+      },
+      {
+        "path": "src/lib/prototypeReview/deliveryWorker.ts",
+        "sha256": "8b6e666934ff43636b5e0b195b329f9c56e21d0e76b28d6e569b83089dccf493"
+      },
+      {
+        "path": "src/lib/prototypeReview/http.test.ts",
+        "sha256": "04b48d3203e5a36e57baaccd0b45ed57d4e0bffb42be54cfc8927623e546b393"
+      },
+      {
+        "path": "src/lib/prototypeReview/model.ts",
+        "sha256": "1728cc328834bb75c9871bd7e112f1666dfb7947e2c533a61375169328694964"
+      },
+      {
+        "path": "src/lib/prototypeReview/read.ts",
+        "sha256": "98f2cee109f1d90a93ae45de329ab5274799f05c41f9c431614aca5e1af9369c"
+      },
+      {
+        "path": "src/lib/prototypeReview/seatRounds.ts",
+        "sha256": "39bace70beb09a8b9cb156db4be662536e8c40eaa9a9f9cda41b61675f6fd261"
+      },
+      {
+        "path": "src/lib/prototypeReview/telegramPostSignals.ts",
+        "sha256": "2ef9f56883f176b52a244a4ee8ef8ec643138ab83278b17f2bda06a9a6194a91"
+      },
+      {
+        "path": "src/lib/prototypeReview/types.ts",
+        "sha256": "14072b5852eb0e3f0b973a69fbdd3329296566d5137e5e92667013f5bf50f331"
+      },
+      {
+        "path": "src/lib/runtime/http.ts",
+        "sha256": "1260fac267ca51a443a7c4141f7d30c382de17f4802fa0dc63e9611b53705b58"
+      },
+      {
+        "path": "src/lib/tasks/commands.ts",
+        "sha256": "ed37027d500a84d673828ce31ac2155ae36e5ef9aebb02692f037f9ea2e42a8c"
+      },
+      {
+        "path": "src/lib/tasks/completion.ts",
+        "sha256": "567598484a31a57a9b13e317a14deaeb2468f6cc0794de461b0ebed3980b9afe"
+      },
+      {
+        "path": "src/lib/tasks/decisionCompletion.ts",
+        "sha256": "dad67125a23f22329e508b379219e56ee29cbd32ab314835cba4c4d40fd80323"
+      },
+      {
+        "path": "src/lib/tasks/ghostSettlement.ts",
+        "sha256": "fa1c601ae3e4231f92d2dbd6c18e57c38fdbf0cbe87d0413f3dfe1ff3f95d508"
+      },
+      {
+        "path": "src/lib/team/actor.ts",
+        "sha256": "8dc048a357b0bacf64bc084d44d06fc8b53a6c1764cd63f04e5518cccba4a7d7"
+      },
+      {
+        "path": "src/lib/team/index.ts",
+        "sha256": "c60d273f3e5151b56fcfb2b1ab6ba90bf629d08fa2227ef77775594a5c0d367b"
+      },
+      {
+        "path": "src/lib/viewerLoopMonitor.ts",
+        "sha256": "16d844b7692a89541ce8a613d9937b4c48c6cf9c699bf35361b3805578387935"
+      }
+    ]
+  },
+  "isolation": [
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "TMPDIR",
+    "LLV_STATE_DIR",
+    "closed Viewer control URL",
+    "unavailable default runtime socket"
+  ],
+  "regressionsRedOnMain": 34,
+  "safetyControlsGreenOnBoth": 3,
+  "cases": [
+    {
+      "file": "src/components/decisions/DecisionColumn.dom.test.tsx",
+      "case": "C: an undelivered answer is shown as a record and retry uses the saved answer",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 33.82
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 1.42
+      }
+    },
+    {
+      "file": "src/lib/monitor/seatTick.test.ts",
+      "case": "B: the next bounded wake carries a saved operator answer ahead of open lanes",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 3.64
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 0.12
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.integration.test.ts",
+      "case": "B: explicit Telegram answer reaches the real destination once in team mode",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 41.32
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 74.46
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.integration.test.ts",
+      "case": "B: recommended Telegram answer reaches the real destination once in team mode",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 57.84
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 121.84
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.integration.test.ts",
+      "case": "B: revoking the saved member during retry preparation refuses dispatch",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 206.86
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 137.07
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: a new process cannot reset an exhausted decision's retry budget",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 422.64
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 724.11
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: an authenticated member can recover a legacy saved reply without changing its answer or key",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 24.78
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 28.7
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: an unknown-outcome terminal journal remains uncertain: delivery was accepted and the delivery journal holds no record of it; whether it reached the recipient is unknown, so sending it again may deliver it twice",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 3.9
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 5.06
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: an unknown-outcome terminal journal remains uncertain: delivery was accepted and the runtime host could not give it a terminal answer; it is fenced from being delivered later, but whether it already reached the recipient is unknown",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 4.02
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 4.53
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: an unknown-outcome terminal journal remains uncertain: delivery was started and never settled; whether it reached the recipient is unknown, so sending it again may deliver it twice",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 4.17
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 4.97
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: automatic attempts and pending age are durably bounded, and the next seat wake carries the answer",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 388.98
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 328.45
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: pending execution on a replaced seat is never blindly resent",
+      "main": {
+        "state": "pass",
+        "elapsedMs": 22.12
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 27.29
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: proven non-execution follows the current seat after recovery, retaining the saved bytes",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 25.86
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 52.51
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: queued replies reach attention after their durable age limit",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 39.44
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 34.79
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: replacement seat admission waits for old execution to be accepted",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 27.89
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 26.49
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: replacement seat admission waits for old execution to be fenced",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 26.98
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 49.41
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: replacement seat admission waits for old execution to be unavailable",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 34.6
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 32.97
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: retention keeps every undelivered answer and retires only confirmed delivery",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 1428.51
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 1735.52
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: seat delivery storage waits off the loop for a peer SQLite lock",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 49.13
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 569.97
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: task delivery storage waits off the loop for a peer SQLite lock",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 42.35
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 557.45
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: terminal reservation is authoritative over a queued journal, disposition=safe",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 4.72
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 6.18
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: terminal reservation is authoritative over a queued journal, disposition=unknown",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 4.1
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 4.55
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: the real conversation ingress keeps its member gate for legacy and revoked actors",
+      "main": {
+        "state": "pass",
+        "elapsedMs": 8.62
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 11.82
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: uncertain execution on a replaced seat is never blindly resent",
+      "main": {
+        "state": "pass",
+        "elapsedMs": 28.3
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 33.21
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: verified Telegram member is persisted for explicit replies",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 46.3
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 47.78
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "B: verified Telegram member is persisted for recommended replies",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 85.53
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 74.22
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "C: badge notices and the panel include the same undelivered task and seat rounds",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 32.24
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 43.53
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "C: historical undelivered rounds survive beside a newer unanswered form in the summary and panel",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 6.69
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 16.92
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "D: automatic ghost settlement keeps a task with a saved undelivered answer",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 4.44
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 4.31
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "D: direct store completion refuses a failed decided round atomically",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 17.91
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 16.28
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "D: direct store completion refuses a no-orchestrator decided round atomically",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 19.7
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 17.02
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "D: direct store completion refuses a pending decided round atomically",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 15.55
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 16.81
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "D: direct store completion refuses a uncertain decided round atomically",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 16.59
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 16.33
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "D: failed decided rounds block both task commands and direct store completion",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 4.34
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 15.83
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "D: no-orchestrator decided rounds block both task commands and direct store completion",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 4.12
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 19.77
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "D: pending decided rounds block both task commands and direct store completion",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 8.0
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 18.96
+      }
+    },
+    {
+      "file": "src/lib/prototypeReview/answerDelivery.test.ts",
+      "case": "D: uncertain decided rounds block both task commands and direct store completion",
+      "main": {
+        "state": "fail",
+        "elapsedMs": 3.99
+      },
+      "candidate": {
+        "state": "pass",
+        "elapsedMs": 15.83
+      }
+    }
+  ],
+  "checks": [
+    {
+      "name": "monitor-controls",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/monitor/seatTick.test.ts"
+      ],
+      "exitCode": 0,
+      "elapsedMs": 477,
+      "log": "final-monitor-controls.log"
+    },
+    {
+      "name": "task-controls",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/tasks/tasks.test.ts",
+        "src/lib/tasks/doneVisibility.test.ts",
+        "src/lib/tasks/ghostSettlement.test.ts"
+      ],
+      "exitCode": 0,
+      "elapsedMs": 1138,
+      "log": "final-task-controls.log"
+    },
+    {
+      "name": "model-controls",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/prototypeReview/model.test.ts",
+        "src/lib/prototypeReview/http.test.ts",
+        "src/lib/prototypeReview/telegramPost.test.ts"
+      ],
+      "exitCode": 0,
+      "elapsedMs": 5525,
+      "log": "final-model-controls.log"
+    },
+    {
+      "name": "regressions-ui",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/prototypeReview/answerDelivery.test.ts",
+        "src/lib/prototypeReview/answerDelivery.integration.test.ts",
+        "src/components/decisions/DecisionColumn.dom.test.tsx"
+      ],
+      "exitCode": 0,
+      "elapsedMs": 6045,
+      "log": "final-regressions-ui.log"
+    },
+    {
+      "name": "delivery-controls",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/prototypeReview/deliveryWorker.test.ts",
+        "src/lib/prototypeReview/seatDecisions.test.ts",
+        "src/lib/prototypeReview/decision.integration.test.ts"
+      ],
+      "exitCode": 0,
+      "elapsedMs": 5495,
+      "log": "final-delivery-controls.log"
+    },
+    {
+      "name": "team-controls",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/team/team.test.ts",
+        "src/lib/team/contract.test.ts",
+        "src/lib/prototypeReview/decision.test.ts"
+      ],
+      "exitCode": 0,
+      "elapsedMs": 1920,
+      "log": "final-team-controls.log"
+    },
+    {
+      "name": "types",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "exitCode": 0,
+      "elapsedMs": 94091,
+      "log": "final-types.log"
+    },
+    {
+      "name": "lint",
+      "command": [
+        "bun",
+        "scripts/eslint-changes.ts",
+        "--base",
+        "origin/main",
+        "src/lib/prototypeReview/decision.ts",
+        "src/lib/prototypeReview/deliveryPolicy.ts",
+        "src/lib/prototypeReview/deliveryWorker.ts",
+        "src/lib/prototypeReview/model.ts",
+        "src/lib/prototypeReview/read.ts",
+        "src/lib/prototypeReview/seatRounds.ts",
+        "src/lib/prototypeReview/telegramPostSignals.ts",
+        "src/lib/prototypeReview/types.ts",
+        "src/lib/externalRelay/prototypeAnswer.ts",
+        "src/lib/externalRelay/runner.ts",
+        "src/lib/team/actor.ts",
+        "src/lib/team/index.ts",
+        "src/lib/runtime/http.ts",
+        "src/lib/tasks/decisionCompletion.ts",
+        "src/lib/tasks/completion.ts",
+        "src/lib/tasks/commands.ts",
+        "src/lib/tasks/ghostSettlement.ts",
+        "src/lib/monitor/seatTick.ts",
+        "src/lib/viewerLoopMonitor.ts",
+        "src/components/decisions/DecisionCard.tsx",
+        "src/components/decisions/DecisionColumn.tsx",
+        "src/components/decisions/useOperatorDecisions.ts",
+        "src/components/kanban/issue1695Evidence.fixture.tsx",
+        "src/components/kanban/kanbanBoard.browser.test.tsx",
+        "src/components/decisions/DecisionColumn.dom.test.tsx",
+        "src/lib/prototypeReview/answerDelivery.test.ts",
+        "src/lib/prototypeReview/answerDeliveryChild.fixture.ts",
+        "src/lib/prototypeReview/answerDelivery.integration.test.ts",
+        "src/lib/prototypeReview/http.test.ts",
+        "src/lib/monitor/seatTick.test.ts"
+      ],
+      "exitCode": 0,
+      "elapsedMs": 11236,
+      "log": "final-lint.log"
+    },
+    {
+      "name": "privacy",
+      "command": [
+        "bun",
+        "scripts/privacy-publication-gate.ts",
+        "--require-known-values",
+        "--paths",
+        "src/lib/prototypeReview/decision.ts",
+        "src/lib/prototypeReview/deliveryPolicy.ts",
+        "src/lib/prototypeReview/deliveryWorker.ts",
+        "src/lib/prototypeReview/model.ts",
+        "src/lib/prototypeReview/read.ts",
+        "src/lib/prototypeReview/seatRounds.ts",
+        "src/lib/prototypeReview/telegramPostSignals.ts",
+        "src/lib/prototypeReview/types.ts",
+        "src/lib/externalRelay/prototypeAnswer.ts",
+        "src/lib/externalRelay/runner.ts",
+        "src/lib/team/actor.ts",
+        "src/lib/team/index.ts",
+        "src/lib/runtime/http.ts",
+        "src/lib/tasks/decisionCompletion.ts",
+        "src/lib/tasks/completion.ts",
+        "src/lib/tasks/commands.ts",
+        "src/lib/tasks/ghostSettlement.ts",
+        "src/lib/monitor/seatTick.ts",
+        "src/lib/viewerLoopMonitor.ts",
+        "src/components/decisions/DecisionCard.tsx",
+        "src/components/decisions/DecisionColumn.tsx",
+        "src/components/decisions/useOperatorDecisions.ts",
+        "src/components/kanban/issue1695Evidence.fixture.tsx",
+        "src/components/kanban/kanbanBoard.browser.test.tsx",
+        "src/components/decisions/DecisionColumn.dom.test.tsx",
+        "src/lib/prototypeReview/answerDelivery.test.ts",
+        "src/lib/prototypeReview/answerDeliveryChild.fixture.ts",
+        "src/lib/prototypeReview/answerDelivery.integration.test.ts",
+        "src/lib/prototypeReview/http.test.ts",
+        "src/lib/monitor/seatTick.test.ts",
+        "docs/verification/decision-answer-delivery.md",
+        "evidence/answer-delivery/panel.json"
+      ],
+      "exitCode": 0,
+      "elapsedMs": 54232,
+      "log": "final-privacy.log"
+    }
+  ],
+  "additionalPassingFiles": [
+    "src/lib/monitor/seatTick.test.ts",
+    "src/lib/tasks/tasks.test.ts",
+    "src/lib/tasks/doneVisibility.test.ts",
+    "src/lib/tasks/ghostSettlement.test.ts",
+    "src/lib/prototypeReview/model.test.ts",
+    "src/lib/prototypeReview/http.test.ts",
+    "src/lib/prototypeReview/telegramPost.test.ts"
+  ],
+  "renderCheck": {
+    "command": [
+      "bun",
+      "test",
+      "src/components/kanban/kanbanBoard.browser.test.tsx",
+      "--test-name-pattern",
+      "C: the Decisions badge"
+    ],
+    "log": "render-merged.log",
+    "exitCode": 0,
+    "assertions": 196
+  },
+  "testFixtureCorrection": "The media-retention HTTP fixture now confirms delivery before marking its task done. Its original setup passes on main and is refused by the new completion fence."
+}

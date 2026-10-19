@@ -3,8 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { createPerformanceSpans } from "@/lib/performanceSpans";
+import { createViewerLoopMonitor } from "@/lib/viewerLoopMonitor";
+
 import { RuntimeJournal, RUNTIME_PENDING_EFFECT_STALE_MS } from "./journal";
-import { registryConversationRetentionStates } from "./journalRetention";
+import { maintainRuntimeJournal, registryConversationRetentionStates } from "./journalRetention";
 
 function sessionStatus(
   journal: RuntimeJournal,
@@ -350,4 +353,49 @@ test("stale orphaned spawn and kill effects settle while live work remains pendi
 
   journal.close();
   fs.rmSync(directory, { recursive: true, force: true });
+});
+
+
+test("maintenance reports its operation and synchronous retention work, including refusal", () => {
+  let at = 0;
+  const spans = createPerformanceSpans(() => at);
+  const lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, spans);
+  const empty = { conversations: {}, entries: {}, receipts: {}, conversationAliases: {} };
+  const snapshot = { ...empty, conversations: new Proxy({}, { ownKeys() { at += 1100; return []; } }) };
+  const journal = { settleStalePendingEffects(lookup: Pick<ReadonlyMap<string, "current" | "dead" | "superseded">, "get">) {
+    lookup.get("conversation_target");
+    lookup.get("conversation_target");
+    return { scanned: 2, settled: 0 };
+  } };
+  let reads = 0;
+  expect(maintainRuntimeJournal(journal, () => ({ conversationRetentionSnapshot() { reads++; return snapshot; } }), monitor, spans))
+    .toEqual({ scanned: 2, settled: 0 });
+  expect(reads).toBe(1);
+  monitor.tick();
+  const report = JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length));
+  expect(report.operations.map((op: { name: string }) => op.name)).toContain("runtime-journal.maintenance");
+  expect(report.attribution.slices).toContainEqual(expect.objectContaining({ site: "runtime-journal.retention-map", kind: "sync", totalMs: 1100 }));
+  expect(() => maintainRuntimeJournal(journal, () => { throw new Error("registry unavailable"); }, monitor, spans)).toThrow("registry unavailable");
+});
+
+test("empty maintenance never opens the registry; lookup refusal preserves the absence horizon", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-journal-retention-"));
+  let now = 1_000;
+  let journal = new RuntimeJournal(path.join(directory, "events.sqlite"), { structuredHosts: true, now: () => now });
+  const unavailable = () => { throw new Error("registry unavailable"); };
+  try {
+    expect(maintainRuntimeJournal(journal, unavailable)).toEqual({ scanned: 0, settled: 0 });
+    journal.executeOperation({ kind: "spawn", conversationId: "conversation_target", operationId: "operation_target",
+      idempotencyKey: "target", engine: "codex", cwd: "/repo", prompt: "start" });
+    expect(maintainRuntimeJournal(journal, unavailable)).toEqual({ scanned: 1, settled: 0 });
+    now += RUNTIME_PENDING_EFFECT_STALE_MS + 1;
+    const absent = () => ({ conversationRetentionSnapshot() { return { conversations: {}, entries: {}, receipts: {}, conversationAliases: {} }; } });
+    expect(maintainRuntimeJournal(journal, absent)).toEqual({ scanned: 1, settled: 0 });
+    journal.close();
+    journal = new RuntimeJournal(path.join(directory, "events.sqlite"), { structuredHosts: true, now: () => now });
+    now += RUNTIME_PENDING_EFFECT_STALE_MS + 1;
+    expect(maintainRuntimeJournal(journal, absent)).toEqual({ scanned: 1, settled: 1 });
+    expect(maintainRuntimeJournal(journal, unavailable)).toEqual({ scanned: 0, settled: 0 });
+  } finally { journal.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });

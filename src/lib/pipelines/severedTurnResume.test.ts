@@ -64,7 +64,7 @@ function harness() {
       : { engine: "claude", model: "fable", effort: "high", access: "read-only", promptScaffold: "Architect guidance" },
     spawnAgent: async (_input, onReserved) => {
       spawns += 1;
-      onReserved({ launchId: `launch-${spawns}`, conversationId: STAGE_CONVERSATION, accountId: "default" });
+      await onReserved({ launchId: `launch-${spawns}`, conversationId: STAGE_CONVERSATION, accountId: "default" });
       return {
         launchId: `launch-${spawns}`,
         conversationId: STAGE_CONVERSATION,

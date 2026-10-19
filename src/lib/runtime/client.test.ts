@@ -10,6 +10,7 @@ import {
   RuntimeHostUnavailableError,
   runtimeHostRequestHealth,
   UnixRuntimeHostClient,
+  withRuntimeRecoveryReads,
 } from "./client";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-client-"));
@@ -68,6 +69,23 @@ test("snapshot forwards its abort signal and settles exactly once on external ab
   const settled = await outcome;
   expect(settled).toBeInstanceOf(RuntimeHostUnavailableError);
   expect((settled as Error).message).toBe("runtime host request cancelled");
+});
+
+test.each(["operation", "session", "effects"] as const)("retiring recovery closes an issued %s read without waiting for its deadline", async kind => {
+  let received!: () => void;
+  const entered = new Promise<void>(resolve => { received = resolve; });
+  let closed!: () => void;
+  const disconnected = new Promise<void>(resolve => { closed = resolve; });
+  const socketPath = serve((_frame, socket) => { socket.once("end", closed); received(); });
+  const controller = new AbortController();
+  const client = withRuntimeRecoveryReads(new UnixRuntimeHostClient(socketPath, 60_000), controller.signal);
+  const read = kind === "operation" ? client.operationStatus("original-operation")
+    : kind === "session" ? client.readSession!({ conversationId: "conversation_recovery" }) : client.effectBatch(["runtime.spawn"]);
+  const outcome = read.then(() => null, error => error);
+  await entered;
+  controller.abort();
+  expect((await outcome).message).toBe("runtime host request cancelled");
+  await disconnected;
 });
 
 test("startup snapshot deadline is caller-local and never sent to the runtime host", async () => {
@@ -207,20 +225,18 @@ test("request latency health reports the nearest-rank p95 of the recent window",
   });
   const client = new UnixRuntimeHostClient(socketPath, 5_000, 5_000, 5_000);
   const durations = Array.from({ length: 20 }, (_, index) => index + 1);
-  let reading = 0;
-  const clock = spyOn(performance, "now").mockImplementation(() => {
-    const requestIndex = Math.floor(reading / 2);
-    const elapsed = reading % 2 === 0 ? 0 : durations[requestIndex] ?? durations.at(-1)!;
-    reading += 1;
-    return requestIndex * 100 + elapsed;
-  });
+  let now = 0;
+  let index = 0;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  const receive = servers.at(-1)!;
+  receive.on("connection", socket => socket.prependListener("data", () => { now += durations[index++]!; }));
   try {
     for (let index = 0; index < durations.length; index += 1) await client.events(0);
   } finally {
     clock.mockRestore();
   }
 
-  expect(reading).toBe(40);
+  expect(index).toBe(20);
   expect(runtimeHostRequestHealth()).toEqual({
     samples: 20,
     p95Ms: 19,

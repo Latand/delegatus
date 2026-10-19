@@ -1,4 +1,4 @@
-import { conversationIdentity, currentConversationFile } from "@/lib/accounts/identity";
+import { conversationIdentity, conversationFileIndex } from "@/lib/accounts/identity";
 import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -57,6 +57,20 @@ export function projectTaskWorkflows(
 }
 
 const NO_FINDINGS: readonly string[] = [];
+const membershipKeys = new WeakMap<TaskWorkflowProjection, object>();
+
+/** Equality of relationship membership, including resolved generation targets.
+ * A size/mtime refresh updates the public references and workers while keeping
+ * this key. Consumers that only use reference paths can retain their work;
+ * consumers of file payloads must still read the fresh projection. */
+export function taskWorkflowMembershipKey(projection: TaskWorkflowProjection): object {
+  return membershipKeys.get(projection) ?? projection;
+}
+
+export function sameFileExceptSizeAndMtime(before: FileEntry, file: FileEntry): boolean {
+  return before === file || (Object.keys(before).length === Object.keys(file).length && (Object.keys(file) as (keyof FileEntry)[])
+    .every(key => Object.hasOwn(before, key) && (key === "mtime" || key === "size" || before[key] === file[key])));
+}
 function sameItems<T>(a: readonly T[], b: readonly T[]): boolean {
   return a.length === b.length && a.every((item, i) => item === b[i]);
 }
@@ -65,38 +79,94 @@ function sameItems<T>(a: readonly T[], b: readonly T[]): boolean {
  * rows from the files client's structural sharing. Relationship indexes keep
  * a task's lookup proportional to its own work, including cross-project work. */
 export function createTaskWorkflowProjector(): typeof projectTaskWorkflows {
-  let previousRefs = new Map<string, WorkReference>();
+  type ReferenceInput = Partial<WorkReference> & Pick<WorkReference, "key" | "kind" | "role" | "state">;
+  type CachedReference = { input: ReferenceInput; value: WorkReference };
+  let previousRefs = new Map<string, CachedReference>();
   let previousTasks = new Map<string, TaskWorkflow>();
-  return (tasks, pipelines, flows, files, project) => {
-    const nextRefs = new Map<string, WorkReference>();
-    const byPath = new Map(files.map(file => [file.path, file]));
-    const byConversation = new Map<string, FileEntry>();
-    const generations = new Map<string, FileEntry[]>();
-    for (const file of files) if (file.conversationId) {
-      const list = generations.get(file.conversationId) ?? [];
-      list.push(file); generations.set(file.conversationId, list);
-    }
-    for (const file of files) {
-      if (file.conversationId && !byConversation.has(file.conversationId)) {
-        const current = currentConversationFile(generations.get(file.conversationId)!, file.conversationId);
-        if (current) byConversation.set(file.conversationId, current);
+  type FileOwners = { references: string[]; tasks: Set<number>; unlinkedReferences: number[]; unlinkedWorkers: number[] };
+  let fileOwners = new Map<FileEntry, FileOwners>();
+  let previous: { tasks: readonly BoardTask[]; pipelines: readonly Pipeline[]; flows: readonly Flow[]; files: readonly FileEntry[]; project?: string; uniquePaths: boolean; value: TaskWorkflowProjection } | undefined;
+  return function projectWorkflows(tasks, pipelines, flows, files, project) {
+    // Generation selection and membership ignore size/mtime. An otherwise
+    // identical ordered catalog keeps each resolved target; replace its payload
+    // wherever that exact file occurred in the preceding projection.
+    if (previous?.uniquePaths && previous.tasks === tasks && previous.pipelines === pipelines && previous.flows === flows && previous.project === project
+      && previous.files.length === files.length && files.every((file, i) => sameFileExceptSizeAndMtime(previous!.files[i], file))) {
+      const changed = new Map<FileEntry, FileEntry>();
+      for (let i = 0; i < files.length; i++) if (files[i] !== previous.files[i]) changed.set(previous.files[i], files[i]);
+      if (!changed.size) return previous.value;
+      const taskIndexes = new Set<number>(), referenceIndexes = new Set<number>(), workerIndexes = new Set<number>();
+      for (const [oldFile, file] of changed) {
+        const owners = fileOwners.get(oldFile);
+        if (!owners) continue;
+        for (const key of owners.references) {
+          const cached = previousRefs.get(key)!;
+          previousRefs.set(key, { input: cached.input, value: { ...cached.value, file } });
+        }
+        for (const index of owners.tasks) taskIndexes.add(index);
+        for (const index of owners.unlinkedReferences) referenceIndexes.add(index);
+        for (const index of owners.unlinkedWorkers) workerIndexes.add(index);
+        fileOwners.delete(oldFile);
+        fileOwners.set(file, owners);
       }
+      const rows = <T,>(items: T[], update: (item: T) => T): T[] => {
+        let next: T[] | undefined;
+        for (let i = 0; i < items.length; i++) {
+          const value = update(items[i]);
+          if (value !== items[i]) { next ??= items.slice(); next[i] = value; }
+        }
+        return next ?? items;
+      };
+      const indexedRows = <T,>(items: T[], indexes: Set<number>, update: (item: T) => T): T[] => {
+        if (!indexes.size) return items;
+        const next = items.slice();
+        for (const index of indexes) next[index] = update(items[index]);
+        return next;
+      };
+      const reference = (value: WorkReference) => previousRefs.get(value.key)!.value;
+      const currentFile = (value: FileEntry) => changed.get(value) ?? value;
+      const value: TaskWorkflowProjection = {
+        ...previous.value,
+        tasks: indexedRows(previous.value.tasks, taskIndexes, row => {
+          const references = rows(row.references, reference);
+          const workers = rows(row.workers, currentFile);
+          const executions = rows(row.executions, execution => {
+            const references = rows(execution.references, reference);
+            return references === execution.references ? execution : { ...execution, references };
+          });
+          return references === row.references && workers === row.workers && executions === row.executions ? row : { ...row, references, workers, executions };
+        }),
+        unlinkedReferences: indexedRows(previous.value.unlinkedReferences, referenceIndexes, reference),
+        unlinkedWorkers: indexedRows(previous.value.unlinkedWorkers, workerIndexes, currentFile),
+      };
+      membershipKeys.set(value, taskWorkflowMembershipKey(previous.value));
+      for (const index of taskIndexes) previousTasks.set(value.tasks[index].task.id, value.tasks[index]);
+      previous = { tasks, pipelines, flows, files, project, uniquePaths: true, value };
+      return value;
     }
+    const nextRefs = new Map<string, CachedReference>();
+    const byPath = new Map(files.map(file => [file.path, file]));
+    const byConversation = conversationFileIndex(files).currentByConversation;
     const resolve = (id: string | null | undefined, path: string | null): FileEntry | null => {
       if (id) return byConversation.get(id) ?? null;
       const recorded = path ? byPath.get(path) : undefined;
       return recorded?.conversationId ? byConversation.get(recorded.conversationId) ?? null : recorded ?? null;
     };
-    const ref = (input: Partial<WorkReference> & Pick<WorkReference, "key" | "kind" | "role" | "state">): WorkReference => {
+    const ref = (input: ReferenceInput): WorkReference => {
+      const file = resolve(input.conversationId, input.path ?? null);
+      const previous = previousRefs.get(input.key);
+      const keys = Object.keys(input) as (keyof ReferenceInput)[];
+      if (previous && previous.value.file === file && Object.keys(previous.input).length === keys.length
+        && keys.every(key => Object.hasOwn(previous.input, key) && previous.input[key] === input[key])) {
+        nextRefs.set(input.key, previous);
+        return previous.value;
+      }
       const next: WorkReference = {
-        file: resolve(input.conversationId, input.path ?? null), conversationId: null, launchId: null, path: null,
+        file, conversationId: null, launchId: null, path: null,
         reviewedSha: null, verdict: null, findings: NO_FINDINGS, findingsCount: null, error: null, ...input,
       };
-      const previous = previousRefs.get(next.key);
-      const keys = Object.keys(next) as (keyof WorkReference)[];
-      const value = previous && Object.keys(previous).length === keys.length && keys.every(key => previous[key] === next[key]) ? previous : next;
-      nextRefs.set(next.key, value);
-      return value;
+      nextRefs.set(next.key, { input, value: next });
+      return next;
     };
     const attemptRef = (pipeline: Pipeline, stageId: string, a: PipelineStageAttempt) => ref({
       key: `pipeline:${pipeline.id}:${stageId}:${a.n}`, kind: "attempt", pipelineId: pipeline.id, stageId,
@@ -205,11 +275,33 @@ export function createTaskWorkflowProjector(): typeof projectTaskWorkflows {
     }
     previousRefs = nextRefs;
     previousTasks = new Map(projected.map(row => [row.task.id, row]));
-    return {
+    const value = {
       tasks: projected, unlinkedReferences,
       unlinkedPipelines,
       unlinkedFlows,
       unlinkedWorkers: [...new Map(unlinkedReferences.flatMap(r => r.file ? [[conversationIdentity(r.file), r.file] as const] : [])).values()],
     };
+    // The reverse index retires with each full projection. Metadata polls only
+    // visit owners of changed files, including references shared by many tasks.
+    fileOwners = new Map();
+    const owners = (file: FileEntry): FileOwners => {
+      let found = fileOwners.get(file);
+      if (!found) {
+        found = { references: [], tasks: new Set(), unlinkedReferences: [], unlinkedWorkers: [] };
+        fileOwners.set(file, found);
+      }
+      return found;
+    };
+    for (const [key, cached] of nextRefs) if (cached.value.file) owners(cached.value.file).references.push(key);
+    value.tasks.forEach((row, index) => {
+      for (const file of row.workers) owners(file).tasks.add(index);
+      for (const reference of row.references) if (reference.file) owners(reference.file).tasks.add(index);
+      for (const execution of row.executions) for (const reference of execution.references) if (reference.file) owners(reference.file).tasks.add(index);
+    });
+    value.unlinkedReferences.forEach((reference, index) => { if (reference.file) owners(reference.file).unlinkedReferences.push(index); });
+    value.unlinkedWorkers.forEach((file, index) => owners(file).unlinkedWorkers.push(index));
+    membershipKeys.set(value, {});
+    previous = { tasks, pipelines, flows, files, project, uniquePaths: byPath.size === files.length, value };
+    return value;
   };
 }

@@ -1,4 +1,7 @@
+import { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
+export { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
+import { installServingNextRenderMonitor } from "@/lib/nextRenderMonitor";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -18,9 +21,8 @@ import {
   publishHotStateAuthority,
   readHotStateAuthority,
   type HotStateAuthority,
-  type HotStateCheckpoint,
 } from "@/lib/state/hotStateAuthority";
-import { initializeStateCollections, markStateSqliteCutoverReady } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollectionsAsync as initializeStateCollections, markStateSqliteCutoverReady } from "@/lib/state/sqliteStateStore";
 import { openStateMutationActivation } from "@/lib/state/stateMutationBarrier";
 import { markStructuredHostStartupFailed, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
 import { StructuredRuntimeRequirementError } from "@/lib/proc/darwinIdentity";
@@ -110,6 +112,7 @@ interface CurrentReleaseControllerLoaders {
   loadLinkedBoardSync?: () => Promise<{ startLinkedBoardSync: () => void }>;
   /** Optional for the same reason. */
   loadDoneSweep?: () => Promise<{ startDoneSweep: () => void }>;
+  loadSeatChannel?: () => Promise<{ startSeatChannel: () => void }>;
   loadPrototypeDelivery?: () => Promise<{ startPrototypeDeliveryWorker: () => void }>;
   loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
 }
@@ -320,37 +323,16 @@ export async function completeViewerReleaseDemotion(
   exit(0);
 }
 
-export async function checkpointHotStateRollbackMirrorsForDemotion(): Promise<HotStateCheckpoint["revisions"]> {
-  const [flows, pipelines, workflows] = await Promise.all([
-    import("@/lib/flows/store"),
-    import("@/lib/pipelines/store"),
-    import("@/lib/workflows/store"),
-  ]);
-  const flowRevision = await flows.checkpointFlowRollbackMirrorForDemotionAsync();
-  const pipelineRevisions = await pipelines.checkpointPipelineRollbackMirrorsForDemotionAsync();
-  const workflowRevision = await workflows.checkpointWorkflowRollbackMirrorForDemotionAsync();
-  /* Stores moved by #1870 record their mirror in `state_imports`, not in the
-     checkpoint record older adapters parse. */
-  const { checkpointLegacyCollectionMirrorsForDemotion } = await import("@/lib/state/legacyCollections");
-  await checkpointLegacyCollectionMirrorsForDemotion();
-  return {
-    flows: flowRevision,
-    pipelines: pipelineRevisions.pipelines,
-    pipelinesArchive: pipelineRevisions.pipelinesArchive,
-    workflows: workflowRevision,
-  };
-}
-
 export async function initializeHotStateStoresAtStartup(
   boundary: HotStateCutoverBoundary = { authority: null, reimportLegacy: false },
-  options: { afterCollectionImport?: (collection: string) => void } = {},
+  options: { afterCollectionImport?: (collection: string) => void; signal?: AbortSignal } = {},
 ): Promise<HotStateAuthority | null> {
   const [flows, pipelines, workflows] = await Promise.all([
     import("@/lib/flows/store"),
     import("@/lib/pipelines/store"),
     import("@/lib/workflows/store"),
   ]);
-  initializeStateCollections(statePath("state.sqlite"), [
+  await initializeStateCollections(statePath("state.sqlite"), [
     flows.flowStateCollectionSeed(),
     ...pipelines.pipelineStateCollectionSeeds(),
     workflows.workflowStateCollectionSeed(),
@@ -360,8 +342,11 @@ export async function initializeHotStateStoresAtStartup(
   });
   flows.loadFlows();
   pipelines.loadPipelines();
-  pipelines.loadArchivedPipelines();
+  pipelines.loadArchivedPipelinesForList();
   workflows.loadWorkflows();
+  // Requests consume the persisted narrow projections from their first call.
+  const { readHistoryProjection } = await import("@/lib/state/historyProjection");
+  await readHistoryProjection(() => undefined, { startup: true, signal: options.signal });
   if (boundary.authority?.mode === "preparing") {
     return completeHotStatePreparation(path.dirname(statePath("state.sqlite")), boundary.authority);
   }
@@ -387,6 +372,7 @@ export async function startCurrentReleaseControllers(
     loadAttentionReconcile: () => import("@/lib/attention/reconcileController"),
     loadLinkedBoardSync: () => import("@/lib/links/schedule"),
     loadDoneSweep: () => import("@/lib/done/sweep"),
+    loadSeatChannel: () => import("@/lib/orchestrator/seatChannel"),
     loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
   },
@@ -553,6 +539,12 @@ export async function startCurrentReleaseControllers(
      their messages go to the seat from here (docs/design/prototype-review-server.md).
      The first sweep attempts every decision still owed, so a decision saved
      while the Viewer restarted or a deploy ran goes out now. */
+  try {
+    const seatChannel = await loaders.loadSeatChannel?.();
+    seatChannel?.startSeatChannel();
+  } catch (error) {
+    console.error("[seat channel] start failed", error instanceof Error ? error.name : "unknown");
+  }
   try {
     const prototypeDelivery = await loaders.loadPrototypeDelivery?.();
     prototypeDelivery?.startPrototypeDeliveryWorker();
@@ -908,6 +900,9 @@ export async function installSpawnCapabilityResolverAtStartup(): Promise<void> {
 
 export async function registerViewerRuntime(): Promise<void> {
   viewerLoopMonitor.start();
+  // Background diagnostics never hold readiness or reach the runtime host.
+  void import("./loopProfilerServing").then(({ startServingLoopProfiler }) => startServingLoopProfiler(viewerLoopMonitor)).catch(() => {});
+  await installServingNextRenderMonitor();
   discardUnsupportedApiCredentials();
 
   await installSpawnCapabilityResolverAtStartup();
@@ -963,14 +958,22 @@ export async function registerViewerRuntime(): Promise<void> {
     const boundary = await establishHotStateCutoverBoundary(isCurrent);
     activatedReleaseRevision = boundary.authority?.releaseRevision ?? null;
     assertStartupActive();
+    const { startManagedRetirementGuard } = await import("@/lib/state/managedRetirementGuard");
+    await startManagedRetirementGuard(hotStateDirectory, activatedReleaseRevision);
     const durability = await startupBarrier.run(() => checkStateDatabasesBeforeStores(hotStateDirectory));
     assertStartupActive();
     const { sweepOldLearnedRulesFiles } = await import("@/lib/memory/roleLaunch");
     try { sweepOldLearnedRulesFiles(); } catch { console.warn("[role-memory] old launch-file cleanup unavailable"); }
-    const authority = await initializeHotStateStoresAtStartup(boundary);
+    const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal });
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
+    const { agentRegistry } = await import("@/lib/agent/registry");
+    await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", () => agentRegistry().prepareReadOnlySnapshot(startupAbort.signal)));
+    assertStartupActive();
     let activatedAuthority: HotStateAuthority | null = null;
+    const { retireCuratorPlaceholdersAtStartup } = await import("@/lib/memory/curation/cleanup");
+    await startupBarrier.run(() => retireCuratorPlaceholdersAtStartup(undefined, assertStartupActive));
+    assertStartupActive();
     await completeViewerRuntimeActivation({
       initializeOperatorCapability: initializeOperatorSpawnCapabilityAtStartup,
       runWorktreeRecovery: async () => {
@@ -990,7 +993,7 @@ export async function registerViewerRuntime(): Promise<void> {
             const startup = startupBarrier.run(async () => {
               const { adoptStructuredHostsAtStartup } = await import("@/lib/runtime/startup");
               await runStructuredHostStartup(
-                () => adoptStructuredHostsAtStartup({ assertActive: assertStartupActive }),
+                () => adoptStructuredHostsAtStartup({ assertActive: assertStartupActive, signal: startupAbort.signal }),
                 console.error, { waitUntilReady: true, signal: startupAbort.signal },
               );
             });
@@ -1005,6 +1008,12 @@ export async function registerViewerRuntime(): Promise<void> {
       startControllers: startCurrentReleaseControllers,
       publishHotStateActivation: () => {
         if (authority) activatedAuthority = markHotStateActivationReady(hotStateDirectory, authority);
+        // A predecessor adapter launches by port. Once this process claims
+        // activation, pin its own revision for every separately loaded bundle.
+        if (activatedAuthority?.releaseRevision) {
+          process.env.LLV_HOT_STATE_RELEASE_REVISION = activatedAuthority.releaseRevision;
+          process.env.DELEGATUS_HOT_STATE_RELEASE_REVISION = activatedAuthority.releaseRevision;
+        }
       },
       publishViewerReleaseReady: () => {
         if (activatedAuthority) markViewerReleaseReady(hotStateDirectory, activatedAuthority);
@@ -1028,7 +1037,8 @@ export async function registerViewerRuntime(): Promise<void> {
     onFenceRequested: async (request) => {
       await quiesceStartup();
       await releaseHosts();
-      const revisions = await checkpointHotStateRollbackMirrorsForDemotion();
+      const { checkpointHotStateRollbackMirrorsInWorker } = await import("@/lib/state/durability");
+      const revisions = await viewerLoopMonitor.run("state.rollback-checkpoint", () => checkpointHotStateRollbackMirrorsInWorker(hotStateDirectory));
       acknowledgeHotStateFence(hotStateDirectory, request, revisions);
     },
     /* A cancelled deployment restores this release's authority but leaves the

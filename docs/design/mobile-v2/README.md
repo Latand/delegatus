@@ -172,7 +172,7 @@ At 390 px: `[‹ 44] [title ≥ 190] [⚠ ~56] [search 44] [⋯ 44]` with 4 px g
 
 ### 3.3 The navigation contract
 
-Screens: Board, Conversation, Pipelines, Pipeline, Accounts & limits. Sheets: Projects, Needs you, board `⋯`, Host, Search, Seat, Rotate draft (fullscreen), conversation `⋯`, Switcher, Next message, Stage configuration (from a never-run stage's row on the pipeline screen). Sheets take at most 88% of the height, keep the screen behind visible and dimmed, and are modal in the sense `useModalLayer` already implements.
+Screens: Board, Conversation, Pipelines, Pipeline, Accounts & limits. Sheets: Projects, Needs you, board `⋯`, Host, Search, Seat, Rotate draft (fullscreen), conversation `⋯`, Switcher, Next message, Stage configuration (from a never-run stage's row on the pipeline screen). Sheets take at most 88% of the height, keep the screen behind visible and dimmed, and are modal in the sense `useModalLayer` already implements. The Needs-you sheet (`expandable`) has a second detent: its handle or header pulls it up, or a flick, to the full height less the top bar and the safe area, where the body is the one scroller; a drag down folds it to the first detent and only from there closes it, and a tap on the handle switches between the two.
 
 | Gesture | What it does |
 | --- | --- |
@@ -287,7 +287,7 @@ The prototype's 29 key screens, by their `screens.js` id. Both frames and both s
 ### 4.3 Waiting for a reply (`chat-waiting`, `chat-keyboard`)
 
 - The question card is warning-soft with a 45% warning border, headed `⚠ Needs you · 9 min`, then the question in 600 weight at 15 px, then each option as a 44 px white row with a radio mark, then one muted line: "Or type your own answer below — it is sent as the reply." Picking an option **sends it**; so does tapping a suggested-reply chip; so does send with typed text. The reply then renders as the user's bubble, the state flips to working, and the card folds to one quiet 44 px line `› question · answered 14:01` that expands to the original question and options with the chosen one marked. Transport state, when it matters, is a caption under the card (finding 6).
-- Suggested replies ride as 32 px chips (44 px hit) directly above the composer box.
+- Suggested replies rode as 32 px chips (44 px hit) directly above the composer box. *2026-10-15: removed with `suggest_replies`; every ask is a decision form.*
 - **Keyboard open** (`#/chat/c2/kb`): the `.kb` block reserves 336 px, the safe-area inset goes to zero, chips stay, the box sits on the keyboard with the send control at 32 px visual / 44 px hit; the whole question card stays inside the 315 px of feed that remain. The field opens with a reply already typed, and that text is the live draft: one tap on send answers the question and lands back on the conversation. The gate measures send-bottom against 844 − 336 and field-top against the bar.
 
 ### 4.4 Next message (`chat-model`)

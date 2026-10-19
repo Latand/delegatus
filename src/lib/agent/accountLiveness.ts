@@ -1,3 +1,4 @@
+import { registryLivenessRows } from "./sqliteRegistryStore";
 import { procBackend } from "@/lib/proc";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
@@ -98,13 +99,19 @@ export interface LivenessProbe {
   now(): number;
   pidAlive(pid: number): boolean;
   processIdentity(pid: number): string | null;
+  /** Stable identity only when the production process probes are in use. */
+  cacheKey?: object;
 }
 
+const productionLivenessProbeKey = {};
+
 export function livenessProbe(options: AccountLivenessOptions = {}): LivenessProbe {
+  const production = !options.now && !options.pidAlive && !options.processIdentity;
   return {
     now: options.now ?? (() => Date.now()),
     pidAlive: options.pidAlive ?? ((pid) => procBackend.pidAlive(pid)),
     processIdentity: options.processIdentity ?? ((pid) => procBackend.processIdentity(pid)),
+    ...(production ? { cacheKey: productionLivenessProbeKey } : {}),
   };
 }
 
@@ -230,7 +237,7 @@ export function conversationIsLive(
        grace-expired uncertain delivery contributes nothing on its own. */
     if (withinGrace(delivery.createdAt, probe)) return true;
   }
-  for (const receipt of Object.values(file.receipts)) {
+  for (const receipt of registryLivenessRows(file).receipts) {
     if (!owns(receipt.conversationId)) continue;
     if (receiptIsLive(file, receipt, probe)) return true;
   }
@@ -266,7 +273,7 @@ export function accountLiveSessionKind(
     if (entryIsLive(entry, probe)) return "live_sessions";
   }
   let queued = false;
-  for (const receipt of Object.values(file.receipts)) {
+  for (const receipt of registryLivenessRows(file).receipts) {
     /* A pin that is still queued for account capacity is durable in-flight work
        with nothing to probe yet: it will actuate on the account it names, so it
        outranks liveness until its receipt settles. A pin WITHOUT a queued spawn
@@ -383,7 +390,7 @@ export function accountLiveWork(
     if (entry.key.engine !== engine || !owned(entry.accountId) || !entryIsLive(entry, probe)) continue;
     add(ownerOf(entry.artifactPath), null, entry.artifactPath);
   }
-  for (const receipt of Object.values(file.receipts)) {
+  for (const receipt of registryLivenessRows(file).receipts) {
     if (receipt.engine !== engine || !owned(receipt.accountId) || !receiptIsLive(file, receipt, probe)) continue;
     const id = canonicalId(file, receipt.conversationId);
     add(file.conversations[id] ?? null, id, receipt.artifactPath);

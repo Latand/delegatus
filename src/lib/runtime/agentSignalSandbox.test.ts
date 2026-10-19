@@ -42,7 +42,11 @@ test.each(engines.flatMap(engine => (["off", "sqlite"] as const).map(mode => [en
     expect(() => store.setStructuredHost(key, null)).toThrow("must be retired");
     expect(() => store.upsert({ ...store.readOnlySnapshot().entries[`${engine}:${key.sessionId}`]!, structuredHost: null })).toThrow("must be retired");
     const reopened = new AgentRegistry(file, () => false, undefined, storage);
-    try { expect(reopened.readOnlySnapshot().entries[`${engine}:${key.sessionId}`]!.structuredHost!.signalDomain).toEqual(signalDomain); }
+    try {
+      const retained = reopened.readOnlySnapshot().entries[`${engine}:${key.sessionId}`]!.structuredHost!.signalDomain!;
+      expect(retained).toEqual(signalDomain);
+      expect(normalizeAgentSignalDomain(retained)).toEqual(signalDomain);
+    }
     finally { reopened.close(); }
   } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });

@@ -12,7 +12,7 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { StructuredControlResult } from "@/lib/runtime/structuredControls";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { Pipeline, PipelineStage, PipelineStageAttempt, PipelineRuntimeSeat, PipelineRuntimeSwitch, EffectivePipelineRole } from "./types";
-import { withoutStoredLessons } from "@/lib/memory/roleStore";
+import { withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 
 export class RuntimeSwitchSuperseded extends Error {
   constructor() { super("runtime switch changed before dispatch or settlement"); }
@@ -39,6 +39,32 @@ export function runtimeSwitchControlAcknowledgement(result: StructuredControlRes
 const OPEN = new Set(["requested", "cutting", "switching", "continuing"]);
 const BUDGET = 10 * 60_000;
 export const openRuntimeSwitch = (attempt: PipelineStageAttempt) => attempt.runtimeSwitches?.find(item => OPEN.has(item.phase));
+export const pendingRuntimeSwitchRetry = (attempt: PipelineStageAttempt) => attempt.runtimeSwitches?.find(item => item.retry && !item.retry.completedAt);
+
+/** Legacy parks have no verdict; current mechanical parks retain the switch's reason. */
+export function recoverableRuntimeSwitch(attempt: PipelineStageAttempt) {
+  const last = attempt.runtimeSwitches?.at(-1);
+  return pendingRuntimeSwitchRetry(attempt) ?? openRuntimeSwitch(attempt)
+    ?? (attempt.state === "needs_decision" && !attempt.report
+      && (!attempt.verdict || !!attempt.error && attempt.error === last?.outcome) ? last : undefined);
+}
+
+/** Mechanical settlement does not impersonate an agent report or follow a failure edge. */
+export function parkRuntimeSwitch(pipeline: Pipeline, attempt: PipelineStageAttempt, record: PipelineRuntimeSwitch, reason: string, now: string): void {
+  reason = hardenedRedact(reason).slice(0, 2000);
+  pipeline.state = "needs_decision"; pipeline.stateDetail = reason;
+  attempt.state = "needs_decision"; attempt.error = reason; attempt.completedAt ??= now;
+  attempt.verdict ??= { status: "needs_decision", findings: [] };
+  record.outcome = reason;
+}
+
+export function requestRuntimeSwitchRetry(pipeline: Pipeline, attempt: PipelineStageAttempt, record: PipelineRuntimeSwitch, reason: string, now: string): void {
+  record.retry ??= { requestedAt: now, reason: hardenedRedact(reason).slice(0, 2000) };
+  record.phase = "failed"; record.settledAt ??= now;
+  clearOldWaits(attempt);
+  parkRuntimeSwitch(pipeline, attempt, record, record.retry.reason, now);
+  pipeline.stateDetail = `runtime switch retry accepted; cleanup pending: ${record.retry.pendingReason ?? record.retry.reason}`;
+}
 /** Receipt-free native controls already proved the selected profile current. */
 export async function runtimeSwitchReconfigureOutcome(record: PipelineRuntimeSwitch, ports: PipelinePorts) {
   return record.reconfigureNoop ? { state: "applied" as const }
@@ -99,17 +125,28 @@ export async function hasRuntimeSwitchKill(client: Pick<RuntimeHostClient, "effe
   }
 }
 
-export function cancelPendingRuntimeSwitch(registry: Pick<AgentRegistry, "conversation" | "withdrawConversationReconfigure" | "cancelConversationSwitch" | "reconfigureOwnedCancellableSwitch" | "releaseSwitchHold">, conversationId: string, operationId: string): void {
+export async function cancelPendingRuntimeSwitch(registry: Pick<AgentRegistry, "deliveryWriteOrBusy" | "conversation" | "withdrawConversationReconfigure" | "cancelConversationSwitch" | "reconfigureOwnedCancellableSwitch" | "releaseSwitchHold">, conversationId: string, operationId: string): Promise<void> {
   const id = conversationId as ViewerConversationId;
-  const withdrawal = registry.withdrawConversationReconfigure(id, operationId);
+  const withdrawal = await registry.deliveryWriteOrBusy({ label: "pipeline.switch-withdraw", operationId },
+    () => registry.withdrawConversationReconfigure(id, operationId));
   if (withdrawal.kind === "claimed") {
     const conversation = withdrawal.conversation;
     if (!conversation.migration || !registry.reconfigureOwnedCancellableSwitch(id)) throw new Error("runtime switch is already applying");
-    registry.cancelConversationSwitch(id, conversation.migration.revision);
+    await registry.deliveryWriteOrBusy({ label: "pipeline.switch-cancel", operationId }, () => {
+      if (!registry.reconfigureOwnedCancellableSwitch(id)) throw new Error("runtime switch is already applying");
+      return registry.cancelConversationSwitch(id, conversation.migration!.revision);
+    });
   } else if (withdrawal.kind === "settled" && withdrawal.conversation.reconfigure?.status !== "failed") {
     throw new Error("runtime switch already settled; reconcile its outcome");
   }
-  registry.releaseSwitchHold(id);
+  await registry.deliveryWriteOrBusy({ label: "pipeline.switch-release", operationId }, () => {
+    const current = registry.conversation(id);
+    if (current?.reconfigure?.operationId !== withdrawal.conversation.reconfigure?.operationId
+      || JSON.stringify(current?.switchHold) !== JSON.stringify(withdrawal.conversation.switchHold)) {
+      throw new RuntimeSwitchSuperseded();
+    }
+    return registry.releaseSwitchHold(id);
+  });
 }
 function clearOldWaits(attempt: PipelineStageAttempt) {
   delete attempt.providerWait; delete attempt.providerRecoveryBudget; delete attempt.severedTurn;
@@ -137,7 +174,7 @@ export async function driveRuntimeSwitch(
     if (record.continuedAt) attempt.runtimeEvidenceSince = attemptEvidenceFloor(attempt) ?? record.continuedAt;
     pipeline.stateDetail = reason; await persist();
   };
-  const park = async (reason: string) => { pipeline.state = "needs_decision"; pipeline.stateDetail = reason; attempt.state = "needs_decision"; record.outcome = reason; await persist(); };
+  const park = async (reason: string) => { parkRuntimeSwitch(pipeline, attempt, record, reason, now); await persist(); };
   const rollbackAccountAllowed = async (): Promise<boolean> => {
     let pool: string[] | null | undefined;
     try { pool = ports.allowedAccountIds?.(pipeline.project, record.from.engine); }
@@ -178,7 +215,7 @@ export async function driveRuntimeSwitch(
   };
   const continuationFloor = async (engine: EffectivePipelineRole["engine"], pathname: string | null, deliveredAt?: string): Promise<string | null> => {
     const admittedAt = record.continuationDispatch?.at ?? deliveredAt ?? record.requestedAt;
-    if (!pathname) return null;
+    if (!pathname) { if (expired) await park("continuation transcript is unavailable"); return null; }
     // Equal report/start fences make the durable reader widen its verified
     // window to this admission, even when a fast turn filled the first tail.
     const evidence = await ports.durableTurnEvidence(engine, pathname, admittedAt, admittedAt);
@@ -306,7 +343,7 @@ export async function driveRuntimeSwitch(
           tail.push(result.code === 0 ? result.stdout.split("\n").slice(0,40).join("\n") : "Git observation unavailable");
         }
         /* The transcript tail can hold the learned rules the attempt started with; they stay out of the checkout. */
-        const content = withoutStoredLessons(hardenedRedact(`Continue attempt ${attempt.n} from ${record.from.engine}/${record.from.model} on ${record.to.engine}/${record.to.model}. Keep the same worktree and branch. Do not reset, stash or discard work.\n${tail.join("\n")}`));
+        const content = await withoutStoredLessonsAsync(hardenedRedact(`Continue attempt ${attempt.n} from ${record.from.engine}/${record.from.model} on ${record.to.engine}/${record.to.model}. Keep the same worktree and branch. Do not reset, stash or discard work.\n${tail.join("\n")}`));
         const directory = await prepareControllerArtifactDirectory(pipeline.worktreeDir, ports.exec);
         const digest = crypto.createHash("sha256").update(content).digest("hex");
         const file = path.join(directory, `runtime-handoff-${digest}.md`);
@@ -354,7 +391,11 @@ export async function driveRuntimeSwitch(
       }
       Object.assign(attempt, { launchId: spawned.launchId, conversationId: spawned.conversationId,
         sessionId: spawned.sessionId, agentPath: spawned.transcript, accountId: spawned.accountId ?? record.to.accountId });
-      if (!attempt.agentPath || !attempt.sessionId) { ports.scheduleTick?.(1000); await persist(); return; }
+      if (!attempt.agentPath || !attempt.sessionId) {
+        if (expired) await park("runtime switch launch completed without its transcript or session identity");
+        else { ports.scheduleTick?.(1000); await persist(); }
+        return;
+      }
       // The new transcript belongs entirely to the successor, including a
       // turn that finished before its path or launch receipt was published.
       delete attempt.effectiveRole.preferredServiceTier; delete attempt.effectiveRole.serviceTierSource;

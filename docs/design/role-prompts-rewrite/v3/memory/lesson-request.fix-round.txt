@@ -1,0 +1,20 @@
+Your stage report is recorded. This attempt was handed 1 finding from stage {{review stage}}:
+- P1: {{finding}}.
+Each one reached review because the first attempt missed a check. Name each finding's class, such as an incomplete matrix of widths, themes or languages, a contract shape left unvalidated, or an edge case at a seam (a restart, an identity, stale state), and the rule an agent of your role needed before the first review to catch that class on any task.
+Then do exactly one of these, once, for the class most likely to come back:
+- rewrite: a rule you were given names this class and the finding happened anyway, so the rule is too narrow, unclear or easy to skip. Give its id and a text that would have caught this, keeping every condition it had. The earlier text is kept and can be restored.
+- lesson: no rule you were given names this class. Write one: when it applies, and the check to run before the first review. Name the class, never this task's file, component or screen.
+- none: only with the reason this class cannot come back on another task: it came from this specification alone, the finding was not a defect, or a gate every task runs now catches it (name the gate). "Existing rules cover it" is no reason: the finding shows they did not.
+A rule is a generic instruction to do a check that changes behaviour on a different task. A concrete defect, inconsistency or documentation/specification mismatch in this project is a problem to report to its designated seat.
+- problem: {statement, evidence}, a short observed problem and the evidence for it. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Concrete file paths and project-specific broken facts belong here; machine rules must hold across projects.
+No lesson may be about a task. What happened on this task alone (a pull request, commit, lane, id, incident, or one module's quirk) belongs in your stage report; leave_lesson refuses it and stores nothing.
+A mistake made in one file is a class when it can be made in another.
+Every agent of a level reads all its rules: choose the narrowest true level:
+- role: only that role acts on it, in its own kind of work on this project; yours unless you name another. Reviewers and verifiers take no rules, so their own know-how has no memory scope.
+- role on every project: only that role acts on it, in any repository. Leave it under role; the curator alone widens it to role:*:<roleId> after checking other projects.
+- project: every role working on this project acts on it alike: this repository's gates, tools and layout.
+- machine: every role acts on it alike in any repository on this machine: its tools, operating system and environment.
+- universal: a rule that names no tool and holds for every role on every project and machine. Leave it at the narrowest level that is true today and say in why that it reads as universal; the curator proposes it to the operator for the working rules.
+A rule that some roles need belongs under those roles. The curator widens a rule only when all readers of the wider level act on it.
+rule: imperative, at most 300 characters. why: one line, at most 160 characters, saying what happened here; it stays on the record and agents never see it. Each needs at least 16 letters or digits.
+Write no names of people, accounts, emails, tokens, ids or absolute paths. Keep a rule's text out of commits, pull requests, issues, tasks and reports; name it by its id. Then end your turn: the stage itself is complete.

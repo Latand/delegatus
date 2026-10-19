@@ -7,6 +7,7 @@ import { existingTeamStore } from "@/lib/team/store";
 import { cachedAgentConversations, type AgentSourceRead } from "./agentSource";
 import { readHumanInputs, type ActivityViewer, type HostReport, type HumanInputRead } from "./hostSources";
 import { readActivitySettings, type ActivitySettings } from "./settings";
+import { parseActivityDates } from "./range";
 import {
   activityReport,
   clampMethodParams,
@@ -14,7 +15,6 @@ import {
   MINUTE_MS,
   METHOD_DEFAULTS,
   RANGE_KEYS,
-  rangeDays,
   uncoveredSpans,
   type ActivityReport,
   type Anchor,
@@ -261,7 +261,8 @@ export async function activityResponse(
   const settings = dependencies.settings();
   const query = parseActivityQuery(search, settings.tz);
   const { params, range } = query;
-  const days = rangeDays(range, nowMs, params.tz);
+  const dates = parseActivityDates(search, nowMs, params.tz);
+  const days = dates.days;
   const window = { start: days[0]!.start, end: days.at(-1)!.end };
 
   /* From T before the first day: an episode running into the range from
@@ -287,7 +288,7 @@ export async function activityResponse(
   let agentIndex: SourceState = "ok";
   let agentRead: AgentSourceRead = { agents: [], index: { available: false, indexedAtMs: null } };
   try {
-    agentRead = dependencies.agents(`${range}:${params.tz}:${window.start}`, window, nowMs);
+    agentRead = dependencies.agents(`${range}:${params.tz}:${window.start}:${window.end}`, window, nowMs);
     if (!agentRead.index.available) agentIndex = "absent";
   } catch {
     agentIndex = "unreadable";
@@ -306,6 +307,7 @@ export async function activityResponse(
   const reportFor = (anchors: Anchor[], hosts: HostCoverage[], agents: AgentSourceRead["agents"]) => activityReport({
     params,
     range,
+    dates,
     nowMs,
     anchors,
     hosts,
@@ -358,7 +360,7 @@ export async function activityResponse(
       rounding: params.rounding,
       tz: params.tz,
     },
-    range: report.range,
+    range: { ...report.range, key: dates.preset ?? "custom" },
     scope: scope === null ? null : { project: scope, name: projects.find((row) => row.project === scope)?.name ?? names.get(scope) ?? null },
     coverage: {
       hostsConfig: human.config,

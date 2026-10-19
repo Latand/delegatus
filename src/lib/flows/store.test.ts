@@ -1,12 +1,13 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import { CODEX_GPT61_SOL_MODEL, CODEX_TERRA_MODEL } from "@/lib/agent/models";
+import { projectKeyIndexSnapshot } from "@/lib/projects/projectKeyIndex";
 
-import { configuredReviewerFallback, loadPresets, savePresets, loadFlows, mergeSeededPresets, patchFlowRows, reconcileFlowConversationOwnership, reconcileFlowConversationOwnershipCooperatively, saveFlows, seededPresetsFromRoles } from "./store";
+import { configuredReviewerFallback, loadPresets, savePresets, loadFlows, mergeSeededPresets, patchFlowRows, reconcileFlowConversationOwnership, reconcileFlowConversationOwnershipCooperatively, saveFlows, seededPresetsFromRoles, withFlowSnapshot, withFlowMutation } from "./store";
 import type { Flow, FlowPreset } from "./types";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 
@@ -157,6 +158,35 @@ test("flow specs persist in SQLite and legacy flow entries import on first boot"
     else process.env.LLV_STATE_DIR = previousState;
     fs.rmSync(sandbox, { recursive: true, force: true });
     if (legacySandbox) fs.rmSync(legacySandbox, { recursive: true, force: true });
+  }
+});
+
+test("warm flow reads reuse cached project membership", () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-project-membership-"));
+  process.env.LLV_STATE_DIR = sandbox;
+  const flow = {
+    id: "membership-flow", template: "implement-review-loop", project: "repo", cwd: "/repo",
+    implementerPath: "/implementer.jsonl",
+    roles: { implementer: { engine: "codex" as const, model: null, effort: "high" }, reviewer: { engine: "codex" as const, model: null, effort: "xhigh" } },
+    baseRef: "base", baseMode: "head" as const, mode: "auto" as const, reviewerMode: "headless" as const,
+    roundLimit: 5, state: "waiting_ready" as const, stateDetail: null, rounds: [], createdAt: "now", closedAt: null,
+  } satisfies Flow;
+  try {
+    saveFlows([flow]);
+    const expected = loadFlows();
+    const stat = spyOn(fs, "statSync");
+    try {
+      for (let pass = 0; pass < 3; pass++) expect(loadFlows()).toEqual(expected);
+      expect(stat.mock.calls.filter(([filename]) => String(filename).endsWith("project-aliases.json")).length).toBeLessThanOrEqual(3);
+    } finally { stat.mockRestore(); }
+    fs.writeFileSync(path.join(sandbox, "project-aliases.json"), JSON.stringify({ schemaVersion: 1, aliases: { repo: "renamed-project" }, displayNames: {} }));
+    loadFlows();
+    expect(projectKeyIndexSnapshot().has("renamed-project")).toBe(true);
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(sandbox, { recursive: true, force: true });
   }
 });
 
@@ -577,3 +607,27 @@ for (const managed of [undefined, "role-registry"] as const) {
     }
   });
 }
+
+
+test("a flow snapshot retains its lease until an asynchronous cross-store checkpoint settles", async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "flow-snapshot-wait-"));
+  process.env.LLV_STATE_DIR = sandbox;
+  let release!: () => void, admitted!: () => void;
+  const ready = new Promise<void>(resolve => { admitted = resolve; });
+  let snapshot: Promise<unknown> | undefined, writer: Promise<unknown> | undefined;
+  try {
+    snapshot = withFlowSnapshot(async () => { admitted(); await new Promise<void>(resolve => { release = resolve; }); });
+    await ready;
+    let entered = false;
+    writer = withFlowMutation(() => { entered = true; });
+    await Bun.sleep(80);
+    expect(entered).toBe(false);
+    release(); await snapshot; await writer;
+    expect(entered).toBe(true);
+  } finally {
+    release?.(); await snapshot?.catch(() => {}); await writer?.catch(() => {});
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+});

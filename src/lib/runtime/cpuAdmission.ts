@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -31,7 +32,8 @@ export function inheritedCpuSlot(env = process.env): CpuSlotLease | null {
     const lease = JSON.parse(env.LLV_GATE_SLOT_LEASE ?? "null") as CpuSlotLease | null;
     if (!lease || typeof lease.slot !== "string" || !path.isAbsolute(lease.slot) || !lease.owner || !Number.isSafeInteger(lease.owner.pid) || lease.owner.pid < 1) return null;
     const match = /^llv-heavy-gate\.slot([1-9]\d*)\.lock$/.exec(path.basename(lease.slot));
-    if (!match || Number(match[1]) > Number(env.LLV_GATE_SLOTS ?? 6) || path.dirname(lease.slot) !== path.resolve(env.LLV_GATE_LOCK_DIR ?? "/var/tmp")) return null;
+    if (!match || Number(match[1]) > Number(env.LLV_GATE_SLOTS ?? 6)
+      || fs.realpathSync(path.dirname(lease.slot)) !== fs.realpathSync(env.LLV_GATE_LOCK_DIR ?? "/var/tmp")) return null;
     const context = signalSandboxContext(env);
     const proc = context?.hostProc ?? "/proc";
     if (cpuOwnerStatus(lease.owner, env) !== "alive") return null;
@@ -63,6 +65,7 @@ export function machineHome(): string {
   const env = { ...process.env };
   delete env.HOME; delete env.USERPROFILE;
   const script = 'process.stdout.write(require("node:os").userInfo().homedir)';
+  // eslint-disable-next-line no-restricted-syntax -- Legacy cached native-home probe on first CPU admission, including serving launch paths.
   const probe = (runtime: string, source: string, childEnv: NodeJS.ProcessEnv) => spawnSync(runtime, ["-e", source], {
     env: childEnv, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000,
   });
@@ -124,7 +127,7 @@ export class CpuAdmissionQueue {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite?.Database) throw new Error("CPU admission requires the supported Bun runtime");
-    this.db = new sqlite.Database(file, { create: true });
+    this.db = observeSqlite(new sqlite.Database(file, { create: true }), "cpu-admission");
     fs.chmodSync(file, 0o600);
     this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
     this.db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT); CREATE TABLE IF NOT EXISTS suspended (key TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER); INSERT OR IGNORE INTO admission VALUES (1, NULL);");
@@ -173,7 +176,11 @@ export class CpuAdmissionQueue {
   /** Only the release owning this pipeline namespace reconciles stage tickets. */
   reconcile(prefix: string, active: ReadonlySet<string>, eligible = active): void {
     this.db.transaction(() => {
-      for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NULL").all()) {
+      const rows = prefix.endsWith(":")
+        ? this.db.query<Ticket, [string, string]>("SELECT * FROM tickets WHERE owner IS NULL AND key >= ? AND key < ?")
+          .all(prefix, `${prefix.slice(0, -1)};`)
+        : this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NULL").all();
+      for (const row of rows) {
         if (!row.key.startsWith(prefix)) continue;
         if (!active.has(row.key)) this.cancel(row.key);
         else {
@@ -193,7 +200,7 @@ export class CpuAdmissionQueue {
       // A release that predates polls released these from a hold since the last check.
       this.db.query("UPDATE tickets SET polled = ? WHERE owner IS NULL AND polled IS NULL").run(now);
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NOT NULL").all()) {
-        const identity = JSON.parse(row.owner!) as ProcessIdentity;
+        const identity = parseSqliteJson(row.owner!, this.db) as ProcessIdentity;
         if (this.observer.status(identity) === "dead" || this.observer.exited(identity)) this.cancel(row.key);
       }
       // The insert is the poll: tickets_poll stamps an existing row with `now`.

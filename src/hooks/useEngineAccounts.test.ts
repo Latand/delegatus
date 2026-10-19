@@ -1077,6 +1077,40 @@ test("a hidden Main reads from the accounts answer, and a failed Show again with
 });
 
 
+/* Audit B37: Show again lists the row at once with its sign-in unchecked and
+   drops the offer; a refusal takes the row off and offers it again, and an
+   "already listed" answer counts as shown. */
+test("a held Show again lists Main at once, a refusal takes it off and offers it again, and an already-listed answer is a restore", async () => {
+  const calls: string[] = [];
+  let release: (response: Response) => void = () => {};
+  const fetcher = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    calls.push(`${init?.method ?? "GET"} ${url}`);
+    if (url === "/api/accounts") return new Response(JSON.stringify(claudePayload({ hidden: [{ id: "default", label: "Home" }] })), { headers: { "content-type": "application/json" } });
+    return new Promise<Response>((resolve) => { release = resolve; });
+  };
+  const store = createEngineAccountsStore("claude", { fetcher });
+  const unsub = store.subscribe(() => {});
+  await advance();
+  const restoring = store.restore("default");
+  await advance();
+  expect(store.accounts.map((account) => [account.id, account.label, account.authHealth])).toEqual([["default", "Home", "unknown"], ["main", "Main", "authenticated"], ["work", "Work", "unknown"]]);
+  expect(store.hidden).toEqual([]);
+  release(new Response("{}", { status: 503 }));
+  expect(await restoring).toBeFalse();
+  expect(store.accounts.map((account) => account.id)).toEqual(["main", "work"]);
+  expect(store.hidden).toEqual([{ id: "default", label: "Home" }]);
+  expect(store.notice).toMatchObject({ kind: "error", operation: "restore", messageKey: "accounts.removed.restoreFailed" });
+
+  const again = store.restore("default");
+  await advance();
+  release(new Response(JSON.stringify({ code: "unknown_account", error: "Main is already listed" }), { status: 404 }));
+  expect(await again).toBeTrue();
+  expect(store.notice).toBeNull();
+  expect(calls.filter((call) => call.startsWith("POST"))).toHaveLength(2);
+  unsub();
+});
+
 for (const engine of ["claude", "codex"] as const) for (const success of [false, true]) {
   test(`${engine} watched login ${success ? "success refreshes the footer once and clears old auth error" : "failure keeps its error without refreshing the footer"}`, async () => {
     let finished = false;

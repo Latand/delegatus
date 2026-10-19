@@ -479,3 +479,17 @@ test("runtimeLine shows a role tier and the actual fallback after launch", async
   pipeline.runs = [{ stageId: stage.id, attempts: [attempt] }];
   expect(pipelineAcknowledgement(pipeline).runtimeLine).toContain("/default (role default ultrafast not offered by an available account)");
 });
+
+
+test("create_pipeline initializes a plain folder and acknowledges the committed and excluded paths", async () => {
+  const folder = fs.mkdtempSync(path.join(sandbox, "plain-folder-"));
+  fs.writeFileSync(path.join(folder, "readme.txt"), "Project\n");
+  fs.writeFileSync(path.join(folder, ".env.local"), "private fixture\n");
+  const args = { clientRequestId: "plain-folder-create", task: "Create local project", src: creatorPath, repoDir: folder, autoStart: false, stages: [] };
+  const result = await viewerMcpBindings().create_pipeline(args) as { repositoryInitialization: { committedFiles: string[]; ignoredPaths: string[] }; delivery: { publishes: boolean } };
+  expect(result.repositoryInitialization.committedFiles).toEqual([".gitignore", "readme.txt"]);
+  expect(result.repositoryInitialization.ignoredPaths).toContain(".env.local");
+  expect(result.delivery.publishes).toBe(false);
+  const replay = await viewerMcpBindings().create_pipeline(args) as typeof result;
+  expect(replay.repositoryInitialization).toEqual(result.repositoryInitialization);
+});

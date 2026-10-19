@@ -231,13 +231,26 @@ const RECOVERABLE_BUSY_RETRY_REASONS = new Set(["delivery-auto-retry", "interrup
 const sentKey = (id: string) => "llvSent:" + id;
 
 const recoveryReceiptsKey = (id: string) => "llvRecoveryReceipts:" + id;
+/* The parsed receipts of the last read, per conversation, keyed by the stored
+   text they came from: a render that finds storage unchanged takes the parse
+   it already has instead of repeating it. Callers copy what they merge and
+   never mutate the rows. */
+const recoveryReceiptReads = new Map<string, { raw: string; receipts: RuntimeReceipt[] }>();
+const RECOVERY_RECEIPT_READS_CAP = 32;
 function readRecoveryReceipts(id: string): RuntimeReceipt[] {
   try {
-    const value: unknown = JSON.parse(sessionStorage.getItem(recoveryReceiptsKey(id)) ?? "[]");
-    return Array.isArray(value) ? value.filter((receipt): receipt is RuntimeReceipt =>
+    const raw = sessionStorage.getItem(recoveryReceiptsKey(id)) ?? "[]";
+    const known = recoveryReceiptReads.get(id);
+    if (known?.raw === raw) return known.receipts;
+    const value: unknown = JSON.parse(raw);
+    const receipts = Array.isArray(value) ? value.filter((receipt): receipt is RuntimeReceipt =>
       receipt && receipt.conversationId === id && typeof receipt.operationId === "string"
       && typeof receipt.idempotencyKey === "string" && typeof receipt.revision === "number"
       && typeof receipt.status === "string" && typeof receipt.at === "string") : [];
+    recoveryReceiptReads.delete(id);
+    recoveryReceiptReads.set(id, { raw, receipts });
+    if (recoveryReceiptReads.size > RECOVERY_RECEIPT_READS_CAP) recoveryReceiptReads.delete(recoveryReceiptReads.keys().next().value!);
+    return receipts;
   } catch { return []; }
 }
 function writeRecoveryReceipts(id: string, receipts: RuntimeReceipt[]): void {
@@ -2156,7 +2169,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   /* Pulls the bridge inbox once, at the start of a turn, and only for the voice
      conversation. Returns "" for every other card and whenever nothing is pending. */
   const drainBridgeTurnStart = useBridgeTurnStartDrain(voiceEnabled, { conversationId: cardId });
-  const { text, textRef, setText, setTextState, inputRef, setStatus, busy: composerBusy, setBusy, voiceSending, attachments } = composer;
+  const { textRef, setText, setTextState, inputRef, setStatus, busy: composerBusy, setBusy, voiceSending, attachments } = composer;
   const parallelAsking = useSyncExternalStore(subscribeParallelRequests, () => parallelRequests.has(cardId), () => false);
   const busy = composerBusy || parallelAsking;
   /* CONTEXT MODE (docs/design/composer-context-mode.md). Offered on a Codex
@@ -2402,6 +2415,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   /* Durable receipts for this session from the runtime bus (empty while the bus
      is disabled or the session is legacy/unhosted). */
   const runtimeReceipts = runtimeDependencies.useRuntimeReceiptsForArtifact(file.path, cardId);
+  /* The stored recovery rows come through `readRecoveryReceipts`, which parses
+     them once per change of their stored text, so a render no longer pays a
+     JSON.parse for them. The merged array itself stays a new value per render:
+     the effects below that settle pending deliveries and reconciliations walk
+     refs against it and have always re-run after every render. */
   const displayedRuntimeReceipts = mergeRuntimeReceipts(runtimeReceipts.filter((receipt) => receipt.conversationId === cardId), mergeRuntimeReceipts(
     [...immediateRuntimeReceipts.filter((receipt) => receipt.conversationId === cardId), ...readRecoveryReceipts(cardId)],
     outbox.flatMap((entry) => entry.deliveryReceipt?.conversationId === cardId
@@ -3769,7 +3787,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       await retryAdmittedPayload(durable, outboxId);
       return;
     }
-    const requestedText = durable?.submission.text ?? overrideText ?? text;
+    const requestedText = durable?.submission.text ?? overrideText ?? textRef.current;
     /* The generation snapshot: exactly the text and attachments this attempt
        carries onto the wire. Read through the ref so a submit racing a paste
        still sends and later clears the same set. A queued submission carries
@@ -5420,7 +5438,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      it is still a conversation with nobody to send to, and its way back is the
      same resume. */
   const hostGone = file.proc === "killed";
-  const composerHasDraft = text.trim().length > 0 || attachments.images.length > 0 || attachments.files.length > 0;
+  const composerHasDraft = composer.hasText || attachments.images.length > 0 || attachments.files.length > 0;
   const slotKind = composerSlotKind({
     killed: hostGone,
     offline: runtimeOffline && !contextOffline,

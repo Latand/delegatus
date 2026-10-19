@@ -14,16 +14,22 @@ import { accountManager } from "@/lib/accounts/manager";
 import { claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeValidityFromLimitRead } from "@/lib/accounts/spawnHealth";
 import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
+import { learnedRulesForLaunchProfile, memoryStartIdentity } from "@/lib/memory/roleLaunch";
+import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
 import { identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
+import { readRuntimeSnapshot } from "./snapshotReads";
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { yieldToRuntime } from "@/lib/cooperative";
 import type { SpawnResponse } from "@/lib/agent/spawnResponse";
 import { prepareManagedClaudeSpawnHome, viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
+import { readHotStateAuthority } from "@/lib/state/hotStateAuthority";
+import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { rememberHandoffChild, persistHandoffLineage } from "@/lib/handoffLineage";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
@@ -34,14 +40,11 @@ import { signalProcessGroup } from "@/lib/processGroup";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { buildImagePayload, deleteInboxImages, spawnAgentWithPrompt } from "@/lib/tmux";
-import { admitRecoveredLaunch, failedLaunchTaskSettlementPending, settleFailedLaunch } from "@/lib/tasks/launchMembership";
-import { hasLifecycleEventKey } from "@/lib/lifecycle/journal";
-import { readSpawnNoticeTurn } from "@/lib/spawnNotice/store";
 import { hardenedRedact } from "@/lib/view/compactText";
 
 import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
-import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
+import { isRuntimeHostTransportFailure, withRuntimeRecoveryReads, RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import { supervisedRuntimeHostUnavailableReason } from "./flags";
 import { StructuredHostAdoptionCleanupError, StructuredSessionMaterializationError, type EngineHost, type HostState, type SessionMaterializationEvidence } from "./engineHost";
 import type { MessageOrigin } from "./messageOrigin";
@@ -59,6 +62,8 @@ import { STAGED_RECOVERY_PREFIX, stagedLaunchRecovery, type StagedLaunchRecovery
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 
 export type SpawnedStructuredHost = EngineHost & {
+  /** Effective MCP transport when account config constrained the preference. */
+  readonly viewerMcpTransport?: "stdio" | "http" | null;
   identity: { threadId: string; path: string | null } | { sessionId: string };
   onStateChange(listener: (state: HostState) => void): () => void;
   /** The canonical phrase of a terminal CLI exit, when the host recognized one
@@ -467,10 +472,12 @@ export async function waitForStructuredInitialMessage(
 async function structuredSpawnEffectForLaunch(
   client: RuntimeHostClient,
   launchId: string,
+  assertActive?: () => void,
 ): Promise<Record<string, unknown> | null> {
   let afterEventSeq = 0;
   while (true) {
     const batch = await client.effectBatch(["runtime.spawn"], afterEventSeq);
+    assertActive?.();
     for (const effect of batch) {
       if (effect.payload.operationId === launchId) return effect.payload;
     }
@@ -484,6 +491,7 @@ async function structuredSpawnEffectForLaunch(
 }
 
 interface LaunchReapOptions {
+  assertActive?: () => void;
   recoveryFence?: (file: RegistryFile, receipt: SpawnReceipt) => boolean;
   /** The launch operation's journal status as last read, null when unread.
       Only a non-terminal status is failed, and an unread one only when
@@ -508,7 +516,15 @@ async function failStructuredLaunchAndReap(
   reason: string,
   options: LaunchReapOptions,
 ): Promise<{ claimed: boolean; receipt: SpawnReceipt | null }> {
-  const failure = await registry.failStructuredSpawnOffLoop(launchId, reason, { recoveryFence: options.recoveryFence });
+  options.assertActive?.();
+  const failure = await registry.failStructuredSpawnOffLoop(launchId, reason, {
+    recoveryFence: (file, receipt) => {
+      // Lock admission can yield after the evidence read. A retired release
+      // must not turn its cancelled observation into a terminal launch.
+      options.assertActive?.();
+      return options.recoveryFence?.(file, receipt) ?? true;
+    },
+  });
   if (!failure.claimed) {
     return { claimed: false, receipt: failure.receipt ?? registry.readOnlySnapshot().receipts[launchId] ?? null };
   }
@@ -581,16 +597,30 @@ export async function reconcileStructuredSpawnReplay(
         receipts. Pending launches always read fresh state below. Live writer
         claims are still merged atomically by recoverStructuredSpawnFromEvidence. */
     failedReceiptSnapshot?: () => Promise<RuntimeSnapshot>;
+    signal?: AbortSignal;
     assertActive?: () => void;
   } = {},
 ): Promise<SpawnReceipt & { initialMessage: "pending" | "queued" | "delivered" | "failed" }> {
-  const current = registry.readOnlySnapshot().receipts[launchId];
+  const assertActive = () => { options.signal?.throwIfAborted(); options.assertActive?.(); };
+  assertActive();
+  if (options.signal) client = withRuntimeRecoveryReads(client, options.signal);
+  const evidenceOrNull = async <T>(read: Promise<T>): Promise<T | null> => {
+    try { return await read; }
+    catch (error) {
+      assertActive();
+      if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) throw error;
+      return null;
+    } finally { assertActive(); }
+  };
+  const current = registry.spawnRecoverySnapshot([launchId]).receipts[launchId];
   if (!current) throw new Error("unknown spawn receipt");
   if (stagedLaunchRecovery(current)) {
     const recovered = await recoverStagedStructuredLaunch(launchId, registry, client, {
       now: options.now,
-      reap: { releaseHost: options.releaseHost, terminateHostProcess: options.terminateHostProcess },
+      assertActive,
+      reap: { releaseHost: options.releaseHost, terminateHostProcess: options.terminateHostProcess, assertActive },
     });
+    assertActive();
     return { ...recovered, initialMessage: recovered.state === "completed" ? "delivered" : "queued" };
   }
   if (current.state === "completed") {
@@ -600,25 +630,27 @@ export async function reconcileStructuredSpawnReplay(
     return { ...current, initialMessage: "failed" };
   }
   const [initialOperation, spawnOperation, runtime] = await Promise.all([
-    client.operationStatus(`spawn_message_${launchId}`, { currentRetryLeaf: true }).catch(() => null),
-    client.operationStatus(launchId, { currentRetryLeaf: true }).catch(() => null),
-    (client.readSession
+    evidenceOrNull(client.operationStatus(`spawn_message_${launchId}`, { currentRetryLeaf: true })),
+    evidenceOrNull(client.operationStatus(launchId, { currentRetryLeaf: true })),
+    evidenceOrNull(client.readSession
       ? client.readSession({ conversationId: current.conversationId }).then((session) => ({ sessions: session ? [session] : [] }))
       : current.state === "failed" && options.failedReceiptSnapshot
         ? options.failedReceiptSnapshot()
-        : client.snapshot()).catch(() => null),
+        : client.snapshot()),
   ]);
-  options.assertActive?.();
+  assertActive();
   let operation = initialOperation;
   let effectHistoryUnavailable = false;
   if (!operation && current.state === "path-pending" && current.artifactPath) {
     /* Effect history can be unavailable during the same runtime-journal outage
        this replay is meant to bound. Missing evidence remains unconfirmed so
        the normal deadline path can settle the placeholder retry-safely. */
-    const effect = await structuredSpawnEffectForLaunch(client, launchId).catch(() => {
+    const effect = await evidenceOrNull(structuredSpawnEffectForLaunch(client, launchId, assertActive).catch(error => {
+      assertActive();
       effectHistoryUnavailable = true;
-      return null;
-    });
+      throw error;
+    }));
+    assertActive();
     const prompt = typeof effect?.prompt === "string" ? effect.prompt : null;
     const imageRefs = parseStructuredImageRefs(effect?.images ?? [], 16);
     if (
@@ -637,14 +669,16 @@ export async function reconcileStructuredSpawnReplay(
         launchId,
         text: prompt,
         imageRefs,
+        admissionGuard: assertActive,
         ...(readmittedOrigin ? { origin: readmittedOrigin } : {}),
       }, {
         client: () => client,
         registry: () => registry,
         enabled: () => true,
       });
+      assertActive();
       if (readmitted?.ok && readmitted.outcome !== "held") {
-        operation = await client.operationStatus(`spawn_message_${launchId}`, { currentRetryLeaf: true }).catch(() => null);
+        operation = await evidenceOrNull(client.operationStatus(`spawn_message_${launchId}`, { currentRetryLeaf: true }));
       }
     }
   }
@@ -691,7 +725,7 @@ export async function reconcileStructuredSpawnReplay(
       claimOwner: null,
       pendingAction: null,
     } : undefined;
-    const recovered = registry.recoverStructuredSpawnFromEvidence(launchId, evidence);
+    const recovered = (await registry.deliveryWriteOrBusy({ label: "registry.recoverStructuredSpawnFromEvidence" }, registry.recoverStructuredSpawnFromEvidence.bind(registry, launchId, evidence)));
     if (recovered.kind === "settled") {
       return { ...recovered.receipt, initialMessage: "delivered" };
     }
@@ -739,6 +773,7 @@ export async function reconcileStructuredSpawnReplay(
       spawnStatus: spawnOperation?.receipt.status ?? null,
       releaseHost: options.releaseHost,
       terminateHostProcess: options.terminateHostProcess,
+      assertActive,
     });
     if (!failure.claimed) {
       const settled = failure.receipt ?? current;
@@ -749,7 +784,7 @@ export async function reconcileStructuredSpawnReplay(
     }
     return { ...(failure.receipt ?? current), initialMessage: "failed" };
   }
-  const receipt = registry.readOnlySnapshot().receipts[launchId] ?? current;
+  const receipt = registry.spawnRecoverySnapshot([launchId]).receipts[launchId] ?? current;
   return {
     ...receipt,
     initialMessage: reconciledInitialMessage(receipt, messageStatus, runtimeDelivered),
@@ -782,6 +817,12 @@ function queuedPinnedSpawnForReceipt(receipt: SpawnReceipt): NonNullable<SpawnRe
 }
 
 export interface StructuredSpawnRecoveryOptions {
+  signal?: AbortSignal;
+  /** Boot leaves terminal reporting to the controller's bounded repair pass. */
+  repairFailures?: boolean;
+  /** Startup reconciles receipts; the controller owns full queued host setup. */
+  actuateQueuedSpawns?: boolean;
+  reportProgress?: (progress: { examined: number; total: number; completed: number; deferred: number }) => void | Promise<void>;
   assertActive?: () => void;
   now?: () => number;
   timeoutMs?: number;
@@ -824,6 +865,17 @@ async function actuateQueuedPinnedSpawn(
   options: StructuredSpawnRecoveryOptions,
 ): Promise<SpawnReceipt> {
   const queued = queuedPinnedSpawnForReceipt(receipt);
+  const admittedAuthority = readHotStateAuthority(path.dirname(registry.filename));
+  const assertActive = () => {
+    options.signal?.throwIfAborted();
+    options.assertActive?.();
+    const authority = readHotStateAuthority(path.dirname(registry.filename));
+    if (!viewerReleaseOwnsTraffic() || authority?.mode === "fencing"
+      || authority?.epoch !== admittedAuthority?.epoch || authority?.releaseRevision !== admittedAuthority?.releaseRevision) {
+      throw new Error("queued launch lost Viewer release authority");
+    }
+  };
+  assertActive();
   const currentTime = (options.now ?? Date.now)();
   if (!queued || Date.parse(queued.retryAt) > currentTime) return receipt;
   if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
@@ -831,14 +883,24 @@ async function actuateQueuedPinnedSpawn(
   let curatorAuthorize: () => void;
   try {
     curatorAuthorize = await curatorReceiptAdmission(receipt, registry, options.curationSources);
+    assertActive();
     curatorAuthorize();
   } catch (error) {
+    assertActive();
     return failQueuedPinnedSpawn(registry, receipt, structuredSpawnFailureReason(error));
   }
   const admissionClaim = receipt.transport === "tmux"
-    ? registry.claimTmuxSpawnActuation(receipt.launchId)
-    : registry.claimStartingStructuredSpawn(receipt.launchId);
+    ? (await registry.deliveryWriteOrBusy({ label: "registry.claimTmuxSpawnActuation" }, registry.claimTmuxSpawnActuation.bind(registry, receipt.launchId)))
+    : (await registry.deliveryWriteOrBusy({ label: "registry.claimStartingStructuredSpawn" }, registry.claimStartingStructuredSpawn.bind(registry, receipt.launchId)));
   if (!admissionClaim.claimed || !admissionClaim.receipt.admissionOwner) return admissionClaim.receipt;
+  const releaseIfCancelled = async () => {
+    try { assertActive(); }
+    catch (error) {
+      await registry.deliveryWrite({ label: "spawn.queued-cancel", operationId: receipt.launchId }, () =>
+        registry.releaseSpawnActuation(receipt.launchId, admissionClaim.receipt.admissionOwner!));
+      throw error;
+    }
+  };
   const claimedQueue = queuedPinnedSpawnForReceipt(admissionClaim.receipt);
   if (!claimedQueue) {
     return failQueuedPinnedSpawn(registry, admissionClaim.receipt, "queued pinned spawn lost its durable admission payload");
@@ -850,10 +912,12 @@ async function actuateQueuedPinnedSpawn(
      that cannot record the membership fails the launch instead of starting an
      agent outside every task. */
   try {
-    admitRecoveredLaunch(admissionClaim.receipt);
+    await registry.admitRecoveredLaunch(admissionClaim.receipt);
   } catch (error) {
+    await releaseIfCancelled();
     return failQueuedPinnedSpawn(registry, admissionClaim.receipt, structuredSpawnFailureReason(error));
   }
+  await releaseIfCancelled();
   let account: AccountContext;
   let admission: SpawnAccountAdmission;
   try {
@@ -866,10 +930,12 @@ async function actuateQueuedPinnedSpawn(
       ? { kind: "admissible", basis: "current", stale: false, retryAt: null }
       : await (options.resolvePinnedSpawnAdmission ?? resolvePinnedSpawnAdmission)(receipt.engine, account);
   } catch (error) {
+    await releaseIfCancelled();
     try { curatorAuthorize(); }
     catch (curationError) { error = curationError; }
     return failQueuedPinnedSpawn(registry, admissionClaim.receipt, structuredSpawnFailureReason(error));
   }
+  await releaseIfCancelled();
   try { curatorAuthorize(); }
   catch (error) { return failQueuedPinnedSpawn(registry, admissionClaim.receipt, structuredSpawnFailureReason(error)); }
   if (admission.kind === "retry-at") {
@@ -878,12 +944,12 @@ async function actuateQueuedPinnedSpawn(
       return failQueuedPinnedSpawn(registry, admissionClaim.receipt, "pinned account retry deadline did not advance");
     }
     const nextRetryAt = new Date(nextRetryMs).toISOString();
-    const refreshed = registry.queuePinnedSpawn(receipt.launchId, {
+    const refreshed = (await registry.deliveryWriteOrBusy({ label: "registry.queuePinnedSpawn" }, registry.queuePinnedSpawn.bind(registry, receipt.launchId, {
       ...claimedQueue,
       retryAt: nextRetryAt,
-    }, queuedPinnedSpawnTitle(claimedQueue.locale, nextRetryAt));
+    }, queuedPinnedSpawnTitle(claimedQueue.locale, nextRetryAt))));
     return refreshed.admissionOwner
-      ? registry.releaseSpawnActuation(refreshed.launchId, refreshed.admissionOwner).receipt
+      ? (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, refreshed.launchId, refreshed.admissionOwner))).receipt
       : refreshed;
   }
   if (admission.kind === "unavailable") {
@@ -899,6 +965,7 @@ async function actuateQueuedPinnedSpawn(
   let tmuxImagePaths: string[] = [];
   try {
     if (receipt.transport === "tmux") {
+      await releaseIfCancelled();
       curatorAuthorize();
       const images = claimedQueue.imageRefs.length
         ? (() => {
@@ -911,19 +978,22 @@ async function actuateQueuedPinnedSpawn(
         : [];
       const bundle = buildImagePayload(claimedQueue.prompt, images);
       tmuxImagePaths = bundle.imagePaths;
+      assertActive();
       await (options.spawnTmuxAgent ?? spawnAgentWithPrompt)(
         claimedQueue.spec,
         bundle.payload,
         admissionClaim.receipt,
       );
+      assertActive();
       const launched = registry.readOnlySnapshot().receipts[receipt.launchId];
       if (launched?.state === "prompt-delivered" || launched?.state === "host-verified") {
-        registry.markSpawnPathPending(receipt.launchId);
+        (await registry.deliveryWriteOrBusy({ label: "registry.markSpawnPathPending" }, registry.markSpawnPathPending.bind(registry, receipt.launchId)));
       }
     } else {
       if (!client) {
         throw new Error(supervisedRuntimeHostUnavailableReason("structured spawn runtime host"));
       }
+      assertActive();
       response = await (options.spawnStructuredConversation ?? spawnStructuredConversation)({
         engine: receipt.engine,
         receipt: admissionClaim.receipt,
@@ -934,6 +1004,7 @@ async function actuateQueuedPinnedSpawn(
         registry,
         client,
         authorize: () => {
+          assertActive();
           if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
             throw new Error("owner relay queued launch authorization revoked");
           curatorAuthorize();
@@ -946,16 +1017,17 @@ async function actuateQueuedPinnedSpawn(
       const failed = registry.readOnlySnapshot().receipts[receipt.launchId] ?? admissionClaim.receipt;
       if (!failed.pane) deleteInboxImages(tmuxImagePaths);
       if (failed.queuedPinnedSpawn && failed.admissionOwner) {
-        return registry.releaseSpawnActuation(failed.launchId, failed.admissionOwner).receipt;
+        return (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, failed.launchId, failed.admissionOwner))).receipt;
       }
       return failed;
     }
     const current = registry.readOnlySnapshot().receipts[receipt.launchId];
     if (current?.queuedPinnedSpawn && current.admissionOwner) {
-      registry.releaseSpawnActuation(current.launchId, current.admissionOwner);
+      (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, current.launchId, current.admissionOwner)));
     }
     throw error;
   }
+  assertActive();
   if (claimedQueue.parentArtifactPath && response?.path) {
     try {
       rememberHandoffChild(response.path, claimedQueue.parentArtifactPath);
@@ -1001,65 +1073,41 @@ export async function terminalizeStaleStructuredSpawns(
     reconcile?: typeof reconcileStructuredSpawnReplay;
   } = {},
 ): Promise<{ examined: number; terminalized: string[]; recovered: string[] }> {
+  const assertActive = () => { options.signal?.throwIfAborted(); options.assertActive?.(); };
+  assertActive();
+  if (client && options.signal) client = withRuntimeRecoveryReads(client, options.signal);
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? STALE_STRUCTURED_SPAWN_TIMEOUT_MS;
   const actuationCap = options.actuationCap ?? STALE_STRUCTURED_SPAWN_ACTUATION_CAP;
   const reconcile = options.reconcile ?? reconcileStructuredSpawnReplay;
-  const recoverySnapshot = registry.readOnlySnapshot();
-  /* A terminal receipt can outlive a refused task, notice or lifecycle write.
-     Re-run each pending obligation on the bounded reaper so a transient store
-     refusal cannot leave the launcher's report or task assignment unfinished. */
-  let repairs = 0;
-  for (const receipt of registry.failedSpawnReceipts()) {
-    if (repairs >= actuationCap) break;
-    if (receipt.purpose !== "launch" || receipt.artifactLifecycle !== "pending") continue;
-    const reportsEligible = !receipt.rejection && !receipt.failureAnnouncementSuppressed
-      && Boolean(receipt.launcher && receipt.launcher.conversationId !== receipt.conversationId);
-    let taskSettlementPending = false;
-    let lookupFailed = false;
-    let lifecyclePending = false;
-    let noticePending = false;
-    if (reportsEligible) {
-      try {
-        lifecyclePending = !hasLifecycleEventKey(`spawn:${receipt.launchId}:failed`);
-        noticePending = !readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`);
-      } catch (error) {
-        lookupFailed = true;
-        spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] failed launch report lookup refused", {
-          launchId: receipt.launchId,
-          error,
-        });
-      }
-    }
-    try {
-      taskSettlementPending = failedLaunchTaskSettlementPending(receipt);
-    } catch (error) {
-      lookupFailed = true;
-      spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] failed launch task lookup refused", {
-        launchId: receipt.launchId,
-        error,
-      });
-    }
-    if (!lookupFailed && !taskSettlementPending && !lifecyclePending && !noticePending) continue;
-    repairs += 1;
+  if (options.repairFailures !== false) {
     options.assertActive?.();
-    settleFailedLaunch(receipt, undefined, {
-      announce: reportsEligible,
-      launcherProject: launcherProjectFromRegistry(recoverySnapshot, receipt.launcher?.conversationId),
+    await registry.deliveryWrite({ label: "spawn.failure-backfill" }, () => {
+      options.assertActive?.();
+      return registry.backfillFailedLaunchReporting(actuationCap);
     });
+    for (const receipt of registry.failedSpawnReceipts(actuationCap)) {
+      options.assertActive?.();
+      registry.reportFailedLaunch(receipt, { now: now() });
+    }
   }
-  await registry.deliveryWrite({ label: "spawn.orphan-hygiene" },() =>
-    registry.terminalizeAbandonedSpawnEntries({ now: now(),timeoutMs,limit: actuationCap }));
-  const snapshot = registry.readOnlySnapshot();
+  await registry.deliveryWrite({ label: "spawn.orphan-hygiene" }, () => {
+    options.assertActive?.();
+    options.signal?.throwIfAborted();
+    return registry.terminalizeAbandonedSpawnEntries({ now: now(), timeoutMs, limit: actuationCap });
+  });
+  const openReceipts = registry.openSpawnReceipts();
+  const snapshot = registry.spawnRecoverySnapshot(openReceipts.map(receipt => receipt.launchId));
   const terminalized: string[] = [];
   const recovered: string[] = [];
   let examined = 0;
-  for (const receipt of registry.openSpawnReceipts()) {
+  for (const receipt of openReceipts) {
     options.assertActive?.();
     if (examined >= actuationCap) break;
     if (receipt.state === "completed" || receipt.state === "failed" || receipt.state === "conflicted") continue;
     const queued = queuedPinnedSpawnForReceipt(receipt);
     if (queued) {
+      if (options.actuateQueuedSpawns === false) continue;
       if (Date.parse(queued.retryAt) > now()) continue;
       if (receipt.transport === "structured" && !client) continue;
       examined += 1;
@@ -1108,20 +1156,26 @@ export async function terminalizeStaleStructuredSpawns(
       examined += 1;
       try {
         const operation = await client.operationStatus(receipt.launchId);
-        const effect = await structuredSpawnEffectForLaunch(client,receipt.launchId);
+        assertActive();
+        const effect = await structuredSpawnEffectForLaunch(client, receipt.launchId, assertActive);
+        assertActive();
         const session = client.readSession
           ? await client.readSession({ conversationId: receipt.conversationId })
           : (await client.snapshot()).sessions.find(candidate => candidate.conversationId === receipt.conversationId);
-        options.assertActive?.();
+        assertActive();
         if (operation || effect || session) continue;
         const failure = await registry.failStructuredSpawnOffLoop(receipt.launchId,
           `spawn interrupted before transport or runtime admission: ${receipt.launchId}`, {
-            recoveryFence: (_file,current) => current.transport === null && !current.key && !current.pane
-              && !current.verifiedHost && !current.admissionOwner && !current.queuedPinnedSpawn
-              && Number.isFinite(Date.parse(current.createdAt)) && now()-Date.parse(current.createdAt) >= timeoutMs,
+            recoveryFence: (_file, current) => {
+              assertActive();
+              return current.transport === null && !current.key && !current.pane
+                && !current.verifiedHost && !current.admissionOwner && !current.queuedPinnedSpawn
+                && Number.isFinite(Date.parse(current.createdAt)) && now() - Date.parse(current.createdAt) >= timeoutMs;
+            },
           });
         if (failure.claimed) terminalized.push(receipt.launchId);
       } catch (error) {
+        assertActive();
         spawnDiagnosticErrorFor(receipt.clientAttemptId,"[reaper] unproven spawn reconciliation failed",{ launchId: receipt.launchId,error });
       }
       continue;
@@ -1130,10 +1184,11 @@ export async function terminalizeStaleStructuredSpawns(
     if (!client) continue;
     examined += 1;
     try {
-      const reconciled = await reconcile(receipt.launchId, registry, client, { now, timeoutMs, assertActive: options.assertActive });
+      const reconciled = await reconcile(receipt.launchId, registry, client, { now, timeoutMs, assertActive });
       if (reconciled.state === "failed") terminalized.push(receipt.launchId);
       else if (reconciled.state === "completed") recovered.push(receipt.launchId);
     } catch (error) {
+      assertActive();
       spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] stale structured spawn reconciliation failed", {
         launchId: receipt.launchId,
         error,
@@ -1141,13 +1196,6 @@ export async function terminalizeStaleStructuredSpawns(
     }
   }
   return { examined, terminalized, recovered };
-}
-
-function launcherProjectFromRegistry(file: RegistryFile, conversationId: ViewerConversationId | undefined): string | undefined {
-  if (!conversationId) return undefined;
-  const canonical = resolveConversationAlias(file, conversationId);
-  const seat = (file.memberships[canonical] ?? []).find((membership) => membership.kind === "orchestrator");
-  return seat?.containerId;
 }
 
 export interface StructuredSpawnInput {
@@ -1184,6 +1232,16 @@ function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredS
     throw new Error(TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH);
   }
   return { ...input, receipt, spec: { ...input.spec, launchProfile: receipt.launchProfile } };
+}
+
+/** Memory preparation yields before native dispatch; a cancelled or changed
+    receipt must not open an engine from its earlier options. */
+function assertMemoryPreparedStartCurrent(input: StructuredSpawnInput): void {
+  const current = admittedStructuredLaunchInput(input).receipt;
+  if (["completed", "failed", "conflicted"].includes(current.state)
+    || JSON.stringify(current.launchProfile) !== JSON.stringify(input.spec.launchProfile)) {
+    throw Error("structured spawn changed during memory preparation");
+  }
 }
 
 interface HostBinding {
@@ -1357,7 +1415,11 @@ function supersededQueuedSpawnReason(
   if (receipt.artifactLifecycle !== "pending") return null;
   const entry = receipt.key ? snapshot.entries[sessionKeyId(receipt.key)] : null;
   if (entry?.structuredHost?.process || entry?.claimOwner) return null;
-  const replaced = Object.values(snapshot.receipts).some((candidate) => {
+  const candidates = [
+    ...registryRowsMatching(snapshot, "receipts", "supersedes.conversationId", receipt.conversationId),
+    ...(receipt.requestDigest ? registryRowsMatching(snapshot, "receipts", "requestDigest", receipt.requestDigest) : []),
+  ];
+  const replaced = candidates.some((candidate) => {
     if (candidate.launchId === receipt.launchId) return false;
     if (candidate.transport !== "structured" || candidate.purpose !== "launch") return false;
     if (candidate.state === "failed" || candidate.state === "conflicted") return false;
@@ -1373,30 +1435,66 @@ function supersededQueuedSpawnReason(
     : null;
 }
 
+const recoveryGlobals = process as typeof process & { __llvSpawnRecoveryCursors?: WeakMap<AgentRegistry, string> };
+const spawnRecoveryCursors = recoveryGlobals.__llvSpawnRecoveryCursors ??= new WeakMap<AgentRegistry, string>();
+
 export async function recoverPendingStructuredSpawns(
   registry: AgentRegistry,
   client: RuntimeHostClient,
   options: StructuredSpawnRecoveryOptions = {},
 ): Promise<void> {
-  const assertActive = options.assertActive ?? (() => {});
+  const deadline = AbortSignal.timeout(20_000);
+  const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
+  const assertActive = () => { signal.throwIfAborted(); options.assertActive?.(); };
+  client = withRuntimeRecoveryReads(client, signal);
+  try {
+    await recoverPendingStructuredSpawnPass(registry, client, { ...options, signal, assertActive });
+  } catch (error) {
+    // The phase budget defers durable work to later passes and the controller.
+    // Operator cancellation and loss of release authority still reject boot.
+    options.signal?.throwIfAborted();
+    options.assertActive?.();
+    if (!deadline.aborted) throw error;
+  }
+}
+
+async function recoverPendingStructuredSpawnPass(
+  registry: AgentRegistry,
+  client: RuntimeHostClient,
+  options: StructuredSpawnRecoveryOptions & { assertActive: () => void },
+): Promise<void> {
+  const assertActive = options.assertActive;
+  const signal = options.signal;
   assertActive();
+  await registry.prepareRecoveryIndexes(signal);
   /* Boot reconciliation shares the reaper's bounded contract so placeholders
      admitted by an older process settle before startup replay considers them. */
-  await terminalizeStaleStructuredSpawns(registry, client, options);
+  await terminalizeStaleStructuredSpawns(registry, client, { ...options, assertActive, repairFailures: false, actuateQueuedSpawns: false });
+  assertActive();
+  const open = registry.openSpawnReceipts();
   const spawnEffects = new Map<string, Record<string, unknown>>();
   let afterEventSeq = 0;
-  while (true) {
+  let batch = await client.effectBatch(["runtime.spawn"]);
+  const activity = await readRuntimeSnapshot(client, "activity");
+  assertActive();
+  // One scalar watermark bounds the admitted work even while peers append.
+  // The phase deadline interrupts reads; unresolved keys remain in the outbox.
+  const watermark = activity.snapshotSeq;
+  for (;;) {
     assertActive();
-    const batch = await client.effectBatch(["runtime.spawn"], afterEventSeq);
     for (const effect of batch) {
+      if (effect.eventSeq > watermark) continue;
       const operationId = typeof effect.payload.operationId === "string" ? effect.payload.operationId : null;
       if (operationId) spawnEffects.set(operationId, effect.payload);
     }
-    if (batch.length < 100) break;
-    const next = Math.max(...batch.map((effect) => effect.eventSeq));
+    if (batch.length < 100 || batch.some(effect => effect.eventSeq >= watermark)) break;
+    const next = Math.max(...batch.map(effect => effect.eventSeq));
     if (!Number.isSafeInteger(next) || next <= afterEventSeq) throw new Error("structured spawn recovery effect page did not advance");
     afterEventSeq = next;
+    batch = await client.effectBatch(["runtime.spawn"], afterEventSeq);
   }
+  const snapshot = registry.spawnRecoverySnapshot([...open.map(receipt => receipt.launchId), ...spawnEffects.keys()],
+    activity.sessions.filter(session => session.host !== "dead").map(session => session.conversationId));
 
   // Historical failures need one identity snapshot for this pass. Fetching the
   // entire runtime once per failed receipt multiplies startup admission work
@@ -1414,7 +1512,6 @@ export async function recoverPendingStructuredSpawns(
       .map((session) => session.conversationId));
   })();
 
-  const snapshot = registry.readOnlySnapshot();
   const failedGroups = new Map<string, SpawnReceipt[]>();
   for (const receipt of Object.values(snapshot.receipts)) {
     if (receipt.state !== "failed" || receipt.transport === "tmux") continue;
@@ -1439,8 +1536,10 @@ export async function recoverPendingStructuredSpawns(
     const registering = client.readSession
       ? (await client.readSession({ conversationId: receipt.conversationId }).catch(() => null))?.host === "registering"
       : (await registeringSessions()).has(receipt.conversationId);
+    assertActive();
     if (!registering) return;
     const operation = await client.operationStatus(receipt.launchId);
+    assertActive();
     const status = operation?.receipt.status;
     if (operation
       && operation.receipt.conversationId === receipt.conversationId
@@ -1450,9 +1549,30 @@ export async function recoverPendingStructuredSpawns(
       });
     }
   }
-  for (const observed of Object.values(snapshot.receipts)) {
+  const ordered = Object.values(snapshot.receipts).sort((a, b) => a.launchId < b.launchId ? -1 : a.launchId > b.launchId ? 1 : 0);
+  const cursor = spawnRecoveryCursors.get(registry);
+  const next = cursor ? ordered.findIndex(receipt => receipt.launchId > cursor) : 0;
+  const selected = next > 0 ? [...ordered.slice(next), ...ordered.slice(0, next)] : ordered;
+  let examined = 0;
+  let previous: string | undefined;
+  const reportRecovery = async () => {
+    if (!options.reportProgress) return;
+    const current = registry.spawnRecoverySnapshot(selected.map(receipt => receipt.launchId));
+    const completed = selected.filter(receipt => ["completed", "failed", "conflicted"].includes(current.receipts[receipt.launchId]?.state ?? "")).length;
+    // Deferred identities remain durably pending; examining one never closes it.
+    await options.reportProgress({ examined, total: selected.length, completed, deferred: selected.length - completed });
+  };
+  for (const observed of selected) {
+    if (previous) spawnRecoveryCursors.set(registry, previous);
     assertActive();
-    const fresh = registry.readOnlySnapshot();
+    if (examined % 16 === 0) await reportRecovery();
+    examined += 1;
+    await yieldToRuntime();
+    assertActive();
+    // Commit this cursor only once its observation finishes. The read cut by
+    // the deadline gets the first turn in the next pass, under the same keys.
+    previous = observed.launchId;
+    const fresh = registry.spawnRecoverySnapshot([observed.launchId]);
     const receipt = fresh.receipts[observed.launchId];
     if (!receipt) continue;
     const effect = spawnEffects.get(receipt.launchId);
@@ -1469,7 +1589,10 @@ export async function recoverPendingStructuredSpawns(
       const stale = await client.operationStatus(receipt.launchId);
       assertActive();
       const failure = await registry.failStructuredSpawnOffLoop(receipt.launchId, supersededReason, {
-        recoveryFence: (file, current) => supersededQueuedSpawnReason(file, current) === supersededReason,
+        recoveryFence: (file, current) => {
+          assertActive();
+          return supersededQueuedSpawnReason(file, current) === supersededReason;
+        },
       });
       if (!failure.claimed) continue;
       const staleStatus = stale?.receipt.status;
@@ -1485,6 +1608,11 @@ export async function recoverPendingStructuredSpawns(
     if (receipt.state === "failed" && receipt.transport !== "tmux") continue;
     if (queuedPinnedSpawnForReceipt(receipt)) continue;
     if (receipt.state === "starting" && !receipt.key && receipt.transport !== "tmux") {
+      // A recent pre-identity launch with a live admission owner cannot be
+      // terminalized by startingRecovery. Its owner retains responsibility.
+      const createdAt = Date.parse(receipt.createdAt);
+      if (receipt.admissionOwner && processIdentityStatus(receipt.admissionOwner) !== "dead"
+        && (!Number.isFinite(createdAt) || (options.now ?? Date.now)() - createdAt < (options.timeoutMs ?? STALE_STRUCTURED_SPAWN_TIMEOUT_MS))) continue;
       const operation = await client.operationStatus(receipt.launchId);
       if (receipt.transport !== "structured" && !effect && !operation) continue;
       let reason: string;
@@ -1498,6 +1626,7 @@ export async function recoverPendingStructuredSpawns(
       }
       assertActive();
       const failure = await registry.failStructuredSpawnOffLoop(receipt.launchId, reason, {
+        recoveryFence: () => { assertActive(); return true; },
         startingRecovery: {
           now: (options.now ?? Date.now)(),
           timeoutMs: options.timeoutMs ?? STALE_STRUCTURED_SPAWN_TIMEOUT_MS,
@@ -1512,7 +1641,7 @@ export async function recoverPendingStructuredSpawns(
       if (identity) {
         const entry = registry.readOnlySnapshot().entries[sessionKeyId(identity.key)];
         if (entry?.structuredHost) {
-          claimed = registry.claimStructuredHost(identity.key, captureProcessIdentity(process.pid), { allowUnhosted: true });
+          claimed = (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, identity.key, captureProcessIdentity(process.pid), { allowUnhosted: true })));
           if (!claimed?.claimOwner) continue;
         }
         try {
@@ -1535,12 +1664,13 @@ export async function recoverPendingStructuredSpawns(
     if (receipt.admissionOwner && processIdentityStatus(receipt.admissionOwner) !== "dead"
       && (!Number.isFinite(createdAt) || (options.now ?? Date.now)() - createdAt < (options.timeoutMs ?? STALE_STRUCTURED_SPAWN_TIMEOUT_MS))) continue;
     if (stagedLaunchRecovery(receipt)) {
-      await recoverStagedStructuredLaunch(receipt.launchId, registry, client);
+      await recoverStagedStructuredLaunch(receipt.launchId, registry, client, { assertActive, reap: { assertActive } });
       continue;
     }
     if (receipt.state !== "path-pending" || !receipt.key || !receipt.artifactPath) continue;
     const entry = snapshot.entries[sessionKeyId(receipt.key)];
     const operation = await client.operationStatus(receipt.launchId);
+    assertActive();
     const status = operation?.receipt.status;
     if (status && FAILED_SPAWN_OPERATION_STATUSES.has(status)) {
       const stagedByAnotherOperation = typeof entry?.structuredHostOperationId === "string"
@@ -1549,6 +1679,7 @@ export async function recoverPendingStructuredSpawns(
         await registry.failSpawnOffLoop(
           receipt.launchId,
           operation?.receipt.reason ?? `structured spawn operation ended as ${status}`,
+          assertActive,
         );
         continue;
       }
@@ -1557,11 +1688,12 @@ export async function recoverPendingStructuredSpawns(
       let recoveryClaim: AgentRegistryEntry | null = null;
       let releasedOwnedHost = false;
       if (entry?.structuredHost && !ownedByFailedOperation) {
-        recoveryClaim = registry.claimStructuredHost(receipt.key, captureProcessIdentity(process.pid), { allowUnhosted: true });
+        recoveryClaim = (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, receipt.key, captureProcessIdentity(process.pid), { allowUnhosted: true })));
         if (!recoveryClaim?.claimOwner) {
           await registry.failSpawnOffLoop(
             receipt.launchId,
             operation?.receipt.reason ?? `structured spawn operation ended as ${status}`,
+            assertActive,
           );
           continue;
         }
@@ -1570,7 +1702,7 @@ export async function recoverPendingStructuredSpawns(
         const releasedHost = await releaseStructuredDeliveryHost(receipt.key);
         releasedOwnedHost = ownedByFailedOperation && releasedHost;
         if (entry?.structuredHost && ownedByFailedOperation && !releasedHost) {
-          recoveryClaim = registry.claimStructuredHost(receipt.key, captureProcessIdentity(process.pid), { allowUnhosted: true });
+          recoveryClaim = (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, receipt.key, captureProcessIdentity(process.pid), { allowUnhosted: true })));
           if (!recoveryClaim?.claimOwner) {
             throw new Error(`structured spawn failed host is still owned for ${receipt.launchId}`);
           }
@@ -1589,6 +1721,7 @@ export async function recoverPendingStructuredSpawns(
       await registry.failStructuredSpawnOffLoop(
         receipt.launchId,
         operation?.receipt.reason ?? `structured spawn operation ended as ${status}`,
+        { recoveryFence: () => { assertActive(); return true; } },
       );
       continue;
     }
@@ -1602,7 +1735,7 @@ export async function recoverPendingStructuredSpawns(
         && entry.status !== "dead"
         && entry.status !== "unhosted";
       if (hostReady) {
-        const finalized = registry.finalizeStructuredSpawn(receipt.launchId);
+        const finalized = (await registry.deliveryWriteOrBusy({ label: "registry.finalizeStructuredSpawn" }, registry.finalizeStructuredSpawn.bind(registry, receipt.launchId)));
         if (finalized.kind === "conflict") throw new Error(`structured spawn recovery conflict: ${finalized.code}`);
       } else {
         if (!entry) throw new Error(`structured spawn recovery identity is unavailable for ${receipt.launchId}`);
@@ -1613,7 +1746,8 @@ export async function recoverPendingStructuredSpawns(
           entry,
           `structured-spawn-delivered-host-dead:${receipt.launchId}`,
         );
-        const settled = registry.recoverDeliveredStructuredSpawn(receipt.launchId);
+        assertActive();
+        const settled = (await registry.deliveryWriteOrBusy({ label: "registry.recoverDeliveredStructuredSpawn" }, registry.recoverDeliveredStructuredSpawn.bind(registry, receipt.launchId)));
         if (settled.kind === "conflict") throw new Error(`structured spawn recovery conflict: ${settled.code}`);
       }
       continue;
@@ -1635,26 +1769,32 @@ export async function recoverPendingStructuredSpawns(
         launchId: receipt.launchId,
         text: prompt,
         imageRefs,
+        admissionGuard: assertActive,
         ...(origin ? { origin } : {}),
       }, {
         client: () => client,
         registry: () => registry,
         enabled: () => true,
       });
+      assertActive();
       if (!delivered?.ok) throw new Error(delivered?.error ?? `structured spawn recovery could not admit ${receipt.launchId}`);
       if (delivered.outcome === "held") continue;
       if (delivered.outcome !== "delivered") {
-        await waitForStructuredInitialMessage(client, delivered.operationId);
-        await settleInitialMessageReservation(registry, receipt.launchId);
+        // Durable admission is sufficient for boot. The delivery controller
+        // owns transcript publication and settlement under the original key.
+        continue;
       }
     }
     /* Delivery acceptance can precede lazy Codex rollout creation. Keep the
        receipt staged so replay exposes no identity while the host is live. */
     if (!structuredTranscriptIsReadable(receipt.artifactPath)) continue;
     await client.transitionOperation(receipt.launchId, "delivered");
-    const finalized = registry.finalizeStructuredSpawn(receipt.launchId);
+    assertActive();
+    const finalized = (await registry.deliveryWriteOrBusy({ label: "registry.finalizeStructuredSpawn" }, registry.finalizeStructuredSpawn.bind(registry, receipt.launchId)));
     if (finalized.kind === "conflict") throw new Error(`structured spawn recovery conflict: ${finalized.code}`);
   }
+  if (previous) spawnRecoveryCursors.set(registry, previous);
+  await reportRecovery();
 }
 
 function pendingColumns(engine: AgentEngine, eventCursor = 0, writerClaimEpoch = 0): StructuredHostColumns {
@@ -1803,23 +1943,24 @@ export async function startCopilotStructuredHost(
 }
 
 /** Production option builder shared by fresh and resumed Claude hosts. */
-export function claudeStructuredHostOptions(
-  input: Pick<StructuredSpawnInput, "spec" | "account">,
+export async function claudeStructuredHostOptions(
+  input: Pick<StructuredSpawnInput, "spec" | "account"> & Partial<Pick<StructuredSpawnInput, "receipt" | "registry">>,
   access: Pick<StructuredHostAccessMaterialization, "env" | "host">,
   initialEventCursor?: number,
   validateTelegramGrant?: () => void,
   agentRole?: string | null,
 ) {
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
+  const launchPaths = claudeHostLaunchPaths(input.account);
   return {
     cwd: input.spec.cwd,
     claudeProjectsDir: input.account.transcriptRoot,
-    ...claudeHostLaunchPaths(input.account),
+    ...launchPaths,
     providerAccount: Boolean(input.account.claudeProvider),
     allowSubagents: profile.allowSubagents,
     operatorDecisionForms: operatorDecisionFormsRequired(agentRole, input.spec.transcript),
     cleanMemory: profile.cleanMemory === true,
-    appendSystemPrompt: learnedRulesForLaunchProfile(profile),
+    appendSystemPrompt: await learnedRulesForLaunchProfile(profile, input.receipt && input.registry ? { engine: "claude", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.account.claudeProvider) } : undefined),
     mcpServers: profile.mcpServers,
     validateTelegramGrant,
     readOnly: launchProfileEngineReadOnly(profile),
@@ -1880,6 +2021,7 @@ export async function defaultStartHost(
   const access = materializeStructuredHostAccess(structuredHostAccessPolicy(profile), input.account.env, capability);
   const env = access.env;
   if (input.engine === "codex") {
+    const nativeMemoryEnabled = await codexNativeMemoryEnabled(input.account.home, profile.allowSubagents, profile.cleanMemory === true);
     const options = {
       cwd: input.spec.cwd,
       codexHome: input.account.home,
@@ -1890,7 +2032,8 @@ export async function defaultStartHost(
       allowSubagents: profile.allowSubagents,
       operatorDecisionForms: operatorDecisionFormsRequired(input.receipt.agentRole, input.receipt.artifactPath ?? input.spec.transcript),
       cleanMemory: profile.cleanMemory === true,
-      developerInstructions: learnedRulesForLaunchProfile(profile),
+      nativeMemoryEnabled,
+      developerInstructions: await learnedRulesForLaunchProfile(profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.receipt.conversationId), cwd: input.spec.cwd, home: input.account.home, env, nativeMemoryEnabled }),
       mcpServers: profile.mcpServers,
       validateTelegramGrant,
       /* Plugin grant from the durable profile (issue #687): present only for
@@ -1904,16 +2047,20 @@ export async function defaultStartHost(
       ...engineProcess.codex,
       ...(memoryCell ? { memoryCell } : {}),
     };
+    await input.authorize?.();
+    assertMemoryPreparedStartCurrent(input);
     return resumeSessionId
       ? await CodexAppServerHost.adopt(resumeSessionId, options)
       : await CodexAppServerHost.start(options);
   }
   const form = structuredClaudeLaunchForm(input);
   const options = {
-    ...claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant, input.receipt.agentRole),
+    ...await claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant, input.receipt.agentRole),
     ...engineProcess.claude,
     ...(memoryCell ? { memoryCell } : {}),
   };
+  await input.authorize?.();
+  assertMemoryPreparedStartCurrent(input);
   return form.kind === "resume"
     ? await ClaudeStreamBrokerHost.adopt(form.sessionId, options)
     : await ClaudeStreamBrokerHost.start({ ...options, ...(form.sessionId ? { sessionId: form.sessionId } : {}) });
@@ -2095,6 +2242,7 @@ export async function failStagedResume(
   options: Omit<LaunchReapOptions, "spawnStatus" | "failUnreadOperation"> = {},
 ): Promise<{ claimed: boolean; receipt: SpawnReceipt | null }> {
   const operation = await client.operationStatus(launchId).catch(() => null);
+  options.assertActive?.();
   const failed = await failStructuredLaunchAndReap(launchId, registry, client, reason.slice(0, 240), {
     ...options,
     spawnStatus: operation?.receipt.status ?? null,
@@ -2139,8 +2287,9 @@ export async function recoverStagedStructuredLaunch(
   launchId: string,
   registry: AgentRegistry,
   client: RuntimeHostClient,
-  options: { now?: () => number; eligible?: () => boolean; reap?: Omit<LaunchReapOptions, "spawnStatus" | "failUnreadOperation">; curationSources?: SeatTickSources } = {},
+  options: { now?: () => number; eligible?: () => boolean; assertActive?: () => void; reap?: Omit<LaunchReapOptions, "spawnStatus" | "failUnreadOperation">; curationSources?: SeatTickSources } = {},
 ): Promise<SpawnReceipt> {
+  options.assertActive?.();
   const inFlight = stagedRecoveryWork.get(launchId);
   if (inFlight) return inFlight;
   const work = async (): Promise<SpawnReceipt> => {
@@ -2158,7 +2307,7 @@ export async function recoverStagedStructuredLaunch(
        the one that must end, whoever holds its host (#2028). */
     const unadvanceable = unadvanceableStagedLaunch(receipt, recovery, pipelineMember, now());
     if (unadvanceable) {
-      const failed = await failStagedResume(launchId, registry, client, unadvanceable, options.reap);
+      const failed = await failStagedResume(launchId, registry, client, unadvanceable, { ...options.reap, assertActive: options.assertActive });
       return failed.receipt ?? read();
     }
     if (lostStagedLaunch(registry.readOnlySnapshot(), receipt, now())) {
@@ -2169,13 +2318,14 @@ export async function recoverStagedStructuredLaunch(
           launchProfile: receipt.launchProfile, status: "dead" as const, host: null, structuredHost: null,
           claimEpoch: 0, claimOwner: null, pendingAction: null,
         } : undefined;
-        const recovered = registry.recoverStructuredSpawnFromEvidence(launchId, evidence);
+        const recovered = (await registry.deliveryWriteOrBusy({ label: "registry.recoverStructuredSpawnFromEvidence" }, registry.recoverStructuredSpawnFromEvidence.bind(registry, launchId, evidence)));
         if (recovered.kind === "settled") stagedContinuations.delete(launchId);
         return read();
       }
       const reason = `lost before its first turn: host exited after first-message dispatch (${recovery!.phase}); no transcript was written; last check: ${recovery!.reason}`;
       const failed = await failStagedResume(launchId, registry, client, reason, {
         ...options.reap,
+        assertActive: options.assertActive,
         recoveryFence: (file, current) => current.error === receipt.error
           && current.artifactPath === receipt.artifactPath && lostStagedLaunch(file, current, now())
           && !(current.artifactPath && hasUserAuthoredMessage(current.artifactPath, current.engine)),
@@ -2195,6 +2345,7 @@ export async function recoverStagedStructuredLaunch(
     // Publication and dispatch continue to require the current writer.
     const ownsHost = Boolean(host && writer?.claimOwner && receipt.key && (continuation ? await continuation.owns()
       : writer.claimOwner === `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`));
+    options.assertActive?.();
     if (!ownsHost && writer?.claimOwner) {
       const owner = structuredClaimIdentity(writer.claimOwner);
       // A replacement writer can be starting its host while the row retains
@@ -2209,6 +2360,7 @@ export async function recoverStagedStructuredLaunch(
     }
     let observedError = receipt.error;
     const matches = (latest: SpawnReceipt | undefined, entry: AgentRegistryEntry | null | undefined) => {
+      options.assertActive?.();
       return latest?.state === "path-pending" && latest.conversationId === receipt.conversationId
         && latest.error === observedError
         && (latest.key ? receipt.key && sessionKeyId(latest.key) === sessionKeyId(receipt.key) : !receipt.key)
@@ -2243,7 +2395,9 @@ export async function recoverStagedStructuredLaunch(
     try {
       // Read ORIGINAL ids. A timeout is unknown; it cannot stand in for null.
       const launch = await client.operationStatus(launchId);
+      options.assertActive?.();
       const message = await client.operationStatus(`spawn_message_${launchId}`);
+      options.assertActive?.();
       if (!current()) return read();
       for (const [id, operation] of [[launchId, launch], [`spawn_message_${launchId}`, message]] as const) {
         if (operation && (operation.receipt.operationId !== id || operation.receipt.conversationId !== receipt.conversationId)) {
@@ -2266,11 +2420,12 @@ export async function recoverStagedStructuredLaunch(
         if (!persist(recovery)) return read();
         if (!receipt.artifactPath || !structuredTranscriptIsReadable(receipt.artifactPath)) return read();
         await client.transitionOperation(launchId, "delivered");
+        options.assertActive?.();
         if (!current()) return read();
         const entry = receipt.key ? registry.readOnlySnapshot().entries[sessionKeyId(receipt.key)] : null;
         const live = entry?.structuredHost?.process && entry.claimOwner && entry.status !== "dead" && entry.status !== "unhosted";
         if (!live && (entry?.structuredHost?.process || entry?.claimOwner)) return read();
-        const result = registry.recoverStructuredSpawnFromEvidence(launchId);
+        const result = (await registry.deliveryWriteOrBusy({ label: "registry.recoverStructuredSpawnFromEvidence" }, registry.recoverStructuredSpawnFromEvidence.bind(registry, launchId)));
         if (result.kind === "conflict") return stop(`staged launch settlement conflict: ${result.code}`);
         stagedContinuations.delete(launchId);
         return read();
@@ -2287,6 +2442,7 @@ export async function recoverStagedStructuredLaunch(
       let curatorAuthorize: () => void;
       try {
         curatorAuthorize = await curatorReceiptAdmission(receipt, registry, options.curationSources);
+        options.assertActive?.();
         curatorAuthorize();
       } catch (error) {
         return stop(stagedRecoveryFailureReason(error));
@@ -2312,7 +2468,7 @@ export async function recoverStagedStructuredLaunch(
           persist(recovery);
         }
       } else {
-        const effect = await structuredSpawnEffectForLaunch(client, launchId);
+        const effect = await structuredSpawnEffectForLaunch(client, launchId, options.assertActive);
         if (!effect || effect.conversationId !== receipt.conversationId || effect.cwd !== receipt.cwd) return stop("original launch payload could not be verified");
         const images = parseStructuredImageRefs(effect.images ?? [], 16);
         if (typeof effect.prompt !== "string" || images === null) return stop("original launch payload is invalid");
@@ -2325,7 +2481,7 @@ export async function recoverStagedStructuredLaunch(
         if (!persist(recovery)) return read();
         const result = await enqueueStructuredMessage({ path: receipt.artifactPath, conversationId: receipt.conversationId,
           clientMessageId: `spawn_${launchId}`, operationId: `spawn_message_${launchId}`, launchId, text: effect.prompt, imageRefs: images,
-          ...(origin ? { origin } : {}), ...(receipt.agentRole === "curator" ? { admissionGuard: () => curatorAuthorize() } : {}),
+          ...(origin ? { origin } : {}), admissionGuard: () => { options.assertActive?.(); curatorAuthorize(); },
         }, { client: () => client, registry: () => registry, enabled: () => true });
         if (!result?.ok) {
           const reason = result?.error ?? "original first-message admission failed";
@@ -2459,9 +2615,8 @@ export async function spawnStructuredConversation(
     input = admittedStructuredLaunchInput(input);
     assertResumeSurvivorsRetired();
     await input.authorize?.();
-    const capability = input.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
-    input.registry.setReceiptViewerMcpTransport(input.receipt.launchId,
-      viewerMcpTransportForLaunch({ ...input.account.env, LLV_SPAWN_CAPABILITY: capability }));
+    const capability = (await input.registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForReceipt" }, input.registry.rotateSpawnCapabilityForReceipt.bind(input.registry, input.receipt.launchId)));
+    (await input.registry.deliveryWriteOrBusy({ label: "registry.setReceiptViewerMcpTransport" }, input.registry.setReceiptViewerMcpTransport.bind(input.registry, input.receipt.launchId, viewerMcpTransportForLaunch({ ...input.account.env, LLV_SPAWN_CAPABILITY: capability }))));
     const durableSetupTimeoutMs = dependencies.durableSetupTimeoutMs
       ?? STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS;
     durableSetupDeadline = now() + durableSetupTimeoutMs;
@@ -2489,6 +2644,7 @@ export async function spawnStructuredConversation(
       }
     }, () => {});
     host = await withinDurableSetup(startingHost);
+    if (host.viewerMcpTransport) (await input.registry.deliveryWriteOrBusy({ label: "registry.setReceiptViewerMcpTransport" }, input.registry.setReceiptViewerMcpTransport.bind(input.registry, input.receipt.launchId, host.viewerMcpTransport)));
     const identity = hostIdentity(input.engine, host, input);
     key = identity.key;
     if (resumeKey && sessionKeyId(key) !== sessionKeyId(resumeKey)) {
@@ -2496,7 +2652,7 @@ export async function spawnStructuredConversation(
     }
     const stagedClaimEpoch = adoptionClaim?.claimEpoch ?? 0;
     const stagedClaimOwner = adoptionClaim?.claimOwner ?? null;
-    const staged = input.registry.stageStructuredSpawn(input.receipt.launchId, {
+    const staged = (await input.registry.deliveryWriteOrBusy({ label: "registry.stageStructuredSpawn" }, input.registry.stageStructuredSpawn.bind(input.registry, input.receipt.launchId, {
       key,
       artifactPath: identity.path,
       cwd: input.spec.cwd,
@@ -2512,14 +2668,14 @@ export async function spawnStructuredConversation(
       claimEpoch: stagedClaimEpoch,
       claimOwner: stagedClaimOwner,
       pendingAction: "spawn",
-    });
+    })));
     if (staged.kind === "conflict") throw new Error(`structured spawn registry conflict: ${staged.code}`);
     const stagedPath = identityMaterializationFence().allowsReceipt(staged.receipt, { structured: true })
       ? identity.path
       : null;
     const claimed = adoptionClaim
       ? staged.entry
-      : input.registry.claimStructuredHost(key, processIdentity(), { allowUnhosted: true });
+      : (await input.registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, input.registry.claimStructuredHost.bind(input.registry, key, processIdentity(), { allowUnhosted: true })));
     if (!claimed?.claimOwner) throw new Error("structured spawn host claim is unavailable");
     adoptionClaimTransferred = adoptionClaim !== null;
     binding.stopPersistence = await withinDurableSetup(
@@ -2611,10 +2767,7 @@ export async function spawnStructuredConversation(
         continuation.deliver = () => defaultDeliverFirst(input, identity.path);
       }
       clearDurableSetupTimeout();
-      input.registry.releaseStructuredSpawnAdmissionOwner(
-        input.receipt.launchId,
-        input.receipt.admissionOwner ?? processIdentity(),
-      );
+      (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, input.receipt.launchId, input.receipt.admissionOwner ?? processIdentity())));
       return {
         ok: true,
         target: null,
@@ -2634,10 +2787,7 @@ export async function spawnStructuredConversation(
     writeStagedRecovery(input.registry, operationId, { ...recovery, phase: "delivered", reason: "transcript publication pending" });
     if (!content && !structuredTranscriptIsReadable(identity.path)) {
       clearDurableSetupTimeout();
-      input.registry.releaseStructuredSpawnAdmissionOwner(
-        input.receipt.launchId,
-        input.receipt.admissionOwner ?? processIdentity(),
-      );
+      (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, input.receipt.launchId, input.receipt.admissionOwner ?? processIdentity())));
       return {
         ok: true,
         target: null,
@@ -2681,7 +2831,7 @@ export async function spawnStructuredConversation(
     await withinDurableSetup(
       withRuntimeAdmissionRetry(() => input.client.transitionOperation(operationId, "delivered"), admissionRetry),
     );
-    const settled = input.registry.finalizeStructuredSpawn(input.receipt.launchId);
+    const settled = (await input.registry.deliveryWriteOrBusy({ label: "registry.finalizeStructuredSpawn" }, input.registry.finalizeStructuredSpawn.bind(input.registry, input.receipt.launchId)));
     stagedContinuations.delete(operationId);
     if (settled.kind === "conflict") throw new Error(`structured spawn registry conflict: ${settled.code}`);
     clearDurableSetupTimeout();
@@ -2708,7 +2858,7 @@ export async function spawnStructuredConversation(
     const recovery = stagedLaunchRecovery(pending);
     if (host && key && recovery && !durableSetupTimedOut && isTransientStagedLaunchFailure(error)) {
       writeStagedRecovery(input.registry, operationId, { ...recovery, reason: stagedRecoveryFailureReason(error) });
-      input.registry.releaseStructuredSpawnAdmissionOwner(operationId, input.receipt.admissionOwner ?? processIdentity());
+      (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, operationId, input.receipt.admissionOwner ?? processIdentity())));
       return { ok: true, target: null, path: null, launchId: operationId, conversationId: input.receipt.conversationId,
         launched: true, retrySafe: false, initialMessage: "queued", state: "path-pending", transport: "structured" };
     }

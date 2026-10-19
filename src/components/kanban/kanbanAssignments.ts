@@ -1,7 +1,8 @@
 "use client";
 
+import { applyTaskSnapshot, revertTaskSnapshot } from "@/hooks/useFiles";
 import { getLocale, translate } from "@/lib/i18n";
-import type { AssignmentRef, BoardTask } from "@/lib/tasks/types";
+import { LAUNCH_NOT_STARTED_ERROR, type AssignmentRef, type BoardTask, type TaskAssignment } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { fireTasksChanged } from "@/components/tasks/taskApi";
 
@@ -16,6 +17,10 @@ import { fireTasksChanged } from "@/components/tasks/taskApi";
  * - Unlink removes one assignment and stops nothing. A conversation left with
  *   no task is bound to a new untitled task of its own; when the task being
  *   left is already that, the route refuses with 409.
+ *
+ * Each of them is drawn at once (`optimisticAssignment`): the task row the
+ * write will produce is layered over the client cache before the request,
+ * replaced by the server's row when it answers, and taken off on a refusal.
  */
 
 export type AssignmentAnswer = { ok: true; task: BoardTask | null } | { ok: false; status: number; error: string };
@@ -109,4 +114,44 @@ export async function dismissUnstartedLaunches(taskId: string, launches: readonl
   }
   if (last) fireTasksChanged();
   return refused ?? last ?? { ok: true, task: null };
+}
+
+function matches(assignment: TaskAssignment, ref: AssignmentRef): boolean {
+  if (ref.launchId && assignment.launchId) return assignment.launchId === ref.launchId;
+  if (ref.conversationId && assignment.conversationId) return assignment.conversationId === ref.conversationId;
+  if (ref.path && assignment.path) return assignment.path === ref.path;
+  return ref.panePid != null && assignment.panePid === ref.panePid;
+}
+
+/** The task as a link of `file` leaves it: one more handoff row, unless the conversation is already on it. */
+export function predictLink(task: BoardTask, file: FileEntry, at = new Date().toISOString()): BoardTask {
+  if (task.assignments.some((assignment) => (file.conversationId && assignment.conversationId === file.conversationId) || assignment.path === file.path)) return task;
+  const row: TaskAssignment = { path: file.path, conversationId: file.conversationId ?? null, panePid: null, state: "handoff", error: null, at };
+  return { ...task, assignments: [...task.assignments, row] };
+}
+
+/** The task as an unlink of `ref` leaves it. */
+export function predictUnlink(task: BoardTask, ref: AssignmentRef): BoardTask {
+  return { ...task, assignments: task.assignments.filter((assignment) => !matches(assignment, ref)) };
+}
+
+/** The task as dismissing `launches` leaves it: each row kept and marked failed, as the route does. */
+export function predictDismissedLaunches(task: BoardTask, launches: readonly LaunchRef[], at = new Date().toISOString()): BoardTask {
+  const assignments = task.assignments.map((assignment) => launches.some((launch) => matches(assignment, launch))
+    ? { ...assignment, state: "failed" as const, error: LAUNCH_NOT_STARTED_ERROR, at }
+    : assignment);
+  return { ...task, assignments };
+}
+
+/**
+ * Draw `predicted` at once, send `write`, then settle: the server's row (or,
+ * when it answers none, the prediction until the next scan) on success; the
+ * stored row again on a refusal.
+ */
+export async function optimisticAssignment(predicted: BoardTask, write: () => Promise<AssignmentAnswer>): Promise<AssignmentAnswer> {
+  applyTaskSnapshot(predicted, false);
+  const answer = await write();
+  if (answer.ok) applyTaskSnapshot(answer.task?.id === predicted.id ? answer.task : predicted, true);
+  else revertTaskSnapshot(predicted.id);
+  return answer;
 }

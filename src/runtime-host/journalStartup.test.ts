@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
-import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { RuntimeJournal, type RuntimeJournalStartupProgress } from "./journal";
 import { expectedReceipts, largeJournal, pinWal, processWrites, receiptKeys, walCommits } from "./fixtures/largeRuntimeJournal";
 
@@ -133,7 +133,7 @@ test("cooperative open yields while verifying the full large-history hash chain"
   setImmediate(() => { yielded = true; expect(progress.some((p) => p.subphase === "hash-chain" && p.done === p.total)).toBe(false); });
   const journal = await RuntimeJournal.open(f, { onStartupProgress: (p) => progress.push(p) });
   expect(yielded).toBe(true); expect(journal.isWritable()).toBe(true); journal.close();
-  expect([...new Set(progress.map((p) => p.subphase))]).toEqual(["schema", "receipt-backfill", "integrity-check", "hash-chain"]);
+  expect([...new Set(progress.map((p) => p.subphase))]).toEqual(["schema", "checkpoint-reconciliation", "receipt-backfill", "integrity-check", "hash-chain"]);
   expect(progress.length).toBeLessThan(100);
   const corrupted = path.join(directory, "anchor-corruption.sqlite");
   largeJournal(corrupted, 300, { migrated: true });
@@ -146,6 +146,49 @@ test("cooperative open yields while verifying the full large-history hash chain"
   expect(faulted.isWritable()).toBe(false);
   expect(() => faulted.append({ scope: "system:fixture", kind: "fixture.history", payload: {} })).toThrow("read-only");
   faulted.close();
+}, 120_000);
+
+test("cooperative open reconciles legacy checkpoint orphans in bounded batches", async () => {
+  const f = path.join(directory, "checkpoint-reconciliation.sqlite");
+  largeJournal(f, 20_000, { migrated: true });
+  const db = new Database(f);
+  db.query(`INSERT INTO consumer_checkpoints(event_id, consumer, completed_at)
+    SELECT event_id, 'held', 1 FROM events ORDER BY seq LIMIT 20_000`).run();
+  db.query("INSERT INTO consumer_checkpoints(event_id, consumer, completed_at) VALUES ('legacy-retired-event', 'held', 1)").run();
+  db.query("INSERT INTO consumer_checkpoints(event_id, consumer, completed_at) VALUES ('', 'held', 1)").run();
+  db.query("INSERT INTO consumer_cursors(consumer, completed_seq) VALUES ('held', 0)").run();
+  db.close();
+
+  const progress: RuntimeJournalStartupProgress[] = [];
+  const exec = spyOn(Database.prototype, "exec");
+  const query = spyOn(Database.prototype, "query");
+  try {
+    const opening = RuntimeJournal.open(f, {
+      startupBatchRows: 32,
+      onStartupProgress: (item) => progress.push(item),
+    });
+    // The constructor and first generator step return after schema setup; no
+    // checkpoint reconciliation work or anti-join runs before the first yield.
+    expect(progress.map((item) => item.subphase)).toEqual(["schema", "schema"]);
+    expect(exec.mock.calls.some(([sql]) => /DELETE FROM consumer_checkpoints WHERE NOT EXISTS/i.test(sql))).toBe(false);
+    expect(query.mock.calls.some(([sql]) => /consumer_checkpoints/i.test(sql))).toBe(false);
+
+    const journal = await opening;
+    try {
+      expect(journal.isWritable()).toBe(true);
+      const reconciliation = progress.filter((item) => item.subphase === "checkpoint-reconciliation");
+      expect(reconciliation.length).toBeGreaterThan(1);
+      expect(reconciliation.at(-1)?.committedBatches).toBe(Math.ceil(20_002 / 32));
+      expect(reconciliation.every((item) => item.total === 0)).toBe(true);
+    } finally { journal.close(); }
+  } finally { query.mockRestore(); exec.mockRestore(); }
+
+  const verify = new Database(f, { readonly: true });
+  try {
+    expect(verify.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM consumer_checkpoints").get()).toEqual({ count: 20_000 });
+    expect(verify.query("SELECT event_id FROM consumer_checkpoints WHERE event_id = 'legacy-retired-event'").get()).toBeNull();
+    expect(verify.query("SELECT completed_seq FROM consumer_cursors WHERE consumer = 'held'").get()).toEqual({ completed_seq: 0 });
+  } finally { verify.close(); }
 }, 120_000);
 
 const sandboxes: string[] = [];

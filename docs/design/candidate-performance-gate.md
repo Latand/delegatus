@@ -1,6 +1,73 @@
 # Candidate performance gate
 
-Status: in force since the incident behind #2760, #2761 and #2762.
+Status: correctness checks remain enforced. Duration thresholds are diagnostic
+warnings and do not block a deployment. The report retains measured values and
+thresholds, including observations from older candidate images. Missing or
+malformed measurements, failed operations, lost sessions or receipts and
+induced faults still refuse promotion.
+
+Both release activations carry explicit completion flags. An incomplete
+activation refuses at any duration. An older report without these flags can
+retain its former within-budget result; an over-budget activation with no
+completion evidence stays refused. Browser observation stops accepting new
+requests at the window boundary and drains the captured in-flight requests for
+up to 30 seconds before deciding whether any went unanswered. Young in-flight
+requests in older reports retain their former within-budget result.
+
+## State-history and minute-timer coverage (RG2)
+
+`src/runtime-host/candidateStateDataset.ts`, called by
+`src/runtime-host/candidatePerformanceRun.ts`, generates
+270 hot pipelines (34 MB; largest 515 KB), 950 archived pipelines (111 MB;
+largest 1.1 MB), 2,450 tasks (9.8 MB), and 3,900 role-memory rows (about
+16 MB). One hundred scope rows carry 12.6 MB of generated history, including
+a 2.9 MB row, and one project retains 50 curator passes. The generator accepts
+a fresh state directory; it reads no installation data. Tasks go through the
+production importer so its receipt accompanies the generated rows.
+
+After the browser warm-up the production Viewer serves for at least 75 seconds.
+The done sweep, attention reconcile and runtime host's minute maintenance run
+on their production timers. One cold curator read and one HTTP rules-window
+view run during this window. The curator read uses a dedicated source process
+over the same state; the rules view uses the production HTTP route. The report
+keeps their durations and main-loop gaps separately: a long cooperative read can finish without a blocking gap.
+The rules probe includes the first timer tick after the response, capped by
+the serving window, so a fully synchronous request cannot appear to have zero
+lag merely because its timer had no turn before the reply. A native regression
+case reproduces that empty interval and requires the recovery sample.
+The loop-gap thresholds for those reads and for the runtime host outside boot
+are 250 ms, reported as `timingWarnings` under the policy from #3058.
+
+The runtime-host collector frames complete diagnostic lines across pipe
+chunks and checks the payload's process identity and role. A minute performance
+summary proves collection on a quiet host. Boot records and gaps crossing the
+warm-up boundary are excluded; malformed, dropped or overflowing diagnostics
+refuse the run. A missing host reading or a serving window below 75 seconds
+refuses as missing evidence. An incomplete generated census or a failed read
+also refuses; durations alone never refuse promotion.
+
+`--induce host-loop-stall` holds the real host loop for 800 ms during the
+serving window. Its own gap record must appear as a timing warning; the induced
+fault keeps that rehearsal refused. The evidence for adoption is recorded in
+`evidence/candidate-state-history.json`.
+
+The adoption pair uses `a25592be` before L1/L2/L4 and the stage's main base
+`84c2bb2f` after those fixes, with the same harness, generated census, eight
+browser views and two writers. Both full runs pass; the old code reports the
+new timing warnings. Commands, source digests and full measurements are in the
+evidence file.
+
+| Observation | Before | After |
+| --- | ---: | ---: |
+| Serving window after warm-up | 75,631 ms | 76,097 ms |
+| Host gap above 250 ms | 1,236 ms | none reported |
+| Curator main-loop gap | 5,048 ms | 192 ms |
+| Rules-window main-loop gap | 4,833.4 ms | 163.6 ms |
+
+The after-run retains unrelated browser timing warnings. The induced host
+control, with the registry reduced to one tenth and the state history still
+full size, records a 794 ms host gap as a warning and refuses the induced run.
+The native recovery-tick test fails on the base and passes with the probe fix.
 
 ## What went wrong
 
@@ -172,12 +239,16 @@ gate's container runs under Docker's init (`--init`): as the entrypoint
 itself the gate was PID 1, its runtime host refused that owner, and every
 candidate was refused before anything was measured; an init also reaps what
 the gate's releases, workers and browser orphan. PID 1 is accepted as an
-owner all the same. A candidate passes only when both pass. A refused candidate is retired before
+owner all the same. Both rehearsals must complete successfully. Duration
+overruns are recorded as `timingWarnings`; actual failed checks still refuse.
+A refused candidate is retired before
 anything is switched, and the release that was serving keeps serving
 (`ViewerDeploymentCoordinator`, phase `candidate-health`). The adapter
 computes the verdict again from the measurements against the bounds the
-deploying release holds: a report whose measurements are missing, garbled or
-over a bound is refused whatever its own `ok` says. A `verify-candidate`
+deploying release holds. Missing or garbled measurements and failed operations
+refuse promotion. Duration observations become warnings. For older reports,
+only exact duration strings recomputed from complete measurements, with no
+independent failure detail, can become warnings. A `verify-candidate`
 answer that carries no performance report, or no runtime-host rehearsal, is
 refused too: it reads exactly like an adapter that skipped them. Only
 `verify-promoted`, which reads the release already serving, owes neither.
@@ -192,7 +263,7 @@ image carries no browser. A revision whose `Dockerfile` has no such stage runs
 the gate in its own image, finds no browser and is refused.
 
 The runner builds a synthetic registry (`registryPerformanceDataset.ts`):
-about 30,000 rows over eight working directories, the newest 2,200 terminal
+53,299 rows over eight working directories, the newest 2,200 terminal
 rows still hot as a bounded archive pass leaves them, large operation-owner
 and receipt payloads, operator roots holding the Telegram grant with
 delegated children claiming it, receipts naming conversations that never
@@ -302,12 +373,11 @@ verdict; it skips the browser, as does a run under an induced fault.
 | Evidence | pending and uncertain deliveries byte-identical and hot; every MCP grant decided the same by writers and the successor | Speed bought by dropping evidence or authority is a regression the latency bounds cannot see. |
 | Stability | every measured answer of every scope carries the rows, conversations and projects of its settled answer from before the first write, and its pinned conversation; no answer is empty | Rows that appear, vanish or change project read as conversations jumping on the board. The history spans eight projects, so the board's ten-project window holds all of it whichever project a write makes the newest. |
 | Browser views | each of eight views: board drawn ≤ 10 s from navigation; `/api/files` p95 ≤ 5 s, max ≤ 10 s; any other ordinary API request ≤ 10 s whether answered, failed or still open, and none answered 5xx or failed; main thread ≤ 1 s before the board drew, p95 ≤ 50 ms and max ≤ 500 ms after; a wheel answered ≤ 500 ms; selection held, no missing-conversation notice, a board answer while the writers ran; ≥ 50 writes, none failed; the serving process's own event loop ≤ 1 s while the views opened, p95 ≤ 50 ms and max ≤ 500 ms while they operated, with ≥ 300 samples, and a run that did not read it is refused | What the operator sees is the page, not the handler. The HTTP bounds above held while the page took 15-19 s to draw: `/api/accounts` enumerated every conversation of the history once per completed account migration, through a lazy reader that stats the database twice per row, and held the server's thread for two thirds of a minute-long run ("What changed" lists the page's other whole-history reads). |
-| Sufficiency | full dataset (≥ 29,000 rows, ≥ 90 % cold); ≥ 50 writes per writer, ≥ 20 keyed reads, ≥ 8 warm builds, ≥ 64 board requests, ≥ 8 compared rounds, ≥ 2 workers, pending and uncertain deliveries present | A run that measured nothing passes nothing. |
+| Sufficiency | full dataset (≥ 53,000 rows, ≥ 90 % cold; ≥ 10,971 receipts with 892 structured failures, 122 legacy failures and 133 conflicts; 20 pending launches and 666 retained deliveries preserved); ≥ 50 writes per writer, ≥ 20 keyed reads, ≥ 8 warm builds, ≥ 64 board requests, ≥ 8 compared rounds, ≥ 2 workers, pending and uncertain deliveries present | A run that measured nothing passes nothing. |
 
-The latency numbers are the bounds the post-incident audit proposed, with the
-first-boot and activation bounds added here. They were kept because the fixed
-code meets them, on a machine whose 24 cores carried a load near 23 from
-other agents while it ran.
+The latency numbers are diagnostic reference values from the post-incident
+audit. The table retains them for comparison; they do not refuse a deployment.
+The non-timing requirements in the table remain mandatory.
 
 ### Proving the gate refuses
 
@@ -325,15 +395,15 @@ adapter and acted on by the coordinator retires the candidate without a
 promote. `candidateBrowserRun.test.ts` drives the browser helper against a
 board fast in every way but one: it passes clean, and a
 `/api/tmux/targets` that never answers or a `/api/runtime/snapshot` that
-answers 503 refuses it through the same adapter and coordinator, and so
-does a board whose server is held once for 800 ms while every request stays
-fast, or whose server carries no probe. `--induce server-stall` does the same
-to the real production server under the gate's own views. `deployment.test.ts` requires a refused
+answers 503 refuses it through the same adapter and coordinator. A server
+held for 800 ms while requests complete produces a timing warning; a missing
+server probe still refuses. `--induce server-stall` deliberately marks a fault
+in the real production server and therefore remains refused. `deployment.test.ts` requires a refused
 candidate to be retired with the previous release still current, and an
 adapter answer without a performance report, read through the real
 host-command adapter, to be retired the same way. The full pass runs with
 `LLV_CANDIDATE_PERFORMANCE_FULL=1` and needs a production build and
-`CHROME_BIN`. A report that passes with breaches, without or with garbled
+`CHROME_BIN`. A report that passes with actual failures, without or with garbled
 measurements, without the browser views, or under an induced fault is read as
 a refusal.
 
@@ -355,3 +425,10 @@ server's own answers and the board draws at about ten seconds, at its bound.
 Give the scope room for eight browsers, `LLV_WORK_SCOPE_CPU_QUOTA=1200`, to
 measure the server rather than the quota; the gate's container has no such
 quota.
+
+The managed-update census, added on 2026-10-15, contains 11,870 conversations,
+8,428 entries, 10,971 receipts, 14,218 delivery owners and 666 delivery rows.
+The latency bounds above are unchanged. All pending launch records and all
+retained delivery JSON records are compared across the handover. First-view
+preparation uses the same cooperative registry method as production startup;
+the sampler still starts before registry open, including index migration.

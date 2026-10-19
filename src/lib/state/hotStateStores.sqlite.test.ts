@@ -50,6 +50,11 @@ test("a live or unverifiable activation owner alone can acknowledge its fence; p
     expect(fence.activationOwner).toEqual(owner);
     expect(() => acknowledgeHotStateFence(directory, fence, revisions)).toThrow("live Viewer must acknowledge");
     expect(readHotStateAuthority(directory)?.checkpoint).toBeUndefined();
+    const adapterOwned = publishHotStateAuthority(directory, "fencing", active.releaseRevision, {
+      retirementOwner: captureProcessIdentity(process.pid),
+    });
+    expect(readHotStateAuthority(directory)?.retirementOwner).toEqual(adapterOwned.retirementOwner);
+    expect(() => acknowledgeHotStateFence(directory, adapterOwned, revisions)).toThrow("live Viewer must acknowledge");
     const unknown = publishHotStateAuthority(directory, "fencing", active.releaseRevision, {
       activationOwner: { ...owner, startIdentity: null },
     });
@@ -62,6 +67,15 @@ test("a live or unverifiable activation owner alone can acknowledge its fence; p
     await worker.exited;
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("a retirement guard refuses a process outside its own Viewer ancestry", async () => {
+  const { runManagedRetirementGuard } = await import("./managedRetirementGuard");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hot-guard-refusal-"));
+  try {
+    await expect(runManagedRetirementGuard(directory, "a".repeat(40), captureProcessIdentity(process.pid)))
+      .rejects.toThrow("cannot prove its Viewer ancestry");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
 function sampleFlow(id: string, stateDetail: string | null = null): Flow {
@@ -192,6 +206,11 @@ test("promotion captures a retiring legacy write and demotion publishes later SQ
       },
     });
     await initializeHotStateStoresAtStartup(boundary);
+    const projections = new Database(path.join(sandbox,"state.sqlite"),{readonly:true});
+    try {
+      expect(projections.query<{n:number},[]>("SELECT count(*) AS n FROM history_pending").get()!.n).toBe(0);
+      expect(projections.query<{n:number},[]>("SELECT count(*) AS n FROM history_inputs WHERE collection='flows'").get()!.n).toBe(2);
+    } finally {projections.close();}
     expect(loadFlows().map((flow) => flow.id)).toEqual([first.id, retiring.id]);
     const sqliteRecords = loadFlows();
     sqliteRecords[0]!.stateDetail = "sqlite-after-promotion";
@@ -299,17 +318,17 @@ test("repeated implicit checkpoints retain nested and structural mutations acros
     await withFlowMutation(async (records, persist) => {
       const retained = records[0]!;
       retained.roles.implementer.model = "gpt-5.6-sol";
-      persist();
+      await persist();
       observed.push(await readFromChild("nested"));
 
       retained.stateDetail = "after-await";
-      persist();
+      await persist();
       observed.push(await readFromChild("retained-reference"));
 
       records.push(sampleFlow("structural"));
-      persist();
+      await persist();
       retained.stateDetail = "after-structural";
-      persist();
+      await persist();
       observed.push(await readFromChild("structural"));
     });
 

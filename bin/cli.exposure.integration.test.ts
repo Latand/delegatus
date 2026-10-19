@@ -10,6 +10,7 @@ import { afterEach, expect, test } from "bun:test";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { createTailscaleStub, hermeticTailscaleEnvironment, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
+import { telemetryNotice } from "./telemetry-notice.mjs";
 
 const fixtures = new Set<string>();
 const children = new Set<ReturnType<typeof spawn>>();
@@ -150,6 +151,13 @@ function unevaluableProbeModule(address: string): string {
    startup diagnostic and a real error on stderr, and which quiet choice the
    launcher handed down. */
 const STARTUP_CHATTER = `
+import { existsSync, writeFileSync as noticeWritten } from "node:fs";
+import { telemetryNotice } from "../../bin/telemetry-notice.mjs";
+const notice = process.env.LLV_STATE_DIR + "/notice-output";
+if (!existsSync(notice)) {
+  console.log(telemetryNotice[process.env.LLV_LANG || "en"]);
+  noticeWritten(notice, "1");
+}
 console.log("\\u001b[1m▲ Next.js 16.3.3\\u001b[22m");
 console.log("- Local:         http://127.0.0.1:" + process.env.PORT);
 console.log("- Network:       http://127.0.0.1:" + process.env.PORT);
@@ -158,7 +166,23 @@ console.error("child quiet diagnostics: " + (process.env.LLV_QUIET_DIAGNOSTICS ?
 console.error("Error: fixture failure that must reach the terminal");
 `;
 
-async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean; failQr?: boolean } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
+function runtimeDiagnostics(role: "viewer" | "runtime-host"): string {
+  return `
+import { startupDiagnostic } from ${JSON.stringify(pathToFileURL(path.resolve("src/lib/startupDiagnostics.ts")).href)};
+import { createViewerLoopMonitor } from ${JSON.stringify(pathToFileURL(path.resolve("src/lib/viewerLoopMonitor.ts")).href)};
+import { createPerformanceSpans } from ${JSON.stringify(pathToFileURL(path.resolve("src/lib/performanceSpans.ts")).href)};
+process.env.LLV_STATE_OWNER = ${JSON.stringify(role)};
+writeFileSync(process.env.LLV_STATE_DIR + "/" + process.env.LLV_STATE_OWNER + "-quiet.json",
+  JSON.stringify({ quiet: process.env.LLV_QUIET_DIAGNOSTICS ?? null }));
+startupDiagnostic("info", "[fixture startup diagnostic] " + process.env.LLV_STATE_OWNER);
+let at = 0;
+const monitor = createViewerLoopMonitor(undefined, () => at, createPerformanceSpans(() => at));
+at = 61000;
+monitor.tick();
+`;
+}
+
+async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableAddress?: string; startupChatter?: boolean; failQr?: boolean; diagnostics?: boolean } = {}): Promise<{ cli: string; env: NodeJS.ProcessEnv }> {
   const fixture = await mkdtemp(path.join(tmpdir(), "llv-cli-exposure-"));
   fixtures.add(fixture);
   const bin = path.join(fixture, "bin");
@@ -222,6 +246,7 @@ const server = Bun.serve({
     return new Response("ok");
   },
 });
+${options.diagnostics ? runtimeDiagnostics("viewer") : ""}
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);
@@ -241,6 +266,7 @@ server.listen(socketPath, () => writeFileSync(fencePath, JSON.stringify({
   startIdentity: process.pid + ":fixture",
   acquisitionId: "fixture-acquisition-id",
 })));
+${options.diagnostics ? runtimeDiagnostics("runtime-host") : ""}
 const stop = () => server.close(() => {
   rmSync(socketPath, { force: true });
   rmSync(fencePath, { force: true });
@@ -269,6 +295,11 @@ throw new Error("fixture QR failure");
   delete inherited.LLV_TOKEN;
   delete inherited.LLV_TS_HOST;
   delete inherited.LLV_TS_URL;
+  delete inherited.LLV_DEBUG;
+  delete inherited.DELEGATUS_DEBUG;
+  delete inherited.LLV_QUIET_DIAGNOSTICS;
+  delete inherited.DELEGATUS_QUIET_DIAGNOSTICS;
+  delete inherited.JOURNAL_STREAM;
   return {
     cli: path.join(bin, "cli.mjs"),
     env: {
@@ -634,16 +665,99 @@ test("a start prints the banner first, hides Next's startup lines and still prin
   const text = output.text();
   expect(text).toContain("DELEGATUS_TELEMETRY=0");
   expect(text).toContain("DO_NOT_TRACK=1");
+  expect(text.split(telemetryNotice.en)).toHaveLength(2);
+  expect(text).not.toContain("Reads logs from");
   expect(text.indexOf("Delegatus v")).toBeGreaterThanOrEqual(0);
   expect(text.indexOf("Delegatus v")).toBeLessThan(text.indexOf("Error: fixture failure"));
   expect(text).toContain(`  Open http://127.0.0.1:${port}/ in your browser.`);
   expect(text).not.toContain("Opened:");
   expect(text).toContain("DELEGATUS_DEBUG=1");
-  expect(text).toContain("child quiet diagnostics: 1");
+  expect(text).toContain("child quiet diagnostics: unset");
   expect(text).not.toContain("Next.js");
   expect(text).not.toContain("- Local:");
   expect(text).not.toContain("Ready in");
 });
+
+test.each(["en", "uk"] as const)("the %s notice is printed once on first start and stays settled after restart", async lang => {
+  const fixture = await checkoutFixture({ startupChatter: true });
+  await mkdir(fixture.env.TMPDIR!, { recursive: true });
+  const port = await availablePort();
+  for (const first of [true, false]) {
+    const child = spawn(process.execPath, ["--bun", fixture.cli, "--no-open", "--port", String(port)], {
+      cwd: path.dirname(path.dirname(fixture.cli)), env: { ...fixture.env, LLV_LANG: lang },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.add(child);
+    const output = captureOutput(child);
+    await output.waitFor("fixture failure that must reach the terminal", 10_000);
+    expect(output.text().split(telemetryNotice[lang])).toHaveLength(first ? 2 : 1);
+    child.kill("SIGINT");
+    await waitForExit(child, 10_000);
+    expect(child.exitCode).toBe(0);
+  }
+});
+
+/* Use a real PTY for the interactive case; CLI children still use pipes, as
+   they do in production. Journal metadata must override even a terminal. */
+for (const scenario of [
+  { name: "piped output", terminal: false, journal: undefined, debug: undefined, quiet: null },
+  { name: "journal output", terminal: false, journal: "1:1", debug: undefined, quiet: null },
+  { name: "interactive terminal", terminal: true, journal: undefined, debug: undefined, quiet: "1" },
+  { name: "journal with a terminal", terminal: true, journal: "1:1", debug: undefined, quiet: null },
+  { name: "debug terminal", terminal: true, journal: undefined, debug: "1", quiet: null },
+]) {
+  // Bun's PTY is a POSIX facility; piped cases also run on Windows.
+  test.skipIf(scenario.terminal && process.platform === "win32")(
+    `${scenario.name} selects diagnostics for both children and retains stall evidence`, async () => {
+      const fixture = await checkoutFixture({ diagnostics: true });
+      await mkdir(fixture.env.TMPDIR!, { recursive: true });
+      const port = await availablePort();
+      let output = "";
+      const env = { ...fixture.env, JOURNAL_STREAM: scenario.journal, DELEGATUS_DEBUG: scenario.debug,
+        LLV_QUIET_DIAGNOSTICS: scenario.quiet === "1" ? undefined : "1" };
+      const child = Bun.spawn([process.execPath, "--bun", fixture.cli, "--no-open", "--port", String(port)], {
+        cwd: path.dirname(path.dirname(fixture.cli)), env,
+        ...(scenario.terminal ? { terminal: { data(_terminal: Bun.Terminal, chunk: Uint8Array) { output += Buffer.from(chunk).toString(); } } }
+          : { stdin: "ignore", stdout: "pipe", stderr: "pipe" }),
+      });
+      const identity = captureProcessIdentity(child.pid);
+      const readers = scenario.terminal ? [] : [child.stdout, child.stderr].map(async stream => {
+        const reader = (stream as ReadableStream<Uint8Array>).getReader();
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) return;
+            output += Buffer.from(value).toString();
+          }
+        } finally { reader.releaseLock(); }
+      });
+      try {
+        await waitForStatus("127.0.0.1", port, 200);
+        for (const role of ["viewer", "runtime-host"]) {
+          expect(JSON.parse(await readFile(path.join(fixture.env.LLV_STATE_DIR!, `${role}-quiet.json`), "utf8")))
+            .toEqual({ quiet: scenario.quiet });
+        }
+        const deadline = Date.now() + 10_000;
+        const diagnosticLines = () => output.split(/\r?\n/).filter(line => /^\[(viewer loop-gap|performance summary)\]/.test(line));
+        while (diagnosticLines().length < 4 && child.exitCode === null && Date.now() < deadline) await Bun.sleep(25);
+        expect(diagnosticLines()).toHaveLength(4);
+        for (const role of ["viewer", "runtime-host"]) {
+          for (const prefix of ["[viewer loop-gap] ", "[performance summary] "]) {
+            const reports = diagnosticLines().filter(line => line.startsWith(prefix)).map(line => JSON.parse(line.slice(prefix.length)));
+            expect(reports.filter(report => report.role === role)).toHaveLength(1);
+          }
+          expect(output.includes(`[fixture startup diagnostic] ${role}`)).toBe(scenario.quiet === null);
+        }
+      } catch (error) {
+        throw new Error(`CLI diagnostics failed:\n${output}`, { cause: error });
+      } finally {
+        await stopFixtureIdentity(identity);
+        await child.exited;
+        await Promise.all(readers);
+        child.terminal?.close();
+      }
+    }, 30_000);
+}
 
 test("DELEGATUS_DEBUG=1 keeps Next's startup lines and lets the children print their diagnostics", async () => {
   const fixture = await checkoutFixture({ startupChatter: true });
@@ -663,6 +777,7 @@ test("DELEGATUS_DEBUG=1 keeps Next's startup lines and lets the children print t
   expect(text).toContain("▲ Next.js 16.3.3");
   expect(text).toContain(`- Local:         http://127.0.0.1:${port}`);
   expect(text).toContain("child quiet diagnostics: unset");
+  expect(text).toContain("Reads logs from");
   expect(text).not.toContain("DELEGATUS_DEBUG=1 —");
 });
 

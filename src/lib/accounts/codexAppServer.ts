@@ -2,7 +2,8 @@ import { withoutUnsupportedApiCredentials } from "../environmentIsolation";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { findAgentBinary } from "../../../bin/agent-binaries.mjs";
-import { CodexPinnedProtocol, installedCodexVersion } from "./codexPinnedProtocol";
+import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "./codexPinnedProtocol";
+import { paidCredits } from "./creditGuard";
 
 import {
   CodexAppServerProtocolError,
@@ -43,6 +44,8 @@ export interface CodexAppServerOptions {
   maxStdoutBufferBytes?: number;
   signalProcess?: ProcessSignal;
   readProtocolVersion?: typeof installedCodexVersion;
+  /** Schema generation for an unpinned executable's additive admission. */
+  generateProtocolSchemas?: CodexSchemaGenerator;
   /** Thread migration and voice declare the methods and fields they need.
       Status/sign-in clients stay on the stable surface. */
   protocolProfile?: "account" | "thread-control" | "voice";
@@ -72,6 +75,7 @@ export interface AppServerRateLimitWindow {
 }
 
 export interface AppServerRateLimits {
+  credits?: import("./creditGuard").PaidCredits;
   primary: AppServerRateLimitWindow | null;
   secondary: AppServerRateLimitWindow | null;
   planType: string | null;
@@ -289,7 +293,8 @@ export class CodexAppServerClient {
   }
 
   static async start(options: CodexAppServerOptions): Promise<CodexAppServerClient> {
-    const protocol = new CodexPinnedProtocol((options.readProtocolVersion ?? installedCodexVersion)(codexAccountBinary(), process.env));
+    const binary = codexAccountBinary();
+    const protocol = await resolveCodexProtocol((options.readProtocolVersion ?? installedCodexVersion)(binary, process.env), binary, process.env, options.generateProtocolSchemas);
     const capabilities = options.protocolProfile === "thread-control"
       ? protocol.initializeCapabilities(["thread/fork", "thread/resume", "thread/read", "thread/name/set", "thread/goal/set"], [{ method: "thread/resume", field: "path" }])
       : options.protocolProfile === "voice"
@@ -378,6 +383,7 @@ export class CodexAppServerClient {
         primary: optionalWindow(snapshot.primary, "account/rateLimits/read"),
         secondary: optionalWindow(snapshot.secondary, "account/rateLimits/read"),
         planType: typeof snapshot.planType === "string" ? snapshot.planType : null,
+        ...(paidCredits(snapshot.credits) ? { credits: paidCredits(snapshot.credits) } : {}),
       },
       resetCredits: optionalResetCredits(response.rateLimitResetCredits),
       ...(typeof snapshot.rateLimitReachedType === "string" || snapshot.rateLimitReachedType === null

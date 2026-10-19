@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { configFilePath, statePath } from "@/lib/configDir";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { withFileTransaction, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import type { CompanionEvent, CompanionPlan, CompanionUsage, Delivery, Locale, Proposal } from "./contract";
 import type { BackendTokens } from "./usage";
 import type { DelegationCode } from "./delegationOutcome";
@@ -31,6 +31,7 @@ export interface CompanionSettings {
   lastCodexSession?: { seconds: number; endedAt: number; plan: CompanionPlan | null };
 }
 export interface StoredProposal {
+  admittedAt?: number;
   proposal: Proposal;
   sourceText: string;
   expiresAt: number;
@@ -65,6 +66,7 @@ export type SessionStarter = { memberId: string } | { operator: true };
  * committed with the scan position that found it, so a failed hand-off resumes
  * at the first part not handed and never repeats one that was. */
 export interface ReportSpeech { reportId: string; project: string; status: string; text: string; parts?: string[]; handed: number;
+  kind?: "message"; at?: string | null;
   /** The operator asked to hear a report this call already relayed once more. */
   reread?: boolean }
 export interface StoredSession {
@@ -240,6 +242,18 @@ export class CompanionStorage {
     const file = this.file();
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     return withFileTransactionSync(file, "companion state is busy", () => {
+      const document = this.read();
+      const result = operation(document);
+      this.prune(document);
+      writePrivate(file, JSON.stringify(document));
+      return result;
+    });
+  }
+  /** Voice tool writes wait without holding the Viewer's event loop. */
+  async changeAsync<T>(operation: (document: CompanionDocument) => T): Promise<T> {
+    const file = this.file();
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    return withFileTransaction(file, "companion state is busy", () => {
       const document = this.read();
       const result = operation(document);
       this.prune(document);

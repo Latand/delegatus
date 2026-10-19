@@ -1,3 +1,4 @@
+import path from "node:path";
 import { claudeAccountsForPrivacy } from "@/lib/accounts/claude";
 import { codexAccountsForPrivacy } from "@/lib/accounts/codex";
 import { evidenceRoots, underRoot } from "@/lib/artifact/localFile";
@@ -6,18 +7,23 @@ import { readForgeCache } from "@/lib/forge/cache";
 import { pipelineRepository } from "@/lib/forge/resolve";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { readHistory } from "@/lib/limitsHistoryStore";
-import { loadArchivedPipelines, loadPipelinesForList } from "@/lib/pipelines/store";
+import { loadArchivedPipelinesForList, loadPipelinesForList } from "@/lib/pipelines/store";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { recordedProjectRemotes } from "@/lib/projects/aliases";
 import { namedProjectDirectory, resolveNamedProject, type NamedProjectDirectory } from "@/lib/projects/nameResolution";
 import { readPrototypeReviews } from "@/lib/prototypeReview/read";
 import { ledgerDeployments } from "@/lib/runtime/deploymentLedger";
 import { ALBUM_PAGE_MAX, readTaskAlbum } from "@/lib/taskAlbum/album";
+import type { AlbumItem } from "@/lib/taskAlbum/album";
 import { productionAlbumDeps } from "@/lib/taskAlbum/world";
 import { loadTasksForList } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import type { DoneWorld } from "./project";
+import { preserveDoneFrame, removeDoneMedia } from "./media";
+import { copyDoneFrameSource, prepareDoneFrameSource } from "./source";
+import { recoverDoneFrame } from "./recover";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 /*
  * The «Готово» projection's view of the Viewer's own records, read-only and
@@ -27,21 +33,6 @@ import type { DoneWorld } from "./project";
  * that cannot be read contributes nothing this time; the next projection reads
  * it again.
  */
-
-/* Settled lanes move to the archive after three days and still finished their
-   work; the archive is cold, so it is read at most once a minute. */
-const ARCHIVE_TTL_MS = 60_000;
-const archive = globalThis as typeof globalThis & { __llvDoneArchive?: { at: number; pipelines: readonly Pipeline[] } | null };
-function archivedPipelines(): readonly Pipeline[] {
-  const held = archive.__llvDoneArchive;
-  if (held && Date.now() - held.at <= ARCHIVE_TTL_MS) return held.pipelines;
-  let pipelines: readonly Pipeline[] = held?.pipelines ?? [];
-  try {
-    pipelines = loadArchivedPipelines();
-  } catch { /* the last good read stands */ }
-  archive.__llvDoneArchive = { at: Date.now(), pipelines };
-  return pipelines;
-}
 
 function quietly<T>(read: () => T, fallback: T): T {
   try {
@@ -58,17 +49,61 @@ function evidenceFile(src: string): string | null {
   return file && evidenceRoots().some((root) => underRoot(file, root)) ? file : null;
 }
 
-export function productionDoneWorld(): DoneWorld {
+/** Recovery requires both the pipeline context and the exact recorded name.
+ * Multiple exact copies remain ambiguous, so callers continue to PR/git. */
+export function matchingDoneAlbumFrame(items: readonly AlbumItem[], pipelineId: string, frame: { src: string; caption: string }): AlbumItem | null {
+  const requested = frameName(frame);
+  if (!requested) return null;
+  const matches = items.filter(item => item.source.stage?.pipelineId === pipelineId
+    && item.src !== frame.src
+    && frameName({src:item.src,caption:item.name ?? ""}) === requested);
+  const unique = [...new Map(matches.map(item => [item.src,item])).values()];
+  return unique.length === 1 ? unique[0]! : null;
+}
+
+export function productionDoneWorld(options: { recover?: boolean } = {}): DoneWorld {
   let tasks: Map<string, BoardTask> | null = null;
   const taskList = () => {
     tasks ??= new Map(quietly(() => loadTasksForList(), [] as readonly BoardTask[]).map((task) => [task.id, task] as const));
     return tasks;
   };
   let pipelines: readonly Pipeline[] | null = null;
-  const laneList = () => (pipelines ??= [...quietly(() => loadPipelinesForList(), [] as readonly Pipeline[]), ...archivedPipelines()]);
+  const laneList = () => (pipelines ??= [...quietly(() => loadPipelinesForList(), [] as readonly Pipeline[]), ...quietly(() => loadArchivedPipelinesForList(), [] as readonly Pipeline[])]);
   let repositories: NamedProjectDirectory | null = null;
   const labels = new Map<string, Map<string, string>>();
+  // One pass owns this bounded tier cache; a new pass reads fresh decisions.
+  const rounds = new Map<string, ReturnType<typeof readPrototypeReviews>["rounds"]>();
   return {
+    async preserveFrame(key, frame, refs, replaceProvisional = false, observedAt = Date.now(), expectedPreviousSrc) {
+      return withViewerOperation("done.frame-source", async () => {
+        if (!await prepareDoneFrameSource(frame.src)) return { frame, settled: false };
+        let deferred = false;
+        const saved = await preserveDoneFrame(key, frame, async (src, staging) => {
+          const copy = await copyDoneFrameSource(src,staging);
+          if (copy || src !== frame.src) return copy;
+          // Network/git recovery runs on the background sweep. Reads keep
+          // answering the persisted rows while that refinement is pending.
+          if (!options.recover) { deferred = true; return null; }
+          const lane = laneList().find(lane => lane.id === refs.pipelineId);
+          if (!lane) return null;
+          const matching: AlbumItem[] = [];
+          for (const taskId of refs.taskIds ?? []) {
+            const page = await readTaskAlbum(taskId,{limit:ALBUM_PAGE_MAX},productionAlbumDeps());
+            matching.push(...page.items);
+          }
+          const alternative = matchingDoneAlbumFrame(matching,lane.id,frame);
+          if (alternative) {
+            const found = await copyDoneFrameSource(alternative.src,staging);
+            if (found) return found;
+          }
+          const requestedName = frameName(frame);
+          const name = requestedName || frame.caption;
+          return refs.pr ? recoverDoneFrame({repository:refs.pr.repository,number:refs.pr.number,repoDir:lane.repoDir,branch:lane.branch,name},staging) : null;
+        }, observedAt, replaceProvisional, expectedPreviousSrc);
+        return deferred ? { frame, settled:false } : { frame:saved, settled:true };
+      });
+    },
+    removeFrames: removeDoneMedia,
     now: () => Date.now(),
     forge: () => quietly(() => readForgeCache().data, { schemaVersion: 1 as const, repositories: {} }),
     pipelines: laneList,
@@ -107,7 +142,15 @@ export function productionDoneWorld(): DoneWorld {
     },
     rounds(taskId) {
       const task = taskList().get(taskId);
-      return task ? quietly(() => readPrototypeReviews(task).rounds, []) : [];
+      // Empty tasks have no frame tier to resolve. Reading their review would
+      // still reread the dismissal document twice for every finished lane.
+      if (!task?.prototypeReviews?.length && !task?.prototypeReviewReplica?.rounds.length) return [];
+      const held = rounds.get(taskId);
+      if (held) return held;
+      const read = quietly(() => readPrototypeReviews(task).rounds, []);
+      rounds.set(taskId, read);
+      if (rounds.size > 64) rounds.delete(rounds.keys().next().value!);
+      return read;
     },
     async album(taskId, pipeline) {
       const page = await readTaskAlbum(taskId, { limit: ALBUM_PAGE_MAX }, productionAlbumDeps());
@@ -117,4 +160,13 @@ export function productionDoneWorld(): DoneWorld {
       return { frame: hit ? { src: hit.src, caption: hit.name ?? "" } : null, settled: !page.indexing };
     },
   };
+}
+
+function frameName(frame: { src: string; caption: string }): string {
+  let name = frame.caption;
+  try {
+    const sourcePath = new URL(frame.src, "http://localhost").searchParams.get("path");
+    if (sourcePath) name = path.basename(sourcePath);
+  } catch { /* use the recorded caption */ }
+  return path.basename(name.trim()).toLocaleLowerCase("en-US");
 }

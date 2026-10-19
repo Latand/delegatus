@@ -969,6 +969,39 @@ function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
   } as RuntimeHostClient;
 }
 
+test.each(["stdio", "http"] as const)("the launch receipt records the Codex host's effective MCP transport: %s", async transport => {
+  const id = crypto.randomUUID();
+  const root = path.join(sandbox, `effective-transport-${id}`);
+  fs.mkdirSync(root, { recursive: true });
+  const artifactPath = path.join(root, "sessions", `${id}.jsonl`);
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: root, transport: "structured", launchProfile: emptyLaunchProfile({ cwd: root }) });
+  if (begun.kind !== "created") throw new Error("fixture admission failed");
+  const host = Object.assign(new RoundTripHost("codex", artifactPath, id), { viewerMcpTransport: transport });
+  await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
+  try {
+    await spawnStructuredConversation({ engine: "codex", receipt: begun.receipt,
+      spec: { command: "codex", cwd: root, engine: "codex", windowName: "transport" },
+      account: { engine: "codex", accountId: "fixture-account", kind: "legacy", home: root, transcriptRoot: path.join(root, "sessions"), env: { NODE_ENV: "test" } },
+      registry, client, prompt: "Fixture turn",
+    }, {
+      startHost: async () => host,
+      bindHost: async (target, key, running, owner, epoch) => {
+        const state = await running.health();
+        target.setStructuredHostClaimed(key, { kind: "codex-app-server", endpoint: state.endpoint,
+          process: { pid: process.pid, startIdentity: "test-process" }, eventCursor: state.eventCursor, protocolVersion: state.protocolVersion,
+          writerClaimEpoch: epoch, activeTurnRef: state.activeTurnRef, pendingAttention: state.pendingAttention, activeFlags: state.activeFlags,
+        }, "idle", owner, epoch);
+        return () => {};
+      },
+      processIdentity: () => ({ pid: process.pid, startIdentity: "test-process" }),
+    });
+    expect(registry.snapshot().receipts[begun.receipt.launchId]).toMatchObject({ state: "completed", viewerMcpTransport: transport });
+  } finally { await host.release(); journal.close(); }
+});
+
 test.each([false, true])("structured Claude symlink materialization with precomputed transcript=%s", async (precomputed) => {
   const id = crypto.randomUUID();
   const directory = path.join(sandbox, `symlink-${id}`);
@@ -4167,15 +4200,12 @@ test("issue 1074: startup reconciliation recovers an overdue materialized placeh
     state: "path-pending",
     artifactLifecycle: "materialized",
   });
-  const client = {
-    effectBatch: async () => [],
-    operationStatus: async () => null,
-    snapshot: async () => ({ sessions: [] }),
-  } as unknown as RuntimeHostClient;
-
-  await recoverPendingStructuredSpawns(registry, client, {
-    now: () => Date.parse(begun.receipt.createdAt) + STALE_STRUCTURED_SPAWN_TIMEOUT_MS + 60_000,
-  });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    await recoverPendingStructuredSpawns(registry, runtimeClient(journal), {
+      now: () => Date.parse(begun.receipt.createdAt) + STALE_STRUCTURED_SPAWN_TIMEOUT_MS + 60_000,
+    });
+  } finally { journal.close(); }
 
   expect(registry.snapshot().receipts[begun.receipt.launchId]).toMatchObject({
     state: "completed",
@@ -4329,6 +4359,11 @@ test("startup recovery withholds a staged identity when recovered delivery has n
 
   await recoverPendingStructuredSpawns(registry, client);
 
+  // Boot returns after durable admission. The existing controller owns the
+  // send and its settlement under the original operation and message keys.
+  expect(registry.snapshot().receipts[begun.receipt.launchId]?.state).toBe("path-pending");
+  expect(await client.operationStatus(`spawn_message_${begun.receipt.launchId}`)).not.toBeNull();
+  await kickStructuredDeliveryQueue();
   expect(host.sent.map((entry) => entry.text)).toEqual(["recover this first prompt"]);
   expect(fs.existsSync(artifactPath)).toBeFalse();
   expect(registry.snapshot().receipts[begun.receipt.launchId]).toMatchObject({
@@ -6490,9 +6525,9 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
     delete process.env.DELEGATUS_AGENT_MEMORY;
     process.env.LLV_AGENT_MEMORY = "off";
     if (transport === "http") {
-      process.env.LLV_MCP_TRANSPORT = "http";
+      delete process.env.LLV_MCP_TRANSPORT;
       process.env.LLV_MCP_HTTP_URL = `http://127.0.0.1:${endpoint.port}/api/mcp`;
-    } else delete process.env.LLV_MCP_TRANSPORT;
+    } else process.env.LLV_MCP_TRANSPORT = "stdio";
     delete process.env.LLV_TOKEN;
     process.env.LLV_CLAUDE_BINARY = binary;
 

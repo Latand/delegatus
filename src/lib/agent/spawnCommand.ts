@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { codexLaunchTier, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
-import { after, NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { deferSpawnWork } from "./spawnDeferral";
 
 import { operatorLocale } from "@/lib/operator/settings";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
@@ -193,7 +194,7 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
   publishFilesRevision,
   spawnStructuredConversation,
   assertStructuredRuntime: assertDarwinStructuredRuntime,
-  defer: (work) => after(work),
+  defer: deferSpawnWork,
   storeImages: (images) => runtimeImageStore().putMany(images),
   adoptPipelineAttemptFromSource,
   pipelineAttemptTargetForSource,
@@ -1190,7 +1191,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         try { queuedImageRefs = dependencies.storeImages(images); }
         catch (error) { throw new RuntimeImageStorageError(error instanceof Error ? error.message : String(error)); }
       }
-      queuedReceipt = registry.queuePinnedSpawn(begun.receipt.launchId, {
+      queuedReceipt = (await registry.deliveryWriteOrBusy({ label: "registry.queuePinnedSpawn" }, registry.queuePinnedSpawn.bind(registry, begun.receipt.launchId, {
         version: 1,
         retryAt: queuedUntil,
         accountId: requestedAccountId,
@@ -1200,7 +1201,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         imageRefs: queuedImageRefs,
         parentArtifactPath,
         pipelineSourceConversationId,
-      }, queuedTitle);
+      }, queuedTitle)));
     }
     const recordActualLaunchAccount = (
       receipt: typeof begun.receipt,
@@ -1348,7 +1349,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         } catch {
           /* The durable registry receipt remains available during runtime resynchronization. */
         }
-        const admission = registry.claimStartingStructuredSpawn(receipt.launchId);
+        const admission = (await registry.deliveryWriteOrBusy({ label: "registry.claimStartingStructuredSpawn" }, registry.claimStartingStructuredSpawn.bind(registry, receipt.launchId)));
         receipt = admission.receipt;
         if (admission.claimed) {
           let imageRefs;
@@ -1357,7 +1358,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
             /* No deferred work exists after this rejection. A compare-and-set
                release lets the next retry claim the lease immediately. */
             if (admission.receipt.admissionOwner) {
-              registry.releaseStartingStructuredSpawn(receipt.launchId, admission.receipt.admissionOwner);
+              (await registry.deliveryWriteOrBusy({ label: "registry.releaseStartingStructuredSpawn" }, registry.releaseStartingStructuredSpawn.bind(registry, receipt.launchId, admission.receipt.admissionOwner)));
             }
             throw new RuntimeImageStorageError(error instanceof Error ? error.message : String(error));
           }
@@ -1373,7 +1374,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
          queue, hand its foreground lease back so the due-queue reaper can own
          the launch independently of this still-live Viewer process. */
       if (queuedUntil && queuedReceipt.admissionOwner) {
-        queuedReceipt = registry.releaseSpawnActuation(queuedReceipt.launchId, queuedReceipt.admissionOwner).receipt;
+        queuedReceipt = (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, queuedReceipt.launchId, queuedReceipt.admissionOwner))).receipt;
         receipt = queuedReceipt;
       }
       const response = withAccountOverride(spawnResponseForReceipt(receipt, receipt.artifactPath, {
@@ -1385,7 +1386,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (queuedUntil) {
       prepareTmuxSpawn();
       const releasedQueuedReceipt = queuedReceipt.admissionOwner
-        ? registry.releaseSpawnActuation(queuedReceipt.launchId, queuedReceipt.admissionOwner).receipt
+        ? (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, queuedReceipt.launchId, queuedReceipt.admissionOwner))).receipt
         : queuedReceipt;
       return NextResponse.json(
         withAccountOverride(spawnResponseForReceipt(releasedQueuedReceipt, releasedQueuedReceipt.artifactPath, {
@@ -1445,15 +1446,15 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     });
     const key = childPath ? sessionKeyFromTranscript(engine, childPath) : null;
     if (!pane.host || !await verifyTmuxHostEvidence(pane.host)) {
-      agentRegistry().invalidateSpawnHost(begun.receipt.launchId, "spawn host disappeared before API confirmation");
+      (await agentRegistry().deliveryWriteOrBusy({ label: "registry.invalidateSpawnHost" }, agentRegistry().invalidateSpawnHost.bind(agentRegistry(), begun.receipt.launchId, "spawn host disappeared before API confirmation")));
       const lost = agentRegistry().readOnlySnapshot().receipts[begun.receipt.launchId]!;
       return NextResponse.json(withAccountOverride(spawnResponseForReceipt(lost, childPath)));
     }
     if (!childPath || !key || !pane.receipt) {
-      const pending = agentRegistry().markSpawnPathPending(begun.receipt.launchId);
+      const pending = (await agentRegistry().deliveryWriteOrBusy({ label: "registry.markSpawnPathPending" }, agentRegistry().markSpawnPathPending.bind(agentRegistry(), begun.receipt.launchId)));
       return NextResponse.json(withAccountOverride(spawnResponseForReceipt(pending, null)));
     }
-    const settled = agentRegistry().settleSpawn(pane.receipt.launchId, {
+    const settled = (await agentRegistry().deliveryWriteOrBusy({ label: "registry.settleSpawn" }, agentRegistry().settleSpawn.bind(agentRegistry(), pane.receipt.launchId, {
       key,
       artifactPath: childPath,
       cwd,
@@ -1463,7 +1464,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       claimEpoch: 0,
       claimOwner: null,
       pendingAction: "spawn",
-    });
+    })));
     if (settled.kind === "conflict") return NextResponse.json(withAccountOverride(spawnResponseForReceipt(settled.receipt)));
     recordActualLaunchAccount(settled.receipt, account.accountId, childPath);
     await adoptMaterializedAttempt(settled.receipt, childPath);
@@ -1489,7 +1490,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       persistHandoffLineage();
     }
     if (!await verifyTmuxHostEvidence(pane.host)) {
-      agentRegistry().invalidateSpawnHost(begun.receipt.launchId, "spawn host disappeared before API response");
+      (await agentRegistry().deliveryWriteOrBusy({ label: "registry.invalidateSpawnHost" }, agentRegistry().invalidateSpawnHost.bind(agentRegistry(), begun.receipt.launchId, "spawn host disappeared before API response")));
       const lost = agentRegistry().readOnlySnapshot().receipts[begun.receipt.launchId]!;
       return NextResponse.json(withAccountOverride(spawnResponseForReceipt(lost, childPath)));
     }
@@ -1528,7 +1529,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     const accountError = spawnAccountErrorResponse(error);
     if (accountError) return accountError;
     if (receipt?.pane) {
-      if (receipt.state === "prompt-delivered" || receipt.state === "host-verified") registry.markSpawnPathPending(receipt.launchId);
+      if (receipt.state === "prompt-delivered" || receipt.state === "host-verified") (await registry.deliveryWriteOrBusy({ label: "registry.markSpawnPathPending" }, registry.markSpawnPathPending.bind(registry, receipt.launchId)));
       const recovered = registry.readOnlySnapshot().receipts[receipt.launchId];
       if (recovered) return NextResponse.json(spawnResponseForReceipt(recovered, recovered.artifactPath));
     }

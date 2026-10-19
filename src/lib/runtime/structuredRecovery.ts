@@ -19,6 +19,7 @@ import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
 import { restartCutEvidenceHolds } from "./restartCutHold";
+import { assertPipelineTurnAllowed } from "./accountCreditGuard";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
@@ -28,6 +29,7 @@ import {
   spawnStructuredConversation,
 } from "./structuredSpawn";
 import { spawnTransport } from "./spawnTransport";
+import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 
 export interface StructuredRecoveryRequest {
   /** Fresh autonomous seat authority, re-read after recovery's lock waits. */
@@ -115,6 +117,8 @@ export interface StructuredRecoveryDependencies {
     operationId: string;
     revision: number;
     owns: () => Promise<boolean>;
+    /** Synchronous durable recheck for destructive writes after admission. */
+    assertCurrent?: () => void;
     releaseHost: (key: SessionKey) => Promise<boolean>;
     /** Throws when the operation's owner no longer allows the account the
         successor host would start on. A recorded account resumes through
@@ -263,6 +267,9 @@ const recoveryStore = globalThis as typeof globalThis & {
   __llvStructuredRecovery?: Map<string, Promise<StructuredRecoveryResult | null>>;
 };
 const recoveries = recoveryStore.__llvStructuredRecovery ??= new Map();
+export function structuredRecoveryPending(conversationId: string): boolean {
+  return [...recoveries.keys()].some(key => key.includes(`:${conversationId}:`));
+}
 
 function candidateFor(
   registry: AgentRegistry,
@@ -382,7 +389,10 @@ async function recoverCandidate(
 ): Promise<StructuredRecoveryResult | null> {
   const ownership = dependencies.ownership;
   const assertOwnership = async (): Promise<void> => {
+    const retired = runtimeSwitchRetirementReason(candidate.conversationId, registry);
+    if (retired) throw new Error(retired);
     if (ownership && !await ownership.owns()) throw new StructuredRecoverySupersededError();
+    assertPipelineTurnAllowed(candidate.conversationId, registry);
   };
   const owner = (dependencies.processIdentity ?? (() => captureProcessIdentity(process.pid)))();
   return registry.withOperationLock(candidate.key, owner, async () => {
@@ -421,9 +431,22 @@ async function recoverCandidate(
         ...liveHostResult(current),
         ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}),
       };
-      await ownership.releaseHost(current.key);
+      const releasedKey = current.key;
+      const releasedEntry = registry.readOnlySnapshot().entries[sessionKeyId(releasedKey)];
+      const releasedCustody = releasedEntry ? {
+        claimEpoch: releasedEntry.claimEpoch,
+        claimOwner: releasedEntry.claimOwner,
+        writerClaimEpoch: releasedEntry.structuredHost?.writerClaimEpoch ?? null,
+        process: releasedEntry.structuredHost?.process ?? null,
+      } : null;
+      await ownership.releaseHost(releasedKey);
       await assertOwnership();
-      registry.terminateStructuredHost(current.key);
+      await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
+        request.authorityGuard?.();
+        ownership.assertCurrent?.();
+        assertPipelineTurnAllowed(candidate.conversationId, registry);
+        return registry.terminateStructuredHost(releasedKey, undefined, [], releasedCustody);
+      });
       await assertOwnership();
       current = candidateFor(registry, request, true, park);
       if (!current) return null;
@@ -443,9 +466,12 @@ async function recoverCandidate(
     let admissionGuard = request.admissionGuard;
     const assertAuthority = () => {
       assertRecoveryAdmission(request, registry);
+      const retired = runtimeSwitchRetirementReason(current.conversationId, registry);
+      if (retired) throw new Error(retired);
       request.authorityGuard?.();
     };
     const assertAccountAuthorized = async (): Promise<void> => {
+      assertAuthority();
       admissionGuard?.();
       await ownership?.authorizeAccount?.(account.accountId ?? null);
       assertAuthority();
@@ -467,9 +493,8 @@ async function recoverCandidate(
           launchProfile: current.spec.launchProfile,
         }, () => {
           // Recheck authority after both authorization and writer admission.
-          assertRecoveryAdmission(request, registry);
-          request.authorityGuard?.();
-          request.admissionGuard?.();
+          assertAuthority();
+          admissionGuard?.();
         });
     } catch (error) {
       /* #1716: the lock throws its typed busy refusal from the acquire, before
@@ -586,8 +611,20 @@ async function recoverCandidate(
       await assertAccountAuthorized();
     } catch (error) {
       if (ownsSuccessor()) {
+        const successorEntry = registry.readOnlySnapshot().entries[sessionKeyId(current.key)];
+        const successorCustody = successorEntry ? {
+          claimEpoch: successorEntry.claimEpoch,
+          claimOwner: successorEntry.claimOwner,
+          writerClaimEpoch: successorEntry.structuredHost?.writerClaimEpoch ?? null,
+          process: successorEntry.structuredHost?.process ?? null,
+        } : null;
         await ownership?.releaseHost(current.key);
-        if (ownsSuccessor()) registry.terminateStructuredHost(current.key);
+        await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
+          request.authorityGuard?.();
+          ownership?.assertCurrent?.();
+          assertPipelineTurnAllowed(current!.conversationId, registry);
+          if (ownsSuccessor()) registry.terminateStructuredHost(current!.key, undefined, [], successorCustody);
+        });
       }
       throw error;
     }
@@ -618,6 +655,8 @@ export async function recoverDeadStructuredConversation(
     dependencies.park ?? defaultParkResolver,
   );
   if (!candidate) return null;
+  const retired = runtimeSwitchRetirementReason(candidate.conversationId, registry);
+  if (retired) throw new Error(retired);
   let admittedRequest = request;
   const admissionSnapshot = registry.readOnlySnapshot();
   if (conversationAgentRole(admissionSnapshot, candidate.conversationId) === "curator") {

@@ -12,8 +12,11 @@ import {
   REQUIRED_SERVER_RUNTIME,
   missingRequiredModules,
   servedRuntimeModules,
+  verifyBuiltCodexSocket,
+  sandboxEnvironment,
   verifyViewerRuntime,
 } from "./verify-viewer-runtime";
+import { isOperatorOwnedDirectory, setStateOwnershipPathsForTests } from "../src/lib/stateOwnership";
 
 /* What this file is defending is the shape of the check rather than its
    verdict: the verdict is produced by CI, under the pinned interpreter, on a
@@ -96,6 +99,36 @@ test("verification of a directory with no build fails, and says that is what hap
   expect(report.modules.probed).toBe(0);
   expect(report.served).toBeNull();
 });
+
+test("a sandbox made inside the installation's own state tree is not read as the operator's", () => {
+  /* A stage's scratch directory lives under the state tree, so its TMPDIR is
+     the sandbox's parent. Every directory the children resolve has to sit under
+     their own temp root, or the ownership rules refuse a valid build. */
+  const home = path.join(os.tmpdir(), "llv-operator-home");
+  const restore = setStateOwnershipPathsForTests({ home, tempRoots: [] });
+  try {
+    const sandbox = path.join(home, ".config", "delegatus", "state", "scratch", "stage", "tmp", "llv-viewer-runtime-x");
+    const env = sandboxEnvironment(sandbox);
+    for (const directory of [env.HOME!, env.XDG_CONFIG_HOME!, path.join(env.XDG_CONFIG_HOME!, "delegatus", "inbox"), env.LLV_STATE_DIR!]) {
+      expect({ directory, operatorOwned: isOperatorOwnedDirectory(directory, env) }).toEqual({ directory, operatorOwned: false });
+    }
+  } finally {
+    restore();
+  }
+});
+
+test("the Codex socket probe fails on a build that does not carry the transport, and names the Viewer", async () => {
+  const root = fixtureRoot(["package.json", path.join(BUILT_SERVER_DIR, "chunks", "1.js")]);
+  fs.writeFileSync(path.join(root, "package.json"), "{}");
+  fs.symlinkSync(import.meta.dir, path.join(root, "scripts"), "dir");
+
+  const report = await verifyBuiltCodexSocket(root);
+
+  expect(report.ok).toBe(false);
+  expect(report.process).toContain("Viewer");
+  expect(report.detail).toContain("carries the Codex socket transport");
+  expect(report.evidence).toBeUndefined();
+}, 30_000);
 
 test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed stop", "direct CLI"])("verification with %s reaps its served process and detached worker before reporting success", async mode => {
   const root = fixtureRoot([

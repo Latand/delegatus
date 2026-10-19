@@ -16,8 +16,9 @@ import { useOperatorDecisions } from "./useOperatorDecisions";
  * Variant 3 of docs/design/operator-decision-forms.md: the column beside the
  * seat conversation holds two tabs, «Рішення» with every open decision of the
  * project and «Звіти» with the report log as it was. One decision stands open
- * as its form; the rest are folded to their titles and open on a press. An
- * answered decision leaves the column; the seat's feed keeps its record.
+ * as its form; the rest are folded to their titles and open on a press. A saved
+ * answer returns as a record while delivery needs attention; confirmed
+ * delivery leaves the column, and the seat's feed keeps its record.
  */
 
 export type DecisionTab = "decisions" | "reports";
@@ -79,10 +80,13 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
     body = <p data-decision-list-empty="" className="m-0 px-1 py-2 text-body text-muted">{t("decisions.empty")}</p>;
   } else {
     body = decisions.map((decision) => decision.id === expanded?.id
-      ? decision.decision && decision.nativeAssociationState === "approved"
-        ? <DecisionRecord key={decision.id} decision={decision} onRevoke={() => read.answer(decision.id, { chosen: [], comment: "",
-          answers: (decision.questions ?? []).map(question => ({ questionId: question.id, options: [0] })) })}
-          revokeError={read.error?.reviewId === decision.id ? read.error.message : null} />
+      ? decision.decision
+        ? <DecisionRecord key={decision.id} decision={decision}
+          onRetry={() => void read.answer(decision.id, { retry: true }, decision)}
+          retryError={read.error?.reviewId === decision.id && read.error.kind !== "revoke" ? read.error.message : null}
+          onRevoke={() => read.answer(decision.id, { chosen: [], comment: "",
+          answers: (decision.questions ?? []).map(question => ({ questionId: question.id, options: [0] })) }, decision)}
+          revokeError={read.error?.reviewId === decision.id && read.error.kind !== "retry" ? read.error.message : null} />
         : <DecisionCard key={decision.id} decision={decision} narrow={narrow} columns={columns} onAnswer={read.answer} error={read.error?.reviewId === decision.id ? read.error.message : null} />
       : <DecisionRow key={decision.id} decision={decision} onOpen={() => setPicked(decision.id)} />);
   }

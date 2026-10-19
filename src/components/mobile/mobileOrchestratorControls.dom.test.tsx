@@ -4,6 +4,7 @@ import { useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { diffTextLines } from "@/components/feed/diff";
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import type { FileEntry } from "@/lib/types";
@@ -379,6 +380,16 @@ test("the controls sheet names the incumbent the way the desktop header does, sh
   expect(confirmButton(host).textContent).toContain("Open conversation");
 });
 
+/** The rotate draft's mandate line: one 44px press opens the diff and the editor (#2942). */
+function foldButton(panel: HTMLElement): HTMLButtonElement {
+  return panel.querySelector("[data-orchestrator-mandate-fold]") as HTMLButtonElement;
+}
+
+function lineCounts(oldText: string, newText: string): string {
+  const rows = diffTextLines(oldText, newText);
+  return `+${rows.filter((row) => row.t === "+").length} −${rows.filter((row) => row.t === "-").length}`;
+}
+
 test("Rotate opens the seat's configuration prefilled from the incumbent, and the draft is the SAME shape the desktop has", async () => {
   const files = [conversation({}), orchestrator];
   const { host, root } = await mount(files);
@@ -389,21 +400,48 @@ test("Rotate opens the seat's configuration prefilled from the incumbent, and th
   expect(panel.getAttribute("data-orchestrator-sheet-mode")).toBe("rotate");
   const draft = panel.querySelector('[data-orchestrator-draft="rotate"]');
   expect(draft).not.toBeNull();
-  /* The seat is based on v3, so the box starts from the CURRENT default and
-     says so; the incumbent's own text is one 44px tap away (#1452). The
-     server composes the handoff either way. */
-  const mandate = panel.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement;
-  expect(mandate.value).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
-  expect(panel.querySelector("[data-orchestrator-mandate-kind]")!.textContent).toBe(`Its instructions (v${ORCHESTRATOR_PROMPT_VERSION})`);
-  expect(panel.querySelector("[data-orchestrator-mandate-stale]")!.textContent).toContain(`based on v3; the current default is v${ORCHESTRATOR_PROMPT_VERSION}`);
+  /* The seat is based on v3, so the successor starts from the CURRENT default.
+     The section is ONE collapsed line, 44px tall, naming both versions and the
+     lines that differ; the incumbent's own text is one 44px tap away (#1452).
+     The server composes the handoff either way. */
+  const counts = lineCounts("You run the Atlas board.", ORCHESTRATOR_SYSTEM_PROMPT);
+  const fold = foldButton(panel);
+  expect(fold.textContent).toBe(`Mandate v3 → v${ORCHESTRATOR_PROMPT_VERSION} · lines: ${counts}`);
+  expect(fold.getAttribute("aria-expanded")).toBe("false");
+  expect(fold.className).toContain("min-h-11");
+  expect(panel.querySelector("[data-orchestrator-mandate]")).toBeNull();
+  expect(panel.querySelector("[data-orchestrator-mandate-diff]")).toBeNull();
+  expect(panel.querySelector("[data-orchestrator-mandate-kind]")).toBeNull();
+  expect(panel.querySelector("[data-orchestrator-mandate-stale]")!.textContent).toBe("Keep the incumbent's mandate (based on v3)");
   const keep = panel.querySelector("[data-orchestrator-keep-incumbent]") as HTMLButtonElement;
   expect(keep.className).toContain("min-h-11");
+  /* Pressing the line opens the diff, then the text box under it; a second press closes both. */
+  flushSync(() => fold.click());
+  expect(fold.getAttribute("aria-expanded")).toBe("true");
+  const diff = panel.querySelector("[data-orchestrator-mandate-diff]") as HTMLElement;
+  const mandate = panel.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement;
+  expect(mandate.value).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(diff.compareDocumentPosition(mandate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(diff.querySelectorAll('[data-orchestrator-mandate-diff-line="+"]')).toHaveLength(Number(counts.match(/\+(\d+)/)![1]));
+  expect(diff.querySelectorAll('[data-orchestrator-mandate-diff-line="-"]')).toHaveLength(Number(counts.match(/−(\d+)/)![1]));
+  flushSync(() => fold.click());
+  expect(panel.querySelector("[data-orchestrator-mandate]")).toBeNull();
   flushSync(() => keep.click());
   await settle(root, view(files), 2);
-  expect(mandate.value).toBe("You run the Atlas board.");
-  expect(panel.querySelector("[data-orchestrator-mandate-kind]")!.textContent)
-    .toBe(`Incumbent's mandate (based on v3; current default is v${ORCHESTRATOR_PROMPT_VERSION})`);
+  expect(foldButton(panel).textContent).toBe(`Mandate unchanged (v3; the current default is v${ORCHESTRATOR_PROMPT_VERSION}) (edit)`);
+  expect(foldButton(panel).getAttribute("aria-expanded")).toBe("false");
   expect(panel.querySelector("[data-orchestrator-keep-incumbent]")).toBeNull();
+  const restore = panel.querySelector("[data-orchestrator-restore-default]") as HTMLButtonElement;
+  expect(restore.textContent).toContain("Restore default");
+  expect(restore.className).toContain("min-h-11");
+  /* Unchanged: «(edit)» reaches the editor alone, with no diff to show. */
+  flushSync(() => foldButton(panel).click());
+  expect(panel.querySelector("[data-orchestrator-mandate-diff]")).toBeNull();
+  expect((panel.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement).value).toBe("You run the Atlas board.");
+  flushSync(() => restore.click());
+  await settle(root, view(files), 2);
+  expect(foldButton(panel).textContent).toBe(`Mandate v3 → v${ORCHESTRATOR_PROMPT_VERSION} · lines: ${counts}`);
+  expect(panel.querySelector("[data-orchestrator-keep-incumbent]")).not.toBeNull();
   expect(panel.textContent).toContain("Replace this project's orchestrator");
   /* The shared launch module: engine radios, the account the incumbent runs
      under, and the 44px floor applied from outside it. */
@@ -441,6 +479,7 @@ test("confirming a rotation posts to the ROTATE route once — never the seat ro
   await openControls(host, root, files);
   await openRotate(host, root, files);
 
+  flushSync(() => foldButton(sheet(host)!).click());
   type(sheet(host)!.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement, "You run Atlas now. Talk to me here.");
   /* Adjust a seat setting end to end: the account this seat will run under.
      One tap on its chip picks it. */
@@ -551,10 +590,11 @@ test("a seat whose transcript is not in view still reaches Rotate from the sheet
   await openRotate(host, root, files);
   expect(sheet(host)!.querySelector('[data-orchestrator-draft="rotate"]')).not.toBeNull();
   /* A v3 seat, so the draft starts from the current default (#1452). */
+  flushSync(() => foldButton(sheet(host)!).click());
   expect((sheet(host)!.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement).value).toBe(ORCHESTRATOR_SYSTEM_PROMPT);
 });
 
-test("Rotate over a seat on the CURRENT default keeps the incumbent's text and offers nothing to keep (#1452)", async () => {
+test("Rotate over a seat on the CURRENT default says the mandate is unchanged and offers nothing to keep or diff (#1452, #2942)", async () => {
   seatAnswer = { seat: seat({ mandate: "You run the Atlas board, my way.", promptVersion: ORCHESTRATOR_PROMPT_VERSION }), pending: null, exists: true };
   const files = [conversation({}), orchestrator];
   const { host, root } = await mount(files);
@@ -565,11 +605,15 @@ test("Rotate over a seat on the CURRENT default keeps the incumbent's text and o
   await openRotate(host, root, files);
 
   const panel = sheet(host)!;
-  expect((panel.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement).value).toBe("You run the Atlas board, my way.");
-  expect(panel.querySelector("[data-orchestrator-mandate-kind]")!.textContent)
-    .toBe(`Incumbent's mandate (based on v${ORCHESTRATOR_PROMPT_VERSION}, the current default)`);
+  expect(foldButton(panel).textContent).toBe(`Mandate unchanged (v${ORCHESTRATOR_PROMPT_VERSION}) (edit)`);
+  expect(foldButton(panel).querySelector("svg")).toBeNull();
+  expect(panel.querySelector("[data-orchestrator-mandate]")).toBeNull();
   expect(panel.querySelector("[data-orchestrator-mandate-stale]")).toBeNull();
   expect(panel.querySelector("[data-orchestrator-keep-incumbent]")).toBeNull();
+  expect(panel.querySelector("[data-orchestrator-restore-default]")).toBeNull();
+  flushSync(() => foldButton(panel).click());
+  expect((panel.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement).value).toBe("You run the Atlas board, my way.");
+  expect(panel.querySelector("[data-orchestrator-mandate-diff]")).toBeNull();
 });
 
 /* A minimal visualViewport stand-in — happy-dom has none, and the keyboard is
@@ -597,10 +641,16 @@ test("the rotate draft stays operable with the keyboard open: the sheet pads the
     await openControls(host, root, files);
     await openRotate(host, root, files);
 
+    /* The section opens on a press; the reveal then takes the EDITOR's label
+       row to the scroller top, never the section's top (the diff above may be
+       thousands of pixels tall). */
+    flushSync(() => foldButton(sheet(host)!).click());
     const field = sheet(host)!.querySelector("[data-orchestrator-mandate]") as HTMLTextAreaElement;
     const block = field.parentElement as HTMLElement & { scrollIntoView: (options?: unknown) => void };
     const reveals: unknown[] = [];
     block.scrollIntoView = (options?: unknown) => { reveals.push(options); };
+    expect(block.querySelector("label")?.textContent).toBe("Mandate");
+    expect(block.querySelector("[data-orchestrator-mandate-diff]")).toBeNull();
 
     flushSync(() => field.focus());
     await settle(root, view(files), 2);

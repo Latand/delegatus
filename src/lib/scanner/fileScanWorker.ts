@@ -1,6 +1,7 @@
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import fs from "node:fs";
 import path from "node:path";
+import { performanceSpans } from "@/lib/performanceSpans";
 
 import { systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
 import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } from "@/lib/helperLease";
@@ -162,7 +163,7 @@ export function collectFileScanInWorker(
       terminate(new Error(message));
     };
     const onAbort = () => terminate(abortError());
-    const consume = () => {
+    const consume = () => performanceSpans.sync("scanner.ipc-frame", () => {
       while (true) {
         const newline = stdout.indexOf("\n");
         if (newline < 0) return;
@@ -171,7 +172,7 @@ export function collectFileScanInWorker(
         if (!raw) continue;
         let parsed: unknown;
         try {
-          parsed = JSON.parse(raw);
+          parsed = performanceSpans.sync("scanner.ipc-decode", () => JSON.parse(raw), 0, Buffer.byteLength(raw));
         } catch {
           fail("file scanner worker emitted invalid JSON");
           return;
@@ -182,7 +183,7 @@ export function collectFileScanInWorker(
           return;
         }
         if (message.type === "resource") {
-          onResourceSnapshot?.(message.snapshot);
+          performanceSpans.sync("scanner.publication", () => onResourceSnapshot?.(message.snapshot));
         } else {
           const { conversationCatalog, ...snapshot } = message.snapshot;
           /* The full scanner runs in a child process. Its process-global
@@ -193,7 +194,7 @@ export function collectFileScanInWorker(
           completed = snapshot;
         }
       }
-    };
+    });
     timer = scheduler.setTimeout(() => {
       timer = undefined;
       fail("file scanner worker timed out");
@@ -230,10 +231,12 @@ export function collectFileScanInWorker(
       }
       if (completedConversationCatalog) {
         const currentScan = isProjectCatalogScanCurrent(catalogScanToken);
-        publishConversationCatalogForScan(completedConversationCatalog, catalogScanToken, completed.complete);
+        performanceSpans.sync("scanner.publication", () =>
+          publishConversationCatalogForScan(completedConversationCatalog!, catalogScanToken, completed!.complete));
         if (currentScan) {
           (runtime.transcriptIndexScheduler ?? scheduleTranscriptIndex)(
-            transcriptIndexFeed(completedConversationCatalog, completed.complete, undefined, listedAt),
+            performanceSpans.sync("transcript.feed", () =>
+              transcriptIndexFeed(completedConversationCatalog!, completed!.complete, undefined, listedAt)),
           );
         }
       }

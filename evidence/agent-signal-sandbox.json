@@ -134,7 +134,7 @@
   ],
   "performanceInterpretation": [
     "Launch samples alternate baseline and protected mode, with the same engine, profile and resource limits; 30 samples per mode for every engine/profile.",
-    "Added launch medians of 59–132 ms exceed the proposed 50 ms investigation threshold. The shared launcher adds two Python startups, delegation, Bubblewrap setup and readiness checks before native execution.",
+    "Added launch medians of 59\u2013132 ms exceed the proposed 50 ms investigation threshold. The shared launcher adds two Python startups, delegation, Bubblewrap setup and readiness checks before native execution.",
     "The short gate workload shows 9.211% overhead. One full TypeScript pair showed no sustained slowdown; a single pair does not establish a speedup or a statistical performance bound.",
     "Protection remains enabled in every protected sample. Native model responses use loopback providers."
   ],
@@ -249,7 +249,7 @@
     }
   },
   "compatibilityBlocker": {
-    "status": "unresolved",
+    "status": "resolved-by-viewer-routing",
     "boundary": "stdio MCP mutation receipts shared across private PID namespaces",
     "productionSources": [
       "src/lib/mcp/server.ts"
@@ -263,6 +263,19 @@
       "dispatchDeniedForStillLivingOwner": true
     },
     "requiredBehavior": "Recovery retains a living owner and leaves its dispatch claim intact.",
-    "resolution": "Integrate the fenced MCP routing prerequisite and verify it across namespaces, or authorize a focused receipt-identity change."
+    "resolution": "Integrated #2930 from current main. Ordinary stdio calls forward to the Viewer before opening bindings or receipts; no MCP writer behavior was changed.",
+    "verification": {
+      "file": "src/lib/runtime/agentSignalSandbox.mcp.integration.test.ts",
+      "passed": 2,
+      "assertions": 34,
+      "heldStages": [
+        "claimed",
+        "dispatching"
+      ],
+      "receiptOwnerIsViewer": true,
+      "privatePidPersisted": false,
+      "recoveryClosesLivingClaim": false,
+      "originalDispatchesOnce": true
+    }
   }
 }

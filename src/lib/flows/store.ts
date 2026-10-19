@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,7 +9,8 @@ import { forEachCooperatively } from "@/lib/cooperative";
 import { initializeStateCollections, SqliteStateCollection, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument } from "@/lib/state/registryRecords";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
-import { canonicalProject } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
 import { resolveRole } from "@/lib/roles/registry";
 import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import type { RoleDefinition } from "@/lib/roles/types";
@@ -118,7 +120,7 @@ export function mergeSeededPresets(presets: FlowPreset[], seeds = seededPresetsF
   return [...seeds.filter((preset) => !names.has(preset.name)), ...presets];
 }
 
-let flowsCache: { signature: string; flows: Flow[] } | null = null;
+let flowsCache: { signature: string; aliases: string; flows: Flow[]; projects: ReadonlySet<string> } | null = null;
 const flowStores = new Map<string, SqliteStateCollection<Flow>>();
 const flowSnapshots = new WeakMap<Flow[], Map<string, string>>();
 
@@ -151,10 +153,19 @@ function reviveCachedFlows(flows: Flow[]): Flow[] {
     revision, including revisions committed by another process. */
 export function loadFlows(): Flow[] {
   const before = flowsFileSignature();
-  if (flowsCache?.signature === before) return rememberFlowSnapshot(reviveCachedFlows(flowsCache.flows));
+  const aliases = JSON.stringify(projectAliasSnapshot().aliases);
+  if (flowsCache?.signature === before) {
+    if (flowsCache.aliases !== aliases) {
+      flowsCache = { ...flowsCache, aliases, projects: canonicalProjectKeys(flowsCache.flows.map(flow => flow.project)) };
+    }
+    replaceProjectKeySource("flows", flowsCache.projects);
+    return rememberFlowSnapshot(reviveCachedFlows(flowsCache.flows));
+  }
   const parsed = flowStore().snapshot();
   const after = flowsFileSignature();
-  if (before === after) flowsCache = { signature: after, flows: parsed };
+  const projects = canonicalProjectKeys(parsed.map(flow => flow.project));
+  if (before === after) flowsCache = { signature: after, aliases, flows: parsed, projects };
+  replaceProjectKeySource("flows", projects);
   return rememberFlowSnapshot(reviveCachedFlows(parsed));
 }
 
@@ -203,7 +214,7 @@ function normalizeRelayHold(hold: Round["relayHold"]): Round["relayHold"] {
 
 /** The shared history validator is deliberately permissive. A live store also
     validates the fields its decoder dereferences before admitting the row. */
-function isStoredFlow(value: unknown): value is Flow {
+export function isStoredFlow(value: unknown): value is Flow {
   try {
     return isFlow(value) && typeof value.project === "string"
       && Boolean(value.roles && isRoleConfig(value.roles.implementer) && isRoleConfig(value.roles.reviewer))
@@ -451,6 +462,7 @@ export function saveFlows(flows: Flow[]): void {
   if (!baseline) {
     flowStore().replaceSync(flows, { beforePersist: prepareFlowRevisions });
     rememberFlowSnapshot(flows);
+    replaceProjectKeySource("flows", canonicalProjectKeys(flows.map(flow => flow.project)));
     return;
   }
   const localIds = new Set(flows.map((flow) => flow.id));
@@ -465,6 +477,7 @@ export function saveFlows(flows: Flow[]): void {
     return { records: changed, deleteKeys: acceptedDeletes };
   });
   rememberFlowSnapshot(flows);
+  replaceProjectKeySource("flows", canonicalProjectKeys(flows.map(flow => flow.project)));
 }
 
 /** Persist a known changed subset while preserving every omitted flow row. */
@@ -497,14 +510,14 @@ export function patchFlowRows(
 }
 
 /** Re-read and mutate flow state under the process-shared SQLite lease. */
-export async function withFlowMutation<T>(mutate: (flows: Flow[], persist: () => void) => T): Promise<T> {
-  return await flowStore().mutate(mutate, ({ dirtyRecords }) => prepareFlowRevisions(dirtyRecords));
+export async function withFlowMutation<T>(mutate: (flows: Flow[], persist: () => Promise<void>) => T | Promise<T>): Promise<T> {
+  return await (await waitForStateLock("flows.open", flowStore)).mutate(mutate, ({ dirtyRecords }) => prepareFlowRevisions(dirtyRecords));
 }
 
 /** Hold the flow collection lease while a cross-store consumer projects one exact
     durable generation. The callback cannot mutate flows through this interface. */
-export function withFlowSnapshot<T>(read: (flows: readonly Flow[]) => T): T {
-  return flowStore().withSnapshotSync(read);
+export async function withFlowSnapshot<T>(read: (flows: readonly Flow[]) => T | Promise<T>): Promise<T> {
+  return (await waitForStateLock("flows.open", flowStore)).mutate(records => read(records));
 }
 
 export function loadPresets(): FlowPreset[] {
@@ -522,3 +535,11 @@ export function savePresets(presets: FlowPreset[]): void {
 export { flowArtifactsDir, findingsPathFor, outputPathFor, stderrPathFor, stdoutPathFor } from "@/lib/reviewHistory/artifacts";
 export { atomicWriteText } from "@/lib/agent/artifacts";
 export { normalizeFindings } from "@/lib/review/findings";
+
+export function patchFlowRowsAsync(...args: Parameters<typeof patchFlowRows>): Promise<void> {
+  return waitForStateLock("flows.patchFlowRows", () => patchFlowRows(...args), { subject: "flows" });
+}
+
+export function saveFlowsAsync(...args: Parameters<typeof saveFlows>): Promise<void> {
+  return waitForStateLock("flows.saveFlows", () => saveFlows(...args), { subject: "flows" });
+}

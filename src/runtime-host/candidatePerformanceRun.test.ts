@@ -26,7 +26,9 @@ async function runGate(args: string[], env: Record<string, string> = {}): Promis
   });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   if (!stdout.includes(CANDIDATE_PERFORMANCE_REPORT_PREFIX)) throw new Error(`the gate printed no report (exit ${code}): ${stderr.slice(-2_000)}`);
-  return { code, report: parseCandidatePerformanceReport(stdout), stdout };
+  const report = parseCandidatePerformanceReport(stdout);
+  if (!report.measurements) console.error(report.detail);
+  return { code, report, stdout };
 }
 
 /** What a refused candidate must still keep: speed and its own release are the only things it may lose. */
@@ -44,11 +46,11 @@ function expectEvidenceIntact(report: CandidatePerformanceEvidence): void {
    promotion, browser views of the production build included. Run it with
    LLV_CANDIDATE_PERFORMANCE_FULL=1 after `bun run build`, with CHROME_BIN
    naming a Chromium, or `bun scripts/verify-viewer-runtime.ts --performance`. */
-test.skipIf(process.env.LLV_CANDIDATE_PERFORMANCE_FULL !== "1")("the candidate gate passes the current code over thirty thousand rows of retained history", async () => {
+test.skipIf(process.env.LLV_CANDIDATE_PERFORMANCE_FULL !== "1")("the candidate gate passes the current code over the complete managed-update census", async () => {
   const { code, report } = await runGate([]);
   if (!report.ok) console.error(JSON.stringify(report, null, 2));
   const measured = report.measurements!;
-  expect(measured.dataset.rows).toBeGreaterThan(29_000);
+  expect(measured.dataset.rows).toBeGreaterThanOrEqual(53_000);
   expect(measured.handover).toMatchObject({ switched: true, demotionExitCode: 0, servingRelease: "successor", serving: { failures: 0 } });
   expect(measured.workers).toMatchObject({ count: 4, rehosted: 4, answering: 4, lostProgress: 0, repeatedProgress: 0, failedPings: 0 });
   expectEvidenceIntact(report);
@@ -58,12 +60,12 @@ test.skipIf(process.env.LLV_CANDIDATE_PERFORMANCE_FULL !== "1")("the candidate g
   expect({ code, ok: report.ok }).toEqual({ code: 0, ok: true });
 }, 600_000);
 
-test("an induced slow candidate is refused with the bounds it breached", async () => {
+test("an induced slow candidate is refused and keeps duration observations as warnings", async () => {
   const { code, report } = await runGate(["--scale", "0.1", "--induce-slow-ms", "600"]);
   expect(code).toBe(1);
   expect(report.ok).toBe(false);
   expect(report.inducedDelayMs).toBe(600);
-  expect(report.breaches).toEqual(expect.arrayContaining([
+  expect(report.timingWarnings).toEqual(expect.arrayContaining([
     expect.stringMatching(/^grant-bearing write p95 \d+(\.\d+)?ms exceeds 350ms$/),
     expect.stringMatching(/^grant-bearing write max \d+(\.\d+)?ms exceeds 500ms$/),
     expect.stringMatching(/^Viewer event-loop delay p95 \d+(\.\d+)?ms exceeds 50ms$/),
@@ -212,7 +214,7 @@ test.skipIf(!served)("a production server held under the browser views is refuse
   expect(browser.views).toBe(8);
   expect(browser.server!.samples).toBeGreaterThan(1_000);
   expect(browser.server!.maxMs).toBeGreaterThanOrEqual(780);
-  expect(report.breaches).toEqual(expect.arrayContaining([
+  expect(report.timingWarnings).toEqual(expect.arrayContaining([
     expect.stringMatching(/^server event-loop delay max under the browser views \d+(\.\d+)?ms exceeds 500ms$/),
   ]));
   expect(report.log?.some((line) => line.startsWith("induced: held the production server's event loop for 800ms"))).toBe(true);

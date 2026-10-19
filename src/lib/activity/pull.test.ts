@@ -22,6 +22,7 @@ import { AgentRegistry, closeAgentRegistryForTests, type RegistryFile } from "@/
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { TeamStore, resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 import { mintSession } from "@/lib/team/sessions";
+import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
 
 /* Two invented hosts on one disk: a "stage" host whose own ingest recorded
    its transcripts, and this host, which pulls them. The transport runs the
@@ -210,6 +211,43 @@ describe("pulling another host's records", () => {
     expect(upgraded.localRowsAfter(0, 10).every((row) => row.author === null)).toBeTrue();
     expect(upgraded.db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(3);
     upgraded.close();
+  });
+
+  test("a remote page waits asynchronously for a real peer writer and commits without marking the host unreachable", async () => {
+    await stageRecords();
+    const store = ActivityStore.open(localStoreFile);
+    const code = "const {Database}=require('bun:sqlite'); const db=new Database(process.argv[1]); db.exec('BEGIN IMMEDIATE'); process.stdout.write('ready'); await Bun.stdin.text(); db.exec('ROLLBACK'); db.close();";
+    const peer = Bun.spawn([process.execPath, "-e", code, localStoreFile], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    let pulling: Promise<unknown> | undefined;
+    let calls = 0;
+    try {
+      const reader = peer.stdout.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe("ready");
+      reader.releaseLock();
+      pulling = pullHost(store, "stage", config(), async (env, script) => {
+        calls += 1;
+        return localTransport()(env, script);
+      }, () => NOW);
+      const deadline = performance.now() + 5000;
+      while (!stateLockWaitsInFlight().some(wait => wait.callSite === "activity.transaction")) {
+        if (performance.now() > deadline) throw new Error("remote pull did not enter asynchronous page admission");
+        await new Promise<void>(resolve => setTimeout(resolve, 1));
+      }
+      let timerAdvanced = false;
+      setTimeout(() => { timerAdvanced = true; }, 0);
+      await new Promise<void>(resolve => setTimeout(resolve, 10));
+      expect(timerAdvanced).toBeTrue();
+      peer.stdin.end();
+      expect(await peer.exited, await new Response(peer.stderr).text()).toBe(0);
+      expect(await pulling).toMatchObject({ ok: true, error: null });
+      expect(calls).toBe(1);
+      expect(store.hostState("stage")).toMatchObject({ error: null, readAt: NOW });
+    } finally {
+      peer.stdin.end();
+      await peer.exited;
+      await pulling;
+      store.close();
+    }
   });
 
   test("migration retains team history from member-authored rows", async () => {

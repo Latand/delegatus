@@ -15,6 +15,7 @@ import {
   day,
   duration,
   headerStatus,
+  managedRetryText,
   checkErrorText,
   processErrorText,
   refusalText,
@@ -188,9 +189,9 @@ function Header({ s, state, actions, t, locale }: { s: Snapshot; state: ViewStat
   const { web, runtimeHost } = s.serving;
   const stale = staleProcesses(s);
   const pairs: ReactNode[] = [];
-  if (web && runtimeHost && web.short !== runtimeHost.short) {
-    pairs.push(<Pair key="web" label={t("selfUpdate.label.webRuns")} value={revisionText(web, locale)} />);
-    pairs.push(<Pair key="host" label={t("selfUpdate.label.hostRuns")} value={revisionText(runtimeHost, locale)} />);
+  if (s.mode === "managed" || web && runtimeHost && web.sha !== runtimeHost.sha) {
+    pairs.push(<Pair key="web" label={t(web ? "selfUpdate.label.webRuns" : "selfUpdate.process.web")} value={web ? revisionText(web, locale) : t("selfUpdate.label.unknownRevision")} />);
+    pairs.push(<Pair key="host" label={t(runtimeHost ? "selfUpdate.label.hostRuns" : "selfUpdate.process.host")} value={runtimeHost ? revisionText(runtimeHost, locale) : t("selfUpdate.label.unknownRevision")} />);
   } else {
     const running = web ?? runtimeHost;
     pairs.push(<Pair key="running" label={t("selfUpdate.label.running")} value={running ? revisionText(running, locale) : t("selfUpdate.label.nothing")} />);
@@ -298,7 +299,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
     </ol>
   );
 
-  if (update.state === "idle" || (update.state === "done" && freshTarget) || (managed && update.state === "failed" && freshTarget)) {
+  if (update.state === "idle" || (update.state === "done" && freshTarget)) {
     if (!s.available || s.check.state !== "update-available") {
       const rebuildCheckout = s.mode === "checkout" && s.auto?.availability === "hand-managed" && s.check.relation === "equal";
       const copy = rebuildCheckout ? t("selfUpdate.update.rebuildNote") : s.check.state === "up-to-date"
@@ -376,8 +377,9 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
   const remoteMoved = !managed && failed.failure?.kind === "remote-moved";
   const failedName = stepName(failed.name, t);
   const cause = stepFailureText(failed, t);
+  const retryGuidance = managed ? managedRetryText(failed, t) : undefined;
   const copy = managed
-    ? t(update.rolledBack ? "selfUpdate.update.rolledBack" : "selfUpdate.update.failedManaged", { step: failedName, duration: duration(elapsed, t) })
+    ? t(update.rollback === "running" ? "selfUpdate.update.rollbackPending" : update.rolledBack ? "selfUpdate.update.rolledBack" : "selfUpdate.update.failedManaged", { step: failedName, duration: duration(elapsed, t) })
     : t(failed.name === "switch" ? update.rolledBack ? "selfUpdate.update.rolledBackApply" : "selfUpdate.update.failedApply"
       : "selfUpdate.update.failed", { step: failedName, duration: duration(elapsed, t) });
   return (
@@ -393,6 +395,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
             tone={freshTarget ? "secondary" : "primary"}
             label={managed ? t("selfUpdate.update.deployAgain") : t("selfUpdate.update.retryFrom", { step: failedName })}
             onClick={actions.retry}
+            title={retryGuidance}
             disabled={s.busy !== null || state.pending.has("update")}
           /> : null}
         </div>
@@ -400,6 +403,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
       <div data-outcome="failed" className="flex flex-col gap-1 rounded-[8px] bg-danger-soft px-2.5 py-2 text-ui text-danger">
         <p className="m-0">{copy}</p>
         {cause ? <p data-cause="" className="m-0 font-mono text-label [overflow-wrap:anywhere]">{cause}</p> : null}
+        {retryGuidance ? <p data-retry-guidance="" className="m-0 text-label [overflow-wrap:anywhere]">{retryGuidance}</p> : null}
       </div>
       {steps(short, update.steps)}
     </section>
@@ -736,7 +740,13 @@ export function SelfUpdateView({ snapshot: s, live, state, actions }: { snapshot
       {/* On phones process health comes before the update log tails. */}
       <div className="flex flex-col gap-4 max-sm:gap-3 min-[900px]:grid min-[900px]:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] min-[900px]:items-start">
         <div className="contents min-[900px]:flex min-[900px]:min-w-0 min-[900px]:flex-col min-[900px]:gap-4">
-          <div className="order-3 min-w-0 min-[900px]:order-none"><UpdateSection s={s} state={state} actions={actions} t={t} /></div>
+          <div className="order-3 flex min-w-0 flex-col gap-3 min-[900px]:order-none">
+            <UpdateSection s={s} state={state} actions={actions} t={t} />
+            {s.previousAttempt?.state === "failed" ? <section data-section="previous-attempt" className={`${CARD} ${EDGE.danger}`}>
+              <p className="m-0 text-ui text-danger">{t("selfUpdate.update.previousFailed", { target: s.previousAttempt.targetShort ?? "" })}</p>
+              {s.previousAttempt.steps.filter(step => step.state === "failed").map(step => <p key={step.name} className="m-0 text-label text-secondary [overflow-wrap:anywhere]">{stepFailureText(step, t)}</p>)}
+            </section> : null}
+          </div>
           <div className="order-4 min-w-0 empty:hidden min-[900px]:order-none"><ChangesSection s={s} t={t} /></div>
         </div>
         <div className="contents min-[900px]:flex min-[900px]:min-w-0 min-[900px]:flex-col min-[900px]:gap-4">

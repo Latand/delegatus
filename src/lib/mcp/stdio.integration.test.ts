@@ -62,7 +62,7 @@ function isolatedEnvironment(sandbox: string, extra: Record<string, string> = {}
   const directories = {
     HOME: path.join(sandbox, "home"),
     XDG_CONFIG_HOME: path.join(sandbox, "config"),
-    TMPDIR: path.join(sandbox, "tmp"),
+    TMPDIR: sandbox,
     LLV_STATE_DIR: path.join(sandbox, "state"),
     LLV_CLAUDE_HOME: path.join(sandbox, "claude-home"),
     LLV_CODEX_HOME: path.join(sandbox, "codex-home"),
@@ -126,6 +126,38 @@ async function startMcp(environment: Record<string, string>, name: string): Prom
   };
 }
 
+async function viewerBridge(environment: Record<string, string>, diagnostics = { text: "" }): Promise<Record<string, string>> {
+  const viewer = ownFixtureChild(Bun.spawn([process.execPath, "-e", `
+    const { NextRequest } = await import("next/server");
+    const { handleMcpHttpRequest } = await import("./src/lib/mcp/http");
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0,
+      fetch: request => handleMcpHttpRequest(new NextRequest(request)) });
+    console.log(server.url.origin);
+    for await (const chunk of Bun.stdin.stream()) break;
+    server.stop(true); process.exit(0);
+  `], { cwd: process.cwd(), env: environment, stdin: "pipe", stdout: "pipe", stderr: "pipe" }));
+  const stderr = (async () => {
+    const decoder = new TextDecoder();
+    const reader = viewer.stderr.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        diagnostics.text += decoder.decode(value, { stream: true });
+      }
+      diagnostics.text += decoder.decode();
+    } finally { reader.releaseLock(); }
+  })();
+  void stderr.catch(() => {});
+  const reader = viewer.stdout.getReader();
+  const answer = await Promise.race([reader.read(), Bun.sleep(5_000).then(() => { throw new Error("fixture Viewer did not start"); })]);
+  reader.releaseLock();
+  if (answer.done) { await stderr; throw new Error(diagnostics.text); }
+  return { ...environment, LLV_VIEWER_CONTROL_URL: new TextDecoder().decode(answer.value).trim(),
+    // This fixture explicitly selects its own port-0 endpoint.
+    LLV_VIEWER_DEPLOY_TARGET: "", LLV_VIEWER_PORT: "" };
+}
+
 async function callSpawn(client: Client, clientRequestId: string, extra: Record<string, unknown> = {}) {
   return client.callTool({
     name: "spawn_agent",
@@ -159,34 +191,60 @@ test("the real stdio server releases retained handles when its client disappears
   expect(exited).toBe(0);
 }, 15_000);
 
-test("a launched stdio server retries local initialization after a receipt database lock clears", async () => {
+for (const engine of ["codex-mcp-client", "claude-code"]) test(`${engine} receives JSON once through the stable launcher and keeps liveness diagnostics`, async () => {
+  const sandbox = sandboxDir("llv-mcp-model-result-");
+  const environment = identifiedEnvironment(sandbox);
+  const verdicts = [
+    { ok: true, toolName: "list_tasks", clientRequestId: null, replayed: false, items: [] },
+    { ok: false, toolName: "list_tasks", clientRequestId: null, replayed: false, code: "tool_failed", error: "Viewer MCP request returned a malformed response", retryable: true },
+    { ok: false, toolName: "list_tasks", clientRequestId: null, replayed: false, code: "fixture_refused", error: "The fixture refuses this read", retryable: false },
+  ];
+  let calls = 0;
+  const http = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const body = await request.json() as { id: string };
+    const result = verdicts[calls++];
+    return Response.json({ jsonrpc: "2.0", id: body.id, result: {
+      content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result, ...(result.ok ? {} : { isError: true }),
+    } });
+  } });
+  let session: McpSession | undefined;
+  try {
+    session = await startMcp({ ...environment, LLV_VIEWER_CONTROL_URL: http.url.origin }, engine);
+    const digest = crypto.createHash("sha256").update(environment.LLV_SPAWN_CAPABILITY!).digest("hex");
+    const heartbeat = path.join(environment.LLV_STATE_DIR!, "mcp-runtime", "sessions", `${digest}.json`);
+    for (let index = 0; index < verdicts.length; index++) {
+      const result = await session.client.callTool({ name: "list_tasks", arguments: {} });
+      expect(result.structuredContent).toBeUndefined();
+      expect(result.content).toEqual([{ type: "text", text: JSON.stringify(verdicts[index]) }]);
+      expect(result.isError === true).toBe(index > 0);
+      expect(JSON.parse(fs.readFileSync(heartbeat, "utf8")).failedCalls).toBe(index === 1 ? 1 : 0);
+    }
+    expect(calls).toBe(3);
+  } finally { await session?.close(); http.stop(true); }
+}, 15_000);
+
+test("a managed stdio server never opens local receipts even while that database is locked", async () => {
   const sandbox = sandboxDir("llv-mcp-local-retry-");
-  const environment = identifiedEnvironment(sandbox, { LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" });
+  const environment = identifiedEnvironment(sandbox);
   const filename = path.join(environment.LLV_STATE_DIR!, "mcp-receipts.sqlite");
   const { SqliteMcpReceiptStore } = await import("./server");
   new SqliteMcpReceiptStore(filename).close();
   const holder = new Database(filename, { strict: true });
   holder.exec("BEGIN IMMEDIATE");
+  const http = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const body = await request.json() as { id: string; params: { name: string } };
+    return Response.json({ jsonrpc: "2.0", id: body.id, result: { content: [], structuredContent: {
+      ok: true, toolName: body.params.name, clientRequestId: null, replayed: false, tasks: [],
+    } } });
+  } });
   let session: McpSession | undefined;
   try {
-    session = await startMcp(environment, "local-initialization-retry");
-    const read = () => session!.client.callTool({ name: "list_tasks", arguments: { ids: ["absent"] } });
-    const failures = await Promise.all([read(), read()]);
-    for (const failure of failures) {
-      expect(failure.isError).toBe(true);
-      expect(JSON.stringify(failure.content)).toContain("database is locked");
-    }
-    holder.exec("ROLLBACK");
-    // The same stdio session must recover without reconnecting or restarting.
-    for (const result of await Promise.all([read(), read()])) {
+    session = await startMcp({ ...environment, LLV_VIEWER_CONTROL_URL: http.url.origin }, "no-local-receipts");
+    for (const result of await Promise.all([1, 2].map(() => session!.client.callTool({ name: "list_tasks", arguments: { ids: ["absent"] } })))) {
       expect(result.structuredContent).toMatchObject({ ok: true, tasks: [] });
     }
-    expect((await read()).structuredContent).toMatchObject({ ok: true, tasks: [] });
-  } finally {
-    holder.close();
-    await session?.close();
-  }
-}, 30_000);
+  } finally { holder.exec("ROLLBACK"); holder.close(); await session?.close(); http.stop(true); }
+}, 15_000);
 
 test("a launched stdio server releases repeated large read answers without loading its domain stores", async () => {
   const sandbox = sandboxDir("llv-mcp-large-reads-");
@@ -383,7 +441,7 @@ test("store reads stay independent of a slow host, held pipeline lease and same-
 
 test("the packaged stdio host publishes and invokes the expanded read surface", async () => {
   const sandbox = sandboxDir("llv-mcp-stdio-");
-  const session = await startMcp(isolatedEnvironment(sandbox), "viewer-stdio-integration");
+  const session = await startMcp(await viewerBridge(identifiedEnvironment(sandbox)), "viewer-stdio-integration");
   try {
     const tools = await session.client.listTools();
     expect(tools.tools.map((tool) => tool.name)).toContain("board_snapshot");
@@ -442,7 +500,7 @@ test("a packaged MCP spawn is dispatched once: a Viewer restart mid-request answ
     LLV_VIEWER_DEPLOY_TARGET: path.join(sandbox, "viewer-release.json"),
     LLV_VIEWER_CONTROL_URL: firstViewer.url.origin,
   });
-  const session = await startMcp(environment, "viewer-restart-integration");
+  const session = await startMcp(await viewerBridge(environment), "viewer-restart-integration");
   let restartedViewer: ReturnType<typeof Bun.serve> | null = null;
   const restartedKeys: string[] = [];
   let transientProxyFailures = 0;
@@ -568,11 +626,11 @@ test("a packaged MCP tool falls back from a retired launch port to the stable Vi
     container: "viewer-fixture",
     endpoint: stableViewer.url.origin,
   }));
-  const session = await startMcp(identifiedEnvironment(sandbox, {
+  const session = await startMcp(await viewerBridge(identifiedEnvironment(sandbox, {
     LLV_VIEWER_DEPLOY_TARGET: targetFile,
     LLV_VIEWER_CONTROL_URL: retiredOrigin,
     LLV_VIEWER_PORT: String(stableViewer.port),
-  }), "viewer-dead-launch-port");
+  })), "viewer-dead-launch-port");
   try {
     expect((await callSpawn(session.client, "dead-launch-port-fallback")).structuredContent)
       .toMatchObject({ ok: true, conversationId: "conversation_stable_resolver" });
@@ -814,12 +872,10 @@ test("send: acceptance, lost response, original-key recovery — one recipient d
     expect(typeof deliveredOrigin.project).toBe("string");
     await host.kill();
     const lost = await original;
-    /* The reset reaches the MCP process as uncertainty; the immediate
-       evidence read already finds the settled delivery under the ORIGINAL
-       key, with the operation id the recipient actually took. */
-    expect(lost).toMatchObject({ ok: true, recovered: true, outcome: "settled", state: "delivered", resend: "not-needed", nextAction: "follow-disposition" });
-    expect(typeof lost.operationId).toBe("string");
-    const operationId = lost.operationId as string;
+    // The adapter cannot consult the stopped Viewer's receipt store. Recovery
+    // below uses the same key after the service returns.
+    expect(lost).toMatchObject({ ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
+    const operationId = String(fixture.effects().find(effect => effect.kind === "recipient")!.operationId);
     const settledSnapshot = fixture.registryFile();
     const occurrence = heldDeliveryOccurrences(fixture.recipient.transcriptPath, settledSnapshot);
     expect(occurrence).toMatchObject([{ origin: "agent", senderConversationId: fixture.caller.conversationId }]);
@@ -883,8 +939,7 @@ test("spawn: acceptance, lost response, original-key recovery — one launch, on
     if (launched.length !== 1) throw new Error(`writer effects: ${JSON.stringify(fixture.effects())}; responses: ${JSON.stringify(fixture.responses())}`);
     await host.kill();
     const lost = await original;
-    expect(lost).toMatchObject({ ok: true, recovered: true, nextAction: "original-key-lookup", launchId: launched[0]!.launchId, conversationId: launched[0]!.conversationId });
-    expect(["accepted", "in-flight"]).toContain(String(lost.outcome));
+    expect(lost).toMatchObject({ ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
 
     fixture.control({ mode: "respond" });
     host = await fixture.startHost();
@@ -995,7 +1050,7 @@ test("network failure without dispatch proof stays unknown and never redelivers;
 
     await host.kill();
     const disconnected = await call(mcp, "spawn_agent", spawnArguments(fixture, "spawn-unconnected"));
-    expect(disconnected).toMatchObject({ ok: false, details: { outcome: "not-executed", nextAction: "new-request-permitted" } });
+    expect(disconnected).toMatchObject({ ok: false, code: "outcome_unknown", details: { outcome: "unknown", nextAction: "original-key-lookup" } });
     expect(fixture.effects()).toHaveLength(0);
     host = await fixture.startHost();
 
@@ -1588,7 +1643,9 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
         removeDownstreamEvidence(fixture, tool, effect);
         if (loss === "reset") await host.kill();
         else fixture.release();
-        expect(await held).toMatchObject({ ok: true, outcome: "settled", ...ids });
+        expect(await held).toMatchObject(loss === "reset"
+          ? { ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } }
+          : { ok: true, outcome: "settled", ...ids });
         expect(fixture.effects()).toHaveLength(1);
         await original.close();
         if (loss !== "reset") await host.kill();
@@ -1917,7 +1974,7 @@ describe.skipIf(process.platform !== "linux")("native caller admission (#2827)",
       const writers = fixture.effects().filter((effect) => effect.kind === "writer");
       expect(writers).toHaveLength(1);
       await host.kill();
-      expect(await original).toMatchObject({ ok: true, launchId: writers[0]!.launchId });
+      expect(await original).toMatchObject({ ok: false, code: "outcome_unknown", details: { nextAction: "original-key-lookup" } });
       fixture.control({ mode: "respond" }); host = await fixture.startHost();
       expect(await call(native.session, "spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({ ok: true, replayed: true, launchId: writers[0]!.launchId });
       const record = JSON.parse(fs.readFileSync(native.recordFile, "utf8"));
@@ -2058,7 +2115,13 @@ describe.skipIf(process.platform !== "linux")("native caller admission (#2827)",
     const ready = path.join(sandbox, "hook-ready.json");
     const preload = path.join(sandbox, "hold-hook-input.cjs");
     fs.writeFileSync(preload, `const fs = require('node:fs'); Object.defineProperty(process, 'stdin', { value: { async *[Symbol.asyncIterator]() { fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({pid:process.pid,parent:process.ppid})); await new Promise(() => {}); } } });`);
-    const bundled = path.join(process.cwd(), "dist", "mcp-server.mjs");
+    const bundleDirectory = path.join(sandbox, "bundle");
+    const builder = ownFixtureChild(Bun.spawn({ cmd: [process.execPath, path.join(process.cwd(), "scripts", "build-mcp.ts"), bundleDirectory],
+      env: environment, stdin: "ignore", stdout: "ignore", stderr: "pipe" }));
+    const buildErrors = new Response(builder.stderr).text();
+    if (await builder.exited !== 0) throw new Error(await buildErrors);
+    fs.symlinkSync(fs.realpathSync(path.join(process.cwd(), "node_modules")), path.join(bundleDirectory, "node_modules"), "dir");
+    const bundled = path.join(bundleDirectory, "mcp-server.mjs");
     const command = entry === "bundle" ? ["--preload", preload, bundled] : [path.join(process.cwd(), "bin", "mcp-server.mjs")];
     if (entry === "wrapper") {
       // The managed bundle adds only an input barrier around the real entry.
@@ -2070,13 +2133,18 @@ describe.skipIf(process.platform !== "linux")("native caller admission (#2827)",
         mcpRuntime: { source: "managed", releaseId: "hook-owner", revision: "a".repeat(40), artifactDigest: crypto.createHash("sha256").update(source).digest("hex"), stagedAt: new Date().toISOString() } }));
     }
     const parentScript = path.join(sandbox, "native-owner.ts");
-    fs.writeFileSync(parentScript, `const child = Bun.spawn([process.execPath, ...${JSON.stringify(command)}, '--native-caller-hook'], {stdin:'inherit',stdout:'ignore',stderr:'ignore'}); await child.exited;`);
+    fs.writeFileSync(parentScript, `const child = Bun.spawn([process.execPath, ...${JSON.stringify(command)}, '--native-caller-hook'], {stdin:'inherit',stdout:'ignore',stderr:'inherit'}); await child.exited;`);
     const executable = path.join(sandbox, "claude"); fs.symlinkSync(process.execPath, executable);
     const parent = ownFixtureChild(Bun.spawn([executable, parentScript], { cwd: process.cwd(), env: environment, stdin: "pipe", stdout: "ignore", stderr: "pipe" }));
+    const parentErrors = new Response(parent.stderr).text();
     const descendants: { pid: number; identity: string | null }[] = [];
     try {
       const until = Date.now() + 10_000;
-      while (!fs.existsSync(ready)) { if (Date.now() > until || parent.exitCode !== null) throw new Error("hook input barrier not reached"); await Bun.sleep(10); }
+      while (!fs.existsSync(ready)) {
+        if (parent.exitCode !== null) throw new Error(`hook owner exited before its input barrier: ${await parentErrors}`);
+        if (Date.now() > until) throw new Error("hook input barrier not reached");
+        await Bun.sleep(10);
+      }
       const child = JSON.parse(fs.readFileSync(ready, "utf8"));
       if (entry === "bundle") expect(child.parent).toBe(parent.pid);
       else { expect(procBackend.readPpid(child.parent)).toBe(parent.pid); descendants.push({ pid: child.parent, identity: procBackend.processIdentity(child.parent) }); }
@@ -2174,8 +2242,8 @@ describe.skipIf(process.platform !== "linux")("native caller admission (#2827)",
         const native = await nativeSession(fixture, NATIVE_A, { LLV_SPAWN_CAPABILITY: capability }, false);
         try {
           const refused = await call(native.session, "spawn_agent", spawnArguments(fixture, "native-unknown-capability"));
-          expect(refused).toMatchObject({ ok: false, code: "caller_unidentified" });
-          expect(refused.error).toContain("capability-unresolved");
+          expect(refused).toMatchObject({ ok: false, code: "outcome_unknown" });
+          expect(refused.error).toContain("403");
         } finally { await native.session.close(); }
       }
       expect(fixture.effects()).toHaveLength(0);
@@ -2192,3 +2260,74 @@ describe.skipIf(process.platform !== "linux")("native caller admission (#2827)",
     } finally { await native.session.close(); await host.stop(); }
   }, 30_000);
 });
+
+test("packaged MCP writers retain ordered task edits while the Viewer yields on state waits", async () => {
+  const sandbox = sandboxDir("llv-mcp-state-contention-");
+  const environment = identifiedEnvironment(sandbox);
+  const file = path.join(environment.LLV_STATE_DIR!, "tasks.json");
+  fs.writeFileSync(file, JSON.stringify({ tasks: [{
+    id: "shared-task", project: "fixture", status: "inbox", text: "Concurrent task edits",
+    details: "start", placement: "unplaced", assignments: [],
+    createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z",
+  }] }));
+  const { loadTasksFile } = await import("@/lib/tasks/store");
+  loadTasksFile(file);
+  const diagnostics = { text: "" };
+  const forwarded = await viewerBridge(environment, diagnostics);
+  const waits = (): import("@/lib/blockingWaits").BlockingWaitSample[] => diagnostics.text.split("\n").slice(0, -1)
+    .filter(line => line.startsWith("[blocking-wait] "))
+    .map(line => JSON.parse(line.slice("[blocking-wait] ".length)));
+  const taskWait = (entry: import("@/lib/blockingWaits").BlockingWaitSample) => entry.subject === "tasks"
+    && entry.stateWait?.processKind === "embedded" && entry.stateWait.callSite === "state.lease.sqlite";
+  const sessions: McpSession[] = [];
+  const holder = new Database(path.join(environment.LLV_STATE_DIR!, "state.sqlite"));
+  let pending: Promise<unknown> | undefined;
+  try {
+    for (let writer = 0; writer < 4; writer++) {
+      const session = await startMcp(forwarded, `state-writer-${writer}`);
+      sessions.push(session);
+      expect((await session.client.callTool({ name: "list_tasks", arguments: { ids: ["shared-task"] } })).isError).not.toBe(true);
+    }
+    holder.exec("BEGIN IMMEDIATE");
+    let acknowledged = 0;
+    const edits = sessions.map(async (session, writer) => {
+      for (let sequence = 0; sequence < 20; sequence++) {
+        const call = { name: "update_task", arguments: {
+          clientRequestId: `edit-${writer}-${sequence}`, taskId: "shared-task", appendLine: `${writer}:${sequence}`,
+        } };
+        const result = await session.client.callTool(call);
+        expect(result.isError).not.toBe(true);
+        acknowledged++;
+        // Replaying a committed request must not append the same line twice.
+        if (sequence === 0) expect((await session.client.callTool(call)).isError).not.toBe(true);
+      }
+    });
+    pending = Promise.all(edits);
+    void pending.catch(() => {});
+    const waitDeadline = Date.now() + 5_000;
+    while (!waits().some(entry => taskWait(entry) && entry.stateWait?.outcome === "waiting") && Date.now() < waitDeadline) await Bun.sleep(10);
+    expect(waits().filter(taskWait)).toEqual(expect.arrayContaining([expect.objectContaining({
+      synchronous: false, stateWait: expect.objectContaining({ outcome: "waiting", synchronousSleepMs: 0 }),
+    })]));
+    expect(acknowledged).toBe(0);
+    expect(loadTasksFile(file).tasks[0]!.details).toBe("start");
+    holder.exec("COMMIT");
+    await pending;
+    const lines = loadTasksFile(file).tasks[0]!.details!.split("\n").slice(1);
+    expect(lines).toHaveLength(80);
+    expect(new Set(lines).size).toBe(80);
+    for (let writer = 0; writer < 4; writer++) {
+      expect(lines.filter(line => line.startsWith(`${writer}:`))).toEqual(Array.from({ length: 20 }, (_, sequence) => `${writer}:${sequence}`));
+    }
+    // The Viewer's single task executor owns this asynchronous wait. The four
+    // packaged adapters own no state locks.
+    expect(waits().filter(taskWait)).toEqual(expect.arrayContaining([expect.objectContaining({
+      synchronous: false, stateWait: expect.objectContaining({ outcome: "success", synchronousSleepMs: 0 }),
+    })]));
+    for (const session of sessions) expect(session.stderr()).not.toContain("[blocking-wait]");
+  } finally {
+    holder.close();
+    await pending?.catch(() => {});
+    await Promise.all(sessions.map(session => session.close()));
+  }
+}, 60_000);

@@ -38,6 +38,9 @@ import { basename, dirname, join } from "node:path";
 import { appDirIn } from "./appDir.mjs";
 
 export const RECORD_VERSION = 1;
+// Runtime host (15s), files (90s), and page+chunk (90s), for both the
+// candidate and rollback release, plus bounded terminal polling/exec slack.
+export const TERMINAL_BOOTSTRAP_TIMEOUT_MS = 420_000;
 const REQUEST_ROLES = new Set(["web", "runtime-host", "relaunch"]);
 
 /**
@@ -51,6 +54,8 @@ export function selfUpdatePaths({ stateDirectory, cacheDirectory, installId }) {
     releasePointer: join(base, `release-${installId}.json`),
     trial: join(base, `trial-${installId}.json`),
     adopt: join(base, `adopt-${installId}.json`),
+    readiness: join(base, `readiness-${installId}.json`),
+    startupOutput: join(base, `startup-output-${installId}.json`),
     /* Each release holds its own node_modules and .next (well over a
        gigabyte), so they live in the cache, not in the state directory. */
     releasesDir: join(appDirIn(cacheDirectory), "self-update", installId, "releases"),
@@ -91,6 +96,15 @@ export function isGitCheckout(dir) {
   return existsSync(join(dir, ".git"));
 }
 
+function packageRevision(packageRoot) {
+  try {
+    const revision = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).gitHead;
+    return typeof revision === "string" && /^[0-9a-f]{40}$/.test(revision) ? revision : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The release the next start runs: the published pointer when its directory
  * is a built checkout of the named commit, else the package root.
@@ -102,7 +116,7 @@ export function isGitCheckout(dir) {
  * @returns {{ dir: string, sha: string | null, published: boolean }}
  */
 export function installedRelease(pointerFile, packageRoot) {
-  const rootHead = headRevision(packageRoot);
+  const rootHead = isGitCheckout(packageRoot) ? headRevision(packageRoot) : null;
   try {
     const parsed = JSON.parse(readFileSync(pointerFile, "utf8"));
     if (parsed.kind === "package" && typeof parsed.dir === "string" && /^[0-9a-f]{40}$/.test(parsed.sha)) {
@@ -121,7 +135,7 @@ export function installedRelease(pointerFile, packageRoot) {
   } catch {
     /* No pointer yet, or an unreadable one: the package root is the release. */
   }
-  return { dir: packageRoot, sha: rootHead, published: false };
+  return { dir: packageRoot, sha: rootHead ?? packageRevision(packageRoot), published: false };
 }
 
 /** The runtime host's entry inside one release, chosen the way
@@ -358,6 +372,15 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
   };
 }
 
+// Only a code/class is safe here: fetch errors can echo authentication headers.
+function readinessError(error) {
+  const kind = [error?.code, error?.name].find((value) => typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(value));
+  return kind ? `Viewer readiness probe failed (${kind})` : "Viewer readiness probe failed";
+}
+
+/** @typedef {{ phase: "files" | "page" | "chunk", status: "running" | "ready" | "failed", elapsedMs?: number, detail?: string | null }} ReadinessPhase */
+
+
 /**
  * A restarted web process is ready when `GET /` answers 200 and so does the
  * first script chunk that page references. `/` alone can answer 200 from a
@@ -368,25 +391,128 @@ export function watchRestartRequests(requestFile, handle, { intervalMs = 500, ad
  * `headers` carries the `probe` service tag (`probeHeadersFrom`): on a team
  * install the page is shown only to a member, and the tag is how the
  * launcher's own probe reads it (sign-in-and-team §4.2).
+ * @param {number} port
+ * @param {number} [timeoutMs]
+ * @param {Record<string, string>} [headers]
+ * @param {(event: ReadinessPhase) => void} [onPhase]
  */
-export async function probePageAndChunk(port, timeoutMs = 5_000, headers = {}) {
+export async function probePageAndChunk(port, timeoutMs = 5_000, headers = {}, onPhase = () => {}) {
+  const signal = AbortSignal.timeout(timeoutMs);
+  let phase = "page";
+  let started = performance.now();
+  let failure = null;
+  const finish = () => onPhase({ phase, status: failure ? "failed" : "ready", elapsedMs: performance.now() - started, detail: failure });
+  onPhase({ phase, status: "running" });
   try {
-    const signal = AbortSignal.timeout(timeoutMs);
     const page = await fetch(`http://127.0.0.1:${port}/`, { signal, redirect: "manual", headers });
     const html = page.status === 200 ? await page.text() : (await page.body?.cancel(), "");
-    if (page.status !== 200) return `GET / answered ${page.status}`;
+    if (page.status !== 200) return failure = `GET / answered ${page.status}`;
     const chunk = /["'](\/_next\/static\/[^"'?#]+\.js)["']/.exec(html)?.[1];
     if (!chunk) return null;
+    finish();
+    phase = "chunk";
+    started = performance.now();
+    onPhase({ phase, status: "running" });
     const asset = await fetch(`http://127.0.0.1:${port}${chunk}`, { signal, redirect: "manual" });
     await asset.body?.cancel();
-    return asset.status === 200 ? null : `GET ${chunk} answered ${asset.status}`;
+    return failure = asset.status === 200 ? null : `GET ${chunk} answered ${asset.status}`;
   } catch (error) {
-    // Fetch errors can include the rejected header value. Restart diagnostics
-    // are persisted and printed by the launcher, so the message stays out and
-    // only the error's own code or class name says what kind it was.
-    const kind = [error?.code, error?.name].find((value) => typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(value));
-    return kind ? `Viewer readiness probe failed (${kind})` : "Viewer readiness probe failed";
+    return failure = readinessError(error);
+  } finally {
+    finish();
   }
+}
+
+// One budget for the complete page+chunk sequence, including retry backoff.
+// A refused member credential cannot improve by waiting; preserve its receipt.
+/** @param {number} port
+ * @param {{ timeoutMs?: number, attemptTimeoutMs?: number, intervalMs?: number, headers?: Record<string, string>, onPhase?: (event: ReadinessPhase) => void, now?: () => number, sleep?: (milliseconds: number) => Promise<void>, probe?: (port: number, timeoutMs: number, headers: Record<string, string>, onPhase: (event: ReadinessPhase) => void) => Promise<string | null> }} [options]
+ */
+export async function waitForPageAndChunk(port, {
+  timeoutMs = 90_000, attemptTimeoutMs = 5_000, intervalMs = 200,
+  headers = {}, onPhase = () => {}, now = () => performance.now(),
+  sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
+  probe = probePageAndChunk,
+} = {}) {
+  const deadline = now() + timeoutMs;
+  let failure = "Viewer readiness deadline expired";
+  while (now() < deadline) {
+    failure = await probe(port, Math.max(1, Math.ceil(Math.min(attemptTimeoutMs, deadline - now()))), headers, onPhase);
+    if (!failure || /^GET \/ answered 40[13]$/.test(failure)) return failure;
+    const remaining = deadline - now();
+    if (remaining <= 0) break;
+    await sleep(Math.min(intervalMs, remaining));
+  }
+  return failure;
+}
+
+function readinessReason(detail) {
+  if (detail === null || detail === undefined) return null;
+  if (["http-status", "probe-error", "deadline"].includes(detail)) return detail;
+  if (detail === "Viewer readiness deadline expired") return "deadline";
+  if (/^GET \/ answered [1-5]\d\d$/.test(detail)
+    || /^GET \/_next\/static\/[^\s]+\.js answered [1-5]\d\d$/.test(detail)) return "http-status";
+  if (/^Viewer readiness probe failed(?: \([A-Za-z][A-Za-z0-9_]{0,39}\))?$/.test(detail)) return "probe-error";
+  return "probe-failed";
+}
+
+/** A bounded record survives launcher exec, including a rollback's own boot.
+ * Each start retains four runs; each phase keeps counters instead of a row
+ * per attempt. Callers persist before dispatching any exec or rollback.
+ */
+export function createReadinessJournal(file, { revision, pid }, clock = () => performance.now()) {
+  let runs;
+  try { runs = JSON.parse(readFileSync(file, "utf8")).runs; } catch { /* first boot */ }
+  if (!Array.isArray(runs)) runs = [];
+  runs = runs.slice(-3).map(previous => {
+    if (!previous || typeof previous !== "object") return previous;
+    return {
+      ...previous,
+      detail: readinessReason(previous.detail),
+      phases: Object.fromEntries(["files", "page", "chunk"].map(phase => [phase, {
+        ...(previous.phases?.[phase] ?? {}),
+        detail: readinessReason(previous.phases?.[phase]?.detail),
+      }])),
+    };
+  });
+  const started = clock();
+  const run = { revision, pid, startedAt: new Date().toISOString(), status: "running", elapsedMs: 0,
+    phases: Object.fromEntries(["files", "page", "chunk"].map(phase => [phase, { attempts: 0, elapsedMs: 0, status: "pending" }])) };
+  runs.push(run);
+  const phaseStarts = new Map();
+  const save = () => {
+    run.elapsedMs = Math.max(0, Math.round(clock() - started));
+    const temporary = `${file}.${process.pid}.tmp`;
+    try {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(temporary, JSON.stringify({ version: 1, runs }) + "\n", { mode: 0o600 });
+      renameSync(temporary, file);
+    } catch {
+      try { rmSync(temporary, { force: true }); } catch { /* cleanup is best effort too */ }
+      /* diagnostics never own candidate cleanup or rollback */
+    }
+  };
+  save();
+  return {
+    /** @param {ReadinessPhase} event */
+    observe({ phase, status, detail = null }) {
+      const entry = run.phases[phase];
+      if (status === "running") {
+        entry.attempts += 1;
+        if (!phaseStarts.has(phase)) phaseStarts.set(phase, clock());
+      }
+      entry.status = status;
+      entry.elapsedMs = Math.max(0, Math.round(clock() - phaseStarts.get(phase)));
+      entry.detail = readinessReason(detail);
+      save();
+    },
+    /** @param {string | null} [detail] */
+    finish(detail = null) {
+      run.status = detail ? "failed" : "ready";
+      run.detail = readinessReason(detail);
+      save();
+    },
+  };
 }
 
 /** How a child ended, as the record's error facts. */

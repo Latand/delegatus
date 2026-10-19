@@ -1,3 +1,4 @@
+import { waitForStateLock, StateLockDeferredError } from "@/lib/state/lockWait";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -19,7 +20,6 @@ import {
   migrateBoardProjects,
   mutateBoard,
   patchBoard,
-  setBoardBusyRetryForTests,
 } from "./store";
 
 /* #1870 slice 3: the board store runs on the `board` collection of the
@@ -415,7 +415,7 @@ describe("cross-process durability", () => {
      `busy_timeout = 0`, so a writer that holds the file lock makes it raise
      SQLITE_BUSY on the first touch of the board in a process. The pre-#1870
      store queued on its own write lock and never dropped that write, so the
-     probe retries the same bounded way every other write here does. */
+     async caller retries the same operation before its callback enters. */
   test("a write whose import probe meets a held file lock waits for it instead of failing", async () => {
     const { dir, file } = sandbox();
     writeLegacy(file, { projects: { repo: projectState(["/a"]) } });
@@ -425,8 +425,8 @@ describe("cross-process durability", () => {
     const holder = spawnChild(["hold-database-lock", path.join(dir, "state.sqlite"), held, "400"]);
     await waitForFile(held);
 
-    // Blocks inside the probe's retry until the holder above lets go.
-    expect(mutateBoard("repo", 3, [{ kind: "restore", path: "/b", placement: "manual" }], file))
+    // The async owner retries the same write before its mutation callback.
+    expect(await waitForStateLock("test.board", () => mutateBoard("repo", 3, [{ kind: "restore", path: "/b", placement: "manual" }], file)))
       .toMatchObject({ ok: true, applied: true });
 
     expect(await holder.exited).toBe(0);
@@ -441,15 +441,13 @@ describe("cross-process durability", () => {
     const holder = spawnChild(["hold-database-lock", path.join(dir, "state.sqlite"), held, "4000"]);
     await waitForFile(held);
 
-    setBoardBusyRetryForTests(3);
     try {
       let raised: unknown;
       try { boardFor("repo", file); } catch (error) { raised = error; }
       expect(raised).toBeInstanceOf(BoardStoreError);
       expect((raised as BoardStoreError).message).toBe("board state is busy");
-      expect(String((raised as BoardStoreError).cause)).toMatch(/database is locked|SQLITE_BUSY/i);
+      expect((raised as BoardStoreError).cause).toBeInstanceOf(StateLockDeferredError);
     } finally {
-      setBoardBusyRetryForTests(null);
       holder.kill();
       await holder.exited;
     }

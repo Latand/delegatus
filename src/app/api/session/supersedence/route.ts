@@ -36,7 +36,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<SupersedenceR
     return NextResponse.json({ error: "conversationId is required" }, { status: 400 });
   }
   try {
-    const cleared = agentRegistry().clearSupersedence(body.conversationId as `conversation_${string}`);
+    const cleared = (await agentRegistry().deliveryWriteOrBusy({ label: "registry.clearSupersedence" }, agentRegistry().clearSupersedence.bind(agentRegistry(), body.conversationId as `conversation_${string}`)));
     if (!cleared) return NextResponse.json({ error: "conversation is unknown" }, { status: 404 });
     return NextResponse.json({ ok: true, conversationId: cleared.id });
   } catch (error) {

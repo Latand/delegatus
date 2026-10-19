@@ -14,6 +14,7 @@ import type { Pipeline } from "./types";
 import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeoverPipelineDelivery, withPipelineMutation } from "./store";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
+import { shortId } from "@/lib/shortIds";
 
 test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));
@@ -176,6 +177,8 @@ async function isolatedIdentityRepo() {
     return result.stdout.trim();
   };
   (await run("init", "--initial-branch=main"));
+  fs.mkdirSync(path.join(repo, ".git", "hooks"), { recursive: true });
+  fs.mkdirSync(path.join(repo, ".git", "info"), { recursive: true });
   fs.writeFileSync(path.join(repo, "source.ts"), "export const value = 1;\n");
   (await run("add", "source.ts"));
   (await run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "initial"));
@@ -2156,7 +2159,7 @@ test("stage reconciliation rejects an amended replay moved to an identical hunk 
     const result = (await reconcilePipelineStageHead(box.subject, head, realExec));
 
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toContain(box.accepted);
+    expect(!result.ok && result.error).toContain(shortId(box.accepted));
     expect(box.subject.lastPassedCommit).toBe(box.accepted);
     expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD"))).toBe(head);
     expect((await git(box.subject.worktreeDir, "ls-remote", "--heads", "origin", "refs/heads/main")).split(/\s+/)[0]).toBe(main);
@@ -2262,7 +2265,7 @@ test("stage reconciliation rejects a same-function hunk relocation despite sibli
     const result = (await reconcilePipelineStageHead(box.subject, head, realExec));
 
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toContain(box.accepted);
+    expect(!result.ok && result.error).toContain(shortId(box.accepted));
     expect(box.subject.lastPassedCommit).toBe(box.accepted);
     expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD"))).toBe(head);
     expect((await git(box.subject.worktreeDir, "ls-remote", "--heads", "origin", "refs/heads/main")).split(/\s+/)[0]).toBe(main);
@@ -2282,7 +2285,7 @@ test("stage reconciliation treats bracketed tracked filenames literally when map
     const result = (await reconcilePipelineStageHead(box.subject, head, realExec));
 
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toContain(box.accepted);
+    expect(!result.ok && result.error).toContain(shortId(box.accepted));
     expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD"))).toBe(head);
     expect((await git(box.subject.worktreeDir, "ls-remote", "--heads", "origin", "refs/heads/main")).split(/\s+/)[0]).toBe(main);
     expect((await box.originHead())).toBe("");
@@ -2573,7 +2576,7 @@ test.each(["ours", "union"])("stage reconciliation ignores repository %s merge p
     const head = (await git(box.subject.worktreeDir, "rev-parse", "HEAD"));
     const result = (await reconcilePipelineStageHead(box.subject, head, realExec));
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toContain(deleted);
+    expect(!result.ok && result.error).toContain(shortId(deleted));
     expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD"))).toBe(head);
     expect((await box.originHead())).toBe("");
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
@@ -2597,7 +2600,7 @@ test.each([
     const result = (await reconcilePipelineStageHead(box.subject, head, realExec));
 
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toContain(box.accepted);
+    expect(!result.ok && result.error).toContain(shortId(box.accepted));
     expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD"))).toBe(head);
     expect((await box.originHead())).toBe("");
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
@@ -2616,7 +2619,7 @@ test("stage reconciliation parks when an amended replay drops a plus-prefixed co
     const result = (await reconcilePipelineStageHead(box.subject, head, realExec));
 
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toContain(box.accepted);
+    expect(!result.ok && result.error).toContain(shortId(box.accepted));
     expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD"))).toBe(head);
     expect((await box.originHead())).toBe("");
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
@@ -2660,7 +2663,7 @@ test.each([false, true])("stage reconciliation checks unique accepted merge cont
     expect(result.ok).toBe(preserved);
     if (result.ok) expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}"))).toBe(tree);
     else {
-      expect(result.error).toContain(acceptedMerge);
+      expect(result.error).toContain(shortId(acceptedMerge));
       expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD"))).toBe(head);
     }
     expect((await box.originHead())).toBe("");
@@ -2757,7 +2760,7 @@ test("stage reconciliation names a dropped merge resolution that restored common
     expect((await git(box.subject.worktreeDir, "cherry", head, accepted)).split("\n").every((line) => line.startsWith("- "))).toBe(true);
     const result = (await reconcilePipelineStageHead(box.subject, head, realExec));
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toContain(accepted);
+    expect(!result.ok && result.error).toContain(shortId(accepted));
     expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD"))).toBe(head);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
@@ -2779,7 +2782,7 @@ test.each([false, true])("stage reconciliation detects accepted merge exclusions
     const head = (await git(box.subject.worktreeDir, "rev-parse", "HEAD"));
     const result = (await reconcilePipelineStageHead(box.subject, head, realExec));
     expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toContain(acceptedMerge);
+    expect(!result.ok && result.error).toContain(shortId(acceptedMerge));
     expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD"))).toBe(head);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
@@ -2843,7 +2846,7 @@ test.each([true, false])("stage reconciliation uses the final accepted resolutio
     const result = (await reconcilePipelineStageHead(box.subject, head, realExec));
     expect(result.ok).toBe(preserved);
     expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}"))).toBe(selectedTree);
-    if (!result.ok) expect(result.error).toContain(accepted);
+    if (!result.ok) expect(result.error).toContain(shortId(accepted));
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
@@ -3341,7 +3344,7 @@ test("a worktree that has moved past the accepted revision publishes nothing", a
 
     expect(result).toEqual({
       ok: false,
-      error: `the pipeline worktree is at ${advanced}, not the accepted revision ${accepted}; nothing was published`,
+      error: `the pipeline worktree is at ${shortId(advanced)}, not the accepted revision ${shortId(accepted)}; nothing was published`,
     });
     expect((await box.originHead())).toBe("");
   } finally {
@@ -3511,4 +3514,29 @@ test("publication dependency preparation waits for CPU pressure, starts once in 
     if (previous === undefined) delete process.env.LLV_AGENT_CPU; else process.env.LLV_AGENT_CPU = previous;
     restoreTick(); fs.rmSync(box.root, { recursive: true, force: true });
   }
+});
+
+
+test("publication distinguishes an unproved remote-ahead tip from divergent history", async () => {
+  const box = await publishSandbox();
+  try {
+    const shared = await box.commit("shared.txt", "shared\n");
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: shared })).toMatchObject({ ok: true, sha: shared });
+    const other = path.join(box.root, "external");
+    await git(box.root, "clone", "--branch", box.subject.branch, box.origin, other);
+    await git(other, "config", "user.name", "Fixture");
+    await git(other, "config", "user.email", ["noreply", "example.invalid"].join("@"));
+    await git(other, "config", "commit.gpgSign", "false");
+    await git(other, "commit", "--allow-empty", "-m", "external fix");
+    const tip = await git(other, "rev-parse", "HEAD");
+    await git(other, "push", "origin", box.subject.branch);
+    const refused = await publishPipelineBranch(box.subject, realExec, { acceptedSha: shared });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error("unproved remote tip was accepted");
+    expect(refused.error).toContain("remote pipeline branch is ahead");
+    expect(refused.error).toContain("attempt proof");
+    expect(refused.error).not.toContain("diverged");
+    expect(await box.originHead()).toBe(tip);
+    expect(await git(box.subject.worktreeDir, "rev-parse", "HEAD")).toBe(shared);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });

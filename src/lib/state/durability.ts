@@ -1,3 +1,5 @@
+import { observeSqlite } from "@/lib/sqliteReadAttribution";
+import { stateLockAttempt } from "./lockWait";
 import type { Database as BunDatabase } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
@@ -139,7 +141,7 @@ function inspect(filename: string, pragma: StateDatabase["check"], readonly: boo
   let db: BunDatabase | null = null;
   try {
     const Database = sqliteDatabase();
-    db = readonly ? new Database(filename, { readonly: true }) : new Database(filename, { readwrite: true });
+    db = readonly ? observeSqlite(new Database(filename, { readonly: true }), "state-durability") : observeSqlite(new Database(filename, { readwrite: true }), "state-durability");
     db.exec("PRAGMA busy_timeout = 5000");
     const rows = db.query<Record<string, unknown>, []>(`PRAGMA ${pragma}`).all();
     const messages = rows.map((row) => String(Object.values(row)[0]));
@@ -154,13 +156,13 @@ function inspect(filename: string, pragma: StateDatabase["check"], readonly: boo
   }
 }
 
-function readRevision(database: StateDatabase): string {
+export function readRevision(database: StateDatabase): string {
   if (database.revisionSql) {
     let db: BunDatabase | null = null;
     try {
-      db = new (sqliteDatabase())(database.filename, { readonly: true });
-      db.exec("PRAGMA busy_timeout = 5000");
-      const row = db.query<{ revision: unknown }, []>(database.revisionSql).get();
+      db = observeSqlite(new (sqliteDatabase())(database.filename, { readonly: true }), "state-durability");
+      db.exec("PRAGMA busy_timeout = 0");
+      const row = stateLockAttempt("state.durability.revision", () => db!.query<{ revision: unknown }, []>(database.revisionSql!).get());
       if (row && row.revision !== null && row.revision !== undefined) return `rev:${String(row.revision)}`;
     } catch {
       /* A database without the table yet: the signature stands in. */
@@ -503,7 +505,7 @@ function swapDamagedDatabase(
 function holdWriteLock(filename: string): BunDatabase | null {
   let db: BunDatabase | null = null;
   try {
-    db = new (sqliteDatabase())(filename, { readwrite: true });
+    db = observeSqlite(new (sqliteDatabase())(filename, { readwrite: true }), "state-durability");
     db.exec("PRAGMA busy_timeout = 5000");
     db.exec("BEGIN IMMEDIATE");
     return db;
@@ -601,7 +603,7 @@ export function backupDatabase(
   let source: BunDatabase | null = null;
   try {
     /* `VACUUM INTO` holds only a read transaction: writers carry on. */
-    source = new (sqliteDatabase())(database.filename, { readonly: true });
+    source = observeSqlite(new (sqliteDatabase())(database.filename, { readonly: true }), "state-durability");
     source.exec("PRAGMA busy_timeout = 5000");
     source.query("VACUUM INTO ?").run(partial);
   } catch (error) {
@@ -612,7 +614,7 @@ export function backupDatabase(
   }
   try {
     /* A backup is one self-contained file: no WAL to lose beside it. */
-    const copy = new (sqliteDatabase())(partial, { readwrite: true });
+    const copy = observeSqlite(new (sqliteDatabase())(partial, { readwrite: true }), "state-durability");
     try { copy.exec("PRAGMA journal_mode = DELETE"); } finally { copy.close(); }
     const verdict = inspect(partial, "integrity_check", false);
     if (verdict.verdict !== "ok") throw new Error(`the copy failed its check: ${verdict.verdict === "corrupt" ? verdict.detail : verdict.detail}`);
@@ -843,12 +845,15 @@ export function backupsDue(stateDirectory: string, lastRevisions: ReadonlyMap<st
 export interface BackupWorkerRequest {
   stateDirectory: string;
   lastRevisions: [string, string][];
-  operation?: "activation";
+  operation?: "activation" | "checkpoint" | "retirement-guard";
+  revision?: string;
+  owner?: import("@/lib/processIdentity").ProcessIdentity;
 }
 
 export interface BackupWorkerResponse {
   outcomes: [string, BackupOutcome][];
   incidents?: StorageIncident[];
+  checkpoint?: import("./hotStateAuthority").HotStateCheckpoint["revisions"];
 }
 
 /** The worker's side: one pass over the request, answered as one JSON line. */
@@ -899,9 +904,17 @@ export async function checkStateDatabasesInWorker(stateDirectory: string): Promi
   return response.incidents;
 }
 
+/** Rollback mirrors can contain retained history. Their encoding and fsync
+    run in the leased worker while the Viewer remains able to acknowledge. */
+export async function checkpointHotStateRollbackMirrorsInWorker(stateDirectory: string, timeoutMs = 10_000) {
+  const response = await runDurabilityWorker({ stateDirectory, lastRevisions: [], operation: "checkpoint" }, { timeoutMs });
+  if (!response.checkpoint) throw new Error("the checkpoint worker returned no revisions");
+  return response.checkpoint;
+}
+
 async function runDurabilityWorker(
   request: BackupWorkerRequest,
-  options: { launch?: { executable: string; workerPath: string } } = {},
+  options: { launch?: { executable: string; workerPath: string }; timeoutMs?: number } = {},
 ): Promise<BackupWorkerResponse> {
   const { stateDirectory } = request;
   const launch = options.launch ?? stateBackupWorkerLaunch();
@@ -913,7 +926,7 @@ async function runDurabilityWorker(
     command: useNice ? "/usr/bin/nice" : launch.executable,
     args: [...(useNice ? ["-n", "10", launch.executable] : []), launch.workerPath],
     cwd: process.cwd(),
-    env: process.env,
+    env: { ...process.env, LLV_STATE_DIR: stateDirectory },
   }, stateDirectory, { input: true, stdout: "pipe", stderr: "inherit", followRelease: false });
   const input = leasedHelperInput(child);
   const response = await new Promise<BackupWorkerResponse>((resolve, reject) => {
@@ -924,7 +937,7 @@ async function runDurabilityWorker(
       endLeasedHelper(child);
       // Activation may open stores next; wait for the guardian to reap the
       // worker before reporting its timeout, so recovery cannot race imports.
-    }, BACKUP_WORKER_TIMEOUT_MS);
+    }, options.timeoutMs ?? BACKUP_WORKER_TIMEOUT_MS);
     timeout.unref?.();
     child.stdout!.setEncoding("utf8");
     child.stdout!.on("data", (chunk: string) => { output += chunk; });
@@ -936,7 +949,7 @@ async function runDurabilityWorker(
     child.once("close", (code, signal) => {
       clearTimeout(timeout);
       try {
-        if (timedOut) throw new Error(`the backup worker ran past ${BACKUP_WORKER_TIMEOUT_MS} ms and was stopped`);
+        if (timedOut) throw new Error(`the backup worker ran past ${options.timeoutMs ?? BACKUP_WORKER_TIMEOUT_MS} ms and was stopped`);
         if (code !== 0) throw new Error(`the backup worker exited with ${code ?? signal}`);
         resolve(JSON.parse(output.trim().split("\n").at(-1) ?? "") as BackupWorkerResponse);
       } catch (error) {

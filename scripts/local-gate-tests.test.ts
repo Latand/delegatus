@@ -134,6 +134,26 @@ test("scope and service guards report an identical surviving tree once across th
   expect(result.preexisting).toHaveLength(1);
   expect(result.preexisting[0]!.name).toContain("21 (21:1), 22 (22:2)");
 });
+test.each([
+  ["owned test children survived teardown: 21, 22; guardian=0", "owned test children survived teardown: 31; guardian=0"],
+  ["owned test children survived teardown: ; guardian=1", "owned test children survived teardown: 31; guardian=1"],
+  ["owned test scope children survived teardown: 21 (21:1), 22 (null)", "owned test scope children survived teardown: 31 (31:3)"],
+])("teardown comparison ignores run identities and preserves evidence: %s", (oldMessage, newMessage) => {
+  const site = (message: string): TestSite => ({ file: "fixture.test.ts", suite: "", kind: "error", name: `<hook error> ${message}` });
+  const base: TestRun = { failures: [site(oldMessage)], passed: [], completed: ["fixture.test.ts"], elapsedMs: 0 };
+  const head = { ...base, failures: [site(newMessage)] };
+  expect(compareTests(base, head)).toEqual({ introduced: [], preexisting: head.failures, fixed: [], absent: [] });
+  expect(head.failures[0]!.name).toBe(`<hook error> ${newMessage}`);
+  const changed = site("owned test child survived the final identity check");
+  expect(compareTests(base, { ...head, failures: [changed] })).toEqual({ introduced: [changed], preexisting: [], fixed: base.failures, absent: [] });
+});
+test("teardown comparison retains the guardian outcome", () => {
+  const site = (guardian: number): TestSite => ({ file: "fixture.test.ts", suite: "", kind: "error",
+    name: `<hook error> owned test children survived teardown: 21; guardian=${guardian}` });
+  const base: TestRun = { failures: [site(0)], passed: [], completed: ["fixture.test.ts"], elapsedMs: 0 };
+  const head = { ...base, failures: [site(1)] };
+  expect(compareTests(base, head)).toEqual({ introduced: head.failures, preexisting: [], fixed: base.failures, absent: [] });
+});
 test("distinct scope identities and unrelated hook failures remain blocking", async () => {
   const file = "fixture.test.ts";
   const failures: TestSite[] = [{ file, suite: "", kind: "error",

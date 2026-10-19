@@ -1,5 +1,6 @@
 import { expect, spyOn, test, spawn, spawnSync, fs, os, path, Database, selectProjectAccount, CONTROLLER_ARTIFACT_GIT_PATHS, engineModule, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, durableStageTurnEvidence, edgeRoundsUsed, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, exhaustVerdictRecovery, provisionRetryClock, STAGE_HEAD, PASS_TEXT, runningStructuredStage, SSH_CONNECT_TIMEOUT, approvedReviewAwaitingRemote, networkDown, NO_CODE_TEST_STAGES, persistedCommittingReview, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, LIMITED_ACCOUNT_LABEL, stageTranscript, limitInterruptedTranscript, codexUsageLimitTranscript, readFixtures, stampPipelinePrompt, severedToolTranscript, truncatedMidTurnTranscript, usageLimitPorts, usageLimitStage } from "./engine.fixture";
 import type { AgentRegistryType, DurableQuotaObservation, PipelinePorts } from "./engine.fixture";
+import { shortId } from "@/lib/shortIds";
 
 
 test("a later exact-head approval replaces a stale startup pause and completes after controller restart (#526)", async () => {
@@ -88,7 +89,7 @@ test("a later approval stays parked when its reviewed head differs from the curr
   expect(parked.runs[1]!.attempts[0]).toMatchObject({
     state: "needs_decision",
     reviewHeadSha: "f".repeat(40),
-    error: expect.stringContaining(`current pipeline head is ${ORIGIN_MAIN_SHA}`),
+    error: expect.stringContaining(`current pipeline head is ${shortId(ORIGIN_MAIN_SHA)}`),
   });
   expect((await tickPipelines([], h.ports)).changed).toBe(false);
   expect(loadPipelines()[0]!.stateDetail).toBe(parked.stateDetail);
@@ -125,7 +126,7 @@ test("issue 533: approval parks when the reviewed repair is absent from the remo
 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toContain(`remote pipeline head is ${staleRemoteHead}`);
+  expect(parked.stateDetail).toContain(`remote pipeline head is ${shortId(staleRemoteHead)}`);
   expect(parked.runs[1]!.attempts[0]).toMatchObject({
     expectedReviewHeadSha: repairHead,
     reviewHeadSha: repairHead,
@@ -177,7 +178,7 @@ test("a remote that comes back at a different head after a timeout parks on the 
 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe(`approved review flow head mismatch: reviewed ${ORIGIN_MAIN_SHA}, remote pipeline head is ${divergedRemote}`);
+  expect(parked.stateDetail).toBe(`approved review flow head mismatch: reviewed ${shortId(ORIGIN_MAIN_SHA)}, remote pipeline head is ${shortId(divergedRemote)}`);
   expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", verdict: null, completedAt: null });
   expect(effects()).toEqual(baseline);
   await tickPipelines([], h.ports);
@@ -280,7 +281,7 @@ test("an internal approval of a revision the worktree no longer holds settles no
   await tickPipelines([], h.ports);
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe(`approved review flow head mismatch: reviewed ${ORIGIN_MAIN_SHA}, current pipeline head is ${changedHead}`);
+  expect(parked.stateDetail).toBe(`approved review flow head mismatch: reviewed ${shortId(ORIGIN_MAIN_SHA)}, current pipeline head is ${shortId(changedHead)}`);
   expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", verdict: null, completedAt: null });
   expect(effects()).toEqual(baseline);
 
@@ -428,7 +429,7 @@ test("an approval parks when the clean head advances during final settlement (#5
   expect(headReads).toBe(2);
   expect(parked).toMatchObject({
     state: "needs_decision",
-    stateDetail: expect.stringContaining(`settled ${newerHead}`),
+    stateDetail: expect.stringContaining(`settled ${shortId(newerHead)}`),
     lastPassedCommit: ORIGIN_MAIN_SHA,
   });
   expect(parked.cursor?.stageId).toBe("review");
@@ -684,7 +685,7 @@ test("a restarted committing review parks when the branch head drifted after app
   const parked = loadPipelines()[0]!;
   expect(parked).toMatchObject({
     state: "needs_decision",
-    stateDetail: expect.stringContaining(`current pipeline head is ${driftedHead}`),
+    stateDetail: expect.stringContaining(`current pipeline head is ${shortId(driftedHead)}`),
   });
   expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", reviewHeadSha: ORIGIN_MAIN_SHA });
   expect(h.calls.some((call) => call.startsWith("git commit"))).toBe(false);
@@ -708,7 +709,7 @@ test("a restarted committing review parks when the clean head advances during fi
   expect(headReads).toBe(2);
   expect(parked).toMatchObject({
     state: "needs_decision",
-    stateDetail: expect.stringContaining(`settled ${newerHead}`),
+    stateDetail: expect.stringContaining(`settled ${shortId(newerHead)}`),
     lastPassedCommit: ORIGIN_MAIN_SHA,
   });
   expect(parked.cursor?.stageId).toBe("review");
@@ -1087,7 +1088,7 @@ test("a retried attempt whose predecessor never reserved a conversation records 
   h.ports.spawnAgent = async (input, onReserved) => {
     h.calls.push(`spawn:${input.clientAttemptId}:supersedes=${input.supersedes ?? "none"}`);
     if (input.clientAttemptId.endsWith("_1")) throw new Error("spawn transport unavailable");
-    onReserved({ launchId: "launch-late", conversationId: "conversation_stage_late" });
+    await onReserved({ launchId: "launch-late", conversationId: "conversation_stage_late" });
     return { launchId: "launch-late", conversationId: "conversation_stage_late", sessionId: "session-late", transcript: "/codex/stage-late.jsonl", paneId: "%9" };
   };
   await tickPipelines([], h.ports);
@@ -2162,7 +2163,7 @@ test("a Claude stage retains the source account's confirmed reset when no allowe
   }
 });
 
-test("a waiting Claude stage continues its original conversation after that account's capacity returns", async () => {
+test("a removed waiting account stays stopped and starts a linked attempt when allowed capacity returns", async () => {
   const h = harness();
   const pipeline = await create(h.ports, [{ ...usageLimitStage()[0], engine: "claude", model: "fable" }] as never);
   await tickPipelines([], h.ports);
@@ -2177,6 +2178,10 @@ test("a waiting Claude stage continues its original conversation after that acco
   let allowed = [LIMITED_ACCOUNT];
   h.ports.allowedAccountIds = () => allowed;
   h.ports.claudeAccountRecovered = () => recovered;
+  h.ports.resolveProjectSpawn = () => recovered && allowed.includes(LIMITED_ACCOUNT)
+    ? { kind: "available", account: { engine: "claude", accountId: LIMITED_ACCOUNT, kind: "managed",
+      home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+    : { kind: "exhausted", resetsAt: null, allowedAccountIds: allowed };
   const continuations: string[] = [];
   const cohorts: Array<string | undefined> = [];
   h.ports.resumeSeveredTurn = async (input) => { continuations.push(input.conversationId); cohorts.push(input.cohortAt); return true; };
@@ -2191,12 +2196,14 @@ test("a waiting Claude stage continues its original conversation after that acco
   await tickPipelines([], h.ports);
   const resumed = loadPipelines()[0]!;
   expect(resumed.state).toBe("running");
-  expect(resumed.runs[0]!.attempts).toHaveLength(1);
-  expect(resumed.runs[0]!.attempts[0]).toMatchObject({ conversationId: attempt.conversationId, state: "running" });
-  expect(continuations).toEqual([attempt.conversationId!]);
-  // The continuation belongs to the attempt's cohort under an update drain.
-  expect(attempt.startedAt).toBeTruthy();
-  expect(cohorts).toEqual([attempt.startedAt!]);
+  expect(resumed.runs[0]!.attempts).toHaveLength(2);
+  expect(resumed.runs[0]!.attempts[0]).toMatchObject({ conversationId: attempt.conversationId, state: "failed",
+    suspension: { stoppedAt: expect.any(String) } });
+  expect(resumed.runs[0]!.attempts[1]).toMatchObject({ accountId: LIMITED_ACCOUNT,
+    restartContext: { previousAttempt: 1, transcriptPath: attempt.agentPath }, input: attempt.input });
+  expect(resumed.worktreeDir).toBe(running.worktreeDir);
+  expect(continuations).toEqual([]);
+  expect(cohorts).toEqual([]);
 });
 
 test("a Claude account without a known new reset stays excluded within the native cut chain", async () => {

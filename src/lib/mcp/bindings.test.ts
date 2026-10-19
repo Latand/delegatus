@@ -2732,7 +2732,7 @@ test("a stage completion call is attributed by the server, and a caller cannot n
       seq: 1,
       at: "2026-09-18T00:00:00.000Z",
       verdict: { status: "fail", findingCount: 1, severityCounts: { P0: 1, P1: 0, P2: 0, P3: 0 } },
-      provenance: { head: "0".repeat(40), branch: "pipeline/x", dirty: false, outputs: [] },
+      provenance: { head: "0".repeat(8), branch: "pipeline/x", dirty: false, outputs: [] },
       calls: 1,
     },
   });
@@ -4418,7 +4418,14 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const error = await new Response(child.stderr).text();
-  expect([await child.exited, error]).toEqual([0, ""]);
+  expect(await child.exited).toBe(0);
+  // Cold SQLite setup can emit a structured async lock-wait diagnostic; it is not child failure.
+  const stderrLines = error.split(/\r?\n/).filter(Boolean);
+  const waitLines = stderrLines.filter(line => line.startsWith("[blocking-wait] "));
+  expect(stderrLines.filter(line => !line.startsWith("[blocking-wait] "))).toEqual([]);
+  for (const line of waitLines) {
+    expect(JSON.parse(line.slice("[blocking-wait] ".length))).toMatchObject({ site: "state-write-lock", synchronous: false });
+  }
   const result = JSON.parse(output) as { createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask; normalizedCreate: BoardTask; unknownUpdate: BoardTask; normalizedUpdate: BoardTask; operatorUpdate: BoardTask; operatorRead: BoardTask; statuses: string[] };
   expect(result.createdTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_create_bound", note: "Waiting for capacity" });
   expect(result.updatedTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_update_bound", note: "Capacity is still full" });
@@ -4457,7 +4464,7 @@ test("continue-review forwards its receipt key, added budget and server actor, a
   const unregister = registerPipelineTick(async () => { ticks += 1; });
   try {
     const answer = await service.callTool("pipeline_action", request);
-    expect(answer).toMatchObject({ ok: true, reviewContinuation: { clientRequestId: "continue-1", stageId: "review", rounds: 2, reviewedHead: "1".repeat(40), currentHead: "2".repeat(40) } });
+    expect(answer).toMatchObject({ ok: true, reviewContinuation: { clientRequestId: "continue-1", stageId: "review", rounds: 2, reviewedHead: "1".repeat(8), currentHead: "2".repeat(8) } });
     expect(calls).toEqual([{ request: { clientRequestId: "continue-1", action: "continue-review", addRounds: 2, expectedRevision: request.expectedRevision }, actor: { kind: "agent", role: "orchestrator", conversationId: "conversation_creator" } }]);
     await Promise.resolve();
     expect(ticks).toBe(1);
@@ -4601,14 +4608,18 @@ test("MCP note authors follow authenticated attribution and round-trip through r
   const now = "2026-10-02T10:00:00.000Z";
   saveTasks([{ id: "note-mcp", project: "viewer", text: "Review the card", status: "inbox", placement: "unplaced", assignments: [], createdAt: now, updatedAt: now }]);
   for (const kind of ["agent", "manager"] as const) {
-    const bindings = viewerMcpBindings(undefined, undefined, { loadTasks, listPipelineRecords: () => [], callerAttribution: () => ({ kind, conversationId: "conversation_fixture", role: "builder" }) } as never);
+    let pipelineReads = 0;
+    const bindings = viewerMcpBindings(undefined, undefined, { loadTasks, listPipelineRecords: () => { pipelineReads++; return []; }, callerAttribution: () => ({ kind, conversationId: "conversation_fixture", role: "builder" }) } as never);
     const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
     const result = await service.callTool("update_task", { clientRequestId: `note-${kind}`, taskId: "note-mcp", note: "Waiting for review.", conversationId: "spoof", full: true });
     expect(result).toMatchObject({ ok: true, changedFields: expect.arrayContaining(["note"]), task: { note: { author: kind === "manager" ? { kind: "orchestrator" } : { kind: "agent", conversationId: "conversation_fixture" } } } });
+    expect(pipelineReads).toBe(0);
     const read = await service.callTool("get_task", { clientRequestId: `read-note-${kind}`, taskId: "note-mcp" });
     expect(read).toMatchObject({ ok: true, task: { note: { text: "Waiting for review." } } });
+    const beforeClear = pipelineReads;
     const clear = await service.callTool("update_task", { clientRequestId: `clear-note-${kind}`, taskId: "note-mcp", note: null });
     expect(clear.ok).toBe(true);
+    expect(pipelineReads).toBe(beforeClear);
     expect(loadTasks()[0]!.note).toBeUndefined();
   }
 });

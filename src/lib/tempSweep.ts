@@ -1,3 +1,5 @@
+import { performanceSpans } from "@/lib/performanceSpans";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { openHostTempRoots } from "@/lib/state/hostTempViews";
@@ -122,6 +124,7 @@ function readLink(file: string): string | null {
 /** Every process this user can inspect, in one pass over `/proc`. A process of
     another user answers nothing and cannot be using a 0700 directory of ours. */
 export function scanProcesses(procRoot = "/proc"): ProcessScan {
+  return performanceSpans.sync("proc.scan", () => {
   let entries: string[];
   try {
     entries = fs.readdirSync(procRoot);
@@ -176,6 +179,7 @@ export function scanProcesses(procRoot = "/proc"): ProcessScan {
     processes.push({ pid: Number(name), namespace, stamped, paths, references });
   }
   return { ownNamespace: readLink(path.join(procRoot, "self", "ns", "mnt")), processes };
+  });
 }
 
 /** Without `/proc`: working directories and open files through the platform backend, one namespace. */
@@ -378,7 +382,7 @@ export function tempSweepMode(env: NodeJS.ProcessEnv = process.env): "on" | "dry
 
 /** Durable intent precedes the rename; only recorded trash is recoverable. */
 export async function removeTreeViaTrash(directory: string, options: {
-  journal: string; held: (trash: string) => boolean; remove?: (trash: string) => Promise<void>;
+  journal: string; held: (trash: string) => boolean | Promise<boolean>; remove?: (trash: string) => Promise<void>;
   context?: { sha: string };
   validate?: (trash: string) => boolean;
 }): Promise<boolean> {
@@ -391,12 +395,16 @@ export async function removeTreeViaTrash(directory: string, options: {
   writeJsonDurably(options.journal, { directory, trash, uid, identity, snapshot, ...(options.context ? { context: options.context } : {}) });
   fs.renameSync(directory, trash);
   const moved = fs.lstatSync(trash);
-  if (`${moved.dev}:${moved.ino}` !== identity || options.held(trash) || options.validate && !options.validate(trash)
+  let holdError: unknown;
+  let held = true;
+  try { const observation = options.held(trash); held = typeof observation === "boolean" ? observation : await observation; } catch (error) { holdError = error; }
+  if (`${moved.dev}:${moved.ino}` !== identity || held || options.validate && !options.validate(trash)
     || !matchesSnapshot(trash, snapshot) || mountPointsUnder(trash).length) {
     try { fs.lstatSync(directory); throw new Error("original path was acquired while trash is held; preserved both paths"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     fs.renameSync(trash, directory);
     fs.unlinkSync(options.journal);
+    if (holdError) throw holdError;
     return false;
   }
   await (options.remove ?? (target => fs.promises.rm(target, { recursive: true, force: true })))(trash);
@@ -405,7 +413,7 @@ export async function removeTreeViaTrash(directory: string, options: {
 }
 
 /** Replay only a same-parent, same-owner trash path from our durable intent. */
-export async function finishTreeTrash(journal: string, held: (trash: string) => boolean, remove?: (trash: string) => Promise<void>, validate?: (trash: string) => boolean): Promise<boolean> {
+export async function finishTreeTrash(journal: string, held: (trash: string) => boolean | Promise<boolean>, remove?: (trash: string) => Promise<void>, validate?: (trash: string) => boolean): Promise<boolean> {
   const row = JSON.parse(fs.readFileSync(journal, "utf8")) as { directory: string; trash: string; uid: number; identity: string; snapshot?: TreeSnapshot };
   if (path.dirname(row.directory) !== path.dirname(row.trash)
     || !path.basename(row.trash).startsWith(`.delegatus-trash-${path.basename(row.directory)}-`)) return false;
@@ -415,7 +423,8 @@ export async function finishTreeTrash(journal: string, held: (trash: string) => 
     || !row.snapshot || !matchesSnapshot(row.trash, row.snapshot) || mountPointsUnder(row.trash).length) return false;
   // held/validate are caller supplied and may scan or mutate the tree. Run
   // them first, then prove the exact journaled tree again at the delete edge.
-  if (held(row.trash) || validate && !validate(row.trash)) return false;
+  const observation = held(row.trash);
+  if ((typeof observation === "boolean" ? observation : await observation) || validate && !validate(row.trash)) return false;
   const final = fs.lstatSync(row.trash);
   if (!final.isDirectory() || final.dev !== fs.statSync(path.dirname(row.trash)).dev
     || `${final.dev}:${final.ino}` !== row.identity || final.uid !== row.uid
@@ -791,7 +800,7 @@ async function cleanupWorktrees() {
 }
 
 /** The production sweep: threshold from the environment, worktrees from the pipelines store. */
-export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
+export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
   const maxAgeMs = tempSweepMaxAgeMs(env);
   const mode = tempSweepMode(env);
   if (maxAgeMs === null || mode === null) return null;
@@ -821,6 +830,14 @@ export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: 
   return report;
 }
 
+/** Production calls share the leased sweep helper. Explicit inspection ports
+ * keep the policy tests local without changing any removal decision. */
+export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
+  if (Object.keys(ports).length) return runTempSweepInHelper(env, ports);
+  const { runTempSweepOffThread } = await import("@/lib/pipelines/worktreeSweepWorker");
+  return runTempSweepOffThread(env);
+}
+
 const sweepHost = globalThis as typeof globalThis & {
   __llvTempSweepTimer?: ReturnType<typeof setTimeout>;
 };
@@ -840,7 +857,7 @@ export function startTempSweep(ports: {
   const sweep = ports.sweep ?? (() => runTempSweep());
   const arm = (delayMs: number) => {
     const timer = schedule(() => {
-      void sweep()
+      void withViewerOperation("temp.sweep", sweep)
         .catch((error) => console.error("[temp sweep] failed", error instanceof Error ? error.message : String(error)))
         .finally(() => {
           if (sweepHost.__llvTempSweepTimer === timer) arm(ports.intervalMs ?? TEMP_SWEEP_INTERVAL_MS);

@@ -105,6 +105,7 @@ function boundedArgs(
     });
   }
   if (toolName === "search_transcripts") args.query = "fixture";
+  if (toolName === "relay_service_tools") args.op = "list";
   if (toolName === "relay_owner_history") args.action = "groups";
   if (toolName === "telegram_bot_messages") args.chat = "team-reports";
   return args;
@@ -1227,4 +1228,17 @@ test("voice task, pipeline and conversation filters keep the MCP read schema nam
     for (const property of Object.keys(voice.parameters.properties)) expect(property === "project" || property === "refresh" || Object.hasOwn(input,property)).toBe(true);
     expect(voice.parameters.additionalProperties).toBe(false);
   }
+});
+
+
+test("seat_tick_settings advertises and forwards the independent curation timer", async () => {
+  let received: unknown;
+  await withProtocolClient(inertBindings({ seat_tick_settings: async args => { received = args; return { changed: true }; } }), async client => {
+    const tool = (await client.listTools()).tools.find(tool => tool.name === "seat_tick_settings")!;
+    expect(tool.inputSchema.properties).toHaveProperty("curation");
+    const result = await client.callTool({ name: "seat_tick_settings", arguments: { clientRequestId: "curation-parity", curation: { enabled: false, intervalHours: 12 } } });
+    expect(result.isError).not.toBe(true);
+    expect(received).toMatchObject({ curation: { enabled: false, intervalHours: 12 } });
+    expect((await client.callTool({ name: "seat_tick_settings", arguments: { clientRequestId: "curation-invalid", curation: { enabled: "yes" } } })).isError).toBe(true);
+  });
 });

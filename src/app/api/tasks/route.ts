@@ -10,7 +10,7 @@ import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds, type TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { createTask, type CreateTaskInput, type CreateTaskResult } from "@/lib/tasks/commands";
-import { loadTasks, loadTasksForList, mutateTasksFile } from "@/lib/tasks/store";
+import { loadTasksForList, mutateTasksFile } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -102,7 +102,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
      referenced file between the check and the persist. The sweep additionally
      reads the freshest task list (not this request's snapshot), so it never
      evaluates references against stale state. */
-  sweepAttachments(loadTasks(), Date.now());
+  sweepAttachments(loadTasksForList(), Date.now());
   /* A replayed create answers the same task, so its id is the key. */
   if (directOperatorActivityAuthority(req).ok) {
     recordOperatorRequest(req, { kind: "task", idempotencyKey: `task-create:${result.task.id}`, project: result.task.project });

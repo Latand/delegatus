@@ -405,7 +405,7 @@ async function postTaskSpawn(
         }), { status: 202 });
       }
     }
-    const claim = registry.claimTmuxSpawnActuation(launchReceipt.launchId);
+    const claim = (await registry.deliveryWriteOrBusy({ label: "registry.claimTmuxSpawnActuation" }, registry.claimTmuxSpawnActuation.bind(registry, launchReceipt.launchId)));
     launchReceipt = claim.receipt;
     if (!claim.claimed) {
       const at = isoNow();
@@ -473,7 +473,7 @@ async function postTaskSpawn(
     });
     const key = transcript ? sessionKeyFromTranscript(engine, transcript) : null;
     if (transcript && key) {
-      const settled = registry.settleSpawn(launchReceipt.launchId, {
+      const settled = (await registry.deliveryWriteOrBusy({ label: "registry.settleSpawn" }, registry.settleSpawn.bind(registry, launchReceipt.launchId, {
         key,
         artifactPath: transcript,
         cwd: cwdResult.cwd,
@@ -484,16 +484,16 @@ async function postTaskSpawn(
         claimEpoch: 0,
         claimOwner: null,
         pendingAction: "spawn",
-      });
+      })));
       if (settled.kind === "conflict") throw new Error(settled.code);
     } else {
-      registry.markSpawnPathPending(launchReceipt.launchId);
+      (await registry.deliveryWriteOrBusy({ label: "registry.markSpawnPathPending" }, registry.markSpawnPathPending.bind(registry, launchReceipt.launchId)));
     }
   } catch (error) {
     const observed = registry.readOnlySnapshot().receipts[launchReceipt.launchId] ?? launchReceipt;
     if (observed.pane) {
       if (observed.state === "prompt-delivered" || observed.state === "host-verified") {
-        registry.markSpawnPathPending(observed.launchId);
+        (await registry.deliveryWriteOrBusy({ label: "registry.markSpawnPathPending" }, registry.markSpawnPathPending.bind(registry, observed.launchId)));
       }
       const pending = registry.readOnlySnapshot().receipts[observed.launchId] ?? observed;
       const at = isoNow();

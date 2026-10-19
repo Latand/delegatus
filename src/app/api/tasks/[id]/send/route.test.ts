@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { deepFreeze } from "@/lib/deepFreeze";
 import { NextRequest } from "next/server";
 
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
@@ -27,7 +28,7 @@ test("task dispatch attributes an admitted agent caller and keeps human dispatch
   } as BoardTask;
   const origins: unknown[] = [];
   const dependencies = {
-    loadTasks: () => [task], listFiles: async () => [entry(path.join(state, "recipient.jsonl"), "codex")],
+    loadTasks: () => deepFreeze(structuredClone([task])), listFiles: async () => [entry(path.join(state, "recipient.jsonl"), "codex")],
     deliverConversationMessage: async (message: { origin?: unknown }) => {
       origins.push(message.origin);
       return { ok: true as const, outcome: "delivered-to-live" as const, target: "pane" };
@@ -99,7 +100,7 @@ test("one authorized task fan-out records one durable operator gesture across re
   const recorded = new Map<string, unknown>();
   let deliveries = 0;
   const dependencies = {
-    loadTasks: () => [task],
+    loadTasks: () => deepFreeze(structuredClone([task])),
     listFiles: async () => files,
     deliverConversationMessage: async () => {
       deliveries += 1;
@@ -138,15 +139,21 @@ test("a task another linked machine runs is refused before any delivery; its own
   process.env.LLV_STATE_DIR = state;
   const self = ["0a0a0a0a", "1111", "4111", "8111", "111111111111"].join("-");
   const peer = ["0b0b0b0b", "2222", "4222", "8222", "222222222222"].join("-");
+  let identityRevision = 0;
   const writeSelf = (installId: string) => {
     fs.mkdirSync(path.join(state, "links"), { recursive: true });
-    fs.writeFileSync(path.join(state, "links/self.json"), JSON.stringify({ v: 1, installId, label: "fixture", publicUrl: null, check: null }));
+    const file = path.join(state, "links/self.json");
+    fs.writeFileSync(file, JSON.stringify({ v: 1, installId, label: "fixture", publicUrl: null, check: null }));
+    // Two same-sized rewrites must publish distinct file versions even on a
+    // filesystem whose timestamp resolution exceeds the interval between them.
+    const at = Date.parse("2026-09-26T00:00:00.000Z") / 1000 + identityRevision++;
+    fs.utimesSync(file, at, at);
   };
   const task = { id: "task-on-peer", project: "project-fixture", status: "inbox", text: "Runs on the peer", machine: peer,
     placement: "unplaced", assignments: [], createdAt: "2026-09-26T00:00:00.000Z", updatedAt: "2026-09-26T00:00:00.000Z" } as BoardTask;
   let deliveries = 0;
   const dependencies = {
-    loadTasks: () => [task], listFiles: async () => [entry(path.join(state, "recipient.jsonl"), "codex")],
+    loadTasks: () => deepFreeze(structuredClone([task])), listFiles: async () => [entry(path.join(state, "recipient.jsonl"), "codex")],
     deliverConversationMessage: async () => { deliveries++; return { ok: true as const, outcome: "delivered-to-live" as const, target: "pane" }; },
     mutateTasks: <R,>(mutator: (tasks: BoardTask[]) => { tasks?: BoardTask[]; result: R }) => mutator([task]).result,
   };

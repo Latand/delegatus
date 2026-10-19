@@ -133,7 +133,7 @@ test("issue 533: a repair review parks when its remote branch is behind the capt
     } as unknown as Flow;
 
     await expect(captureReviewHead(flow, newRound(flow, "marker", null)))
-      .rejects.toThrow(`review remote head mismatch before launch: local ${repairSha}, origin/main ${remoteSha}`);
+      .rejects.toThrow(`review remote head mismatch before launch: local ${repairSha.slice(0, 8)}, origin/main ${remoteSha.slice(0, 8)}`);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -288,11 +288,11 @@ test("a review round parks when clean HEAD advances past its synchronized target
     } as unknown as Flow;
     const round = newRound(flow, "button", null);
 
-    await expect(captureReviewHead(flow, round)).rejects.toThrow(`review target changed before launch: expected ${targetSha}, found ${advancedSha}`);
+    await expect(captureReviewHead(flow, round)).rejects.toThrow(`review target changed before launch: expected ${targetSha.slice(0, 8)}, found ${advancedSha.slice(0, 8)}`);
     expect(round.reviewHeadSha).toBeNull();
     expect(flow).toMatchObject({
       state: "needs_decision",
-      stateDetail: `review target changed before launch: expected ${targetSha}, found ${advancedSha}`,
+      stateDetail: `review target changed before launch: expected ${targetSha.slice(0, 8)}, found ${advancedSha.slice(0, 8)}`,
     });
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -418,7 +418,7 @@ test("launch-time drift parks before reviewer process actuation (#522)", async (
 
     const parked = loadFlows()[0]!;
     expect(parked.state).toBe("needs_decision");
-    expect(parked.stateDetail).toBe(`review target changed before launch: expected ${targetSha}, found ${driftedSha}`);
+    expect(parked.stateDetail).toBe(`review target changed before launch: expected ${targetSha.slice(0, 8)}, found ${driftedSha.slice(0, 8)}`);
     expect(parked.rounds[0]).toMatchObject({
       launchId: null,
       reviewerConversationId: null,
@@ -1490,7 +1490,7 @@ test("a mid-flight round is polled with its frozen reviewer role, not a raced se
   expect(after.rounds[0]!.reviewerRole).toEqual({ engine: "codex", model: null, effort: "xhigh" });
 });
 
-test("persistTickFlows never reverts a concurrent operator config change (issue #118 Finding 2)", () => {
+test("persistTickFlows never reverts a concurrent operator config change (issue #118 Finding 2)", async () => {
   /* On disk: the operator has switched the reviewer to claude/fable and bumped
      the round limit. */
   const onDisk = {
@@ -1526,7 +1526,7 @@ test("persistTickFlows never reverts a concurrent operator config change (issue 
   staleClone.mode = "auto";
   const base = flowTickBase([staleClone]); // captured before the tick mutates it
   staleClone.state = "relaying";
-  persistTickFlows([staleClone], base);
+  await persistTickFlows([staleClone], base);
 
   const after = loadFlows()[0]!;
   /* Operator-owned config survives from disk; the tick's own state change lands. */
@@ -1718,9 +1718,9 @@ test("overlapping relay ticks deliver one review and settle the round once (#529
   const entriesByPath = new Map([[implementer.path, implementer]]);
 
   try {
-    const firstTick = tickFlow(first, [implementer], entriesByPath, () => persistTickFlows([first], firstBase));
+    const firstTick = tickFlow(first, [implementer], entriesByPath, async () => await persistTickFlows([first], firstBase));
     while (relayDeliveries < 1) await new Promise<void>((resolve) => setImmediate(resolve));
-    const secondTick = tickFlow(second, [implementer], entriesByPath, () => persistTickFlows([second], secondBase));
+    const secondTick = tickFlow(second, [implementer], entriesByPath, async () => await persistTickFlows([second], secondBase));
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(relayDeliveries).toBe(1);
@@ -1732,8 +1732,8 @@ test("overlapping relay ticks deliver one review and settle the round once (#529
     saveFlows([{ ...loadFlows()[0]!, state: "paused", pausedState: "relaying" }]);
     for (const release of releaseRelayDeliveries) release();
     await Promise.all([firstTick, secondTick]);
-    persistTickFlows([first], firstBase);
-    persistTickFlows([second], secondBase);
+    await persistTickFlows([first], firstBase);
+    await persistTickFlows([second], secondBase);
 
     expect(loadFlows()[0]).toMatchObject({
       state: "paused",
@@ -1752,10 +1752,10 @@ test("overlapping relay ticks deliver one review and settle the round once (#529
     for (let pass = 0; pass < 2; pass += 1) {
       const recovered = structuredClone(loadFlows()[0]!);
       const recoveredBase = flowTickBase([recovered]);
-      await tickFlow(recovered, [repairedEntry], new Map([[repairedEntry.path, repairedEntry]]), () => {
-        persistTickFlows([recovered], recoveredBase);
+      await tickFlow(recovered, [repairedEntry], new Map([[repairedEntry.path, repairedEntry]]), async () => {
+        await persistTickFlows([recovered], recoveredBase);
       });
-      persistTickFlows([recovered], recoveredBase);
+      await persistTickFlows([recovered], recoveredBase);
     }
 
     expect(relayDeliveries).toBe(1);
@@ -2646,7 +2646,7 @@ test("a restart-interrupted legacy relay parks before a newly available structur
   }
 });
 
-test("persistTickFlows respects a concurrent close instead of reopening the flow (issue #118 review)", () => {
+test("persistTickFlows respects a concurrent close instead of reopening the flow (issue #118 review)", async () => {
   /* The tick started with the flow reviewing; the operator closed it during the
      tick's awaited spawn/relay. */
   const started = raceFlow({ state: "reviewing" });
@@ -2657,14 +2657,14 @@ test("persistTickFlows respects a concurrent close instead of reopening the flow
   saveFlows([raceFlow({ state: "closed", closedAt: "2026-05-05T01:00:00Z" })]);
   /* The tick, unaware, computed a busy state and saves. */
   clone.state = "relaying";
-  persistTickFlows([clone], base);
+  await persistTickFlows([clone], base);
 
   const after = loadFlows()[0]!;
   expect(after.state).toBe("closed");
   expect(after.closedAt).toBe("2026-05-05T01:00:00Z");
 });
 
-test("relay settlement does not contaminate a concurrently retried round", () => {
+test("relay settlement does not contaminate a concurrently retried round", async () => {
   const round = {
     ...newRound(raceFlow({ rounds: [] }), "marker", null),
     verdict: "REQUEST_CHANGES" as const,
@@ -2685,7 +2685,7 @@ test("relay settlement does not contaminate a concurrently retried round", () =>
   clone.rounds[0]!.relayDelivery = { path: "/impl", deliveredAt: "2026-07-21T17:00:00.000Z" };
   clone.rounds[0]!.relayedAt = "2026-07-21T17:00:00.000Z";
 
-  persistTickFlows([clone], base);
+  await persistTickFlows([clone], base);
 
   expect(loadFlows()[0]).toMatchObject({
     state: "paused",
@@ -2693,7 +2693,7 @@ test("relay settlement does not contaminate a concurrently retried round", () =>
   });
 });
 
-test("persistTickFlows preserves a flow created during the tick (issue #118 review)", () => {
+test("persistTickFlows preserves a flow created during the tick (issue #118 review)", async () => {
   const started = raceFlow({ id: "flow-old", state: "reviewing" });
   saveFlows([started]);
   const clone = structuredClone(started);
@@ -2701,7 +2701,7 @@ test("persistTickFlows preserves a flow created during the tick (issue #118 revi
   /* Operator creates a new flow while the tick is awaiting. */
   saveFlows([started, raceFlow({ id: "flow-new", state: "waiting_ready" })]);
   clone.state = "relaying";
-  persistTickFlows([clone], base);
+  await persistTickFlows([clone], base);
 
   const after = loadFlows();
   expect(after.map((flow) => flow.id).sort()).toEqual(["flow-new", "flow-old"]);
@@ -2710,7 +2710,7 @@ test("persistTickFlows preserves a flow created during the tick (issue #118 revi
   expect(after.find((flow) => flow.id === "flow-new")!.state).toBe("waiting_ready");
 });
 
-test("a reviewer spawned into a concurrently closed flow is detected as orphaned and its handle dropped (issue #118 review Finding 1)", () => {
+test("a reviewer spawned into a concurrently closed flow is detected as orphaned and its handle dropped (issue #118 review Finding 1)", async () => {
   /* The tick entered spawning and persisted spawnStartedAt; base = spawning. */
   const spawning = raceFlow({
     id: "flow-spawn",
@@ -2734,7 +2734,7 @@ test("a reviewer spawned into a concurrently closed flow is detected as orphaned
   /* The tick finishes spawning: it stamps the pane handle and persists. */
   clone.state = "reviewing";
   clone.rounds[0]!.reviewerPane = { paneId: "%9", windowName: "codex-rev" };
-  persistTickFlows([clone], base);
+  await persistTickFlows([clone], base);
 
   const after = loadFlows()[0]!;
   /* The close is respected (not reopened) and the pane handle was NOT persisted. */
@@ -2744,7 +2744,7 @@ test("a reviewer spawned into a concurrently closed flow is detected as orphaned
   expect(reviewerLaunchPersisted(loadFlows()[0], clone.rounds[0]!)).toBe(false);
 });
 
-test("a pause during pane launch orphans nothing and lets resume re-spawn (issue #118 review Finding 2)", () => {
+test("a pause during pane launch orphans nothing and lets resume re-spawn (issue #118 review Finding 2)", async () => {
   /* Tick is mid-spawn (spawnStartedAt set, no handle yet); base = spawning. */
   const spawning = raceFlow({
     id: "flow-pause",
@@ -2767,7 +2767,7 @@ test("a pause during pane launch orphans nothing and lets resume re-spawn (issue
   /* The tick stamps the pane handle and persists — the merge drops it (paused). */
   clone.state = "reviewing";
   clone.rounds[0]!.reviewerPane = { paneId: "%9", windowName: "codex-rev" };
-  persistTickFlows([clone], base);
+  await persistTickFlows([clone], base);
 
   /* The handle did not persist, so the launch is orphaned and must be cleaned up. */
   expect(reviewerLaunchPersisted(loadFlows()[0], clone.rounds[0]!)).toBe(false);
@@ -3276,9 +3276,9 @@ test("a headless reviewer that exits stops fencing its conversation, and a later
   expect(loadFlows().find((item) => item.id === flow.id)?.rounds[0]?.verdict).toBe("APPROVE");
   expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toMatchObject({ status: "dead", pendingAction: null, host: null });
   const request = { conversationId, path: reviewer.path };
-  expect(conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
+  expect((await conversationDeliverabilityFromRecord(registry.conversationDeliverySnapshot(request), {
     conversationId, transcriptPath: reviewer.path,
-  }).condition).toBe("reclaimed");
+  })).condition).toBe("reclaimed");
 
   let recovered = 0;
   const sent = await enqueueStructuredMessage({ ...request, text: "one more question about round 1", clientMessageId: "hostless-reviewer-question" }, {

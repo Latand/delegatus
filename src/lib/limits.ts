@@ -1,4 +1,5 @@
 import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
+import { paidCredits } from "@/lib/accounts/creditGuard";
 import { claudeTierDisplayName, normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import fs from "node:fs";
 import path from "node:path";
@@ -788,6 +789,7 @@ interface CodexWindow {
 }
 
 interface CodexRateLimits {
+  credits?: unknown;
   primary?: CodexWindow;
   secondary?: CodexWindow;
   plan_type?: unknown;
@@ -805,6 +807,7 @@ export function mapAppServerRateLimits(rateLimits: AppServerRateLimits, captured
     session: routed.session,
     weekly: routed.weekly,
     plan: rateLimits.planType,
+    ...(rateLimits.credits ? { credits: rateLimits.credits } : {}),
     capturedAt,
   };
 }
@@ -844,6 +847,8 @@ export async function readCodexLimits(options: {
       ? null
       : transcriptProjection ?? rejectionReading(live, transcript.rejectedAt);
     const transcriptLimits = projected ?? transcript.data;
+    const credits = live.credits ?? transcript.data?.credits;
+    const retainCredits = (data: EngineLimits | null): EngineLimits | null => data && credits ? { ...data, credits } : data;
     if (!transcriptLimits) return { data: live, reason: null, source: "live" };
     const reconcile = (limits: EngineLimits) => reconcileQuotaReadings(
       { limits: live, observedAt: live.capturedAt, stale: false, source: "live" },
@@ -855,9 +860,9 @@ export async function readCodexLimits(options: {
     // What this read would have been without the rejection, so the cache keeps
     // a reading no projection shaped and the number an expired exhaustion
     // overrode comes back when it expires.
-    const unprojected = projected ? (transcript.data ? quotaAsEngineLimits(reconcile(transcript.data)) : live) : null;
+    const unprojected = projected ? retainCredits(transcript.data ? quotaAsEngineLimits(reconcile(transcript.data)) : live) : null;
     return {
-      data: quotaAsEngineLimits(reconciled),
+      data: retainCredits(quotaAsEngineLimits(reconciled)),
       ...(unprojected ? { baseData: unprojected } : {}),
       reason: transcriptWon ? "transcript-reconciled" : null,
       source: transcriptWon ? "transcript" : "live",
@@ -1049,6 +1054,7 @@ function lastRateLimits(file: string): { data: EngineLimits | null; rejectedAt: 
   const lines = text.split("\n");
   let data: EngineLimits | null = null;
   let rejectedAt: number | null = null;
+  let credits: ReturnType<typeof paidCredits>;
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
     if (!line.includes('"rate_limits"') && !line.includes('"usage_limit')) continue;
@@ -1065,6 +1071,7 @@ function lastRateLimits(file: string): { data: EngineLimits | null; rejectedAt: 
       }
       const rl = row.payload?.rate_limits;
       if (!rl) continue;
+      credits ??= paidCredits(rl.credits);
       const routed = routeWindowsByHorizon(codexWindow(rl.primary, capturedAt), codexWindow(rl.secondary, capturedAt), capturedAt);
       // Codex also emits `rate_limits` events carrying no windows at all (other
       // limit families, e.g. credit balances). They say nothing about the
@@ -1075,6 +1082,7 @@ function lastRateLimits(file: string): { data: EngineLimits | null; rejectedAt: 
           session: routed.session,
           weekly: routed.weekly,
           plan: typeof rl.plan_type === "string" ? rl.plan_type : null,
+          ...(paidCredits(rl.credits) ? { credits: paidCredits(rl.credits) } : {}),
           capturedAt,
         };
       }
@@ -1082,7 +1090,7 @@ function lastRateLimits(file: string): { data: EngineLimits | null; rejectedAt: 
       /* first line of the tail chunk is usually cut mid-JSON */
     }
   }
-  return { data, rejectedAt };
+  return { data: data && credits ? { ...data, credits } : data, rejectedAt };
 }
 
 function governingWindow(limits: EngineLimits): { key: "session" | "weekly"; value: LimitWindow } | null {

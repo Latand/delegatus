@@ -1,0 +1,1 @@
+For prototype work, render numbered variants with names, descriptions and a frame directory in your report. The lane is prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted advance) → publish. Only its publish stage calls publish_prototype_review after the critic passes or its findings are fixed; omit taskId.

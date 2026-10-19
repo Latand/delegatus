@@ -1,12 +1,13 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { encodedPowerShellCommand, resetWindowsSnapshotForTests, windowsBackend, WINDOWS_PROCESS_SNAPSHOT_SCRIPT } from "./windows";
+import { encodedPowerShellCommand, resetWindowsSnapshotForTests, windowsBackend, WINDOWS_PROCESS_SNAPSHOT_SCRIPT, type WindowsSnapshotCommandResult } from "./windows";
 import { windowsProcessCwd } from "./windowsCwd";
-import { normalizeWindowsCwd } from "./windowsSnapshot";
+import { normalizeWindowsCwd, parseWindowsProcessSnapshot, snapshotEntries } from "./windowsSnapshot";
 import { windowsProcessIdentity } from "./windowsIdentity";
+import { requireWindowsSnapshot } from "../../../scripts/verify-windows-snapshot";
 
 /*
  * The live half of the Windows backend. Everything here talks to the running
@@ -167,3 +168,88 @@ test.if(windows)("memory and CPU are reported for a live pid, and memory for the
   expect(system!.ramAvailable).toBeGreaterThan(0);
   expect(system!.ramAvailable).toBeLessThanOrEqual(system!.ramTotal);
 }, 30_000);
+
+describe("platform verifier snapshot retries", () => {
+  const goodCsv = '"ProcessId","ParentProcessId","CommandLine"\r\n'
+    + [10, 11, 12, 13, 14].map(pid => `"${pid}","10","bun.exe"`).join("\r\n");
+  const good: WindowsSnapshotCommandResult = { stdout: goodCsv, stderr: "", status: 0, signal: null, error: null };
+  const empty: WindowsSnapshotCommandResult = { ...good, stdout: "", stderr: "CIM query unavailable\r\n" };
+
+  function harness(commands: WindowsSnapshotCommandResult[]) {
+    const waits: number[] = [];
+    const logs: string[] = [];
+    const timeouts: number[] = [];
+    let calls = 0;
+    const result = requireWindowsSnapshot({
+      attempt: timeoutMs => {
+        timeouts.push(timeoutMs);
+        const command = commands[Math.min(calls++, commands.length - 1)]!;
+        const data = parseWindowsProcessSnapshot(command.error ? "" : command.stdout);
+        return { command, listed: snapshotEntries(data, () => null, 1) };
+      },
+      sleep: async ms => { waits.push(ms); },
+      log: line => { logs.push(line); },
+    });
+    return { result, waits, logs, timeouts, calls: () => calls };
+  }
+
+  test("a good first snapshot needs no retry or diagnostic", async () => {
+    const run = harness([good]);
+    expect((await run.result).map(row => row.pid)).toEqual([10, 11, 12, 13, 14]);
+    expect(run.calls()).toBe(1);
+    expect(run.waits).toEqual([]);
+    expect(run.logs).toEqual([]);
+  });
+
+  test.each([1, 2])("%i empty attempts then good takes fresh snapshots with short backoff", async count => {
+    const run = harness([...Array.from({ length: count }, () => empty), good]);
+    expect((await run.result).length).toBe(5);
+    expect(run.calls()).toBe(count + 1);
+    expect(run.timeouts).toEqual(Array.from({ length: count + 1 }, () => 30_000));
+    expect(run.waits).toEqual([250, 500].slice(0, count));
+    expect(run.logs).toHaveLength(count);
+    for (const [index, line] of run.logs.entries()) {
+      expect(line).toBe(`Win32_Process snapshot attempt ${index + 1}/3 failed: ${JSON.stringify({ reason: "PowerShell exited successfully; the parsed snapshot is empty", timeoutMs: 30_000, ...empty, processes: 0 })}`);
+    }
+  });
+
+  test("a cold-start timeout is named and can recover on a fresh attempt", async () => {
+    const timeout = { ...empty, status: null, signal: "SIGTERM", error: "ETIMEDOUT: powershell.exe" };
+    const run = harness([timeout, good]);
+    expect((await run.result).length).toBe(5);
+    expect(run.calls()).toBe(2);
+    expect(run.timeouts).toEqual([30_000, 30_000]);
+    expect(run.logs[0]).toContain('"reason":"PowerShell snapshot timed out after 30000 ms"');
+    expect(run.logs[0]).toContain('"error":"ETIMEDOUT: powershell.exe"');
+  });
+
+  test("persistent timeouts fail with a timeout diagnosis", async () => {
+    const run = harness([{ ...empty, status: null, error: "ETIMEDOUT: powershell.exe" }]);
+    await expect(run.result).rejects.toThrow("snapshot failed after 3 attempts: PowerShell snapshot timed out after 30000 ms");
+    expect(run.calls()).toBe(3);
+  });
+
+  test.each([
+    ["always empty", empty],
+    ["missing CSV column", { ...good, stdout: '"WrongColumn"\r\n"10"' }],
+    ["header only", { ...good, stdout: '"ProcessId"\r\n' }],
+    ["wrong encoding", { ...good, stdout: Buffer.from(goodCsv, "utf16le").toString("utf8") }],
+    ["too few processes", { ...good, stdout: '"ProcessId"\r\n"10"' }],
+    ["nonzero exit with parseable output", { ...good, status: 1, stderr: "query failed" }],
+    ["missing PowerShell", { ...empty, status: null, error: "ENOENT: powershell.exe" }],
+    ["timeout with partial output", { ...good, status: null, signal: "SIGTERM", error: "ETIMEDOUT: powershell.exe" }],
+    ["signal with parseable output", { ...good, status: null, signal: "SIGTERM" }],
+  ] satisfies [string, WindowsSnapshotCommandResult][])("%s fails hard after three attempts with all raw evidence", async (_name, command) => {
+    const run = harness([command]);
+    await expect(run.result).rejects.toThrow("snapshot failed after 3 attempts:");
+    expect(run.calls()).toBe(3);
+    expect(run.waits).toEqual([250, 500]);
+    expect(run.timeouts).toEqual([30_000, 30_000, 30_000]);
+    expect(run.logs).toHaveLength(3);
+    for (const [index, line] of run.logs.entries()) {
+      expect(line.startsWith(`Win32_Process snapshot attempt ${index + 1}/3 failed: `)).toBe(true);
+      expect(JSON.parse(line.slice(line.indexOf("{")))).toMatchObject(command);
+      expect(line.split("\n")).toHaveLength(1);
+    }
+  });
+});

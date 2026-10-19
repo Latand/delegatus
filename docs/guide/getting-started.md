@@ -1,7 +1,7 @@
 # Getting started
 
 This page takes you from nothing to an orchestrator working on your project,
-and then to a first pipeline that ends in a pull request. Terms in it are
+and then to a first pipeline that delivers its branch or pull request. Terms in it are
 explained in [Core concepts](concepts.md).
 
 ## What you need
@@ -37,13 +37,11 @@ you already use.
   GitHub Copilot is optional: `bun add -g @github/copilot`. It runs single
   agents only and cannot run the orchestrator. When Delegatus reports Copilot
   missing, its message names the exact package version to install.
-- git, and a project that is a git repository with at least one commit. A
-  pipeline works in a git worktree of your project and starts from a commit.
-  By default that commit is the tip of `main` on the project's `origin`
-  remote, which the pipeline fetches first, so the project also needs an
-  `origin` with a `main` branch. [Prepare a project for
-  pipelines](#prepare-a-project-for-pipelines) shows both setups.
-- For pull requests and merging: the same `origin` on GitHub, and the GitHub
+- git and a project folder. Delegatus can initialize a safe new folder, make
+  its first local commit and start the pipeline. [Prepare a project for
+  pipelines](#prepare-a-project-for-pipelines) explains the exclusions and
+  the optional remote.
+- For pull requests and merging: an `origin` on GitHub, and the GitHub
   CLI (`gh`) signed in. Without a GitHub pull request, pipelines end without
   a merge, and a stopped merge names a signed-out `gh` as its reason.
 - Linux with Bubblewrap (`bwrap`), Python 3, util-linux, unprivileged user/PID
@@ -270,46 +268,27 @@ conversation. Copilot agents start only this way.
 
 ## Prepare a project for pipelines
 
-A pipeline starts from a commit of your project, so the folder needs one
-before the first pipeline. Git also needs to know who you are before it
-commits, and a new machine often has no identity set. `git config user.name`
-and `git config user.email` each print a value when it is. When either prints nothing, `git commit` stops
-with `Author identity unknown`. Set both once for every repository on the
-machine, with your own name and an address you are happy to see in public
-history (GitHub offers a no-reply address under **Settings** → **Emails**):
+Choose your project folder and ask the orchestrator to start a pipeline. When
+the folder has no Git repository, Delegatus creates a local repository on
+`main` and makes its first commit with a Delegatus identity. The creation
+answer and the project’s **Reports** log list the committed files, excluded
+paths and default ignore patterns.
 
-```bash
-git config --global user.name "Your Name"
-git config --global user.email "you@example.com"
-```
+The baseline preserves existing `.gitignore` rules and adds exclusions for
+environment files, keys, credentials, dependencies and build outputs. It also
+excludes large files, links, nested repositories and content matching secret
+patterns. Protected folders and projects beyond the commit limits are refused
+with a reason. See [the initialization limits](../pipelines.md#create-and-inspect)
+for the bounds and their configuration.
 
-To set an identity for this project only, leave out `--global`.
+The repository stays local. Its pipelines finish on their own branches.
+Delegatus creates a remote only when you ask for one. For pull requests, ask
+the orchestrator to connect a GitHub remote and sign in to `gh` when needed.
+An existing repository keeps its remote and branch settings.
 
-Pick one of these:
-
-- **A repository on GitHub.** This is the default and the only setup that
-  ends in a pull request. The project needs at least one commit and an
-  `origin` remote whose `main` branch holds it. For a new folder:
-
-  ```bash
-  git init -b main
-  git add -A
-  git commit -m "Initial commit"
-  gh repo create --private --source . --push
-  ```
-
-  `git remote -v` then shows `origin`, and `git ls-remote origin main`
-  prints a commit. If your project's main branch has another name, tell the
-  orchestrator that name when you ask for work.
-- **A local repository with no remote.** Commit your work as above, without
-  the last line. When you ask for work, tell the orchestrator to pin the
-  pipeline's base to your current commit, which `git rev-parse HEAD` prints.
-  A pipeline pinned that way never fetches from a remote. It ends with its
-  work on its own branch, without a pull request.
-
-`git init` on its own is not enough: it creates neither a commit nor an
-`origin`. A pipeline in such a folder parks before its first stage, and its
-reason names the `origin/main` it could not fetch.
+An existing repository with no commits still needs a first commit before a
+pipeline can start. If the pipeline cannot resolve its base, check its branch
+and commit; the automatic first commit applies to folders without Git.
 
 ## If only one engine is connected
 
@@ -344,8 +323,9 @@ fix or a small feature in one file. Then watch it appear:
 4. The reviewer reads the builder's change. If it finds problems, the builder
    fixes them and a fresh reviewer looks again, up to the pipeline's review
    budget.
-5. The pipeline ends with a pull request open on GitHub, and the orchestrator
-   files a report in the **Reports** log beside its chat.
+5. With a GitHub remote, the pipeline ends with a pull request. Local
+   pipelines finish on their branch. The orchestrator files a report in the
+   **Reports** log beside its chat.
 
 ![A pipeline opened from its task: Build, Review and Verify stages, with Review's loop back to Build folded under it, and the builder's and the reviewer's conversations side by side](../media/readme/pipeline.svg)
 
@@ -370,8 +350,8 @@ turn on **Merge when the review passes**; see
   with `--port` and that number.
 - **Only Copilot is installed.** Copilot cannot run the orchestrator. Install
   Claude Code or Codex as well.
-- **"not a git repository", or the pipeline stops while resolving its base.**
-  The pipeline needs a commit to start from. Follow [Prepare a project for
+- **Repository initialization is refused, or the pipeline cannot resolve its base.**
+  Read the refusal reason, then follow [Prepare a project for
   pipelines](#prepare-a-project-for-pipelines).
 - **The pipeline is refused because an engine is not connected.** See [If only
   one engine is connected](#if-only-one-engine-is-connected).

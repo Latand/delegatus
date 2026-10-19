@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -26,6 +26,9 @@ import { taskAcknowledgement } from "@/lib/mcp/listAnswers";
 import type { PrototypeWorld } from "./world";
 import type { PublishPrototypeInput, PrototypeReviewRead } from "./types";
 import { MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, createMcpToolService, MemoryMcpReceiptStore } from "@/lib/mcp/server";
+
+import * as prototypeHttp from "./http";
+import { PrototypeError } from "./input";
 
 import { questions } from "./questionnaire.fixture";
 
@@ -85,15 +88,43 @@ test("the full form keeps originals, captions and videos; safe routes serve copi
   const input = await fullInput(); const id = await publish(input); const review = (await read()).rounds[0]!;
   const frame = review.variants[0]!.frames[0]!;
   expect(frame.caption).toBe("Changed controls"); expect(frame.original?.available).toBe(true);
-  const image = await imageGET(request(frame.image.url!)); expect(image.status).toBe(200); expect(Buffer.from(await image.arrayBuffer())).toEqual(PNG);
+  const shortRound = id.slice(0, 11);
+  const image = await imageGET(request(`/api/image?taskId=task-prototype&prototype=${shortRound}&media=${frame.image.id.slice(0, 8)}`)); expect(image.status, image.status === 200 ? "" : JSON.stringify(await image.clone().json())).toBe(200); expect(Buffer.from(await image.arrayBuffer())).toEqual(PNG);
+  const original = await imageGET(request(`/api/image?taskId=task-prototype&prototype=${shortRound}&media=${frame.original!.id.slice(0, 8)}`)); expect(original.status).toBe(200); expect(Buffer.from(await original.arrayBuffer())).toEqual(Buffer.concat([PNG,Buffer.from("original")]));
   const media = review.variants[0]!.videos[0]!.media;
   const rangeRequest = request(media.url!); rangeRequest.headers.set("range","bytes=4-11");
-  const video = await prototypeMediaGET(rangeRequest,"task-prototype",id,media.id,"video");
+  const video = await prototypeMediaGET(rangeRequest,"task-prototype",shortRound,media.id.slice(0, 8),"video");
   expect(video.status).toBe(206); expect(video.headers.get("content-range")).toBe(`bytes 4-11/${MP4.length}`); expect(Buffer.from(await video.arrayBuffer())).toEqual(Buffer.from("ftypisom"));
   rangeRequest.headers.set("range","bytes=999-"); expect((await prototypeMediaGET(rangeRequest,"task-prototype",id,media.id,"video")).status).toBe(416);
   rangeRequest.headers.set("range","bytes=-4"); const suffix = await prototypeMediaGET(rangeRequest,"task-prototype",id,media.id,"video"); expect(suffix.status).toBe(206); await suffix.arrayBuffer();
   expect((await prototypeMediaGET(request(media.url!),"task-prototype",id,"f".repeat(64),"video")).status).toBe(404);
   expect(JSON.stringify(review)).not.toContain(process.env.HOME!);
+});
+test("short prototype media references refuse colliding review and media prefixes", async () => {
+  const id = await publish(await fullInput("media-prefix-collision"));
+  const review = (await read()).rounds[0]!;
+  const imageId = review.variants[0]!.frames[0]!.image.id;
+  const videoId = review.variants[0]!.videos[0]!.media.id;
+  const collidingReview = `${id.slice(0, 11)}${id[11] === "a" ? "b" : "a"}${id.slice(12)}`;
+  mutatePrototypeRound("task-prototype", id, round => {
+    const frame = round.variants[0]!.frames[0]!;
+    frame.original = { ...frame.image, id: `${imageId.slice(0, 8)}${imageId[8] === "a" ? "b" : "a"}${imageId.slice(9)}` };
+    const otherVideo = round.variants[0]!.videos[1]!.media;
+    round.variants[0]!.videos[1]!.media = { ...otherVideo, id: `${videoId.slice(0, 8)}${videoId[8] === "a" ? "b" : "a"}${videoId.slice(9)}` };
+  });
+  const imageCollision = await imageGET(request(`/api/image?taskId=task-prototype&prototype=${id.slice(0, 11)}&media=${imageId.slice(0, 8)}`));
+  expect(imageCollision.status).toBe(409);
+  const videoCollision = await prototypeMediaGET(request("/api/prototypes/media"), "task-prototype", id, videoId.slice(0, 8), "video");
+  expect(videoCollision.status).toBe(409);
+
+  mutatePrototypeRound("task-prototype", id, (round, taskRow) => {
+    if (!taskRow?.prototypeReviews) throw new Error("published round is missing from its task");
+    const original = structuredClone(round);
+    round.id = collidingReview;
+    taskRow.prototypeReviews.push(original);
+  });
+  const reviewCollision = await imageGET(request(`/api/image?taskId=task-prototype&prototype=${id.slice(0, 11)}&media=${imageId}`));
+  expect(reviewCollision.status).toBe(409);
 });
 test("directory convention pairs original and changed pictures and skips subdirectories", async () => {
   const dir = await source(); await fs.mkdir(path.join(dir,"bundle"));
@@ -186,8 +217,12 @@ test("failed task commits leave no publication or decision and no dispatch", asy
 
 test("retention removes old copies while decisions and round history remain", async () => {
   const id = await publish(await fullInput("retention-old"));
-  await reviewPOST(request("/review", { reviewId: id, chosen: [1], comment: "Keep the compact layout" }), "task-prototype");
+  await reviewPOST(request("/review", { reviewId: id, chosen: [1], comment: "Keep the compact layout" }), "task-prototype",
+    { ...prototypeWorld, orchestrator: () => "conversation_seat" },
+    { recover: async () => null, send: async () => ({ state: "sent" }), retry: async () => ({ state: "sent" }) });
+  await settlePrototypeDeliveriesForTests();
   const stored = loadTasks()[0]!;
+  expect(stored.prototypeReviews![0]!.decision!.delivery.state).toBe("sent");
   stored.status = "done"; stored.doneAt = "2020-01-01T00:00:00Z"; stored.updatedAt = stored.doneAt;
   saveTasks([stored]);
   await publish(await fullInput("retention-new"));
@@ -528,4 +563,65 @@ test("a dispatched choice amended to rejection gets a new message identity and e
   expect(decision.delivery.text).not.toContain("Chosen:");
   const repeated = await reviewPOST(request("/review", { reviewId: id, reject: true, chosen: [], comment: "Redo everything." }), "task-prototype");
   expect(repeated.status).toBe(200); expect(loadTasks()[0]!.prototypeReviews![0]!.decision!.revision).toBe(2);
+});
+
+test("unexpected prototype failures log the cause and keep internal details out of the response", async () => {
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    for (const error of [null, undefined, "failure", "internal failure", new Error("internal detail"), new Error("no such index: state_rows_task_stamp_text")]) {
+      const response = prototypeHttp.prototypeFailure(error, "POST /api/prototype-reviews");
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: "prototype review is unavailable" });
+      expect(log).toHaveBeenLastCalledWith("[prototype review] POST /api/prototype-reviews", error);
+    }
+    log.mockClear();
+    const refused = prototypeHttp.prototypeFailure(new PrototypeError("review not found", 404), "GET /api/tasks/[id]/prototypes");
+    expect(refused.status).toBe(404);
+    expect(await refused.json()).toEqual({ error: "review not found" });
+    expect(log).not.toHaveBeenCalled();
+  } finally { log.mockRestore(); }
+});
+
+test("ambiguous short review IDs return retryable guidance and bounded candidates", async () => {
+  const ambiguous = Object.assign(new PrototypeError("reviewId is ambiguous; pass more characters", 409), {
+    code: "short_id_ambiguous",
+    candidates: ["pr_00000001", "pr_00000002"],
+  });
+  const response = prototypeHttp.prototypeFailure(ambiguous, "POST /api/prototype-reviews/telegram");
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({
+    error: "reviewId is ambiguous; pass more characters",
+    code: "short_id_ambiguous",
+    field: "reviewId",
+    retryable: false,
+    candidates: ["pr_00000001", "pr_00000002"],
+  });
+});
+
+test("every prototype HTTP fallback identifies its route in the journal", async () => {
+  const error = new Error("no such index: state_rows_task_stamp_text");
+  const world: PrototypeWorld = { ...reviewedWorld, caller: () => { throw error; } };
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  const cases: [string, () => Promise<Response>][] = [
+    ["POST /api/prototype-reviews", () => publishPOST(request("/api/prototype-reviews", {
+      clientRequestId: "failure-route", taskId: "task-prototype", title: "Choose", questions,
+    }), world)],
+    ["POST /api/prototype-reviews/scope", () => prototypeHttp.reviewScopePOST(request("/scope", { mode: "read", taskId: "task-prototype" }), world)],
+    ["POST /api/prototype-reviews/telegram", () => prototypeHttp.resendTelegramPOST(request("/telegram", { reviewId: "pr_00000000000000000000000000000001" }), world)],
+    ["POST /api/prototype-reviews/read", () => reviewReadPOST(request("/read", { taskId: "task-prototype" }), world)],
+    ["GET /api/tasks/[id]/prototypes", () => reviewGET(request("/review"), "task-prototype", world)],
+    ["POST /api/tasks/[id]/prototypes", () => reviewPOST(request("/review", {}), "task-prototype", world)],
+    ["GET /api/projects/decisions", () => prototypeHttp.decisionsGET(request("/decisions"), "project-a", world)],
+    ["POST /api/projects/decisions", () => prototypeHttp.decisionsPOST(request("/decisions", {}), world)],
+  ];
+  try {
+    for (const [route, call] of cases) {
+      log.mockClear();
+      const response = await call();
+      expect(response.status, route).toBe(503);
+      expect(await response.json()).toEqual({ error: "prototype review is unavailable" });
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith(`[prototype review] ${route}`, error);
+    }
+  } finally { log.mockRestore(); }
 });

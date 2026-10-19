@@ -1,10 +1,11 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { AgentRegistry, REGISTRY_WRITER_BUSY } from "@/lib/agent/registry";
+import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import { reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import type { LaunchProfile, SuccessorProviderPort, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
@@ -365,6 +366,67 @@ test("an account switch's reseat waits for the registry lock off the loop under 
       await holder.close();
       target.registry.close();
     }
+  }
+});
+
+test("reconfigure preserves replacement host custody published while termination waits for admission", async () => {
+  const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const target = fixture({}, "codex", { sqliteWriterDeadlineMs: 500 });
+  const peer = new AgentRegistry(target.registry.filename, undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename: target.sqliteFilename,
+  });
+  const holder = registryLockHolder(target.sqliteFilename);
+  const original = target.registry.readOnlySnapshot().entries[`codex:${target.registry.conversation(target.conversationId)!.generations.at(-1)!.id}`]!;
+  const originalWithWriter = SqliteAgentRegistryStore.prototype.withWriter;
+  const withWriter = spyOn(SqliteAgentRegistryStore.prototype, "withWriter").mockImplementation((async function (
+    this: SqliteAgentRegistryStore,
+    ...args: Parameters<SqliteAgentRegistryStore["withWriter"]>
+  ) {
+    const [operation, options] = args;
+    return originalWithWriter.call(this, operation, { ...options, probeMs: 50 });
+  }) as typeof originalWithWriter);
+  try {
+    const outcome = await applyStructuredReconfigure(effect({ conversationId: target.conversationId }), {
+      registry: target.registry,
+      releaseHost: async () => {
+        await holder.hold(200);
+        await new Promise<void>(resolve => setTimeout(resolve, 10));
+        await holder.release();
+        peer.upsert({
+          key: { engine: "codex", sessionId: target.registry.conversation(target.conversationId)!.generations.at(-1)!.id },
+          artifactPath: target.transcript,
+          cwd: target.cwd,
+          accountId: "source",
+          status: "idle",
+          host: null,
+          structuredHost: {
+            ...original.structuredHost!,
+            endpoint: "test:replacement",
+            process: { pid: process.pid + 100_000, startIdentity: "replacement" },
+            writerClaimEpoch: original.claimEpoch + 1,
+          },
+          claimEpoch: original.claimEpoch + 1,
+          claimOwner: "structured-host:replacement",
+          pendingAction: null,
+        });
+        return true;
+      },
+      recover: async () => ({ target: null, path: target.transcript, conversationId: target.conversationId, spawned: true }),
+    });
+
+    expect(outcome).toBe("applied");
+    expect(target.registry.readOnlySnapshot().entries[`codex:${target.registry.conversation(target.conversationId)!.generations.at(-1)!.id}`])
+      .toMatchObject({
+        claimEpoch: original.claimEpoch + 1,
+        claimOwner: "structured-host:replacement",
+        status: "idle",
+        structuredHost: { endpoint: "test:replacement", process: { startIdentity: "replacement" } },
+      });
+  } finally {
+    withWriter.mockRestore();
+    await holder.close();
+    peer.close();
+    target.registry.close();
   }
 });
 

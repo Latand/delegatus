@@ -1100,20 +1100,20 @@ describe("agent registry", () => {
     expect(handoff.entry.pendingAction).toBe("handoff");
   });
 
-  test("startup repair clears only an exact completed structured launch marker", () => {
+  test("startup repair clears only an exact completed structured launch marker", async () => {
     const store = jsonRegistry();
     const fixture = structuredLaunchFixture(store, "spawn");
     const legacyEntry = { ...fixture.entry };
     delete legacyEntry.structuredHostOperationId;
     store.upsert({ ...legacyEntry, pendingAction: "spawn" });
-    expect(conversationDeliverabilityFromRecord(store.snapshot(), { conversationId: fixture.conversationId })).toMatchObject({
+    expect(await conversationDeliverabilityFromRecord(store.snapshot(), { conversationId: fixture.conversationId })).toMatchObject({
       condition: "synchronizing",
       deliverable: false,
     });
 
     expect(store.repairCompletedStructuredSpawnMarkers()).toBe(1);
     expect(store.readOnlySnapshot().entries[`codex:${fixture.entry.key.sessionId}`]?.pendingAction).toBeNull();
-    expect(conversationDeliverabilityFromRecord(store.snapshot(), { conversationId: fixture.conversationId })).toMatchObject({
+    expect(await conversationDeliverabilityFromRecord(store.snapshot(), { conversationId: fixture.conversationId })).toMatchObject({
       condition: "deliverable",
       deliverable: true,
     });
@@ -4418,4 +4418,27 @@ test("held automatic continuation retains its idle fence and binds it to request
     { ...command, onlyIfIdle: { revision: 4, writerClaim: "fixture:1" } })).toThrow(DeliveryReservationConflictError);
   expect(() => store.holdDelivery(conversation.id, "continue", "automatic", "text", [], undefined,
     { ...command, onlyIfIdle: undefined })).toThrow(DeliveryReservationConflictError);
+});
+
+test("Codex socket reattachment takes only the exact live process after its previous writer gives up ownership", () => {
+  const engine = { pid: 426_001, startIdentity: "socket-engine" };
+  const writer = { pid: 426_002, startIdentity: "first-viewer" };
+  const next = { pid: 426_003, startIdentity: "next-viewer" };
+  const alive = new Set([engine.pid, writer.pid, next.pid]);
+  const store = jsonRegistry(identity => alive.has(identity.pid));
+  const entry = spawnEntry(`/sessions/${crypto.randomUUID()}.jsonl`);
+  const endpoint = "codex-unix:/fixture/private/rpc.sock";
+  store.upsert({ ...entry, claimEpoch: 4, claimOwner: `structured-host:${JSON.stringify(writer)}`, structuredHost: {
+    kind: "codex-app-server", endpoint, process: engine, eventCursor: 12, protocolVersion: "0.162.1", writerClaimEpoch: 4,
+    activeTurnRef: "turn", pendingAttention: ["callback"], activeFlags: [],
+  } });
+  const reconnectCodex = { endpoint, process: engine };
+  expect(store.claimStructuredHost(entry.key, next, { reconnectCodex })).toBeNull();
+  alive.delete(writer.pid);
+  expect(store.claimStructuredHost(entry.key, next)).toBeNull();
+  expect(store.claimStructuredHost(entry.key, next, { reconnectCodex: { ...reconnectCodex, endpoint: "codex-unix:/fixture/other/rpc.sock" } })).toBeNull();
+  expect(store.claimStructuredHost(entry.key, next, { reconnectCodex: { endpoint, process: { ...engine, startIdentity: "reused-pid" } } })).toBeNull();
+  const claimed = store.claimStructuredHost(entry.key, next, { reconnectCodex });
+  expect(claimed).toMatchObject({ claimEpoch: 5, structuredHost: { endpoint, process: engine, pendingAttention: ["callback"], eventCursor: 12 } });
+  expect(store.claimStructuredHost(entry.key, writer, { reconnectCodex })).toBeNull();
 });

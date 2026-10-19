@@ -17,6 +17,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
  */
 
 export type BlockingWaitSite =
+  | "file-transaction"
   | "registry-lock"
   | "registry-revision-retry"
   | "registry-lock-async"
@@ -35,6 +36,9 @@ export interface BlockingWaitCorrelation {
 }
 
 export interface BlockingWaitSample {
+  /** Bounded caller coordinates for a slow registry wait, relative to source. */
+  callSite?: string;
+  stateWait?: { callSite: string; reason: string; outcome: string; attempts: number; maxSliceMs: number; backoffMs: number; synchronousSleepMs: number; pid: number; processKind: string; release: string | null };
   site: BlockingWaitSite;
   /** `LLV_STATE_OWNER` of this process, or `unowned`. */
   role: string;
@@ -83,6 +87,21 @@ export function blockingWaitRole(env: NodeJS.ProcessEnv = process.env): string {
   return owner ? owner.slice(0, 32) : "unowned";
 }
 
+/** Keep source coordinates, never the absolute path or function arguments.
+ * Capture only on the slow path; ordinary registry writes allocate no stack. */
+export function registryWaitCallSite(stack: string | undefined): string {
+  const locations: string[] = [];
+  for (const frame of stack?.split("\n").slice(1) ?? []) {
+    const location = frame.match(/(?:^|\/)((?:src|\.next\/server|dist)\/[A-Za-z0-9_./[\]-]+\.[cm]?[jt]sx?:\d+:\d+)\)?$/)?.[1];
+    if (!location || /(?:blockingWaits|sqliteRegistryStore|agent\/registry)\.[cm]?[jt]sx?:/.test(location)) continue;
+    locations.push(location);
+    if (locations.length === 8) break;
+  }
+  // Bundled helpers share one chunk: retain the caller frames as well as the
+  // first coordinate so that its minified name cannot hide the write's origin.
+  return locations.length ? locations.join(" <- ").slice(0, 1_024) : "unresolved";
+}
+
 /** Runs `operation` with a correlation every wait inside it reports. */
 export function withWaitCorrelation<T>(context: BlockingWaitCorrelation, operation: () => T): T {
   return correlation.run(context, operation);
@@ -104,11 +123,15 @@ export function recordBlockingWait(input: {
   subject?: string | null;
   correlation?: BlockingWaitCorrelation | null;
   refused?: boolean;
+  stateWait?: BlockingWaitSample["stateWait"];
 }): void {
   if (!Number.isFinite(input.durationMs) || (input.durationMs <= 0 && !input.refused)) return;
   const context = input.correlation ?? currentWaitCorrelation();
   const sample: BlockingWaitSample = {
     site: input.site,
+    ...((input.site === "registry-lock" || input.site === "registry-revision-retry" || input.site === "registry-lock-async") && input.durationMs >= BLOCKING_WAIT_LOG_MS
+      ? { callSite: registryWaitCallSite(new Error().stack) } : {}),
+    ...(input.stateWait ? { stateWait: input.stateWait } : {}),
     role: blockingWaitRole(),
     durationMs: round(input.durationMs),
     synchronous: input.synchronous,
@@ -120,7 +143,7 @@ export function recordBlockingWait(input: {
   };
   samples.push(sample);
   if (samples.length > SAMPLE_LIMIT) samples.splice(0, samples.length - SAMPLE_LIMIT);
-  if (sample.durationMs >= BLOCKING_WAIT_LOG_MS || (sample.site === "state-write-lock" && sample.refused)) {
+  if (sample.durationMs >= (sample.site === "state-write-lock" || sample.site === "state-lease" || sample.site === "file-transaction" ? 50 : BLOCKING_WAIT_LOG_MS) || (sample.site === "state-write-lock" && sample.refused)) {
     try { logSink(`[blocking-wait] ${JSON.stringify(sample)}`); }
     catch { /* a log that cannot be written never fails the caller */ }
   }

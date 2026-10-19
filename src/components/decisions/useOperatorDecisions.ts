@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { forgetDecisionDraft, reconcileSeatDrafts } from "@/components/prototypeReview/decisionDrafts";
 import { fireTasksChanged, TASKS_CHANGED_EVENT } from "@/components/tasks/taskApi";
 import type { DecidePrototypeInput, OperatorDecisionView, OperatorDecisionsRead } from "@/lib/prototypeReview/types";
 
@@ -14,30 +15,24 @@ export function decisionsUrl(project: string, review?: string): string {
 
 export type DecisionAnswer = Omit<DecidePrototypeInput, "reviewId">;
 
-/* What the operator chose and wrote, by round, from the press of «Відповісти»
-   until the server keeps it. The form leaves the list while its answer is on
-   the way; when the server refuses, the form that comes back starts from this
-   draft, so a second press sends the same answer. */
-const drafts = new Map<string, DecisionAnswer>();
-export function decisionDraft(reviewId: string): DecisionAnswer | undefined {
-  return drafts.get(reviewId);
-}
-/** Tests only: forget every held draft. */
-export function resetDecisionDraftsForTests(): void {
-  drafts.clear();
-}
-
 /**
  * A project's open decisions while the column shows them: read at once, then
  * every few seconds. An answer leaves the list the moment it is pressed and
- * comes back, with the server's reason and the operator's draft, only if the
+ * comes back, with the server's reason and the operator's stored draft, only if the
  * server refused it (docs/design/operator-decision-forms.md §2.4).
+ *
+ * A record already decided stays where it is: Retry draws its message as on
+ * its way and Revoke draws the access as refused, both at once, and a refusal
+ * puts the record back as it was beside the reason (audit B13).
  */
 export function useOperatorDecisions(project: string, active: boolean, initial?: OperatorDecisionView[]) {
   const [state, setState] = useState<{ project: string; decisions: OperatorDecisionView[] | null; failed: boolean }>(
     () => ({ project, decisions: initial ?? null, failed: false }));
   const [answering, setAnswering] = useState<ReadonlySet<string>>(() => new Set());
-  const [error, setError] = useState<{ reviewId: string; message: string } | null>(null);
+  /* Decided records whose Retry or Revoke is on its way, drawn as it will leave them. */
+  const [predicted, setPredicted] = useState<ReadonlyMap<string, OperatorDecisionView>>(() => new Map());
+  const inflight = useRef(new Set<string>());
+  const [error, setError] = useState<{ reviewId: string; message: string; kind?: "retry" | "revoke" } | null>(null);
   const sequence = useRef(0);
   const current = state.project === project ? state : { project, decisions: null, failed: false };
 
@@ -47,7 +42,10 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
       const response = await fetch(decisionsUrl(project), { signal, cache: "no-store" });
       const body = await response.json() as OperatorDecisionsRead & { error?: string };
       if (!response.ok) throw new Error(body.error ?? "decisions unavailable");
-      if (seq === sequence.current && !signal?.aborted) setState({ project, decisions: body.decisions, failed: false });
+      if (seq === sequence.current && !signal?.aborted) {
+        setState({ project, decisions: body.decisions, failed: false });
+        reconcileSeatDrafts(body.project, body.decisions);
+      }
     } catch {
       if (seq === sequence.current && !signal?.aborted) setState((held) => ({ project, decisions: held.project === project ? held.decisions : null, failed: true }));
     }
@@ -65,10 +63,13 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
     return () => { controller.abort(); clearInterval(timer); window.removeEventListener(TASKS_CHANGED_EVENT, changed); };
   }, [active, initial, refresh]);
 
-  const answer = useCallback(async (reviewId: string, body: DecisionAnswer): Promise<boolean> => {
+  const answer = useCallback(async (reviewId: string, body: DecisionAnswer | { retry: true }, record?: OperatorDecisionView): Promise<boolean> => {
+    if (inflight.current.has(reviewId)) return false;
+    inflight.current.add(reviewId);
     setError(null);
-    drafts.set(reviewId, body);
-    setAnswering((held) => new Set([...held, reviewId]));
+    const decided = record?.decision ? recordAfter(record, body) : null;
+    if (decided) setPredicted((held) => new Map(held).set(reviewId, decided));
+    else setAnswering((held) => new Set([...held, reviewId]));
     ++sequence.current;
     try {
       const response = await fetch("/api/projects/decisions", {
@@ -78,18 +79,30 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
       const result = await response.json() as OperatorDecisionsRead & { error?: string };
       if (!response.ok) throw new Error(result.error ?? "the answer could not be saved");
       ++sequence.current;
-      drafts.delete(reviewId);
+      /* Saved: the draft the form kept as the operator typed goes. A refusal leaves it for the form that comes back. */
+      if (!("retry" in body) && !decided) forgetDecisionDraft(reviewId);
       setState({ project, decisions: result.decisions, failed: false });
       fireTasksChanged();
       return true;
     } catch (failure) {
-      setError({ reviewId, message: failure instanceof Error ? failure.message : String(failure) });
+      setError({ reviewId, message: failure instanceof Error ? failure.message : String(failure), ...(decided ? { kind: "retry" in body ? "retry" as const : "revoke" as const } : {}) });
       return false;
     } finally {
-      setAnswering((held) => { const next = new Set(held); next.delete(reviewId); return next; });
+      inflight.current.delete(reviewId);
+      setAnswering((held) => { if (!held.has(reviewId)) return held; const next = new Set(held); next.delete(reviewId); return next; });
+      setPredicted((held) => { if (!held.has(reviewId)) return held; const next = new Map(held); next.delete(reviewId); return next; });
     }
   }, [project]);
 
-  const decisions = current.decisions?.filter((decision) => !answering.has(decision.id)) ?? null;
+  const decisions = current.decisions?.filter((decision) => !answering.has(decision.id)).map((decision) => predicted.get(decision.id) ?? decision) ?? null;
   return { decisions, loaded: current.decisions !== null, failed: current.failed && current.decisions === null, answer, error, refresh };
+}
+
+/** A decided record as its Retry (the message on its way) or its Revoke (the access refused) leaves it. */
+export function recordAfter(record: OperatorDecisionView, body: DecisionAnswer | { retry: true }): OperatorDecisionView | null {
+  const made = record.decision;
+  if (!made) return null;
+  if ("retry" in body) return { ...record, decision: { ...made, delivery: { state: "pending", retryable: false } } };
+  if (record.nativeAssociationState === "approved") return { ...record, nativeAssociationState: "refused" };
+  return null;
 }

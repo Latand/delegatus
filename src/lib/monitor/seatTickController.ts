@@ -1,3 +1,5 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { pendingAutonomyReports, autonomyActive } from "./autonomy";
 import { expireSeatAutonomy, expireSeatSchedule } from "./seatTickSettings";
 import { releaseControllerForSources } from "@/lib/release/production";
@@ -535,7 +537,7 @@ function wakeClientMessageId(
   const fingerprint = context.operatorInstructions
     ? crypto.createHash("sha512").update(JSON.stringify([context.fingerprint, context.operatorInstructions])).digest("hex").slice(0, context.fingerprint.length)
     : context.fingerprint;
-  return boundedWakeIdentity(`seat-tick:${project}:${seatEpoch}:${context.lastWakeAt ?? "first"}:${shape}:${fingerprint}`
+  return boundedWakeIdentity(`${seatMessageKeys.tick}${project}:${seatEpoch}:${context.lastWakeAt ?? "first"}:${shape}:${fingerprint}`
     + wakePromptIdentity(context.monitorPrompt)
     + releasedWakeIdentity(context.releasedWake ?? null), project, seatEpoch);
 }
@@ -566,7 +568,7 @@ function wakeClientMessageId(
 function boundedWakeIdentity(identity: string, project: string, seatEpoch: number): string {
   if (runtimeIdempotencyKeyAdmissible(identity)) return identity;
   const tail = `:${seatEpoch}:digest-${crypto.createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
-  const head = `seat-tick:${project}`;
+  const head = `${seatMessageKeys.tick}${project}`;
   return `${head.slice(0, Math.max(0, RUNTIME_IDEMPOTENCY_KEY_LIMIT - tail.length))}${tail}`;
 }
 
@@ -1327,7 +1329,7 @@ export async function runSeatTickCheck(
   const canonical = canonicalOrchestratorProject(project);
 
   try {
-    return await check(canonical, policy, dependencies, appendRecord);
+    return await withViewerOperation("seat-tick.check", () => check(canonical, policy, dependencies, appendRecord));
   } catch (error) {
     let detail = `the check failed: ${redactMonitorText(error instanceof Error ? error.message : "unknown error")}`;
     if (error instanceof SeatTickEvidenceRefreshCanceledError) {
@@ -1394,6 +1396,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       workers: input.workers,
       snapshotAt,
       reasons: verdict.reasons,
+      ...(verdict.catchUp ? { catchUp: verdict.catchUp } : {}),
       /* A settled child's final message rides on its line (#1881), read from
          its transcript's tail now that the wake is going out. */
       items: renderedVerdict.kind === "wake" ? renderedVerdict.items : [],
@@ -1431,6 +1434,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
   const text = payload.text;
   if (renderedVerdict.kind === "wake") renderedVerdict.items = [...payload.items];
   const commit = seatTickWakeCommitPlan(renderedVerdict, {
+    wakeIntervalMs: input.settings.wakeIntervalMs,
     fingerprint: input.changeFingerprint,
     eventsThrough: input.events.at(-1)?.seq ?? input.state.eventsThrough ?? 0,
     terminalChildren,
@@ -1450,6 +1454,7 @@ async function check(
   appendRecord: typeof appendSeatTickRecord,
 ): Promise<SeatTickRunRecord> {
   const sources = dependencies.sources ?? defaultSeatTickSources();
+  await sources.prepareRead?.();
   const readState = dependencies.readState ?? readSeatTickState;
   const writeState = dependencies.writeState ?? writeSeatTickState;
   const deliver = dependencies.deliver ?? deliverConversationMessage;
@@ -1484,6 +1489,28 @@ async function check(
       return { identity, cleanups };
     } catch { return null; } // Unreadable ownership cannot license recovery.
   };
+  // Host loss, MCP health and delivery progress are separate observations.
+  // Bind the bounded host probe to the seat and registry identity across I/O.
+  const hostReachabilityFor = async (seat: { conversationId: string; seatEpoch: number }, observed = recoveryIdentity(seat.conversationId)) => {
+    let deadHost = false;
+    let detail = "host evidence absent";
+    try {
+      await yieldToRuntime();
+      const rows = await sources.liveness({ conversationId: seat.conversationId, stallAfterMs: policy.stallAfterMs, limit: 1 });
+      await yieldToRuntime();
+      const row = rows.find(row => row.conversationId === seat.conversationId);
+      deadHost = row?.host?.state === "gone"
+        && (row.reason === "host_gone_turn_settled" || row.reason === "host_gone_turn_open");
+      if (row) detail = `${row.host?.state ?? "unknown"}/${row.reason}`;
+    } catch { detail = "host evidence unreadable"; }
+    const current = () => {
+      const active = sources.seatFor(canonical).active;
+      return !!active && active.conversationId === seat.conversationId && active.seatEpoch === seat.seatEpoch
+        && observed !== null && recoveryIdentity(seat.conversationId)?.identity === observed.identity;
+    };
+    return { deadHost, detail, current };
+  };
+  let openingReachability: { conversationId: string; seatEpoch: number; observation: Awaited<ReturnType<typeof hostReachabilityFor>> } | null = null;
   let admissionDetail: string | null = null;
   const admissionFor = async (seat: { conversationId: string; seatEpoch: number; designatedAt?: string | null }, requireDeadHost = false) => {
     const observed = recoveryIdentity(seat.conversationId);
@@ -1491,12 +1518,11 @@ async function check(
     let deadHost = false;
     let hostVerdict = "MCP available";
     if (requireDeadHost || mcpHealthFor(seat, sources.now()).status === "dead") {
-      try {
-        const rows = await sources.liveness({ conversationId: seat.conversationId, stallAfterMs: policy.stallAfterMs, limit: 1 });
-        deadHost = rows.some(row => row.conversationId === seat.conversationId && row.host?.state === "gone"
-          && (row.reason === "host_gone_turn_settled" || row.reason === "host_gone_turn_open"));
-        hostVerdict = rows.map(row => `${row.host?.state ?? "unknown"}/${row.reason}`).join(", ") || "host evidence absent";
-      } catch { hostVerdict = "host evidence unreadable"; }
+      // A failed revival needs new evidence about the host it just attempted.
+      const reachability = !requireDeadHost && openingReachability?.conversationId === seat.conversationId && openingReachability.seatEpoch === seat.seatEpoch
+        ? openingReachability.observation : await hostReachabilityFor(seat, observed);
+      deadHost = reachability.deadHost && reachability.current();
+      hostVerdict = reachability.detail;
     }
     const currentSeat = () => {
       const current = sources.seatFor(canonical).active;
@@ -1640,8 +1666,20 @@ async function check(
   const unresolved: UnresolvedAttempt[] = [];
   const openingRow = readState(canonical);
   // Credit delivered problem rows before a successor resets the generic agenda history.
-  sources.memoryProblems?.(canonical, openingRow.itemsShown ?? []);
-  const opened = seatTickStateForEpoch(openingRow, openingSeat?.seatEpoch ?? null);
+  sources.memoryProblems?.(canonical, openingRow.itemsShown ?? [], openingSeat?.conversationId ? { conversationId: openingSeat.conversationId, seatEpoch: openingSeat.seatEpoch } : null);
+  let opened = seatTickStateForEpoch(openingRow, openingSeat?.seatEpoch ?? null);
+  if (openingSeat?.conversationId) {
+    const reachability = await hostReachabilityFor({ ...openingSeat, conversationId: openingSeat.conversationId });
+    openingReachability = { conversationId: openingSeat.conversationId, seatEpoch: openingSeat.seatEpoch, observation: reachability };
+    if (!opened.unreachableSince && reachability.deadHost && reachability.current()) {
+      const observedAt = new Date(sources.now()).toISOString();
+      const fresh = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
+      opened = fresh.unreachableSince ? fresh : { ...fresh,
+        unreachableSince: observedAt, unreachableBacklogSince: fresh.lastWakeAt ?? observedAt };
+      writeState(canonical, opened);
+      opened = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
+    }
+  }
   /* Whether the project came into this check with anything its card could be
      describing — so a check that finds it all gone closes the card, and a
      project that never had one asks nothing of the board. The refusal run is
@@ -1727,7 +1765,7 @@ async function check(
   let input = await refreshSeatTickEvidence(gathered, sources);
   input = { ...input, state: seatTickStateForEpoch(input.state, input.seat?.seatEpoch ?? null) };
   // Outcomes are visible even when the seat needs no wake or operator answer.
-  sources.recordRuleReports?.(input.project, new Date(input.now).toISOString());
+  await sources.recordRuleReports?.(input.project, new Date(input.now).toISOString());
   const authDetail = await recoverSeatAuthentication(input, sources, readState, writeState, ensureCard, dependencies.seatAuth ?? {});
   const autoRotateDetail = await runSeatAutoRotation(input, sources, readState, writeState, ensureCard, deliver, dependencies.seatAutoRotation ?? {});
   let proposalIssues: readonly ProposalIssue[] = [];
@@ -1829,7 +1867,7 @@ async function check(
       operatorInstructions: input.settings.reason,
       monitorPrompt: input.settings.monitorPrompt,
     });
-    const { text, commit } = alarmPayload(input, verdict, proposalIssues, new Date(gathered.now).toISOString());
+    const { text, commit } = withViewerOperation("seat-tick.payload", () => alarmPayload(input, verdict, proposalIssues, new Date(gathered.now).toISOString()));
 
     /* The prompt above came off the settings row this check read, not out of
        anything the controller carries between checks or between seats: the row

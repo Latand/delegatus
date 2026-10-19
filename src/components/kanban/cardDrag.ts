@@ -31,7 +31,14 @@ import type { TaskStatus } from "@/lib/tasks/types";
  *   - the pointer is captured on the held card, so no hover restyles the
  *     cards the ghost passes over (no `pointer-events` or `user-select` is set
  *     on the board);
- *   - nothing is rendered by React: the hint is a node appended by hand.
+ *   - nothing is rendered by React: the hint is a node appended by hand, and the
+ *     board holds its model while a card is held (`KanbanBoard`'s `dragHold`), so
+ *     a poll or the clock that lands mid-drag renders nothing either;
+ *   - no class the drag toggles is named inside `:has()` or `:not()`, which
+ *     would restyle the board or a column's subtree per column crossed: the
+ *     column under the card carries `data-drop`, only a strip opening carries
+ *     `drop-open`, and the pause of the live animations
+ *     (`data-card-drag`) waits one frame after the ghost.
  */
 
 export const DRAG_START_PX = 8;
@@ -86,6 +93,7 @@ export function startCardGesture(options: CardDragOptions): void {
   let settleUntil = 0;
   let measuredAt = 0;
   let released = false;
+  let armFrame: number | null = null;
 
   /* A press is a click in waiting, and a hand that moves is not a text selection. */
   const noSelect = (event: Event) => { event.preventDefault(); };
@@ -114,12 +122,20 @@ export function startCardGesture(options: CardDragOptions): void {
     /* By element: a measure makes new rectangles for the same columns. */
     if (column?.element !== over?.element) {
       const restyled = (over !== null && over.status !== status) || (column !== null && column.status !== status);
-      over?.element.classList.remove("drop");
+      clearDrop(over?.element);
       over = column;
-      column?.element.classList.toggle("drop", column.status !== status);
+      if (column && column.status !== status) {
+        column.element.setAttribute("data-drop", "");
+        /* Only a strip opens under the card; the class that opens it restyles the board, so no other column carries it. */
+        if (column.element.classList.contains("strip")) column.element.classList.add("drop-open");
+      }
       /* A strip that opens or closes moves the columns beside it, so the rectangles read at the start are stale. */
       if (restyled) settleUntil = performance.now() + SETTLE_MS;
     }
+  };
+  const clearDrop = (column: HTMLElement | undefined) => {
+    column?.removeAttribute("data-drop");
+    column?.classList.remove("drop-open");
   };
   const schedule = () => { if (frame === null) frame = requestAnimationFrame(apply); };
 
@@ -142,8 +158,9 @@ export function startCardGesture(options: CardDragOptions): void {
     hint.className = "drag-hint";
     hint.textContent = options.hint;
     element.classList.add("dragging");
-    root.setAttribute("data-card-drag", "");
     root.append(ghost, hint);
+    /* The attribute pauses every live animation on the board, a restyle of all of it: one frame after the ghost and the hint, as the phone's lift does, so neither frame is the long one the two make together. */
+    armFrame = requestAnimationFrame(() => { armFrame = null; root.setAttribute("data-card-drag", ""); });
     window.addEventListener("scroll", invalidate, true);
     window.addEventListener("resize", invalidate);
     options.onActive(true);
@@ -171,6 +188,7 @@ export function startCardGesture(options: CardDragOptions): void {
     document.removeEventListener("selectstart", noSelect, true);
     element.removeEventListener("dragstart", noNativeDrag, true);
     if (frame !== null) cancelAnimationFrame(frame);
+    if (armFrame !== null) cancelAnimationFrame(armFrame);
     if (!started) return;
     window.removeEventListener("scroll", invalidate, true);
     window.removeEventListener("resize", invalidate);
@@ -201,7 +219,7 @@ export function startCardGesture(options: CardDragOptions): void {
     root.removeAttribute("data-card-drag");
     ghost?.remove();
     hint?.remove();
-    over?.element.classList.remove("drop");
+    clearDrop(over?.element);
     options.onActive(false);
     if (!cancel && over && over.status !== status) options.onDrop(over.status);
   };

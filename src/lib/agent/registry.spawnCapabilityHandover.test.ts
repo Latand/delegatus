@@ -9,6 +9,7 @@ import { AgentRegistry, setAgentRegistryForTests } from "./registry";
 import { emptyLaunchProfile, type ProviderReceipt } from "@/lib/accounts/migration/contracts";
 import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
 import { handleMcpHttpRequest } from "@/lib/mcp/http";
+import { retireViewerTaskExecutor } from "@/lib/mcp/taskExecutor";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-capability-handover-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -71,6 +72,7 @@ test.each(["off", "sqlite"] as const)("%s: rollback publication without a pendin
     reloaded.commitSuccessor(launch.conversationId, successor, 1, operationId, receipt);
     expect(await initialize(relaunched)).toBe(200);
   } finally {
+    await retireViewerTaskExecutor();
     setAgentRegistryForTests(null);
     if (structuredFlag === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
     else process.env.LLV_STRUCTURED_HOSTS = structuredFlag;

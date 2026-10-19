@@ -1,5 +1,25 @@
 # Prototype reviews in Telegram through Celestia
 
+Implementation update, 2026-10-15: decision forms now add advisory native polls
+below the media post. The authenticated owner's text reply decides. The relay
+receives each outgoing poll's reference and numbered options, so a direct reply
+can identify its round from the parent message. The original design below is
+retained as the record of the earlier copy-line flow.
+
+Poll work runs separately from form publication in the shared bot service,
+with at most 16 queued forms and seven polls per form. Sends are serial and each
+has a five-second deadline. A durable pending claim becomes uncertain after an
+interruption; it is never resent automatically. Every outcome stays in the local
+round, and failures join the orchestrator's existing Telegram wake signals.
+Admitting a poll job persists an empty poll ledger before its first send, even
+while it waits behind another form. Recovery requires a ledger matching the
+publication key; older forms with no ledger stay unchanged and raise no poll alert.
+Poll metadata changes one task row and its cache revision while preserving its
+editor, timestamps and linked group stamps. Board answers leave polls alone.
+Questions exceeding the option count stay text-only. Full text remains in the
+form; poll questions and options shorten with an ellipsis under the
+[Bot API limits](https://core.telegram.org/bots/api#sendpoll).
+
 Status: design, 2026-10-11. Written by the architect stage of the task
 "Prototype reviews in Telegram through Celestia". Delegatus claims are at
 `e7893bcfa` on `main`. Celestia claims are at its `origin/main` of 2026-10-11

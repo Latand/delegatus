@@ -1,4 +1,7 @@
-import { normalizeAgentSignalDomain, type AgentSignalDomain } from "@/lib/runtime/agentSignalSandbox";
+import { agentSignalDomainAlive, normalizeAgentSignalDomain, type AgentSignalDomain } from "@/lib/runtime/agentSignalSandbox";
+import { liveRootSession } from "@/lib/root/adopt";
+import { StateLockDeferredError, waitForStateLock } from "@/lib/state/lockWait";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
@@ -14,6 +17,8 @@ import { stagedLaunchRecovery } from "@/lib/runtime/stagedRecovery";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
+import { assertStateMutationAllowed, stateMutationActivationOpen } from "@/lib/state/stateMutationBarrier";
+import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import {
   captureProcessIdentity,
   processIdentityMayOwn,
@@ -22,7 +27,7 @@ import {
   type ProcessIdentity,
 } from "@/lib/processIdentity";
 import { durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
-import { ACCOUNT_MUTATION_ADMISSION_WAIT_MS, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { ACCOUNT_MUTATION_ADMISSION_WAIT_MS, AccountMutationBusyError, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountMutationHeld } from "@/lib/accounts/accountMutationContext";
 import { readRetiredAccountIds, retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -97,6 +102,7 @@ import {
   registryRowsMatching, registryKeysMatching, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported,
+  type RegistryDeliveryCompactionChanges,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
 } from "./sqliteRegistryStore";
@@ -107,7 +113,8 @@ import { parseMessageOrigin, sameMessageOrigin } from "@/lib/runtime/messageOrig
 import { normalizePendingPermissions, normalizePendingToolUses, type PendingPermissionRequest, type PendingToolUse } from "@/lib/runtime/permissionRequests";
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
-import { admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
+import { admitRecoveredLaunch, admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
+import type { LaunchFailureReporting } from "@/lib/tasks/launchFailureReporting";
 
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
 
@@ -215,6 +222,13 @@ export interface AgentRegistryEntry {
   updatedAt: string;
 }
 
+export interface StructuredHostCustody {
+  claimEpoch: number;
+  claimOwner: string | null;
+  writerClaimEpoch: number | null;
+  process: Readonly<ProcessIdentity> | null;
+}
+
 function hasCompleteProcessIdentity(identity: ProcessIdentity | null): identity is ProcessIdentity & {
   startIdentity: string;
   bootEpoch: string;
@@ -320,6 +334,9 @@ export interface SpawnReceipt {
   /** A caller already received a pre-acceptance refusal. Keep its reporting
       policy with the failed receipt so recovery cannot announce lost work. */
   failureAnnouncementSuppressed?: true;
+  /** Absent on reservations made before receipt-owned failure reporting. */
+  failureReporting?: LaunchFailureReporting;
+  failureRepairState?: "pending" | "handled";
   /** False only while a newly reserved receipt is waiting for task membership.
       Missing on legacy receipts means their historical admission is complete. */
   membershipAdmitted?: boolean;
@@ -718,6 +735,8 @@ export type DeliveryAdmissionEvidence =
   | { outcome: "unknown"; reason: string };
 
 export interface DeliveryOperationOwner {
+  /** One Viewer-composed Claude input, committed before the engine write. */
+  batchId?: string;
   conversationId: ViewerConversationId;
   runtimeConversationId: ViewerConversationId;
   clientMessageId: string | null;
@@ -1603,7 +1622,29 @@ function rearmRolledBackMigrationDeliveries(
   }
 }
 
+/** Receipt selection shares the lazy view's transaction and collection order.
+ * Alias keys are selected too: adopted receipts can predate the canonical id. */
+export function registryReceiptsForConversation(file: RegistryFile, id: string): SpawnReceipt[] {
+  const canonical = resolveConversationAlias(file, id as ViewerConversationId);
+  return registryRowsMatching(file, "receipts", "conversationId", conversationIdsResolvingTo(file, canonical))
+    .filter(receipt => resolveConversationAlias(file, receipt.conversationId) === canonical);
+}
+
+function registryReceiptsReferencing(file: RegistryFile, id: string): SpawnReceipt[] {
+  const keys = new Set([
+    ...registryKeysMatching(file, "receipts", "conversationId", id),
+    ...registryKeysMatching(file, "receipts", "parentConversationId", id),
+    ...registryKeysMatching(file, "receipts", "launchProfile.parentConversationId", id),
+  ]);
+  return [...keys].map(key => file.receipts[key]!).filter(Boolean);
+}
+
 const CLAIMABLE_RECEIPT_STATES = new Set(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
+
+/** The same provisioning states in keyed reads and held startup views. */
+export function registryOpenSpawnReceipts(file: RegistryFile): SpawnReceipt[] {
+  return registryRowsMatching(file, "receipts", "state", [...CLAIMABLE_RECEIPT_STATES]);
+}
 
 export function deliveryHasDurableClaimOwner(
   snapshot: RegistryFile,
@@ -1618,7 +1659,7 @@ export function deliveryHasDurableClaimOwner(
     && entry.key.sessionId === current.id
     && entry.artifactPath === current.path
     && ((entry.structuredHost !== null && entry.structuredHost !== undefined) !== (entry.host !== null)))) return true;
-  return Object.values(snapshot.receipts).some((receipt) =>
+  return registryRowsMatching(snapshot, "receipts", "conversationId", conversation.id).some((receipt) =>
     receipt.engine === conversation.engine
     && receipt.conversationId === conversation.id
     && CLAIMABLE_RECEIPT_STATES.has(receipt.state));
@@ -1822,7 +1863,7 @@ function enrollSettledSpawnInDrain(file: RegistryFile, conversation: RegistryCon
     settling: staged, its first message not yet delivered (#2051). */
 function settlingLaunchAccounts(file: RegistryFile): Map<ViewerConversationId, string | null> {
   const accounts = new Map<ViewerConversationId, string | null>();
-  for (const receipt of Object.values(file.receipts)) {
+  for (const receipt of registryRowsMatching(file, "receipts", "state", ["starting", "path-pending"])) {
     if (receipt.purpose !== "launch" || (receipt.state !== "starting" && receipt.state !== "path-pending")) continue;
     accounts.set(resolveConversationAlias(file, receipt.conversationId), receipt.accountId);
   }
@@ -2747,7 +2788,16 @@ function failInitialSpawnReceiptForDelivery(file: RegistryFile, delivery: HeldDe
   if (!receipt || ["completed", "failed", "conflicted"].includes(receipt.state)) return;
   receipt.state = "failed";
   receipt.error = delivery.error ?? "initial prompt delivery failed";
+  markFailedLaunchReporting(receipt);
   receipt.admissionOwner = null;
+}
+
+function markFailedLaunchReporting(receipt: SpawnReceipt, announce = true): void {
+  const reporting = receipt.failureReporting;
+  if (!reporting || !receipt.membershipAdmitted || receipt.rejection || !announce) receipt.failureAnnouncementSuppressed = true;
+  receipt.failureReporting = { ...reporting, failedAt: reporting?.failedAt ?? now(), lifecycle: reporting?.lifecycle ?? false,
+    notice: reporting?.notice ?? false, task: reporting?.task ?? false };
+  receipt.failureRepairState = "pending";
 }
 
 /** Converge terminal launch and initial-delivery state in both directions.
@@ -2977,6 +3027,7 @@ function normalizeDeliveryOperationOwners(
         deliveryId: owner.deliveryId,
         command: { ...canonicalHeldDeliveryCommand(owner.command, operationId), operationId },
         requestDigest: owner.requestDigest,
+        ...(typeof owner.batchId === "string" && /^inbox_[a-f0-9]{32}$/.test(owner.batchId) ? { batchId: owner.batchId } : {}),
         contentDigest: typeof owner.contentDigest === "string"
           ? owner.contentDigest
           : referencedDelivery?.contentDigest ?? settledDelivery?.contentDigest ?? null,
@@ -3092,9 +3143,21 @@ function dropCompactedHeldDelivery(file: RegistryFile, delivery: HeldDelivery): 
   delete file.heldDeliveries[delivery.id];
 }
 
-function compactDeliveryOperationOwners(file: RegistryFile, onlyConversationId?: ViewerConversationId): void {
+function compactDeliveryOperationOwners(
+  file: RegistryFile,
+  onlyConversationId?: ViewerConversationId,
+  touchedConversations?: Iterable<ViewerConversationId>,
+): void {
   const terminalGroups = new Map<ViewerConversationId, Array<[string, DeliveryOperationOwner]>>();
-  for (const [operationId, owner] of (onlyConversationId ? conversationRows(file, "deliveryOperationOwners", onlyConversationId).map(owner => [owner.command.operationId, owner] as const) : Object.entries(file.deliveryOperationOwners))) {
+  const selectedOwners = onlyConversationId
+    ? conversationRegistryEntries(file, "deliveryOperationOwners", onlyConversationId)
+    : touchedConversations
+      ? [...new Set(touchedConversations)].flatMap(id => conversationRegistryEntries(file, "deliveryOperationOwners", id))
+      : Object.entries(file.deliveryOperationOwners);
+  const seen = new Set<string>();
+  for (const [operationId, owner] of selectedOwners) {
+    if (seen.has(operationId)) continue;
+    seen.add(operationId);
     if (owner.terminalState === null) continue;
     const canonicalId = resolveConversationAlias(file, owner.conversationId);
     if (onlyConversationId && canonicalId !== resolveConversationAlias(file, onlyConversationId)) continue;
@@ -3128,8 +3191,43 @@ function terminalDeliveryExpired(delivery: HeldDelivery, nowMs: number | undefin
   return Number.isFinite(settledAt) && nowMs - settledAt > TERMINAL_DELIVERY_RETENTION_MS;
 }
 
-function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: ViewerConversationId, nowMs?: number): number {
-  for (const delivery of (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries))) {
+function terminalDeliveryExpiryAt(delivery: HeldDelivery): number | null {
+  const settledAt = Date.parse(delivery.deliveredAt ?? delivery.createdAt);
+  return Number.isFinite(settledAt) ? settledAt + TERMINAL_DELIVERY_RETENTION_MS + 1 : null;
+}
+
+interface DeliveryCompactionOutcome {
+  removed: number;
+  nextExpiryAt: number | null;
+}
+
+function compactDeliveryReservations(
+  file: RegistryFile,
+  onlyConversationId?: ViewerConversationId,
+  nowMs?: number,
+  changes?: RegistryDeliveryCompactionChanges,
+  forceDeliverySweep = false,
+  previousNextExpiryAt: number | null = null,
+): DeliveryCompactionOutcome {
+  const full = onlyConversationId === undefined && (!changes || changes.full);
+  const replaceNextExpiry = full || forceDeliverySweep;
+  let nextExpiryAt = nowMs === undefined ? null : replaceNextExpiry ? null : previousNextExpiryAt;
+  const syncDeliveries = onlyConversationId || full
+    ? undefined
+    : (changes?.deliveryIds ?? []).flatMap(id => file.heldDeliveries[id] ? [file.heldDeliveries[id]!] : []);
+  const deliveryConversationIds = new Set<ViewerConversationId>();
+  if (!onlyConversationId && !full && !forceDeliverySweep) {
+    for (const delivery of syncDeliveries ?? []) deliveryConversationIds.add(resolveConversationAlias(file, delivery.conversationId));
+  }
+  const candidateDeliveries = onlyConversationId
+    ? conversationRows(file, "heldDeliveries", onlyConversationId)
+    : full || forceDeliverySweep
+      ? Object.values(file.heldDeliveries)
+      : [...deliveryConversationIds].flatMap(id => conversationRows(file, "heldDeliveries", id))
+        .filter((delivery, index, all) => all.findIndex(candidate => candidate.id === delivery.id) === index);
+  const ownerConversations = new Set<ViewerConversationId>();
+  if (onlyConversationId) ownerConversations.add(resolveConversationAlias(file, onlyConversationId));
+  for (const delivery of (syncDeliveries ?? candidateDeliveries)) {
     /* Every accepted send gets its row, including the ordinary one whose
        operation id the reservation generated for itself (#1131). The exception
        used to be free — the reservation IS the record under that id — and it
@@ -3138,29 +3236,40 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
        common shape was the one nobody could ask about, and its duplicate-send
        evidence was the one that vanished. */
     if (!delivery.requestDigest) continue;
-    file.deliveryOperationOwners[delivery.command.operationId] ??= {
-      conversationId: delivery.conversationId,
-      runtimeConversationId: delivery.runtimeConversationId,
-      clientMessageId: delivery.clientMessageId,
-      deliveryId: delivery.id,
-      command: delivery.command,
-      requestDigest: delivery.requestDigest,
-      contentDigest: delivery.contentDigest,
-      targetGenerationId: delivery.generationId,
-      evidenceText: delivery.text,
-      evidenceImageCount: delivery.runtimeImages.length,
-      createdAt: delivery.createdAt,
-      retryOfOperationId: null,
-      terminalState: null,
-      terminalDisposition: null,
-      terminalReason: null,
-      settledAt: null,
-    };
+    const operationId = delivery.command.operationId;
+    if (!file.deliveryOperationOwners[operationId]) {
+      file.deliveryOperationOwners[operationId] = {
+        conversationId: delivery.conversationId,
+        runtimeConversationId: delivery.runtimeConversationId,
+        clientMessageId: delivery.clientMessageId,
+        deliveryId: delivery.id,
+        command: delivery.command,
+        requestDigest: delivery.requestDigest,
+        contentDigest: delivery.contentDigest,
+        targetGenerationId: delivery.generationId,
+        evidenceText: delivery.text,
+        evidenceImageCount: delivery.runtimeImages.length,
+        createdAt: delivery.createdAt,
+        retryOfOperationId: null,
+        terminalState: null,
+        terminalDisposition: null,
+        terminalReason: null,
+        settledAt: null,
+      };
+      if (!full) ownerConversations.add(resolveConversationAlias(file, delivery.conversationId));
+    }
     syncDeliveryOperationOwnerState(file, delivery);
+    if (!full) ownerConversations.add(resolveConversationAlias(file, delivery.conversationId));
+  }
+  if (!full) {
+    for (const operationId of changes?.ownerOperationIds ?? []) {
+      const owner = file.deliveryOperationOwners[operationId];
+      if (owner) ownerConversations.add(resolveConversationAlias(file, owner.conversationId));
+    }
   }
   const deliveredGroups = new Map<ViewerConversationId, HeldDelivery[]>();
   const failedGroups = new Map<ViewerConversationId, HeldDelivery[]>();
-  for (const delivery of (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries))) {
+  for (const delivery of candidateDeliveries) {
     const canonicalId = resolveConversationAlias(file, delivery.conversationId);
     if (onlyConversationId && canonicalId !== resolveConversationAlias(file, onlyConversationId)) continue;
     if (delivery.state === "delivered") {
@@ -3184,6 +3293,8 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
           dropCompactedHeldDelivery(file, delivery);
           removed += 1;
         } else {
+          const expiryAt = terminalDeliveryExpiryAt(delivery);
+          if (expiryAt !== null && (nextExpiryAt === null || expiryAt < nextExpiryAt)) nextExpiryAt = expiryAt;
           kept.push(delivery);
         }
       }
@@ -3198,7 +3309,7 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
     }
   }
   for (const [conversationId, deliveries] of failedGroups) {
-    const activeCount = (onlyConversationId ? conversationRows(file, "heldDeliveries", onlyConversationId) : Object.values(file.heldDeliveries)).filter((delivery) =>
+    const activeCount = candidateDeliveries.filter((delivery) =>
       resolveConversationAlias(file, delivery.conversationId) === conversationId
       && ["held", "assigned", "delivery-uncertain"].includes(delivery.state)).length;
     const retainedFailed = Math.max(0, Math.min(50, 99 - activeCount));
@@ -3208,8 +3319,8 @@ function compactDeliveryReservations(file: RegistryFile, onlyConversationId?: Vi
       removed += 1;
     }
   }
-  compactDeliveryOperationOwners(file, onlyConversationId);
-  return removed;
+  compactDeliveryOperationOwners(file, onlyConversationId, onlyConversationId || full ? undefined : ownerConversations);
+  return { removed, nextExpiryAt };
 }
 
 function conversationOwnsPath(conversation: RegistryConversation, artifactPath: string): boolean {
@@ -3269,10 +3380,8 @@ function scannerAllocatedProvisionalOwner(conversation: RegistryConversation, pa
 
 function conversationDurabilityScore(file: RegistryFile, conversation: RegistryConversation): number {
   let score = conversation.generations.length > 1 || conversation.migration !== null ? 100 : 0;
-  for (const receipt of Object.values(file.receipts)) {
-    if (receipt.conversationId === conversation.id) score += 20;
-    if (receipt.parentConversationId === conversation.id) score += 5;
-  }
+  score += registryKeysMatching(file, "receipts", "conversationId", conversation.id).length * 20;
+  score += registryKeysMatching(file, "receipts", "parentConversationId", conversation.id).length * 5;
   if (file.lineageEdges[conversation.id]) score += 10;
   for (const edge of Object.values(file.lineageEdges)) if (edge.parentConversationId === conversation.id) score += 5;
   if (file.memberships[conversation.id]?.length) score += 10;
@@ -3624,7 +3733,7 @@ function adoptProvisionalOwner(
   /* The adopted identity's keys are answered under the target from here on, so
      the target inherits the weaker of the two histories. */
   if (!owner.deliveryEvidenceTracked) target.deliveryEvidenceTracked = false;
-  for (const receipt of Object.values(file.receipts)) {
+  for (const receipt of registryReceiptsReferencing(file, owner.id)) {
     if (receipt.conversationId === owner.id) receipt.conversationId = target.id;
     if (receipt.parentConversationId === owner.id) receipt.parentConversationId = target.id;
     if (receipt.launchProfile.parentConversationId === owner.id) {
@@ -3956,6 +4065,14 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     launcher: normalizeSpawnLauncher(value.launcher),
     rejection: normalizeSpawnRejection(value.rejection),
     ...(value.failureAnnouncementSuppressed === true ? { failureAnnouncementSuppressed: true as const } : {}),
+    ...(value.failureReporting && typeof value.failureReporting === "object" ? { failureReporting: {
+      failedAt: typeof value.failureReporting.failedAt === "string" ? value.failureReporting.failedAt : null,
+      lifecycle: value.failureReporting.lifecycle === true,
+      notice: value.failureReporting.notice === true,
+      task: value.failureReporting.task === true,
+      ...(Array.isArray(value.failureReporting.taskIds) ? { taskIds: value.failureReporting.taskIds.filter((id): id is string => typeof id === "string") } : {}),
+    } } : {}),
+    ...(value.failureRepairState === "pending" || value.failureRepairState === "handled" ? { failureRepairState: value.failureRepairState } : {}),
     membershipAdmitted: value.membershipAdmitted === false ? false : true,
     launchProfile: receiptLaunchProfile(value, policy),
     explicitProject: validExplicitProject(value.explicitProject),
@@ -4527,10 +4644,18 @@ export class RegistryWriterBusyError extends Error {
 export class AgentRegistry {
   private readonly sqliteMode: AgentRegistrySqliteMode;
   private readonly writerDeadlineMs: number | undefined;
+  private writerAdmissionTail: Promise<void> = Promise.resolve();
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
+  private lastDeliveryCompactionChangeId: number | null = null;
+  private nextDeliveryCompactionAt: number | null = null;
   /** Synchronous writer admission lends its JSON claim to the mutation. */
   private admittedJsonWriter: RegistryLockClaim | null = null;
+  private creditGuardRevision = 0;
+
+  /** Local commits and host notifications invalidate the guard without reading storage. */
+  accountCreditGuardRevision(): number { return this.creditGuardRevision; }
+  invalidateAccountCreditGuard(): void { this.creditGuardRevision += 1; }
   private readonly beforeDualWriteMutationReplace: (() => void) | undefined;
   private readOnlyCache: { signature: string; snapshot: RegistryFile } | null = null;
   private readonly mirrorCheckpointMs: number;
@@ -4602,6 +4727,7 @@ export class AgentRegistry {
       verifyImport: (source, imported) => verifyRegistryImport(source, imported, storage.onRegistryImportVerify),
       normalize: (value, mode) => normalizeRegistry(value, storage.mcpGrantPolicy, mode),
       mcpGrantPolicy: storage.mcpGrantPolicy,
+      onCreditGuardChange: () => this.invalidateAccountCreditGuard(),
       onWriterWait: (duration) => {
         this.recordMetric(this.writerWaits, duration);
         storage.onSqliteWriterWait?.(duration);
@@ -5043,6 +5169,7 @@ export class AgentRegistry {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === "ENOENT") return;
         if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+        // eslint-disable-next-line no-restricted-syntax -- Legacy recovery-lock restoration shared by serving synchronous and asynchronous writers.
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
       }
     }
@@ -5309,6 +5436,7 @@ export class AgentRegistry {
         if (recovered) return recovered;
         throw new RegistryWriterBusyError("account commit");
       }
+      // eslint-disable-next-line no-restricted-syntax -- Legacy synchronous registry writer admission; serving async writers use acquireLockAsync.
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, this.lockBackoff(attempt, REGISTRY_LOCK_BACKOFF_MAX_MS));
     }
   }
@@ -5384,6 +5512,7 @@ export class AgentRegistry {
       if (changed) {
         const payload = sqlite ? serializeRegistry(file, sqlite.revision + 1) : currentPayload;
         writeAtomicPayload(this.filename, payload);
+        this.invalidateAccountCreditGuard();
       }
       if (sqlite && !changed) this.assertSqliteParity();
       if (sqlite && changed) {
@@ -5428,13 +5557,71 @@ export class AgentRegistry {
    * that transaction, so the wait and the write cannot be separated by another
    * writer. `{ acquired: false }` means the lock stayed held past the deadline
    * and nothing ran; the refusal is logged with the operation it was for, and
-   * the caller defers. `operation` must go straight to its mutation, with no
-   * snapshot read before it. Stores without a SQLite writer run it at once.
+   * the caller defers. `operation` stays synchronous; keyed reads before its
+   * mutation share the admitted transaction. Stores without a SQLite writer run it at once.
    */
   private async whenWriterHeld<T>(
     correlation: { label: string; operationId?: string | null },
     operation: () => T,
     correlate?: (value: T) => { label: string; operationId?: string | null } | null,
+  ): Promise<{ acquired: true; value: T } | { acquired: false }> {
+    const startedAt = performance.now();
+    return withViewerOperation("registry.write", () => this.withWriterAdmissionQueue(
+      remaining => this.whenWriterAdmitted(correlation, operation, correlate, remaining),
+      this.writerDeadlineMs ?? 5_000,
+      () => {
+        recordBlockingWait({ site: "registry-lock-async", synchronous: false,
+          durationMs: performance.now() - startedAt, correlation, subject: "agent-registry", refused: true });
+        return { acquired: false };
+      },
+    ));
+  }
+
+  /** One FIFO covers every SQLite writer admission, including account mutations.
+   * Its callback must acquire external leases only after its turn and release
+   * them before any retry wait. */
+  private async withWriterAdmissionQueue<T>(
+    operation: (remainingMs: number) => Promise<T>,
+    deadlineMs: number,
+    expired: () => T,
+  ): Promise<T> {
+    if (accountMutationHeld() || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) {
+      return operation(deadlineMs);
+    }
+    const queuedAt = performance.now();
+    const deadlineAt = queuedAt + deadlineMs;
+    const previous = this.writerAdmissionTail;
+    let release!: () => void;
+    this.writerAdmissionTail = new Promise<void>((resolve) => { release = resolve; });
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const hasTurn = await Promise.race([
+      previous.then(() => true),
+      new Promise<false>(resolve => {
+        timeout = setTimeout(() => resolve(false), Math.max(0, deadlineAt - performance.now()));
+        timeout.unref?.();
+      }),
+    ]);
+    if (timeout) clearTimeout(timeout);
+    if (!hasTurn) {
+      // Keep this expired ticket in FIFO order until its predecessor finishes;
+      // later writers must not pass the writer whose turn they followed.
+      void previous.then(release);
+      return expired();
+    }
+    try {
+      const remainingMs = deadlineAt - performance.now();
+      if (remainingMs <= 0) return expired();
+      return await operation(remainingMs);
+    } finally {
+      release();
+    }
+  }
+
+  private async whenWriterAdmitted<T>(
+    correlation: { label: string; operationId?: string | null },
+    operation: () => T,
+    correlate?: (value: T) => { label: string; operationId?: string | null } | null,
+    deadlineMs?: number,
   ): Promise<{ acquired: true; value: T } | { acquired: false }> {
     if (accountMutationHeld()) return this.deliveryWriteNow(correlation, operation);
     if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
@@ -5443,7 +5630,7 @@ export class AgentRegistry {
     const waitStartedAt = performance.now();
     const written = await withWaitCorrelation(correlation, () => this.sqliteStore!.withWriter(operation, {
       ...(correlate ? { correlate } : {}),
-      ...(this.writerDeadlineMs !== undefined ? { deadlineMs: this.writerDeadlineMs } : {}),
+      deadlineMs: deadlineMs ?? this.writerDeadlineMs,
     }));
     if (!written.acquired) {
       console.warn(`[registry] ${correlation.label}${correlation.operationId ? ` for ${correlation.operationId}` : ""} `
@@ -5456,7 +5643,7 @@ export class AgentRegistry {
    * One registry write on a delivery path, with the write lock waited for off
    * the event loop and correlated with the operation it is made for
    * (docs/design/delivery-progress-and-drain.md, rule c). `write` makes exactly
-   * one registry mutation and reads no snapshot before it. `{ acquired: false }`
+   * one registry mutation; its keyed reads share the admitted transaction. `{ acquired: false }`
    * means nothing was written; each caller states what a refusal leaves.
    */
   async deliveryWrite<T>(
@@ -5522,14 +5709,95 @@ export class AgentRegistry {
     return deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
   }
 
+  /** Prepare the recovery lookups through asynchronous writer admission. */
+  async prepareRecoveryIndexes(signal?: AbortSignal): Promise<void> {
+    await this.sqliteStore?.prepareRecoveryIndexes(signal);
+  }
+
+  /** Production boot and the candidate gate share the cooperative first view. */
+  async prepareReadOnlySnapshot(signal?: AbortSignal): Promise<RegistryFile> {
+    signal?.throwIfAborted();
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+      return (await this.sqliteStore.prepareReadOnlySnapshot(signal)).file;
+    }
+    return this.readOnlySnapshot();
+  }
+
   private readKeyed<T>(reader: (file: RegistryFile) => T): T {
     return performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
       ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot()));
   }
 
+  /** Retention evidence for one pending runtime effect. SQLite selectors run
+      in one keyed read transaction without materializing unrelated history. */
+  conversationRetentionSnapshot(conversationId: string): Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+      return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.conversationRetentionSnapshot(conversationId));
+    }
+    return this.readKeyed(file => {
+      const result: Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> = {
+        conversations: {}, entries: {}, receipts: {}, conversationAliases: {},
+      };
+      const seen = new Set<string>();
+      let canonical = conversationId as ViewerConversationId;
+      while (file.conversationAliases[canonical]) {
+        if (seen.has(canonical)) return result; // The retention reducer keeps cycles current.
+        seen.add(canonical);
+        const next = file.conversationAliases[canonical]!;
+        result.conversationAliases[canonical] = next;
+        canonical = next;
+      }
+      // An alias may also have its own conversation row. The full reducer
+      // retains that state when its canonical destination has no evidence.
+      for (const id of new Set([conversationId, canonical])) {
+        const conversation = file.conversations[id];
+        if (!conversation) continue;
+        result.conversations[id] = clone(conversation);
+        const generation = conversation.generations.at(-1);
+        if (generation) {
+          const key = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
+          if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+        }
+      }
+      // Walk the reverse alias index once, including receipt-only aliases.
+      const identities = new Set<ViewerConversationId>([canonical]);
+      const pending = [canonical];
+      while (pending.length) {
+        const target = pending.pop()!;
+        for (const alias of registryKeysMatching(file, "conversationAliases", "alias", target) as ViewerConversationId[]) {
+          if (identities.has(alias)) continue;
+          identities.add(alias);
+          result.conversationAliases[alias] = target;
+          pending.push(alias);
+        }
+      }
+      for (const receipt of registryRowsMatching(file, "receipts", "conversationId", [...identities])) {
+        result.receipts[receipt.launchId] = clone(receipt);
+      }
+      return result;
+    });
+  }
+
   /** A detached delivery view for one conversation, including historical aliases. */
   conversationDeliverySnapshot(target: { conversationId?: string | null; path?: string }): RegistryFile {
     return this.scopedConversationSnapshot(target, false);
+  }
+
+  /** Curator authority needs one identity and its receipts, role and project.
+      Keyed reads preserve alias resolution without hydrating retained history. */
+  curatorConversationSnapshot(conversationId: string): RegistryFile {
+    return this.readKeyed(file => {
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      const id = resolveConversationAlias(file, conversationId as ViewerConversationId);
+      for (const identity of conversationIdentities(file, id)) {
+        if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+      }
+      if (file.conversations[id]) result.conversations[id] = clone(file.conversations[id]!);
+      if (file.lineageEdges[id]) result.lineageEdges[id] = clone(file.lineageEdges[id]!);
+      if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
+      for (const receipt of registryRowsMatching(file, "receipts", "conversationId", id)) result.receipts[receipt.launchId] = clone(receipt);
+      return result;
+    });
   }
 
   /** Activity attribution needs one conversation's custody, role and launch
@@ -5538,7 +5806,15 @@ export class AgentRegistry {
     return this.scopedConversationSnapshot({ path: artifactPath }, true);
   }
 
-  private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean): RegistryFile {
+  /** Liveness needs every generation and artifact-path owner for one
+      conversation, plus its aliases and launch receipts. Keep that read keyed
+      so a targeted poll does not hydrate unrelated host rows from retained
+      registry history. */
+  livenessConversationSnapshot(conversationId: string): RegistryFile {
+    return this.scopedConversationSnapshot({ conversationId }, true, true);
+  }
+
+  private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean, liveness = false): RegistryFile {
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
       const id = target.conversationId ? resolveConversationAlias(file, target.conversationId as ViewerConversationId)
@@ -5550,10 +5826,26 @@ export class AgentRegistry {
       }
       if (conversation) {
         result.conversations[id] = clone(conversation);
+        result.conversationRevision[conversation.engine] = file.conversationRevision[conversation.engine];
         const generation = conversation.generations.at(-1);
         if (generation) {
           const key = `${conversation.engine}:${generation.id}`;
           if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+        }
+        if (liveness) {
+          const paths = new Set([
+            ...conversation.generations.map(candidate => candidate.path),
+            ...conversation.continuityPaths,
+          ]);
+          for (const candidate of conversation.generations) {
+            const key = `${conversation.engine}:${candidate.id}`;
+            if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+          }
+          for (const pathname of paths) {
+            for (const entry of registryRowsMatching(file, "entries", "artifactPath", pathname)) {
+              result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = clone(entry);
+            }
+          }
         }
       }
       if (activity) {
@@ -5724,6 +6016,42 @@ export class AgentRegistry {
     });
   }
 
+  spawnReceipt(launchId: string): SpawnReceipt | null {
+    return this.readKeyed(file => clone(file.receipts[launchId] ?? null));
+  }
+
+  /** Fresh, keyed evidence for one launch across asynchronous controller reads.
+      Returns its latest generation and original native entry only. */
+  spawnEvidence(launchId: string): {
+    receipt: SpawnReceipt | null;
+    generation: { engine: AgentEngine; id: string; path: string } | null;
+    entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId"> | null;
+    structured: boolean;
+  } {
+    return this.readKeyed(file => {
+      const receipt = file.receipts[launchId];
+      if (!receipt) return { receipt: null, generation: null, entry: null, structured: false };
+      const conversation = file.conversations[resolveConversationAlias(file, receipt.conversationId)];
+      const generation = conversation?.generations.at(-1);
+      const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
+      return {
+        receipt: clone(receipt),
+        generation: conversation && generation ? { engine: conversation.engine, id: generation.id, path: generation.path } : null,
+        entry: entry ? { artifactPath: entry.artifactPath, structuredHostOperationId: entry.structuredHostOperationId } : null,
+        structured: !!entry?.structuredHost || typeof entry?.structuredHostOperationId === "string",
+      };
+    });
+  }
+
+  /** Caller identity reads only its generation keys, without a grant expansion. */
+  mcpCallerSnapshot(conversationId: string, ancestry: readonly number[], configuredRootId: string | null) {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+      return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.mcpCallerSnapshot(conversationId, ancestry, configuredRootId));
+    }
+    const snapshot = this.readOnlySnapshot();
+    return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
+  }
+
   conversationIdForSpawnCapabilityDigest(digest: string): ViewerConversationId | null {
     if (!/^[0-9a-f]{64}$/.test(digest)) return null;
     return this.readKeyed(file => {
@@ -5740,25 +6068,119 @@ export class AgentRegistry {
   }
 
   openSpawnReceipts(): SpawnReceipt[] {
-    return this.readKeyed(file => clone(registryRowsMatching(file,"receipts","state",
-      ["starting","pane-bound","host-verified","prompt-delivered","path-pending"])));
+    return this.readKeyed(file => clone(registryOpenSpawnReceipts(file)));
   }
 
-  /** Failed receipts remain available for idempotent reporting recovery. */
-  failedSpawnReceipts(): SpawnReceipt[] {
-    return this.readKeyed(file => registryRowsMatching(file, "receipts", "state", "failed")
-      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
-      .map(clone));
+  /** Structured ownership rows, including released rows needed by recovery. */
+  structuredHostEntries(): AgentRegistryEntry[] {
+    const file = this.readOnlySnapshot();
+    return registryRowsMatching(file, "entries", "structuredHost.kind",
+      ["codex-app-server", "claude-broker", "copilot-acp"]).map(entry => clone(entry));
   }
 
-  private reportFailedLaunch(receipt: SpawnReceipt, options: { announce?: boolean } = {}): void {
+  diagnosticSpawnAttempt(launchId?: string, conversationId?: string): string | undefined {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite"))
+      return this.sqliteStore.spawnDiagnosticAttempt(launchId, conversationId);
+    const receipts = Object.values(this.readOnlySnapshot().receipts);
+    const attributed = launchId !== undefined ? receipts.find(receipt => receipt.launchId === launchId)
+      : conversationId ? receipts.find(receipt => receipt.conversationId === conversationId) : undefined;
+    return (attributed ? [attributed] : receipts).find(receipt => receipt.clientAttemptId?.startsWith("relay-owner-"))?.clientAttemptId ?? undefined;
+  }
+
+  /** One recovery selection, plus only the entries and replacement proofs it
+      can use. Terminal history is selected by live runtime evidence. */
+  spawnRecoverySnapshot(launchIds: readonly string[] = [], runtimeConversations: readonly string[] = []): RegistryFile {
+    return this.readKeyed(file => {
+      const selected = new Map(launchIds.map(id => [id, file.receipts[id]]));
+      for (const id of runtimeConversations) {
+        for (const receipt of registryRowsMatching(file, "receipts", "conversationId", conversationIdentities(file, id as ViewerConversationId))) {
+          if (receipt.state === "failed" && receipt.transport !== "tmux") selected.set(receipt.launchId, receipt);
+        }
+      }
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      for (const [id, receipt] of selected) {
+        if (!receipt) continue;
+        result.receipts[id] = clone(receipt);
+        if (receipt.key) {
+          const key = sessionKeyId(receipt.key);
+          if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+        }
+        for (const candidate of [
+          ...registryRowsMatching(file, "receipts", "supersedes.conversationId", receipt.conversationId),
+          ...(receipt.requestDigest ? registryRowsMatching(file, "receipts", "requestDigest", receipt.requestDigest) : []),
+        ]) result.receipts[candidate.launchId] = clone(candidate);
+        const launcher = receipt.launcher?.conversationId;
+        if (launcher) {
+          const canonical = resolveConversationAlias(file, launcher);
+          if (file.memberships[canonical]) result.memberships[canonical] = clone(file.memberships[canonical]!);
+          if (canonical !== launcher) result.conversationAliases[launcher] = canonical;
+        }
+      }
+      return result;
+    });
+  }
+
+  /** Only unfinished settlements are controller-active; retained failures do
+      not enter the reaper's report lookups again. */
+  failedSpawnReceipts(limit = 64): SpawnReceipt[] {
+    const keys = this.sqliteStore?.failedLaunchRepairKeys(limit, false);
+    return this.readKeyed(file => (keys ? keys.map(key => file.receipts[key]!).filter(Boolean)
+      : Object.values(file.receipts).filter(row => row.state === "failed" && row.failureRepairState === "pending").slice(0, limit)).map(clone));
+  }
+
+  /** A bounded, restartable backfill. Old failures have no announcement debt.
+      The release owner performs the first page at startup and the reaper
+      continues it; MCP readers never migrate operator state. */
+  backfillFailedLaunchReporting(limit = 64): number {
+    const assertOwner = () => {
+      assertStateStartupMutation(path.dirname(this.filename), "failed launch announcement backfill");
+      assertStateMutationAllowed(path.dirname(this.filename));
+      if (process.env.LLV_STATE_OWNER === "viewer" && (!stateMutationActivationOpen() || !viewerReleaseOwnsTraffic())) {
+        throw new Error("failed launch announcement backfill requires the current Viewer release");
+      }
+    };
+    assertOwner();
+    const keys = this.sqliteStore?.failedLaunchRepairKeys(limit, true)
+      ?? Object.values(this.readOnlySnapshot().receipts).filter(row => row.state === "failed" && !row.failureRepairState).slice(0, limit).map(row => row.launchId);
+    if (!keys.length) return 0;
+    return this.mutate(file => {
+      assertOwner();
+      let changed = 0;
+      for (const key of keys) {
+        const receipt = file.receipts[key];
+        if (!receipt || receipt.state !== "failed" || receipt.failureRepairState) continue;
+        receipt.failureAnnouncementSuppressed = true;
+        receipt.failureReporting = { failedAt: null, lifecycle: true, notice: true, task: false };
+        receipt.failureRepairState = "pending";
+        changed++;
+      }
+      return changed;
+    });
+  }
+
+  reportFailedLaunch(receipt: SpawnReceipt, options: { announce?: boolean; now?: number } = {}): void {
     const launcherId = receipt.launcher?.conversationId;
     const file = this.readOnlySnapshot();
     const canonical = launcherId ? resolveConversationAlias(file, launcherId) : null;
     const launcherProject = canonical
       ? file.memberships[canonical]?.find(membership => membership.kind === "orchestrator")?.containerId
       : undefined;
-    settleFailedLaunch(receipt, undefined, { ...options, launcherProject });
+    settleFailedLaunch(receipt, undefined, { ...options,
+      ...(canonical && file.conversations[canonical]?.supersededBy ? { announce: false } : {}),
+      launcherProject, onProgress: progress => {
+        this.deliveryWriteNow({ label: "spawn.failure-report", operationId: receipt.launchId }, () => this.mutate(current => {
+          const row = current.receipts[receipt.launchId];
+          if (!row || row.state !== "failed" || row.failureRepairState === "handled") return;
+          const held = row.failureReporting;
+          row.failureReporting = { ...held, failedAt: held?.failedAt ?? null,
+            lifecycle: progress.lifecycle || held?.lifecycle === true,
+            notice: progress.notice || held?.notice === true,
+            task: progress.task || held?.task === true };
+          if (progress.suppressed) row.failureAnnouncementSuppressed = true;
+          if (row.failureReporting.lifecycle && row.failureReporting.notice && row.failureReporting.task) row.failureRepairState = "handled";
+        }));
+      },
+    });
   }
 
   terminalizeAbandonedSpawnEntries(options: { now: number; timeoutMs: number; limit: number }): string[] {
@@ -5834,7 +6256,7 @@ export class AgentRegistry {
       its identity even if an older host finishes cleanup afterwards. */
   discardSpawnCapabilityForOperation(operationId: string, digest?: string): void {
     this.mutate((file) => {
-      for (const receipt of Object.values(file.receipts)) {
+      for (const receipt of registryRowsMatching(file, "receipts", "pendingSpawnCapability.operationId", operationId)) {
         if (receipt.pendingSpawnCapability?.operationId === operationId
           && (digest === undefined || receipt.pendingSpawnCapability.digest === digest)) {
           receipt.pendingSpawnCapability = null;
@@ -5888,9 +6310,33 @@ export class AgentRegistry {
   /** Bounded, non-blocking admission for request and controller paths. */
   async beginSpawnRequestAsync(input: SpawnRequest, guard?: () => void): Promise<SpawnBeginResult> {
     const caller = input.purpose === "resume-successor" ? "resume" : "spawn";
-    const written = await this.accountMutationWrite(`${caller} admission`, () => this.beginSpawnRequest(input), guard);
+    const deadline = performance.now() + (this.writerDeadlineMs ?? 2_000);
+    const remaining = () => Math.max(0, deadline - performance.now());
+    const written = await this.accountMutationWrite(`${caller} admission`, () => this.reserveSpawnRequest(input), guard, { waitMs: remaining() });
     if (!written.acquired) throw new RegistryWriterBusyError(`${caller} admission`);
-    return written.value;
+    const result = written.value;
+    if (result.kind === "created" || result.kind === "replay") {
+      // Reservation is durable. Retry only its idempotent prerequisite, with
+      // no registry writer held while the task store takes its own writer.
+      const admission = await waitForStateLock(`${caller}.membership`, async () => {
+        try {
+          return await withAccountMutationLockAsync(() => {
+            guard?.();
+            return this.admitSpawnMembership(input, result);
+          }, { caller: `${caller} membership`, waitMs: remaining() });
+        } catch (error) {
+          if (error instanceof AccountMutationBusyError) throw new StateLockDeferredError(`${caller}.membership`);
+          throw error;
+        }
+      }, { waitMs: remaining(), subject: result.receipt.launchId });
+      if (admission.ok) {
+        const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
+          this.recordSpawnMembership(result.receipt, admission.taskIds);
+        }, guard, { waitMs: remaining() });
+        if (!recorded.acquired) throw new RegistryWriterBusyError(`${caller} membership record`);
+      }
+    }
+    return result;
   }
 
   /** Acquire each writer without waiting while the other is held. A failed
@@ -5902,39 +6348,49 @@ export class AgentRegistry {
   } = {}): Promise<{ acquired: true; value: T } | { acquired: false }> {
     const inherited = accountMutationHeld();
     const startedAt = performance.now();
-    const deadline = startedAt + (options.waitMs ?? this.writerDeadlineMs ?? 2_000);
+    const totalWaitMs = options.waitMs ?? this.writerDeadlineMs ?? 2_000;
     let waited = false;
     let refused = false;
     let acquiredAt: number | undefined;
     let correlation: BlockingWaitCorrelation = { label, operationId: options.operationId };
-    try {
-      for (;;) {
-        const result = await withAccountMutationLockAsync(() => {
-          guard?.();
-          // Publish one correlated wait after admission supplies its operation
-          // id; individual failed probes are part of this same wait.
-          return this.deliveryWriteNow(correlation, () => { acquiredAt = performance.now(); refused = false; return write(); }, { recordRefusal: false });
-        }, {
-          holder: label, caller: label,
-          waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
-        });
-        if (result.acquired) {
-          correlation = options.correlate?.(result.value) ?? correlation;
-          return result;
+    const run = async (remainingMs: number): Promise<{ acquired: true; value: T } | { acquired: false }> => {
+      const deadline = performance.now() + remainingMs;
+      try {
+        for (;;) {
+          const result = await withAccountMutationLockAsync(() => {
+            guard?.();
+            // Publish one correlated wait after admission supplies its operation
+            // id; individual failed probes are part of this same wait.
+            return this.deliveryWriteNow(correlation, () => { acquiredAt = performance.now(); refused = false; return write(); }, { recordRefusal: false });
+          }, {
+            holder: label, caller: label,
+            waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
+          });
+          if (result.acquired) {
+            correlation = options.correlate?.(result.value) ?? correlation;
+            return result;
+          }
+          refused = true;
+          if (inherited || performance.now() >= deadline) return result;
+          waited = true;
+          await new Promise<void>(resolve => setTimeout(resolve, 5));
         }
-        refused = true;
-        if (inherited || performance.now() >= deadline) return result;
-        waited = true;
-        await new Promise<void>(resolve => setTimeout(resolve, 5));
+      } finally {
+        if (waited || refused) recordBlockingWait({ site: "registry-lock-async", synchronous: false,
+          durationMs: (acquiredAt ?? performance.now()) - startedAt, correlation, subject: "agent-registry", refused });
       }
-    } finally {
-      if (waited || refused) recordBlockingWait({ site: "registry-lock-async", synchronous: false,
-        durationMs: (acquiredAt ?? performance.now()) - startedAt, correlation, subject: "agent-registry", refused });
-    }
+    };
+    if (inherited) return run(totalWaitMs);
+    return this.withWriterAdmissionQueue(run, totalWaitMs, () => {
+      refused = true;
+      recordBlockingWait({ site: "registry-lock-async", synchronous: false,
+        durationMs: performance.now() - startedAt, correlation, subject: "agent-registry", refused: true });
+      return { acquired: false };
+    });
   }
 
-  beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
-    const result = withAccountMutationLock(() => {
+  private reserveSpawnRequest(input: SpawnRequest): SpawnBeginResult {
+    return withAccountMutationLock(() => {
       if ((input.engine === "claude" || input.engine === "codex") && input.accountId && input.accountId !== "default") {
         /* The registry moved into state.sqlite (#1870, slice 7); its retired
            list is read through the store rather than by parsing the file. */
@@ -5953,6 +6409,18 @@ export class AgentRegistry {
       }
       return result;
     });
+  }
+
+  private admitSpawnMembership(input: SpawnRequest, result: Extract<SpawnBeginResult, { kind: "created" | "replay" }>) {
+    return admitReservedLaunch(input, result.receipt, (reason) => {
+      if (result.kind !== "created") return;
+      if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
+      else this.failSpawn(result.receipt.launchId, reason);
+    });
+  }
+
+  beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
+    const result = this.reserveSpawnRequest(input);
     /* Canonical task membership (#1586): the receipt is the last shared step
        before any launch path actuates, and every caller has passed its own
        admission checks to get here. Membership is committed with the reserved
@@ -5960,28 +6428,40 @@ export class AgentRegistry {
        fresh receipt and aborts the launch. A replay converges on the first
        admission's task. */
     if (result.kind === "created" || result.kind === "replay") {
-      admitReservedLaunch(input, result.receipt, (reason) => {
-        if (result.kind !== "created") return;
-        if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
-        else this.failSpawn(result.receipt.launchId, reason);
-      });
-      this.mutate((file) => {
-        const receipt = file.receipts[result.receipt.launchId];
-        if (receipt) receipt.membershipAdmitted = true;
-      });
-      result.receipt.membershipAdmitted = true;
+      const admission = this.admitSpawnMembership(input, result);
+      if (admission.ok) this.recordSpawnMembership(result.receipt, admission.taskIds);
     }
     return result;
+  }
+
+  /** Recovery may replace a task deleted while the launch waited. Persist the
+      newly admitted targets before execution or failure reporting can resume. */
+  async admitRecoveredLaunch(receipt: SpawnReceipt): Promise<void> {
+    const admission = admitRecoveredLaunch(receipt);
+    if (admission.ok) await this.deliveryWriteOrBusy({ label: "spawn.membership", operationId: receipt.launchId }, () =>
+      this.recordSpawnMembership(receipt, admission.taskIds));
+  }
+
+  private recordSpawnMembership(receipt: SpawnReceipt, taskIds: string[]): void {
+    this.mutate(file => {
+      const row = file.receipts[receipt.launchId];
+      if (!row) throw new Error("admitted launch receipt is unavailable");
+      row.membershipAdmitted = true;
+      if (row.failureReporting) row.failureReporting.taskIds = [...taskIds];
+    });
+    receipt.membershipAdmitted = true;
+    if (receipt.failureReporting) receipt.failureReporting.taskIds = [...taskIds];
   }
 
   /** Terminalize only a reservation whose task membership never committed and
       which has no host binding. The state check and owner release are one CAS. */
   retireUnconsumedSpawn(clientAttemptId: string, reason: string): boolean {
     return this.mutate((file) => {
-      const receipt = Object.values(file.receipts).find((row) => row.clientAttemptId === clientAttemptId);
+      const receipt = registryRowsMatching(file, "receipts", "clientAttemptId", clientAttemptId)[0];
       if (!receipt || receipt.membershipAdmitted !== false || receipt.state !== "starting" || receipt.key || receipt.pane) return false;
       receipt.state = "failed";
       receipt.error = reason;
+      markFailedLaunchReporting(receipt, false);
       receipt.admissionOwner = null;
       terminalizeFailedSpawnDeliveriesInFile(file, receipt.launchId);
       return true;
@@ -6103,7 +6583,7 @@ export class AgentRegistry {
                   entry.launchProfile.title = requestedTitle;
                 }
               }
-              for (const receipt of Object.values(file.receipts)) {
+              for (const receipt of registryReceiptsForConversation(file, existingConversationId)) {
                 if (resolveConversationAlias(file, receipt.conversationId) === existingConversationId
                   && !durableSemanticTitle(receipt.launchProfile.title)) {
                   receipt.launchProfile.title = requestedTitle;
@@ -6192,7 +6672,7 @@ export class AgentRegistry {
         }
       }
       if (conversationId && input.spawnCapabilityDigest) {
-        for (const existing of Object.values(file.receipts)) {
+        for (const existing of registryReceiptsForConversation(file, conversationId)) {
           if (resolveConversationAlias(file, existing.conversationId) === conversationId) {
             existing.spawnCapabilityDigest = null;
             existing.pendingSpawnCapability = null;
@@ -6245,6 +6725,8 @@ export class AgentRegistry {
         delegationDepth: childDepth,
         rejection,
         membershipAdmitted: false,
+        failureReporting: { failedAt: rejection ? createdAt : null, lifecycle: false, notice: false, task: false },
+        ...(rejection ? { failureAnnouncementSuppressed: true as const, failureRepairState: "handled" as const } : {}),
         launchProfile: profile,
         explicitProject,
         launchDisplay: normalizeLaunchDisplay(input.launchDisplay),
@@ -6362,7 +6844,10 @@ export class AgentRegistry {
         receipt.launchProfile = emptyLaunchProfile(receipt.queuedPinnedSpawn.spec.launchProfile, this.mcpGrantPolicy);
         receipt.queuedPinnedSpawn = null;
         receipt.error = reason;
-        if (receipt.state === "starting" && !receipt.pane && !receipt.key) receipt.state = "failed";
+        if (receipt.state === "starting" && !receipt.pane && !receipt.key) {
+          receipt.state = "failed";
+          markFailedLaunchReporting(receipt);
+        }
         terminalizeFailedSpawnDeliveriesInFile(file, launchId);
         return true;
       }));
@@ -6460,6 +6945,10 @@ export class AgentRegistry {
     return this.mutate((file) => clone(recordMembership(file, conversationId, membership, now())));
   }
 
+  conversationMemberships(conversationId: ViewerConversationId): DurableConversationMembership[] {
+    return this.readKeyed(file => clone(file.memberships[resolveConversationAlias(file, conversationId)] ?? []));
+  }
+
   runIdentityWaveMigration(input: IdentityWaveMigrationInput, validatePreparedState?: () => void): IdentityWaveMigrationResult {
     const snapshot = this.readOnlySnapshot();
     // The durable marker ends this one-time migration. Read it before cloning
@@ -6476,7 +6965,10 @@ export class AgentRegistry {
     const result = applyIdentityWaveMigration(prepared, { ...input, commitExternalPathRekeys: value => { rekeys = value; } });
     return withAccountMutationLock(() => this.mutate((file) => {
       validatePreparedState?.();
-      if (!isDeepStrictEqual(file, observed)) throw new Error("identity migration state changed while reading evidence; retry at startup");
+      // Materialize the lazy mutation view before comparison. Bun inspects
+      // constructors during deep comparison, which can dirty a synthetic row
+      // (or reject an unchanged proxy) before the migration writes anything.
+      if (!isDeepStrictEqual(clone(file), observed)) throw new Error("identity migration state changed while reading evidence; retry at startup");
       if (rekeys.length) input.commitExternalPathRekeys?.(rekeys);
       Object.assign(file, prepared);
       return result;
@@ -6488,7 +6980,7 @@ export class AgentRegistry {
       const stamped = stampOrchestratorLineage(file, seat, seat.activatedAt ?? seat.designatedAt);
       if (stamped.changed && stamped.engine) file.conversationRevision[stamped.engine] += 1;
       if (stamped.engine) return stamped.changed;
-      const receipt = Object.values(file.receipts).find((candidate) => candidate.conversationId === seat.conversationId);
+      const receipt = seat.conversationId ? registryRowsMatching(file, "receipts", "conversationId", seat.conversationId)[0] : undefined;
       if (!receipt) return false;
       const pending = normalizePendingOrchestratorSeatIdentity(seat);
       if (!pending || isDeepStrictEqual(receipt.pendingOrchestratorSeatIdentity, pending)) return false;
@@ -7077,13 +7569,15 @@ export class AgentRegistry {
    * {@link failSpawn} with the registry lock waited for off the event loop
    * (docs/design/delivery-progress-and-drain.md, C5): the launch's failure and
    * its never-attempted first message's ending stay one transaction, only the
-   * wait for its lock leaves the loop. Refused, nothing changed: the launch
-   * keeps its state and its first message stays held, as a crash just before
-   * the write leaves them, for the stale-launch convergence. Answers false then.
+   * wait for its lock leaves the loop. Recovery's optional authority check
+   * runs after lock admission and before the failure mutation. Refused, nothing
+   * changed: the launch keeps its state and its first message stays held, as a
+   * crash just before the write leaves them, for the stale-launch convergence.
+   * Answers false then.
    */
-  async failSpawnOffLoop(launchId: string, error: string): Promise<boolean> {
+  async failSpawnOffLoop(launchId: string, error: string, assertActive?: () => void): Promise<boolean> {
     const written = await this.whenWriterHeld({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
-      () => this.failSpawnInFile(launchId, error));
+      () => { assertActive?.(); return this.failSpawnInFile(launchId, error); });
     if (!written.acquired) return false;
     if (written.value.receipt) this.reportFailedLaunch(written.value.receipt);
     return written.value.result;
@@ -7190,6 +7684,7 @@ export class AgentRegistry {
       }
       receipt.state = receipt.pane ? "conflicted" : "failed";
       receipt.error = error;
+      if (receipt.state === "failed") markFailedLaunchReporting(receipt);
       if (receipt.state === "conflicted") receipt.verifiedHost = null;
       if ((receipt.state === "failed" || receipt.state === "conflicted") && receipt.queuedPinnedSpawn) {
         receipt.launchProfile = emptyLaunchProfile(
@@ -7299,7 +7794,7 @@ export class AgentRegistry {
       }
       receipt.state = "failed";
       receipt.error = error;
-      if (options.announce === false) receipt.failureAnnouncementSuppressed = true;
+      markFailedLaunchReporting(receipt, options.announce !== false);
       if (receipt.queuedPinnedSpawn) {
         receipt.launchProfile = emptyLaunchProfile(
           receipt.queuedPinnedSpawn.spec.launchProfile,
@@ -7456,12 +7951,20 @@ export class AgentRegistry {
     key: SessionKey,
     expected?: Readonly<ProcessIdentity>,
     confirmedSurvivors: readonly ProcessIdentity[] = [],
+    expectedCustody?: StructuredHostCustody | null,
   ): boolean {
     return this.mutate((file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry) return false;
       const current = entry.structuredHost?.process ?? null;
+      if (expectedCustody !== undefined) {
+        if (!expectedCustody || entry.claimEpoch !== expectedCustody.claimEpoch
+          || entry.claimOwner !== expectedCustody.claimOwner
+          || (entry.structuredHost?.writerClaimEpoch ?? null) !== expectedCustody.writerClaimEpoch
+          || ((current === null) !== (expectedCustody.process === null))
+          || (current && expectedCustody.process && !sameRecordedProcessIdentity(current, expectedCustody.process))) return false;
+      }
       if (expected && current && !sameRecordedProcessIdentity(current, expected)) return false;
       const retained = entry.structuredTerminationSurvivors ?? [];
       if (retained.length > 0 && (!expected || !current || !sameRecordedProcessIdentity(current, expected))) return false;
@@ -7824,6 +8327,8 @@ export class AgentRegistry {
     owner: ProcessIdentity,
     options: {
       allowUnhosted?: boolean;
+      /** Reattach this exact native Codex listener after its writer died. */
+      reconnectCodex?: { endpoint: string; process: ProcessIdentity };
       reclaimUnverifiedOwner?: boolean;
       setupHost?: StructuredHostColumns;
       setupEntry?: Pick<AgentRegistryEntry, "artifactPath" | "cwd" | "accountId" | "launchProfile">;
@@ -7843,7 +8348,11 @@ export class AgentRegistry {
         ?? (!entry.host && options.allowUnhosted === true ? options.setupHost : null);
       if (!structuredHost) return null;
       if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
-      if (structuredHost.signalDomain && structuredHost.signalDomain.retired !== true) return null;
+      if (structuredHost.signalDomain && structuredHost.signalDomain.retired !== true
+        && (!options.reconnectCodex || structuredHost.kind !== "codex-app-server"
+          || structuredHost.endpoint !== options.reconnectCodex.endpoint
+          || !sameRecordedProcessIdentity(structuredHost.signalDomain.native, options.reconnectCodex.process)
+          || !agentSignalDomainAlive(structuredHost.signalDomain))) return null;
       if (entry.status === "unhosted" && options.allowUnhosted !== true) return null;
       /* Adoption builds its host options from the entry this returns, and a
          mutation loads rows lazily rather than from an assembled snapshot, so
@@ -7857,7 +8366,15 @@ export class AgentRegistry {
          engine beside it (#2790). Callers that may stop the orphan do so by
          its recorded identity and claim again once it is proven gone. */
       const liveHost = structuredHost.process;
-      if (liveHost && this.ownerAlive(liveHost)) return null;
+      if (liveHost && this.ownerAlive(liveHost)) {
+        const reconnect = options.reconnectCodex;
+        if (!reconnect || structuredHost.kind !== "codex-app-server"
+          || !structuredHost.endpoint.startsWith("codex-unix:")
+          || structuredHost.endpoint !== reconnect.endpoint
+          || !liveHost.startIdentity || liveHost.pid !== reconnect.process.pid
+          || liveHost.startIdentity !== reconnect.process.startIdentity
+          || liveHost.bootEpoch !== reconnect.process.bootEpoch) return null;
+      }
       const requestedOwner = structuredClaimOwner(owner);
       if (entry.claimOwner) {
         const priorOwner = structuredClaimIdentity(entry.claimOwner);
@@ -7974,7 +8491,7 @@ export class AgentRegistry {
       for (const entry of Object.values(file.entries)) {
         if (liveIds.has(sessionKeyId(entry.key))) entry.pendingAction = null;
       }
-      for (const receipt of Object.values(file.receipts)) {
+      for (const receipt of registryRowsMatching(file, "receipts", "state", "starting")) {
         if (receipt.state !== "starting" || !receipt.artifactPath) continue;
         const key = Object.values(file.entries).find((entry) => entry.artifactPath === receipt.artifactPath)?.key;
         if (key && liveIds.has(sessionKeyId(key))) receipt.state = "completed";
@@ -7993,7 +8510,7 @@ export class AgentRegistry {
         || entry.status === "dead"
         || entry.status === "unhosted") return false;
       const receiptCandidates = entry.structuredHostOperationId == null
-        ? Object.values(file.receipts)
+        ? registryRowsMatching(file, "receipts", "artifactPath", entry.artifactPath)
         : [file.receipts[entry.structuredHostOperationId]].filter((receipt): receipt is SpawnReceipt => Boolean(receipt));
       const matchingReceipts = receiptCandidates.filter((receipt) =>
         receipt.state === "completed"
@@ -8510,17 +9027,18 @@ export class AgentRegistry {
   }
 
   launchProfileForPath(artifactPath: string): LaunchProfile | null {
-    const snapshot = this.readOnlySnapshot();
-    for (const conversation of Object.values(snapshot.conversations)) {
-      const generation = conversation.generations.find((item) => item.path === artifactPath);
-      if (generation) return clone(generation.launchProfile);
-      if (conversation.continuityPaths.includes(artifactPath)) {
-        const current = conversation.generations.at(-1);
-        if (current) return clone(current.launchProfile);
+    return this.readKeyed(snapshot => {
+      for (const conversation of registryConversationsForPath(snapshot, artifactPath)) {
+        const generation = conversation.generations.find((item) => item.path === artifactPath);
+        if (generation) return clone(generation.launchProfile);
+        if (conversation.continuityPaths.includes(artifactPath)) {
+          const current = conversation.generations.at(-1);
+          if (current) return clone(current.launchProfile);
+        }
       }
-    }
-    const receipt = Object.values(snapshot.receipts).find((item) => item.artifactPath === artifactPath);
-    return receipt ? clone(receipt.launchProfile) : null;
+      const receipt = registryRowsMatching(snapshot, "receipts", "artifactPath", artifactPath)[0];
+      return receipt ? clone(receipt.launchProfile) : null;
+    });
   }
 
   /** Durable account ownership for a transcript path (issue #891, phase 0).
@@ -8528,18 +9046,20 @@ export class AgentRegistry {
       conversation; deriving the account from the path layout stays in the
       account manager only as recovery for artifacts the registry never saw. */
   transcriptAccountId(engine: AgentEngine, artifactPath: string): string | null {
-    const snapshot = this.readOnlySnapshot();
-    for (const conversation of Object.values(snapshot.conversations)) {
-      if (conversation.engine !== engine) continue;
-      const generation = conversation.generations.find((item) => item.path === artifactPath);
-      if (generation?.accountId) return generation.accountId;
-      if (conversation.continuityPaths.includes(artifactPath)) {
-        const current = conversation.generations.at(-1);
-        if (current?.accountId) return current.accountId;
+    return this.readKeyed(file => {
+      for (const conversation of registryConversationsForPath(file, artifactPath)) {
+        if (conversation.engine !== engine) continue;
+        const generation = conversation.generations.find((item) => item.path === artifactPath);
+        if (generation?.accountId) return generation.accountId;
+        if (conversation.continuityPaths.includes(artifactPath)) {
+          const current = conversation.generations.at(-1);
+          if (current?.accountId) return current.accountId;
+        }
       }
-    }
-    const receipt = Object.values(snapshot.receipts).find((item) => item.artifactPath === artifactPath && item.engine === engine);
-    return receipt?.accountId ?? null;
+      const receipt = registryRowsMatching(file, "receipts", "artifactPath", artifactPath)
+        .find((item) => item.engine === engine);
+      return receipt?.accountId ?? null;
+    });
   }
 
   updateConversationLaunchProfile(
@@ -8798,12 +9318,13 @@ export class AgentRegistry {
 
   /** Whether a migration is a switch owned by the conversation's applying reconfigure and still cancellable. */
   reconfigureOwnedCancellableSwitch(id: ViewerConversationId): boolean {
-    const snapshot = this.readOnlySnapshot();
-    const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
-    const migration = conversation?.migration;
-    const owner = conversation?.reconfigure;
-    if (!migration || !owner || owner.status !== "applying" || !CANCELLABLE_SWITCH_PHASES.has(migration.phase)) return false;
-    return snapshot.migrationIntents[migration.intentId]?.requestIds.includes(reconfigureMigrationRequestId(owner)) === true;
+    return this.readKeyed(snapshot => {
+      const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
+      const migration = conversation?.migration;
+      const owner = conversation?.reconfigure;
+      if (!migration || !owner || owner.status !== "applying" || !CANCELLABLE_SWITCH_PHASES.has(migration.phase)) return false;
+      return snapshot.migrationIntents[migration.intentId]?.requestIds.includes(reconfigureMigrationRequestId(owner)) === true;
+    });
   }
 
   canonicalPath(artifactPath: string): string {
@@ -9221,6 +9742,7 @@ export class AgentRegistry {
     targetId: string,
     reconfigureOwner?: { operationId: string; revision: number },
     profile?: Pick<LaunchProfile, "model" | "effort" | "fast" | "serviceTier">,
+    creditGuard?: true,
   ): RegistryConversation {
     return this.mutate((file) => {
       const canonicalId = resolveConversationAlias(file, id);
@@ -9309,6 +9831,7 @@ export class AgentRegistry {
       const phase = migrationReadiness(file, conversation) === "busy" ? "waiting-turn" : "requested";
       queueAbandonedMigrationCleanup(file, conversation, changedAt);
       conversation.migration = conversationMigrationForIntent(conversation, source, intent, phase, changedAt);
+      if (creditGuard) conversation.migration.creditGuard = true;
       adoptFencedDeliveries(file, conversation, replaced, reconfigureOwner ? conversation.reconfigure ?? null : null);
       conversation.updatedAt = changedAt;
       file.conversationRevision[conversation.engine] += 1;
@@ -9586,8 +10109,7 @@ export class AgentRegistry {
         (pathname) => !committedContinuityPaths.has(pathname),
       );
       conversation.migration = { ...migration, phase: "committed", updatedAt: now() };
-      const receipts = Object.values(file.receipts)
-        .filter((receipt) => resolveConversationAlias(file, receipt.conversationId) === conversation.id);
+      const receipts = registryReceiptsForConversation(file, conversation.id);
       const pending = receipts.find((receipt) => receipt.pendingSpawnCapability?.operationId === expectedOperationId);
       const digest = pending?.pendingSpawnCapability?.digest ?? null;
       // A rollback successor can publish without HTTP identity; its archived predecessor still loses access at commit.
@@ -9665,8 +10187,15 @@ export class AgentRegistry {
       changes: the auto-balance sustain window and policy revision are the
       controller's, and an operator looking at one card must not reset them. */
   recordQuotaObservation(observation: DurableQuotaObservation): void {
+    this.recordQuotaObservations([observation]);
+  }
+
+  /** One admitted commit for all observations from the same quota probe. */
+  recordQuotaObservations(observations: readonly DurableQuotaObservation[]): void {
     this.mutate((file) => {
-      file.quotaObservations[observation.engine][observation.accountId] = clone(observation);
+      for (const observation of observations) {
+        file.quotaObservations[observation.engine][observation.accountId] = clone(observation);
+      }
     });
   }
 
@@ -9889,9 +10418,13 @@ export class AgentRegistry {
   /** {@link holdDelivery} with the write lock waited for off the event loop
       and kept for the write, correlated with the operation it admits. Null
       when the lock stayed held past its deadline: nothing was reserved. */
-  async holdDeliveryOffLoop(...admission: Parameters<AgentRegistry["holdDelivery"]>): Promise<HeldDelivery | null> {
-    const write = await this.accountMutationWrite("delivery.admit", () => this.holdDelivery(...admission), undefined, {
-      operationId: admission[6]?.operationId ?? null,
+  async holdDeliveryOffLoop(
+    ...admission: [...Parameters<AgentRegistry["holdDelivery"]>, admissionPreflight?: () => Promise<void>]
+  ): Promise<HeldDelivery | null> {
+    const holdAdmission = admission.slice(0, 8) as Parameters<AgentRegistry["holdDelivery"]>;
+    await admission[8]?.();
+    const write = await this.accountMutationWrite("delivery.admit", () => this.holdDelivery(...holdAdmission), undefined, {
+      operationId: holdAdmission[6]?.operationId ?? null,
       correlate: held => ({ label: "delivery.admit", operationId: held.command.operationId }),
       waitMs: this.writerDeadlineMs ?? 5_000,
     });
@@ -10123,7 +10656,21 @@ export class AgentRegistry {
   }
 
   compactDeliveryReservations(): number {
-    return this.mutate((file) => compactDeliveryReservations(file, undefined, this.now()));
+    const sqlite = this.sqliteMode === "read" || this.sqliteMode === "sqlite" ? this.sqliteStore : null;
+    const nowMs = this.now();
+    const currentChangeId = sqlite?.deliveryCompactionChangeId() ?? null;
+    const expiryDue = this.nextDeliveryCompactionAt !== null && nowMs >= this.nextDeliveryCompactionAt;
+    if (sqlite && this.lastDeliveryCompactionChangeId === currentChangeId && !expiryDue) return 0;
+
+    let observedChangeId = currentChangeId;
+    const result = this.mutate((file) => {
+      const changes = sqlite?.deliveryCompactionChangesSince(this.lastDeliveryCompactionChangeId);
+      if (changes) observedChangeId = changes.changeId;
+      return compactDeliveryReservations(file, undefined, nowMs, changes, expiryDue, this.nextDeliveryCompactionAt);
+    });
+    if (sqlite) this.lastDeliveryCompactionChangeId = observedChangeId;
+    this.nextDeliveryCompactionAt = result.nextExpiryAt;
+    return result.removed;
   }
 
   queueSuccessorCleanup(conversationId: ViewerConversationId, receipt: ProviderReceipt): void {
@@ -10426,7 +10973,8 @@ export class AgentRegistry {
       immediately before it hands the operation to that host. */
   bindDeliveryOperationGeneration(operationId: string, generationId: string): boolean {
     if (!operationId || !generationId) return false;
-    if (!this.readOnlySnapshot().deliveryOperationOwners[operationId]?.retryOfOperationId) return true;
+    const owner = this.readOnlySnapshot().deliveryOperationOwners[operationId];
+    if (!owner?.retryOfOperationId && !owner?.batchId) return true;
     return this.writeDeliveryOperationGeneration(operationId, generationId);
   }
 
@@ -10434,16 +10982,35 @@ export class AgentRegistry {
       the event loop. Null when the lock stayed held and nothing was written. */
   async bindDeliveryOperationGenerationOffLoop(operationId: string, generationId: string): Promise<boolean | null> {
     if (!operationId || !generationId) return false;
-    if (!this.readOnlySnapshot().deliveryOperationOwners[operationId]?.retryOfOperationId) return true;
+    const owner = this.readOnlySnapshot().deliveryOperationOwners[operationId];
+    if (!owner?.retryOfOperationId && !owner?.batchId) return true;
     const write = await this.whenWriterHeld({ label: "delivery.bind-generation", operationId },
       () => this.writeDeliveryOperationGeneration(operationId, generationId));
+    return write.acquired ? write.value : null;
+  }
+
+  /** Atomically binds every member and its generation through the off-loop writer.
+      Missing, terminal or cross-conversation members refuse the entire write. */
+  async bindDeliveryBatchOffLoop(batchId: string, operationIds: readonly string[], generationId: string): Promise<boolean | null> {
+    if (!/^inbox_[a-f0-9]{32}$/.test(batchId) || operationIds.length < 2 || operationIds.length > 1000
+      || new Set(operationIds).size !== operationIds.length || !generationId) return false;
+    const write = await this.whenWriterHeld({ label: "delivery.inbox-batch", operationId: operationIds[0]! }, () => this.mutate(file => {
+      const owners = operationIds.map(id => file.deliveryOperationOwners[id]);
+      const conversation = owners[0] && file.conversations[owners[0].conversationId];
+      if (!conversation || conversation.engine !== "claude" || !conversation.generations.some(g => g.id === generationId)
+        || owners.some(owner => !owner || owner.conversationId !== conversation.id || owner.terminalState !== null
+          || owner.command.kind !== "send")) return false;
+      for (const owner of owners) { owner!.batchId = batchId; owner!.targetGenerationId = generationId; }
+      return true;
+    }));
     return write.acquired ? write.value : null;
   }
 
   private writeDeliveryOperationGeneration(operationId: string, generationId: string): boolean {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
-      if (!owner?.retryOfOperationId) return false;
+      if (!owner?.retryOfOperationId && !owner?.batchId) return false;
+      delete owner.batchId;
       owner.targetGenerationId = generationId;
       return true;
     });

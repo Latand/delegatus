@@ -130,17 +130,21 @@ test.each([
   // SQLite's writer lock. Only that exact diagnostic is allowed; the exit,
   // durable ownership and restart replay still have to prove success.
   const releaseWarning = "[state lease] abandoned pipelines: SQLiteError: database is locked\n";
+  const admissionWarning = "[state lease] abandoned pipelines: StateLockDeferredError: state admission is busy at state.lease.release\n";
   const collect = async (child: ReturnType<typeof run>) => {
     const [output, errors, exit] = await Promise.all([
       new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
     ]);
     expect(exit).toBe(0);
-    expect(["", releaseWarning]).toContain(errors);
-    return { record: JSON.parse(output) as Pipeline, errors };
+    const waits = errors.split("\n").filter(line => line.startsWith("[blocking-wait] "));
+    for (const line of waits) expect(JSON.parse(line.slice("[blocking-wait] ".length)).site).toBe("state-write-lock");
+    const warnings = errors.split("\n").filter(line => line && !line.startsWith("[blocking-wait] ")).join("\n");
+    expect(["", releaseWarning.trim(), admissionWarning.trim()]).toContain(warnings);
+    return { record: JSON.parse(output) as Pipeline, errors: warnings };
   };
   const children = [run(deliveryFixture("owner-a"), contendedRelease), run(deliveryFixture("owner-b"))];
   const completed = await Promise.all(children.map(collect));
-  if (contendedRelease) expect(completed[0]!.errors).toBe(releaseWarning);
+  if (contendedRelease) expect([releaseWarning.trim(), admissionWarning.trim()]).toContain(completed[0]!.errors);
   const results = completed.map(({ record }) => record);
   const owner = results.find((record) => record.delivery?.active)!;
   const comparison = results.find((record) => record.delivery?.disposition === "comparison")!;
@@ -347,7 +351,7 @@ test("pipeline mutations refuse corrupt files and preserve individual rejected r
   try {
     for (const content of ["{", JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION + 1, pipelines: [] })]) {
       fs.writeFileSync(file, content, "utf8");
-      await expect(withPipelineMutation((_pipelines, persist) => persist())).rejects.toThrow();
+      await expect(withPipelineMutation(async (_pipelines, persist) => await persist())).rejects.toThrow();
       expect(fs.readFileSync(file, "utf8")).toBe(content);
     }
     const stages: PipelineStage[] = [
@@ -358,7 +362,7 @@ test("pipeline mutations refuse corrupt files and preserve individual rejected r
       const filename = path.join(root, "pipelines.json");
       const bytes = JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines: [pipeline] });
       fs.writeFileSync(filename, bytes, "utf8");
-      await withPipelineMutation((records, persist) => { expect(records).toEqual([]); persist(); });
+      await withPipelineMutation(async (records, persist) => { expect(records).toEqual([]); await persist(); });
       expect(fs.readFileSync(filename, "utf8")).toBe(bytes);
       const db = new Database(path.join(root, "state.sqlite"));
       try { expect(db.query("SELECT COUNT(*) AS count FROM state_rows WHERE collection='pipelines'").get()).toEqual({ count: 1 }); }
@@ -989,7 +993,7 @@ test.each(["pipelines.json", "pipelines-archive.json"])("ordinary legacy %s read
 
 test("pending close custody retains publication ownership and stays out of the archive", async () => isolatedDelivery(async () => {
   const owner = await createPipelineWithDelivery(deliveryFixture("close-custody-owner"), deliveryTarget);
-  await withPipelineMutation((pipelines, persist) => {
+  await withPipelineMutation(async (pipelines, persist) => {
     const record = pipelines.find((item) => item.id === owner.id)!;
     record.state = "closed";
     record.cursor = null;
@@ -997,7 +1001,7 @@ test("pending close custody retains publication ownership and stays out of the a
     record.closeTeardown = { id: "close-obligation", phase: "pending", waitingForActivation: false, acknowledgeHosts: false, flow: null };
     record.closeReport = { status: "pending", pending: [], stopped: [], alreadyStopped: [], unconfirmed: [], acknowledged: [],
       reviewers: [], stillRunning: [], notes: [], worktree: null };
-    persist([record]);
+    await persist([record]);
   });
   expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })?.id).toBe(owner.id);
   expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(0);
@@ -1006,11 +1010,11 @@ test("pending close custody retains publication ownership and stays out of the a
   borrowed.closeReport!.notes.push({ stageId: "build", attempt: 1, conversationId: null, agentPath: null, paneId: null, detail: "borrowed copy" });
   expect(loadPipelines()[0]!.closeTeardown!.waitingForActivation).toBeFalse();
   expect(loadPipelines()[0]!.closeReport!.notes).toEqual([]);
-  await withPipelineMutation((pipelines, persist) => {
+  await withPipelineMutation(async (pipelines, persist) => {
     const record = pipelines.find((item) => item.id === owner.id)!;
     record.closeTeardown!.phase = "settled";
     record.closeReport!.status = "settled";
-    persist([record]);
+    await persist([record]);
   });
   expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })).toBeNull();
   expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(1);
@@ -1070,6 +1074,23 @@ function providerStoreFixture(): Pipeline {
   });
   return lane;
 }
+
+test("suspension custody round-trips independently and rejects malformed stop evidence", async () => isolatedDelivery(() => {
+  const lane = providerStoreFixture();
+  const suspension = { reason: "account" as const, detail: "account left binding", requestedAt: "2026-10-15T00:00:00Z",
+    stoppedAt: "2026-10-15T00:00:01Z", stopRevision: 2, operatorStoppedAt: "2026-10-15T00:00:02Z" };
+  lane.runs[0]!.attempts[0]!.suspension = suspension;
+  savePipelines([lane]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.suspension).toEqual(suspension);
+  loadPipelines()[0]!.runs[0]!.attempts[0]!.suspension!.detail = "mutated read";
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.suspension!.detail).toBe(suspension.detail);
+  for (const bad of [{}, { ...suspension, reason: "unknown" }, { ...suspension, stoppedAt: "invalid" },
+    { ...suspension, requestedAt: null }, { ...suspension, operatorStoppedAt: 123 },
+    { ...suspension, stopRevision: -1 }, { ...suspension, stopRevision: "1" }]) {
+    lane.runs[0]!.attempts[0]!.suspension = bad as never;
+    expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+  }
+}));
 
 test("malformed provider waits and histories are rejected at the persistence boundary", async () => isolatedDelivery(() => {
   for (const bad of [{}, { condition: {} }, { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, resumeAt: "invalid" },
@@ -1141,5 +1162,56 @@ test("runtime-switch state survives store reopening and malformed targets are re
   const record = { id: "runtime-switch-store:build:1:1", seq: 1, requestedAt: "2026-10-02T10:00:00.000Z", actor: { kind: "operator" as const }, mode: "fork" as const, phase: "requested" as const, from: { ...seat, conversationId: "conversation_store", launchId: "launch-store", sessionId: "session-store", agentPath: "/sessions/store.jsonl" }, to: { ...seat, accountId: "account-b", accountPinned: false } };
   pipeline.runs[0]!.attempts.push({ n: 1, state: "running", effectiveRole: structuredClone(pipeline.stages[0]!.effectiveRole), launchId: "launch-store", conversationId: "conversation_store", sessionId: "session-store", agentPath: "/sessions/store.jsonl", paneId: null, flowId: null, startedAt: record.requestedAt, completedAt: null, input: "brief", activatedBy: null, output: null, verdict: null, error: null, runtimeSwitches: [record] });
   savePipelines([pipeline]); expect(loadPipelines()[0]?.runs[0]?.attempts[0]?.runtimeSwitches).toEqual([record]);
+  const retryRecord: import("./types").PipelineRuntimeSwitch = { ...record, retry: {
+    requestedAt: record.requestedAt, reason: "source host is gone", pendingReason: "waiting for source termination",
+    operatorStoppedAt: record.requestedAt,
+  } };
+  pipeline.runs[0]!.attempts[0]!.runtimeSwitches = [retryRecord];
+  savePipelines([pipeline]); expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches).toEqual([retryRecord]);
+  for (const invalid of [{ requestedAt: "invalid" }, { completedAt: "invalid" }, { operatorStoppedAt: "invalid" },
+    { reason: "x".repeat(2001) }, { pendingReason: 12 }]) {
+    const malformed = structuredClone(pipeline);
+    Object.assign(malformed.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry!, invalid);
+    expect(() => savePipelines([malformed])).toThrow("malformed pipeline record");
+  }
+  pipeline.runs[0]!.attempts[0]!.runtimeSwitches = [record];
   record.to.model = 123 as never; expect(() => savePipelines([pipeline])).toThrow("malformed pipeline record"); expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.to.model).toBe("gpt-6.1-sol");
+}));
+
+
+test("archive moves use bounded transactions and never enumerate retained archive payloads", async () => isolatedDelivery(async () => {
+  const make = (id: string) => {
+    const row = deliveryFixture(id); row.state = "closed"; row.cursor = null;
+    row.closedAt = "2026-07-02T00:00:00Z"; row.publication = "internal";
+    return row;
+  };
+  savePipelines(Array.from({ length: 40 },(_,i) => make(`cold-page-${i}`)));
+  let commits = 0;
+  expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"),{ beforeCommit: () => { commits++; } })).toBe(40);
+  expect(commits).toBe(3);
+  savePipelines([make("newly-settled")]);
+  const parse = spyOn(JSON,"parse");
+  try {
+    expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(1);
+    expect(parse.mock.calls.filter(([value]) => typeof value === "string" && value.includes('"id":"cold-page-'))).toHaveLength(0);
+  } finally { parse.mockRestore(); }
+  expect(loadArchivedPipelines()).toHaveLength(41);
+}));
+
+
+test("a failed archive page retains its source rows and the next sweep completes without duplicates", async () => isolatedDelivery(async () => {
+  const rows = Array.from({ length: 33 },(_,i) => {
+    const row = deliveryFixture(`retry-page-${i}`); row.state = "closed"; row.cursor = null;
+    row.closedAt = "2026-07-02T00:00:00Z"; row.publication = "internal"; return row;
+  });
+  savePipelines(rows);
+  let page = 0;
+  await expect(archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"),{
+    beforeCommit: () => { if (++page === 2) throw new Error("refused page"); },
+  })).rejects.toThrow("refused page");
+  expect(loadArchivedPipelines()).toHaveLength(16);
+  expect(loadPipelines()).toHaveLength(17);
+  expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(17);
+  expect(loadPipelines()).toEqual([]);
+  expect(new Set(loadArchivedPipelines().map(row => row.id)).size).toBe(33);
 }));

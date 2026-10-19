@@ -1,4 +1,4 @@
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasksForList } from "@/lib/tasks/store";
 import { runsElsewhere } from "@/lib/links/linked";
 import { prototypeReviewSummary } from "./model";
 import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
@@ -32,11 +32,11 @@ export type PrototypeAnswerMatch = { round: PrototypeReviewRound; input: DecideP
   | { round: PrototypeReviewRound; error: string; input?: never };
 
 /** Structured choices are conveniences; every remaining word is an owner note. */
-export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string): PrototypeAnswerMatch {
+export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string, replyContext = false): PrototypeAnswerMatch {
   const originalReply = text.normalize("NFC").replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~])/g, "$1");
   const refs = originalReply.match(/#proto-[a-f0-9]{8}\b/gi) ?? [];
-  if (!refs.length) return { round, error: "додайте посилання на раунд" };
-  if (refs.length !== 1 || refs[0]!.toLowerCase() !== prototypeReference(round)) return { round, error: "вкажіть один раунд" };
+  if (!refs.length && !replyContext) return { round, error: "додайте посилання на раунд" };
+  if (refs.length && (refs.length !== 1 || refs[0]!.toLowerCase() !== prototypeReference(round))) return { round, error: "вкажіть один раунд" };
   if (prototypeTextLength(originalReply) > 20_000) return { round, error: "скоротіть відповідь до 20000 символів" };
   const body = originalReply.replace(/^\s*Прототип «[^»]*»\s*/iu, "").replace(/#proto-[a-f0-9]{8}\b/i, "");
   const questions = round.questions ?? [];
@@ -47,6 +47,7 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string):
   let recommended = false;
   let reservation: string | undefined;
   let notesBeforeRecommendation = 0;
+  let ambiguous = false;
   for (const part of body.matchAll(/[^·\n]+/g)) {
     const segment = part[0].trim();
     if (!segment) continue;
@@ -59,7 +60,7 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string):
       continue;
     }
     let words = segment.replace(/^відповіді(?:\s+|$)/i, "");
-    const recommendation = /^рекомендовані(?=$|[^\p{L}\p{N}_])/iu.exec(words);
+    const recommendation = /^(?:рекомендовані|рекомендованные|рекомендованное|recommended)(?=$|[^\p{L}\p{N}_])/iu.exec(words);
     if (recommendation && questions.length) {
       recommended = true;
       words = words.slice(recommendation[0].length);
@@ -68,17 +69,26 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string):
       if (words.trim()) notes.push(words);
       continue;
     }
-    words = words.replace(/(?<!\S)([1-7])([a-f]+\+?|\+)(?!\S)/gi, (token, number: string, letters: string) => {
+    words = words.replace(/(?<![\p{L}\p{N}_])([1-9]\d*)(\s*(?::\s*)?)([a-z]+\+?|\+)(?![\p{L}\p{N}_])/giu, (token, number: string, gap: string, letters: string) => {
+      // Spaced words such as "2 days" and numbered custom prose stay notes.
+      // Compact choices and single option letters must name a declared option.
+      if (gap && letters.replace("+", "").length > 1 && /[m-z]/i.test(letters)) return token;
       const q = questions[Number(number) - 1];
       const options = [...letters.replace("+", "").toLowerCase()].map(c => c.charCodeAt(0) - 97);
-      if (!q || selected.has(q.id) || new Set(options).size !== options.length || options.some(i => i >= q.options.length)
-        || (!q.multiple && options.length > 1)) return token;
-      selected.set(q.id, { questionId: q.id, options, ...(letters.includes("+") ? { other: true as const } : {}) });
+      const prior = q && selected.get(q.id);
+      if (!q || (prior && (!q.multiple || options.some(i => prior.options.includes(i)))) || new Set(options).size !== options.length || options.some(i => i >= q.options.length)
+        || (!q.multiple && options.length > 1)) { ambiguous = true; return token; }
+      selected.set(q.id, { questionId: q.id, options: [...(prior?.options ?? []), ...options], ...(letters.includes("+") || prior?.other ? { other: true as const } : {}) });
       if (letters.includes("+")) otherTokens.push(token);
       return "";
     });
-    if (words.trim()) notes.push(words.trim());
+    if (words.split(/[,;]/).some(fragment => /^\d+\s*[:.)—–-]?$/.test(fragment.trim()))) ambiguous = true;
+    const remaining = words.replace(/^[\s,;]+|[\s,;]+$/g, "");
+    if (remaining) notes.push(remaining);
   }
+  const answerBody = body.replace(/^[\s·]+|[\s·]+$/g, "").replace(/^відповіді\s*/iu, "");
+  if (ambiguous || !answerBody || /^(?:[a-l]|\d+|так|ні|да|нет|yes|no|ок|ok)[.!?\s]*$/iu.test(answerBody))
+    return { round, error: "уточніть питання й варіант, наприклад 1b, 2a, або напишіть власну відповідь" };
   const comment = reservation?.trim() && notes.length > notesBeforeRecommendation
     ? [...notes.slice(0, notesBeforeRecommendation), reservation].join("\n")
     : notes.join("\n") || (recommended ? otherTokens.join(" ") : "");
@@ -101,7 +111,7 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string):
       if (!recommended) answer.other = true;
     }
   }
-  // A bare reference, or a bare Other token, still records exactly what was sent.
+  // Unanswered questions retain the owner's full custom reply.
   const needsCustom = !recommended && answers.some(a => a.other);
   const input: DecidePrototypeInput = { reviewId: round.id, chosen: [...chosen], originalReply,
     comment: comment || (needsCustom || (!questions.length && !chosen.size) ? originalReply : ""),
@@ -113,9 +123,13 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string):
 
 /** Match all retained rounds before filtering: a short-reference collision refuses identity.
     Only the runner's saved request record admits replay of an already recorded decision. */
-export function matchPrototypeAnswer(text: string, tasks: readonly BoardTask[] = loadTasks(), replayReviewId?: string,
-  seatRounds: readonly PrototypeReviewRound[] = loadSeatRounds()): PrototypeAnswerMatch | null {
-  const line = normalizeTelegramAnswer(text).split("\n").find(line => /#proto-[a-f0-9]{8}\b/i.test(line));
+export function matchPrototypeAnswer(text: string, tasks: readonly BoardTask[] = loadTasksForList(), replayReviewId?: string,
+  seatRounds: readonly PrototypeReviewRound[] = loadSeatRounds(), replyToText?: string): PrototypeAnswerMatch | null {
+  const explicit = /#proto-[a-f0-9]{8}\b/i.test(normalizeTelegramAnswer(text));
+  const identity = explicit ? text : replyToText ?? "";
+  const references = normalizeTelegramAnswer(identity).match(/#proto-[a-f0-9]{8}\b/gi) ?? [];
+  if (!explicit && new Set(references.map(ref => ref.toLowerCase())).size !== 1) return null;
+  const line = normalizeTelegramAnswer(identity).split("\n").find(line => /#proto-[a-f0-9]{8}\b/i.test(line));
   const ref = line?.match(/#proto-[a-f0-9]{8}\b/i)?.[0].toLowerCase();
   if (!ref) return null;
   const matches: Array<{ task?: BoardTask; round: PrototypeReviewRound }> = [
@@ -127,5 +141,5 @@ export function matchPrototypeAnswer(text: string, tasks: readonly BoardTask[] =
   const replay = replayReviewId === round.id && !!round.decision;
   if (task ? runsElsewhere(task) || (!replay && prototypeReviewSummary(task.prototypeReviews ?? [])?.waitingReviewId !== round.id)
     : !!round.decision && !replay) return null;
-  return parsePrototypeAnswer(round, text);
+  return parsePrototypeAnswer(round, text, !explicit);
 }

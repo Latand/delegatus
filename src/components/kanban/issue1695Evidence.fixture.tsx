@@ -1,5 +1,13 @@
+import { RelayChatsView } from "@/components/externalRelay/RelayChats";
+import type { RelayChatsPayload } from "@/lib/externalRelay/relayChats";
+import { PipelineTemplatePicker } from "@/components/pipelines/PipelineTemplatePicker";
+import { AttentionCard } from "@/components/runtime/AttentionCard";
+import { codexAttentionActions, projectCodexAttentionActions } from "@/lib/runtime/codexAttentionActions";
+import { questionsResolution } from "@/components/runtime/ConversationAttention";
+import type { RuntimeAttention } from "@/components/runtime/runtimeModel";
+import { useState } from "react";
 import { nativeAssociationForm } from "@/lib/attention/nativeAssociationForm";
-import { issueReportApprovalDrafts } from "@/lib/issueReports/approvalReply";
+import { issueReportApprovalForm } from "@/lib/issueReports/approvalForm";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import type { IssueReportFinding } from "@/lib/issueReports/scrub";
 import { enqueueOutbox, OUTBOX_LIMIT, readOutbox, seedLaunchOutbox, updateOutbox } from "@/components/conversation/outbox";
@@ -22,7 +30,7 @@ import { RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
-import { sampleTranscript } from "@/components/voiceCompanion/transcriptSample.fixture";
+import { sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
@@ -42,10 +50,13 @@ import { setKanbanCardsOpenByDefault } from "./cardOpenDefault";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { ORCHESTRATOR_PROMPT_VERSION, orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
+import { fixtureIncumbentMandate, type FixtureMandateKind } from "./rotationMandateFixture";
 import { readTaskHold, storedTaskHold } from "@/lib/tasks/hold";
 import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
+import { createFilesClientCache } from "@/hooks/useFiles";
+import { diffBoard } from "@/lib/boardDelta";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { prototypeReviewSummary, prototypeRoundsSuperseded } from "@/lib/prototypeReview/model";
 import type { PrototypeAnswer, PrototypeQuestion, PrototypeDeliveryPhase, PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
@@ -80,6 +91,7 @@ import { refreshTeamView } from "@/components/team/teamClient";
  */
 
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+const PROJECT_DERIVATION = SCENARIO === "project-derivation";
 const OVERVIEW_PERFORMANCE = SCENARIO === "overview-performance";
 const COLD_BOARD = SCENARIO === "cold-board";
 let releaseColdBoard!: () => void;
@@ -121,6 +133,9 @@ const EDITING = SCENARIO === "editing";
 const CODENAME_TIERS = SCENARIO === "tier-codename";
 const TIER_LIMITS = SCENARIO === "tier-limits" || CODENAME_TIERS;
 const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS;
+/* `&overlay-links`: the running verifier's last answer links one file of each preview kind, so a driver opens
+   the document preview from the feed the way an operator does. */
+const OVERLAY_LINKS = new URLSearchParams(location.search).has("overlay-links");
 /* The orchestrator's long report (#2179): a status answer with a heading,
    lists, a code block and a table, the shape of reply the seat wrapped into a
    narrow ribbon, so its measure can be read beside the operator's bubble. It
@@ -132,6 +147,11 @@ const AGENT_REPORT = SCENARIO === "agent-report";
    text several screens tall and `legacy` a preview stored without a judgment. */
 const REPORT_PREVIEW = AGENT_REPORT ? new URLSearchParams(location.search).get("report-preview") : null;
 const REPORT_PREVIEW_DIGEST = "a".repeat(64);
+const REPORT_PREVIEW_TITLE = REPORT_PREVIEW === "long"
+  ? "Delegatus refuses a requested launch on the second project while nothing holds it, and the refusal names a holder that finished long before the request"
+  : "Delegatus refuses a requested launch";
+/* The decision form the seat asks after reading the preview back: the tool's own approval form. */
+const REPORT_FORM_ID = `pr_${"f".repeat(32)}`;
 const reportPreviewLanguage = () => (localStorage.getItem("llv_lang") === "uk" ? "uk" : "en");
 const STAGES = SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
 /* The pipeline block in variant B (#2072 slice 3, docs/design/desktop-flat-cards.md §9):
@@ -146,7 +166,7 @@ const DRAG_BOARD = SCENARIO === "drag-board";
    owning some of its lanes. */
 const ARROWS = SCENARIO === "orchestrator-arrows";
 const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled";
-const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS || CPU_QUEUE;
+const PIPELINES = PROJECT_DERIVATION || SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS || CPU_QUEUE;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
 /* The seat-noise scenario (docs/design/seat-panel-noise.md) seats the orchestrator on a structured host too,
@@ -182,8 +202,8 @@ const VOICE_PRODUCT = VOICE && new URLSearchParams(location.search).get("mount")
    `voiceCompanion.loaded` back rather than its own clock, which may have passed the next minute. */
 const VOICE_LOADED = Math.floor(Date.now() / 60_000) * 60;
 const voice = { loaded: VOICE_LOADED, delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
-  /* What the settings routes were asked to write. The key itself is never kept: its length is all the driver needs. */
-  settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], sessionStarts: [] as Array<Record<string, unknown>>, settingsOpened: 0 };
+  /* What the settings routes were asked to write. */
+  settingsWrites: [] as Array<Record<string, unknown>>, sessionStarts: [] as Array<Record<string, unknown>>, settingsOpened: 0 };
 const voicePlan = (): CompanionPlan => ({ type: "pro", limitReached: false, observedAt: VOICE_LOADED * 1000,
   primary: { usedPercent: 23, resetsAt: VOICE_LOADED + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: VOICE_LOADED + 4 * 86_400, windowMinutes: 10_080 } });
 const VOICE_CODEX = new URLSearchParams(location.search).get("backend") === "codex";
@@ -377,6 +397,13 @@ const ASKS_YOU_SETTING = { enabled: ASKS_YOU };
    a context past the rotation line, twenty previous seats and a running host
    with its Stop host control — every element the row has to keep readable. */
 const SEAT_HEAD = SCENARIO === "seat-head";
+/* The incumbent's stored mandate for the rotation dialog's diff
+   (`&mandate=changed|unchanged`): derived from the current default, see
+   rotationMandateFixture.ts. Without it the seat keeps its one-line mandate. */
+const ROTATION_MANDATE_KIND = SEAT_HEAD ? new URLSearchParams(location.search).get("mandate") : null;
+const ROTATION_MANDATE = ROTATION_MANDATE_KIND === "changed" || ROTATION_MANDATE_KIND === "unchanged"
+  ? fixtureIncumbentMandate(ROTATION_MANDATE_KIND as FixtureMandateKind)
+  : null;
 const SEAT_UNCONFIRMED = SEAT_HEAD && new URLSearchParams(location.search).get("usage") === "unconfirmed";
 /* The same seat with its agent not running and its context past the rotation
    line: the status read reports both causes, as data, beside the sentences it
@@ -1566,6 +1593,48 @@ const stageChainPipelines: Pipeline[] = STAGE_CHAIN ? (() => {
         { stageId: "build", attempts: [attempt(1, "passed", null, done(30))] },
         { stageId: "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-bridge", attempts: [attempt(1, "running", null, { startedAt: iso(8 * MIN), ...passVia("build") })] },
       ], { stageId: "confirm-each-attachment-arrives-whole-on-the-phone-the-desktop-and-the-bridge", state: "running", input: null, activatedBy: null }),
+    /* The wide row hangs a fix under its gate: two gates, each with its own fix; Review fired once, Visual runs, Ui fix has no attempt. */
+    pipeline("p-chain-gates", L("Review and check the export screens", "Переглянути і перевірити екрани експорту"), "t-chain-gates", "running",
+      [stage("build", "builder", "review"), stage("review", "reviewer", "visual", { kind: "run", onFail: { to: "fix", maxRounds: 2 } }), stage("visual", "reviewer", null, { kind: "run", onFail: { to: "ui-fix", maxRounds: 2 } }), stage("fix", "builder", "review"), stage("ui-fix", "builder", "visual")],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "review", attempts: [attempt(1, "failed", null, { ...done(70), ...passVia("build") }), attempt(2, "passed", null, { ...done(50), ...passVia("fix") })] },
+        { stageId: "fix", attempts: [attempt(1, "passed", null, { ...done(60), ...failVia("review") })] },
+        { stageId: "visual", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...passVia("review") })] },
+      ], { stageId: "visual", state: "running", input: null, activatedBy: null }),
+    /* Two gates in a row, each with a fix wider than its gate and no attempt yet: the earlier fix takes the room up to the later fix, and wraps at spaces only. */
+    pipeline("p-chain-gates-long", L("Critique and review the sync screens", "Критика і рев’ю екранів синхронізації"), "t-chain-gates-long", "running",
+      [stage("build", "builder", "critique"), stage("critique", "architect", "review", { onFail: { to: "critique-fix", maxRounds: 2 } }), stage("review", "reviewer", null, { kind: "run", onFail: { to: "review-fix", maxRounds: 2 } }), stage("critique-fix", "builder", "critique"), stage("review-fix", "builder", "review")],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "critique", attempts: [attempt(1, "passed", null, { ...done(70), ...passVia("build") })] },
+        { stageId: "review", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...passVia("critique") })] },
+      ], { stageId: "review", state: "running", input: null, activatedBy: null }),
+    /* One fix shared by two gates is drawn once, under the first; it runs now because Visual failed. */
+    pipeline("p-chain-shared", L("Review and check the import screens", "Переглянути і перевірити екрани імпорту"), "t-chain-shared", "running",
+      [stage("build", "builder", "review"), stage("review", "reviewer", "visual", { kind: "run", onFail: { to: "fix", maxRounds: 2 } }), stage("visual", "reviewer", "merge", { kind: "run", onFail: { to: "fix", maxRounds: 2 } }), stage("fix", "builder", "review"), stage("merge", "cleaner", null)],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "review", attempts: [attempt(1, "passed", null, { ...done(70), ...passVia("build") })] },
+        { stageId: "visual", attempts: [attempt(1, "failed", null, { ...done(50), ...passVia("review") })] },
+        { stageId: "fix", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...failVia("visual") })] },
+      ], { stageId: "fix", state: "running", input: null, activatedBy: failVia("visual").activatedBy }),
+    /* A fix that failed with a stage after its gate: the lane waits on the operator. */
+    pipeline("p-chain-failed", L("Critique the sync, then review it", "Критика синхронізації, потім рев’ю"), "t-chain-failed", "needs_decision",
+      [stage("build", "builder", "critique"), stage("critique", "architect", "review", { onFail: { to: "critique-fix", maxRounds: 2 } }), stage("critique-fix", "builder", "critique"), stage("review", "reviewer", null, { kind: "run" })],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "critique", attempts: [attempt(1, "failed", null, { ...done(70), ...passVia("build") })] },
+        { stageId: "critique-fix", attempts: [attempt(1, "failed", null, { ...done(60), ...failVia("critique") })] },
+      ], { stageId: "critique-fix", state: "needs_decision", input: null, activatedBy: null }),
+    /* A fix with a name wider than its gate: the fix wraps inside its pill, the pass stages stay on one line, nothing overlaps. */
+    pipeline("p-chain-wide-long", L("Check every attachment on arrival", "Перевірити кожне вкладення при надходженні"), "t-chain-wide-long", "running",
+      [stage("build", "builder", "review"), stage("review", "reviewer", "merge", { kind: "run", onFail: { to: "review-fix-after-the-attachment-check", maxRounds: 2 } }), stage("review-fix-after-the-attachment-check", "builder", "review"), stage("merge", "cleaner", null)],
+      [
+        { stageId: "build", attempts: [attempt(1, "passed", null, done(90))] },
+        { stageId: "review", attempts: [attempt(1, "failed", null, { ...done(70), ...passVia("build") })] },
+        { stageId: "review-fix-after-the-attachment-check", attempts: [attempt(1, "running", null, { startedAt: iso(10 * MIN), ...failVia("review") })] },
+      ], { stageId: "review-fix-after-the-attachment-check", state: "running", input: null, activatedBy: failVia("review").activatedBy }),
   ];
 })() : [];
 
@@ -1776,6 +1845,14 @@ const mixedFailed = UNSTARTED ? add(conversation("mixed-failed", L("Replay the m
     state: "failed", initialMessage: "failed", retrySafe: true, error: "account limit reached: the weekly window resets in 3 days" },
 })) : null;
 
+// The historical project corpus also used by the derivation audit.
+if (PROJECT_DERIVATION) for (let i = 0; i < 280; i++) {
+  const builder = add(conversation(`history-builder-${i}`, `Historical work ${i}`));
+  const reviewers = [0, 1].map(j => add(conversation(`history-review-${i}-${j}`, `Historical review ${i}`)));
+  const flow = reviewFlow(`history-flow-${i}`, builder, reviewers[1], ["REQUEST_CHANGES", "REQUEST_CHANGES", "REQUEST_CHANGES", "APPROVE"], 100000);
+  flow.state = "closed";
+  flows.push(flow);
+}
 let revision = 1;
 function task(id: string, status: TaskStatus, title: string, description: string, updatedAgo: number, members: FileEntry[] = [], over: Partial<BoardTask> = {}): BoardTask {
   return {
@@ -1862,6 +1939,11 @@ const tasks: BoardTask[] = [
     task("t-chain-live", "blocked", L("Build, review and merge the export", "Зібрати, переглянути і злити експорт"), "", 10 * MIN),
     task("t-chain-long", "blocked", L("Confirm every attachment arrives whole", "Підтвердити, що кожне вкладення доходить цілим"), "", 8 * MIN),
     task("t-chain-wide", "assigned", L("Keep the review fix on the card, wide", "Залишити виправлення рев’ю на картці, широка"), "", 45 * MIN),
+    task("t-chain-gates", "assigned", L("Review and check the export screens", "Переглянути і перевірити екрани експорту"), "", 44 * MIN),
+    task("t-chain-gates-long", "assigned", L("Critique and review the sync screens", "Критика і рев’ю екранів синхронізації"), "", 45 * MIN),
+    task("t-chain-shared", "assigned", L("Review and check the import screens", "Переглянути і перевірити екрани імпорту"), "", 43 * MIN),
+    task("t-chain-failed", "assigned", L("Critique the sync, then review it", "Критика синхронізації, потім рев’ю"), "", 42 * MIN),
+    task("t-chain-wide-long", "assigned", L("Check every attachment on arrival", "Перевірити кожне вкладення при надходженні"), "", 41 * MIN),
   ] : []),
   ...(LABELS ? [task("t-labels", "assigned", "Build the board header lane", "Design, build and critique; the critique sent the first build back.", 2 * MIN)] : []),
   ...(REVIEW_SPENT ? [task("t-review-spent", "assigned", "Show the retry count in the banner", "The last review failed, and the fix after it was never reviewed.", 3 * MIN)] : []),
@@ -2305,6 +2387,17 @@ if (DRAG_BOARD) {
         { stageId: "review", state: "running", input: null, activatedBy: null }));
     }
   }
+  /* A live board: every working conversation has written a line since the last poll, as the
+     agents on a running board do. `window.dragBoardChurn()` is one such poll arriving. */
+  Object.assign(window, {
+    dragBoardChurn: () => {
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index]!;
+        if (file.activity === "live") files[index] = { ...file, size: file.size + 64, mtime: file.mtime + 1 };
+      }
+      fireTasksChanged();
+    },
+  });
 }
 if (OVERVIEW_SCOPE) {
   tasks.push(
@@ -2323,6 +2416,10 @@ if (ICONS) {
     const icon = stored[tasks[index]!.id];
     if (icon) tasks[index] = { ...tasks[index]!, icon } as BoardTask;
   }
+}
+if (PROJECT_DERIVATION) for (let i = 0; i < 600; i++) {
+  tasks.push(task(`history-task-${i}`, "done", `Historical task ${i}`, "Synthetic acceptance notes. ".repeat(12), 100000,
+    i < 60 ? [files.find(f => f.name === `history-builder-${i}.jsonl`)!] : [], i < 60 ? {} : { board: "hidden" }));
 }
 if (EDITING) {
   const at = (id: string) => tasks.findIndex((entry) => entry.id === id);
@@ -2451,6 +2548,7 @@ function transcriptOf(pathname: string): string {
   if (file === searchVer2) {
     const long = [asked(90 * MIN, `${file.title} — pick it up from the task text.`)];
     for (let step = 0; step < 24; step += 1) long.push(said((88 - step * 3) * MIN, `Step ${step + 1}: re-ran the rebuild against live traffic and checked the alias swap window.`));
+    if (OVERLAY_LINKS) long.push(said(2 * MIN, "Files from this run: [plan](/repo/notes/plan.md), [page](/repo/notes/page.html), [log](/repo/notes/run.txt), [shot](/repo/notes/shot.png), [report](/repo/notes/report.pdf), [gone](/repo/notes/gone.md)."));
     return `${long.join("\n")}\n`;
   }
   if (FIRST_MESSAGE && file === orchestrator) {
@@ -2542,9 +2640,7 @@ function transcriptOf(pathname: string): string {
         expected,
       ].join("\n"),
     };
-    const title = REPORT_PREVIEW === "long"
-      ? "Delegatus refuses a requested launch on the second project while nothing holds it, and the refusal names a holder that finished long before the request"
-      : "Delegatus refuses a requested launch";
+    const title = REPORT_PREVIEW_TITLE;
     const body = bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
     const judgment = REPORT_PREVIEW === "many" ? {
       assessment: "I reviewed the whole text. Several details still identify a machine and one line quotes the operator; I am returning it so you can see what remains.",
@@ -2585,7 +2681,14 @@ function transcriptOf(pathname: string): string {
         hintWarnings: REPORT_PREVIEW === "many" ? ["Known-name hints are unavailable; review names and identities yourself."] : [],
       }),
     }, reportPreviewLanguage());
-    return `${[asked(120, "Prepare a report for me to review."), said(60, preview)].join("\n")}\n`;
+    const form = seatRounds.find((round) => round.id === REPORT_FORM_ID)!;
+    const result = (secondsAgo: number, id: string, answer: Record<string, unknown>) => line(secondsAgo, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: JSON.stringify(answer, null, 2) }] }] } });
+    return `${[
+      asked(120, "Prepare a report for me to review."),
+      said(60, preview),
+      line(40, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_report_form", name: "mcp__viewer__publish_prototype_review", input: { clientRequestId: "report-approval", title: form.title, questions: form.questions } }] } }),
+      result(39, "toolu_report_form", { reviewId: form.id, taskId: null, project: PROJECT, title: form.title, variants: 0, questions: form.questions!.length, frames: 0, videos: 0 }),
+    ].join("\n")}\n`;
   }
   if (AGENT_REPORT && file === orchestrator) {
     return `${[
@@ -2640,6 +2743,7 @@ function transcriptOf(pathname: string): string {
 }
 
 const params = new URLSearchParams(location.search);
+const PIPELINE_INIT = params.get("pipelineinit");
 
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md). The seat made the lanes on five open
    tasks and spawned the export implementer; `&many=1` fills the board to about a hundred cards, a third
@@ -2984,6 +3088,16 @@ const evidence = {
   },
 };
 Object.assign(window, { evidence });
+if (PROJECT_DERIVATION) Object.assign(window, {
+  projectCorpus: { files: files.length, flows: flows.length, tasks: tasks.length, liveIds: files.filter(f => f.activity === "live").map(f => f.conversationId) },
+  projectPoll: () => {
+    files[0] = { ...files[0], mtime: files[0].mtime + 1, size: files[0].size + 1 };
+    window.dispatchEvent(new Event("llv:files-changed"));
+  },
+  projectCatalogHead: () => ({ size: files[0].size, mtime: files[0].mtime }),
+  projectSessions: () => Object.values(getRuntimeBus().getState().store.sessions).map(s => ({ id: s.conversationId, revision: s.revision })),
+  projectConnection: () => getRuntimeBus().getState().connection,
+});
 
 /* Streams stay silent, except the log stream, which reports it cannot connect
    so the feeds read their transcripts through the polled route below. */
@@ -3000,12 +3114,30 @@ class QuietEventSource {
 class StreamEventSource extends QuietEventSource {
   onmessage: ((event: { data: string }) => void) | null = null;
   onopen: (() => void) | null = null;
+  private heartbeats = new Set<(event: { data: string }) => void>();
+  private heartbeatTimer: number | undefined;
   constructor(url: string | URL) {
     super(url);
     if (String(url).startsWith("/api/runtime/stream")) {
       openStream(this);
       setTimeout(() => this.onopen?.(), 0);
+      // The real runtime route sends a named heartbeat every 15 seconds while
+      // quiet. A slow CPU-throttled mount can outlast the client's 20-second
+      // watchdog before the driver starts streaming its measured events.
+      if (PROJECT_DERIVATION) this.heartbeatTimer = window.setInterval(() => {
+        for (const listener of this.heartbeats) listener({ data: "{}" });
+      }, 15_000);
     }
+  }
+  addEventListener(type?: string, listener?: (event: { data: string }) => void) {
+    if (type === "heartbeat" && listener) this.heartbeats.add(listener);
+  }
+  removeEventListener(type?: string, listener?: (event: { data: string }) => void) {
+    if (type === "heartbeat" && listener) this.heartbeats.delete(listener);
+  }
+  close() {
+    window.clearInterval(this.heartbeatTimer);
+    this.heartbeats.clear();
   }
 }
 let streamSource: StreamEventSource | null = null;
@@ -3016,6 +3148,62 @@ Object.assign(window, {
 });
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+const pollTransport = new URLSearchParams(location.search).get("pollTransport");
+let pollBase: { raw: Record<string, unknown>; etag: string } | undefined;
+let pollSequence = 0;
+const pollReads: Array<{ delta: boolean; bytes: number }> = [];
+Object.assign(window, {
+  boardPollReads: pollReads,
+  boardPollStep: () => {
+    const index = tasks.findIndex(task => task.id === "t-search");
+    tasks[index] = { ...tasks[index], text: `${tasks[index].text} updated` };
+    files[0] = { ...files[0], size: files[0].size + 1 };
+    fireTasksChanged();
+  },
+  boardPollBench: async (input: { before: string; after: string; delta: string }) => {
+    const results: Record<string, number[]> = {};
+    const expected = JSON.parse(input.after);
+    const equal = (a: unknown, b: unknown): boolean => {
+      if (a === b) return true;
+      if (!a || !b || typeof a !== "object" || typeof b !== "object" || Array.isArray(a) !== Array.isArray(b)) return false;
+      const left = a as Record<string, unknown>, right = b as Record<string, unknown>;
+      return Object.keys(left).length === Object.keys(right).length && Object.keys(left).every(key => Object.hasOwn(right, key) && equal(left[key], right[key]));
+    };
+    for (const mode of ["full", "delta"]) {
+      const samples: number[] = [];
+      for (let i = 0; i < 8; i++) {
+        let step = 0;
+        const cache = createFilesClientCache(async () => new Response(step++ === 0 ? input.before : mode === "full" ? input.after : input.delta, {
+          headers: { ETag: step === 1 ? "before" : "after", "x-llv-board-protocol": "2", ...(step > 1 && mode === "delta" ? { "x-llv-files-delta-base": "before" } : {}) },
+        }));
+        try {
+          await cache.revalidate();
+          const start = performance.now();
+          await cache.revalidate();
+          const elapsed = performance.now() - start;
+          if (!equal(cache.certifiedGlobal()?.raw, expected)) throw new Error("board benchmark state mismatch");
+          if (i) samples.push(elapsed);
+        } finally { cache.dispose(); }
+      }
+      results[mode] = samples;
+    }
+    return results;
+  },
+});
+
+function pollResponse(body: string, init?: RequestInit): Response {
+  const raw = { ...JSON.parse(body), boardProtocol: 2, boardScope: "fixture.global" };
+  const headers = new Headers(init?.headers);
+  const etag = `fixture-${++pollSequence}`;
+  const delta = pollTransport === "delta" && pollBase && headers.get("if-none-match") === pollBase.etag;
+  const encoded = delta ? JSON.stringify({ deltas: [diffBoard(pollBase!.raw, raw, pollBase!.etag, etag)] }) : JSON.stringify(raw);
+  const response = new Response(encoded, { headers: { ETag: etag, "content-type": "application/json", "x-llv-board-protocol": "2",
+    ...(delta ? { "x-llv-files-delta-base": pollBase!.etag } : {}) } });
+  pollBase = { raw, etag };
+  pollReads.push({ delta: Boolean(delta), bytes: new TextEncoder().encode(encoded).length });
+  return response;
+}
 
 /* A production-shaped, invented catalog for the landing board's poll cost.
    Keep inactive history: the Overview still projects it before filtering. */
@@ -3049,6 +3237,17 @@ if (OVERVIEW_PERFORMANCE) {
    agent's renders have — a desktop board, a phone screen, a wide strip, a
    small crop — so the grid meets the aspect ratios it will meet. */
 const ALBUM = params.get("album") === "1";
+/* `&olderfails=1`: the album's and the report log's older pages are refused,
+   so «Show older» meets the line that says so beside it. */
+const OLDER_FAILS = params.get("olderfails") === "1";
+/* `&dismissrefused=1`: dismissing a launch that did not start is refused, and
+   `&boardrefuses=1`: a board write that closes a conversation is refused for
+   good, so what the click took away comes back with the reason. */
+const DISMISS_REFUSED = params.get("dismissrefused") === "1";
+const BOARD_REFUSES = params.get("boardrefuses") === "1";
+/* `&settingsrefuse=1`: every write to the voice companion's settings is refused
+   with COMPANION_UNAVAILABLE, so a press flips and meets its reason. */
+const SETTINGS_REFUSE = params.get("settingsrefuse") === "1";
 function mockRender(width: number, height: number, hue: number, label: string, phone = false): string {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -3088,6 +3287,11 @@ function mockRender(width: number, height: number, hue: number, label: string, p
 const PROTO = params.get("proto") ?? (CALM ? "1" : null);
 const protoPosts: unknown[] = [];
 const protoTelegramPosts: unknown[] = [];
+/* `&protoRefuse=1` makes both save endpoints answer as the Viewer does when its
+   state is unavailable (503), until `protoAcceptSaves()` is called. The flag
+   lives in the URL, so a reload keeps refusing and the round stays undecided. */
+let protoRefusing = params.has("protoRefuse");
+const protoRefusal = () => new Response(JSON.stringify({ error: "prototype review is unavailable" }), { status: 503, headers: { "content-type": "application/json" } });
 /* `&tgstate=sent|uncertain|unknown` starts the Telegram record in that state; the default is a failed post. */
 function telegramFixturePost(key: string): PrototypeRoundView["telegramPost"] {
   const state = params.get("tgstate");
@@ -3105,7 +3309,8 @@ function protoSummary(rounds: PrototypeRoundView[]): PrototypeReviewSummary {
   const waitingDismissal = summary.waitingReviewId ? protoHidden.get(summary.waitingReviewId) : undefined;
   /* As the Viewer's own read: a decision this installation delivers carries its delivery's phase on the card too. */
   const phase = rounds.at(-1)?.decision?.delivery.phase;
-  return { ...summary, ...(summary.decision && phase ? { decision: { ...summary.decision, phase } } : {}), ...(waitingDismissal ? { waitingDismissal } : {}) };
+  const undelivered = rounds.filter(round => round.decision?.delivery.phase === "attention").map(round => ({ reviewId: round.id, title: round.title, at: round.decision!.at }));
+  return { ...summary, ...(undelivered.length ? { undelivered } : {}), ...(summary.decision && phase ? { decision: { ...summary.decision, phase } } : {}), ...(waitingDismissal ? { waitingDismissal } : {}) };
 }
 function protoPublish(): void {
   for (const [taskId, rounds] of Object.entries(protoRounds)) {
@@ -3226,6 +3431,7 @@ if (PROTO) {
   Object.assign(window, {
     protoPosts,
     protoTelegramPosts,
+    protoAcceptSaves: () => { protoRefusing = false; },
     protoHoldSave: () => { (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave = new Promise<void>((resolve) => { releaseSave = resolve; }); },
     protoReleaseSave: () => { releaseSave?.(); releaseSave = null; delete (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave; },
     protoPhase: (taskId: string, phase: PrototypeDeliveryPhase) => {
@@ -3292,6 +3498,13 @@ if (DECISIONS) {
     Object.assign(seatRounds[0]!, form, { source: { conversationId: null }, nativeAssociationState: "pending" });
     seatRounds.splice(1); delete protoRounds["t-search"];
   }
+  if (DECISIONS === "undelivered") {
+    for (const [index, round] of [...seatRounds, ...Object.values(protoRounds).flat()].entries()) {
+      round.decision = { chosen: [], answers: (round.questions ?? []).map(question => ({ questionId: question.id, options: [0] })),
+        comment: L("Keep the recommended answer; it is already saved.", "Залиште рекомендовану відповідь; її вже збережено."), at: iso(MIN),
+        delivery: { state: (["pending", "uncertain", "failed"] as const)[index % 3]!, phase: "attention", retryable: true } };
+    }
+  }
   if (DECISIONS === "answered") {
     const held = seatRounds[0]!;
     held.decision = { chosen: [], answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [0] }], comment: "", at: iso(MIN), delivery: { state: "sent", retryable: false } };
@@ -3299,16 +3512,22 @@ if (DECISIONS) {
   protoPublish();
   Object.assign(window, { decisionPosts });
 }
+if (REPORT_PREVIEW) {
+  seatRounds.push({ id: REPORT_FORM_ID, taskId: null, project: PROJECT, createdAt: iso(40), source: { conversationId: orchestrator.conversationId ?? null }, variants: [],
+    ...issueReportApprovalForm({ digest: REPORT_PREVIEW_DIGEST, title: REPORT_PREVIEW_TITLE }, reportPreviewLanguage()) });
+  Object.assign(window, { decisionPosts });
+}
 /* What the Viewer answers for the column: each task's waiting round with its task, then the seat's open questions. */
 function fixtureDecisions() {
   const fromTasks = Object.entries(protoRounds).flatMap(([taskId, rounds]) => {
     const waiting = rounds.at(-1);
     const held = tasks.find((entry) => entry.id === taskId);
-    return waiting && !waiting.decision && !protoHidden.has(waiting.id) && held ? [{ ...waiting, taskTitle: held.text.split("\n")[0] }] : [];
+    return held ? rounds.filter(round => (!round.decision && round === waiting && !protoHidden.has(round.id)) || round.decision?.delivery.phase === "attention")
+      .map(round => ({ ...round, taskTitle: held.text.split("\n")[0] })) : [];
   });
-  return [...fromTasks, ...seatRounds.filter((round) => !round.decision || (round.nativeAssociationState && round.decision.answers?.every(answer => answer.options[0] === 1)))].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return [...fromTasks, ...seatRounds.filter((round) => !round.decision || round.decision.delivery.phase === "attention" || (round.nativeAssociationState && round.decision.answers?.every(answer => answer.options[0] === 1)))].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
-const seatDecisionNotices = () => seatRounds.filter((round) => !round.decision).map((round) => ({ id: `prototype:${round.id}`, project: PROJECT, taskId: null, reviewId: round.id, title: round.title, asks: "questions" as const, createdAt: round.createdAt, target: { kind: "seat-decision" as const, project: PROJECT, reviewId: round.id } }));
+const seatDecisionNotices = () => seatRounds.filter((round) => !round.decision || round.decision.delivery.phase === "attention").map((round) => ({ ...(round.decision ? { undelivered: true as const } : {}), id: `prototype:${round.id}`, project: PROJECT, taskId: null, reviewId: round.id, title: round.title, asks: "questions" as const, createdAt: round.createdAt, target: { kind: "seat-decision" as const, project: PROJECT, reviewId: round.id } }));
 type FixtureAlbumItem = { id: string; src: string; name: string | null; ts: number; via: "read" | "named" | "pasted"; source: { key: string; conversationId: string | null; path: string; stage?: { pipelineId: string; stageId: string; attempt: number; round?: number } }; isNew: boolean };
 const albumOpened = new Map<string, number>([["t-export", Date.now()]]);
 const albumSource = (file: FileEntry, stage?: { pipelineId: string; stageId: string; attempt: number; round?: number }) => ({ key: file.conversationId ?? file.path, conversationId: file.conversationId ?? null, path: file.path, ...(stage ? { stage } : {}) });
@@ -3621,6 +3840,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   const method = (init?.method ?? "GET").toUpperCase();
+  if (PIPELINE_INIT && url.pathname === "/api/pipelines/preflight") return PIPELINE_INIT === "refused"
+    ? new Response(JSON.stringify({ error: "initialization refused for the Delegatus state directory", code: "initialization_refused", path: "/project" }), { status: 403 })
+    : json({ ok: true, repoDir: "/project", gitCommonDir: "/project/.git", worktreeParent: "/" });
   if (WORKER_SCENE && url.pathname === "/api/operator/settings") {
     return json({ ok: true, locale: { value: new URLSearchParams(location.search).get("lang") ?? "en", source: "chosen", changedAt: iso(0) }, timeZone: null });
   }
@@ -3657,6 +3879,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
+  /* «Keys» (docs/design/keys-settings.md): the driver answers the section's routes, or hands them to the real ones. */
+  if ((HEADER_MENU || SCENARIO === "memory-settings" || SCENARIO === "keys") && url.pathname.startsWith("/api/keys")) return serverFetch(url.pathname + url.search, init);
+  if (SCENARIO === "keys" && url.pathname === "/api/transcribe/backend") return serverFetch(url.pathname + url.search, init);
   /* Role memory (docs/design/role-memory.md §3.1): `&rolememory=1` hands the rules window and the card's lesson line to the driver's real routes. */
   if (ROLE_MEMORY && url.pathname.startsWith("/api/role-memory")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
@@ -3665,6 +3890,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if ((TICK_CARDS || SEAT_TICK_DRIVER) && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
+  if (OVERLAY_LINKS && url.pathname.startsWith("/api/artifact")) return serverFetch(url.pathname + url.search, init);
   if (PROTO && url.pathname === "/api/transcribe" && method === "POST") {
     /* A transcription the driver holds back, to close the review while it is awaited. */
     const held = (window as unknown as { protoTranscribeDelay?: number }).protoTranscribeDelay;
@@ -3683,13 +3909,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return json({ ok: true, at, by, undo: !!body.undo, dismissed: [target], alreadyClear: [], changed: [] });
     }
   }
-  if ((DECISIONS || PROTO) && url.pathname === "/api/projects/decisions") {
+  if ((DECISIONS || PROTO || REPORT_PREVIEW) && url.pathname === "/api/projects/decisions") {
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[]; reject?: true };
+      const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[]; reject?: true; retry?: true };
       decisionPosts.push(body);
+      if (protoRefusing) return protoRefusal();
       const held = [...seatRounds, ...Object.values(protoRounds).flat()].find((round) => round.id === body.reviewId);
       if (!held) return json({ error: "review not found" }, 404);
-      held.decision = { ...(body.reject ? { rejected: true as const } : {}), chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
+      if (body.retry && held.decision) held.decision = { ...held.decision, delivery: { state: "sent", phase: "delivered", retryable: false } };
+      else held.decision = { ...(body.reject ? { rejected: true as const } : {}), chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
       protoPublish();
       if (held.nativeAssociationState) held.nativeAssociationState = body.answers?.every((answer: { options: number[] }) => answer.options[0] === 1) ? "approved" : "refused";
       return json({ project: PROJECT, decisions: fixtureDecisions() });
@@ -3711,6 +3939,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "POST") {
       const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; reject?: true; answers?: PrototypeAnswer[]; skip?: true };
       protoPosts.push({ taskId, ...body });
+      if (protoRefusing) return protoRefusal();
       /* A held save has not been written yet: the decision is recorded only once it is released. */
       await (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave;
       const held = rounds.find((entry) => entry.id === body.reviewId);
@@ -3747,7 +3976,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       albumOpened.set(taskId, Date.now());
       return json({ ok: true, lastOpenedAt: Date.now() });
     }
-    return json(albumPage(taskId));
+    if (OLDER_FAILS && url.searchParams.has("cursor")) return json({ error: "album index is busy" }, 503);
+    const page = albumPage(taskId);
+    return json(OLDER_FAILS ? { ...page, nextCursor: "older" } : page);
   }
   if (NEW_AGENT && url.pathname === "/api/accounts" && method === "GET") {
     return json(NEW_AGENT_SEED === "signed-out" ? {
@@ -3874,7 +4105,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
            folder it had before Confirm, since a seat read keyed on another folder answers from its own older cache. */
         ...(TELEGRAM_STEP || FM_SEAT ? { projectCwds: { [PROJECT]: "/repo/atlas" } } : {}),
       };
-    const body = JSON.stringify({ ...scoped, ...(DECISIONS && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    const body = JSON.stringify({ ...scoped, ...((DECISIONS || REPORT_PREVIEW) && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (COLD_BOARD) {
       const headers = new Headers(init?.headers);
       const required = headers.get("x-llv-files-generation");
@@ -3895,6 +4126,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       } });
     }
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
+    if (pollTransport) return pollResponse(body, init);
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
   }
   if (url.pathname === "/api/attention") {
@@ -3919,6 +4151,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "PATCH") {
       const body = JSON.parse(String(init?.body)) as { mutations?: BoardMutationV1[] };
       evidence.boardMutations.push(...(body.mutations ?? []));
+      if (BOARD_REFUSES && body.mutations?.some((mutation) => mutation.kind === "close")) return json({ error: "INVALID_REQUEST" }, 400);
       const reduced = applyBoardMutations(board, body.mutations ?? []);
       board = { ...reduced, schemaVersion: 1, revision: board.revision + 1, pathAliases: reduced.pathAliases ?? {} };
       return json({ ok: true, applied: true, board });
@@ -3955,6 +4188,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
   }
   if (url.pathname === "/api/orchestrator/reports") {
+    if (OLDER_FAILS && url.searchParams.has("before")) return json({ error: "report log is busy" }, 503);
     const known = new Map<string, "task" | "pipeline">([
       ...tasks.map((task) => [task.id, "task"] as const),
       ...pipelines.map((pipeline) => [pipeline.id, "pipeline"] as const),
@@ -4083,6 +4317,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     /* «Launch did not start» dismissed: the row is kept as failed, and an
        unnamed launch placeholder with nothing else on it is done. */
+    if (method === "PATCH" && DISMISS_REFUSED) return json({ error: "the launch started after all" }, 409);
     if (method === "PATCH") {
       const assignments = current.assignments.map((assignment) => (assignment.launchId === body.launchId
         ? { ...assignment, state: "failed" as const, error: "launch did not start (dismissed)", at: new Date().toISOString() }
@@ -4309,6 +4544,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ calls: held.callMemoryRows });
   }
   if (VOICE && url.pathname === "/api/voice-companion/settings") {
+    if (method === "PUT" && SETTINGS_REFUSE) return json({ code: "COMPANION_UNAVAILABLE" }, 503);
     if (method === "PUT") { const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>; voice.settingsWrites.push(body); Object.assign(voiceSettings, body); }
     return json(voiceSettings);
   }
@@ -4318,14 +4554,15 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     voice.sessionStarts.push({ project: body.project, locale: body.locale, offer: typeof body.sdp === "string" && body.sdp.startsWith("v=0") });
     return json({ code: "CODEX_LIMIT_REACHED", resetsAt: VOICE_LOADED + 7_200 }, 409);
   }
-  if (VOICE && url.pathname === "/api/voice-companion/key" && method === "PUT") {
-    if (voiceSettings.keySource === "env") return json({ code: "KEY_FROM_ENV" }, 409);
-    const key = String((JSON.parse(String(init?.body ?? "{}")) as { key?: unknown }).key ?? "");
-    if (!key.trim() || /\s/u.test(key.trim())) return json({ code: "INVALID_KEY" }, 400);
-    voice.keyWrites.push(key.length);
-    voiceSettings.keySource = "file";
-    return json(voiceSettings);
-  }
+  /* «Keys», which the settings row opens on the OpenAI key (docs/design/keys-settings.md §4): the list as its route answers it, on placeholders. */
+  if (VOICE && url.pathname === "/api/keys") return json({ staging: false, owner: true, keys: [
+    { id: "openrouter", variable: "OPENROUTER_API_KEY", source: "missing", masked: null },
+    { id: "openai", variable: "OPENAI_API_KEY", source: voiceSettings.keySource, masked: voiceSettings.keySource === "missing" ? null : "sk-proj-••••••••2222" },
+    { id: "elevenlabs", variable: "ELEVENLABS_API_KEY", source: "missing", masked: null },
+    { id: "soniox", variable: "SONIOX_API_KEY", source: "missing", masked: null },
+    { id: "fishaudio", variable: "FISH_AUDIO_API_KEY", source: "missing", masked: null },
+    { id: "telegram", variable: "DELEGATUS_TELEGRAM_BOT_TOKEN", source: "missing", masked: null },
+  ] });
   if (VOICE && url.pathname === "/api/telemetry") return json({ enabled: false, locked: false, noticeDismissed: true });
   if (VOICE && url.pathname === "/api/memory/settings") return json({ enabled: false, capUsd: 5, spentUsd: 0 });
   if (url.pathname === "/api/log/provenance" && ROLE_AVATARS) {
@@ -4346,20 +4583,6 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ],
     });
   }
-  if (REPORT_PREVIEW && url.pathname === "/api/log/suggestions") {
-    /* The set the seat offers after reading the preview back: the tool's own approving draft beside a no and an edit. */
-    const uk = reportPreviewLanguage() === "uk";
-    const offered = url.searchParams.get("conversationId") === orchestrator.conversationId;
-    return json({ set: offered ? {
-      conversationId: orchestrator.conversationId, setId: "rsg_report_preview", at: iso(30),
-      origin: { kind: "manager", conversationId: orchestrator.conversationId, role: "orchestrator" },
-      replies: [
-        issueReportApprovalDrafts(REPORT_PREVIEW_DIGEST)[reportPreviewLanguage()],
-        uk ? { label: "Ні, не публікуй", text: "Ні, не публікуй цей звіт." } : { label: "No, do not publish", text: "No, do not publish this report." },
-        uk ? { label: "Зміни текст…", text: "Зміни текст: " } : { label: "Edit the text…", text: "Edit the text: " },
-      ],
-    } : null });
-  }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });
   if (url.pathname === "/api/orchestrator/seat" && method === "POST" && FM_SEAT) {
@@ -4378,8 +4601,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     evidence.seatReads += 1;
     return json({
       seat: {
-        project: PROJECT, seatEpoch: 3, conversationId: orchestrator.conversationId, path: orchestrator.path, mandate: "Keep the project moving.",
-        promptVersion: SEAT_HEAD ? ORCHESTRATOR_PROMPT_VERSION - 1 : null, predecessorConversationId: null, state: "active",
+        project: PROJECT, seatEpoch: 3, conversationId: orchestrator.conversationId, path: orchestrator.path, mandate: ROTATION_MANDATE?.mandate ?? "Keep the project moving.",
+        promptVersion: ROTATION_MANDATE ? ROTATION_MANDATE.promptVersion : SEAT_HEAD ? ORCHESTRATOR_PROMPT_VERSION - 1 : null, predecessorConversationId: null, state: "active",
         intent: { clientRequestId: "seat-atlas", mode: "spawn", launchId: null, error: null }, designatedAt: iso(9 * 60 * MIN), activatedAt: iso(9 * 60 * MIN),
       },
       pending: null,
@@ -4548,7 +4771,14 @@ function voiceCompanionScene() {
       publish({ ...event, type: "playback.stopped", reason: "ended", eventId: `${event.eventId}:pause` });
     }
   });
-  void adapter.finished.then(() => { voice.finished = true; });
+  void adapter.finished.then(() => {
+    if (params.get("seatmessage") === "1") {
+      const last = voice.events.at(-1) as CompanionEvent;
+      publish({ ...last, type: "orchestrator.report", eventId: "whole-orchestrator-message", reportId: "voice-whole-message",
+        status: "message", project: PROJECT, at: Date.parse("2026-10-15T12:00:00Z"), text: sampleOrchestratorMessage(UK ? "uk" : "en") });
+    }
+    voice.finished = true;
+  });
   Object.assign(window, { voiceCompanion: voice });
   let sendLost = params.get("sendlost") === "1";
   const shown: VoiceCompanionAdapter = {
@@ -4561,6 +4791,8 @@ function voiceCompanionScene() {
       const record = sampleTranscript(UK ? "uk" : "en", PROJECT);
       record.entries.push({ id: "standalone-report", kind: "report", atMs: 90_000, order: 100,
         data: { project: PROJECT, projectName: "Atlas", status: "result", text: UK ? "Усі перевірки завершено. Звіт збережено після завершення розмови." : "All checks completed. This report remains saved after the call ended." } });
+      if (params.get("seatmessage") === "1") record.entries.push({ id: "report-voice-whole-message", kind: "report", atMs: 91000, order: 101,
+        data: { project: PROJECT, projectName: "Atlas", status: "message", text: sampleOrchestratorMessage(UK ? "uk" : "en") } });
       return { ...record, usage: VOICE_CODEX ? { backend: "codex" as const, callSeconds: 252, callFinal: true, plan: voicePlan(), planStartPercent: 21 }
         : { callUsd: 0.19, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 } };
     } } : {}),
@@ -4590,17 +4822,58 @@ function voiceCompanionScene() {
     </>
   );
 }
+function CodexCallbacksScene() {
+  const [answer, setAnswer] = useState<unknown>(null);
+  const scenario = new URLSearchParams(location.search).get("callback") ?? "permissions";
+  const unowned = scenario === "uncertain" || scenario === "unavailable";
+  const row: RuntimeAttention = {
+    id: "callback", conversationId: "callback-thread", kind: scenario === "question" ? "question" : "permission",
+    state: "open", unowned, createdAt: "2026-10-15T00:00:00Z",
+    request: scenario === "question" ? { questions: [
+      { prompt: L("Choose a deployment region", "Виберіть регіон розгортання"), header: L("Region", "Регіон"), isOther: true, options: [{ label: "Europe" }, { label: "Asia" }] },
+      { prompt: L("Enter the release note", "Введіть примітку до випуску"), isOther: true },
+    ] } : { title: L("Allow the requested network access?", "Дозволити запитаний доступ до мережі?"),
+      detail: unowned ? "Recovery outcome" : undefined,
+      protocol: { engine: "codex", method: "item/permissions/requestApproval", actions: codexAttentionActions("item/permissions/requestApproval", { permissions: { network: { enabled: true } } }) },
+    },
+    ...(unowned ? { codexReceipt: {
+      identity: { generation: "fixture", threadId: "thread", turnId: "turn", itemId: "item", method: "item/permissions/requestApproval", requestId: 1, approvalId: null },
+      requestDigest: "a".repeat(64), receivedAt: "2026-10-15T00:00:00Z",
+      recovery: { at: "2026-10-15T00:01:00Z", outcome: scenario === "uncertain" ? "delivery-uncertain" : "callback-unavailable", reason: "process-lost" },
+    } } : {}),
+  };
+  if (scenario === "long-label") {
+    row.kind = "question";
+    row.request = { question: { prompt: L("Choose the retained value", "Виберіть збережене значення"), options: [{ label: `${"x".repeat(256)}…` }] },
+      protocol: { engine: "codex", method: "item/tool/requestUserInput", responseRef: "a".repeat(64) } };
+  } else if (scenario === "large-permissions") {
+    row.request = { title: L("Allow the requested file access?", "Дозволити запитаний доступ до файлів?"),
+      protocol: { engine: "codex", method: "item/permissions/requestApproval",
+        actions: projectCodexAttentionActions("item/permissions/requestApproval", { permissions: { fileSystem: {
+          read: Array.from({ length: 110 }, (_, i) => `/workspace/${"p".repeat(70)}${i}`),
+        } } }, "a".repeat(64)) } };
+  }
+  return <main className="w-full max-w-2xl p-4" data-codex-callback>
+    <AttentionCard attention={row} onAction={setAnswer} onAnswerQuestion={index => setAnswer(questionsResolution(row, [[index]]))}
+      onAnswerQuestions={(selected, custom) => setAnswer({ selected, custom })} />
+    <output data-callback-answer className="block break-all text-primary">{answer ? JSON.stringify(answer) : ""}</output>
+  </main>;
+}
+
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
 // Mount the production dock beside the Viewer for shared desktop-host cases.
 const dockWidth = new URLSearchParams(location.search).get("dockWidth");
 if (dockWidth === "440" || dockWidth === "360") localStorage.setItem(`llvOrchestratorPanelWidth:${PROJECT}`, dockWidth);
-createRoot(document.getElementById("root")!).render(dockWidth === "440" || dockWidth === "360" ? (
+const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
+  (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
+    engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
+createRoot(document.getElementById("root")!).render(PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
   </div>
-) : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>

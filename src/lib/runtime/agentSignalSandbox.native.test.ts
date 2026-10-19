@@ -11,8 +11,12 @@ import { materializeStructuredHostAccess, type StructuredHostAccessMaterializati
 import type { EngineHost } from "./engineHost";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { launchDetached, reviewerCommand, headlessRuns, type BuiltHeadlessCommand } from "@/lib/agent/headless";
-import { headlessFixtureTransport, setHeadlessSpawnForTests } from "./agentSignalSandbox";
+import { headlessFixtureTransport, setHeadlessSpawnForTests, signalDomain, spawnManagedEngine } from "./agentSignalSandbox";
+import { CodexSocketTransport } from "./codexSocketTransport";
 import { setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { adoptCodexRegistryHosts, bindCodexHostPersistence, codexHostColumns, detachCodexHostForViewerRestart, stopTerminalStructuredOrphan } from "./registry";
+import type { AgentSignalDomain } from "./agentSignalSandbox";
 
 async function proveHeadless(built: BuiltHeadlessCommand, root: string, marker: string): Promise<void> {
   const previous = headlessFixtureTransport();
@@ -80,6 +84,8 @@ async function prove(host: EngineHost, marker: string, trigger: () => Promise<un
     expect(fs.existsSync(marker), trace.slice(-8).join("\n") + String((host as unknown as { stderrTail?: string }).stderrTail ?? "")).toBeTrue();
     expect(JSON.parse(fs.readFileSync(marker, "utf8"))).toMatchObject({ foreignRefused: true, ownStopped: true });
     if (waitForTurn) await Promise.race([pump, Bun.sleep(10_000).then(() => { throw new Error("native fixture did not finish its turn"); })]);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${trace.slice(-8).join("\n")}\n${String((host as unknown as { stderrTail?: string }).stderrTail ?? "")}`, { cause: error });
   } finally {
     await host.release();
     await pump;
@@ -156,6 +162,106 @@ test.skipIf(!enabled || !process.env.LLV_CODEX_BINARY).each(profiles)("real stru
     access?.cleanup(); home.cleanup();
   }
 }, 90_000);
+
+test.skipIf(!enabled)("a missing sandbox dependency stays explicit over the persistent socket launch", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "socket-preflight-"));
+  const tools = path.join(root, "tools"); fs.mkdirSync(tools);
+  fs.symlinkSync(fs.realpathSync(Bun.which("python3")!), path.join(tools, "python3"));
+  const env = { ...process.env, HOME: root, TMPDIR: root, XDG_CONFIG_HOME: path.join(root, "config"),
+    LLV_STATE_DIR: path.join(root, "state"), PATH: tools, LLV_GATE_SLOT_LEASE: undefined };
+  try {
+    await expect(CodexSocketTransport.launch("/bin/sleep", ["60"], { env, detached: true }, undefined,
+      (command, args, options, base) => spawnManagedEngine(command, args, options, null, undefined, env, base)))
+      .rejects.toThrow("required host dependency is missing: bwrap");
+    expect(fs.readdirSync(root)).toEqual(["tools"]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test.skipIf(!enabled)("a failed protected socket listener start reaps its monitor and namespace", async () => {
+  let domain: AgentSignalDomain | undefined;
+  const env = { ...process.env, LLV_GATE_SLOT_LEASE: undefined };
+  try {
+    await expect(CodexSocketTransport.launch("/bin/sleep", ["60"], { env, detached: true }, undefined,
+      async (_command, _args, options, base) => {
+        const child = await spawnManagedEngine("/bin/sleep", ["60"], options, null, undefined, env, base);
+        domain = signalDomain(child);
+        return child;
+      })).rejects.toThrow("listener did not start");
+    expect(domain).toBeDefined();
+    for (const record of [domain!.monitor, domain!.bubblewrap, domain!.init, domain!.native]) expect(processIdentityStatus(record)).toBe("dead");
+  } finally {
+    if (domain && processIdentityStatus(domain.init) === "alive") process.kill(domain.init.pid, "SIGKILL");
+  }
+}, 20_000);
+
+test.skipIf(!enabled || !process.env.LLV_CODEX_BINARY)("real Codex socket adoption retains the living signal domain and its cleanup authority", async () => {
+  const binary = process.env.LLV_CODEX_BINARY!;
+  const home = prepareCodexIntegrationTestHome(binary);
+  if (!home) throw new Error("native signal test requires an isolated Codex subscription credential");
+  const registry = new AgentRegistry(path.join(home.directory, "registry.json"), undefined, undefined,
+    { sqliteMode: "sqlite", sqliteFilename: path.join(home.directory, "registry.sqlite") });
+  const foreign = spawn("/bin/sleep", ["90"], { stdio: "ignore" });
+  const foreignIdentity = captureProcessIdentity(foreign.pid!);
+  let host: CodexAppServerHost | undefined;
+  let domain: AgentSignalDomain | undefined;
+  try {
+    const options = { binary, cwd: home.directory, codexHome: home.codexHome, env: home.env,
+      mcpServers: [], fileAuthCredentials: true, approvalPolicy: "never" as const,
+      eventStore: new FileRuntimeEventStore(path.join(home.directory, "events")) };
+    host = await CodexAppServerHost.start(options);
+    await (host as unknown as { rpc(method: string, params: unknown): Promise<unknown> }).rpc("thread/name/set", {
+      threadId: host.identity.threadId, name: "Signal socket adoption fixture" });
+    const state = await host.health();
+    domain = state.signalDomain!;
+    expect(state.endpoint).toStartWith("codex-unix:");
+    expect(domain.native.pid).toBe(state.pid!);
+    const key = { engine: "codex" as const, sessionId: host.identity.threadId };
+    registry.upsert({ key, artifactPath: path.join(home.directory, "session.jsonl"), cwd: home.directory,
+      accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+      structuredHost: codexHostColumns(state, 0) });
+    const writer = captureProcessIdentity(process.pid);
+    expect(registry.claimStructuredHost(key, writer, { allowUnhosted: true })).toBeNull();
+    expect(registry.claimStructuredHost(key, writer, { reconnectCodex: { endpoint: state.endpoint,
+      process: { ...domain.native, startIdentity: "replacement" } } })).toBeNull();
+    const claim = registry.claimStructuredHost(key, writer, { reconnectCodex: { endpoint: state.endpoint, process: domain.native } })!;
+    expect(claim.claimOwner).toBeTruthy();
+    await bindCodexHostPersistence(registry, key, host, claim.claimOwner!, claim.claimEpoch);
+    expect(await detachCodexHostForViewerRestart(registry, key, host)).toBeTrue();
+    const adopted = await adoptCodexRegistryHosts(registry, () => options, { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, () => true, undefined, { admit: () => null });
+    expect(adopted).toHaveLength(1);
+    host = adopted[0]!.host;
+    expect((await host.health()).signalDomain).toEqual(domain);
+    expect((await host.health()).pid).toBe(domain.native.pid);
+    const script = path.join(home.directory, "proof.py"), marker = path.join(home.directory, "reconnected-proof.json");
+    fs.writeFileSync(script, source);
+    const current = host;
+    await prove(current, marker, async () => {
+      const result = await (current as unknown as { rpc(method: string, params: unknown): Promise<{ exitCode: number; stderr: string }> }).rpc("command/exec", {
+        command: ["python3", script, String(foreign.pid), marker, path.resolve("scripts/gate-slot.sh")], sandboxPolicy: { type: "dangerFullAccess" }, timeoutMs: 10_000 });
+      expect(result.exitCode, result.stderr).toBe(0);
+    });
+    const entry = registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
+    registry.upsert({ ...entry, claimOwner: null, status: "dead" });
+    const stopped = await stopTerminalStructuredOrphan(registry, key, { graceMs: 100, deadlineMs: 3_000 });
+    expect(stopped, JSON.stringify({ statuses: [domain.monitor, domain.bubblewrap, domain.init, domain.native].map(record => processIdentityStatus(record)),
+      row: registry.readOnlySnapshot().entries[`codex:${key.sessionId}`] })).toBeTrue();
+    for (const record of [domain.monitor, domain.bubblewrap, domain.init, domain.native]) expect(processIdentityStatus(record)).toBe("dead");
+    expect(registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!.structuredHost!.signalDomain?.retired).toBeTrue();
+    expect(processIdentityStatus(foreignIdentity)).toBe("alive");
+  } finally {
+    await host?.release();
+    if (domain && processIdentityStatus(domain.init) === "alive") process.kill(domain.init.pid, "SIGKILL");
+    if (domain) {
+      const records = [domain.monitor, domain.bubblewrap, domain.init, domain.native];
+      const deadline = Date.now() + 5_000;
+      while (records.some(record => processIdentityStatus(record) !== "dead") && Date.now() < deadline) await Bun.sleep(10);
+      for (const record of records) expect(processIdentityStatus(record)).toBe("dead");
+    }
+    foreign.kill("SIGKILL");
+    await new Promise<void>(resolve => foreign.exitCode !== null || foreign.signalCode !== null ? resolve() : foreign.once("close", () => resolve()));
+    registry.close(); home.cleanup();
+  }
+}, 60_000);
 
 test.skipIf(!enabled || !process.env.LLV_CLAUDE_BINARY).each(profiles)("real structured Claude signal domain with loopback provider, fresh and resumed: %s", async profile => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-signal-native-"));

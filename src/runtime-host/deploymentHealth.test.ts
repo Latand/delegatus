@@ -525,3 +525,18 @@ test("transient inspection and probe errors keep serving pending", async () => {
   expect(result.ok).toBe(true);
   expect(progress).toEqual(["candidate inspection unavailable: Docker unavailable", "candidate probe unavailable: network unavailable"]);
 });
+
+
+test("pending receipt progress survives capability parsing without renewing the phase on repeated examination", async () => {
+  markStructuredHostStartupProgress({ phase: "recovering pending spawns", completedHosts: 2, totalHosts: 2,
+    recovery: { examined: 16, total: 20, completed: 0, deferred: 20 } });
+  const response = deploymentCapability();
+  const body = await response.text();
+  const progress = viewerDeploymentStructuredHostStartup(response.status, body)!;
+  expect(progress.recovery).toEqual({ examined: 16, total: 20, completed: 0, deferred: 20 });
+  expect(promotedViewerReadinessPhase({ ...progress, recovery: { ...progress.recovery!, examined: 20 } }))
+    .toBe(promotedViewerReadinessPhase(progress));
+  const invalid = JSON.parse(body);
+  invalid.structuredHostStartup.recovery.deferred = 19;
+  expect(viewerDeploymentStructuredHostStartup(response.status, JSON.stringify(invalid))).toBeNull();
+});

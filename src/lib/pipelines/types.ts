@@ -7,14 +7,15 @@ export type PipelineSandbox = "full" | "restricted";
 
 /** A write whose stated expectation (`expectedStageDigest`, `expectedStageId`,
     `expectedAttempt`) no longer holds: nothing was changed. */
-export type PipelineGuardErrorCode = "STAGE_CHANGED";
-export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId" | "expectedRevision" | "addRounds";
+export type PipelineGuardErrorCode = "STAGE_CHANGED" | "short_id_ambiguous";
+export type PipelineGuardField = "expectedStageDigest" | "expectedStageId" | "expectedAttempt" | "expectedConversationId" | "expectedRevision" | "addRounds" | "acceptedSha";
 
 export type PipelineRepoPreflightErrorCode =
   | "missing"
   | "not_directory"
   | "repo_unreadable"
   | "repo_untraversable"
+  | "initialization_refused"
   | "not_git"
   /** A Git probe could not reach a verdict — a spawn/exec failure, a timeout, or
       a transient non-zero exit that is not the definitive "not a git repository"
@@ -23,8 +24,17 @@ export type PipelineRepoPreflightErrorCode =
   | "git_metadata_unwritable"
   | "worktree_parent_unwritable";
 
+export interface RepositoryInitialization {
+  message: string;
+  project: string;
+  commit: string;
+  committedFiles: string[];
+  ignoredPaths: string[];
+  defaultIgnorePatterns: string[];
+}
+
 export type PipelineRepoPreflight =
-  | { ok: true; repoDir: string; gitCommonDir: string; worktreeParent: string }
+  | { ok: true; repoDir: string; gitCommonDir: string; worktreeParent: string; repositoryInitialization?: RepositoryInitialization }
   /** `detail` carries the underlying stderr/reason for a probe_failed transient so
       the failure preserves fidelity instead of collapsing to a generic code. */
   | { ok: false; code: PipelineRepoPreflightErrorCode; path: string; detail?: string };
@@ -177,10 +187,10 @@ export type PipelineEdgeActivation = {
   edge: PipelineEdgeKind;
   /** On a fail activation: the source's budget was spent, so this is the
       one handoff past it (#1868). It spends no reviewed round, and the
-      target's pass follows the source's pass edge, except a terminal advance
-      gate gets one final re-check (#2247). */
+      target's pass follows the source's pass edge or completes, with no
+      further review. */
   budgetSpent?: true;
-  /** The terminal gate must judge the spent fix once more; a fail parks. */
+  /** Legacy terminal re-check activation retained for existing records. */
   budgetRecheck?: true;
 };
 
@@ -298,8 +308,8 @@ export type PipelineStageProvenance = {
 
 /** A stage attempt's own completion report (graph slice 2): the intent the
     attempt stated through the MCP tool. The attempt settles when its turn
-    completes, on this verdict; a second call before settlement replaces this
-    record, and one after it is refused. */
+    completes, on this verdict. An explicit PR privacy rewrite request later
+    admits only a replacement summary, retaining verdict and provenance. */
 export type PipelineStageReport = {
   /** Shared with the pipeline's attributed journal entry for this call. */
   seq: number;
@@ -361,6 +371,8 @@ export type PipelineRuntimeSwitch = {
   cutAt?: string; continuedAt?: string; settledAt?: string; outcome?: string;
   rollback?: boolean;
   reconfigureNoop?: boolean;
+  /** Withdraws this attempt's execution authority before any teardown. */
+  retry?: { requestedAt: string; reason: string; completedAt?: string; pendingReason?: string; operatorStoppedAt?: string };
   continuationKey?: string;
   continuationDispatch?: { key: string; at: string };
   launch?: { clientAttemptId: string; launchId: string | null; conversationId: string | null };
@@ -369,6 +381,8 @@ export type PipelineRuntimeSwitch = {
 
 export type PipelineStageAttempt = {
   n: number;
+  /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
+  suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string };
   runtimeSwitches?: PipelineRuntimeSwitch[];
   /** Monotonic verdict fence survives bounded switch-history retention. */
   runtimeEvidenceSince?: string;
@@ -461,6 +475,28 @@ export type PipelineStageAttempt = {
       a refusal of an unchanged head, or a push interrupted before it landed.
       Each failed operation is counted once; `exhausted` waits for retry-stage. */
   publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
+  /** Bounded PR summary corrections preserve the accepted verdict and SHA.
+      Persisted before delivery so a restart reuses the same request. */
+  publicationTextRepair?: {
+    sha: string;
+    /** Legacy terminal outputs stay local; its PR still names the published head. */
+    pullRequestHead?: string;
+    stageId: string;
+    attempt: number;
+    rounds: number;
+    maxRounds: number;
+    detail: string;
+    part: "title" | "body" | "title/body";
+    state: "pending" | "answered" | "exhausted";
+    reportSeq: number | null;
+    requestedAt: string;
+    delivered?: boolean;
+    answeredAt?: string;
+  };
+  /** A legacy terminal report remains local after an ordinary PR forge
+      refusal; retry the PR against the published head without publishing this
+      output commit. */
+  terminalOutputPublication?: { localSha: string; pullRequestHead: string };
   /** Authoritative projection of the embedded flow. The generation is a
       content digest, so reconciliation remains idempotent across processes and
       independently committed flow/pipeline writes. */
@@ -664,8 +700,8 @@ export type PipelineStageAttempt = {
       the lane kept going instead of parking on it. */
   decisionRequested?: boolean;
   /** Set on the failed attempt whose findings were handed along a spent fail
-      edge (#1868): they went to the fix stage. A terminal advance gate gets one
-      final re-check (#2247). The verdict and findings stay on this attempt. */
+      edge (#1868): they went to the fix stage, whose pass follows this gate's
+      pass edge or completes. The verdict and findings stay on this attempt. */
   budgetSpent?: boolean;
   /** On a `budgetSpent` attempt: the head that review judged (#1938), compared
       with the head the fix writes to decide whether the lane may move on. */
@@ -825,6 +861,8 @@ export type PipelineCreationIntent = {
     attempt is settled independently, so an idle host can be retired while the
     rest of its pipeline runs or waits for a decision. */
 export type PipelineTerminalReap = {
+  /** Retry custody for a controller batch spread over bounded attempt windows. */
+  attemptRounds?: Record<string, number>;
   /** Sweeps in the current unsettled batch that dispatched at least one kill,
       or were cut off by the budget. Reset when a later attempt becomes eligible. */
   rounds: number;
@@ -863,6 +901,8 @@ export type PipelinePublicationFailure = {
   hookBudgetMs?: number;
   /** The check the hook named as stopped without a verdict. */
   hookStoppedCheck?: string;
+  /** Full output proved a deadline with no decisive check or cleanup refusal. */
+  retryableDeadline?: boolean;
 };
 
 export type PipelinePublicationResult = (
@@ -886,7 +926,8 @@ export type PipelineDelivery = {
     epoch: number;
     sha: string;
     requestKey?: string;
-    /** This reservation continues the committing pass, rather than an unrelated park. */
+    /** This reservation continues the committing pass. False records that its
+        successful push reached a later refusal, which needs an explicit retry. */
     passedStage?: boolean;
     /** Admission snapshot, checked before an asynchronous publisher starts. */
     fence?: string;

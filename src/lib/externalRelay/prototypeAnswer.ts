@@ -1,14 +1,14 @@
 import type { EphemeralAgentRun } from "@/lib/agent/ephemeral";
 import { decidePrototype, prototypeDelivery, type PrototypeDelivery } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
-import { findPrototypeRound } from "@/lib/prototypeReview/store";
+import { findPrototypeRound, withPrototypeState } from "@/lib/prototypeReview/store";
 import { PrototypeError } from "@/lib/prototypeReview/input";
 import { prototypeCopyLine, type PrototypeAnswerMatch } from "@/lib/prototypeReview/telegramAnswer";
 import { prototypeWorld, type PrototypeWorld } from "@/lib/prototypeReview/world";
 
 /** An owner control with the runner's normal lease and cancellation lifetime. */
 export function runPrototypeAnswer(match: PrototypeAnswerMatch, replyTo: string, authorize: () => void,
-  ports: { world?: PrototypeWorld; delivery?: PrototypeDelivery } = {}): EphemeralAgentRun {
+  ports: { world?: PrototypeWorld; delivery?: PrototypeDelivery; telegramUserId?: string } = {}): EphemeralAgentRun {
   let cancelled = false;
   const guard = () => { if (cancelled) throw new Error("cancelled"); authorize(); };
   const started = Date.now();
@@ -17,10 +17,10 @@ export function runPrototypeAnswer(match: PrototypeAnswerMatch, replyTo: string,
     const { round } = match;
     const expected = prototypeCopyLine(round, round.variants[0]?.number);
     let text: string;
-    if (match.error !== undefined) text = `Не записав: ${match.error}. Формат: ${expected}`;
+    if (match.error !== undefined) text = `Не записав: ${match.error}. Уточніть відповідь одним текстовим reply. Формат: ${expected}`;
     else {
       try {
-        if (decidePrototype({ kind: "operator-in-process", authorize: guard }, round.taskId, match.input, ports.world)) {
+        if (await withPrototypeState(() => decidePrototype({ kind: "operator-in-process", authorize: guard, telegramUserId: ports.telegramUserId }, round.taskId, match.input, ports.world))) {
           // Authority is checked while saving. The durable operator decision
           // then uses the same background delivery and boot recovery as the web.
           deliverPrototypeDecision(round.taskId, round.id, { world: ports.world ?? prototypeWorld,

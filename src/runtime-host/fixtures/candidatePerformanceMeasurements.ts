@@ -7,10 +7,17 @@ export function passingCandidatePerformanceMeasurements(): CandidatePerformanceM
   return structuredClone(PASSING);
 }
 
+export const PASSING_RG2 = {
+  stateHistory: { hotPipelines: 270, hotBytes: 34_000_000, hotMaxBytes: 515_000, archivedPipelines: 950, archiveBytes: 111_000_000, archiveMaxBytes: 1_100_000, tasks: 2450, taskBytes: 9_800_000, memoryRows: 3900, memoryBytes: 16_000_000, scopes: 100, historyBytes: 12_600_000, memoryMaxBytes: 2_901_000, curatorPasses: 50 },
+  servingHistory: { windowMs: 75_000, curatorReads: 1, curatorMs: 80, curatorLoopMaxMs: 20, rulesViews: 1, rulesMs: 90, rulesLoopMaxMs: 30 },
+  hostLoop: { records: 2, malformed: 0, maxMs: 200 },
+};
 const PASSING: CandidatePerformanceMeasurements = {
-  dataset: { scale: 1, rows: 30_036, coldRows: 27_836, payloadBytes: 94_000_000, transcripts: 320, seedMs: 7_000 },
+  ...PASSING_RG2,
+  dataset: { scale: 1, rows: 53_299, coldRows: 51_099, payloadBytes: 214_600_000, transcripts: 320, seedMs: 7_000,
+    receipts: { total: 10_971, failedStructured: 892, failedLegacy: 122, conflicted: 133 } },
   firstBoot: { registryOpenMs: 80, firstSnapshotMs: 600, coldProjectionMs: 4_200, firstUsableMs: 4_900, eventLoopMaxMs: 600, coldBuild: { sequence: 1, buildMs: 2_500 } },
-  activation: { incumbentMs: 4_300, successorMs: 4_800, eventLoopMaxMs: 900 },
+    activation: { incumbentMs: 4_300, successorMs: 4_800, eventLoopMaxMs: 900, incumbentCompleted: true, successorCompleted: true },
   grantWrites: { count: 60, p50Ms: 5, p95Ms: 9, maxMs: 30, mismatches: 0, failures: 0 },
   externalWrites: { count: 300, p50Ms: 3, p95Ms: 7, maxMs: 30, mismatches: 0, failures: 0 },
   keyedOperationReads: { count: 100, p50Ms: 1, p95Ms: 2, maxMs: 4 },
@@ -33,7 +40,7 @@ const PASSING: CandidatePerformanceMeasurements = {
   sqliteBusy: 0,
   runtimeTimeouts: 0,
   runtimeRpc: { requests: 600, p95Ms: 4, maxMs: 120, timeouts: 0, failures: 0, hostAlive: true },
-  deliveryEvidence: { pending: 16, uncertain: 8, preserved: true },
+  deliveryEvidence: { pending: 16, uncertain: 8, retained: 666, pendingLaunches: 20, preserved: true },
   browser: {
     views: 8,
     writes: { count: 900, p95Ms: 4, maxMs: 60, failures: 0 },

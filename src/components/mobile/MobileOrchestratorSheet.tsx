@@ -2,7 +2,7 @@
 
 import { EngineMark } from "@/components/EngineMark";
 import { Bot, ChevronRight, CornerDownRight, LoaderCircle, LogIn, Pencil, RefreshCw, RotateCcw, TriangleAlert } from "lucide-react";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { X } from "@/components/icons";
 import {
@@ -27,6 +27,7 @@ import type { FileEntry } from "@/lib/types";
 import { FailureTime } from "../orchestrator/FailureTime";
 import { boardContext } from "../orchestrator/IncumbentHeader";
 import { RunsOnRow } from "../orchestrator/RunsOnRow";
+import { MandateDiff } from "../orchestrator/MandateDiff";
 import { MobilePreviousSeatsRow, MobilePreviousSeatsScreen } from "../orchestrator/PreviousSeats";
 import type { OrchestratorIncumbent } from "../orchestrator/incumbent";
 import { WorkerLimitChip } from "../orchestrator/WorkerLimitChip";
@@ -35,6 +36,8 @@ import {
   mandateSummaryOf,
   orchestratorQuietBannerEligible,
   rotateMandateBase,
+  rotateMandateLine,
+  rotateMandateView,
   type OrchestratorPanelState,
   type OrchestratorSeatStatus,
   rotationBannerLines,
@@ -633,7 +636,7 @@ function SeatDraftSheet({
                 value={mandate}
                 disabled={submitting}
                 edited={mandate !== ORCHESTRATOR_SYSTEM_PROMPT}
-                caption={mandateSummaryOf(mandate, null)}
+                caption={mandateSummaryOf(mandate)}
                 restoreKey="orchPanel.restoreDefault"
                 onChange={setMandate}
                 onRestore={() => setMandate(ORCHESTRATOR_SYSTEM_PROMPT)}
@@ -736,7 +739,6 @@ function RotateDraft({
      the incumbent's own text is one tap away, and a seat on the current
      version, or on bespoke rules, keeps its text. */
   const base = rotateMandateBase(seat);
-  const staleVersion = orchestratorMandateStale(seat.promptVersion) ? seat.promptVersion : null;
   const [mandate, setMandateState] = useState(() => readSeatFlowField("Rotate", project, "mandate") || base);
   const setMandate = (value: string) => {
     setMandateState(value);
@@ -811,20 +813,17 @@ function RotateDraft({
             same shared module the create draft mounts, at the phone's 44px
             targets. What the operator adjusts here is what the successor runs
             on. */}
-        <div className="shrink-0 [&_button]:min-h-11 [&_select]:min-h-11">
+        <div className="shrink-0 [&_button]:min-h-11 [&_select]:min-h-11" data-orchestrator-launch-choices>
           <AgentLaunchControls draft={launch} disabled={submitting} stacked />
         </div>
 
-        <MandateField
+        <RotateMandateSection
           id="mobile-orchestrator-rotate-mandate"
+          seat={seat}
           value={mandate}
           disabled={submitting}
           edited={mandate !== base}
-          caption={mandateSummaryOf(mandate, seat)}
-          keepIncumbent={staleVersion !== null && mandate !== seat.mandate
-            ? { version: staleVersion, onKeep: () => setMandate(seat.mandate) }
-            : null}
-          restoreKey={staleVersion === null ? "orchPanel.restoreIncumbent" : "orchPanel.restoreDefault"}
+          onKeep={() => setMandate(seat.mandate)}
           onChange={setMandate}
           onRestore={() => setMandate(base)}
           cwdLine={cwd ? t("orchPanel.cwdInherited", { cwd }) : null}
@@ -868,6 +867,136 @@ function RotateDraft({
   );
 }
 
+/** The keyboard reveal both mandate editors share (#1004): once the keyboard is
+    really up over a focused textarea, `blockRef`'s element goes to the top of
+    the scroller, once per typing session. */
+function useMandateKeyboardReveal(blockRef: { current: HTMLElement | null }) {
+  const kbInset = useKeyboardInset();
+  const revealedRef = useRef(false);
+  const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    if (!focused || kbInset <= 0) {
+      revealedRef.current = false;
+      return;
+    }
+    if (revealedRef.current) return;
+    revealedRef.current = true;
+    blockRef.current?.scrollIntoView({ block: "start" });
+  }, [focused, kbInset, blockRef]);
+  return { onFocus: () => setFocused(true), onBlur: () => setFocused(false) };
+}
+
+/**
+ * The rotate draft's mandate section (#2942): one line saying how the
+ * successor's mandate stands against the incumbent's, collapsed. Changed, the
+ * line opens to the diff and, under it, the editor; unchanged, it has nothing
+ * to diff and «(edit)» opens the editor alone. It never opens by itself. The
+ * incumbent's text, on offer over a stale default (#1452), and the way back
+ * sit in one slot above the line, at 44px targets.
+ */
+function RotateMandateSection({
+  id,
+  seat,
+  value,
+  disabled,
+  edited,
+  onKeep,
+  onChange,
+  onRestore,
+  cwdLine,
+}: {
+  id: string;
+  seat: Pick<OrchestratorSeat, "mandate" | "promptVersion">;
+  value: string;
+  disabled: boolean;
+  edited: boolean;
+  onKeep: () => void;
+  onChange: (value: string) => void;
+  onRestore: () => void;
+  cwdLine: string | null;
+}) {
+  const { t } = useLocale();
+  const view = useMemo(() => rotateMandateView(seat, value), [seat, value]);
+  const [open, setOpen] = useState(false);
+  const blockRef = useRef<HTMLDivElement>(null);
+  const reveal = useMandateKeyboardReveal(blockRef);
+  const changed = view.kind === "changed";
+  const restoreInSlot = view.slot === "restore-default";
+  return (
+    <div className="flex shrink-0 flex-col gap-3" data-orchestrator-mandate-state={view.kind}>
+      {view.slot ? (
+        <div {...(view.staleVersion !== null ? { "data-orchestrator-mandate-stale": String(view.staleVersion) } : {})}>
+          <button
+            type="button"
+            {...(view.slot === "keep" ? { "data-orchestrator-keep-incumbent": "" } : { "data-orchestrator-restore-default": "" })}
+            onClick={view.slot === "keep" ? onKeep : onRestore}
+            disabled={disabled}
+            className="inline-flex min-h-11 items-center justify-center gap-1 rounded-control border border-border bg-card px-3 text-caption font-semibold text-secondary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+          >
+            {view.slot === "keep" ? (
+              t("orchPanel.keepIncumbentMandate", { version: view.staleVersion ?? 0 })
+            ) : (
+              <>
+                <RotateCcw className="h-3.5 w-3.5" aria-hidden /> {t("orchPanel.restoreDefault")}
+              </>
+            )}
+          </button>
+        </div>
+      ) : null}
+      <button
+        type="button"
+        data-orchestrator-mandate-fold
+        aria-expanded={open}
+        aria-controls={`${id}-body`}
+        onClick={() => setOpen((was) => !was)}
+        className="flex min-h-11 w-full items-center gap-2 rounded-control border border-border bg-card/60 px-3 text-left text-label font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      >
+        {changed ? <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`} aria-hidden /> : null}
+        <span className="min-w-0">{rotateMandateLine(t, view)}{changed ? "" : ` ${t("orchPanel.mandateEdit")}`}</span>
+      </button>
+      {open ? (
+        <div id={`${id}-body`} className="flex flex-col gap-3">
+          {view.kind === "changed" ? <MandateDiff oldText={seat.mandate} newText={value} /> : null}
+          <div ref={blockRef} className="flex flex-col gap-1">
+            <div className="flex min-h-11 items-center gap-2">
+              <label className="text-label font-semibold text-muted" htmlFor={id}>
+                {t("orchPanel.mandate")}
+              </label>
+              {edited && !restoreInSlot ? (
+                <button
+                  type="button"
+                  onClick={onRestore}
+                  disabled={disabled}
+                  className="inline-flex min-h-11 items-center gap-1 rounded-control border border-border bg-card px-3 text-caption font-semibold text-muted hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" aria-hidden /> {t(view.staleVersion === null ? "orchPanel.restoreIncumbent" : "orchPanel.restoreDefault")}
+                </button>
+              ) : null}
+              <span className="ml-auto shrink-0 text-caption text-muted">{t("orchPanel.mandateSent")}</span>
+            </div>
+            <textarea
+              id={id}
+              data-orchestrator-mandate
+              value={value}
+              disabled={disabled}
+              onChange={(event) => onChange(event.target.value)}
+              onFocus={reveal.onFocus}
+              onBlur={reveal.onBlur}
+              spellCheck={false}
+              className="min-h-[160px] w-full resize-none rounded-surface border border-border bg-sunken px-3 py-2.5 text-ui leading-[1.45] text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+            />
+          </div>
+        </div>
+      ) : null}
+      {cwdLine ? (
+        <p className="truncate font-mono text-caption text-muted" title={cwdLine}>
+          {cwdLine}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * The mandate textarea, with the one behaviour the phone needs from it: the
  * keyboard costs the body scroller most of its height, and everything above the
@@ -891,7 +1020,6 @@ function MandateField({
   disabled,
   edited,
   caption,
-  keepIncumbent = null,
   restoreKey,
   onChange,
   onRestore,
@@ -908,32 +1036,18 @@ function MandateField({
   /** What the text IS — the built-in default, the incumbent's, or the
       operator's own — the same line the dock folds its rules behind. */
   caption: ReturnType<typeof mandateSummaryOf>;
-  /** A rotation over a stale incumbent (#1452): its version, and the tap that
-      puts its own text back in the box. Null when there is nothing to offer. */
-  keepIncumbent?: { version: number; onKeep: () => void } | null;
   restoreKey: MessageKey;
   onChange: (value: string) => void;
   onRestore: () => void;
   cwdLine: string | null;
 }) {
   const { t } = useLocale();
-  const kbInset = useKeyboardInset();
   const blockRef = useRef<HTMLDivElement>(null);
-  const revealedRef = useRef(false);
-  const [focused, setFocused] = useState(false);
+  const reveal = useMandateKeyboardReveal(blockRef);
   const [open, setOpen] = useState(() => !folded || edited);
   useEffect(() => {
     if (edited) setOpen(true);
   }, [edited]);
-  useEffect(() => {
-    if (!focused || kbInset <= 0) {
-      revealedRef.current = false;
-      return;
-    }
-    if (revealedRef.current) return;
-    revealedRef.current = true;
-    blockRef.current?.scrollIntoView({ block: "start" });
-  }, [focused, kbInset]);
 
   if (!open) {
     return (
@@ -976,31 +1090,14 @@ function MandateField({
         <span className="ml-auto shrink-0 text-caption text-muted">{t("orchPanel.mandateSent")}</span>
       </div>
       <p data-orchestrator-mandate-kind className="text-caption leading-4 text-muted">{t(caption.key, caption.params)}</p>
-      {keepIncumbent ? (
-        <div
-          className="flex flex-col gap-1.5 rounded-control border border-warning/45 bg-warning-soft px-3 py-2 text-ui leading-4 text-secondary"
-          data-orchestrator-mandate-stale={String(keepIncumbent.version)}
-        >
-          <span>{t("orchPanel.rotateStaleMandate", { version: keepIncumbent.version, current: ORCHESTRATOR_PROMPT_VERSION })}</span>
-          <button
-            type="button"
-            data-orchestrator-keep-incumbent
-            onClick={keepIncumbent.onKeep}
-            disabled={disabled}
-            className="inline-flex min-h-11 items-center justify-center gap-1 self-start rounded-control border border-border bg-card px-3 text-caption font-semibold text-secondary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
-          >
-            {t("orchPanel.keepIncumbentMandate", { version: keepIncumbent.version })}
-          </button>
-        </div>
-      ) : null}
       <textarea
         id={id}
         data-orchestrator-mandate
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
+        onFocus={reveal.onFocus}
+        onBlur={reveal.onBlur}
         spellCheck={false}
         /* Prose the agent reads, so sans (design system §1.1); the only mono
            here is the cwd caption, which is a path. */

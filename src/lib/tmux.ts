@@ -19,6 +19,7 @@ import {
   type TmuxSpawnBinding,
 } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
+import type { DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import { logEvent } from "@/lib/events";
 import { inboxImageExt, MAX_INBOX_IMAGE_BYTES } from "@/lib/imagePolicy";
 import { INBOX_DIR } from "@/lib/inbox";
@@ -726,9 +727,11 @@ async function ensureDeliverable(
  * chip), Enter is pressed again. An extra Enter on an already-empty composer
  * is a no-op in both CLIs, so a false positive here costs nothing.
  */
-export async function sendText(target: TmuxTarget, text: string): Promise<void> {
+export async function sendText(target: TmuxTarget, text: string, authorityGuard?: DeliveryAdmissionGuard): Promise<void> {
+  authorityGuard?.();
   const endpoint = tmuxEndpointDescriptor();
   const initial = await inspectTmuxPane(target, endpoint, { runTmux, processIdentity: (pid) => procBackend.processIdentity(pid) });
+  authorityGuard?.();
   if (!initial) throw new Error("tmux pane is unavailable");
   const binding: TmuxSpawnBinding = {
     endpoint: endpoint.tmuxTmpdir,
@@ -739,13 +742,16 @@ export async function sendText(target: TmuxTarget, text: string): Promise<void> 
     display: initial.display,
   };
   const guard = async () => {
+    authorityGuard?.();
     if (!await verifyTmuxSpawnBinding(binding, endpoint)) {
       throw new Error("tmux server or pane identity changed during delivery");
     }
   };
   await withPaneLock(initial.paneId, async () => {
+    authorityGuard?.();
     try {
       await ensureDeliverable(initial.paneId, endpoint, guard);
+      authorityGuard?.();
       await sendTextUnlocked(initial.paneId, text, endpoint, guard);
       logEvent("send", { target: initial.paneId, result: "ok", meta: { bytes: text.length, display: initial.display } });
     } catch (error) {
@@ -1303,7 +1309,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
   const session = await activeTmuxSession(endpoint);
   const server = await tmuxServerReference(endpoint);
   if (!server) throw new Error("tmux server identity is unavailable before spawn");
-  const initialCapability = recoveringPane ? null : agentRegistry().rotateSpawnCapabilityForReceipt(receipt.launchId);
+  const initialCapability = recoveringPane ? null : (await agentRegistry().deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForReceipt" }, agentRegistry().rotateSpawnCapabilityForReceipt.bind(agentRegistry(), receipt.launchId)));
   const binding = existingPane
     ? existingPane
     : await createSpawnWindow({
@@ -1334,7 +1340,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
   } else {
     const marker = await runBoundTmux(["set-option", "-p", "-t", target, "@llv_launch_id", receipt.launchId]);
     if (marker.code !== 0) throw new Error(marker.stderr.trim() || "could not bind launch marker to pane");
-    const bound = agentRegistry().bindSpawnPane(receipt.launchId, binding);
+    const bound = (await agentRegistry().deliveryWriteOrBusy({ label: "registry.bindSpawnPane" }, agentRegistry().bindSpawnPane.bind(agentRegistry(), receipt.launchId, binding)));
     if (bound.state === "conflicted") throw new Error("spawn pane binding conflict");
   }
 
@@ -1347,7 +1353,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
       if (reset.code !== 0) throw new Error(reset.stderr.trim() || "could not reset pane before spawn recovery");
     }
     if (placement) await placePaneInCpuScope(binding, spec.engine, placement, endpoint, runBoundTmux);
-    const capability = initialCapability ?? agentRegistry().rotateSpawnCapabilityForReceipt(receipt.launchId);
+    const capability = initialCapability ?? (await agentRegistry().deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForReceipt" }, agentRegistry().rotateSpawnCapabilityForReceipt.bind(agentRegistry(), receipt.launchId)));
     const bootSpec = withSpawnCapability(spec, capability);
     await sendShellCommandToPane(target, spec.cwd, terminalSignalSandboxCommand(bootSpec.command), runBoundTmux);
   }
@@ -1411,7 +1417,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
     agent: { pid: agent.pid, startIdentity: agentStartIdentity },
     argv: [...agent.argv],
   };
-  const verified = agentRegistry().markSpawnHostVerified(receipt.launchId, host);
+  const verified = (await agentRegistry().deliveryWriteOrBusy({ label: "registry.markSpawnHostVerified" }, agentRegistry().markSpawnHostVerified.bind(agentRegistry(), receipt.launchId, host)));
   if (verified.state === "conflicted") throw new Error(verified.error ?? "spawn host verification conflict");
   logEvent("spawn", {
     target,
@@ -1431,7 +1437,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("pane is unavailable") || message.includes("pane identity changed during delivery")) {
-        agentRegistry().invalidateSpawnHost(receipt.launchId, "spawn_host_identity_conflict");
+        (await agentRegistry().deliveryWriteOrBusy({ label: "registry.invalidateSpawnHost" }, agentRegistry().invalidateSpawnHost.bind(agentRegistry(), receipt.launchId, "spawn_host_identity_conflict")));
       }
       throw error;
     }
@@ -1441,7 +1447,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
       promptScreen = await paneScreen(target, endpoint);
       const promptFailure = detectLaunchFailure(spec.engine, promptScreen);
       if (promptFailure) {
-        agentRegistry().invalidateSpawnHost(receipt.launchId, promptFailure.message);
+        (await agentRegistry().deliveryWriteOrBusy({ label: "registry.invalidateSpawnHost" }, agentRegistry().invalidateSpawnHost.bind(agentRegistry(), receipt.launchId, promptFailure.message)));
         throw new Error(promptFailure.message);
       }
       if (launchPromptLanded(spec.engine, promptScreen, fencedPrompt)) {
@@ -1457,10 +1463,10 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
     !pidAlive(agent.pid) ||
     (agentStartIdentity !== null && procBackend.processIdentity(agent.pid) !== agentStartIdentity) ||
     ancestryDistance(agent.pid, panePid, readPpid) === null) {
-    agentRegistry().invalidateSpawnHost(receipt.launchId, "spawn_host_identity_conflict");
+    (await agentRegistry().deliveryWriteOrBusy({ label: "registry.invalidateSpawnHost" }, agentRegistry().invalidateSpawnHost.bind(agentRegistry(), receipt.launchId, "spawn_host_identity_conflict")));
     throw new Error("spawn host identity changed before launch confirmation");
   }
-  agentRegistry().markSpawnPromptDelivered(receipt.launchId);
+  (await agentRegistry().deliveryWriteOrBusy({ label: "registry.markSpawnPromptDelivered" }, agentRegistry().markSpawnPromptDelivered.bind(agentRegistry(), receipt.launchId)));
   return {
     paneId: target,
     display,

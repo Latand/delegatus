@@ -12,7 +12,7 @@ import type {
 
 import { CANDIDATE_PERFORMANCE_BOUNDS, candidatePerformanceBreaches, type CandidatePerformanceEvidence, type CandidatePerformanceMeasurements } from "./candidatePerformance";
 import { HostCommandViewerDeploymentAdapter } from "./deploymentAdapter";
-import { passingCandidatePerformanceMeasurements } from "./fixtures/candidatePerformanceMeasurements";
+import { PASSING_RG2, passingCandidatePerformanceMeasurements } from "./fixtures/candidatePerformanceMeasurements";
 import { promotedViewerReadinessPhase } from "./deploymentHealth";
 import { PROMOTE_ACTION_TIMEOUT_MS } from "./deploymentHotState";
 import type { RuntimeHostHandoffIntent } from "./hostRelease";
@@ -415,10 +415,10 @@ function passingPerformance(): CandidatePerformanceEvidence {
   };
 }
 
-/* #2761: the performance gate's verdict crosses into the durable record, and a
-   refused gate refuses the candidate whatever the rest of the evidence says. */
-test("a refused candidate performance gate reaches the record and refuses the candidate", async () => {
+/* Duration observations cross into the durable record as warnings. */
+test("duration-only candidate observations reach the record without refusing the candidate", async () => {
   const measured: CandidatePerformanceMeasurements = {
+    ...structuredClone(PASSING_RG2),
     ...PASSING_MEASUREMENTS,
     grantWrites: { count: 60, p50Ms: 610, p95Ms: 640, maxMs: 700, mismatches: 0, failures: 0 },
     eventLoop: { p95Ms: 620, maxMs: 700 },
@@ -442,18 +442,22 @@ test("a refused candidate performance gate reaches the record and refuses the ca
     unauthorizedStatus: 403,
     assets: [],
     performance,
-    // A gate that reports a refusal refuses, even beside an ok it did not earn.
+    runtimeHost: {
+      checkedAt: "2026-10-11T20:59:00.000Z", runtime: "bun 1.4.0",
+      succession: { predecessorReadyMs: 100, successorTookOverMs: 100, completed: true },
+      listener: { windowMs: 15000, polls: 27, answered: 27, abandoned: 13 },
+      socket: { polls: 27, answered: 27, abandoned: 13 }, ok: true,
+    },
     ok: true,
   };
   const candidate = { image: "viewer:test", container: "viewer-candidate", endpoint: "http://127.0.0.1:19312", revision: "a".repeat(40) };
   const adapter = new HostCommandViewerDeploymentAdapter(async (action) => (action === "verify-candidate" ? reported : {}));
 
   const evidence = await adapter.verifyCandidate(candidate);
-  expect(evidence.ok).toBe(false);
-  /* The record names the gate's refusal, never a bare "health gate failed". */
-  expect(evidence.detail).toBe("candidate performance gate refused the release: grant-bearing write p95 640ms exceeds 350ms; grant-bearing write max 700ms exceeds 500ms; Viewer event-loop delay p95 620ms exceeds 50ms; Viewer event-loop delay max 700ms exceeds 500ms");
-  expect(evidence.performance).toEqual(performance);
-  expect(evidence.performance?.breaches).toEqual([
+  expect(evidence.ok).toBe(true);
+  expect(evidence.detail).toBeUndefined();
+  expect(evidence.performance?.breaches).toEqual([]);
+  expect(evidence.performance?.timingWarnings).toEqual([
     "grant-bearing write p95 640ms exceeds 350ms",
     "grant-bearing write max 700ms exceeds 500ms",
     "Viewer event-loop delay p95 620ms exceeds 50ms",

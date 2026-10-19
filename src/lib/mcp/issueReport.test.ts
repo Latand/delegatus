@@ -1,43 +1,68 @@
+import { updateOperatorSettings } from "@/lib/operator/settings";
+import { resolvePrototypeReviewId } from "@/lib/prototypeReview/store";
+import { shortId } from "@/lib/shortIds";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { NextRequest } from "next/server";
 
+import { VIEWER_SPAWN_CAPABILITY_ENV } from "@/lib/agent/spawnPolicy";
 import type { PublicDenyList } from "@/lib/bridge/publicSafe";
 import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
-import { issueReportApprovalReplies, operatorMessagesOf } from "@/lib/issueReports/approval";
-import type { RegistryFile } from "@/lib/agent/registry";
+import { ISSUE_REPORT_QUESTION_ID, issueReportApprovalForm, issueReportApprovalReplies } from "@/lib/issueReports/approvalForm";
 import { issueReportDigest, readIssueReportPreview, recordIssueReportPreview } from "@/lib/issueReports/store";
+import { decidePrototype } from "@/lib/prototypeReview/decision";
+import { resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests } from "@/lib/prototypeReview/deliveryWorker";
+import { decisionsPOST, publishPOST, reviewScopePOST } from "@/lib/prototypeReview/http";
+import { clearSeatRoundsForTests, loadSeatRounds } from "@/lib/prototypeReview/seatRounds";
+import type { DecidePrototypeInput, PrototypeQuestion } from "@/lib/prototypeReview/types";
+import { prototypeWorld, type PrototypeWorld } from "@/lib/prototypeReview/world";
 
 import { viewerMcpBindings, viewerMcpToolPolicy, type CallerAttribution } from "./bindings";
 import { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, MCP_TOOL_NAMES, MUTATING_MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, type McpToolResult } from "./server";
 
 /*
  * #2518 at the tool boundary: detector hints accompany the agent judgment.
- * What is filed is the stored preview the operator approved,
- * named by its digest. Nothing here files an issue: the publisher is a fake
- * that records what it was handed.
+ * What is filed is the stored preview the operator approved, named by its
+ * digest, and the approval is the operator's choice in the decision form the
+ * seat asked with publish_prototype_review. The form goes through the real
+ * publication and decision routes; nothing here files an issue: the publisher
+ * is a fake that records what it was handed.
  */
 
 let sandbox = "";
 let privacyState = "";
 let previousState: string | undefined;
+let previousCapability: string | undefined;
 
-beforeEach(() => {
-  sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-issue-report-"));
+beforeEach(async () => {
+
   privacyState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-privacy-sources-"));
   previousState = process.env.LLV_STATE_DIR;
+  previousCapability = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
   process.env.LLV_STATE_DIR = privacyState;
+  sandbox = path.join(privacyState, "issue-reports"); fs.mkdirSync(sandbox);
+  /* The seat's own capability; the fake Viewer below names the caller itself. */
+  process.env[VIEWER_SPAWN_CAPABILITY_ENV] = "a".repeat(43);
+  await resetPrototypeDeliveryWorkerForTests();
+  clearSeatRoundsForTests();
 });
-afterEach(() => {
+afterEach(async () => {
+  await resetPrototypeDeliveryWorkerForTests();
+  const { shutdownTaskPageWorker } = await import("@/lib/links/taskPageWorker");
+  await shutdownTaskPageWorker();
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousState;
+  if (previousCapability === undefined) delete process.env[VIEWER_SPAWN_CAPABILITY_ENV];
+  else process.env[VIEWER_SPAWN_CAPABILITY_ENV] = previousCapability;
   fs.rmSync(sandbox, { recursive: true, force: true });
   fs.rmSync(privacyState, { recursive: true, force: true });
 });
 
+const PROJECT = "repo-report";
 const SEAT = "conversation_seat";
 const SEAT_CALLER: CallerAttribution = { kind: "manager", conversationId: SEAT, role: "orchestrator" };
 const OTHER_SEAT = "conversation_other_seat";
@@ -67,17 +92,20 @@ const REPORT = {
 };
 
 type Publisher = (report: { title: string; body: string }, repository: string) => Promise<string>;
+type ApprovalForm = { title: string; questions: PrototypeQuestion[] };
 
-function harness(options: { publisher?: Publisher; finder?: (report: { title: string; body: string }) => Promise<string | null>; deny?: PublicDenyList; privacyRead?: () => Promise<void>; controlRead?: (url: string) => Promise<Record<string, unknown>>; locale?: "en" | "uk"; transcript?: RegistryFile } = {}) {
+function request(url: string, body: unknown): NextRequest {
+  return new NextRequest(`http://localhost${url}`, { method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" }, body: JSON.stringify(body) });
+}
+
+/* The operator's answers, as the form's question takes them. */
+const YES = { answers: [{ questionId: ISSUE_REPORT_QUESTION_ID, options: [0] }] };
+const EDIT_FIRST = { answers: [{ questionId: ISSUE_REPORT_QUESTION_ID, options: [1] }] };
+const NO = { answers: [{ questionId: ISSUE_REPORT_QUESTION_ID, options: [2] }] };
+
+function harness(options: { publisher?: Publisher; finder?: (report: { title: string; body: string }) => Promise<string | null>; deny?: PublicDenyList; privacyRead?: () => Promise<void>; controlRead?: (url: string) => Promise<Record<string, unknown>>; locale?: "en" | "uk" } = {}) {
+  updateOperatorSettings({ locale: options.locale ?? "en", source: "chosen" });
   const published: { title: string; body: string; repository: string }[] = [];
-  /* What the operator wrote, per conversation: the fake of the transcript read. */
-  const said = new Map<string, { at: number; text: string }[]>();
-  const operatorSays = (words: string, conversationId = SEAT) => {
-    /* The next millisecond: a message is after a reading only by the clock. */
-    const from = Date.now();
-    while (Date.now() === from) { /* wait */ }
-    said.set(conversationId, [...(said.get(conversationId) ?? []), { at: Date.now(), text: words }]);
-  };
   /* Every caller gets its own service and receipt store, as every agent has
      its own MCP server process over the one state directory. */
   const as = (caller: CallerAttribution) => {
@@ -87,10 +115,9 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
         : { kind: "unidentified" }),
       callerAttribution: () => caller,
       publicDenyList: options.privacyRead || options.controlRead ? undefined : () => options.deny ?? DENY,
-      viewerProjects: () => ["repo-report"],
+      viewerProjects: () => [PROJECT],
       issueReportsDir: () => sandbox,
       issueReportRepository: () => REPOSITORY,
-      operatorMessages: async (conversationId: string) => options.transcript ? operatorMessagesOf(conversationId, options.transcript) : said.get(conversationId) ?? [],
       operatorLocale: () => options.locale ?? "en",
       issueReportFinder: async (report: { title: string; body: string }) => (options.finder ? options.finder(report) : null),
       issueReportPublisher: async (report: { title: string; body: string }, repository: string) => {
@@ -98,34 +125,63 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
         return options.publisher ? options.publisher(report, repository) : ISSUE_URL;
       },
     };
-    const control = options.privacyRead || options.controlRead ? {
-      post: async () => { throw new Error("unexpected control mutation"); },
+    /* The Viewer's own prototype routes, with the caller as the project's seat. */
+    const world: PrototypeWorld = { ...prototypeWorld, caller: () => ({ conversationId: caller.conversationId, project: PROJECT }), stage: () => null, orchestrator: () => caller.conversationId };
+    const control = {
+      post: async (url: string, body: Record<string, unknown>) => {
+        const route = url === "/api/prototype-reviews" ? publishPOST : url === "/api/prototype-reviews/scope" ? reviewScopePOST : null;
+        if (!route) throw new Error(`unexpected control mutation ${url}`);
+        const response = await route(request(url, body), world);
+        const answer = await response.json() as Record<string, unknown>;
+        if (!response.ok) throw new Error(String(answer.error));
+        return answer;
+      },
       get: async (url: string) => {
         if (options.controlRead) return options.controlRead(url);
         expect(url).toBe("/api/telegram/bot/agent?op=chats&includeInactive=1");
-        await options.privacyRead!();
+        await options.privacyRead?.();
         return { chats: [] };
       },
-    } : undefined;
+    };
     return createMcpToolService(viewerMcpBindings(undefined, control, domain as never), new MemoryMcpReceiptStore(), viewerMcpToolPolicy(domain as never));
   };
   let next = 0;
   const call = (caller: CallerAttribution, args: Record<string, unknown>) =>
     as(caller).callTool("issue_report", { clientRequestId: `issue-report-${next += 1}`, ...(args.action === "preview" ? { privacyJudgment: JUDGMENT } : {}), ...args }) as Promise<McpToolResult & Record<string, unknown>>;
-  return { call, published, operatorSays };
+  /** The seat reads the preview back and asks the operator in the form show
+      answers, or in the form given; the answer is the form's review id. */
+  const asks = async (digest: string, seat = SEAT_CALLER, form?: ApprovalForm): Promise<string> => {
+    const shown = await call(seat, { action: "show", digest });
+    expect(shown.ok).toBe(true);
+    const asked = await as(seat).callTool("publish_prototype_review", { clientRequestId: `form-${next += 1}`, ...(form ?? shown.approvalForm as ApprovalForm) }) as McpToolResult & Record<string, unknown>;
+    expect(asked).toMatchObject({ ok: true, taskId: null });
+    return resolvePrototypeReviewId(loadSeatRounds(), asked.reviewId as string)!;
+  };
+  /** The operator answers the form in Delegatus, through the decision route. */
+  const decides = async (reviewId: string, answer: Partial<DecidePrototypeInput> = YES) => {
+    reviewId = resolvePrototypeReviewId(loadSeatRounds(), reviewId)!;
+    const delivery = { recover: async () => null, send: async () => ({ state: "sent" as const }), retry: async () => ({ state: "sent" as const }) };
+    const operator: PrototypeWorld = { ...prototypeWorld, orchestrator: () => loadSeatRounds().find((round) => round.id === reviewId)?.source.conversationId ?? null };
+    const response = await decisionsPOST(request("/api/projects/decisions", { project: PROJECT, reviewId, chosen: [], comment: "", ...answer }), operator, delivery);
+    await settlePrototypeDeliveriesForTests();
+    expect(response.status).toBe(200);
+  };
+  /** The seat asks, and the operator chooses the approving option. */
+  const approves = async (digest: string, seat = SEAT_CALLER) => decides(await asks(digest, seat));
+  return { as, call, published, asks, decides, approves };
 }
 
 async function previewed(h: ReturnType<typeof harness>, report = REPORT): Promise<string> {
   const preview = await h.call(REPORTER, { action: "preview", ...report });
   expect(preview.ok).toBe(true);
-  return preview.digest as string;
+  expect(preview.digest).toBe(shortId(issueReportDigest(report)));
+  return issueReportDigest(report);
 }
 
-/** The seat reads the preview back; the answer names the reply that approves it. */
-async function shown(h: ReturnType<typeof harness>, digest: string, seat = SEAT_CALLER): Promise<{ en: string; uk: string }> {
-  const answer = await h.call(seat, { action: "show", digest });
-  expect(answer.ok).toBe(true);
-  return answer.approvalReplies as { en: string; uk: string };
+/** The next millisecond: a form is after a reading only by the clock. */
+function tick(): void {
+  const from = Date.now();
+  while (Date.now() === from) { /* wait */ }
 }
 
 test("the tool is on the published surface, keyed like every other mutation", () => {
@@ -136,8 +192,8 @@ test("the tool is on the published surface, keyed like every other mutation", ()
   expect(schema.safeParse({ clientRequestId: "a", action: "publish", digest: "f".repeat(64) }).success).toBe(true);
   /* Publication takes no approval from its caller: the field is gone. */
   expect(Object.keys(schema.shape)).not.toContain("approval");
-  /* A digest is the whole 64 characters; a shortened one names nothing. */
-  expect(schema.safeParse({ clientRequestId: "a", action: "publish", digest: "f".repeat(8) }).success).toBe(false);
+  /* The advertised digest accepts the short value shown by preview. */
+  expect(schema.safeParse({ clientRequestId: "a", action: "publish", digest: "f".repeat(8) }).success).toBe(true);
   expect(schema.safeParse({ clientRequestId: "a", action: "file" }).success).toBe(false);
 });
 
@@ -150,7 +206,7 @@ test.each([
   for (const encoded of [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]) {
     const report = { title: REPORT.title, body: encoded };
     const digest = await previewed(h, report);
-    h.operatorSays((await shown(h, digest)).en);
+    await h.approves(digest);
     expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
     expect(h.published.at(-1)).toEqual({ ...report, repository: REPOSITORY });
   }
@@ -167,28 +223,46 @@ test("technical numeric evidence and source line references remain publishable",
   ]) {
     const report = { title: REPORT.title, body };
     const digest = await previewed(h, report);
-    h.operatorSays((await shown(h, digest)).en);
+    await h.approves(digest);
     expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
     expect(h.published.at(-1)).toEqual({ ...report, repository: REPOSITORY });
   }
 });
 
-test("the seat reads the preview back, and the operator's approving reply files exactly that text, once", async () => {
+test("the seat asks in a decision form, and the operator's approving choice files exactly that text, once", async () => {
   const h = harness();
   const digest = await previewed(h);
 
   const answer = await h.call(SEAT_CALLER, { action: "show", digest });
-  expect(answer).toMatchObject({ ok: true, title: REPORT.title, body: REPORT.body, digest });
-  const replies = answer.approvalReplies as { en: string; uk: string };
-  expect(replies).toEqual(issueReportApprovalReplies(digest));
-  /* A reader who is no seat gets the text and no reply to offer. */
-  expect((await h.call(REPORTER, { action: "show", digest })).approvalReplies).toBeUndefined();
+  expect(answer).toMatchObject({ ok: true, title: REPORT.title, body: REPORT.body, digest: shortId(digest) });
+  expect(answer.approvalForm).toEqual({ issueReport: shortId(digest) });
+  const form = issueReportApprovalForm({ digest, title: REPORT.title }, "en");
+  expect(form).toEqual(issueReportApprovalForm({ digest, title: REPORT.title }, "en"));
+  /* Its approving option names the whole digest; the others refuse or ask for an edit. */
+  expect(form.questions).toHaveLength(1);
+  expect(form.questions[0]).toMatchObject({ id: ISSUE_REPORT_QUESTION_ID, other: true });
+  expect(form.questions[0]!.options.map((option) => option.label)).toEqual([issueReportApprovalReplies(digest).en, "No, change the text first", "No, do not publish it"]);
+  expect(answer).not.toHaveProperty("approvalReplies");
+  expect(answer).not.toHaveProperty("approvalReplyDrafts");
+  /* A reader who is no seat gets the text and no form to ask. */
+  expect((await h.call(REPORTER, { action: "show", digest })).approvalForm).toBeUndefined();
 
-  h.operatorSays(replies.uk);
+  const reviewId = await h.asks(digest);
+  expect(loadSeatRounds(PROJECT)).toEqual([expect.objectContaining({ id: reviewId, taskId: null, title: form.title, questions: form.questions, source: expect.objectContaining({ conversationId: SEAT }) })]);
+  /* Asked and not answered yet. */
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_answered", reviewId: shortId(reviewId) } });
+  expect(h.published).toEqual([]);
+
+  await h.decides(reviewId);
   const published = await h.call(SEAT_CALLER, { action: "publish", digest });
   expect(published).toMatchObject({ ok: true, published: true, issueUrl: ISSUE_URL, state: "published" });
   expect(h.published).toEqual([{ ...REPORT, repository: REPOSITORY }]);
-  expect(readIssueReportPreview(digest, sandbox)?.publication).toMatchObject({ by: SEAT, approval: replies.uk, issueUrl: ISSUE_URL });
+  const decision = loadSeatRounds(PROJECT)[0]!.decision!;
+  expect(decision.decidedBy).toEqual({ kind: "operator" });
+  expect(readIssueReportPreview(digest, sandbox)?.publication).toMatchObject({
+    by: SEAT, approval: issueReportApprovalReplies(digest).en, reviewId, approvedAt: decision.at, issueUrl: ISSUE_URL,
+  });
 
   /* A second publication of the same preview answers the issue that exists. */
   const again = await h.call(SEAT_CALLER, { action: "publish", digest });
@@ -196,23 +270,23 @@ test("the seat reads the preview back, and the operator's approving reply files 
   expect(h.published).toHaveLength(1);
 });
 
-test("the approving reply is read loosely in its punctuation and case, and in either language", async () => {
-  for (const reword of [(reply: string) => reply.toUpperCase(), (reply: string) => `  ${reply.replace(",", "")}.  `, (reply: string) => `${reply}!`]) {
-    for (const language of ["en", "uk"] as const) {
-      const h = harness();
-      const digest = await previewed(h);
-      const replies = await shown(h, digest);
-      h.operatorSays(reword(replies[language]));
-      expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
-    }
-  }
+test("the form is asked in the operator's language, and its English twin approves as well", async () => {
+  const h = harness({ locale: "uk" });
+  const digest = await previewed(h);
+  const shown = await h.call(SEAT_CALLER, { action: "show", digest });
+  expect(shown.approvalForm).toEqual({ issueReport: shortId(digest) });
+  expect(issueReportApprovalForm({ digest, title: REPORT.title }, "uk").questions[0]!.options[0]!.label).toBe(issueReportApprovalReplies(digest).uk);
+  expect(shown.next).toContain("publish_prototype_review");
+
+  await h.decides(await h.asks(digest, SEAT_CALLER, issueReportApprovalForm({ digest, title: REPORT.title }, "en")));
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+  expect(readIssueReportPreview(digest, sandbox)?.publication?.approval).toBe(issueReportApprovalReplies(digest).en);
 });
 
 test("a digest that does not match the approved preview is refused and nothing is filed", async () => {
   const h = harness();
   const digest = await previewed(h);
-  const replies = await shown(h, digest);
-  h.operatorSays(replies.en);
+  await h.approves(digest);
 
   /* The digest of an edited text nobody previewed. */
   const edited = issueReportDigest({ title: REPORT.title, body: `${REPORT.body}\nOne more sentence.` });
@@ -230,150 +304,117 @@ test("a digest that does not match the approved preview is refused and nothing i
   expect(h.published).toEqual([]);
 });
 
-for (const language of ["en", "uk"] as const) {
-  test.each([
-    ["phrase alone", (reply: string) => reply],
-    ["followed by questions", (reply: string) => `${reply}\nWhat happened to the queue? When is the next check?`],
-    ["preceded by text", (reply: string) => `The queue looks ready. ${reply}`],
-    ["upper case", (reply: string) => `Ready: ${reply.toUpperCase()}; thanks.`],
-    ["surrounding punctuation", (reply: string) => ` \n«${reply}»?! \n`],
-    ["followed by edit text", (reply: string) => `${reply} but change the title`],
-  ] as const)(`publication accepts the ${language} approving reply: %s`, async (_name, reword) => {
-    const h = harness();
-    const digest = await previewed(h);
-    const words = reword((await shown(h, digest))[language]);
-    h.operatorSays(words);
-    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
-    expect(h.published).toEqual([{ ...REPORT, repository: REPOSITORY }]);
-    expect(readIssueReportPreview(digest, sandbox)?.publication?.approval).toBe(words);
-  });
-}
+test("a form that is not this preview's approval form approves nothing, even answered yes", async () => {
+  const h = harness();
+  const digest = await previewed(h);
+  const exact = issueReportApprovalForm({ digest, title: REPORT.title }, "en");
+  const question = exact.questions[0]!;
+  const other = issueReportApprovalForm({ digest: "e".repeat(64), title: REPORT.title }, "en");
+  for (const form of [
+    { ...exact, title: "Publish it?" },
+    { ...exact, questions: [{ ...question, text: "Publish?" }] },
+    { ...exact, questions: [{ ...question, other: undefined }] },
+    { ...exact, questions: [{ ...question, options: [question.options[0]!, { label: "No" }] }] },
+    { ...exact, questions: [{ ...question, options: [{ label: question.options[1]!.label, recommended: true }, { label: question.options[0]!.label }, question.options[2]!] }] },
+    issueReportApprovalForm({ digest, title: "Another title" }, "en"),
+    other,
+  ] as ApprovalForm[]) {
+    await h.decides(await h.asks(digest, SEAT_CALLER, form));
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
+      .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_form" } });
+  }
+  expect(h.published).toEqual([]);
+});
 
-test("one operator message publishes two independently shown previews", async () => {
+test("two previews need two forms: the yes to one never publishes the other", async () => {
   const h = harness();
   const otherReport = { ...REPORT, title: "Delegatus refuses a requested launch" };
   const first = await previewed(h);
   const second = await previewed(h, otherReport);
-  const firstReplies = await shown(h, first);
-  const secondReplies = await shown(h, second);
-  h.operatorSays(`${firstReplies.uk}; ${secondReplies.en}. What about the queue?`);
+  await h.approves(first);
+  await h.call(SEAT_CALLER, { action: "show", digest: second });
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest: second }))
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_form" } });
+  await h.approves(second);
   for (const digest of [first, second]) expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
   expect(h.published).toEqual([{ ...REPORT, repository: REPOSITORY }, { ...otherReport, repository: REPOSITORY }]);
 });
 
-test("an agent-authored approval quotation, relay and seat tick cannot publish", async () => {
-  const file = path.join(sandbox, "seat.jsonl");
-  const snapshot = {
-    conversations: { [SEAT]: { id: SEAT, engine: "claude", generations: [{ path: file, launchProfile: { cwd: sandbox } }], continuityPaths: [], delegationDepth: 0 } },
-    conversationAliases: {}, memberships: {}, lineageEdges: {}, receipts: {}, entries: {},
-  } as unknown as RegistryFile;
-  const h = harness({ transcript: snapshot });
-  const digest = await previewed(h);
-  const { uk: reply } = await shown(h, digest);
-  fs.writeFileSync(file, [
-    { type: "user", timestamp: new Date().toISOString(), message: { role: "user", content: "You are the orchestrator." }, promptSource: "sdk" },
-    { type: "assistant", timestamp: new Date(Date.now() + 10).toISOString(), message: { role: "assistant", content: [{ type: "text", text: `The seat offered: ${reply}` }] } },
-    { type: "user", timestamp: new Date(Date.now() + 20).toISOString(), message: { role: "user", content: reply }, promptSource: "sdk" },
-    { type: "user", timestamp: new Date(Date.now() + 30).toISOString(), message: { role: "user", content: `<task-notification>seat tick ${reply}</task-notification>` } },
-  ].map((record) => JSON.stringify({ cwd: sandbox, entrypoint: "sdk-ts", ...record })).join("\n") + "\n");
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_operator_message" } });
-  expect(h.published).toEqual([]);
-});
-
-test.each(["не", "don't", "do not"])("a negated approving reply (%s) refuses publication", async (negation) => {
+test("an agent's decision of the form approves nothing, and the operator's later choice does", async () => {
   const h = harness();
   const digest = await previewed(h);
-  const replies = await shown(h, digest);
-  for (const reply of Object.values(replies)) {
-    for (const words of [`${negation} ${reply}`, `${reply}; ${negation} ${reply}`]) {
-      h.operatorSays(words);
-      expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
-    }
-  }
+  const reviewId = await h.asks(digest);
+  const world: PrototypeWorld = { ...prototypeWorld, orchestrator: () => null };
+  expect(decidePrototype({ kind: "autonomous-seat", project: PROJECT, conversationId: SEAT, authorize: () => {} }, null, { reviewId, chosen: [], comment: "", ...YES }, world)).toBe(true);
+  await settlePrototypeDeliveriesForTests();
+  expect(loadSeatRounds(PROJECT)[0]!.decision?.decidedBy).toEqual({ kind: "agent", conversationId: SEAT });
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval", reviewId: shortId(reviewId) } });
   expect(h.published).toEqual([]);
+
+  /* The operator confirms the agent's choice with the same answer: a person decided it now. */
+  await h.decides(reviewId);
+  expect(loadSeatRounds(PROJECT)[0]!.decision).toMatchObject({ decidedBy: { kind: "operator" }, revision: 2 });
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
 });
 
 test.each([
-  ["do not publish the report", (digest: string) => `do not publish the report ${digest}`],
-  ["don't publish the report", (digest: string) => `don't publish the report ${digest}`],
-  ["не публікуй цей звіт", (digest: string) => `не публікуй цей звіт ${digest}`],
-  ["don't ever publish report", (digest: string) => `don't ever publish report ${digest}`],
-  ["do not publish a report", (digest: string) => `do not publish a report ${digest}`],
-  ["не публікуй цього звіту", (digest: string) => `не публікуй цього звіту ${digest}`],
-  ["звіт digest не публікуй", (digest: string) => `звіт ${digest} не публікуй`],
-])("an explicit refusal of this report overrides its reply: %s", async (_name, refusal) => {
+  ["the edit option", EDIT_FIRST],
+  ["the refusing option", NO],
+  ["«Other» with a note", { comment: "Publish it after the title changes", answers: [{ questionId: ISSUE_REPORT_QUESTION_ID, options: [], other: true }] }],
+  ["the form taken on its recommendations", { skip: true }],
+  ["the question set aside", { answers: [{ questionId: ISSUE_REPORT_QUESTION_ID, options: [], skipped: true }] }],
+] as const)("%s approves nothing", async (_name, answer) => {
   const h = harness();
   const digest = await previewed(h);
-  const replies = await shown(h, digest);
-  for (const reply of Object.values(replies)) {
-    h.operatorSays(`${reply}; ${refusal(digest)}`);
-    expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
-      .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
-  }
+  const reviewId = await h.asks(digest);
+  await h.decides(reviewId, answer as Partial<DecidePrototypeInput>);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval", reviewId: shortId(reviewId) } });
   expect(h.published).toEqual([]);
 });
 
-test("a refusal of another digest does not cancel this report's approval", async () => {
+test("an amended answer counts as it now stands", async () => {
   const h = harness();
-  const firstReport = { ...REPORT };
-  const secondReport = { ...REPORT, title: "Delegatus refuses a requested launch" };
-  const first = await previewed(h, firstReport);
-  const second = await previewed(h, secondReport);
-  const firstReply = (await shown(h, first)).uk;
-  const secondReply = (await shown(h, second)).en;
-  h.operatorSays(`${firstReply}; ${secondReply}; don't ever publish report ${first}`);
-
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest: first }))
+  const digest = await previewed(h);
+  const reviewId = await h.asks(digest);
+  await h.decides(reviewId);
+  await h.decides(reviewId, NO);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
     .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest: second })).toMatchObject({ ok: true, published: true });
-  expect(h.published).toEqual([{ ...secondReport, repository: REPOSITORY }]);
+  expect(h.published).toEqual([]);
+  await h.decides(reviewId);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+  expect(h.published).toHaveLength(1);
 });
 
-test.each(["\n", "\r\n"])("newline refusals stop at the publisher boundary while another digest remains independent (%j)", async (lineBreak) => {
-  for (const refusalLanguage of ["uk", "en", "report clause"] as const) {
-    const h = harness();
-    const firstReport = { ...REPORT };
-    const secondReport = { ...REPORT, title: `Delegatus refuses a requested launch ${refusalLanguage}` };
-    const refused = await previewed(h, firstReport);
-    const approved = await previewed(h, secondReport);
-    const refusedReplies = await shown(h, refused);
-    const approvedReplies = await shown(h, approved);
-    const negated = refusalLanguage === "uk"
-      ? `не${lineBreak}${refusedReplies.uk}`
-      : refusalLanguage === "en"
-        ? `don't${lineBreak}${refusedReplies.en}`
-        : `${refusedReplies.uk}; do not publish${lineBreak}report ${refused}`;
-    h.operatorSays(`${negated}; ${approvedReplies.en}`);
-
-    expect(await h.call(SEAT_CALLER, { action: "publish", digest: refused }))
-      .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
-    expect(h.published).toEqual([]);
-    expect(await h.call(SEAT_CALLER, { action: "publish", digest: approved }))
-      .toMatchObject({ ok: true, published: true });
-    expect(h.published).toEqual([{ ...secondReport, repository: REPOSITORY }]);
-  }
-});
-
-test.each(["en", "uk"] as const)("a free-form yes is refused with guidance in %s that permits a longer message", async (locale) => {
+test.each(["en", "uk"] as const)("a refusal explains in %s how to ask and which option approves", async (locale) => {
   const h = harness({ locale });
   const digest = await previewed(h);
-  const replies = await shown(h, digest);
-  for (const words of ["одобряю", "так, публікуй", "Yes, publish"]) {
-    h.operatorSays(words);
-    const answer = await h.call(SEAT_CALLER, { action: "publish", digest });
-    expect(answer).toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
-    expect(answer.error).toContain(replies[locale]);
-    expect(answer.error).toContain(locale === "uk" ? "частиною довшого повідомлення" : "part of a longer message");
-  }
+  await h.call(SEAT_CALLER, { action: "show", digest });
+  const unasked = await h.call(SEAT_CALLER, { action: "publish", digest });
+  expect(unasked).toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_form" } });
+  expect(unasked.error).toContain("publish_prototype_review");
+  expect(unasked.error).toContain("issueReport");
+
+  const reviewId = await h.asks(digest);
+  const waiting = await h.call(SEAT_CALLER, { action: "publish", digest });
+  expect(waiting.error).toContain(shortId(reviewId));
+  expect(waiting.error).toContain(locale === "uk" ? "ще не відповів" : "has not answered");
+
+  await h.decides(reviewId, EDIT_FIRST);
+  const refused = await h.call(SEAT_CALLER, { action: "publish", digest });
+  expect(refused.error).toContain(issueReportApprovalReplies(shortId(digest))[locale]);
   expect(h.published).toEqual([]);
 });
 
-test("show guidance and the published tool description explain approvals within longer messages", async () => {
+test("show guidance and the published tool description send the approval through a decision form", async () => {
   const h = harness();
   const digest = await previewed(h);
   const answer = await h.call(SEAT_CALLER, { action: "show", digest });
-  expect(answer.next).toContain("contains the approving reply");
-  expect(answer.next).toContain("several previews");
+  expect(answer.next).toContain("publish_prototype_review");
+  expect(answer.next).toContain("approvalForm");
+  expect(answer.next).not.toContain("suggest_replies");
   const bindings = viewerMcpBindings(undefined, undefined, {} as never);
   const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
   const client = new Client({ name: "approval-guidance-test", version: "1.0.0" });
@@ -381,9 +422,9 @@ test("show guidance and the published tool description explain approvals within 
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
     const description = (await client.listTools()).tools.find((tool) => tool.name === "issue_report")!.description;
-    expect(description).toContain("contains the approving reply");
-    expect(description).toContain("several previews");
-    expect(description).toContain("explicit refusal");
+    expect(description).toContain("approvalForm");
+    expect(description).toContain("publish_prototype_review");
+    expect(description).not.toContain("suggest_replies");
   } finally {
     await client.close();
     await server.close();
@@ -392,29 +433,23 @@ test("show guidance and the published tool description explain approvals within 
 
 /* Review finding 1: an approval was whatever string the seat passed. Each of
    the following reached the forge; none does now. */
-test("no approval, a refusal, and the seat's own account of an approval file nothing", async () => {
+test("no form, an unanswered one, and the seat's own account of an approval file nothing", async () => {
   const h = harness();
   const digest = await previewed(h);
 
   /* Not read back yet. */
   expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_not_shown" });
-  const replies = await shown(h, digest);
+  await h.call(SEAT_CALLER, { action: "show", digest });
 
-  /* The operator has said nothing since. */
-  const silent = await h.call(SEAT_CALLER, { action: "publish", digest });
-  expect(silent).toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_operator_message" } });
+  /* Nothing asked since. */
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_form" } });
 
   /* What the seat passes is no evidence, whatever it says. */
-  for (const approval of ["yes", replies.en, replies.uk]) {
+  const reviewId = await h.asks(digest);
+  for (const approval of ["yes", issueReportApprovalReplies(digest).en, reviewId]) {
     expect(await h.call(SEAT_CALLER, { action: "publish", digest, approval }))
-      .toMatchObject({ ok: false, code: "issue_report_approval_required" });
-  }
-
-  /* A refusal, an edit, a bare yes, and a refusal that names the digest. */
-  for (const words of ["Ні, не публікуй", "Change the title first", "yes", "так", `Ні, не публікуй звіт ${digest}`]) {
-    h.operatorSays(words);
-    expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
-      .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
+      .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_answered" } });
   }
   expect(h.published).toEqual([]);
 });
@@ -429,35 +464,37 @@ test("the yes for one preview never publishes another whose digest begins the sa
   /* The pair is real: their digests differ and share their first eight characters. */
   expect(approvedDigest).not.toBe(siblingDigest);
   expect(siblingDigest.slice(0, 8)).toBe(approvedDigest.slice(0, 8));
-  const replies = await shown(h, approvedDigest);
-  await shown(h, siblingDigest);
+  await h.call(SEAT_CALLER, { action: "show", digest: siblingDigest });
+  await h.approves(approvedDigest);
 
-  h.operatorSays(replies.en);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest: siblingDigest }))
-    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_form" } });
   expect(h.published).toEqual([]);
 
   expect(await h.call(SEAT_CALLER, { action: "publish", digest: approvedDigest })).toMatchObject({ ok: true, published: true });
   expect(h.published).toEqual([{ ...approved, repository: REPOSITORY }]);
 });
 
-test("an approval counts only after the preview was read back, and only while it is the operator's last word", async () => {
+test("a form counts only when asked after the preview was read back, and only the newest one", async () => {
   const h = harness();
   const digest = await previewed(h);
-  /* Sent before the seat could have shown the text. */
-  h.operatorSays(issueReportApprovalReplies(digest).en);
-  const replies = await shown(h, digest);
+  /* Asked before the seat could have shown the text. */
+  const early = await h.as(SEAT_CALLER).callTool("publish_prototype_review", { clientRequestId: "early-form", ...issueReportApprovalForm({ digest, title: REPORT.title }, "en") }) as McpToolResult & Record<string, unknown>;
+  expect(early.ok).toBe(true);
+  await h.decides(early.reviewId as string);
+  tick();
+  await h.call(SEAT_CALLER, { action: "show", digest });
   expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
-    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_operator_message" } });
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_form" } });
 
-  /* Approved, then withdrawn. */
-  h.operatorSays(replies.en);
-  h.operatorSays("Wait, do not send it yet");
+  /* Approved, then asked again: the newer, unanswered form is the one that counts. */
+  await h.approves(digest);
+  const newer = await h.asks(digest);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest }))
-    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_answered", reviewId: shortId(newer) } });
   expect(h.published).toEqual([]);
 
-  h.operatorSays(replies.en);
+  await h.decides(newer);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
   expect(h.published).toHaveLength(1);
 });
@@ -465,42 +502,34 @@ test("an approval counts only after the preview was read back, and only while it
 test("an approval of one preview does not move to another text or another conversation", async () => {
   const h = harness();
   const first = await previewed(h);
-  const firstReplies = await shown(h, first);
-  const second = await previewed(h, { title: REPORT.title, body: `${REPORT.body}\nIt happened twice in one hour.` });
+  await h.approves(first);
+  const secondReport = { title: REPORT.title, body: `${REPORT.body}\nIt happened twice in one hour.` };
+  const second = await previewed(h, secondReport);
   expect(second).not.toBe(first);
 
   /* The seat has not read the edited text back, so it cannot have shown it. */
-  h.operatorSays(firstReplies.en);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest: second })).toMatchObject({ ok: false, code: "issue_report_not_shown" });
 
   /* Read back after the yes to the first text: that yes names another preview. */
-  const secondReplies = await shown(h, second);
-  expect(secondReplies).not.toEqual(firstReplies);
+  await h.call(SEAT_CALLER, { action: "show", digest: second });
   expect(await h.call(SEAT_CALLER, { action: "publish", digest: second }))
-    .toMatchObject({ ok: false, code: "issue_report_approval_required" });
-  h.operatorSays(firstReplies.en);
-  expect(await h.call(SEAT_CALLER, { action: "publish", digest: second }))
-    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_form" } });
 
-  /* The approving reply of the second text, sent in another seat's conversation. */
-  h.operatorSays(secondReplies.en, OTHER_SEAT);
+  /* The second text approved in another seat's conversation. */
+  await h.approves(second, OTHER_SEAT_CALLER);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest: second }))
-    .toMatchObject({ ok: false, code: "issue_report_approval_required" });
-  /* And that other seat never read it back. */
-  expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest: second })).toMatchObject({ ok: false, code: "issue_report_not_shown" });
+    .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "no_form" } });
   expect(h.published).toEqual([]);
 
-  h.operatorSays(secondReplies.en);
+  await h.approves(second);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest: second })).toMatchObject({ ok: true, published: true });
-  expect(h.published).toEqual([{ title: REPORT.title, body: `${REPORT.body}\nIt happened twice in one hour.`, repository: REPOSITORY }]);
+  expect(h.published).toEqual([{ ...secondReport, repository: REPOSITORY }]);
 });
 
 test("only the seat itself publishes", async () => {
   const h = harness();
   const digest = await previewed(h);
-  const replies = await shown(h, digest);
-  h.operatorSays(replies.en);
-  h.operatorSays(replies.en, REPORTER.conversationId!);
+  await h.approves(digest);
 
   for (const caller of [REPORTER, DEPUTY]) {
     expect(await h.call(caller, { action: "publish", digest }))
@@ -515,10 +544,7 @@ test("concurrent publications of one digest reach the forge once, whoever calls 
   const held = new Promise<void>((resolve) => { release = resolve; });
   const h = harness({ publisher: async () => { await held; return ISSUE_URL; } });
   const digest = await previewed(h);
-  for (const seat of [SEAT_CALLER, OTHER_SEAT_CALLER]) {
-    const replies = await shown(h, digest, seat);
-    h.operatorSays(replies.en, seat.conversationId!);
-  }
+  for (const seat of [SEAT_CALLER, OTHER_SEAT_CALLER]) await h.approves(digest, seat);
   const racing = [SEAT_CALLER, OTHER_SEAT_CALLER, SEAT_CALLER, OTHER_SEAT_CALLER].map((seat) => h.call(seat, { action: "publish", digest }));
   await new Promise((resolve) => setTimeout(resolve, 50));
   /* A reading that arrives while the claim is held changes nothing about it. */
@@ -543,8 +569,7 @@ test("a publication whose outcome is unknown is never repeated, and is settled b
     finder: async () => existing,
   });
   const digest = await previewed(h);
-  const replies = await shown(h, digest);
-  h.operatorSays(replies.en);
+  await h.approves(digest);
 
   const first = await h.call(SEAT_CALLER, { action: "publish", digest });
   expect(first.ok).toBe(false);
@@ -552,10 +577,9 @@ test("a publication whose outcome is unknown is never repeated, and is settled b
   expect(readIssueReportPreview(digest, sandbox)?.state).toBe("publishing");
 
   /* A new request id, a new approval, another seat: none files it again. */
-  h.operatorSays(replies.en);
+  await h.approves(digest);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_outcome_unknown", retryable: false });
-  const otherReplies = await shown(h, digest, OTHER_SEAT_CALLER);
-  h.operatorSays(otherReplies.en, OTHER_SEAT);
+  await h.approves(digest, OTHER_SEAT_CALLER);
   expect(await h.call(OTHER_SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_outcome_unknown" });
   expect(h.published).toHaveLength(1);
 
@@ -569,7 +593,7 @@ test("a publication whose outcome is unknown is never repeated, and is settled b
 test("a lost answer is settled at once when the issue is already there", async () => {
   const h = harness({ publisher: async () => { throw Object.assign(new Error("socket hang up"), { stderr: "error connecting" }); }, finder: async () => ISSUE_URL });
   const digest = await previewed(h);
-  h.operatorSays((await shown(h, digest)).en);
+  await h.approves(digest);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true, reconciled: true, issueUrl: ISSUE_URL });
   expect(h.published).toHaveLength(1);
 });
@@ -583,7 +607,7 @@ test("a refusal that provably came before the write frees the preview for anothe
     },
   });
   const digest = await previewed(h);
-  h.operatorSays((await shown(h, digest)).en);
+  await h.approves(digest);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_publish_failed", retryable: true });
   expect(readIssueReportPreview(digest, sandbox)?.state).toBe("preview");
 
@@ -630,7 +654,7 @@ test.each([
     const answer = await h.call(REPORTER, { action: "preview", ...report });
     expect(answer).toMatchObject({ ok: true, privacyJudgment: JUDGMENT });
     expect(answer.hints).toEqual(expect.arrayContaining([expect.objectContaining({ class: kind, where, span: expect.objectContaining({ text: expect.any(String) }) })]));
-    const digest = answer.digest as string;
+    const digest = issueReportDigest(report);
     expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ ...report, privacyJudgment: JUDGMENT, hints: answer.hints });
     const shown = await h.call(SEAT_CALLER, { action: "show", digest });
     expect(shown).toMatchObject({ ...report, privacyJudgment: JUDGMENT, hints: answer.hints });
@@ -640,11 +664,9 @@ test.each([
     expect(shown.previewText).toContain(JUDGMENT.assessment);
     expect(shown.previewText).toContain("Detector hints");
     expect(shown.previewLanguage).toBe("en");
-    const drafts = shown.approvalReplyDrafts as Record<"en" | "uk", { label: string; text: string }>;
-    expect(drafts.en.text).toBe((shown.approvalReplies as { en: string }).en);
-    expect(drafts.uk.text).toBe((shown.approvalReplies as { uk: string }).uk);
+    expect(shown.approvalForm).toEqual({ issueReport: shortId(digest) });
     expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_approval_required" });
-    h.operatorSays((shown.approvalReplies as { en: string }).en);
+    await h.approves(digest);
     expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
     expect(h.published.at(-1)).toEqual({ ...report, repository: REPOSITORY });
   }
@@ -657,7 +679,7 @@ test("an approved legacy preview with hints reaches the publisher", async () => 
   const shown = await h.call(SEAT_CALLER, { action: "show", digest: legacy.digest });
   expect(shown.hints).toEqual(expect.arrayContaining([expect.objectContaining({ class: "host" })]));
   expect(shown.privacyJudgment).toMatchObject({ assessment: expect.stringContaining("legacy preview") });
-  h.operatorSays((shown.approvalReplies as { en: string }).en);
+  await h.approves(legacy.digest);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest: legacy.digest })).toMatchObject({ ok: true, published: true });
   expect(h.published).toEqual([{ ...report, repository: REPOSITORY }]);
 });
@@ -668,10 +690,10 @@ test("missing hint sources are advisory and cannot block storage or publication"
   const answer = await h.call(REPORTER, { action: "preview", ...report });
   expect(answer).toMatchObject({ ok: true, hintWarnings: [expect.stringContaining("unavailable")] });
   expect(answer.hints).toEqual(expect.arrayContaining([expect.objectContaining({ class: "host" })]));
-  const digest = answer.digest as string;
+  const digest = issueReportDigest(report);
   const shown = await h.call(SEAT_CALLER, { action: "show", digest });
   expect(shown.hintWarnings).toEqual(answer.hintWarnings);
-  h.operatorSays((shown.approvalReplies as { en: string }).en);
+  await h.approves(digest);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
   expect(JSON.stringify(answer)).not.toContain("private source failure");
 });

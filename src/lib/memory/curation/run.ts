@@ -2,8 +2,10 @@ import { launchAutonomousConversation, observeSpawnedTurn, type SpawnedTurnObser
 import { repoDirForProject, type SeatTickSources } from "@/lib/monitor/seatTickSources";
 import type { SeatTickCheckInput } from "@/lib/monitor/types";
 import type { ReportSpawnResult } from "@/lib/telegram/reportSpawn";
+import { effectiveCurationSetting } from "@/lib/monitor/seatTickSettings";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { roleMemoryEnabled } from "../settings";
+import { withSystemRunTask } from "@/lib/tasks/systemRun";
 import { curatorBrief } from "./brief";
 import { admissionHeld, hostAdmission, settle, type CurationAdmissionPorts } from "./admission";
 import { claimPass, curationStatus, currentPass, machinePass, patchPass, readPass, passIsLive, type CuratorPass } from "./store";
@@ -28,6 +30,7 @@ async function launch(pass: CuratorPass, ports: CurationPorts): Promise<string |
   if (!pass.launchBody) pass = patchPass(pass.id, { state: "launching", launchBody: { role: "curator", roleParams: {}, project: pass.project, cwd: pass.repoDir, prompt: curatorBrief(pass.project), title: "Role memory curation", clientAttemptId: pass.id, mcpServers: ["viewer"], notifyLauncher: false } })!;
   const fresh = readPass(pass.id);
   if (!fresh || !passIsLive(fresh)) return null;
+  const launchBody = await withSystemRunTask(pass.launchBody!, new Date(ports.sources.now()).toISOString());
   const heldAgain = admissionHeld(pass.project, ports); if (heldAgain) return heldAgain;
   if (!pass.launchedAt) pass = patchPass(pass.id, { launchedAt: new Date(ports.sources.now()).toISOString() })!;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -38,7 +41,7 @@ async function launch(pass: CuratorPass, ports: CurationPorts): Promise<string |
     if (machinePass()?.id !== pass.id || !passIsLive(readPass(pass.id))) throw Error("curation pass ended");
   };
   const response = await Promise.race([
-    (ports.launch ?? launchAutonomousConversation)(pass.launchBody!, authorize),
+    (ports.launch ?? launchAutonomousConversation)(launchBody, authorize),
     new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), ports.launchTimeoutMs ?? LAUNCH_GRACE_MS); }),
   ]).finally(() => { if (timer) clearTimeout(timer); });
   const ineligibleAfterLaunch = host.guard();
@@ -73,22 +76,24 @@ export async function launchCurationIfDue(input: SeatTickCheckInput, ports: Cura
   if (!roleMemoryEnabled()) return "curation: paused, memory off";
   if (!input.settings.enabled) return "curation: paused, wakes off";
   const eligible: { project: string; wakeAt: number }[] = [];
-  let reason = "no designated seat";
+  let reason = "no designated seat", quietEligible = false;
   // Read every designated project's own delivery stamp before choosing a machine host.
   for (const project of [...new Set([...ports.sources.activeSeats(), input.project].map(canonicalProject))].sort()) {
     const host = await hostAdmission(project, ports);
     if (host.held !== null) { if (project === canonicalProject(input.project)) reason = host.held; continue; }
-    if (!curationStatus(project, ports.sources.now()).active) continue;
+    const status = curationStatus(project, ports.sources.now(), effectiveCurationSetting(ports.sources.settings(project)));
+    if (!status.active) continue;
+    if (!status.due) { quietEligible = true; continue; }
     eligible.push({ project, wakeAt: host.wakeAt });
   }
   eligible.sort((a, b) => b.wakeAt - a.wakeAt || (a.project < b.project ? -1 : a.project > b.project ? 1 : 0));
   const project = eligible[0]?.project;
-  if (!project) return `curation: paused, no eligible project: ${reason}`;
+  if (!project) return quietEligible ? null : `curation: paused, no eligible project: ${reason}`;
   const held = admissionHeld(project, ports); if (held) return held;
   const seat = ports.sources.seatFor(project).active;
   const conversation = seat?.conversationId ? ports.sources.registry().conversation(seat.conversationId as `conversation_${string}`) : null;
   const repoDir = repoDirForProject(project, ports.sources) ?? conversation?.generations.at(-1)?.launchProfile.cwd ?? null;
-  const pass = claimPass({ project, repoDir, now: ports.sources.now() });
+  const pass = claimPass({ project, repoDir, now: ports.sources.now(), setting: effectiveCurationSetting(ports.sources.settings(project)) });
   return pass ? launch(pass, ports) : null;
 }
 export function productionCurationController(sources: SeatTickSources, overrides: Omit<CurationPorts, "sources"> = {}): CurationController {

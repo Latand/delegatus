@@ -16,6 +16,8 @@ export interface DoneFrame {
   /** The same picture before the change, when the lane published a pair. */
   before?: string;
   caption: string;
+  /** No retained raster could be recovered. Draw the missing-frame label. */
+  unavailable?: boolean;
 }
 
 export interface DoneItemRefs {

@@ -61,6 +61,11 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
   if (typeof raw.eventsThrough !== "number" || !Number.isInteger(raw.eventsThrough) || raw.eventsThrough < 0) return null;
   return {
     ...(raw.diskPressure && typeof raw.diskPressure === "object" && "episode" in raw.diskPressure && "version" in raw.diskPressure && typeof raw.diskPressure.episode === "string" && typeof raw.diskPressure.version === "string" ? { diskPressure: { episode: raw.diskPressure.episode, version: raw.diskPressure.version } } : {}),
+    ...(raw.catchUp && typeof raw.catchUp === "object" && typeof (raw.catchUp as Record<string, unknown>).key === "string"
+      && isoOrNull((raw.catchUp as Record<string, unknown>).from) && isoOrNull((raw.catchUp as Record<string, unknown>).through)
+      ? { catchUp: { key: String((raw.catchUp as Record<string, unknown>).key), from: String((raw.catchUp as Record<string, unknown>).from),
+        through: String((raw.catchUp as Record<string, unknown>).through), covers: conversationIds((raw.catchUp as Record<string, unknown>).covers) } } : {}),
+    ...(typeof raw.wakeIntervalMs === "number" && Number.isFinite(raw.wakeIntervalMs) && raw.wakeIntervalMs > 0 ? { wakeIntervalMs: raw.wakeIntervalMs } : {}),
     proposal: raw.proposal === true,
     reasons: (Array.isArray(raw.reasons) ? raw.reasons : [])
       .filter((entry): entry is SeatTickWakeReasonKind => SEAT_TICK_WAKE_REASON_KINDS.includes(entry as SeatTickWakeReasonKind)),
@@ -262,6 +267,8 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     ...(typeof raw.authRecoveredThrough === "number" && Number.isFinite(raw.authRecoveredThrough) ? { authRecoveredThrough: raw.authRecoveredThrough } : {}),
     ...(typeof raw.diskPressureShown === "string" ? { diskPressureShown: raw.diskPressureShown } : {}),
     seatEpoch: typeof raw.seatEpoch === "number" && Number.isSafeInteger(raw.seatEpoch) ? raw.seatEpoch : null,
+    unreachableSince: isoOrNull(raw.unreachableSince),
+    unreachableBacklogSince: isoOrNull(raw.unreachableBacklogSince),
     lastCheckAt: isoOrNull(raw.lastCheckAt),
     lastWakeAt: isoOrNull(raw.lastWakeAt),
     lastWakeReasons: (Array.isArray(raw.lastWakeReasons) ? raw.lastWakeReasons : [])
@@ -396,7 +403,6 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     ...(row.reportSeenAt !== undefined ? { reportSeenAt: row.reportSeenAt } : {}),
     ...(row.reportFingerprint !== undefined ? { reportFingerprint: row.reportFingerprint } : {}),
     ...(row.checkFingerprint !== undefined ? { checkFingerprint: row.checkFingerprint } : {}),
-    ...(row.asksOwed ? { asksOwed: row.asksOwed } : {}),
     accounting: row.accounting,
   };
 }

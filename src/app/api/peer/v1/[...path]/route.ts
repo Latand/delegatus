@@ -1,3 +1,5 @@
+import { assertTaskExportCurrent } from "@/lib/links/taskExportPrivacy";
+import { exchangeTelegramPublications, telegramPublicationAvailable } from "@/lib/links/telegramPublication";
 import { NextRequest, NextResponse } from "next/server";
 
 import { authorizePeer, incomingSync, markGrantSync, pairIncoming, probePair, revokeGrant, sharedDigest } from "@/lib/links/protocol";
@@ -10,7 +12,10 @@ import { unauthorizedPeer } from "@/lib/links/peerResponse";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ path: string[] }> };
-const answer = (body: object, status = 200) => NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
+const answer = (body: object, status = 200) => {
+  assertTaskExportCurrent(body);
+  return NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
+};
 const unauthorized = unauthorizedPeer;
 
 async function json(req: NextRequest): Promise<unknown> {
@@ -52,7 +57,8 @@ export async function POST(req: NextRequest, context: Context): Promise<NextResp
     if (current?.id !== grant.id) return unauthorized();
     if (malformed) { markGrantSync(current, "malformed"); return answer({ error: "malformed" }, 400); }
     try {
-      const result = incomingSync(current, input);
+      const result = await incomingSync(current, input);
+      if (authorizePeer(req.headers.get("x-delegatus-peer"), "board:sync")?.id !== current.id) return unauthorized();
       const link = linkedPeer("grant", current.id);
       if (result.status === 200 && link) {
         if (result.agreed) await drainSeatMessages(link);
@@ -69,6 +75,15 @@ export async function POST(req: NextRequest, context: Context): Promise<NextResp
           result.agreed = false;
           result.body = { v: 1, now: Date.now(), store: body.store, s: digest, taskWireVersion: body.taskWireVersion,
             shared: local.slice(0, 100), index: 0, total: local.length, need: true, tasks: { wait: true } };
+        }
+        if (result.agreed && telegramPublicationAvailable((input as { tp?: unknown }).tp)) {
+          (result.body as Record<string, unknown>).tp = await exchangeTelegramPublications(freshLink, (input as { tp?: unknown }).tp, undefined, () => {
+            if (authorizePeer(req.headers.get("x-delegatus-peer"), "board:sync")?.id !== current.id) throw Error("Telegram publication link revoked");
+          });
+          if (authorizePeer(req.headers.get("x-delegatus-peer"), "board:sync")?.id !== current.id) return unauthorized();
+          const finalLink = linkedPeer("grant", current.id);
+          if (!finalLink || finalLink.install !== freshLink.install || finalLink.projects.size !== freshLink.projects.size
+            || [...freshLink.projects].some(project => !finalLink.projects.has(project))) return unauthorized();
         }
         (result.body as Record<string, unknown>).sm = result.agreed ? seatMessagesPart(freshLink) : { v: 1 };
       }

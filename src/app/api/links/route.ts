@@ -5,6 +5,7 @@ import { tokensMatch } from "@/lib/authToken";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { accessKeyWithheld, teamActor } from "@/lib/team";
 import { isStagingMode } from "@/lib/staging";
+import { retireViewerTaskExecutor } from "@/lib/mcp/taskExecutor";
 import { getToken } from "../../../../bin/tailscale.mjs";
 
 export const runtime = "nodejs";
@@ -58,6 +59,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     try {
       const token = process.env.LLV_TOKEN || (await getToken()).token;
       process.env.LLV_TOKEN = token;
+      // Concurrent key requests must also await withdrawal when they observe
+      // the token another request installed before its worker finished exiting.
+      await retireViewerTaskExecutor();
       const response = NextResponse.json(view());
       response.cookies.set({ name: "llv_auth", value: token, httpOnly: true, sameSite: "lax", path: "/", maxAge: 2_592_000, secure: req.headers.get("x-forwarded-proto") === "https" });
       return response;

@@ -13,6 +13,7 @@ import fs from "node:fs";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { Database } from "bun:sqlite";
 
+import { codexAnswerMatchesDispatch, sameCodexRequest } from "@/lib/runtime/codexRequestReceipt";
 import {
   RUNTIME_SCHEMA_VERSION,
   compactViewerDeploymentError, parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDeploymentListLimit,
@@ -361,7 +362,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
 const cooperativeOpen = Symbol("cooperative journal open");
 
 export interface RuntimeJournalStartupProgress {
-  subphase: "schema" | "receipt-backfill" | "integrity-check" | "hash-chain";
+  subphase: "schema" | "checkpoint-reconciliation" | "receipt-backfill" | "integrity-check" | "hash-chain";
   done: number;
   total: number;
   committedBatches: number;
@@ -532,6 +533,7 @@ export class RuntimeJournal {
   private *initialize(): Generator<void> {
     this.startupProgress("schema", 1, 1);
     yield;
+    yield* this.reconcileCheckpointOrphans();
     yield* this.backfillProducerReceipts();
     yield* this.verify();
     if (!this.fault) {
@@ -542,6 +544,52 @@ export class RuntimeJournal {
 
   private startupProgress(subphase: RuntimeJournalStartupProgress["subphase"], done: number, total: number, committedBatches = 0): void {
     this.startupOptions.onStartupProgress?.({ subphase, done, total, committedBatches });
+  }
+
+  private *reconcileCheckpointOrphans(): Generator<void> {
+    // Older releases could checkpoint a completion after its event retired.
+    // Walk the checkpoint primary key in bounded slices so a large clean
+    // journal never pays for a synchronous whole-table anti-join during open.
+    const batchSize = this.startupOptions.startupBatchRows ?? 512;
+    const firstRows = this.db.query<{ event_id: string; consumer: string }, [string, string, number]>(
+      `SELECT event_id, consumer FROM consumer_checkpoints
+       WHERE (event_id, consumer) >= (?, ?) ORDER BY event_id, consumer LIMIT ?`,
+    );
+    const laterRows = this.db.query<{ event_id: string; consumer: string }, [string, string, number]>(
+      `SELECT event_id, consumer FROM consumer_checkpoints
+       WHERE (event_id, consumer) > (?, ?) ORDER BY event_id, consumer LIMIT ?`,
+    );
+    const eventExists = this.db.query<{ present: number }, [string]>(
+      "SELECT 1 AS present FROM events WHERE event_id = ?",
+    );
+    const remove = this.db.query("DELETE FROM consumer_checkpoints WHERE event_id = ? AND consumer = ?");
+    let cursor: [string, string] = ["", ""];
+    let firstBatch = true;
+    let done = 0;
+    let batches = 0;
+    this.startupProgress("checkpoint-reconciliation", 0, 0);
+    for (;;) {
+      this.db.exec("BEGIN IMMEDIATE");
+      let batch: Array<{ event_id: string; consumer: string }>;
+      try {
+        batch = (firstBatch ? firstRows : laterRows).all(...cursor, batchSize);
+        for (const checkpoint of batch) {
+          if (!eventExists.get(checkpoint.event_id)) remove.run(checkpoint.event_id, checkpoint.consumer);
+        }
+        this.db.exec("COMMIT");
+      } catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+        throw error;
+      }
+      if (!batch.length) break;
+      const last = batch[batch.length - 1]!;
+      cursor = [last.event_id, last.consumer];
+      firstBatch = false;
+      done += batch.length;
+      batches++;
+      this.startupProgress("checkpoint-reconciliation", done, 0, batches);
+      yield;
+    }
   }
 
   private *backfillProducerReceipts(): Generator<void> {
@@ -779,13 +827,14 @@ export class RuntimeJournal {
   nativeQueueTransition(operationId: string, transition: NativeQueueTransition): RuntimeOperationResult {
     const original = this.operationResult(operationId);
     const status = transition.phase === "prepared" || transition.phase === "withdrawn" ? "delivering"
+      : transition.phase === "seat-withdrawal" ? "failed"
       : (transition.phase === "acknowledged" || transition.phase === "observed-queued") ? original?.receipt.kind === "send" ? "queued" : "applied"
       : transition.phase === "proven" ? "delivered"
       : transition.phase === "refused" || transition.phase === "removed" ? "failed" : "uncertain";
     return this.transitionOperation(operationId, status,
       transition.phase === "removed" ? { reason: RUNTIME_DELIVERY_DISCARDED_REASON }
         : "reason" in transition ? { reason: transition.reason } : {},
-      transition.phase === "prepared" ? { fromStatuses: ["pending", "queued"] } : {}, transition);
+      transition.phase === "prepared" || transition.phase === "seat-withdrawal" ? { fromStatuses: ["pending", "queued"] } : {}, transition);
   }
 
   /** Evidence-only settlement of an entry whose add operation compaction
@@ -1717,7 +1766,9 @@ export class RuntimeJournal {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.registerConsumer(consumer);
-      this.db.query("INSERT INTO consumer_checkpoints(event_id, consumer, completed_at) VALUES (?, ?, ?) ON CONFLICT(event_id, consumer) DO NOTHING").run(eventId, consumer, this.now());
+      this.db.query(`INSERT INTO consumer_checkpoints(event_id, consumer, completed_at)
+        SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM events WHERE event_id = ?)
+        ON CONFLICT(event_id, consumer) DO NOTHING`).run(eventId, consumer, this.now(), eventId);
       // Recursive projections may finish before their parent. Only advance over
       // a contiguous completed prefix, preserving every hole for ordered replay.
       const pending = this.db.query<{ seq: number }, [number, string]>(`
@@ -1893,7 +1944,7 @@ export class RuntimeJournal {
       superseded. Pending sends and interrupts retain their existing unknown-
       fate rules. */
   settleStalePendingEffects(
-    registryConversations: ReadonlyMap<string, RuntimeRegistryConversationRetentionState>,
+    registryConversations: Pick<ReadonlyMap<string, RuntimeRegistryConversationRetentionState>, "get">,
     horizonMs = RUNTIME_PENDING_EFFECT_STALE_MS,
   ): { scanned: number; settled: number } {
     this.assertHealthy();
@@ -1947,6 +1998,15 @@ export class RuntimeJournal {
       }
     }
     return { scanned: rows.length, settled };
+  }
+
+  private readonly effectReaderGeneration = randomUUID();
+
+  /** Process generation plus both SQLite write witnesses: a peer commit and
+      a replacement journal invalidate a conditional page too. */
+  effectPageVersion(): string {
+    const peer = this.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
+    return `${this.effectReaderGeneration}:${this.totalChanges()}:${peer}`;
   }
 
   effectBatch(limit = 100, kinds?: readonly string[], afterEventSeq = 0): Array<RuntimeEffect & { eventSeq: number }> {
@@ -2036,8 +2096,13 @@ export class RuntimeJournal {
       ).get(Math.min(target.seq, consumed ?? target.seq));
       if (!anchor) { this.db.exec("COMMIT"); return; }
       this.retainLegacyStopAdmissions();
+      // Select the retiring prefix while its event ids still exist. The
+      // checkpoint primary key starts with event_id, so a small append retires
+      // only its checkpoints instead of scanning the entire retained tail.
+      this.db.query(`DELETE FROM consumer_checkpoints
+        WHERE event_id IN (SELECT event_id FROM events WHERE seq <= ?)`)
+        .run(anchor.seq);
       this.db.query("DELETE FROM events WHERE seq <= ?").run(anchor.seq);
-      this.db.exec("DELETE FROM consumer_checkpoints WHERE NOT EXISTS (SELECT 1 FROM events WHERE events.event_id = consumer_checkpoints.event_id)");
       this.db.query("DELETE FROM outbox WHERE state = 'completed' AND event_seq <= ?").run(anchor.seq);
       // Upgrade retained legacy boundaries before their receipts disappear.
       // Kill authorship comes from the admitted fence, never from prose or ids.
@@ -2488,9 +2553,16 @@ export class RuntimeJournal {
         status = "rejected";
         reason = "attention-missing";
       } else if (attention.state !== "open") {
-        status = attention.state === "resolving" ? "rejected" : "answered";
-        reason = attention.state === "resolving" ? "attention-resolving" : null;
+        const confirmed = attention.codexReceipt
+          ? attention.codexReceipt.serverResolution?.outcome === "answered"
+            && codexAnswerMatchesDispatch(attention.codexReceipt, command.resolution)
+          : attention.state === "resolved";
+        status = confirmed ? "answered" : "rejected";
+        reason = confirmed ? null : attention.state === "resolving" ? "attention-resolving" : "attention-no-longer-answerable";
         turnId = attention.turnId ?? turnId;
+      } else if (attention.unowned || attention.codexReceipt?.recovery || attention.codexReceipt?.protocolError) {
+        status = "rejected";
+        reason = attention.codexReceipt?.recovery?.outcome ?? "attention-ownership-unavailable";
       } else if (!session || session.host !== "hosted") {
         status = "rejected";
         reason = session?.host === "dead" || session?.host === "unhosted" ? "dead-host" : "no-claim";
@@ -2833,6 +2905,9 @@ export class RuntimeJournal {
       return;
     }
     if (command.kind === "answer" && receipt.status === "answered") {
+      // Codex's server-resolution receipt is the sole terminal transition.
+      // Its event pump can arrive before or after the operation completion.
+      if (this.entity<RuntimeAttention>("attention", command.attentionId)?.codexReceipt) return;
       this.appendInTransaction(normalizeRuntimeEventInput({
         scope: { type: "session", id: command.conversationId },
         kind: "attention-resolved",
@@ -3011,9 +3086,14 @@ export class RuntimeJournal {
     }
     if (event.kind === "attention") {
       const id = typeof payload.id === "string" ? payload.id : typeof payload.requestId === "string" ? payload.requestId : `attention-${event.seq}`;
+      const retained = this.entity<RuntimeAttention>("attention", id);
+      const incoming = payload.codexReceipt as RuntimeAttention["codexReceipt"];
+      if (retained?.codexReceipt?.serverResolution && incoming
+        && sameCodexRequest(retained.codexReceipt.identity, incoming.identity)) return;
       const conversationId = typeof payload.conversationId === "string" ? payload.conversationId : scope.id;
       const kind = payload.kind === "approval" || payload.kind === "permission" || payload.kind === "waiting_heuristic" ? payload.kind : "question";
       const attention: RuntimeAttention = {
+        ...(payload.codexReceipt ? { codexReceipt: payload.codexReceipt as RuntimeAttention["codexReceipt"] } : {}),
         id,
         conversationId,
         kind,
@@ -3041,7 +3121,7 @@ export class RuntimeJournal {
       const attention = this.entity<RuntimeAttention>("attention", id);
       if (attention) {
         const state = payload.state === "expired-confirmed" || payload.state === "cancelled" || payload.state === "resolution-unknown" ? payload.state : "resolved";
-        this.upsertEntity("attention", id, event.revision, { ...attention, state, unowned: false }, event.seq);
+        this.upsertEntity("attention", id, event.revision, { ...attention, state, unowned: false, ...(payload.codexReceipt ? { codexReceipt: payload.codexReceipt } : {}) }, event.seq);
         const session = this.entity<RuntimeSession>("session", attention.conversationId);
         if (session) this.upsertEntity("session", attention.conversationId, event.revision, { ...session, revision: event.revision, attentionIds: session.attentionIds.filter((item) => item !== id) }, event.seq);
       }

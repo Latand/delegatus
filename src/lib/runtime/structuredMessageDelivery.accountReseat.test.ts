@@ -1389,7 +1389,9 @@ test("a delivered image replay racing reseat admission wins over source capabili
   const beforeIntents = registry.snapshot().migrationIntents;
   const hold = registry.holdDeliveryOffLoop.bind(registry);
   registry.holdDeliveryOffLoop = async (...args) => {
-    const raced = registry.holdDelivery(...args);
+    await args[8]?.();
+    const admission = args.slice(0, 8) as Parameters<typeof registry.holdDelivery>;
+    const raced = registry.holdDelivery(...admission);
     registry.recordDeliveryOutcome(raced.id, "delivered", null, "delivered");
     return hold(...args);
   };

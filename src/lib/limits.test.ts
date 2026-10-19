@@ -51,6 +51,27 @@ function resetLimitsCache(): void {
   fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "limits-cache.json"), { force: true });
 }
 
+test("paid-credit metadata survives transcript/live reconciliation and windowless balance events", async () => {
+  const account = createManagedCodexAccount("account A credits");
+  const file = path.join(account.sessionsDir, "2026", "10", "15", "credits.jsonl");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const now = Date.parse("2026-10-15T00:00:00Z");
+  fs.writeFileSync(file, [
+    { timestamp: new Date(now - 1000).toISOString(), payload: { rate_limits: {
+      primary: { used_percent: 99, window_minutes: 10080, resets_at: now / 1000 + 86400 },
+      credits: { has_credits: true, balance: "10", unlimited: false } } } },
+    { timestamp: new Date(now).toISOString(), payload: { rate_limits: { credits: { has_credits: true, balance: "12", unlimited: false } } } },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n");
+  expect(readCodexTranscriptLimits(account.sessionsDir).data?.credits).toEqual({ hasCredits: true, balance: "12", unlimited: false });
+  const live = await readCodexLimits({ account, now: () => now, liveReader: async () => ({
+    primary: { usedPercent: 99, windowDurationMins: 10080, resetsAt: now / 1000 + 86400 }, secondary: null, planType: "pro",
+    credits: { hasCredits: true, balance: "11", unlimited: false },
+  }) });
+  expect(live.data?.credits).toEqual({ hasCredits: true, balance: "11", unlimited: false });
+  const fallback = await readCodexLimits({ account, now: () => now, liveReader: async () => { throw Error("offline"); } });
+  expect(fallback.data?.credits).toEqual({ hasCredits: true, balance: "12", unlimited: false });
+});
+
 test("account throttle provenance round-trips from disk and expires after retry grace", () => {
   resetLimitsCache();
   const retryAtMs = Date.parse("2026-08-23T09:12:00.000Z");

@@ -31,6 +31,7 @@ Object.assign(globalThis, {
 
 const { SelfUpdateView } = await import("./SelfUpdateView");
 const { publishBlockerNames } = await import("./blockerNames");
+const { resetDrainDecisionsForTests } = await import("./AutoDrainDecision");
 const { actionError, day } = await import("./selfUpdateCopy");
 type ActionError = import("./selfUpdateCopy").ActionError;
 const { setLocale } = await import("@/lib/i18n");
@@ -159,6 +160,43 @@ function render(s: Snapshot, state: Partial<{ armed: boolean; openLogs: Set<stri
 const text = (element: Element | null) => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
 const section = (el: HTMLElement, name: string) => el.querySelector<HTMLElement>(`[data-section="${name}"]`);
 const button = (el: HTMLElement, action: string) => el.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
+
+describe("MCP update failure guidance", () => {
+  for (const locale of ["en", "uk"] as const) {
+    test.each([
+      ["MCP runtime is missing tools: suggest_replies", "installed updater", "Встановлений оновлювач"],
+      ["MCP candidate did not register declared tools: new_read. Retrying the same image will not help; choose a corrected release.", "declares MCP tools", "заявляє інструменти MCP"],
+      ["MCP candidate is missing deployment contract tools: board_snapshot. Retrying the same image will not help; choose a corrected release.", "required for deployment", "потрібні для розгортання"],
+      ["MCP candidate tool catalog is invalid. Retrying the same image will not help; choose a corrected release.", "invalid MCP tool catalog", "некоректний каталог інструментів MCP"],
+    ])(`catalog failures explain cause and futile retry in ${locale}: %s`, (reason, en, uk) => {
+      setLocale(locale);
+      const s = snapshot({ mode: "managed", ...available(), update: {
+        ...idleUpdate(MANAGED_STEPS), state: "failed", target: NEW, targetShort: NEW.slice(0, 7),
+        startedAt: AT, finishedAt: new Date(NOW).toISOString(),
+        steps: pendingSteps(MANAGED_STEPS).map(step => step.name === "health"
+          ? { ...step, state: "failed", failure: null, tail: [reason] } : step),
+      } });
+      const el = render(s);
+      expect(text(el.querySelector("[data-cause]"))).toContain(locale === "en" ? en : uk);
+      const guidance = text(el.querySelector("[data-retry-guidance]"));
+      expect(guidance).toContain(locale === "en" ? "will not help" : "не допоможе");
+      expect(button(el, "retry")?.title).toBe(guidance);
+      button(el, "retry")!.click();
+      expect(calls).toEqual(["retry"]);
+    });
+
+    test(`a transient MCP failure explains that retry may help in ${locale}`, () => {
+      setLocale(locale);
+      const el = render(snapshot({ mode: "managed", ...available(), update: {
+        ...idleUpdate(MANAGED_STEPS), state: "failed", target: NEW, targetShort: NEW.slice(0, 7), startedAt: AT, finishedAt: new Date(NOW).toISOString(),
+        steps: pendingSteps(MANAGED_STEPS).map(step => step.name === "health"
+          ? { ...step, state: "failed", failure: null, tail: ["MCP startup timed out"] } : step),
+      } }));
+      expect(text(el.querySelector("[data-cause]"))).toBe("MCP startup timed out");
+      expect(text(el.querySelector("[data-retry-guidance]"))).toContain(locale === "en" ? "may help" : "може допомогти");
+    });
+  }
+});
 
 describe("automatic updates", () => {
   test.each(["en", "uk"] as const)("the expired hold explains admitted launches and retry time in %s", locale => {
@@ -338,6 +376,30 @@ describe("automatic updates", () => {
       expect(text(card?.querySelector('[role="alert"]') ?? null)).toBe("Could not record the decision. Try again.");
       expect(button(el, "deploy-now")?.disabled).toBe(false);
     } finally { globalThis.fetch = savedFetch; }
+  });
+
+  /* Audit B15: «Keep waiting» leaves at once; a lost answer brings the card back with the reason. */
+  test("Keep waiting takes the card away at once while the answer is held, sends once, and a lost answer brings it back with the reason", async () => {
+    const savedFetch = globalThis.fetch;
+    const posted: unknown[] = [];
+    let fail!: () => void;
+    globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+      posted.push(JSON.parse(String(init?.body)));
+      return new Promise<Response>((_resolve, reject) => { fail = () => reject(new TypeError("network")); });
+    }) as unknown as typeof fetch;
+    try {
+      const el = render(decided());
+      flushSync(() => button(el, "keep-waiting")!.click());
+      expect(el.querySelector("[data-auto-drain-decision]")).toBeNull();
+      expect(posted).toEqual([{ decisionId: "drain-current", choice: "keep-waiting" }]);
+      fail();
+      await Bun.sleep(0);
+      await Bun.sleep(0);
+      const card = el.querySelector("[data-auto-drain-decision]");
+      expect(card).not.toBeNull();
+      expect(text(card?.querySelector('[role="alert"]') ?? null)).toBe("Could not record the decision. Try again.");
+      expect(posted).toHaveLength(1);
+    } finally { globalThis.fetch = savedFetch; resetDrainDecisionsForTests(); }
   });
 
   test("the switch, blockers, serving revisions and history are visible", () => {
@@ -861,8 +923,45 @@ describe("managed install", () => {
   test("a rolled-back deployment says the previous release serves again, and deploys again on request", () => {
     const failedAt = MANAGED_STEPS.map((name, at) => ({ ...pendingSteps(MANAGED_STEPS)[at]!, state: at < 3 ? "done" as const : at === 3 ? "failed" as const : "pending" as const, tail: at === 3 ? ["candidate health gate failed: GET / answered 500"] : [] }));
     const el = render(managed({ ...available(), update: { ...idleUpdate(MANAGED_STEPS), state: "failed", rolledBack: true, target: NEW, targetShort: "a1b2c3d", steps: failedAt, startedAt: new Date(NOW - 90_000).toISOString(), finishedAt: new Date(NOW).toISOString() } }));
-    expect(text(el.querySelector('[data-outcome="failed"]'))).toContain("Deployment stopped at health check after 1 m 30 s and was rolled back: the previous release serves again.");
+    expect(text(el.querySelector('[data-outcome="failed"]'))).toContain("Deployment stopped at health check after 1 m 30 s. Rollback completed; current component revisions are shown above.");
     expect(text(button(el, "retry"))).toBe("Deploy again");
+  });
+
+  test.each(["en", "uk"] as const)("a newer external success keeps the failed attempt and both serving identities (%s)", locale => {
+    setLocale(locale);
+    const previousAttempt = { ...idleUpdate(MANAGED_STEPS), state: "failed" as const, target: OLD, targetShort: OLD.slice(0, 7),
+      steps: pendingSteps(MANAGED_STEPS).map(step => step.name === "health" ? { ...step, state: "failed" as const, failure: { kind: "error" as const, text: "First boot loop gate refused" } } : step) };
+    const el = render(managed({ serving: { web: NEW_REV, runtimeHost: null },
+      previousAttempt, update: { ...idleUpdate(MANAGED_STEPS), state: "done", target: NEW, targetShort: NEW.slice(0, 7) } }));
+    expect(text(section(el, "previous-attempt"))).toContain(OLD.slice(0, 7));
+    expect(text(section(el, "previous-attempt"))).toContain("First boot loop gate refused");
+    expect(text(section(el, "header"))).toContain(NEW.slice(0, 7));
+    expect(text(section(el, "header"))).toContain(locale === "uk" ? "ревізія невідома" : "unknown revision");
+    expect(text(section(el, "header"))).not.toContain(locale === "uk" ? "Runtime host працює на" : "Runtime host runs");
+    expect(button(el, "retry")).toBeNull();
+  });
+
+  test.each(["en", "uk"] as const)("a completed deployment leaves an unknown host revision unconfirmed (%s)", locale => {
+    setLocale(locale);
+    const el = render(managed({ installed: NEW_REV, serving: { web: NEW_REV, runtimeHost: null },
+      processes: { web: proc("web", { revision: NEW.slice(0, 7) }), runtimeHost: proc("runtimeHost", { state: "failed", revision: null }) },
+      update: { ...idleUpdate(MANAGED_STEPS), state: "done", target: NEW, targetShort: NEW.slice(0, 7) } }));
+    expect(text(el.querySelector('[data-outcome="done"]'))).toContain(locale === "uk"
+      ? "Поточні ревізії компонентів показано вище." : "current component revisions are shown above.");
+    expect(text(el.querySelector('[data-outcome="done"]'))).not.toContain(locale === "uk"
+      ? "Тепер на ній працюють і веб, і runtime host." : "Web and the runtime host now run it.");
+  });
+
+  test("pending rollback retains its failed target beside a newer check", () => {
+    const newer = rev("f7e6ce4".padEnd(40, "1"), "1.2.4");
+    const el = render(managed({ ...available(), available: newer, update: { ...idleUpdate(MANAGED_STEPS), state: "failed",
+      rollback: "running", target: NEW, targetShort: NEW.slice(0, 7),
+      steps: pendingSteps(MANAGED_STEPS).map(step => step.name === "health" ? { ...step, state: "failed", failure: { kind: "error", text: "adoption timed out" } } : step) } }));
+    expect(text(section(el, "update"))).toContain(NEW.slice(0, 7));
+    expect(text(section(el, "update"))).toContain("adoption timed out");
+    expect(text(el.querySelector('[data-outcome="failed"]'))).toContain("Rollback is in progress");
+    expect(text(el.querySelector('[data-outcome="failed"]'))).not.toContain("previous release serves again");
+    expect(text(button(el, "update-checked"))).toContain(newer.short);
   });
 
   test("done means both processes run it", () => {

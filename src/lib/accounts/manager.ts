@@ -13,6 +13,7 @@ import { afterAccountMutationAdmission, accountProbeSnapshot, accountProbeIdenti
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, projectAccountRefusalDetail, type AccountProjectBinding } from "./projectBindings";
 import { selectProjectAccount } from "./projectSelection";
+import { creditGuardBlock } from "./creditGuard";
 import { refreshStaleExhaustion, type LiveLimitsDeps } from "./liveLimits";
 import { selectHealthyClaudeAccount } from "./spawnHealth";
 import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
@@ -33,7 +34,15 @@ function listedAccountId(engine: "claude" | "codex", id: string | null | undefin
 
 function contextForSpawn(engine: "claude" | "codex", requested?: string | null) {
   if (engine === "claude") { const item = claudeAccountForSpawn(requested); return { engine, accountId: item.id, kind: item.kind, home: item.home, transcriptRoot: item.projectsDir, env: item.kind === "managed" ? claudeAccountEnvironment(item) : withoutUnsupportedApiCredentials(process.env), ...(item.provider ? { claudeProvider: item.provider } : {}) }; }
-  const item = accountForSpawn(requested); return { engine, accountId: item.id, kind: item.kind, home: item.home, transcriptRoot: item.sessionsDir, env: { ...withoutUnsupportedApiCredentials(process.env), CODEX_HOME: item.home } };
+  const item = accountForSpawn(requested);
+  assertCodexCreditCapacity(item.id);
+  return { engine, accountId: item.id, kind: item.kind, home: item.home, transcriptRoot: item.sessionsDir, env: { ...withoutUnsupportedApiCredentials(process.env), CODEX_HOME: item.home } };
+}
+
+function assertCodexCreditCapacity(accountId: string): void {
+  const guarded = creditGuardBlock("codex", agentRegistry().quotaObservations("codex").find(item => item.accountId === accountId)?.limits);
+  if (guarded) throw new ProjectAccountRefusedError({ kind: "exhausted", ...guarded, allowedAccountIds: [accountId] }, "codex", null,
+    "paid-credit guard reached; continue on an allowed account with capacity");
 }
 
 /** Viewer-visible spawn admission performs a fresh Claude OAuth health pass. */
@@ -371,8 +380,8 @@ export async function resolveProjectSpawnAfterLiveRead(
  *
  * - **The work records an account.** That is CONTINUITY, not a selection.
  *   The session already lives in that account's home, so resuming anywhere
- *   else resumes nothing; the pool does not get to re-seat it and capacity
- *   does not get to veto it. Byte for byte `resolveSpawn` with an id.
+ *   else resumes nothing. The paid-credit guard can stop it; the pool and
+ *   ordinary capacity checks leave continuity on its recorded account.
  * - **The work records none.** Nobody named an account, so this call is
  *   picking one — and `resolveSpawn(engine, null)` picked the engine's
  *   routing account, reading neither the project's pool nor any quota. That
@@ -412,8 +421,7 @@ export function resolveContinuityAccount(
  * {@link resolveContinuityAccount}:
  *
  * - **Provenance names an account the machine still has.** Continuity. The
- *   session lives in that home; the pool does not re-seat it and capacity does
- *   not veto it.
+ *   session lives in that home. The paid-credit guard still fences its resume.
  * - **It names none, or names one that is gone.** Nobody chose, so this is the
  *   automatic rule's own case and it goes through the shared decision: the
  *   project's pool first, capacity second, an exhausted pool reported and an
@@ -429,7 +437,10 @@ export function resolveResumeAccountId(
 ): string | null {
   const accounts = engine === "claude" ? listClaudeAccounts() : listCodexAccounts();
   const recorded = recordedAccountId?.trim() || null;
-  if (recorded !== null && accounts.some((account) => account.id === recorded)) return recorded;
+  if (recorded !== null && accounts.some((account) => account.id === recorded)) {
+    if (engine === "codex") assertCodexCreditCapacity(recorded);
+    return recorded;
+  }
   const bindings = accountProjectBindings();
   const allowed = allowedAccountIdsForProject(project, engine, bindings);
   const registry = agentRegistry();
@@ -645,8 +656,7 @@ export const accountManager: AccountManager = {
   },
   /* #1279: one seam for every project-owned launch. An unbound project takes
      the branch that has always existed — the active account, resolved and
-     used, with no capacity arithmetic anywhere near it. A bound project is the
-     only case that changes: its candidates are the allowed set and nothing
+     used, subject to the paid-credit guard. A bound project's candidates are the allowed set and nothing
      else, and when all of them are out of capacity that is reported, never
      resolved by widening the set. */
   resolveProjectSpawn(engine, request) {

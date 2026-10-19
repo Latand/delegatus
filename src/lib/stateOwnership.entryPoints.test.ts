@@ -1,10 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
-
-import { STATE_OWNER_ENV } from "./stateOwnership";
+import { OWNERSHIP_PRELOAD, ownershipSandbox } from "./state/fixtures/ownershipSandbox";
 
 /*
  * The other half of #1905: the processes that DO own the operator's state have
@@ -19,24 +17,11 @@ import { STATE_OWNER_ENV } from "./stateOwnership";
  * environment — which is how the Viewer MCP server and two operator scripts
  * were found dead on arrival.
  *
- * The "operator home" is a newly owned directory in the user's cache. It must
- * stay outside temp roots, since a `$HOME` under one is exactly the sandbox the
- * mechanism leaves alone.
+ * Platform paths are injected in the runner and each child, so the operator
+ * home is a private fixture even when this checkout lives under a temp root.
  */
-// Bun caches userInfo()'s home from the startup environment. A fresh process
-// without the runner's temporary home finds the native cache instead.
-function nativeHome(): string {
-  const env = { ...process.env };
-  delete env.HOME;
-  delete env.USERPROFILE;
-  const result = runEntryPoint(["-e", "console.log(require('node:os').userInfo().homedir)"], env);
-  if (result.status !== 0) throw new Error(result.output);
-  return result.stdout.trim();
-}
-const cache = path.join(nativeHome(), ".cache");
-fs.mkdirSync(cache, { recursive: true });
-const operatorRoot = fs.mkdtempSync(path.join(cache, "llv-entry-point-test-"));
-const OPERATOR_HOME = path.join(operatorRoot, "home");
+const sandbox = ownershipSandbox();
+const OPERATOR_HOME = sandbox.home;
 /* Both shapes an operator's home takes after the rename (rename-delegatus.md
    §4.2): a new install holds only `~/.config/delegatus`, an existing one only
    `~/.config/agent-log-viewer`. */
@@ -45,7 +30,7 @@ const MCP_BUNDLE = path.join(process.cwd(), "dist", "mcp-server.mjs");
 const temporaryRoots: string[] = [];
 
 function temporaryRoot(): string {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-entry-point-"));
+  const directory = sandbox.temporaryRoot();
   temporaryRoots.push(directory);
   return directory;
 }
@@ -64,20 +49,7 @@ interface RunResult {
  * throw-away directory and answer a different question than the one asked.
  */
 function operatorEnvironment(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
-  delete env[STATE_OWNER_ENV];
-  delete env.LLV_STATE_DIR;
-  delete env.DELEGATUS_STATE_OWNER;
-  delete env.DELEGATUS_STATE_DIR;
-  // An operator's stdio MCP starts locally. An inherited agent capability
-  // selects lazy delegation and never opens the local receipt store at EOF.
-  delete env.LLV_SPAWN_CAPABILITY;
-  delete env.DELEGATUS_SPAWN_CAPABILITY;
-  delete env.NEXT_PHASE;
-  delete env.NEXT_RUNTIME;
-  env.HOME = OPERATOR_HOME;
-  env.XDG_CONFIG_HOME = path.join(OPERATOR_HOME, ".config");
+  const env = sandbox.environment();
   env.TMPDIR = temporaryRoot();
   env.NODE_ENV = "production";
   return env;
@@ -85,7 +57,7 @@ function operatorEnvironment(): Record<string, string> {
 
 function runEntryPoint(command: string[], env: Record<string, string | undefined> = operatorEnvironment()): RunResult {
   const result = Bun.spawnSync({
-    cmd: [process.execPath, ...command],
+    cmd: [process.execPath, "--preload", OWNERSHIP_PRELOAD, ...command],
     cwd: process.cwd(),
     env,
     stdin: "ignore",
@@ -118,8 +90,9 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  fs.rmSync(path.dirname(OPERATOR_HOME), { recursive: true, force: true });
+  fs.rmSync(OPERATOR_HOME, { recursive: true, force: true });
   for (const root of temporaryRoots) fs.rmSync(root, { recursive: true, force: true });
+  sandbox.release();
 });
 
 for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's state, under a home holding only ~/.config/${appDir}`, () => {
@@ -127,7 +100,7 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
   const OTHER_APP_DIR = path.join(OPERATOR_HOME, ".config", APP_DIRS.find((name) => name !== appDir)!);
 
   beforeEach(() => {
-    fs.rmSync(path.dirname(OPERATOR_HOME), { recursive: true, force: true });
+    fs.rmSync(OPERATOR_HOME, { recursive: true, force: true });
     fs.mkdirSync(STATE_DIRECTORY, { recursive: true });
   });
 
@@ -141,7 +114,7 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("native caller hook needs its Claude parent");
     });
-    test(`the Viewer MCP server starts from ${label} and keeps its receipts in the operator's state directory`, () => {
+    test(`the Viewer MCP server starts from ${label} with its state claim and a stateless Linux transport`, () => {
       const result = runEntryPoint([...command]);
 
       expectNoRefusal(result);
@@ -154,9 +127,8 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
          belongs to the helper's own file: started as the MCP server it must
          not read this process's arguments as a credential request. */
       expect(result.stderr).not.toContain("token|gh|git-credential");
-      /* And it resolved the operator's directory rather than a throw-away
-         one: this is where its receipts live. */
-      expect(fs.existsSync(path.join(STATE_DIRECTORY, "mcp-receipts.sqlite"))).toBeTrue();
+      /* Adapters forward before constructing the local receipt store. */
+      expect(fs.existsSync(path.join(STATE_DIRECTORY, "mcp-receipts.sqlite"))).toBe(false);
       /* An MCP server is no startup-mutation owner: it neither creates the
          other name nor makes the link. */
       expect(fs.existsSync(OTHER_APP_DIR)).toBeFalse();
@@ -167,7 +139,7 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
      its own parsing at all is the assertion, because the failure this guards
      is a throw during module evaluation, before any argument is read. */
   for (const [script, argv, marker] of [
-    ["scripts/relay-switch.ts", ["status"], "chat_conversations"],
+    ["scripts/relay-switch.ts", ["status"], "chain_conversations"],
     ["scripts/rollback-runtime-host.ts", [], "no retained runtime-host rollback target"],
     ["scripts/cutover-shared-claude-projects.ts", [], "nothing to cut over"],
     ["scripts/migrate-legacy-tmux.ts", [], "only `preflight --root <transcript>`"],
@@ -192,7 +164,7 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
        port. */
     const socketPath = path.join(temporaryRoot(), "runtime-host.sock");
     const child = Bun.spawn({
-      cmd: [process.execPath, "src/runtime-host/main.ts"],
+      cmd: [process.execPath, "--preload", OWNERSHIP_PRELOAD, "src/runtime-host/main.ts"],
       cwd: process.cwd(),
       env: { ...operatorEnvironment(), LLV_RUNTIME_HOST_SOCKET: socketPath, LLV_VIEWER_DEPLOYMENTS: "0", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
       stdin: "ignore",

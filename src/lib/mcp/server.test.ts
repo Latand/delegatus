@@ -20,6 +20,7 @@ import {
   MemoryMcpReceiptStore,
   McpToolTimingAggregate,
   SqliteMcpReceiptStore,
+  openAsyncMcpReceiptStore,
   createViewerMcpServer,
   validRequestBinding,
   createMcpToolService,
@@ -310,7 +311,17 @@ describe("MCP tool service", () => {
       expect(await waitForFileCount(directory, `${schema.name}-ready-`, processes)).toBeTrue();
       fs.writeFileSync(startPath, String(Date.now() + 150));
       const outcomes = await Promise.all(children.map(childResult));
-      expect(outcomes).toEqual(Array.from({ length: processes }, () => ({ exit: 0, error: "" })));
+      for (const { exit, error } of outcomes) {
+        expect(exit).toBe(0);
+        for (const line of error.trim().split("\n").filter(Boolean)) {
+          expect(line.startsWith("[blocking-wait] ")).toBe(true);
+          const wait = JSON.parse(line.slice("[blocking-wait] ".length));
+          expect(wait).toMatchObject({ site: "state-write-lock", synchronous: false,
+            stateWait: { synchronousSleepMs: 0 } });
+          expect(["mcp.receipts.initialize", "mcp.receipts.lookup"]).toContain(wait.stateWait.callSite);
+          expect(["waiting", "success"]).toContain(wait.stateWait.outcome);
+        }
+      }
       expect(ownedFixturePids().slice(pidStart).filter(fixturePidAlive)).toEqual([]);
       const results = Array.from({ length: processes }, (_value, index) => JSON.parse(
         fs.readFileSync(path.join(directory, `${schema.name}-result-${index}.json`), "utf8"),
@@ -475,7 +486,7 @@ describe("MCP tool service", () => {
       expect((await service.callTool("list_tasks", args)).replayed).toBe(true);
       expect(output).toHaveBeenCalledTimes(1);
       const line = String(output.mock.calls[0]![0]);
-      expect(line).toMatch(/^\[mcp slow\] tool=list_tasks(?: [a-zA-Z]+Ms=\d+)+$/);
+      expect(line).toMatch(/^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=list_tasks(?: [a-zA-Z]+Ms=\d+)+$/);
       for (const phase of ["caller", "claim", "binding", "completion", "serialization", "serviceTotal"]) expect(line).toContain(`${phase}Ms=`);
       expect(line).not.toContain(privateSentinel);
     } finally { output.mockRestore(); }
@@ -938,7 +949,7 @@ describe("MCP tool service", () => {
     expect(processResult.exit).toBe(0);
     /* The claimant walks its wait on a stepped clock (server.lockChild.ts), so
        the budget it spent is exact: the whole 5 s, and not one pause past it. */
-    expect(processResult.error).toMatch(/^\[mcp slow\] tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
+    expect(processResult.error).toMatch(/^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
     expect(Number(processResult.error.match(/claimMs=(\d+)/)?.[1])).toBe(5_000);
     expect(JSON.parse(fs.readFileSync(resultPath, "utf8"))).toMatchObject({
       outcome: "failed",
@@ -1469,7 +1480,7 @@ describe("MCP tool service", () => {
 
     for (const claimant of claimants) {
       expect(claimant.exit).toBe(0);
-      expect(claimant.error).toMatch(/^\[mcp slow\] tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
+      expect(claimant.error).toMatch(/^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=flow_action(?: [a-zA-Z]+Ms=\d+)+\n$/);
       // Exact on the claimant's stepped clock: the whole budget, no pause past it.
       expect(Number(claimant.error.match(/claimMs=(\d+)/)?.[1])).toBe(5_000);
     }
@@ -1927,7 +1938,6 @@ describe("MCP tool service", () => {
         "agent_activity",
         "lifecycle_events",
         "request_attention",
-        "suggest_replies",
         "publish_prototype_review",
         "resend_prototype_review_telegram",
         "read_prototype_review",
@@ -1950,9 +1960,12 @@ describe("MCP tool service", () => {
         "telegram_bot_send_document",
         "telegram_bot_messages",
         "relay_owner_history",
+        "relay_answer",
+        "relay_service_tools",
         "issue_report",
       ]);
-      const optionalReadKeys = new Set(["relay_owner_history", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
+      expect(listed.tools.map(tool => tool.name)).not.toContain("suggest_replies");
+      const optionalReadKeys = new Set(["relay_owner_history", "relay_answer", "relay_service_tools", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
       for (const tool of listed.tools) {
         if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
         else expect(tool.inputSchema.required).toContain("clientRequestId");
@@ -1965,8 +1978,10 @@ describe("MCP tool service", () => {
       expect(spawnSchema?.properties).toHaveProperty("mcpServers");
       const createOrchestratorSchema = listed.tools.find((tool) => tool.name === "create_orchestrator")?.inputSchema;
       expect(createOrchestratorSchema?.properties).toHaveProperty("conversationId");
-      const suggestRepliesSchema = listed.tools.find((tool) => tool.name === "suggest_replies")?.inputSchema;
-      expect(suggestRepliesSchema?.properties).not.toHaveProperty("replaces");
+      /* The deprecated protocol bridge has no active action or draft route. */
+      expect(MCP_TOOL_NAMES as readonly string[]).not.toContain("suggest_replies");
+      expect(fs.existsSync(path.join(import.meta.dir, "../../app/api/log/suggestions"))).toBe(false);
+      expect(fs.existsSync(path.join(import.meta.dir, "../../app/api/log/route.ts"))).toBe(true);
       /* #878: rotation must reach effort parity with create, or a successor
          silently boots at the default reasoning level. */
       const rotateOrchestratorSchema = listed.tools.find((tool) => tool.name === "rotate_orchestrator")?.inputSchema;
@@ -2118,6 +2133,68 @@ import {
 } from "./server";
 
 const OWNER: McpRequestCaller = { kind: "worker", conversationId: "conversation_owner", project: "proj-a" };
+
+test("async SQLite receipts retry each transition and a contended completion never repeats the binding", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-async-receipts-"));
+  scratch.push(directory);
+  const filename = path.join(directory, "receipts.sqlite");
+  const store = await openAsyncMcpReceiptStore(filename);
+  const holder = new Database(filename);
+  const { stateLockWaitsInFlight } = await import("@/lib/state/lockWait");
+  const waiting = async () => {
+    const deadline = Date.now() + 2000;
+    while (!stateLockWaitsInFlight().some(wait => wait.callSite.startsWith("mcp.receipts.") && wait.attempts >= 2)) {
+      if (Date.now() >= deadline) throw new Error("receipt operation did not yield while waiting for its lock");
+      await Bun.sleep(1);
+    }
+  };
+  const contended = async <T>(operation: () => T | Promise<T>) => {
+    holder.exec("BEGIN IMMEDIATE");
+    const result = operation();
+    try { await waiting(); }
+    finally { holder.exec("ROLLBACK"); }
+    return result;
+  };
+  const binding: McpRequestBinding = {
+    version: 1, toolName: "send_message_to_orchestrator", clientRequestId: "async-transition",
+    caller: OWNER, target: { project: "proj-a", identity: null }, downstreamKey: "async-transition",
+    owner: { pid: process.pid, startIdentity: null }, claimedAt: "2026-10-15T00:00:00.000Z",
+  };
+  const key = `${binding.toolName}:${binding.clientRequestId}`, digest = "a".repeat(64);
+  const result: McpToolResult = { ok: true, toolName: binding.toolName, clientRequestId: binding.clientRequestId, replayed: false };
+  try {
+    expect(await contended(() => store.claim(key, digest, "durable", binding))).toEqual({ kind: "fresh" });
+    expect(await contended(() => store.markDispatching(key, digest))).toBe(true);
+    expect(await contended(() => store.bindCreatedTarget!(key, digest, binding, "conversation_target"))).toBe(true);
+    expect(await contended(() => store.settle(key, digest, result))).toEqual(result);
+    expect((await store.lookup(key))?.binding?.target.identity).toBe("conversation_target");
+    expect(await contended(() => store.fenceUndispatched(key, digest, result))).toBe(false);
+    expect(await contended(() => store.release!(key, digest))).toBe(false);
+    expect(await contended(() => store.claim(key, digest, "durable"))).toMatchObject({ kind: "replay", result });
+    expect(await contended(() => store.claim(key, "changed", "durable"))).toMatchObject({ kind: "conflict" });
+
+    const releaseKey = "list_flows:async-release";
+    await store.claim(releaseKey, digest, "bounded");
+    expect(await contended(() => store.release!(releaseKey, digest))).toBe(true);
+    expect(await store.lookup(releaseKey)).toBeNull();
+    const fenceKey = `${binding.toolName}:async-fence`;
+    await store.claim(fenceKey, digest, "durable", { ...binding, clientRequestId: "async-fence" });
+    expect(await contended(() => store.fenceUndispatched(fenceKey, digest, { ...result, clientRequestId: "async-fence" }))).toBe(true);
+
+    let effects = 0;
+    const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, async () => ({})])) as unknown as McpToolBindings;
+    bindings.flow_action = async () => { effects++; holder.exec("BEGIN IMMEDIATE"); return { effect: effects }; };
+    const service = createMcpToolService(bindings, store);
+    const args = { flowId: "flow_fixture", action: "pause", clientRequestId: "async-completion" };
+    const completed = service.callTool("flow_action", args);
+    try { await waiting(); }
+    finally { if (holder.inTransaction) holder.exec("ROLLBACK"); }
+    expect(await completed).toMatchObject({ ok: true, effect: 1 });
+    expect(await service.callTool("flow_action", args)).toMatchObject({ ok: true, replayed: true, effect: 1 });
+    expect(effects).toBe(1);
+  } finally { holder.close(); store.close(); }
+}, 10_000);
+
 const OTHER: McpRequestCaller = { kind: "worker", conversationId: "conversation_other", project: "proj-a" };
 const OTHER_PROJECT: McpRequestCaller = { kind: "worker", conversationId: "conversation_owner", project: "proj-b" };
 const UNIDENTIFIED: McpRequestCaller = { kind: "unidentified", conversationId: null, project: null };

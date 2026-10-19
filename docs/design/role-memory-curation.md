@@ -9,6 +9,16 @@ outside the repository under
 `$HOME/.local/share/delegatus-evidence/role-memory-quality/`. No rule text
 from the live store appears here; the examples are invented.
 
+**Timer amendment, 2026-10-17.** The current timer contract is documented in
+[Role memory curator timer](../verification/role-memory-curator.md). Each project
+has an independent `curation` switch and an interval of 1–168 hours (default 6)
+in `seat_tick_settings`. All triggers respect that interval after the later
+persisted claim/end time, including pressure, ten new lessons, failed passes
+and successful no-op passes. This supersedes the original early-trigger and
+30-minute claim wording below. The existing tick panel shows the controls,
+latest completed result and conversation, any live pass separately, and next
+eligibility.
+
 ## Originating requirement
 
 Operator, 2026-10-11 01:59 Kyiv (2026-10-10 22:59 UTC), orchestrator seat
@@ -322,6 +332,11 @@ row (`m:` with the machine scope's `lastPassAt` and the machine-wide
 pass) for the MCP guard.
 
 ### 3.2 Retention: curation fills the 10 000 characters
+
+Implementation update, 2026-10-16: [memory-delivery-ledger.md](memory-delivery-ledger.md#curation-admission-and-budget)
+supersedes the budget behavior below. Never-curated rules remain active through
+budget overflow, scopes at 90% with pending lessons make curation due early,
+and a committed curator partition must meet the character bound.
 
 - **The bound** stays 10 000 code points per scope, measured on what an
   agent reads: the rendered lines `- [id] rule`, which no longer carry Why

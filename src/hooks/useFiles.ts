@@ -9,6 +9,7 @@ import { SESSION_TITLES_CHANGED_EVENT } from "@/components/session/sessionTitleA
 import { TASKS_CHANGED_EVENT } from "@/components/tasks/taskApi";
 import { WORKFLOWS_CHANGED_EVENT } from "@/components/workflows/workflowModel";
 import { FILES_BUILT_HEADER, filesBuiltBefore, filesBuiltSuperseded, parseFilesBuilt, type FilesBuilt } from "@/lib/filesBuilt";
+import { applyBoardDelta, BOARD_PROTOCOL_HEADER, BOARD_SCOPE_HEADER, type BoardDelta } from "@/lib/boardDelta";
 import { applyFilesDelta, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER, type FilesDelta } from "@/lib/filesDelta";
 import { documentHidden, hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
 import { createRuntimeFilesStatusProjection } from "@/lib/client/runtimeFilesStatus";
@@ -159,9 +160,13 @@ export interface FilesClientCache {
       is authoritative again. */
   revertPipeline(id: string): void;
   /** Layer one task row over the server snapshot without a refetch (#1836).
-      Held only until a scan requested after the apply carries the row, exactly
-      as a confirmed pipeline echo is. */
-  applyTask(task: BoardTask): void;
+      Confirmed (a server echo), it is held only until a scan requested after
+      the apply carries the row, exactly as a confirmed pipeline echo is;
+      unconfirmed (an optimistic local write), until it is confirmed or
+      reverted. */
+  applyTask(task: BoardTask, confirmed?: boolean): void;
+  /** Drop a task overlay (a failed optimistic write). */
+  revertTask(id: string): void;
   /** Layer a freshly admitted launch conversation (the client-built
       `spawn:<launchId>` card, issue #919) over the server snapshot without a
       refetch, so the board renders the live window the moment the spawn receipt
@@ -624,6 +629,8 @@ export function createFilesClientCache(
     ...(Array.isArray(parsed.tasks) ? { tasks: data.tasks } : {}),
   });
 
+  const legacyScopes = new Set<string>();
+
   const performRevalidate = async (
     pinnedPath?: string | null,
     revision?: number,
@@ -643,6 +650,8 @@ export function createFilesClientCache(
            take one full representation instead of guessing. */
         const stale = representations.get(filesApiUrl(undefined, pinnedPath));
         if (stale) stale.raw = undefined;
+        legacyScopes.add(filesApiUrl(undefined, pinnedPath));
+        if (legacyScopes.size > 32) legacyScopes.delete(legacyScopes.values().next().value!);
         result = await runRevalidate(pinnedPath, revision, requiredGeneration, logicalGeneration, completionRetryAttempt, completionRetry, signal);
       }
       noteCatalogOutcome(true);
@@ -679,10 +688,12 @@ export function createFilesClientCache(
     /* Only a tab holding the server's exact representation can apply a delta
        to it; otherwise the conditional request asks for the whole body. */
     const headers = filesRequestHeaders(representation?.etag ?? "", revision, requiredGeneration, Boolean(representation?.raw));
+    const requestHeaders = { ...headers, ...(!legacyScopes.has(url) ? {
+      [BOARD_PROTOCOL_HEADER]: "2",
+      ...(typeof representation?.raw?.boardScope === "string" ? { [BOARD_SCOPE_HEADER]: representation.raw.boardScope } : {}),
+    } : {}) };
     const signal = completionRetry?.controller?.signal ?? externalSignal;
-    const init = headers || signal
-      ? { ...(headers ? { headers } : {}), ...(signal ? { signal } : {}) }
-      : undefined;
+    const init = { headers: requestHeaders, ...(signal ? { signal } : {}) };
     let response: Response;
     try {
       response = await fetcher(url, init);
@@ -700,6 +711,8 @@ export function createFilesClientCache(
       && targetGeneration !== undefined
       && servedGeneration < targetGeneration)
     );
+    const protocol = response.headers.get(BOARD_PROTOCOL_HEADER);
+    if (protocol !== null && protocol !== "2") throw new FilesDeltaMismatch("unsupported board protocol");
     if (response.status === 304) {
       if (!representation) throw new Error("files request returned 304 without a cached representation");
       if (generation < appliedGeneration) return snapshot;
@@ -755,10 +768,12 @@ export function createFilesClientCache(
     const deltaBase = response.headers.get(FILES_DELTA_BASE_HEADER);
     let parsed: FilesResponse | FileEntry[];
     if (deltaBase !== null) {
-      parsed = appliedDeltas(representation, deltaBase, etag, text) as unknown as FilesResponse;
+      parsed = appliedDeltas(representation, deltaBase, etag, text, protocol === "2") as unknown as FilesResponse;
     } else {
       parsed = JSON.parse(text) as FilesResponse | FileEntry[];
     }
+    if (!Array.isArray(parsed) && "boardProtocol" in parsed && parsed.boardProtocol !== 2) throw new FilesDeltaMismatch("unsupported board snapshot");
+    if (protocol === "2" && (Array.isArray(parsed) || !("boardProtocol" in parsed) || parsed.boardProtocol !== 2)) throw new FilesDeltaMismatch("missing board protocol marker");
     if (completionRetry && !ownsCompletionRetry(url, completionRetry)) return snapshot;
     if (generation < appliedGeneration) return snapshot;
     const built = parseFilesBuilt(response.headers.get(FILES_BUILT_HEADER));
@@ -979,9 +994,16 @@ export function createFilesClientCache(
     publish(undefined, "urgent");
   };
 
-  const applyTask = (task: BoardTask) => {
+  const applyTask = (task: BoardTask, confirmed = true) => {
     if (disposed) return;
-    taskOverlays.set(task.id, { task, minGeneration: requestedGeneration + 1 });
+    taskOverlays.set(task.id, { task, minGeneration: confirmed ? requestedGeneration + 1 : Number.POSITIVE_INFINITY });
+    composeTasks();
+    publish(undefined, "urgent");
+  };
+
+  const revertTask = (id: string) => {
+    if (disposed) return;
+    if (!taskOverlays.delete(id)) return;
     composeTasks();
     publish(undefined, "urgent");
   };
@@ -1008,6 +1030,7 @@ export function createFilesClientCache(
       return false;
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    if ("boardProtocol" in parsed && parsed.boardProtocol !== 2) return false;
     const data: FilesData = { ...parsedFilesData(parsed as FilesResponse, url), loaded: false, cached: true, scopeCertified: false };
     snapshot = data;
     serverPipelines = data.pipelines;
@@ -1082,7 +1105,7 @@ export function createFilesClientCache(
     listeners.clear();
   };
 
-  return { read: () => withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), readScope: exactScopeSnapshot, revalidate, revalidateWriteHealth, subscribe, applyPipeline, revertPipeline, applyTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
+  return { read: () => withStateWrites(withCatalogFailures(withSpawnedOverlays(snapshot))), readScope: exactScopeSnapshot, revalidate, revalidateWriteHealth, subscribe, applyPipeline, revertPipeline, applyTask, revertTask, applySpawnedConversation, hydrate, certifiedGlobal, pauseCompletionRetries, resumeCompletionRetries, dispose };
 }
 
 const defaultFilesFetcher: FilesFetcher = (input, init) => fetch(input, init);
@@ -1187,9 +1210,18 @@ export function applyPipelineSnapshot(pipeline: Pipeline, confirmed: boolean): v
  * server pushed with an attention request (#1836) — so the board draws its
  * card in the same frame. The next complete scan is authoritative and retires
  * the overlay; a row the server no longer carries goes away with it.
+ * `confirmed: false` draws an optimistic local write (a dismissed launch, a
+ * link, a card being created) that outlives every scan until it is confirmed
+ * with the server's row or rolled back with {@link revertTaskSnapshot}.
  */
-export function applyTaskSnapshot(task: BoardTask): void {
-  flushSync(() => filesClientCache.applyTask(task));
+export function applyTaskSnapshot(task: BoardTask, confirmed = true): void {
+  flushSync(() => filesClientCache.applyTask(task, confirmed));
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(PIPELINES_PATCHED_EVENT));
+}
+
+/** Roll back a failed optimistic task write to the server snapshot. */
+export function revertTaskSnapshot(id: string): void {
+  flushSync(() => filesClientCache.revertTask(id));
   if (typeof window !== "undefined") window.dispatchEvent(new Event(PIPELINES_PATCHED_EVENT));
 }
 
@@ -1230,17 +1262,21 @@ function appliedDeltas(
   base: string,
   etag: string | null,
   text: string,
+  board = false,
 ): RawFilesResponse {
   if (!representation?.raw || representation.etag !== base || !etag) {
     throw new FilesDeltaMismatch("files delta does not apply to the certified representation");
   }
   try {
-    const { deltas } = JSON.parse(text) as { deltas: FilesDelta[] };
+    const { deltas } = JSON.parse(text) as { deltas: Array<FilesDelta | BoardDelta> };
+    if (!Array.isArray(deltas) || !deltas.length || deltas.length > 16) throw new Error("invalid files delta chain");
+    if (board && representation.raw.boardProtocol !== 2) throw new Error("board base protocol mismatch");
     let raw = representation.raw;
     let at = base;
     for (const delta of deltas) {
       if (delta.base !== at) throw new Error("files delta chain is broken");
-      raw = applyFilesDelta(raw, delta);
+      if (board !== (delta.v === 2)) throw new Error("delta protocol mismatch");
+      raw = delta.v === 2 ? applyBoardDelta(raw, delta) : applyFilesDelta(raw, delta);
       at = delta.etag;
     }
     if (at !== etag) throw new Error("files delta chain ends elsewhere");

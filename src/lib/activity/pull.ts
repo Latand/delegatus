@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 
 import { EXCLUSION_REASONS, REQUEST_KINDS, SURFACES, type ExclusionReason, type RequestKind, type Surface } from "./method";
 import type { ActivityStore, StoredInput, StoredTurn } from "./store";
+import { waitForStateLock } from "@/lib/state/lockWait";
 
 /*
  * Another host's selected member input, brought here (docs/design/activity-dashboard.md,
@@ -296,9 +297,9 @@ export async function pullHost(
   const held = store.hostState(host);
   let cursor = held?.cursor ?? 0;
   const heldStore = held?.remoteStore ?? null;
-  const fail = (error: PullError) => {
+  const fail = async (error: PullError) => {
     result.error = error;
-    store.setHostState(host, { attemptAt: now(), error, cursor });
+    await waitForStateLock("activity.pull.failure", () => store.transaction(() => store.setHostState(host, { attemptAt: now(), error, cursor })));
     return result;
   };
   let restarted = false;
@@ -334,7 +335,7 @@ export async function pullHost(
          pulled from it and read it whole once more. */
       restarted = true;
       cursor = 0;
-      store.forgetHost(host);
+      await waitForStateLock("activity.pull.reset", () => store.forgetHost(host));
       continue;
     }
     const inputs: StoredInput[] = [];
@@ -347,7 +348,7 @@ export async function pullHost(
       else inputs.push(row as StoredInput);
     }
     result.rows += inputs.length + turns.length;
-    store.transaction(() => {
+    await waitForStateLock("activity.pull.page", () => store.transaction(() => {
       result.changed += store.upsertPulled(host, inputs) + store.upsertPulledTurns(host, turns);
       for (const row of [...inputs, ...turns]) cursor = Math.max(cursor, row.version);
       if (!state.more) cursor = state.latest;
@@ -356,7 +357,7 @@ export async function pullHost(
         : { attemptAt: now(), readAt: now(), error: state.teamHistory && !selectedMember ? "member-unconfigured" : null,
             cursor, remoteStore: state.storeId, remoteMode: state.mode, teamHistory: state.teamHistory, pulledMember: selectedMember, unknownAuthors: state.unknownAuthors,
             coveredFrom: state.coveredFrom, coveredUntil: state.coveredUntil, excluded: state.excluded });
-    });
+    }));
     if (!state.more) {
       result.ok = true;
       return result;

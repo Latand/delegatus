@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { recordBlockingWait } from "@/lib/blockingWaits";
 import { procBackend } from "@/lib/proc";
 
 const LOCK_ATTEMPTS = 6_000;
@@ -166,14 +167,20 @@ function release(ticket: LockTicket, descriptor: number): void {
  * FIFO lock for the target file.
  */
 export function withFileTransactionSync<T>(filePath: string, busyMessage: string, operation: () => T): T {
+  const startedAt = performance.now();
+  let waited = false;
+  let admittedAt: number | undefined;
   const ticket = enqueue(filePath);
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
       const descriptor = tryAcquire(ticket);
       if (descriptor === null) {
+        waited = true;
+        // eslint-disable-next-line no-restricted-syntax -- Legacy synchronous file-transaction API still reached while serving; async API is available.
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
         continue;
       }
+      admittedAt = performance.now();
       try {
         return operation();
       } finally {
@@ -183,6 +190,8 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
     throw new FileTransactionBusyError(busyMessage);
   } finally {
     removeIfOwned(ticket.ticketPath, ticket.owner.token);
+    if (waited) recordBlockingWait({ site: "file-transaction", synchronous: true,
+      durationMs: (admittedAt ?? performance.now()) - startedAt, subject: "file-transaction", refused: admittedAt === undefined });
   }
 }
 
@@ -191,16 +200,24 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
  * process-shared FIFO lock used by synchronous writers.
  */
 export async function withFileTransaction<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T): Promise<T> {
+  const startedAt = performance.now();
+  let waited = false;
+  let admittedAt: number | undefined;
   const ticket = enqueue(filePath);
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
       const descriptor = tryAcquire(ticket);
       if (descriptor === null) {
+        waited = true;
         await new Promise<void>((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
         continue;
       }
+      admittedAt = performance.now();
       try {
-        return await operation();
+        const result = operation();
+        // A synchronous commit releases before another in-process synchronous
+        // writer can run. Only an asynchronous body holds across a microtask.
+        return result && typeof (result as Promise<T>).then === "function" ? await result : result;
       } finally {
         release(ticket, descriptor);
       }
@@ -208,5 +225,7 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
     throw new FileTransactionBusyError(busyMessage);
   } finally {
     removeIfOwned(ticket.ticketPath, ticket.owner.token);
+    if (waited) recordBlockingWait({ site: "file-transaction", synchronous: false,
+      durationMs: (admittedAt ?? performance.now()) - startedAt, subject: "file-transaction", refused: admittedAt === undefined });
   }
 }

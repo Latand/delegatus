@@ -8,6 +8,7 @@ import type { DeliveryReceipt, EngineHost, FirstDispatchEvidence, HostState, Que
 import {
   CONTROL_SETTLEMENT_WINDOW_MS,
   StructuredDeliveryQueue,
+  type StructuredDeliveryTransition,
   type StructuredDeliveryEffect,
   type StructuredDeliveryQueuePort,
 } from "./structuredDeliveryQueue";
@@ -1489,6 +1490,65 @@ test("a send an earlier executor already took is never delivered a second time",
   expect(transitions).toEqual([]);
 });
 
+test("a dropped steer is retried after a concurrent control pass reads its stale delivering snapshot", async () => {
+  const statuses = new Map<string, { status: StructuredDeliveryTransition | "pending"; reason?: string | null }>([
+    ["supplement", { status: "queued" }],
+    ["interrupt", { status: "pending" }],
+  ]);
+  let includeInterrupt = false;
+  let active = true;
+  let resolveSteer!: (value: "dropped") => void;
+  let resolveInterrupt!: () => void;
+  let interruptStarted!: () => void;
+  let queuedTransition!: () => void;
+  const observedSteer = new Promise<"dropped">((resolve) => { resolveSteer = resolve; });
+  const interruptGate = new Promise<void>((resolve) => { resolveInterrupt = resolve; });
+  const interruptEntered = new Promise<void>((resolve) => { interruptStarted = resolve; });
+  const becameQueued = new Promise<void>((resolve) => { queuedTransition = resolve; });
+  const target = host(async () => ({ outcome: "turn-started", turnId: "successor-turn" }));
+  target.health = async () => ({ ...idleState(), status: active ? "active" : "idle", activeTurnRef: active ? "original-turn" : null });
+  target.steer = async () => ({ turnId: "original-turn", observe: () => observedSteer });
+  target.interrupt = async () => {
+    interruptStarted();
+    await interruptGate;
+    active = false;
+  };
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [
+      ...(includeInterrupt ? [{
+        id: "effect:interrupt",
+        kind: "runtime.interrupt",
+        eventSeq: 1,
+        payload: { operationId: "interrupt", conversationId: "conversation-one", turnId: "original-turn" },
+      }] : []),
+      ...(statuses.get("supplement")?.status === "queued" || statuses.get("supplement")?.status === "delivering" ? [{
+        id: "effect:supplement",
+        kind: "runtime.send",
+        eventSeq: 2,
+        payload: { operationId: "supplement", conversationId: "conversation-one", text: "continue after rotation", policy: "steer-or-queue" },
+      }] : []),
+    ],
+    status: async (id) => statuses.get(id) ?? null,
+    transition: async (id, status, details) => {
+      statuses.set(id, { status, reason: details?.reason });
+      if (id === "supplement" && status === "queued" && details?.reason === "steer-dropped") queuedTransition();
+    },
+  }, () => target);
+
+  await queue.drain();
+  expect(statuses.get("supplement")?.status).toBe("delivering");
+
+  includeInterrupt = true;
+  const concurrentPass = queue.drain();
+  await interruptEntered;
+  resolveSteer("dropped");
+  await becameQueued;
+  resolveInterrupt();
+  await concurrentPass;
+
+  expect(statuses.get("supplement")?.status).toBe("delivered");
+});
+
 test("a steered send the dying host took is not delivered again when the host returns", async () => {
   const expectedTurns: Array<string | null | undefined> = [];
   const transitions: Array<[string, string, string | null | undefined]> = [];
@@ -1820,8 +1880,81 @@ test("a structured kill terminates its host and completes its receipt", async ()
   ]);
 });
 
+test("an explicit kill settles during startup deferral while sends and idle retirement stay deferred", async () => {
+  const statuses = new Map<string, string>();
+  const terminated: string[] = [];
+  const inputs: string[] = [];
+  let handoffHeld = true;
+  const effects: StructuredDeliveryEffect[] = [
+    { id: "send-held", kind: "runtime.send", eventSeq: 1, payload: {
+      operationId: "send-held", conversationId: "conversation-held", text: "keep pending", policy: "queue",
+    } },
+    { id: "retire-held", kind: "runtime.kill", eventSeq: 2, payload: {
+      operationId: "retire-held", conversationId: "conversation-held",
+      sessionKey: { engine: "codex", sessionId: "thread-held" },
+      onlyIfIdle: { revision: 1, writerClaim: "owner:held" },
+    } },
+    { id: "kill-held", kind: "runtime.kill", eventSeq: 3, payload: {
+      operationId: "kill-held", conversationId: "conversation-held",
+      sessionKey: { engine: "codex", sessionId: "thread-held" },
+    } },
+    { id: "send-healthy", kind: "runtime.send", eventSeq: 4, payload: {
+      operationId: "send-healthy", conversationId: "conversation-healthy", text: "keep working", policy: "queue",
+    } },
+  ];
+  const queue = new StructuredDeliveryQueue({
+    handoffHeld: () => handoffHeld,
+    deferTarget: (id) => id === "conversation-held",
+    effects: async () => effects,
+    status: async (id) => ({ status: statuses.get(id) ?? "queued", revision: 1 }),
+    hostClaim: async () => "owner:healthy",
+    transition: async (id, status) => { statuses.set(id, status); },
+  }, (id) => id === "conversation-healthy" ? host(async (entry) => {
+    inputs.push(entry.id);
+    return { outcome: "turn-started", turnId: "turn-healthy" };
+  }) : null, async (id, key) => {
+    terminated.push(`${id}:${key.sessionId}`);
+    return true;
+  });
+
+  await queue.drain();
+  expect(terminated).toEqual([]);
+  handoffHeld = false;
+  await queue.drain();
+  expect(terminated).toEqual(["conversation-held:thread-held"]);
+  expect(statuses.get("kill-held")).toBe("delivered");
+  expect(statuses.get("retire-held")).toBeUndefined();
+  expect(statuses.get("send-held")).toBeUndefined();
+  expect(statuses.get("send-healthy")).toBe("delivered");
+  expect(inputs).toEqual(["send-healthy"]);
+
+  await queue.drain();
+  expect(statuses.get("send-held")).toBeUndefined();
+  expect(terminated).toEqual(["conversation-held:thread-held"]);
+});
+
+test("an expired explicit kill settles during startup deferral without terminating a host", async () => {
+  const transitions: Array<[string, string]> = [];
+  let terminations = 0;
+  const queue = new StructuredDeliveryQueue({
+    deferTarget: () => true,
+    effects: async () => [{ id: "expired-kill", kind: "runtime.kill", eventSeq: 1, payload: {
+      operationId: "expired-kill", conversationId: "conversation-held",
+      sessionKey: { engine: "codex", sessionId: "thread-held" },
+    } }],
+    status: async () => ({ status: "queued", revision: 1,
+      admittedAt: new Date(Date.now() - CONTROL_SETTLEMENT_WINDOW_MS - 1_000).toISOString() }),
+    transition: async (id, status) => { transitions.push([id, status]); },
+  }, () => null, async () => { terminations += 1; return true; });
+
+  await queue.drain();
+  expect(terminations).toBe(0);
+  expect(transitions).toEqual([["expired-kill", "failed"]]);
+});
+
+for (const deferredFirst of [false, true]) {
 for (const order of ["reconfigure-then-kill", "kill-then-reconfigure"] as const) {
-  test(`a delivered kill fences a pending same-generation reconfigure admitted ${order}`, async () => {
+  test(`a delivered kill fences a pending same-generation reconfigure admitted ${order}${deferredFirst ? " across startup deferral" : ""}`, async () => {
     const reconfigure = {
       id: "reconfigure-one",
       kind: "runtime.reconfigure",
@@ -1846,12 +1979,18 @@ for (const order of ["reconfigure-then-kill", "kill-then-reconfigure"] as const)
       },
     };
     const transitions: Array<[string, string, string | null | undefined]> = [];
+    const statuses = new Map<string, string>();
     const actions: string[] = [];
     let hosted = true;
+    let deferred = deferredFirst;
+    const pendingEffects = [reconfigure, kill];
     const target = host(async () => ({ outcome: "turn-started", turnId: "unexpected" }));
     const queue = new StructuredDeliveryQueue({
-      effects: async () => [reconfigure, kill],
+      deferTarget: () => deferred,
+      effects: async () => pendingEffects.filter(effect => !["delivered", "failed", "applied"].includes(statuses.get(effect.id) ?? "")),
+      status: async id => ({ status: statuses.get(id) ?? "queued", revision: 1 }),
       transition: async (operationId, status, details) => {
+        statuses.set(operationId, status);
         transitions.push([operationId, status, details?.reason]);
       },
     }, () => hosted ? target : null, async () => {
@@ -1864,6 +2003,9 @@ for (const order of ["reconfigure-then-kill", "kill-then-reconfigure"] as const)
     });
 
     await queue.drain();
+    expect(statuses.get("reconfigure-one")).toBe("failed");
+    deferred = false;
+    await queue.drain();
 
     expect(actions).toEqual(["terminate"]);
     expect(hosted).toBeFalse();
@@ -1872,6 +2014,35 @@ for (const order of ["reconfigure-then-kill", "kill-then-reconfigure"] as const)
       ["kill-one", "delivered", undefined],
       ["reconfigure-one", "failed", "conversation-killed"],
     ]);
+
+    // A new operator choice after the stop is independent of the cancelled one.
+    pendingEffects.push({ ...reconfigure, id: "reconfigure-later", eventSeq: 3,
+      payload: { ...reconfigure.payload, operationId: "reconfigure-later" } });
+    await queue.drain();
+    expect(statuses.get("reconfigure-later")).toBe("applied");
+    expect(actions).toEqual(["terminate", "recover"]);
+  });
+}
+}
+
+for (const eventSeq of [1, 3]) {
+  test(`a restarted queue fences only reconfigures preceding its durable kill boundary (${eventSeq})`, async () => {
+    const statuses = new Map<string, string>();
+    let reconfigures = 0;
+    const queue = new StructuredDeliveryQueue({
+      effects: async () => [
+        { id: "kill-boundary", kind: "runtime.kill-boundary", eventSeq: 2,
+          payload: { operationId: "kill-one", conversationId: "conversation-one", admissionEventSeq: 2 } },
+        { id: "configure", kind: "runtime.reconfigure", eventSeq, payload: {
+          operationId: "configure", conversationId: "conversation-one",
+          sessionKey: { engine: "codex", sessionId: "thread-one" }, model: "gpt-5.6-sol", effort: "high", fast: false,
+        } },
+      ],
+      transition: async (id, status) => { statuses.set(id, status); },
+    }, () => null, undefined, undefined, undefined, async () => { reconfigures += 1; return "applied"; });
+    await queue.drain();
+    expect(reconfigures).toBe(eventSeq > 2 ? 1 : 0);
+    expect(statuses.get("configure")).toBe(eventSeq > 2 ? "applied" : "failed");
   });
 }
 
@@ -3156,6 +3327,21 @@ test("dispatch authorization is rechecked after the delivering journal wait", as
   expect(statuses).toContain("failed");
 });
 
+for (const cut of ["before drain", "during journal write", "before resend"] as const) test(`runtime switch retirement prevents continuation delivery: ${cut}`, async () => {
+  let retired = cut === "before drain", sends = 0;
+  const statuses: string[] = [];
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:switch-retry", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "switch-retry", conversationId: "conversation-one", text: "Continue stage", policy: "queue" } }],
+    status: async () => ({ status: "queued", revision: 1 }), hostClaim: async () => "owner:1",
+    conversationRetired: () => retired ? "runtime switch retry withdrew execution authority" : null,
+    transition: async (_id, status) => { statuses.push(status); if (cut === "during journal write" && status === "delivering") retired = true; },
+  }, () => host(async () => { sends++; retired = true; throw Error("thread/read timed out"); }));
+  await queue.drain();
+  expect(sends).toBe(cut === "before resend" ? 1 : 0);
+  expect(statuses).toContain("failed");
+});
+
 test("dispatch authorization is rechecked before a thread-read resend", async () => {
   let allowed = true, sends = 0;
   const statuses: string[] = [];
@@ -3169,4 +3355,219 @@ test("dispatch authorization is rechecked before a thread-read resend", async ()
   await queue.drain();
   expect(sends).toBe(1);
   expect(statuses).toContain("failed");
+});
+
+test.each(["uncertain", "unavailable"] as const)("a %s Codex callback outcome is never requeued after its process dies", async outcome => {
+  const { StructuredAnswerError } = await import("./engineHost");
+  let writes = 0, terminal = false;
+  const transitions: string[] = [];
+  const target = host(async () => ({ outcome: "turn-started", turnId: "unused" }));
+  target.answer = async () => { writes++; throw new StructuredAnswerError("callback process lost", outcome); };
+  target.health = async () => ({ ...idleState(), ...(writes ? { status: "dead" as const } : {}) });
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => terminal ? [] : [{ id: "effect:callback-loss", kind: "runtime.answer", eventSeq: 1, payload: {
+      operationId: "callback-loss", conversationId: "conversation-one", attentionId: "callback", resolution: { decision: "accept" },
+    } }],
+    transition: async (_id, status) => { transitions.push(status); if (status === "uncertain" || status === "failed") terminal = true; },
+  }, () => target);
+  await queue.drain(); await queue.drain();
+  expect(writes).toBe(1);
+  expect(transitions).toEqual(["delivering", outcome === "uncertain" ? "uncertain" : "failed"]);
+});
+
+for (const boundary of ["drain", "engine", "unknown", "unknown-at-engine"] as const) test(`seat channel fences queued sends at ${boundary}`, async () => {
+  let authority: "open" | "revoked" | "unknown" = boundary === "engine" || boundary === "unknown-at-engine" ? "open" : boundary === "unknown" ? "unknown" : "revoked";
+  let sends = 0;
+  const transitions: { status: string; reason?: string | null }[] = [];
+  const reason = "the orchestrator seat was replaced before this reached it; it was not delivered there";
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:seat-fence", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "seat-fence", conversationId: "conversation-one", text: "saved operator answer", policy: "queue" } }],
+    status: async () => ({ status: "queued", revision: 1 }), hostClaim: async () => "owner:1",
+    seatRecipient: () => authority === "open" ? { kind: "open" } : { kind: authority, reason },
+    transition: async (_id, status, details) => {
+      transitions.push({ status, reason: details?.reason });
+      if (status === "delivering") authority = boundary === "unknown-at-engine" ? "unknown" : "revoked";
+    },
+  }, () => host(async () => { sends++; return { outcome: "turn-started", turnId: "turn-one" }; }));
+  await queue.drain();
+  expect(sends).toBe(0);
+  if (boundary === "unknown") expect(transitions).toEqual([]);
+  else if (boundary === "unknown-at-engine") expect(transitions.at(-1)).toMatchObject({ status: "queued" });
+  else expect(transitions.at(-1)).toEqual({ status: "failed", reason });
+});
+
+for (const kind of ["interrupt", "kill"] as const) test(`a revoked seat can still receive the ${kind} control`, async () => {
+  let acted = 0;
+  const target = host(async () => { throw new Error("no message expected"); });
+  target.health = async () => ({ ...idleState(), status: "active", activeTurnRef: "held-turn" });
+  target.interrupt = async () => { acted++; };
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:seat-control", kind: `runtime.${kind}`, eventSeq: 1,
+      payload: { kind, operationId: "seat-control", conversationId: "conversation-one", turnId: "held-turn", sessionKey: { engine: "codex", sessionId: "thread-one" } } }],
+    seatRecipient: () => ({ kind: "revoked", reason: "revoked seat" }),
+    transition: async () => {},
+  }, () => target, async () => { acted++; return true; });
+  await queue.drain();
+  expect(acted).toBe(1);
+});
+
+
+// Seat inbox: a deterministic host changes turns only when the test releases it.
+function inboxHarness(count = 8, overrides: Partial<StructuredDeliveryQueuePort> = {}) {
+  const inputs: StructuredDeliveryEffect[] = Array.from({ length: count }, (_, i) => ({
+    id: `inbox-effect-${i}`, kind: "runtime.send", eventSeq: i + 1,
+    payload: { kind: "send", operationId: `inbox-${i}`, conversationId: "conversation_inbox",
+      text: `answer ${i}`, policy: i === 6 ? "interrupt-active" : i === 7 ? "queue" : "steer-or-queue",
+      origin: i <= 6 ? { kind: "operator" } : { kind: "agent", role: "seat-tick" } },
+  }));
+  const rows = new Map(inputs.map(e => [e.payload.operationId as string, { status: "queued", revision: 1,
+    admittedAt: `2026-10-17T06:00:${String(e.eventSeq).padStart(2, "0")}.000Z`, reason: null as string | null, turnId: null as string | null }]));
+  const sends: QueueEntry[] = [];
+  const bindings: Array<{ id: string; members: readonly string[] }> = [];
+  let running = true, interrupts = 0;
+  const engine: EngineHost = { ...host(async () => ({ outcome: "rejected", reason: "dead-host" })),
+    supportsSteer: false, supportsQueuedSend: false, sendWaitsForRunningTurn: true,
+    ...{ coalescesQueuedInput: true },
+    health: async () => ({ ...idleState(), ...(running ? { status: "active", activeTurnRef: "incumbent" } : {}) }),
+    send: async (entry, _proof, authorize) => {
+      authorize?.(); sends.push(entry); running = true;
+      return { outcome: "turn-started", turnId: entry.id };
+    },
+    interrupt: async () => { interrupts++; },
+  };
+  const port: StructuredDeliveryQueuePort = {
+    ...{ coalescesConversation: () => true, bindDeliveryBatch: async (id: string, members: readonly string[]) => {
+      bindings.push({ id, members }); return true;
+    } },
+    seatRecipient: () => ({ kind: "open" }),
+    effects: async () => inputs,
+    status: async id => rows.get(id) ?? null,
+    hostClaim: async () => "fixture-owner",
+    transition: async (id, state, details, options) => {
+      const row = rows.get(id)!;
+      if (["delivered", "failed", "uncertain"].includes(row.status)) throw new Error("terminal receipt");
+      if (options?.fromStatuses && !(options.fromStatuses as readonly string[]).includes(row.status)) throw new Error("compare-and-set refused");
+      Object.assign(row, { status: state, revision: row.revision + 1 }, details);
+    },
+    ...overrides,
+  };
+  const queue = new StructuredDeliveryQueue(port, () => engine);
+  return { queue, port, engine, inputs, rows, sends, bindings, idle: () => { running = false; }, interrupts: () => interrupts };
+}
+
+test("seat inbox acceptance: six answers, chat and wake reach one turn without interrupt", async () => {
+  const h = inboxHarness();
+  await h.queue.drain();
+  expect(h.sends).toHaveLength(0);
+  h.idle(); await h.queue.drain();
+  expect(h.sends).toHaveLength(1);
+  expect(h.sends[0]!.parts?.map(p => p.operationId)).toEqual(h.inputs.map(e => String(e.payload.operationId)));
+  expect([...h.rows.values()].map(r => r.status)).toEqual(Array(8).fill("delivered"));
+  expect(new Set([...h.rows.values()].map(r => r.turnId))).toEqual(new Set([h.sends[0]!.id]));
+  expect(h.bindings).toHaveLength(1);
+  expect(h.interrupts()).toBe(0);
+});
+
+test("seat inbox priority preserves ordinary admission order across a forty-message backlog", async () => {
+  const h = inboxHarness(41);
+  const claims: string[] = [], requeues: string[] = [];
+  const transition = h.port.transition;
+  h.port.transition = async (id, status, details, options) => {
+    if (status === "delivering") claims.push(id);
+    if (status === "queued") requeues.push(id);
+    await transition(id, status, details, options);
+  };
+  h.inputs.forEach((e, i) => Object.assign(e.payload, { text: i === 40 ? "c".repeat(80) : String(i).padStart(3, "0") + "o".repeat(14997),
+    policy: i === 40 ? "interrupt-active" : "queue", origin: i === 40 ? { kind: "operator" } : { kind: "agent" },
+    ...(i === 40 ? { runtime: { model: "claude-opus-4-7" } } : {}) }));
+  h.idle(); await h.queue.drain();
+  expect(claims).toHaveLength(3);
+  expect(requeues).toEqual([]);
+  expect([...h.rows.entries()].filter(([, row]) => row.status === "queued").map(([id]) => id))
+    .toEqual(h.inputs.slice(2, 40).map(e => String(e.payload.operationId)));
+  for (let i = 1; i < 21; i++) { h.idle(); await h.queue.drain(); }
+  expect(h.sends).toHaveLength(20);
+  expect(h.sends[0]!.parts?.map(p => p.operationId)).toEqual(["inbox-0", "inbox-1", "inbox-40"]);
+  expect(h.sends[0]!.runtime).toEqual({ model: "claude-opus-4-7" });
+  expect(h.sends[0]!.content!.text).toContain("38 older messages are held for your next turn.");
+  const ordinary = h.sends.flatMap(e => e.parts?.map(p => p.operationId) ?? [e.id]).filter(id => id !== "inbox-40");
+  expect(ordinary).toEqual(h.inputs.slice(0, 40).map(e => String(e.payload.operationId)));
+  expect([...h.rows.values()].every(r => r.status === "delivered")).toBe(true);
+});
+
+test("seat inbox overflow notice counts only older ordinary members still eligible after a lost claim", async () => {
+  const h = inboxHarness(41);
+  h.inputs.forEach((e, i) => Object.assign(e.payload, { text: i === 40 ? "chat" : String(i).padStart(3, "0") + "o".repeat(14997),
+    policy: i === 40 ? "interrupt-active" : "queue", origin: i === 40 ? { kind: "operator" } : { kind: "agent" } }));
+  const transition = h.port.transition;
+  h.port.transition = async (...args) => args[0] === "inbox-0" && args[1] === "delivering"
+    ? (h.rows.get("inbox-0")!.status = "failed", Promise.reject(new Error("compare-and-set lost")))
+    : transition(...args);
+  h.idle(); await h.queue.drain();
+  expect(h.sends[0]!.parts?.map(part => part.operationId)).toEqual(["inbox-1", "inbox-40"]);
+  expect(h.sends[0]!.content!.text).toContain("38 older messages are held for your next turn.");
+});
+
+for (const reason of ["stale-turn", "dead-host"] as const) test(`seat inbox ${reason} returns every member to queued`, async () => {
+  const h = inboxHarness(3); h.idle();
+  h.engine.send = async entry => { h.sends.push(entry); return { outcome: "rejected", reason }; };
+  await h.queue.drain();
+  expect(h.sends[0]!.parts).toHaveLength(3);
+  expect([...h.rows.values()].map(r => r.status)).toEqual(Array(3).fill("queued"));
+});
+
+test("seat inbox unknown write terminalizes every member and never resends", async () => {
+  const h = inboxHarness(3); h.idle();
+  h.engine.send = async entry => { h.sends.push(entry); throw new Error("lost acknowledgement after write"); };
+  await h.queue.drain(); await h.queue.drain();
+  expect(h.sends).toHaveLength(1);
+  expect([...h.rows.values()].map(r => r.status)).toEqual(Array(3).fill("uncertain"));
+});
+
+test("seat inbox binding refusal sends nothing and releases every delivering member", async () => {
+  const h = inboxHarness(3, { ...{ bindDeliveryBatch: async () => false } }); h.idle();
+  await h.queue.drain();
+  expect(h.sends).toHaveLength(0);
+  expect([...h.rows.values()].map(r => r.status)).toEqual(Array(3).fill("queued"));
+});
+
+test("seat inbox excludes a lost compare-and-set and recomputes membership", async () => {
+  const h = inboxHarness(3); h.idle();
+  const transition = h.port.transition;
+  h.port.transition = async (...args) => args[0] === "inbox-1" && args[1] === "delivering" ? (h.rows.get("inbox-1")!.status = "failed", Promise.reject(new Error("compare-and-set lost"))) : transition(...args);
+  await h.queue.drain();
+  expect(h.sends[0]!.parts?.map(p => p.operationId)).toEqual(["inbox-0", "inbox-2"]);
+  expect(h.rows.get("inbox-1")!.status).toBe("failed");
+});
+
+for (const boundary of ["preparation", "after-binding"] as const) test(`seat inbox per-member authorization refusal at ${boundary} fails only that member before recomposition`, async () => {
+  let bound = false;
+  const attempts: string[] = [];
+  const h = inboxHarness(3, { authorizeDispatch: id => { if (id === "inbox-1" && (boundary === "preparation" || bound)) throw new StructuredSendRefusedError("withdrawn"); },
+    ...{ bindDeliveryBatch: async (id: string) => { attempts.push(id); bound = true; return true; } } }); h.idle();
+  await h.queue.drain();
+  expect(h.sends).toHaveLength(0);
+  expect([...h.rows.values()].map(r => r.status)).toEqual(["queued", "failed", "queued"]);
+  await h.queue.drain();
+  expect(h.sends[0]!.parts?.map(p => p.operationId)).toEqual(["inbox-0", "inbox-2"]);
+  if (boundary === "after-binding") expect(attempts[0]).not.toBe(attempts[1]);
+});
+
+for (const verdict of ["revoked", "unknown"] as const) test(`seat inbox ${verdict} at engine write applies to the entire batch`, async () => {
+  let bound = false;
+  const h = inboxHarness(3, { seatRecipient: () => bound ? { kind: verdict, reason: "seat authority changed" } : { kind: "open" },
+    ...{ bindDeliveryBatch: async () => { bound = true; return true; } } }); h.idle();
+  await h.queue.drain();
+  expect(h.sends).toHaveLength(0);
+  expect([...h.rows.values()].map(r => r.status)).toEqual(Array(3).fill(verdict === "revoked" ? "failed" : "queued"));
+});
+
+for (const enabled of [false, undefined]) test(`seat inbox scope falls back to individual sends when eligibility is ${enabled}`, async () => {
+  const positive = inboxHarness(3); positive.idle(); await positive.queue.drain();
+  expect(positive.sends[0]!.parts).toHaveLength(3);
+  const h = inboxHarness(3, { ...{ coalescesConversation: () => enabled } });
+  for (let i = 0; i < 3; i++) { h.idle(); await h.queue.drain(); }
+  expect(h.sends).toHaveLength(3);
+  expect(h.sends.every(e => !e.parts)).toBe(true);
 });

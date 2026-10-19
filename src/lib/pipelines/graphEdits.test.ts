@@ -41,6 +41,7 @@ function harness() {
   const ports: PipelinePorts = {
     exec: (rawCommand, rawArgs) => {
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
+      if (args[0] === "remote") return { code: 0, stdout: args[1] === "get-url" ? "https://example.invalid/project.git\n" : "origin\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return { code: 0, stdout: "main\n", stderr: "" };
       if (args[0] === "branch" && args[1] === "--show-current") return { code: 0, stdout: `${loadPipelines()[0]?.branch ?? ""}\n`, stderr: "" };
@@ -368,4 +369,17 @@ test("every accepted graph edit is recorded with who made it", async () => {
     { seq: 3, action: "override-stage", stageId: "one", actor: AGENT, effect: "pending-next-attempt", appliesFromAttempt: 2 },
   ]);
   expect(current().graphEdits![0]!.summary).toContain("three");
+});
+
+test("short stage and graph digests accept current reads, refuse stale reads and keep full reads", async () => {
+  const h = harness();
+  const id = await started(h.ports, [stage("one", "two"), stage("two", null)]);
+  const seen = stageDigest(current().stages[1]!);
+  expect((await patchPipeline(id, { action: "override-stage", stageId: "two", prompt: "short edit", expectedStageDigest: seen.slice(0, 8).toUpperCase() }, h.ports, AGENT)).error).toBeUndefined();
+  expect(await patchPipeline(id, { action: "override-stage", stageId: "two", prompt: "stale", expectedStageDigest: seen.slice(0, 8) }, h.ports, AGENT)).toMatchObject({ status: 409, code: "STAGE_CHANGED" });
+  const full = stageDigest(current().stages[1]!);
+  expect((await patchPipeline(id, { action: "override-stage", stageId: "two", prompt: "full edit", expectedStageDigest: full }, h.ports, AGENT)).error).toBeUndefined();
+  const graph = graphDigest(current().stages);
+  expect((await patchPipeline(id, { action: "add-stage", stage: stage("three", null) as never, expectedStageDigest: graph.slice(0, 7) }, h.ports, AGENT)).error).toBeUndefined();
+  expect(await patchPipeline(id, { action: "add-stage", stage: stage("four", null) as never, expectedStageDigest: graph.slice(0, 8) }, h.ports, AGENT)).toMatchObject({ status: 409, code: "STAGE_CHANGED" });
 });

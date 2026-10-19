@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, test, spyOn } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -23,6 +23,37 @@ const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal"
 const collectionRequest = (query = "") => new NextRequest(`http://127.0.0.1/api/pipelines${query}`);
 const CURRENT_HEAD = execFileSync("git", ["rev-parse", "HEAD"], { cwd: process.cwd(), encoding: "utf8" }).trim();
 agentRegistry().ensureConversation("codex", creatorPath, null);
+
+test("pipeline responses preserve full JSON and serialize only rows requested by the reader", async () => {
+  const { buildPipeline, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
+  const previous = loadPipelines();
+  const records = ["one", "two", "three"].map(id => buildPipeline({ id, task: `Unicode \"${id}\"\nрядок 😀`,
+    project: "fixture", repoDir: "/repo", stages: [{ id: "build", kind: "run", prompt: "full prompt", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: "2026-10-01T00:00:00.000Z" }));
+  try {
+    savePipelines(records);
+    const expected = loadPipelines();
+    expect(await (await GET(collectionRequest())).json()).toEqual({ pipelines: expected });
+    const stringify = spyOn(JSON, "stringify");
+    try {
+      const response = await GET(collectionRequest());
+      const encodedRows = () => stringify.mock.calls.filter(([value]) => records.some(r => r.id === (value as { id?: string })?.id)).length;
+      expect(encodedRows()).toBe(0);
+      const reader = response.body!.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe('{"pipelines":[');
+      expect(encodedRows()).toBe(0);
+      const first = new TextDecoder().decode((await reader.read()).value);
+      expect(JSON.parse(first)).toEqual(expected[0]);
+      expect(encodedRows()).toBe(1);
+      await reader.cancel();
+      await Bun.sleep(10);
+      expect(encodedRows()).toBe(1);
+    } finally { stringify.mockRestore(); }
+    savePipelines([]);
+    expect(await (await GET(collectionRequest())).text()).toBe('{"pipelines":[]}');
+  } finally { savePipelines(previous); }
+});
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -185,23 +216,29 @@ test("pipeline POST rejects non-object JSON", async () => {
   }
 });
 
-test("pipeline POST returns the stable admission payload without creating a record", async () => {
-  const plainDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-plain-"));
-  try {
-    const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", {
-      method: "POST",
-      headers: { host: "127.0.0.1", "content-type": "application/json" },
-      body: JSON.stringify({ task: "blocked", src: creatorPath, repoDir: plainDir, autoStart: false, stages: [] }),
-    }));
-    expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
-      error: `not a git repository: ${plainDir}`,
-      code: "not_git",
-      field: "repoDir",
-      path: plainDir,
-    });
-    expect((await GET(collectionRequest())).status).toBe(200);
-  } finally {
-    fs.rmSync(plainDir, { recursive: true, force: true });
-  }
+test("pipeline POST refuses the state directory with its safety reason", async () => {
+  const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ task: "blocked", src: creatorPath, repoDir: process.env.LLV_STATE_DIR, autoStart: false, stages: [] }),
+  }));
+  expect(response.status).toBe(403);
+  expect(await response.json()).toEqual({
+    error: "initialization refused for the Delegatus state directory", code: "initialization_refused", field: "repoDir", path: process.env.LLV_STATE_DIR,
+  });
+  expect((await GET(collectionRequest())).status).toBe(200);
+});
+
+test("pipeline POST creates a draft in a plain folder and returns its initialization inventory", async () => {
+  const folder = fs.mkdtempSync(path.join(sandbox, "board-project-"));
+  fs.writeFileSync(path.join(folder, "readme.txt"), "Project\n");
+  const response = await POST(new NextRequest("http://127.0.0.1/api/pipelines", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ task: "New project", src: creatorPath, repoDir: folder, autoStart: false, stages: [] }),
+  }));
+  expect(response.status).toBe(201);
+  const body = await response.json();
+  expect(body.repositoryInitialization.committedFiles).toEqual([".gitignore", "readme.txt"]);
+  expect(body.repositoryInitialization.defaultIgnorePatterns).toContain(".env*");
+  expect(body.pipeline.state).toBe("draft");
+  expect(body.pipeline.delivery.target.remote).toBe("");
 });

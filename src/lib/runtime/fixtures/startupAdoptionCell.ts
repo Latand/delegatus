@@ -28,14 +28,15 @@ export async function startupAdoptionCell(directory: string, engine: "codex" | "
   const key = `${engine}:${sessionId}`;
   registry.upsert({ key: { engine, sessionId }, artifactPath, cwd: root, accountId: null, launchProfile, status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
   let result: { cell: AgentMemoryCell | null } | { refused: Error } | null = null;
-  const capture = (async (store: AgentRegistry, optionsFor: (entry: never) => { memoryCell?: AgentMemoryCell | null; releaseCleanup?: () => void }) => {
+  type OptionsFor = Parameters<NonNullable<StructuredStartupDependencies["adopt"] | StructuredStartupDependencies["adoptClaude"]>>[1];
+  const capture = async (store: AgentRegistry, optionsFor: OptionsFor) => {
     try {
-      const options = optionsFor(store.readOnlySnapshot().entries[key]! as never);
+      const options = await optionsFor(store.readOnlySnapshot().entries[key]!);
       options.releaseCleanup?.();
       result = { cell: options.memoryCell ?? null };
     } catch (error) { result = { refused: error as Error }; }
     return [];
-  }) as unknown as NonNullable<StructuredStartupDependencies["adopt"]> & NonNullable<StructuredStartupDependencies["adoptClaude"]>;
+  };
   try {
     await adoptStructuredHostsAtStartup({ registry, client: null, refreshTranscriptState: async () => {}, orchestratorSeats: () => [],
       resolveCodexOwner: () => null, resolveClaudeOwner: () => null,

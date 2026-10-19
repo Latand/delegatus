@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -223,7 +224,7 @@ export class TelegramBotStore {
     fs.closeSync(fs.openSync(filename, "a", 0o600));
     fs.chmodSync(filename, 0o600);
     this.db = openCurrentDatabase(filename, () => {
-      const db = new sqlite.Database(filename, { create: true, strict: true });
+      const db = observeSqlite(new sqlite.Database(filename, { create: true, strict: true }), "telegram");
       db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
       db.exec(`
         CREATE TABLE IF NOT EXISTS bot (
@@ -314,7 +315,7 @@ export class TelegramBotStore {
         AND substr(client_request_id, 1, length(?4)) = ?4
     `).all(chatId, `text:${conversationId}`, conversationId, prefix);
     return rows.some(row => (row.client_request_id === prefix || /^:r\d+$/.test(row.client_request_id.slice(prefix.length)))
-      && (JSON.parse(row.message_ids) as number[]).includes(messageId));
+      && (parseSqliteJson(row.message_ids, this.db) as number[]).includes(messageId));
   }
 
   admitReportReply(row: ReportReplyRow): void {
@@ -323,7 +324,7 @@ export class TelegramBotStore {
 
   pendingReportReplies(): ReportReplyRow[] {
     return this.db.query<{ value_json: string }, []>("SELECT value_json FROM report_replies WHERE json_extract(value_json, '$.state') = 'pending' ORDER BY rowid")
-      .all().map(row => JSON.parse(row.value_json) as ReportReplyRow);
+      .all().map(row => parseSqliteJson(row.value_json, this.db) as ReportReplyRow);
   }
 
   /** CAS prevents a second process from replacing a dispatch's frozen binding. */
@@ -393,7 +394,7 @@ export class TelegramBotStore {
     const row = this.db.query<{ value: string }, [string]>("SELECT value FROM settings WHERE key = ?1").get("document_roots");
     if (!row) return null;
     try {
-      const parsed = JSON.parse(row.value) as unknown;
+      const parsed = parseSqliteJson(row.value, this.db) as unknown;
       return Array.isArray(parsed) && parsed.every((entry) => typeof entry === "string") ? parsed as string[] : null;
     } catch {
       return null;
@@ -666,7 +667,7 @@ export class TelegramBotStore {
     ).get(callerKey, clientRequestId);
     if (!row) return null;
     let messageIds: number[] = [];
-    try { messageIds = (JSON.parse(row.message_ids) as unknown[]).filter((value): value is number => Number.isSafeInteger(value)); } catch { /* none */ }
+    try { messageIds = (parseSqliteJson(row.message_ids, this.db) as unknown[]).filter((value): value is number => Number.isSafeInteger(value)); } catch { /* none */ }
     return { state: row.state as SendRow["state"], chatId: row.chat_id, messageIds, parts: row.parts, sentAt: row.sent_at, errorCode: row.error_code };
   }
 

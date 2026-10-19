@@ -720,3 +720,49 @@ for (const locale of ["en", "uk"] as const) test(`an unresolved owner stop stays
       ? "Owner turn is still stopping; Delegatus will retry." : "Запуск власника ще зупиняється; Delegatus повторить спробу.");
   } finally { setLocale("en"); }
 });
+
+/* Audit B35, B36: a target's settings and pause or resume show at once; the
+   other controls stay usable, and a refusal shows the stored value with the error. */
+function heldPatch() {
+  const pending: Array<(response: Response) => void> = [];
+  route((url, init) => (url === "/api/external-relay/relays/relay-1" && init?.method === "PATCH" ? new Promise<Response>((resolve) => { pending.push(resolve); }) : undefined));
+  return (response: Response) => act(async () => { pending.shift()!(response); await settle(); });
+}
+
+test("a held target setting shows at once, the other settings stay usable, and a refusal puts the stored value back with the error", async () => {
+  accounts({ codex: [signedIn("work")] });
+  answers.relay = { relays: [relay({ targets: [target({ engine: "codex", model: "gpt-6-sol", effort: "medium", concurrency: 1, answered_by: "install" })] })], pending: [], status: [] };
+  const answer = heldPatch();
+  const host = await mount(<ExternalRelaySection />);
+  const row = await unfold(host.querySelector("[data-external-relay-target=bot-1]")!);
+  const select = (label: string) => row.querySelector<HTMLSelectElement>(`select[aria-label="${label} · Support bot"]`)!;
+  await choose(select("Effort"), "high");
+  expect(select("Effort").value).toBe("high");
+  expect(select("At once").disabled).toBe(false);
+  await choose(select("At once"), "2");
+  expect(select("At once").value).toBe("2");
+  expect(harness.calls.filter((call) => call.method === "PATCH").map((call) => call.body)).toEqual([{ target: { id: "bot-1", effort: "high" } }, { target: { id: "bot-1", concurrency: 2 } }]);
+  await answer(jsonResponse({ error: "relay_unreachable" }, 502));
+  expect(select("Effort").value).toBe("medium");
+  expect(select("At once").value).toBe("2");
+  expect(host.querySelector("[data-external-relay=relay-1] [role=alert]")).not.toBeNull();
+  await answer(jsonResponse({ relay: relay() }));
+});
+
+test("Pause reads as paused at once and the menu offers Resume; a refusal shows the relay running again with the error", async () => {
+  accounts({});
+  answers.relay = { relays: [relay()], pending: [], status: [{ id: "relay-1", state: { state: "polling", lastOutcome: null, lastOutcomeAt: null, lastProgress: null }, running: {} }] };
+  const answer = heldPatch();
+  const host = await mount(<ExternalRelaySection />);
+  const card = host.querySelector("[data-external-relay=relay-1]")!;
+  await click(await menuRow(card, "Pause"));
+  expect(card.querySelector("[data-external-relay-state]")?.getAttribute("data-external-relay-state")).toBe("paused");
+  const resume = await menuRow(card, "Resume");
+  expect(resume?.disabled).toBe(true);
+  expect(harness.calls.filter((call) => call.method === "PATCH").map((call) => call.body)).toEqual([{ paused: true }]);
+  await answer(jsonResponse({ error: "relay_unreachable" }, 502));
+  expect(card.querySelector("[data-external-relay-state]")?.getAttribute("data-external-relay-state")).toBe("polling");
+  /* The menu opened above is still open: its row reads Pause again. */
+  expect(Array.from(card.querySelectorAll<HTMLButtonElement>("[data-bar-more-menu] button")).find((button) => button.textContent === "Pause")?.disabled).toBe(false);
+  expect(card.querySelector("[role=alert]")).not.toBeNull();
+});

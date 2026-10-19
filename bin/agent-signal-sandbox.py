@@ -92,7 +92,13 @@ def inner(directory, command):
     atomic(directory / "inner.json", ready)
     wait_file(directory / "exec.json")
     os.environ["LLV_SIGNAL_SANDBOX"] = read(directory / "context.json")
-    for name in ("LLV_SIGNAL_LAUNCHER", "LLV_SIGNAL_RECEIPT", "LLV_SIGNAL_AUTOMATIC"):
+    # Socket engines outlive their Viewer and inherit no Viewer pipes. Only
+    # pre-exec setup writes the owned diagnostic file; native output is ignored.
+    if os.environ.get("LLV_SIGNAL_IGNORE_NATIVE_STDIO") == "1":
+        with open(os.devnull, "r+b", buffering=0) as null:
+            for descriptor in (0, 1, 2):
+                os.dup2(null.fileno(), descriptor)
+    for name in ("LLV_SIGNAL_LAUNCHER", "LLV_SIGNAL_RECEIPT", "LLV_SIGNAL_AUTOMATIC", "LLV_SIGNAL_DIAGNOSTIC", "LLV_SIGNAL_IGNORE_NATIVE_STDIO"):
         os.environ.pop(name, None)
     os.execvp(command[0], command)
 
@@ -148,7 +154,7 @@ def launch(options, command):
     if not all(control in available for control in ("cpu", "memory", "pids")):
         raise RuntimeError("invocation cgroup delegation lacks cpu, memory or pids")
     (root / "cgroup.subtree_control").write_text("+cpu +memory +pids")
-    directory = Path(options.receipt).parent if options.receipt else Path(tempfile.mkdtemp(prefix="delegatus-signal-"))
+    directory = (Path(options.receipt).parent if options.receipt else Path(tempfile.mkdtemp(prefix="delegatus-signal-"))).resolve()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o700)
     (directory / "proc").mkdir(exist_ok=True)

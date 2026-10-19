@@ -1,3 +1,5 @@
+import { reportHeaderName } from "@/lib/projects/settings";
+import { notifySeatChannel } from "./seatChannelSignal";
 import crypto from "node:crypto";
 import { captureSeatAuthCredentialBaseline, normalizeSeatAuthCredentialBaseline, seatAuthCredentialStamp, type SeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
 import fs from "node:fs";
@@ -8,6 +10,8 @@ import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasResolver } from "@/lib/projects/aliases";
 import type { IdentityWavePathRekey } from "@/lib/agent/identityWaveMigration";
 import type { BoardTask } from "@/lib/tasks/types";
+import { performanceSpans } from "@/lib/performanceSpans";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 /* Operator-selected PER-PROJECT orchestrator seats.
  *
@@ -205,6 +209,72 @@ interface OrchestratorSeatFile {
 
 const seatsFile = () => statePath("orchestrator-seats.json");
 
+type RecipientRefusal = { status: 409 | 503; error: string; successorConversationId?: string; project?: string; revokedAt?: string; revokedSeatEpoch?: number } | null;
+
+const RECIPIENT_AUTHORITY_CACHE_LIMIT = 8;
+const recipientAuthorityCacheProperty = "__delegatusOrchestratorRecipientAuthorityV2__" as const;
+const identityConversationAlias = (id: string): string => id;
+
+interface RecipientAuthorityRecord {
+  activeSeatEpoch: number;
+  revokedSeatEpoch: number;
+  revocationOrder: number;
+  successorConversationId?: string;
+  project?: string;
+  revokedAt?: string;
+}
+interface RecipientAuthorityIndex {
+  activeConversations: Set<string>;
+  currentSeats: Map<string, string | null>;
+  records: Map<string, RecipientAuthorityRecord>;
+  revocationCount: number;
+}
+interface RecipientAuthorityCache {
+  files: Map<string, { revision: string; file: OrchestratorSeatFile | null }>;
+  indexes: Map<string, RecipientAuthorityIndex>;
+  fileLoads: Map<string, Promise<OrchestratorSeatFile | null>>;
+  indexLoads: Map<string, Promise<RecipientAuthorityIndex | null>>;
+}
+
+function recipientAuthorityCache(): RecipientAuthorityCache {
+  const globalCache = globalThis as typeof globalThis & { [recipientAuthorityCacheProperty]?: RecipientAuthorityCache };
+  return globalCache[recipientAuthorityCacheProperty] ??= {
+    files: new Map(), indexes: new Map(), fileLoads: new Map(), indexLoads: new Map(),
+  };
+}
+
+function rememberBounded<K, V>(cache: Map<K, V>, key: K, value: V): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > RECIPIENT_AUTHORITY_CACHE_LIMIT) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
+
+function seatFileRevisionSync(filePath: string): string | null {
+  return performanceSpans.sync("orchestrator.seat-stat", () => {
+    try {
+      const stat = fs.statSync(filePath, { bigint: true });
+      return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return "missing";
+      return null;
+    }
+  });
+}
+
+async function seatFileRevisionAsync(filePath: string): Promise<string | null> {
+  try {
+    const stat = await performanceSpans.wait("orchestrator.seat-stat", () => fs.promises.stat(filePath, { bigint: true }));
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return "missing";
+    return null;
+  }
+}
+
 /** One durable namespace for named projects and their repository identities. */
 export function canonicalOrchestratorProject(project: string): string {
   return canonicalProject(project.trim());
@@ -319,6 +389,10 @@ export function readOrchestratorSeatFileOrNull(): OrchestratorSeatFile | null {
   } catch (error) {
     return (error as NodeJS.ErrnoException | null)?.code === "ENOENT" ? emptyFile() : null;
   }
+  return normalizeOrchestratorSeatFile(raw);
+}
+
+function normalizeOrchestratorSeatFile(raw: string): OrchestratorSeatFile | null {
   try {
     const parsed = JSON.parse(raw) as Partial<OrchestratorSeatFile>;
     if (parsed.schemaVersion !== ORCHESTRATOR_SEATS_SCHEMA_VERSION) return null;
@@ -543,7 +617,30 @@ export function readOrchestratorSeatRetirementEvidenceOrNull(): OrchestratorSeat
 }
 
 function writeSeatFile(file: OrchestratorSeatFile): void {
-  atomicWriteJson(seatsFile(), file);
+  const filePath = seatsFile();
+  const cache = recipientAuthorityCache();
+  const previous = cache.files.get(filePath);
+  const previousRevision = seatFileRevisionSync(filePath);
+  const previousIndex = previous && previous.revision === previousRevision
+    ? cache.indexes.get(recipientAuthorityIndexKey(filePath, previousRevision))
+    : undefined;
+  atomicWriteJson(filePath, file);
+  const newRows = file.revocations.slice(previous?.file?.revocations.length ?? 0);
+  notifySeatChannel(newRows);
+  const revision = seatFileRevisionSync(filePath);
+  if (revision === null) return;
+  rememberBounded(cache.files, filePath, { revision, file });
+  if (previous && previousIndex && previous.revision === previousRevision
+    && file.revocations.length >= previousIndex.revocationCount) {
+    const rows = Object.keys(previous.file?.seats ?? {}).length + Object.keys(previous.file?.pending ?? {}).length
+      + Object.keys(file.seats).length + Object.keys(file.pending).length
+      + file.revocations.length - previousIndex.revocationCount;
+    const index = withViewerOperation("orchestrator.recipient-authority", () =>
+      performanceSpans.sync("orchestrator.seat-index", () => updateRecipientAuthorityIndexAfterWrite(previousIndex, previous.file, file), rows));
+    rememberBounded(cache.indexes, recipientAuthorityIndexKey(filePath, revision), index);
+    return;
+  }
+  void withViewerOperation("orchestrator.recipient-authority", () => recipientAuthorityIndex(filePath, revision)).catch(() => {});
 }
 
 /** The active seat, any pending intent, and the terminalized-intent history
@@ -1305,6 +1402,13 @@ export function revokedOrchestratorSeatConversationsOrUnknown(
 ): ReadonlySet<string> | null {
   const file = readOrchestratorSeatFileOrNull();
   if (file === null) return null;
+  return revokedOrchestratorSeatConversationsIn(file, resolveAlias);
+}
+
+function revokedOrchestratorSeatConversationsIn(
+  file: OrchestratorSeatFile,
+  resolveAlias: (conversationId: string) => string,
+): ReadonlySet<string> {
   const seatedAt = new Map<string, number>();
   const seatedBy = (seat: OrchestratorSeat): void => {
     if (!seat.conversationId) return;
@@ -1330,4 +1434,244 @@ export function revokedOrchestratorSeatConversationsOrUnknown(
     if (revocation.seatEpoch >= (seatedAt.get(id) ?? 0)) revoked.add(id);
   }
   return revoked;
+}
+
+/** Recipient admission follows designation authority while historical
+    conversations remain readable; delivery is fenced again at dispatch. */
+export function orchestratorRecipientRefusal(
+  conversationIds: readonly string[],
+  resolveAlias: (conversationId: string) => string = identityConversationAlias,
+): RecipientRefusal {
+  return withViewerOperation("orchestrator.recipient-authority", () => {
+    const filePath = seatsFile();
+    const revision = seatFileRevisionSync(filePath);
+    if (revision === null) return { status: 503, error: "orchestrator seat authority is unavailable" };
+    const key = recipientAuthorityIndexKey(filePath, revision);
+    const index = recipientAuthorityCache().indexes.get(key);
+    if (!index) return { status: 503, error: "orchestrator seat authority is not ready" };
+    return recipientAuthorityRefusal(index, conversationIds, resolveAlias);
+  });
+}
+
+/** Affirmative current-seat membership from the already hydrated shared index.
+ * Missing or changed authority keeps the original individual-delivery path. */
+export function isCurrentOrchestratorSeat(conversationIds: readonly string[]): boolean {
+  const filename = seatsFile();
+  const revision = seatFileRevisionSync(filename);
+  if (revision === null) return false;
+  const index = recipientAuthorityCache().indexes.get(recipientAuthorityIndexKey(filename, revision));
+  return !!index && conversationIds.some(id => index.activeConversations?.has(id))
+    && recipientAuthorityRefusal(index, conversationIds, identityConversationAlias) === null;
+}
+
+/** Hydrate and index seat authority before a caller reaches synchronous
+    admission. The sync check above only stats the file and reads one Map key. */
+export async function orchestratorRecipientRefusalAsync(
+  conversationIds: readonly string[],
+  resolveAlias: (conversationId: string) => string = identityConversationAlias,
+): Promise<RecipientRefusal> {
+  return withViewerOperation("orchestrator.recipient-authority", async () => {
+    const filePath = seatsFile();
+    const revision = await seatFileRevisionAsync(filePath);
+    if (revision === null) return { status: 503, error: "orchestrator seat authority is unavailable" };
+    const index = await recipientAuthorityIndex(filePath, revision);
+    if (!index) return { status: 503, error: "orchestrator seat authority is unavailable" };
+    if (seatFileRevisionSync(filePath) !== revision) {
+      return { status: 503, error: "orchestrator seat authority changed during lookup" };
+    }
+    return recipientAuthorityRefusal(index, conversationIds, resolveAlias);
+  });
+}
+
+function recipientAuthorityRefusal(
+  index: RecipientAuthorityIndex,
+  conversationIds: readonly string[],
+  resolveAlias: (conversationId: string) => string,
+): RecipientRefusal {
+  if (conversationIds.length === 0) return { status: 503, error: "orchestrator seat authority is unavailable" };
+  let activeSeatEpoch = 0;
+  let latestRevocation: { seatEpoch: number; order: number; successorConversationId?: string; project?: string; revokedAt?: string } | undefined;
+  for (const id of conversationIds) {
+    const record = index.records.get(id);
+    if (!record) continue;
+    activeSeatEpoch = Math.max(activeSeatEpoch, record.activeSeatEpoch);
+    if (record.revokedSeatEpoch > (latestRevocation?.seatEpoch ?? 0)
+      || (record.revokedSeatEpoch > 0 && record.revokedSeatEpoch === latestRevocation?.seatEpoch
+        && record.revocationOrder < latestRevocation.order)) {
+      latestRevocation = {
+        seatEpoch: record.revokedSeatEpoch,
+        order: record.revocationOrder,
+        project: record.project, revokedAt: record.revokedAt,
+        ...(record.successorConversationId ? { successorConversationId: record.successorConversationId } : {}),
+      };
+    }
+  }
+  if (!latestRevocation || latestRevocation.seatEpoch < activeSeatEpoch) return null;
+  const successor = latestRevocation.project && index.currentSeats.has(latestRevocation.project)
+    ? index.currentSeats.get(latestRevocation.project) : latestRevocation.successorConversationId;
+  const successorConversationId = successor ? resolveAlias(successor) : undefined;
+  return {
+    status: 409,
+    error: successorConversationId
+      ? `This orchestrator was replaced. The current orchestrator of «${latestRevocation.project ? reportHeaderName(latestRevocation.project) : "the project"}» is ${successorConversationId}; send there.`
+      : "This orchestrator was replaced; designate a current orchestrator before sending.",
+    ...(successorConversationId ? { successorConversationId } : {}),
+    project: latestRevocation.project, revokedAt: latestRevocation.revokedAt, revokedSeatEpoch: latestRevocation.seatEpoch,
+  };
+}
+
+function recipientAuthorityIndexKey(filePath: string, revision: string): string {
+  return `${filePath}\0${revision}`;
+}
+
+async function recipientAuthorityIndex(
+  filePath: string,
+  revision: string,
+): Promise<RecipientAuthorityIndex | null> {
+  const cache = recipientAuthorityCache();
+  const key = recipientAuthorityIndexKey(filePath, revision);
+  const cached = cache.indexes.get(key);
+  if (cached) {
+    rememberBounded(cache.indexes, key, cached);
+    return cached;
+  }
+  const pending = cache.indexLoads.get(key);
+  if (pending) return pending;
+
+  const load = (async (): Promise<RecipientAuthorityIndex | null> => {
+    const file = await recipientAuthorityFile(filePath, revision);
+    if (!file) return null;
+    const rows = Object.keys(file.seats).length + Object.keys(file.pending).length + file.revocations.length;
+    const index = performanceSpans.sync("orchestrator.seat-index", () => recipientAuthorityIndexIn(file), rows);
+    if (await seatFileRevisionAsync(filePath) !== revision) return null;
+    rememberBounded(cache.indexes, key, index);
+    return index;
+  })();
+  rememberBounded(cache.indexLoads, key, load);
+  try {
+    return await load;
+  } finally {
+    if (cache.indexLoads.get(key) === load) cache.indexLoads.delete(key);
+  }
+}
+
+async function recipientAuthorityFile(filePath: string, revision: string): Promise<OrchestratorSeatFile | null> {
+  const cache = recipientAuthorityCache();
+  const cached = cache.files.get(filePath);
+  if (cached?.revision === revision) {
+    rememberBounded(cache.files, filePath, cached);
+    return cached.file;
+  }
+  const loadKey = `${filePath}\0${revision}`;
+  const pending = cache.fileLoads.get(loadKey);
+  if (pending) return pending;
+
+  const load = (async (): Promise<OrchestratorSeatFile | null> => {
+    let file: OrchestratorSeatFile | null;
+    if (revision === "missing") {
+      file = emptyFile();
+    } else {
+      let raw: string;
+      try {
+        raw = await performanceSpans.wait("orchestrator.seat-read", () => fs.promises.readFile(filePath, "utf8"));
+      } catch {
+        return null;
+      }
+      file = performanceSpans.sync("orchestrator.seat-parse", () => normalizeOrchestratorSeatFile(raw), 0, Buffer.byteLength(raw));
+    }
+    if (await seatFileRevisionAsync(filePath) !== revision) return null;
+    rememberBounded(cache.files, filePath, { revision, file });
+    return file;
+  })();
+  rememberBounded(cache.fileLoads, loadKey, load);
+  try {
+    return await load;
+  } finally {
+    if (cache.fileLoads.get(loadKey) === load) cache.fileLoads.delete(loadKey);
+  }
+}
+
+function recipientAuthorityIndexIn(
+  file: OrchestratorSeatFile,
+): RecipientAuthorityIndex {
+  const authority = new Map<string, RecipientAuthorityRecord>();
+  const recordFor = (conversationId: string): RecipientAuthorityRecord => {
+    let record = authority.get(conversationId);
+    if (!record) {
+      record = { activeSeatEpoch: 0, revokedSeatEpoch: 0, revocationOrder: Number.MAX_SAFE_INTEGER };
+      authority.set(conversationId, record);
+    }
+    return record;
+  };
+  const seatedBy = (seat: OrchestratorSeat): void => {
+    if (!seat.conversationId) return;
+    const record = recordFor(seat.conversationId);
+    record.activeSeatEpoch = Math.max(record.activeSeatEpoch, seat.seatEpoch);
+  };
+  for (const seat of Object.values(file.seats)) seatedBy(seat);
+  for (const seat of Object.values(file.pending)) {
+    if (seat.intent.error === null) seatedBy(seat);
+  }
+
+  for (const [order, revocation] of file.revocations.entries()) {
+    const record = recordFor(revocation.conversationId);
+    if (record.revokedSeatEpoch >= revocation.seatEpoch) continue;
+    const successor = file.seats[revocation.project]?.conversationId ?? revocation.successorConversationId;
+    record.revokedSeatEpoch = revocation.seatEpoch;
+    record.revocationOrder = order;
+    record.project = revocation.project;
+    record.revokedAt = revocation.revokedAt;
+    delete record.successorConversationId;
+    if (successor) record.successorConversationId = successor;
+  }
+  return { activeConversations: new Set(Object.values(file.seats).filter(seat => seat.state === "active" && seat.conversationId).map(seat => seat.conversationId!)), records: authority, currentSeats: new Map(Object.entries(file.seats).map(([project, seat]) => [project, seat.conversationId])), revocationCount: file.revocations.length };
+}
+
+function updateRecipientAuthorityIndexAfterWrite(
+  index: RecipientAuthorityIndex,
+  previous: OrchestratorSeatFile | null,
+  file: OrchestratorSeatFile,
+): RecipientAuthorityIndex {
+  const activeEpochs = new Map<string, number>();
+  const noteActive = (seat: OrchestratorSeat): void => {
+    if (!seat.conversationId) return;
+    activeEpochs.set(seat.conversationId, Math.max(activeEpochs.get(seat.conversationId) ?? 0, seat.seatEpoch));
+  };
+  for (const seat of Object.values(file.seats)) noteActive(seat);
+  for (const seat of Object.values(file.pending)) if (seat.intent.error === null) noteActive(seat);
+
+  const affected = new Set<string>();
+  for (const seat of Object.values(previous?.seats ?? {})) if (seat.conversationId) affected.add(seat.conversationId);
+  for (const seat of Object.values(previous?.pending ?? {})) if (seat.conversationId) affected.add(seat.conversationId);
+  for (const seat of Object.values(file.seats)) if (seat.conversationId) affected.add(seat.conversationId);
+  for (const seat of Object.values(file.pending)) if (seat.conversationId) affected.add(seat.conversationId);
+  for (const id of affected) {
+    const record = index.records.get(id);
+    if (record) record.activeSeatEpoch = activeEpochs.get(id) ?? 0;
+    else if (activeEpochs.has(id)) index.records.set(id, {
+      activeSeatEpoch: activeEpochs.get(id)!, revokedSeatEpoch: 0, revocationOrder: Number.MAX_SAFE_INTEGER,
+    });
+  }
+
+  for (let order = index.revocationCount; order < file.revocations.length; order++) {
+    const revocation = file.revocations[order]!;
+    let record = index.records.get(revocation.conversationId);
+    if (!record) {
+      record = { activeSeatEpoch: activeEpochs.get(revocation.conversationId) ?? 0,
+        revokedSeatEpoch: 0, revocationOrder: Number.MAX_SAFE_INTEGER };
+      index.records.set(revocation.conversationId, record);
+    }
+    if (record.revokedSeatEpoch >= revocation.seatEpoch) continue;
+    const successor = file.seats[revocation.project]?.conversationId ?? revocation.successorConversationId;
+    record.revokedSeatEpoch = revocation.seatEpoch;
+    record.revocationOrder = order;
+    record.project = revocation.project;
+    record.revokedAt = revocation.revokedAt;
+    delete record.successorConversationId;
+    if (successor) record.successorConversationId = successor;
+  }
+  index.activeConversations = new Set(Object.values(file.seats).filter(seat => seat.state === "active" && seat.conversationId).map(seat => seat.conversationId!));
+  index.currentSeats = new Map(Object.entries(file.seats).map(([project, seat]) => [project, seat.conversationId]));
+  index.revocationCount = file.revocations.length;
+  return index;
 }

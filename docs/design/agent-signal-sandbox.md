@@ -282,21 +282,20 @@ The design covers current structured hosts, state sandboxing, scopes and both re
 
 ## Implementation, 2026-10-15
 
-The implementation remains a draft pending stdio MCP receipt compatibility.
-The current `src/lib/mcp/server.ts` records `process.pid` and its local start
-identity in shared mutation receipts. Its `processOwnerAlive` reader interprets
-that PID in the reader's namespace. An isolated probe through the production
-SQLite receipt store and tool service reproduced the failure twice: a native
-owner remained alive in its private namespace while an outer recovery caller
-received `not_executed`; the same recovery then prevented the living owner
-from marking its receipt dispatching. The observations are recorded under
-`compatibilityBlocker` in `evidence/agent-signal-sandbox.json`.
+PR #2930 routes ordinary stdio MCP calls to the Viewer before loading local
+bindings or receipts. The Viewer owns the shared mutation claim, so its PID
+and start identity retain their meaning across an agent's private namespace.
+This implementation uses that route without changing MCP writer behavior.
 
-The brief reserves MCP writer transport and lifetime for a parallel lane.
-Complete that routing prerequisite and verify receipt recovery across the
-namespace boundary before merging this implementation. A focused change to
-shared receipt identities would require expanding this lane's scope. The core
-signal tests below do not exercise that shared mutation path.
+The earlier isolated reproduction recorded a private PID in a shared receipt.
+Outer recovery then closed a living owner's pre-dispatch claim as
+`not_executed`. The continuation tests in
+`src/lib/runtime/agentSignalSandbox.mcp.integration.test.ts` drive the real
+stdio entry, HTTP route, tool service and SQLite store. They hold claims before
+and after dispatch, verify the persisted owner is the outer Viewer process,
+and prove recovery leaves the living claim intact and the original dispatch
+settles exactly once. Both cases passed after integrating current main.
+The before/after record is in `evidence/agent-signal-sandbox.json`.
 
 `src/lib/runtime/agentSignalSandbox.ts` is the shared managed launch adapter.
 `bin/agent-signal-sandbox.py` enters the delegated invocation scope, moves its
@@ -309,6 +308,12 @@ before the engine can read its buffered prompt.
 The receipt records the outer supervisor, Bubblewrap monitor, namespace init
 and native process separately. Structured `HostState.pid` remains the native
 host PID. Both registry writers and normalization retain the complete domain.
+Persistent Codex socket launches use the same adapter. A reconnect retains the
+recorded domain and verifies its native process before accepting the connection.
+Viewer restart detaches the connection while the invocation survives. A failed
+listener start uses the monitor's own birth identity for cleanup; intentional
+termination waits for all four recorded domain processes to end.
+
 An orphan's existing authorized termination ladder also retains the verified
 supervisors and init. Native exit, supervisor death and forced init death each
 end the namespace's detached descendants. A missing domain on an older host
@@ -432,5 +437,6 @@ After the interrupted build attempt, a fresh isolated replay passed the nine
 registry/metadata cases, eleven kernel cases, seven gate cases, six real-engine
 profile cases (fresh/resumed and both headless paths) and the terminal case.
 The two built-image cases were skipped in this replay; their separate earlier
-results remain recorded above. The stdio receipt probe still reproduced the
-compatibility blocker. No MCP writer files were changed.
+results remain recorded above. That replay preceded #2930 and still reproduced
+the stdio receipt blocker. The continuation described above removes that
+blocker through Viewer routing. No MCP writer files were changed.

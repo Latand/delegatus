@@ -89,6 +89,92 @@ function model(tasks: readonly BoardTask[], files: readonly FileEntry[], options
   return buildKanbanModel({ bands, tasks, pipelines, projection, files, query: options.query, cardFilter: options.cardFilter, reasonFilter: options.reasonFilter, statusOverrides: options.overrides, now: NOW });
 }
 
+test("unlinked card reuse follows working and cleared-attention deadlines, replacements and removal", () => {
+  const build = createKanbanModel();
+  const clearedAt = new Date(NOW * 1000).toISOString();
+  const quiet = file(700);
+  const cleared = file(701, { attentionDismissal: {
+    at: clearedAt, by: { kind: "system" }, reasonId: "cleared-question",
+    cleared: { reason: "question", raisedAt: NOW - 120 },
+  } as FileEntry["attentionDismissal"] });
+  const busy = file(702, { activity: "live", proc: "running", mtime: NOW,
+    lastTurn: { startedAt: NOW * 1000, endedAt: null } });
+  const input = (files: FileEntry[], now = NOW): KanbanModelInput => {
+    const projection = projectTaskWorkflows([], [], [], files);
+    return { files, now, tasks: [], pipelines: [], projection, bands: buildTaskBands(layout(files), { tasks: [], projection, untitled: "Untitled" }) };
+  };
+  const initial = input([quiet, cleared, busy]);
+  const first = build(initial);
+  const later = build({ ...initial, now: NOW + 30 });
+  expect(later).toEqual(buildKanbanModel({ ...initial, now: NOW + 30 }));
+  expect(later.unlinked.find(card => card.members[0]?.file === quiet)).toBe(first.unlinked.find(card => card.members[0]?.file === quiet));
+  for (const delta of [0, 299, 300, 301, 600, 24 * 3600 - 0.001, 24 * 3600, 24 * 3600 + 0.001, 72 * 3600, 0]) {
+    const next = { ...initial, now: NOW + delta };
+    expect(build(next)).toEqual(buildKanbanModel(next));
+  }
+  const expired = build({ ...initial, now: NOW + 24 * 3600 + 1 });
+  expect(expired.unlinked.find(card => card.members[0]?.file === cleared)?.cleared).toHaveLength(0);
+  for (const files of [
+    [quiet, { ...cleared, title: "Renamed" }, busy],
+    [{ ...quiet, lastAgentWorkAt: (NOW + 10) * 1000 }, busy],
+    [quiet, { ...busy, path: "/fixture/new-generation.jsonl" }],
+    [quiet], [], [quiet, cleared, busy],
+  ]) {
+    const next = input(files);
+    expect(build(next)).toEqual(buildKanbanModel(next));
+  }
+  const projected = build(initial);
+  expect(build({ ...initial, query: "absent", reasonFilter: "needs-you" })).toEqual(buildKanbanModel({ ...initial, query: "absent", reasonFilter: "needs-you" }));
+  expect(build({ ...initial, seat: { paths: [quiet.path], conversationIds: [] } })).toEqual(buildKanbanModel({ ...initial, seat: { paths: [quiet.path], conversationIds: [] } }));
+  expect(projected.unlinked).toHaveLength(3);
+});
+
+test("member clock reuse preserves attention and activity boundaries in both time directions", () => {
+  const files = [file(730),
+    file(731, { bridgeAsk: { id: "legacy-ask", at: iso(NOW) } }),
+    file(732, { bridgeAsks: [{ id: "ask", at: iso(NOW) }] }),
+    file(733, { stuckDelivery: { since: iso(NOW), attempts: 1, state: "assigned" } }),
+    file(734, { memoryKill: { at: iso(NOW + 1), limitBytes: 1024, limit: "agent", fatal: true } }),
+    file(735, { activity: "stalled", proc: "running", mtime: NOW }),
+    file(736, { activity: "live", proc: "running", mtime: NOW,
+      agentActivity: { lastRecordAt: NOW * 1000 }, lastTurn: { startedAt: NOW * 1000, endedAt: null } }),
+  ];
+  const tasks = files.map((entry, i) => task(`t${730 + i}`, "assigned", [entry.path]));
+  const projection = projectTaskWorkflows(tasks, [], [], files);
+  const view: KanbanModelInput = { tasks, files, pipelines: [], projection, now: NOW,
+    bands: buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled", deferDoneVisibility: true }) };
+  const build = createKanbanModel(), first = build(view);
+  for (const boundary of [0, 1, 600, 1800, 7200, 86401, 3 * 86400]) {
+    for (const delta of [-0.001, 0, 0.001]) {
+      const next = { ...view, now: NOW + boundary + delta }, result = build(next);
+      expect(result).toEqual(buildKanbanModel(next));
+      expect(result.columns.assigned.cards.find(card => card.id === "task:t730"))
+        .toBe(first.columns.assigned.cards.find(card => card.id === "task:t730"));
+    }
+  }
+  expect(build(view)).toEqual(buildKanbanModel(view));
+  expect(build({ ...view, now: NOW + 1800 }).columns.assigned.cards.find(card => card.id === "task:t733")?.needsYou).toBe(true);
+  expect(build({ ...view, now: NOW + 7201 }).columns.assigned.cards.find(card => card.id === "task:t731")?.needsYou).toBe(false);
+});
+
+test("working candidate indexes follow fresh metadata, arrivals, removals and turn transitions outside visible bands", () => {
+  const build = createKanbanModel(), project = createTaskWorkflowProjector();
+  const tasks: BoardTask[] = [], pipelines: Pipeline[] = [], flows: Flow[] = [];
+  const bands: KanbanModelInput["bands"] = [];
+  const quiet = file(740), live = file(741, { activity: "live", proc: "running",
+    lastTurn: { startedAt: NOW * 1000, endedAt: null } });
+  const counts = [0, 1, 1, 1, 0, 0, 0, 0, 1];
+  let index = 0;
+  for (const files of [[quiet], [quiet, live], [live, quiet],
+    [{ ...live, size: 300, mtime: NOW }, quiet],
+    [{ ...live, lastTurn: { startedAt: NOW * 1000, endedAt: NOW * 1000 + 1 } }, quiet],
+    [{ ...live, proc: "killed" as const }, quiet], [quiet], [], [live]]) {
+    const view = { tasks, pipelines, flows, bands, files, now: NOW, projection: project(tasks, pipelines, flows, files) };
+    expect(build(view)).toEqual(buildKanbanModel(view));
+    expect(build(view).totals.working).toBe(counts[index++]);
+  }
+});
+
 test("incremental cards retain unrelated work and agree with a full rebuild after edits, arrivals, removals and ageing", () => {
   const project = createTaskWorkflowProjector(), build = createKanbanModel();
   const a = file(1), b = file(2);
@@ -112,6 +198,65 @@ test("incremental cards retain unrelated work and agree with a full rebuild afte
     input(tasks, [changed, b], { now: NOW + 4 * 24 * 3600 }),
     input([], []), input(tasks, [changed, b]),
   ]) expect(build(view)).toEqual(buildKanbanModel(view));
+});
+
+test("hidden file freshness reuses the model while working changes, clocks and failed launch payloads remain current", () => {
+  const project = createTaskWorkflowProjector(), build = createKanbanModel();
+  const visible = file(710), hidden = file(711, { activity: "stalled", proc: "running", mtime: NOW - 7201 });
+  const tasks = [task("t710", "assigned", [visible.path, hidden.path])], pipelines: Pipeline[] = [], flows: Flow[] = [];
+  const projection = project(tasks, pipelines, flows, [visible, hidden]);
+  const bands = buildTaskBands(layout([visible]), { tasks, projection, untitled: "Untitled", deferDoneVisibility: true });
+  const base: KanbanModelInput = { tasks, pipelines, flows, bands, projection, files: [visible, hidden], now: NOW };
+  let previous = build(base);
+  expect(previous.totals.working).toBe(1);
+  for (const update of [{ ...hidden, size: 200 }, { ...hidden, size: 300, mtime: NOW - 7202 }]) {
+    const files = [visible, update], next = { ...base, files, projection: project(tasks, pipelines, flows, files) };
+    const result = build(next);
+    expect(result).toEqual(buildKanbanModel(next));
+    expect(result).toBe(previous);
+    previous = result;
+  }
+  // Freshness brings this open turn back inside the stalled-attention window.
+  const files = [visible, { ...hidden, mtime: NOW }];
+  const active = { ...base, files, projection: project(tasks, pipelines, flows, files) };
+  expect(build(active)).toEqual(buildKanbanModel(active));
+  expect(build(active)).not.toBe(previous);
+  expect(build(active).totals.working).toBe(0);
+  for (const now of [NOW + 299, NOW + 300, NOW + 301, NOW + 4 * 24 * 3600, 0]) {
+    expect(build({ ...active, now })).toEqual(buildKanbanModel({ ...active, now }));
+  }
+  const failed = file(711, { path: "spawn:failed-launch", spawn: { state: "failed", error: "Launch refused" } as FileEntry["spawn"] });
+  const failedTasks = [task("t711", "assigned", [], { assignments: [{ path: failed.path, conversationId: failed.conversationId, panePid: null, state: "failed", error: "Launch refused", at: iso(NOW) }] })];
+  const failedBands = buildTaskBands(layout([]), { tasks: failedTasks, projection: project(failedTasks, pipelines, flows, [failed]), untitled: "Untitled", deferDoneVisibility: true });
+  for (const file of [failed, { ...failed, size: 22, mtime: NOW }]) {
+    const next = { ...base, bands: failedBands, tasks: failedTasks, files: [file], projection: project(failedTasks, pipelines, flows, [file]) };
+    const actual = build(next);
+    expect(actual).toEqual(buildKanbanModel(next));
+    expect(actual.columns.assigned.cards[0].unstarted[0].failed?.file).toBe(file);
+  }
+});
+
+test("ordinary task clock reuse preserves expiry and falls back for naming, holds, steps and unresolved launches", () => {
+  const agent = file(720, { activity: "live", proc: "running", mtime: NOW, lastTurn: { startedAt: NOW * 1000, endedAt: null } });
+  const simple = task("t720", "done", [agent.path], { doneAt: iso(NOW) });
+  const holds = { kind: "postponed" as const, note: "After the boundary", since: iso(NOW), until: iso(NOW + 60), by: "operator" as const };
+  for (const row of [simple,
+    { ...simple, status: "blocked" as const, hold: holds },
+    { ...simple, status: "assigned" as const, steps: [{ id: "later", text: "Next", state: "open" as const, hold: holds }] },
+    { ...simple, text: "", createdAt: iso(NOW), origin: { kind: "conversation" as const, key: agent.conversationId!, refinement: "pending" as const } },
+    { ...simple, status: "assigned" as const, assignments: [{ path: null, launchId: "unresolved", panePid: null, state: "spawning" as const, error: null, at: iso(NOW) }] },
+  ]) {
+    const build = createKanbanModel();
+    const projection = projectTaskWorkflows([row], [], [], [agent]);
+    const view: KanbanModelInput = { tasks: [row], pipelines: [], files: [agent], projection,
+      bands: buildTaskBands(layout([agent]), { tasks: [row], projection, untitled: "Untitled", deferDoneVisibility: true }), now: NOW };
+    const first = build(view);
+    for (const delta of [30, 59.999, 60, 60.001, 299.999, 300, 300.001, 899.999, 900, 900.001, 3 * 86400, 3 * 86400 + 0.001, 0]) {
+      const input = { ...view, now: NOW + delta }, result = build(input);
+      expect(result).toEqual(buildKanbanModel(input));
+      if (row === simple && delta === 30) expect(result.columns.done.cards[0]).toBe(first.columns.done.cards[0]);
+    }
+  }
 });
 
 test("a held task refreshes when its target changes, and seat designation invalidates cached cards", () => {
@@ -271,6 +416,30 @@ test("a settled stage whose conversation works again reads so on the board and o
   expect(card.pipelines[0]!.chips.find((chip) => chip.stage.id === "build")!.rework).toBe(true);
   /* Idle, it is plain passed. */
   expect(summarizePipeline(done, new Map(), workingStageConversations([done], [file(321)], NOW)).chips[0]!.rework).toBe(false);
+});
+
+test("cached pipeline summaries follow clock demotion, changed work and lane edits with stable bands", () => {
+  const build = createKanbanModel(), project = createTaskWorkflowProjector();
+  const agent = file(321, { activity: "live", proc: "running", mtime: NOW, lastTurn: { startedAt: NOW * 1000, endedAt: null } });
+  const lane = buildingLane("cached-lane", "t321", { conversationId: agent.conversationId, agentPath: agent.path, startedAt: iso(NOW) });
+  const tasks = [task("t321", "assigned")], flows: Flow[] = [], pipelines = [lane];
+  const projection = project(tasks, pipelines, flows, [agent]);
+  const bands = buildTaskBands(layout([]), { tasks, projection, untitled: "Untitled", deferDoneVisibility: true });
+  const base: KanbanModelInput = { tasks, pipelines, flows, projection, bands, files: [agent], now: NOW };
+  const first = build(base);
+  expect(build({ ...base, now: NOW + 30 }).columns.assigned.cards[0]).toBe(first.columns.assigned.cards[0]);
+  for (const now of [NOW, NOW + 30, NOW + 299, NOW + 300, NOW + 301, NOW + 3600, NOW]) {
+    expect(build({ ...base, now })).toEqual(buildKanbanModel({ ...base, now }));
+  }
+  for (const row of [{ ...agent, size: 200 }, { ...agent, lastAgentWorkAt: NOW * 1000 },
+    { ...agent, activity: "idle" as const, lastTurn: { ...agent.lastTurn!, endedAt: NOW * 1000 } }]) {
+    const next = { ...base, files: [row], projection: project(tasks, pipelines, flows, [row]) };
+    expect(build(next)).toEqual(buildKanbanModel(next));
+  }
+  for (const state of ["paused", "completed"] as const) {
+    const next = { ...base, pipelines: [{ ...lane, state }] };
+    expect(build(next)).toEqual(buildKanbanModel(next));
+  }
 });
 
 /* The operator's report of 2026-09-24, as the live board had it: in Assigned,

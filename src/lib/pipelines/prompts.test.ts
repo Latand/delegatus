@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
+import { DELEGATUS_MECHANICS, ROLE_DEFAULTS } from "@/lib/roles/defaults";
 
 import { convertNewLegacyReviewStages } from "./legacyReviewDefinition";
 import { buildPipeline } from "./store";
@@ -42,7 +42,9 @@ test.each(["vitest", "delegatus", "missing"])("assembled test guidance uses inst
     expect(prompt).toContain("instruction files or package scripts");
     expect(prompt).not.toContain("bun test");
     expect(prompt).toContain("explicit path");
-    expect(prompt).toContain("isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR");
+    /* This repository's own variable is in its AGENTS.md; the stage names none. */
+    expect(prompt).toContain("isolated HOME, XDG_CONFIG_HOME, TMPDIR and any state-directory variable the project's instruction files name");
+    expect(prompt).not.toContain("LLV_STATE_DIR");
     {
       const wrapper = fs.realpathSync(path.join(toolingCwd, "scripts", "gate-slot.sh"));
       expect(prompt).toContain(wrapper);
@@ -158,14 +160,16 @@ test("run prompt renders task, previous output, spec, access, verdict, and nesti
   expect(prompt).toContain('"findings":[]');
   expect(prompt).toContain("it replaces any other ending the brief above asks for (REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES, NO FINDINGS): write none of them.");
   expect(prompt).toContain("Its status uses the same three words.");
-  expect(prompt).toContain("blocked:true and a non-empty blockedReason");
-  expect(prompt).toContain("cannot build, cannot run required checks");
-  expect(prompt).toContain("fixer returns pass unless blocked");
+  expect(prompt).toContain(DELEGATUS_MECHANICS);
+  /* The blocked fields are for fix stages; a builder no fail edge leads to
+     reads none of them. */
+  expect(prompt).not.toContain("blocked:true and a non-empty blockedReason");
   /* Review of #2301: the fallback block's own shape, which the parser reads:
      string findings led by their severity, and no summary key. */
   expect(prompt).toContain("In the block each finding is a string that starts with its severity");
   expect(parseStageVerdict('```json\n{"status":"fail","findings":["P1 — src/a.ts:3 wrong label"]}\n```')).toMatchObject({ verdict: { status: "fail", rankedFindings: [{ severity: "P1", text: "src/a.ts:3 wrong label" }] } });
   expect(prompt).not.toContain("COMMENT");
+    expect(prompt).not.toMatch(/[a-f0-9]{20,}/i);
   expect(prompt).toContain("Role preset: builder");
   expect(prompt).toContain("Keep the implementation focused on pipeline support.");
 });
@@ -333,8 +337,9 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
     const prompt = renderStagePrompt(pipeline, current, current.effectiveRole, "prior output");
     for (const pattern of STACK_SPECIFIC) expect(prompt).not.toMatch(pattern);
     expect(prompt).not.toContain("COMMENT");
+    expect(prompt).not.toMatch(/[a-f0-9]{20,}/i);
     expect(prompt).not.toMatch(/Inspect\s+with/);
-    expect(prompt).toContain(`This pipeline's worktree started from commit ${"a".repeat(40)} on main.`);
+    expect(prompt).toContain(`This pipeline's worktree started from commit ${"a".repeat(8)} on main.`);
     /* Once in the completion sentence; the builder's brief asked for one more. */
     const briefMarkers = current.id === "build" ? 1 : 0;
     expect(prompt.split("REVIEW_READY").length - 1).toBe(1 + briefMarkers);
@@ -352,11 +357,14 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
   const fixPrompt = renderStagePrompt(pipeline, fixer, fixer.effectiveRole, "P1 src/a.ts:3 wrong label");
   expect(fixPrompt).toContain("Fix the findings stage review reported for: pipeline support");
   expect(fixPrompt).toContain("P1 src/a.ts:3 wrong label");
-  expect(fixPrompt).toContain("Apply-fixes guidance");
+  expect(fixPrompt).toContain("Fix round: your brief is a list of findings.");
   expect(fixPrompt).toContain("the specification's steps for the first build (where to branch, whether to open a pull request) are already done");
   /* Review of #2301: the fix stage has one finish line, scoped to its findings. */
   expect(fixPrompt.split("You are done when")).toHaveLength(2);
-  expect(fixPrompt).toContain("You are done when every handed finding and every issue you notice within the pinned specification is fixed");
+  expect(fixPrompt).toContain("You are done when each is fixed, or left unfixed with the evidence in your summary that it is wrong");
+  expect(fixPrompt).toContain("blocked:true and a non-empty blockedReason");
+  expect(fixPrompt).toContain("cannot build, cannot run required checks");
+  expect(fixPrompt).toContain("fixer returns pass unless blocked");
 });
 
 
@@ -368,7 +376,39 @@ test("design and UI stages receive the task-bound prototype publishing contract"
   expect(prompt).toContain("publish_prototype_review");
   expect(prompt).toContain("Only its publish stage");
   expect(prompt).toContain("maxRounds 2");
-  for (const role of ["builder", "architect"]) expect(ROLE_DEFAULTS.find(r => r.id === role)!.promptScaffold).toContain("publish_prototype_review");
+  /* The wrapper renders at every launch, so the contract lives there, and only
+     for the stages that build or judge frames (role-prompts-rewrite.md §3.3). */
+  for (const role of ["builder", "architect"]) expect(ROLE_DEFAULTS.find(r => r.id === role)!.promptScaffold).not.toContain("publish_prototype_review");
+  for (const [roleId, shown] of [[null, true], ["builder", true], ["architect", true], ["visual-critic", true], ["reviewer", false], ["merger", false], ["verifier", false]] as const) {
+    const current: PipelineStage = { ...stage, effectiveRole: { ...stage.effectiveRole, roleId } };
+    expect(renderStagePrompt(pipeline, current, current.effectiveRole, "").includes("Prototype stages render numbered variants")).toBe(shown);
+  }
+});
+
+/* A stage keeps the scaffold it was created with (pipelines/roles.ts): a lane
+   stored before the working rules shipped renders that text byte for byte,
+   and the wrapper, which renders at every launch, still gives its fix stage
+   the blocked rule whether the stage is known by its params or its fail edge. */
+const STORED_FIX_SCAFFOLD = "You are a Builder in apply-fixes mode. Implement the brief with focused checks. You are done when every handed finding and every issue you notice within the pinned specification is fixed, or left unfixed with evidence that it is wrong, and the project's own checks for what you touched pass. The reviewer evaluates the result against the pinned specification. Report the verification evidence; fix any issue you notice within the specification before finishing. Stay inside the scope the brief names. Process cleanup: stop only the processes you started yourself, each by the PID you recorded when you started it.\n\nApply-fixes guidance: Fix every handed finding and anything you notice yourself within the pinned specification.\n\nSafety fences:\n- Product source changes stay inside the scope the brief names.";
+
+test("a stored lane renders its original scaffold and its fix stage still reads the blocked rule", () => {
+  const review: PipelineStage = { id: "review", kind: "run", prompt: "Review", next: null, onFail: { to: "fix", maxRounds: 2 },
+    effectiveRole: { roleId: "reviewer", engine: "codex", model: null, effort: "xhigh", access: "read-only", promptScaffold: "You are a fresh-context Reviewer. Three standing rules." } };
+  const byParams: PipelineStage = { id: "fix", kind: "run", prompt: "Fix", next: "review", role: { roleId: "builder", params: { mode: "apply-fixes" } },
+    effectiveRole: { roleId: "builder", engine: "codex", model: null, effort: "high", access: "read-write", promptScaffold: STORED_FIX_SCAFFOLD } };
+  const pipeline = buildPipeline({ id: "stored", task: "Fix it", project: "viewer", repoDir: "/repo", stages: [review, byParams], srcPath: null, srcConversationId: null, now: "now" });
+  const fixPrompt = renderStagePrompt(pipeline, byParams, byParams.effectiveRole, "P1 a finding");
+  expect(fixPrompt).toContain(`Role prompt scaffold:\n${STORED_FIX_SCAFFOLD}\n`);
+  expect(fixPrompt).not.toContain("Working rules (every role, every project)");
+  expect(fixPrompt).toContain("For a blocked fix stage, return fail with blocked:true and a non-empty blockedReason");
+  expect(fixPrompt).toContain(DELEGATUS_MECHANICS);
+  /* A fix stage stored without params, known only by the edge that leads to it. */
+  const byEdge: PipelineStage = { ...byParams, role: undefined };
+  const edgePipeline = buildPipeline({ id: "stored-edge", task: "Fix it", project: "viewer", repoDir: "/repo", stages: [review, byEdge], srcPath: null, srcConversationId: null, now: "now" });
+  expect(renderStagePrompt(edgePipeline, byEdge, byEdge.effectiveRole, "P1 a finding")).toContain("For a blocked fix stage");
+  const reviewPrompt = renderStagePrompt(pipeline, review, review.effectiveRole, "");
+  expect(reviewPrompt).toContain("Role prompt scaffold:\nYou are a fresh-context Reviewer. Three standing rules.\n");
+  expect(reviewPrompt).not.toContain("For a blocked fix stage");
 });
 
 test("an owner without a delivery remote gets a local commit instruction", () => {

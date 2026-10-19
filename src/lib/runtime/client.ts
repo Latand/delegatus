@@ -1,6 +1,8 @@
 import { performanceSpans } from "@/lib/performanceSpans";
 import type { NativeQueueCompactedProof, NativeQueueCompactedSettlement, NativeQueueRecord, NativeQueueTransition } from "./nativeQueueContracts";
-import net from "node:net";
+import { StringDecoder } from "node:string_decoder";
+import { acquireRuntimeConnection, type RuntimeConnectionLease } from "./connectionPool";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import { isNamedPipePath } from "./localEndpoint";
 import { parseViewerDeploymentListCursor, viewerDeploymentListLimit, viewerDeploymentPage,
@@ -88,9 +90,16 @@ export function resetRuntimeHostRequestHealthForTests(): void {
   Object.assign(runtimeHostRequestTotalsSoFar, { requests: 0, timeouts: 0, failures: 0, maxMs: 0 });
 }
 
+// A Next route and the controller can load distinct copies of this class.
+// Weak membership proves client-originated errors across those module copies
+// without retaining failed calls or accepting an ordinary lookalike Error.
+const errorOwner = process as typeof process & { __delegatusRuntimeHostErrors?: WeakSet<Error> };
+const runtimeHostErrors = errorOwner.__delegatusRuntimeHostErrors ??= new WeakSet<Error>();
+
 export class RuntimeHostUnavailableError extends Error {
   constructor(message: string, readonly code?: string) {
     super(message);
+    runtimeHostErrors.add(this);
   }
 }
 
@@ -106,9 +115,34 @@ const TRANSPORT_FAILURE_MESSAGES = new Set([
     request may or may not have reached the journal. Idempotent commands are
     safe to replay against these; deterministic server rejections are not. */
 export function isRuntimeHostTransportFailure(error: unknown): boolean {
-  return error instanceof RuntimeHostUnavailableError
-    && error.code === undefined
-    && TRANSPORT_FAILURE_MESSAGES.has(error.message);
+  if (!(error instanceof RuntimeHostUnavailableError)
+    && !(typeof error === "object" && error !== null && runtimeHostErrors.has(error as Error))) return false;
+  const failure = error as RuntimeHostUnavailableError;
+  return failure.code === undefined && TRANSPORT_FAILURE_MESSAGES.has(failure.message);
+}
+
+export type RuntimeEffectPage = { version: string; unchanged: true } | { version?: string; effects: RuntimePendingEffect[] };
+
+export interface RuntimeReadOptions { timeoutMs?: number; signal?: AbortSignal }
+
+/** Read cancellation never changes mutation transport semantics. All issued
+    reads close their socket before the release's startup barrier can settle. */
+export function withRuntimeRecoveryReads(client: RuntimeHostClient, signal: AbortSignal): RuntimeHostClient {
+  return new Proxy(client, {
+    get(target, property) {
+      if (property === "snapshot") return (_signal?: AbortSignal, options?: { timeoutMs?: number; voiceBodiesFor?: string[] }) =>
+        target.snapshot(signal, options);
+      if (property === "readSession" && target.readSession) return (identity: RuntimeSessionRead, options?: RuntimeReadOptions) =>
+        target.readSession!(identity, { ...options, signal });
+      if (property === "operationStatus") return (id: string, options?: { currentRetryLeaf?: boolean }) =>
+        target.operationStatus(id, { ...options, signal });
+      if (property === "effectPage" && target.effectPage) return (kinds: readonly string[] | undefined, after: number, knownVersion?: string) => target.effectPage!(kinds, after, knownVersion, { signal });
+      if (property === "effectBatch") return (kinds?: readonly string[], after?: number) => target.effectBatch(kinds, after, { signal });
+      if (property === "readSnapshot" && target.readSnapshot) return (kind: RuntimeSnapshotReadKind, ids?: readonly string[]) => target.readSnapshot!(kind, ids, signal);
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 export interface RuntimeHostClient {
@@ -120,7 +154,7 @@ export interface RuntimeHostClient {
   /** Canonical proof for an entry whose add operation was compacted (#1664).
       Answers the settled entry; there is no operation receipt to answer. */
   nativeQueueSettleCompacted?(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement>;
-  readSession?(identity: RuntimeSessionRead, options?: { timeoutMs?: number }): Promise<RuntimeSession | null>;
+  readSession?(identity: RuntimeSessionRead, options?: RuntimeReadOptions): Promise<RuntimeSession | null>;
   filesRevision?(): Promise<number>;
   snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot>;
   /** The same snapshot as the UTF-8 JSON the host encoded, for a caller that
@@ -134,11 +168,12 @@ export interface RuntimeHostClient {
   appendSessionFenced?(event: RuntimeEventInput & { expectedSessionRevision: number }): Promise<unknown>;
   operation(event: RuntimeEventInput): Promise<unknown>;
   command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult>;
-  operationStatus(operationId: string, options?: { currentRetryLeaf?: boolean }): Promise<RuntimeOperationResult | null>;
+  operationStatus(operationId: string, options?: RuntimeReadOptions & { currentRetryLeaf?: boolean }): Promise<RuntimeOperationResult | null>;
   claimDeliveryAction(operationId: string, action: RuntimeDeliveryAction): Promise<RuntimeDeliveryActionClaim>;
   retryOperation(operationId: string, nextIdempotencyKey?: string, options?: RuntimeRetryOptions): Promise<RuntimeOperationResult>;
   producerCursor(producerKind: string, eventKeyPrefix: string): Promise<number>;
-  effectBatch(kinds?: readonly string[], afterEventSeq?: number): Promise<RuntimePendingEffect[]>;
+  effectPage?(kinds: readonly string[] | undefined, afterEventSeq: number, knownVersion?: string, options?: RuntimeReadOptions): Promise<RuntimeEffectPage>;
+  effectBatch(kinds?: readonly string[], afterEventSeq?: number, options?: RuntimeReadOptions): Promise<RuntimePendingEffect[]>;
   transitionOperation(
     operationId: string,
     status: Exclude<RuntimeReceiptStatus, "pending">,
@@ -190,10 +225,10 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   nativeQueueSettleCompacted(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement> {
     return this.call("native-queue-settle-compacted", { ...request }) as Promise<NativeQueueCompactedSettlement>;
   }
-  readSession(identity: RuntimeSessionRead, options?: { timeoutMs?: number }): Promise<RuntimeSession | null> {
+  readSession(identity: RuntimeSessionRead, options?: RuntimeReadOptions): Promise<RuntimeSession | null> {
     // Startup can wait for a slow host without changing interactive deadlines
     // or sending the caller's transport policy over the wire.
-    return this.call("session-read", { ...identity }, options?.timeoutMs ?? this.timeoutMs) as Promise<RuntimeSession | null>;
+    return this.call("session-read", { ...identity }, options?.timeoutMs ?? this.timeoutMs, options?.signal) as Promise<RuntimeSession | null>;
   }
   async filesRevision(): Promise<number> {
     try {
@@ -233,11 +268,11 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       || command.kind === "kill" && command.providerRecovery;
     return this.call(guarded ? "guarded-command" : "command", { command }) as Promise<RuntimeOperationResult>;
   }
-  operationStatus(operationId: string, options: { currentRetryLeaf?: boolean } = {}): Promise<RuntimeOperationResult | null> {
+  operationStatus(operationId: string, options: RuntimeReadOptions & { currentRetryLeaf?: boolean } = {}): Promise<RuntimeOperationResult | null> {
     return this.call("operation-status", {
       operationId,
       ...(options.currentRetryLeaf ? { currentRetryLeaf: true } : {}),
-    }) as Promise<RuntimeOperationResult | null>;
+    }, options.timeoutMs ?? this.timeoutMs, options.signal) as Promise<RuntimeOperationResult | null>;
   }
   claimDeliveryAction(operationId: string, action: RuntimeDeliveryAction): Promise<RuntimeDeliveryActionClaim> {
     return this.call("operation-delivery-action", { operationId, action }) as Promise<RuntimeDeliveryActionClaim>;
@@ -252,12 +287,23 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     }) as Promise<RuntimeOperationResult>;
   }
   producerCursor(producerKind: string, eventKeyPrefix: string): Promise<number> { return this.call("producer-cursor", { producerKind, eventKeyPrefix }) as Promise<number>; }
-  effectBatch(kinds?: readonly string[], afterEventSeq = 0): Promise<RuntimePendingEffect[]> {
+  async effectPage(kinds: readonly string[] | undefined, afterEventSeq: number, knownVersion?: string, options: RuntimeReadOptions = {}): Promise<RuntimeEffectPage> {
+    const result = await this.call("effect-batch", { kinds, afterEventSeq, conditional: true, knownVersion }, options.timeoutMs ?? this.timeoutMs, options.signal);
+    // An incumbent listener ignores the optional fields and returns its array.
+    if (Array.isArray(result)) return { effects: result };
+    const page = result as RuntimeEffectPage | null;
+    if (!page || typeof page !== "object" || typeof page.version !== "string"
+      || (!("unchanged" in page && page.unchanged === true) && !("effects" in page && Array.isArray(page.effects)))) {
+      throw new RuntimeHostUnavailableError("runtime host returned invalid effect page");
+    }
+    return page;
+  }
+  effectBatch(kinds?: readonly string[], afterEventSeq = 0, options: RuntimeReadOptions = {}): Promise<RuntimePendingEffect[]> {
     const params = {
       ...(kinds ? { kinds: [...kinds] } : {}),
       ...(afterEventSeq !== 0 ? { afterEventSeq } : {}),
     };
-    return this.call("effect-batch", Object.keys(params).length > 0 ? params : undefined) as Promise<RuntimePendingEffect[]>;
+    return this.call("effect-batch", Object.keys(params).length > 0 ? params : undefined, options.timeoutMs ?? this.timeoutMs, options.signal) as Promise<RuntimePendingEffect[]>;
   }
   transitionOperation(
     operationId: string,
@@ -345,14 +391,14 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
       having a route stringify and encode it again was five passes over the
       frame on the request thread, per request. */
   private call(method: RuntimeSocketRequest["method"], params?: Record<string, unknown>, timeoutMs = this.timeoutMs, signal?: AbortSignal, encoded = false): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const request: RuntimeSocketRequest = { id: crypto.randomUUID(), method, ...(params ? { params } : {}) };
+    return withViewerOperation("runtime.rpc", () => new Promise((resolve, reject) => {
+      const request: RuntimeSocketRequest = { id: crypto.randomUUID(), method, keepAlive: true, ...(params ? { params } : {}) };
       performanceSpans.request(request.id, method, timeoutMs);
       performanceSpans.event("rpc.dispatch", request.id);
-      const socket = net.createConnection(this.socketPath);
-      // Decode across chunk boundaries; a split multibyte character belongs
-      // to the same session response and must survive a large frame intact.
-      if (!encoded) socket.setEncoding("utf8");
+      const admission = new AbortController();
+      let lease: RuntimeConnectionLease | undefined;
+      let reusable = false;
+      const decoder = new StringDecoder("utf8");
       const chunks: Buffer[] = [];
       const startedAt = performance.now();
       let frame = "";
@@ -371,7 +417,15 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
         performanceSpans.event("rpc.finish", request.id, frameBytes, Boolean(error));
         clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
-        socket.destroy();
+        admission.abort();
+        if (lease) {
+          lease.socket.removeListener("data", onData);
+          lease.socket.removeListener("error", onError);
+          lease.socket.removeListener("end", onError);
+          lease.socket.removeListener("close", onError);
+          lease.socket.removeListener("connect", send);
+          lease.release(reusable);
+        }
         recordRuntimeHostRequest(method, elapsedMs, timeout);
         if (!cancelled) {
           runtimeHostRequestTotalsSoFar.requests += 1;
@@ -383,10 +437,8 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
         else resolve(result);
       };
       const onAbort = () => finish(new RuntimeHostUnavailableError("runtime host request cancelled"), undefined, false, performance.now() - startedAt, true);
-      if (signal?.aborted) return onAbort();
-      signal?.addEventListener("abort", onAbort, { once: true });
-      socket.once("error", () => finish(new RuntimeHostUnavailableError("runtime host is unavailable")));
-      socket.on("data", (chunk: Buffer | string) => {
+      const onError = () => finish(new RuntimeHostUnavailableError("runtime host is unavailable"));
+      const onData = (chunk: Buffer) => {
         if (firstByteAt === null) {
           firstByteAt = method === "snapshot" ? performance.now() : 0;
           performanceSpans.event("rpc.first-byte", request.id);
@@ -404,14 +456,18 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
           /* A success frame is exactly this envelope around the result
              (`serveRuntimeHost`). Anything else, a refusal included, is
              parsed like every other answer. */
-          const envelope = Buffer.from(`{"id":${JSON.stringify(request.id)},"ok":true,"result":`);
+          const persistent = Buffer.from(`{"id":${JSON.stringify(request.id)},"ok":true,"keepAlive":true,"result":`);
+          const envelope = whole.subarray(0, persistent.length).equals(persistent) ? persistent
+            : Buffer.from(`{"id":${JSON.stringify(request.id)},"ok":true,"result":`);
           if (end >= envelope.length + 3 && whole.subarray(0, envelope.length).equals(envelope)
             && whole[envelope.length] === 123 && whole[end - 2] === 125 && whole[end - 1] === 125) {
+            reusable = envelope === persistent;
             return finish(undefined, whole.subarray(envelope.length, end - 1));
           }
           try {
             const response = JSON.parse(whole.toString("utf8", 0, end)) as RuntimeSocketResponse;
             if (response.id !== request.id) return finish(new RuntimeHostUnavailableError("runtime host response id mismatch"));
+            reusable = response.keepAlive === true;
             return finish(response.ok ? undefined : new RuntimeHostUnavailableError(response.error ?? "runtime host rejected request", response.code),
               Buffer.from(JSON.stringify(response.result) ?? "null"));
           } catch {
@@ -421,7 +477,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
         /* Measure and search only the chunk that arrived. Re-measuring and
            re-scanning the whole frame on every chunk made a snapshot-sized
            answer quadratic, hundreds of milliseconds on the event loop (#1987). */
-        const text = String(chunk);
+        const text = decoder.write(chunk);
         if (method === "snapshot") firstByteAt ??= performance.now();
         frame += text;
         frameBytes += Buffer.byteLength(text);
@@ -440,17 +496,36 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
             recordBlockingWait({ site: "snapshot-parse", durationMs: performance.now() - parseStartedAt, synchronous: true, subject: `${frameBytes} bytes` });
           }
           if (response.id !== request.id) return finish(new RuntimeHostUnavailableError("runtime host response id mismatch"));
+          reusable = response.keepAlive === true;
           finish(response.ok ? undefined : new RuntimeHostUnavailableError(response.error ?? "runtime host rejected request", response.code), response.result);
         } catch {
           finish(new RuntimeHostUnavailableError("runtime host returned invalid JSON"));
         }
-      });
-      socket.once("connect", () => {
-        performanceSpans.event("rpc.connect", request.id);
-        socket.write(JSON.stringify(request) + "\n");
-        performanceSpans.event("rpc.send", request.id);
-      });
-    });
+      };
+      const send = () => {
+        if (settled || !lease) return;
+        if (!lease.reused) performanceSpans.event("rpc.connect", request.id);
+        try {
+          lease.socket.write(JSON.stringify(request) + "\n");
+          performanceSpans.event("rpc.send", request.id);
+        } catch { onError(); }
+      };
+      // Abort is checked after handlers exist: an already-aborted call never
+      // acquires a lease, and cancellation while queued removes its waiter.
+      if (signal?.aborted) { onAbort(); return; }
+      signal?.addEventListener("abort", onAbort, { once: true });
+      void acquireRuntimeConnection(this.socketPath, method === "wait", admission.signal).then(connection => {
+        if (settled) { connection.release(false); return; }
+        lease = connection;
+        const socket = connection.socket;
+        socket.on("error", onError);
+        socket.on("end", onError);
+        socket.on("close", onError);
+        socket.on("data", onData);
+        if (socket.connecting) socket.once("connect", send);
+        else send();
+      }, () => { if (!settled) onError(); });
+    }));
   }
 }
 

@@ -2,6 +2,7 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn, spawnSync } from "node:child_process";
 
 import type { CreateFlowRequest, Flow } from "@/lib/flows/types";
 
@@ -17,7 +18,10 @@ type StageTurnEvidence = import("./durableEvidence").StageTurnEvidence;
 /* A tick this suite did not ask for must never reach the real ports. */
 registerPipelineTick(async () => {});
 
-afterAll(() => fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }));
+afterAll(async () => {
+  await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
+  fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+});
 
 const STAGE_TRANSCRIPT = "/claude/stage-1.jsonl";
 const STAGE_CONVERSATION = "conversation_stage_1";
@@ -40,9 +44,11 @@ function harness() {
   let deliveryOutstanding = false;
   let resumeAccepted = true;
   let spawns = 0;
+  const spawnInputs: Array<Parameters<PipelinePorts["spawnAgent"]>[0]> = [];
   const ports: PipelinePorts = {
     exec: (rawCommand, rawArgs) => {
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
+      if (args[0] === "remote" && args[1] === "get-url") return { code: 2, stdout: "", stderr: "No such remote" };
       if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return { code: 1, stdout: "", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return { code: 0, stdout: "main\n", stderr: "" };
@@ -59,23 +65,26 @@ function harness() {
     roleLookup: (roleId) => roleId === "builder"
       ? { engine: "claude", model: "opus", effort: "high", access: "read-write", promptScaffold: "Builder guidance" }
       : { engine: "claude", model: "fable", effort: "high", access: "read-only", promptScaffold: "Architect guidance" },
-    spawnAgent: async (_input, onReserved) => {
-      spawns += 1;
-      onReserved({ launchId: `launch-${spawns}`, conversationId: STAGE_CONVERSATION, accountId: "default" });
+    spawnAgent: async (input, onReserved) => {
+      spawns += 1; spawnInputs.push(input);
+      const conversationId = spawns === 1 ? STAGE_CONVERSATION : `${STAGE_CONVERSATION}_${spawns}`;
+      const accountId = input.requestedAccountId ?? "default";
+      await onReserved({ launchId: `launch-${spawns}`, conversationId, accountId });
       return {
         launchId: `launch-${spawns}`,
-        conversationId: STAGE_CONVERSATION,
+        conversationId,
         sessionId: `session-${spawns}`,
         "transcript": STAGE_TRANSCRIPT,
         /* Pane-less: the transport a release succession replaces. */
         paneId: null,
-        accountId: "default",
+        accountId,
       };
     },
     spawnReceipt: () => null,
     claimSpawnRetry: () => "claimed",
     paneAgentAlive: async () => false,
     stopStageAgent: async () => ({ outcome: "not-running" }),
+    retireRuntimeSwitch: async () => null,
     stopStagePane: async () => ({ outcome: "not-running" }),
     stageHostResident: async () => false,
     monotonicNow: () => wall,
@@ -108,6 +117,7 @@ function harness() {
   };
   return {
     ports,
+    spawnInputs,
     continuations,
     advance: (milliseconds: number) => { wall += milliseconds; },
     succeed: () => { hostEpoch += 2; },
@@ -152,8 +162,18 @@ test("apply now admits a durable switch on the same running attempt", async () =
   expect(attempt.runtimeSwitches).toHaveLength(1);
 });
 
+function switchAccount(engine: "claude" | "codex", accountId: string): import("@/lib/accounts/contracts").AccountContext {
+  const home = path.join(process.env.LLV_STATE_DIR!, "switch-accounts", engine, accountId);
+  const transcriptRoot = path.join(home, engine === "codex" ? "sessions" : "projects");
+  fs.mkdirSync(transcriptRoot, { recursive: true, mode: 0o700 });
+  fs.chmodSync(home, 0o700); fs.chmodSync(transcriptRoot, 0o700);
+  return { engine, accountId, kind: "managed", home, transcriptRoot, env: { NODE_ENV: "test" } };
+}
+
 function switchHarness() {
   const h = harness();
+  h.ports.resolveProjectSpawn = (engine, request) => ({ kind: "available",
+    account: switchAccount(engine as "claude" | "codex", request.requestedId ?? request.preferredId ?? "default") });
   const operations = new Map<string, string>();
   const deliveries = new Map<string, { state: "delivered" | "failed" | "pending"; at: string }>();
   let outcome: "pending" | "applied" | "failed" | "superseded" = "applied";
@@ -176,6 +196,420 @@ async function requestSwitch(h: ReturnType<typeof switchHarness>, body = {}) {
   const pipeline = await runningStage(h);
   return await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", model: "opus", applyNow: true, ...body }, h.ports, { kind: "operator" });
 }
+
+function dirtyCheckout(directory: string, branch: string) {
+  const git = (...args: string[]) => {
+    const result = spawnSync("git", args, { cwd: directory, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout;
+  };
+  git("init", "-b", branch);
+  git("config", "user.name", "Fixture"); git("config", "user.email", "noreply@example.com");
+  fs.writeFileSync(path.join(directory, "tracked"), "base\n");
+  git("add", "tracked"); git("commit", "-m", "fixture");
+  fs.writeFileSync(path.join(directory, "tracked"), "staged\n"); git("add", "tracked");
+  fs.writeFileSync(path.join(directory, "tracked"), "modified\n");
+  fs.writeFileSync(path.join(directory, "untracked"), Buffer.from([0, 255, 10, 1]));
+  const snapshot = () => ({ head: git("rev-parse", "HEAD"), branch: git("branch", "--show-current"),
+    index: git("show", ":tracked"), tracked: fs.readFileSync(path.join(directory, "tracked")),
+    untracked: fs.readFileSync(path.join(directory, "untracked")), status: git("status", "--porcelain") });
+  return { before: snapshot(), snapshot };
+}
+
+for (const engine of ["claude", "codex"] as const) for (const source of ["dead", "absent", "limited-idle", "limited-dead", "limited-unknown-reset"] as const) {
+  for (const parked of [false, true]) test(`fresh runtime attempt preserves the dirty checkout: ${engine}, ${source}, parked=${parked}`, async () => {
+    const h = switchHarness();
+    const role = h.ports.roleLookup!;
+    const model = engine === "codex" ? "gpt-6-astra" : "opus";
+    const effort = engine === "codex" ? "xhigh" : "high";
+    const serviceTier = engine === "codex" ? "priority" : null;
+    let targetId = "target";
+    if (engine === "codex") {
+      const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+      const target = createManagedCodexAccount("Switch target");
+      targetId = target.id;
+      fs.writeFileSync(path.join(target.home, "models_cache.json"), JSON.stringify({ models: [{ slug: model, service_tiers: [{ id: serviceTier }] }] }));
+    }
+    h.ports.roleLookup = id => ({ ...role(id)!, engine, model, effort });
+    const lane = await runningStage(h);
+    const checkout = dirtyCheckout(lane.worktreeDir, lane.branch);
+    h.ports.exec = (await import("@/lib/workflows/provision")).realExec;
+    const rows = loadPipelines(); const attempt = rows[0]!.runs[0]!.attempts[0]!;
+    rows[0]!.baseRef = rows[0]!.lastPassedCommit = checkout.before.head.trim();
+    if (source.startsWith("limited")) attempt.providerWait = {
+      condition: { kind: "usage_limit", scope: "usage", resetLabel: null, label: "usage limit" },
+      text: "quota exhausted", accountId: "default", tries: 0, turnTs: h.wallClock(), startedAt: h.ports.now(),
+      resumeAt: new Date(h.wallClock() + 86400000).toISOString(), resetsAt: source === "limited-unknown-reset" ? null : h.wallClock() / 1000 + 86400,
+    };
+    if (parked) { rows[0]!.state = "needs_decision"; attempt.state = "needs_decision"; }
+    savePipelines(rows);
+    h.ports.conversationTurnInterrupted = async id => id === STAGE_CONVERSATION ? (source === "dead" || source === "limited-dead" ? "dead" : "idle") : null;
+    h.ports.runtimeSwitchSourceUnavailable = id => id === STAGE_CONVERSATION && source === "absent";
+    h.ports.conversationGeneration = id => ({ engine, model, effort, serviceTier,
+      accountId: id === STAGE_CONVERSATION ? "default" : targetId, sessionId: id === STAGE_CONVERSATION ? "session-1" : "session-2", agentPath: STAGE_TRANSCRIPT });
+    h.ports.allowedAccountIds = () => ["default", targetId];
+    const chosen = await patchPipeline(lane.id, { action: "override-stage", stageId: "plan", account: targetId, model, effort, serviceTier, applyNow: true,
+      expectedAttempt: 1, expectedConversationId: STAGE_CONVERSATION }, h.ports);
+    expect(chosen.error).toBeUndefined();
+    const restarted = await import(`./engine?fresh-switch=${crypto.randomUUID()}`) as typeof import("./engine");
+    await restarted.tickPipelines([], h.ports);
+    await restarted.tickPipelines([], h.ports);
+    await restarted.tickPipelines([], h.ports);
+    const after = loadPipelines()[0]!;
+    expect(after.worktreeDir).toBe(lane.worktreeDir); expect(after.branch).toBe(lane.branch);
+    expect(checkout.snapshot()).toEqual(checkout.before);
+    expect(after.runs[0]!.attempts).toHaveLength(2); expect({ state: after.state, detail: after.stateDetail, next: after.runs[0]!.attempts[1]?.error, spawns: h.spawnCount() }).toMatchObject({ spawns: 2 });
+    expect(h.operations.size).toBe(0); expect(h.continuations).toHaveLength(0);
+    const [old, next] = after.runs[0]!.attempts;
+    expect(old!.verdict?.status).toBe("needs_decision"); expect(old!.completedAt).toBe(h.ports.now());
+    expect(old!.launchId).toBe("launch-1"); expect(old!.providerWait).toBeUndefined();
+    expect(old!.runtimeSwitches![0]!.retry?.completedAt).toBe(h.ports.now());
+    expect(next).toMatchObject({ n: 2, state: "running", accountId: targetId, effectiveRole: { engine, model, effort } });
+    expect(next!.effectiveRole.serviceTier ?? null).toBe(serviceTier);
+    expect(next!.restartContext).toEqual({ previousAttempt: 1, transcriptPath: STAGE_TRANSCRIPT });
+    expect(h.spawnInputs[1]!.prompt).toContain("use its transcript for reference");
+    expect(h.spawnInputs[1]).toMatchObject({ cwd: lane.worktreeDir, requestedAccountId: targetId, supersedes: STAGE_CONVERSATION });
+  });
+}
+
+for (const phase of ["requested", "cutting", "switching", "continuing", "failed", "superseded", "committed"] as const) {
+  test(`legacy ${phase} park accepts one retry and replays cleanup after restart`, async () => {
+    const h = switchHarness(); const chosen = await requestSwitch(h);
+    const rows = loadPipelines(); const old = rows[0]!.runs[0]!.attempts[0]!;
+    rows[0]!.state = "needs_decision"; old.state = "needs_decision";
+    Object.assign(old.runtimeSwitches![0]!, { phase, rollback: true, continuationDispatch: { key: "kept-send", at: h.ports.now() } });
+    savePipelines(rows);
+    h.ports.retireRuntimeSwitch = async () => "runtime socket unavailable";
+    const request = { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 } as const;
+    expect((await patchPipeline(chosen.pipeline!.id, request, h.ports)).error).toBeUndefined();
+    const intent = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!;
+    h.advance(1000);
+    const restarted = await import(`./engine?legacy-retry=${crypto.randomUUID()}`) as typeof import("./engine");
+    expect((await restarted.patchPipeline(chosen.pipeline!.id, request, h.ports)).error).toBeUndefined();
+    await restarted.tickPipelines([], h.ports);
+    const pending = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    expect(pending.runtimeSwitches![0]!.retry?.requestedAt).toBe(intent.retry!.requestedAt);
+    expect(pending.runtimeSwitches![0]!.continuationDispatch).toEqual(intent.continuationDispatch);
+    expect(pending.runtimeSwitches![0]!.retry?.pendingReason).toContain("socket unavailable");
+    expect(pending.verdict?.status).toBe("needs_decision"); expect(pending.completedAt).not.toBeNull();
+    expect(h.spawnCount()).toBe(1);
+    h.ports.retireRuntimeSwitch = async () => null;
+    await restarted.tickPipelines([], h.ports); await restarted.tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2); expect(h.spawnCount()).toBe(2);
+    expect((await restarted.patchPipeline(chosen.pipeline!.id, request, h.ports)).status).toBe(409);
+  });
+}
+
+for (const action of ["pause", "close"] as const) test(`runtime retry cleanup cannot overwrite ${action}`, async () => {
+  const h = switchHarness(); const chosen = await requestSwitch(h);
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  h.ports.retireRuntimeSwitch = async () => { entered(); await held; return null; };
+  expect((await patchPipeline(chosen.pipeline!.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+  const ticking = tickPipelines([], h.ports);
+  try {
+    await started;
+    expect((await patchPipeline(chosen.pipeline!.id, { action }, h.ports)).error).toBeUndefined();
+  } finally { release(); await ticking; }
+  expect(loadPipelines()[0]!.state).toBe(action === "pause" ? "paused" : "closed");
+  expect(h.spawnCount()).toBe(1);
+});
+
+test("runtime retry retains its intent when target authorization changes during source teardown", async () => {
+  const h = switchHarness(); const chosen = await requestSwitch(h, { account: "target" });
+  h.ports.allowedAccountIds = () => ["default", "target"];
+  h.ports.stopStageAgent = async () => { h.ports.allowedAccountIds = () => ["default"]; return { outcome: "not-running" }; };
+  expect((await patchPipeline(chosen.pipeline!.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toContain("target account is no longer allowed");
+  expect(h.spawnCount()).toBe(1);
+  h.ports.stopStageAgent = async () => ({ outcome: "not-running" }); h.ports.allowedAccountIds = () => ["default", "target"];
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(2);
+});
+
+test("retry is accepted with a recorded live survivor and waits until that child exits", async () => {
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
+  try {
+    const identity = captureProcessIdentity(child.pid!);
+    expect(identity).not.toBeNull();
+    const h = switchHarness(); const chosen = await requestSwitch(h);
+    const rows = loadPipelines();
+    rows[0]!.runs[0]!.attempts[0]!.unresolvedTermination = { recordedAt: h.ports.now(), error: "surviving CLI", survivors: [identity!] };
+    savePipelines(rows);
+    const request = { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 } as const;
+    expect((await patchPipeline(chosen.pipeline!.id, request, h.ports)).error).toBeUndefined();
+    h.ports.stopStageAgent = async (_target, options) => {
+      expect(options?.recordedSurvivors).toEqual([identity!]);
+      return { outcome: "not-running" };
+    };
+    await tickPipelines([], h.ports);
+    expect(h.spawnCount()).toBe(1);
+    expect(loadPipelines()[0]!.stateDetail).toContain("still running");
+    expect((await patchPipeline(chosen.pipeline!.id, request, h.ports)).replayed).toBe(true);
+    child.kill(); await exited;
+    h.ports.stopStageAgent = async () => ({ outcome: "not-running" });
+    await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+    expect(h.spawnCount()).toBe(2);
+  } finally { if (child.exitCode === null && child.signalCode === null) child.kill(); await exited; }
+});
+
+for (const operatorKill of [false, true]) test(`automatic terminal reap preserves retry authority (later operator kill=${operatorKill})`, async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { hasRuntimeSwitchKill } = await import("./runtimeSwitch");
+  const h = switchHarness();
+  const pipeline = await runningStage(h);
+  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, `retry-reap-${operatorKill}.sqlite`), { structuredHosts: true, now: h.wallClock });
+  const sessionKey = { engine: "claude" as const, sessionId: "retry-reap-session" };
+  const client = { effectBatch: async (kinds, cursor) => journal.effectBatch(100, kinds, cursor), operationStatus: async id => journal.operationResult(id) } as import("@/lib/runtime/client").RuntimeHostClient;
+  let resident = true;
+  let cleanupPending = true;
+  let reaps = 0;
+  h.ports.runtimeSwitchKilled = (id, since, ignored) => hasRuntimeSwitchKill(client, id, since, ignored);
+  h.ports.conversationOperatorStopped = (id, since, ignored) => hasRuntimeSwitchKill(client, id, since, ignored, true);
+  h.ports.stageHostResident = async target => resident && target.conversationId === STAGE_CONVERSATION;
+  h.ports.conversationAgentActive = async id => id !== STAGE_CONVERSATION;
+  h.ports.conversationGeneration = id => ({ engine: "claude", model: id === STAGE_CONVERSATION ? "fable" : "opus", effort: "high", serviceTier: null,
+    accountId: id === STAGE_CONVERSATION ? "default" : "target", sessionId: id === STAGE_CONVERSATION ? "session-1" : "session-2", agentPath: STAGE_TRANSCRIPT });
+  h.setTurn({ turn: "terminal", message: null, lastRecordAt: h.wallClock() });
+  const readSource = h.ports.durableTurnEvidence;
+  h.ports.durableTurnEvidence = async (...args) => h.spawnCount() === 1 ? readSource(...args) : { turn: "busy", message: null, lastRecordAt: h.wallClock() };
+  h.ports.retireRuntimeSwitch = async () => cleanupPending ? "continuation retirement pending" : null;
+  h.ports.stopStageAgent = async (target, options) => {
+    if (!resident) return { outcome: "not-running" };
+    expect(options?.onlyIfIdle).toBe(true);
+    const operationId = `terminal-reap-${++reaps}`;
+    journal.executeOperation({ kind: "kill", operationId, idempotencyKey: operationId, conversationId: target.conversationId!, sessionKey,
+      origin: { kind: "agent", role: "pipeline" } });
+    journal.transitionOperation(operationId, "delivered");
+    resident = false;
+    return { outcome: "stopped" };
+  };
+  try {
+    const rows = loadPipelines();
+    rows[0]!.runs[0]!.attempts[0]!.providerWait = {
+      condition: { kind: "usage_limit", scope: "usage", resetLabel: null, label: "usage limit" },
+      text: "quota exhausted", accountId: "default", tries: 0, turnTs: h.wallClock(), startedAt: h.ports.now(),
+      resumeAt: new Date(h.wallClock() + 86400000).toISOString(), resetsAt: null,
+    };
+    savePipelines(rows);
+    expect((await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", account: "target", model: "opus", applyNow: true }, h.ports)).error).toBeUndefined();
+    await tickPipelines([], h.ports);
+    const intent = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry!;
+    expect(intent.pendingReason).toContain("retirement pending");
+    h.advance(1000);
+    await tickPipelines([], h.ports);
+    expect(reaps).toBe(1);
+    expect(await h.ports.runtimeSwitchKilled(STAGE_CONVERSATION, intent.requestedAt)).toBe(true);
+    expect(await h.ports.conversationOperatorStopped(STAGE_CONVERSATION, intent.requestedAt)).toBe(false);
+    const pending = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry!;
+    expect(pending.operatorStoppedAt).toBeUndefined();
+    expect(pending.pendingReason).toContain("retirement pending");
+    expect(h.spawnCount()).toBe(1);
+
+    const restarted = await import(`./engine?retry-reap=${crypto.randomUUID()}`) as typeof import("./engine");
+    cleanupPending = false;
+    if (operatorKill) {
+      h.advance(1000);
+      journal.executeOperation({ kind: "kill", operationId: "later-operator-kill", idempotencyKey: "later-operator-kill", conversationId: STAGE_CONVERSATION, sessionKey, origin: { kind: "operator" } });
+      journal.transitionOperation("later-operator-kill", "failed");
+      await restarted.tickPipelines([], h.ports);
+      const stopped = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry!;
+      expect(stopped.operatorStoppedAt).toBe(h.ports.now());
+      expect(stopped.pendingReason).toContain("operator kill after retry");
+      expect(stopped.completedAt).toBeUndefined();
+      expect(h.spawnCount()).toBe(1);
+      h.advance(1000);
+      expect((await restarted.patchPipeline(pipeline.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+    }
+    await restarted.tickPipelines([], h.ports);
+    await restarted.tickPipelines([], h.ports);
+    await restarted.tickPipelines([], h.ports);
+    const lane = loadPipelines()[0]!;
+    expect(lane.runs[0]!.attempts).toHaveLength(2);
+    expect(lane.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry?.completedAt).toBeDefined();
+    expect(lane.runs[0]!.attempts[1]).toMatchObject({ n: 2, state: "running", accountId: "target", effectiveRole: { model: "opus" } });
+    expect(h.spawnCount()).toBe(2);
+    expect(h.spawnInputs[1]).toMatchObject({ cwd: pipeline.worktreeDir, requestedAccountId: "target" });
+    expect(lane.branch).toBe(pipeline.branch);
+  } finally { journal.close(); }
+});
+
+for (const status of ["pass", "fail"] as const) test(`retired attempt cannot settle through exhausted verdict recovery: ${status}`, async () => {
+  const h = switchHarness();
+  const pipeline = await runningStage(h);
+  h.ports.conversationAgentActive = async id => id !== STAGE_CONVERSATION;
+  h.ports.conversationTurnInterrupted = async id => id === STAGE_CONVERSATION ? "dead" : null;
+  h.ports.conversationGeneration = id => ({ engine: "claude", model: id === STAGE_CONVERSATION ? "fable" : "opus", effort: "high", serviceTier: null,
+    accountId: id === STAGE_CONVERSATION ? "default" : "target", sessionId: id === STAGE_CONVERSATION ? "session-1" : "session-2", agentPath: STAGE_TRANSCRIPT });
+  const rows = loadPipelines();
+  const old = rows[0]!.runs[0]!.attempts[0]!;
+  old.state = "needs_decision"; old.completedAt = h.ports.now();
+  old.error = "stage verdict recovery exhausted after 3 checks";
+  old.verdictRecovery = { state: "exhausted", checks: 3, maxChecks: 3, startedAt: h.ports.now(), lastCheckedAt: h.ports.now(), nextCheckAt: null, reason: "canonical turn unavailable", messageTs: null };
+  rows[0]!.state = "needs_decision"; rows[0]!.stateDetail = old.error;
+  savePipelines(rows);
+  h.ports.retireRuntimeSwitch = async () => "continuation retirement pending";
+  expect((await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", account: "target", model: "opus", applyNow: true }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const retired = loadPipelines()[0]!;
+  const before = retired.runs[0]!.attempts[0]!;
+  expect(before.runtimeSwitches![0]!.retry?.pendingReason).toContain("retirement pending");
+  h.advance(1000);
+  h.setTurn({ turn: "terminal", message: { text: '```json\n' + JSON.stringify({ status, findings: [] }) + '\n```', ts: h.wallClock() }, lastRecordAt: h.wallClock() });
+  const restarted = await import(`./engine?retry-verdict=${crypto.randomUUID()}`) as typeof import("./engine");
+  await restarted.tickPipelines([], h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("needs_decision");
+  expect(waiting.cursor).toEqual(retired.cursor);
+  expect(waiting.runs[0]!.attempts[0]!.verdict).toEqual(before.verdict);
+  expect(waiting.runs[0]!.attempts[0]!.verdictRecovery).toEqual(before.verdictRecovery);
+  expect(waiting.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry?.completedAt).toBeUndefined();
+  expect(h.spawnCount()).toBe(1);
+  h.ports.retireRuntimeSwitch = async () => null;
+  // Only the retired source carries that late verdict; the successor starts a new turn.
+  const readSource = h.ports.durableTurnEvidence;
+  h.ports.durableTurnEvidence = async (...args) => h.spawnCount() === 1 ? readSource(...args) : { turn: "busy", message: null, lastRecordAt: h.wallClock() };
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts).toHaveLength(2);
+  expect(lane.runs[0]!.attempts[0]!.verdict).toEqual(before.verdict);
+  expect(lane.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry?.completedAt).toBeDefined();
+  expect(lane.runs[0]!.attempts[1]).toMatchObject({ n: 2, state: "running", accountId: "target", effectiveRole: { model: "opus" } });
+  expect(h.spawnCount()).toBe(2);
+});
+
+test("a kill during retry cleanup wins until a later explicit retry", async () => {
+  const h = switchHarness(); const chosen = await requestSwitch(h);
+  const request = { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 } as const;
+  await patchPipeline(chosen.pipeline!.id, request, h.ports);
+  let killedAt: string | null = null;
+  h.ports.conversationOperatorStopped = async (_id, since) => !!killedAt && killedAt >= since;
+  h.ports.stopStageAgent = async () => { killedAt ??= h.ports.now(); return { outcome: "not-running" }; };
+  await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(1);
+  expect(loadPipelines()[0]!.stateDetail).toContain("operator kill after retry");
+  h.advance(1000);
+  expect((await patchPipeline(chosen.pipeline!.id, request, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(2);
+});
+
+test("retry reconciles a late producer before allocating the replacement", async () => {
+  const h = switchHarness(); const chosen = await requestSwitch(h);
+  let reads = 0;
+  h.ports.retireRuntimeSwitch = async () => ++reads === 1 ? null : "late recovery reservation";
+  await patchPipeline(chosen.pipeline!.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(1);
+  expect(loadPipelines()[0]!.stateDetail).toContain("late recovery reservation");
+  h.ports.retireRuntimeSwitch = async () => null;
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(2);
+});
+
+test("matching override and retry replay while retired reports remain fenced", async () => {
+  const h = switchHarness(); const chosen = await requestSwitch(h);
+  const retry = { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 } as const;
+  await patchPipeline(chosen.pipeline!.id, retry, h.ports);
+  const same = await patchPipeline(chosen.pipeline!.id, { action: "override-stage", stageId: "plan", model: "opus", applyNow: true,
+    expectedAttempt: 1, expectedConversationId: STAGE_CONVERSATION }, h.ports);
+  expect(same.replayed).toBe(true);
+  expect((await patchPipeline(chosen.pipeline!.id, { action: "override-stage", stageId: "plan", model: "fable", applyNow: true }, h.ports)).status).toBe(409);
+  const report = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Late answer" },
+    { kind: "agent", conversationId: STAGE_CONVERSATION, role: "builder" }, h.ports);
+  expect(report.status).toBe(409);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.report).toBeUndefined();
+});
+
+test("a failed source read cannot overwrite a report accepted during that read", async () => {
+  const h = switchHarness(); await requestSwitch(h);
+  let enter!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { enter = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  h.ports.conversationTurnInterrupted = async () => { enter(); await held; throw new Error("runtime socket timed out"); };
+  const ticking = tickPipelines([], h.ports);
+  try {
+    await ready;
+    const report = await reportStageCompletion({ verdict: "pass", findings: [], summary: "Completed before the cut" },
+      { kind: "agent", conversationId: STAGE_CONVERSATION, role: "builder" }, h.ports);
+    expect(report.error).toBeUndefined();
+  } finally { release(); await ticking; }
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(attempt.report?.verdict.status).toBe("pass");
+  expect(attempt.error).toBeNull();
+});
+
+test("durable retry revokes reconfigure and host recovery across a registry reopen", async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { runtimeSwitchRetirementReason, pipelineSwitchFence, switchOperationKey } = await import("./runtimeSwitchFence");
+  const { retireRuntimeSwitchProducers } = await import("./runtimeSwitchRecovery");
+  const { recoverDeadStructuredConversation } = await import("@/lib/runtime/structuredRecovery");
+  const h = switchHarness(); const chosen = await requestSwitch(h);
+  const filename = path.join(process.env.LLV_STATE_DIR!, "retry-registry.json");
+  const transcript = path.join(process.env.LLV_STATE_DIR!, "retry-session.jsonl"); fs.writeFileSync(transcript, "");
+  let registry = new AgentRegistry(filename);
+  const conversation = registry.ensureConversation("claude", transcript, "default");
+  registry.upsert({ key: { engine: "claude", sessionId: "retry-session" }, artifactPath: transcript,
+    cwd: chosen.pipeline!.worktreeDir, accountId: "default", launchProfile: emptyLaunchProfile({ cwd: chosen.pipeline!.worktreeDir, title: "Recover switched stage" }),
+    status: "dead", host: null, structuredHost: null, claimEpoch: 1, claimOwner: null, pendingAction: null });
+  registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: chosen.pipeline!.id, role: "architect", slot: "plan:1",
+    stageId: "plan", stageOrder: 0, round: 1, parentConversationId: null });
+  const rows = loadPipelines(); const attempt = rows[0]!.runs[0]!.attempts[0]!;
+  attempt.conversationId = conversation.id; attempt.runtimeSwitches![0]!.from.conversationId = conversation.id;
+  savePipelines(rows);
+  const operationId = switchOperationKey(attempt.runtimeSwitches![0]!, "reconfigure");
+  expect(registry.claimConversationReconfigure(conversation.id, { operationId, revision: 1, profile: { model: "opus", effort: "high", fast: false } }).kind).toBe("claimed");
+  let enter!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { enter = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let spawns = 0;
+  const recovering = recoverDeadStructuredConversation({ path: transcript, conversationId: conversation.id }, {
+    registry, client: {} as never, transport: () => "structured", park: () => null,
+    resolveAccount: () => ({ engine: "claude", accountId: "default", kind: "legacy", home: path.dirname(transcript),
+      transcriptRoot: path.dirname(transcript), env: { NODE_ENV: "test" } }),
+    ownership: { operationId, revision: 1, owns: async () => true, releaseHost: async () => true,
+      authorizeAccount: async () => { enter(); await held; } },
+    spawn: async () => { spawns++; throw new Error("unexpected spawn"); },
+  }).then(() => null, error => error as Error);
+  try {
+    await ready;
+    expect((await patchPipeline(chosen.pipeline!.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+    const pending = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!;
+    expect(await retireRuntimeSwitchProducers(pending, registry)).toContain("host recovery is still settling");
+  } finally { release(); }
+  expect((await recovering)?.message).toContain("withdrew");
+  expect(spawns).toBe(0);
+  const record = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!;
+  expect(record.from.conversationId).toBe(conversation.id);
+  expect(registry.conversation(conversation.id)?.reconfigure?.status).toBe("applying");
+  expect(await retireRuntimeSwitchProducers(record, registry)).toContain("executor is still settling");
+  registry.settleConversationReconfigure(conversation.id, operationId, 1, "failed", "retired");
+  registry.close(); registry = new AgentRegistry(filename);
+  try {
+    expect(await retireRuntimeSwitchProducers(record, registry)).toBeNull();
+    expect(runtimeSwitchRetirementReason(conversation.id, registry)).toContain("withdrew");
+    expect(() => pipelineSwitchFence(operationId)!.authorize()).toThrow("withdrew");
+    await expect(recoverDeadStructuredConversation({ path: transcript, conversationId: conversation.id }, {
+      registry, transport: () => "structured", client: null, park: () => null,
+      spawn: async () => { spawns++; throw new Error("unexpected spawn"); },
+    })).rejects.toThrow("withdrew");
+    expect(spawns).toBe(0);
+    const reserved = registry.beginSpawnRequest({ engine: "claude", cwd: chosen.pipeline!.worktreeDir, transport: "structured",
+      conversationId: conversation.id, accountId: "default", purpose: "resume-successor", expectedArtifactPath: transcript,
+      launchProfile: emptyLaunchProfile({ cwd: chosen.pipeline!.worktreeDir, title: "Recover switched stage" }) });
+    if (reserved.kind !== "created") throw new Error("expected a pending recovery fixture");
+    expect(await retireRuntimeSwitchProducers(record, registry)).toContain("reservation is still starting");
+    registry.failSpawn(reserved.receipt.launchId, "old recovery retired");
+    expect(await retireRuntimeSwitchProducers(record, registry)).toBeNull();
+  } finally { registry.close(); }
+});
 
 test("the production runtime-switch control preserves the fast flag for Ultrafast", async () => {
   const controls = await import("@/lib/runtime/structuredControls");
@@ -329,6 +763,79 @@ test("a model switch interrupts, reconfigures and continues once, keeping the at
   expect(attempt.definition?.prompt).toBe("Plan");
   expect(requested.pipeline?.branch).toBe(loadPipelines()[0]?.branch);
 });
+test("a transcript question after a completed switch keeps ordinary decision admission", async () => {
+  const { pipelineRevision } = await import("./store");
+  const { drainRuntimeSwitches } = await import("./engine");
+  const h = switchHarness(); await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  h.advance(2000);
+  h.ports.conversationAgentActive = async () => false;
+  h.setTurn({ turn: "terminal", message: { text: 'Which format?\n```json\n{"status":"needs_decision","findings":[]}\n```', ts: h.wallClock() } });
+  await tickPipelines([], h.ports);
+  const settled = loadPipelines()[0]!;
+  expect(settled.runs[0]!.attempts[0]).toMatchObject({ state: "needs_decision", verdict: { status: "needs_decision" } });
+  expect(settled.runs[0]!.attempts[0]!.report).toBeUndefined();
+  h.ports.runtimeSwitchSourceUnavailable = () => true;
+  await drainRuntimeSwitches(h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toEqual(settled.runs[0]!.attempts);
+  const answer = await patchPipeline(settled.id, { action: "resolve-decision", clientRequestId: "format-answer", answer: "Use Markdown.",
+    expectedStageId: "plan", expectedAttempt: 1, expectedRevision: pipelineRevision(loadPipelines()[0]!) }, h.ports, { kind: "operator" });
+  expect(answer.error).toBeUndefined();
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+});
+
+for (const question of ["transcript", "stage_report"] as const) test(`ordinary retry after completed switch honors deferred runtime and account: ${question}`, async () => {
+  const h = switchHarness(); await requestSwitch(h);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("committed");
+  h.ports.spawnReceipt = id => id === "launch-1" ? { state: "completed", launchId: id, conversationId: STAGE_CONVERSATION,
+    sessionId: "session-1", transcript: STAGE_TRANSCRIPT, paneId: null, accountId: "default" } : null;
+  const sourceGeneration = h.ports.conversationGeneration!;
+  h.ports.conversationGeneration = id => id === STAGE_CONVERSATION ? sourceGeneration(id) : null;
+  h.advance(2000);
+  h.ports.conversationAgentActive = async () => false;
+  h.setTurn({ turn: "terminal", message: { text: 'Which format?\n```json\n{"status":"needs_decision","findings":[]}\n```', ts: h.wallClock() } });
+  if (question === "stage_report") {
+    const report = await reportStageCompletion({ verdict: "needs_decision", findings: [], summary: "Which format?" },
+      { kind: "agent", conversationId: STAGE_CONVERSATION, role: "builder" }, h.ports);
+    expect(report.error).toBeUndefined();
+  }
+  await tickPipelines([], h.ports);
+  const settled = loadPipelines()[0]!;
+  expect(settled.runs[0]!.attempts[0]).toMatchObject({ state: "needs_decision", verdict: { status: "needs_decision" } });
+  expect(!!settled.runs[0]!.attempts[0]!.report).toBe(question === "stage_report");
+  const override = await patchPipeline(settled.id, { action: "override-stage", stageId: "plan", model: "sonnet", account: "retry-target" }, h.ports);
+  expect(override.error).toBeUndefined();
+  const retry = await patchPipeline(settled.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+  expect(retry.error).toBeUndefined();
+  h.ports.conversationAgentActive = async () => true;
+  h.setTurn({ turn: "busy", message: null, lastRecordAt: h.wallClock() });
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempts = lane.runs[0]!.attempts;
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]).toMatchObject({ n: 2, state: "running", effectiveRole: { model: "sonnet" },
+    definition: { account: "retry-target" }, accountId: "retry-target" });
+  expect(h.spawnInputs[1]).toMatchObject({ cwd: settled.worktreeDir, requestedAccountId: "retry-target", role: { model: "sonnet" } });
+  expect(attempts[0]!.runtimeSwitches?.[0]?.retry).toBeUndefined();
+  expect(lane.branch).toBe(settled.branch);
+  expect(h.continuations).toHaveLength(1);
+});
+
+test("a mechanical switch park requires retry retirement before a decision continuation", async () => {
+  const { pipelineRevision } = await import("./store");
+  const h = switchHarness(); await requestSwitch(h);
+  h.ports.runtimeSwitchControl = async () => { throw new Error("structured control unavailable"); };
+  h.advance(10 * 60_000 + 1);
+  await tickPipelines([], h.ports);
+  const settled = loadPipelines()[0]!;
+  expect(settled.runs[0]!.attempts[0]!.verdict?.status).toBe("needs_decision");
+  const answer = await patchPipeline(settled.id, { action: "resolve-decision", clientRequestId: "unsafe-answer", answer: "Continue.",
+    expectedStageId: "plan", expectedAttempt: 1, expectedRevision: pipelineRevision(settled) }, h.ports, { kind: "operator" });
+  expect(answer.error).toContain("retry-stage");
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect((await patchPipeline(settled.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports)).error).toBeUndefined();
+});
 test("concurrent requests replay one target and refuse a different target", async () => {
   const h = switchHarness(); const first = await requestSwitch(h); const id = first.pipeline!.id;
   const replay = await patchPipeline(id, { action: "override-stage", stageId: "plan", model: "opus", applyNow: true }, h.ports);
@@ -354,7 +861,7 @@ test("a no-op switch stops re-admitting its pending continuation", async () => {
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("continuing");
 });
 
-test("an unverified no-op continuation retains its fence and never sends a replacement", async () => {
+test("an unverified no-op continuation accepts retry and retains its cleanup fence", async () => {
   const h = switchHarness();
   h.ports.runtimeSwitchControl = async (_id, _path, action) => action === "reconfigure" ? "already-current" : undefined;
   h.ports.runtimeSwitchDelivery = (_id, key) => {
@@ -371,9 +878,13 @@ test("an unverified no-op continuation retains its fence and never sends a repla
   expect(h.continuations).toHaveLength(1);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("continuing");
   h.ports.spawnReceipt = () => ({ state: "completed", launchId: "launch-1" } as never);
-  expect(await patchPipeline(requested.pipeline!.id, {
+  h.ports.retireRuntimeSwitch = async () => "continuation retirement pending";
+  expect((await patchPipeline(requested.pipeline!.id, {
     action: "retry-stage", stageId: "plan", launchId: "launch-1", expectedStageId: "plan", expectedAttempt: 1,
-  }, h.ports)).toMatchObject({ status: 409 });
+  }, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(h.spawnCount()).toBe(1);
 });
 
 for (const parked of [false, true]) test(`a refused no-op continuation settles promptly and allows retry (parked=${parked})`, async () => {
@@ -473,9 +984,13 @@ for (const outcome of ["no-op", "failed"] as const) for (const proof of ["untrac
     await tickPipelines([], h.ports);
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("switching");
     h.ports.spawnReceipt = () => ({ state: "completed", launchId: "launch-1" } as never);
-    expect(await patchPipeline(requested.pipeline!.id, {
+    h.ports.retireRuntimeSwitch = async () => "continuation retirement pending";
+    expect((await patchPipeline(requested.pipeline!.id, {
       action: "retry-stage", stageId: "plan", launchId: "launch-1", expectedStageId: "plan", expectedAttempt: 1,
-    }, h.ports)).toMatchObject({ status: 409 });
+    }, h.ports)).error).toBeUndefined();
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    expect(h.spawnCount()).toBe(1);
   } finally { setAgentRegistryForTests(prior); }
 });
 
@@ -675,7 +1190,7 @@ test("a cancellation that cannot be confirmed parks with its reason", async () =
   expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("switch has already started") });
   expect(h.continuations).toHaveLength(1);
 });
-test("retry-stage stays fenced while a parked runtime switch still owns its continuation, including after engine restart", async () => {
+test("retry-stage persists pending cleanup while a parked switch owns its continuation, including after engine restart", async () => {
   const h = switchHarness(); h.setOutcome("pending");
   h.ports.cancelRuntimeSwitch = async () => { throw new Error("switch has already started"); };
   const requested = await requestSwitch(h);
@@ -688,37 +1203,43 @@ test("retry-stage stays fenced while a parked runtime switch still owns its cont
   const retry = await restarted.patchPipeline(requested.pipeline!.id, {
     action: "retry-stage", stageId: "plan", launchId: "launch-1", expectedStageId: "plan", expectedAttempt: 1,
   }, h.ports);
-  expect(retry).toMatchObject({ status: 409, error: expect.stringContaining("runtime switch") });
+  expect(retry.error).toBeUndefined();
+  h.ports.retireRuntimeSwitch = async () => "continuation retirement pending";
 
-  // The persisted open phase continues to fence ticks after a fresh engine module loads.
+  // Accepted retry persists while its old producers remain unresolved.
   await restarted.tickPipelines([], h.ports); await restarted.tickPipelines([], h.ports);
   const lane = loadPipelines()[0]!;
   expect(lane.runs[0]!.attempts).toHaveLength(1);
-  expect(lane.runs[0]!.attempts[0]!.runtimeSwitches?.[0]).toMatchObject({ phase: "switching", continuationDispatch: { key: expect.any(String) } });
+  expect(lane.runs[0]!.attempts[0]!.runtimeSwitches?.[0]).toMatchObject({ phase: "failed", retry: { pendingReason: expect.stringContaining("retirement pending") }, continuationDispatch: { key: expect.any(String) } });
   expect(lane.cursor).toMatchObject({ stageId: "plan", state: "running" });
   expect(h.continuations).toHaveLength(1);
 });
-test("retry-stage refuses a dead-host running attempt while its runtime switch remains open", async () => {
+test("a dead-host switch accepts retry while a surviving child prevents its replacement", async () => {
   const h = switchHarness();
   const requested = await requestSwitch(h);
   let stops = 0;
-  h.ports.resumeSeveredTurn = async () => false;
+  h.ports.runtimeSwitchControl = async () => { throw new Error("structured control unavailable"); };
   h.ports.conversationTurnInterrupted = async () => "dead";
-  h.ports.stopStageAgent = async () => { stops++; return { outcome: "not-running" }; };
-  h.ports.spawnReceipt = () => ({ state: "completed", launchId: "launch-1" } as never);
+  h.ports.stopStageAgent = async () => { stops++; return { outcome: "unconfirmed", operationId: "owned-stop", detail: "child is still running" }; };
   await tickPipelines([], h.ports);
-  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("switching");
-
+  const old = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(old.verdict?.status).toBe("needs_decision");
+  expect(old.completedAt).toBe(h.ports.now());
+  expect(old.runtimeSwitches![0]!.retry?.pendingReason).toContain("child is still running");
   const restarted = await import(`./engine?retry-open-switch=${crypto.randomUUID()}`) as typeof import("./engine");
   const retry = await restarted.patchPipeline(requested.pipeline!.id, {
-    action: "retry-stage", stageId: "plan", launchId: "launch-1", expectedStageId: "plan", expectedAttempt: 1,
+    action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1,
   }, h.ports);
-  expect(retry).toMatchObject({ status: 409, error: expect.stringContaining("runtime switch") });
+  expect(retry.error).toBeUndefined();
   await restarted.tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
-  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("switching");
-  expect(stops).toBe(0);
+  expect(stops).toBeGreaterThan(0);
   expect(h.spawnCount()).toBe(1);
+  h.ports.stopStageAgent = async () => ({ outcome: "not-running" });
+  await restarted.tickPipelines([], h.ports);
+  await restarted.tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+  expect(h.spawnCount()).toBe(2);
 });
 test("a late successful parked switch accepts its successor verdict once after engine restart", async () => {
   const h = switchHarness(); h.setOutcome("pending");
@@ -808,6 +1329,14 @@ test("a completed parked handoff receipt settles its successor after engine rest
   };
   await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ conversationId: "conversation_fork", launchId: "launch-handoff", runtimeSwitches: [{ mode: "handoff", phase: "switching" }] });
+  // The handoff stopped its own source. That expected death must leave the
+  // reserved successor alone while its original launch is still progressing.
+  h.ports.runtimeSwitchSourceUnavailable = id => id === STAGE_CONVERSATION;
+  receipt = { state: "starting", launchId: "launch-handoff", conversationId: "conversation_fork" } as never;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry).toBeUndefined();
+  expect(handoffCalls).toBe(1);
+  receipt = null;
   h.ports.stopStageAgent = async () => ({ outcome: "unconfirmed", operationId: null, detail: "receipt still pending" });
   h.advance(10 * 60_000);
   await tickPipelines([], h.ports);
@@ -1071,7 +1600,7 @@ test("switch admission uses project selection with continuity and known exhauste
   const state = loadPipelines(); state[0]!.runs[0]!.attempts[0]!.usageLimitedAccounts = [{ engine: "claude", accountId: "default", limitedAt: h.wallClock(), resetsAt: null }]; savePipelines(state);
   h.ports.allowedAccountIds = () => ["default", "account-b"];
   const selections: unknown[] = [];
-  h.ports.resolveProjectSpawn = (_engine, request) => { selections.push(request); return { kind: "available", account: { accountId: "account-b" } } as never; };
+  h.ports.resolveProjectSpawn = (engine, request) => { selections.push(request); return { kind: "available", account: switchAccount(engine as "claude" | "codex", "account-b") }; };
   const answer = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", model: "opus", applyNow: true }, h.ports);
   expect(selections).toMatchObject([{ project: "viewer", preferredId: "default", unavailableIds: ["default"] }]);
   expect(answer.runtimeSwitch?.to.accountId).toBe("account-b");
@@ -1104,8 +1633,8 @@ test("kill boundary lookup includes later pages and fails closed on a stalled cu
 test("cancellation cannot claim success when withdrawal loses to a queue claim", async () => {
   const { cancelPendingRuntimeSwitch } = await import("./runtimeSwitch");
   let released = false;
-  const registry = { conversation: () => ({}), withdrawConversationReconfigure: () => ({ kind: "claimed", conversation: {} }), releaseSwitchHold: () => { released = true; } };
-  expect(() => cancelPendingRuntimeSwitch(registry as never, STAGE_CONVERSATION, "switch-one")).toThrow("already applying");
+  const registry = { deliveryWriteOrBusy: async (_correlation: unknown, write: () => unknown) => write(), conversation: () => ({}), withdrawConversationReconfigure: () => ({ kind: "claimed", conversation: {} }), releaseSwitchHold: () => { released = true; } };
+  await expect(cancelPendingRuntimeSwitch(registry as never, STAGE_CONVERSATION, "switch-one")).rejects.toThrow("already applying");
   expect(released).toBe(false);
 });
 
@@ -1440,7 +1969,7 @@ test("a predecessor report preflight cannot cross a committed same-engine switch
 test("target account revocation during interrupt fences reconfigure and continuation", async () => {
   const h = switchHarness(); let allowed = ["default", "target"];
   h.ports.allowedAccountIds = () => allowed;
-  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "target" } } as never);
+  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: switchAccount("claude", "target") });
   await requestSwitch(h, { account: "target" });
   const control = h.ports.runtimeSwitchControl!;
   h.ports.runtimeSwitchControl = async (...args) => { const result = await control(...args); if (args[2] === "interrupt") allowed = ["default"]; return result; };
@@ -1654,34 +2183,265 @@ test("the executor's fence reads the switch record and the project's allowed acc
   const { pipelineSwitchFence, switchOperationKey } = await import("./runtimeSwitchFence");
   const { bindAccountToProject, unbindAccountFromProject } = await import("@/lib/accounts/projectBindings");
   const h = switchHarness();
-  h.ports.resolveProjectSpawn = undefined;
-  expect(bindAccountToProject("claude", "default", "viewer").ok).toBe(true);
-  expect(bindAccountToProject("claude", "target", "viewer").ok).toBe(true);
-  const requested = await requestSwitch(h, { account: "target" });
-  expect(requested.error).toBeUndefined();
-  const record = requested.runtimeSwitch!;
-  expect(record.to.accountId).toBe("target");
-  const operationId = switchOperationKey(record, "reconfigure");
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const resolve = spyOn(accountManager, "resolveSpawn").mockImplementation((engine, id) => switchAccount(engine as "claude" | "codex", id ?? "default"));
+  try {
+    h.ports.resolveProjectSpawn = undefined;
+    expect(bindAccountToProject("claude", "default", "viewer").ok).toBe(true);
+    expect(bindAccountToProject("claude", "target", "viewer").ok).toBe(true);
+    const requested = await requestSwitch(h, { account: "target" });
+    expect(requested.error).toBeUndefined();
+    const record = requested.runtimeSwitch!;
+    expect(record.to.accountId).toBe("target");
+    const operationId = switchOperationKey(record, "reconfigure");
 
-  expect(pipelineSwitchFence("switch-of-a-conversation")).toBeNull();
-  const fence = pipelineSwitchFence(operationId)!;
-  expect(fence.serviceTier).toBeUndefined();
-  expect(() => fence.authorize()).not.toThrow();
-  /* Revoked after admission: the fence taken earlier answers for now, and so does one read after a restart. */
-  expect(unbindAccountFromProject("claude", "target", "viewer").ok).toBe(true);
-  expect(() => fence.authorize()).toThrow("target account is no longer allowed on this project");
-  expect(() => pipelineSwitchFence(operationId)!.authorize()).toThrow("target account is no longer allowed on this project");
-  expect(bindAccountToProject("claude", "target", "viewer").ok).toBe(true);
-  expect(() => fence.authorize()).not.toThrow();
-  /* Asked about the account a host would start on, the source included. */
-  expect(() => fence.authorize("default")).not.toThrow();
-  expect(unbindAccountFromProject("claude", "default", "viewer").ok).toBe(true);
-  expect(() => fence.authorize("default")).toThrow("account is no longer allowed on this project");
-  expect(() => fence.authorize(null)).toThrow("no longer allowed");
-  expect(() => fence.authorize()).not.toThrow();
-  expect(bindAccountToProject("claude", "default", "viewer").ok).toBe(true);
-  /* A switch whose record is gone authorizes nothing. */
-  expect(() => pipelineSwitchFence(switchOperationKey({ id: "p-gone:plan:1:1" }, "reconfigure"))!.authorize()).toThrow("no longer allowed");
-  expect(unbindAccountFromProject("claude", "target", "viewer").ok).toBe(true);
-  expect(unbindAccountFromProject("claude", "default", "viewer").ok).toBe(true);
+    expect(pipelineSwitchFence("switch-of-a-conversation")).toBeNull();
+    const fence = pipelineSwitchFence(operationId)!;
+    expect(fence.serviceTier).toBeUndefined();
+    expect(() => fence.authorize()).not.toThrow();
+    /* Revoked after admission: the fence taken earlier answers for now, and so does one read after a restart. */
+    expect(unbindAccountFromProject("claude", "target", "viewer").ok).toBe(true);
+    expect(() => fence.authorize()).toThrow("target account is no longer allowed on this project");
+    expect(() => pipelineSwitchFence(operationId)!.authorize()).toThrow("target account is no longer allowed on this project");
+    expect(bindAccountToProject("claude", "target", "viewer").ok).toBe(true);
+    expect(() => fence.authorize()).not.toThrow();
+    /* Asked about the account a host would start on, the source included. */
+    expect(() => fence.authorize("default")).not.toThrow();
+    expect(unbindAccountFromProject("claude", "default", "viewer").ok).toBe(true);
+    expect(() => fence.authorize("default")).toThrow("account is no longer allowed on this project");
+    expect(() => fence.authorize(null)).toThrow("no longer allowed");
+    expect(() => fence.authorize()).not.toThrow();
+    expect(bindAccountToProject("claude", "default", "viewer").ok).toBe(true);
+    /* A switch whose record is gone authorizes nothing. */
+    expect(() => pipelineSwitchFence(switchOperationKey({ id: "p-gone:plan:1:1" }, "reconfigure"))!.authorize()).toThrow("no longer allowed");
+    expect(unbindAccountFromProject("claude", "target", "viewer").ok).toBe(true);
+    expect(unbindAccountFromProject("claude", "default", "viewer").ok).toBe(true);
+  } finally { resolve.mockRestore(); }
+});
+
+// Real migration and history-copy paths; only native CLI/auth/host ports are stubbed.
+const { AgentRegistry } = await import("@/lib/agent/registry");
+const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+const { applyStructuredReconfigure } = await import("@/lib/runtime/structuredReconfigure");
+const { advanceConversationMigration } = await import("@/lib/accounts/migration/coordinator");
+
+for (const engine of ["codex", "claude"] as const) for (const scenario of ["success", "target-root-0775", "target-root-changed", "continuation-refusal"] as const) {
+  test(`account-only applyNow through engine and reconfigure: ${engine} ${scenario}`, async () => {
+    const h = switchHarness();
+    const model = engine === "codex" ? "gpt-6-astra" : "opus";
+    h.ports.roleLookup = () => ({ engine, model, effort: "high", access: "read-only", promptScaffold: "Stage guidance" });
+    const lane = await runningStage(h);
+    const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `${engine}-${scenario}-registry.json`));
+    const account = (id: string) => {
+      const home = path.join(process.env.LLV_STATE_DIR!, `${engine}-${scenario}`, id);
+      const transcriptRoot = path.join(home, engine === "codex" ? "sessions" : "projects");
+      fs.mkdirSync(transcriptRoot, { recursive: true, mode: 0o700 });
+      fs.chmodSync(home, 0o700); fs.chmodSync(transcriptRoot, 0o700);
+      return { engine, accountId: id, kind: "managed" as const, home, transcriptRoot, env: { ...process.env } };
+    };
+    const source = account("default"), targetAccount = account("target");
+    if (scenario === "target-root-0775") fs.chmodSync(targetAccount.transcriptRoot, 0o775);
+    const sourceId = crypto.randomUUID();
+    const transcript = path.join(source.transcriptRoot, `${engine === "codex" ? "rollout-" : ""}${sourceId}.jsonl`);
+    const codexMeta = (id: string, parent?: string) => JSON.stringify({ type: "session_meta", timestamp: h.ports.now(), payload: { id, ...(parent ? { forked_from_id: parent } : {}), cwd: lane.worktreeDir } }) + "\n";
+    const history = engine === "codex" ? codexMeta(sourceId) + JSON.stringify({ type: "event_msg", timestamp: h.ports.now(), payload: { type: "task_complete" } }) + "\n"
+      : [ { type: "user", sessionId: sourceId, cwd: lane.worktreeDir, message: { role: "user", content: "Fixture question" } },
+          { type: "assistant", sessionId: sourceId, message: { role: "assistant", content: [{ type: "text", text: "Fixture answer" }] } },
+          { type: "result", timestamp: h.ports.now(), subtype: "success" } ].map(item => JSON.stringify(item)).join("\n") + "\n";
+    fs.writeFileSync(transcript, history, { mode: 0o600 });
+    registry.reconcileConversations([{ engine, path: transcript, accountId: "default",
+      launchProfile: emptyLaunchProfile({ cwd: lane.worktreeDir, model, effort: "high", title: "Account boundary fixture" }),
+      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: h.ports.now() }]);
+    const conversationId = registry.conversationForPath(transcript)!.id;
+    const rows = loadPipelines();
+    Object.assign(rows[0]!.runs[0]!.attempts[0]!, { conversationId, agentPath: transcript });
+    savePipelines(rows);
+    h.ports.pathForConversation = () => registry.conversation(conversationId)!.generations.at(-1)!.path;
+    h.ports.conversationIdForPath = () => conversationId;
+    h.ports.allowedAccountIds = () => ["default", "target"];
+    h.ports.resolveProjectSpawn = (_engine, request) => ({ kind: "available", account: request.requestedId === "target" ? targetAccount : source });
+    h.ports.conversationGeneration = () => {
+      const g = registry.conversation(conversationId)!.generations.at(-1)!;
+      return { engine, model: g.launchProfile.model, effort: g.launchProfile.effort, serviceTier: null, accountId: g.accountId, sessionId: g.id, agentPath: g.path };
+    };
+    const sourceGeneration = h.ports.conversationGeneration(conversationId);
+    const controls: string[] = [];
+    let providerCreates = 0;
+    const { RegisteredSuccessorProvider } = await import("@/lib/accounts/migration/provider");
+    const realProvider = new RegisteredSuccessorProvider({
+      registry, accounts: { resolveSpawn: () => targetAccount, resolveTranscriptOwner: () => source },
+      startCodex: async home => ({
+        async readAccount() { return { account: { type: "chatgpt" }, requiresOpenaiAuth: true }; },
+        async forkThread(id: string) {
+          expect(home).toBe(source.home);
+          const forkId = crypto.randomUUID(); const forkPath = path.join(source.transcriptRoot, `rollout-${forkId}.jsonl`);
+          fs.writeFileSync(forkPath, codexMeta(forkId, id), { mode: 0o600 });
+          return { id: forkId, path: forkPath };
+        },
+        async resumeThread(id: string, options: { path: string }) { expect(home).toBe(targetAccount.home); return { id, path: options.path }; },
+        async readThread(id: string) { return { id, path: null }; },
+        async setThreadName() {}, async setThreadGoal() {}, close() {},
+      }) as never,
+      claudeStatus: async () => ({ loggedIn: true }),
+      publishCodexHost: async () => async () => {}, publishClaudeHost: async () => async () => {},
+      journalRoot: path.join(process.env.LLV_STATE_DIR!, `${engine}-${scenario}-operations`),
+      claudeJournalRoot: path.join(process.env.LLV_STATE_DIR!, `${engine}-${scenario}-claude-operations`), now: h.ports.now,
+    });
+    const provider = {
+      create: async (input: Parameters<import("@/lib/accounts/migration/contracts").SuccessorProviderPort["create"]>[0]) => { providerCreates++; return realProvider.create(input); },
+      verify: realProvider.verify.bind(realProvider), publishHost: realProvider.publishHost.bind(realProvider), cleanup: realProvider.cleanup.bind(realProvider),
+    } as import("@/lib/accounts/migration/contracts").SuccessorProviderPort;
+    h.ports.runtimeSwitchControl = async (_id, _path, action, key, target) => {
+      controls.push(action);
+      if (action !== "reconfigure") return;
+      try {
+        await applyStructuredReconfigure({ kind: "reconfigure", operationId: key, conversationId, model: target!.model!, effort: target!.effort!, fast: false,
+          accountId: target!.accountId!, eventSeq: 1 }, {
+          registry, validateAccount: async () => {}, resolveAccount: () => ({}) as never, releaseHost: async () => true,
+          migrate: (id, _account, store, ownsOperation, reconfigureOperationId, authorizeTarget) =>
+            advanceConversationMigration(id, store, provider, { ownsOperation, reconfigureOperationId, authorizeTarget }),
+        });
+      } catch (error) { expect(String(error)).toContain("target transcript directory failed safety checks"); }
+    };
+    h.ports.runtimeSwitchOutcome = async () => {
+      const r = registry.conversation(conversationId)!.reconfigure!;
+      return { state: r.status === "applying" ? "pending" : r.status === "applied" ? "applied" : "failed", error: r.error ?? undefined };
+    };
+    const deliver = h.ports.resumeSeveredTurn!;
+    h.ports.resumeSeveredTurn = async input => {
+      if (scenario === "continuation-refusal") {
+        input.onRefused?.("fixture continuation refused", "refused"); return false;
+      }
+      return deliver(input);
+    };
+    h.ports.runtimeSwitchDelivery = (_id, key) => h.deliveries.get(key) ?? { state: "pending", admitted: false };
+    const request: import("./types").PatchPipelineRequest = { action: "override-stage", stageId: "plan", account: "target", applyNow: true,
+      expectedAttempt: 1, expectedConversationId: conversationId };
+    if (scenario === "target-root-0775") {
+      const before = loadPipelines();
+      const refused = await patchPipeline(lane.id, request, h.ports, { kind: "operator" });
+      expect(refused.status).toBe(409);
+      expect(refused.code).toBe("RUNTIME_SWITCH_UNAVAILABLE");
+      expect(refused.error).toContain("target transcript directory");
+      expect(refused.error).toContain("repair");
+      expect(refused.error).not.toContain(targetAccount.home);
+      expect(loadPipelines()).toEqual(before);
+      expect(controls).toEqual([]);
+      expect(h.continuations).toEqual([]);
+      expect(providerCreates).toBe(0);
+      expect(h.ports.conversationGeneration(conversationId)).toEqual(sourceGeneration);
+      // Repairing the target makes the same attempt switchable without a stage retry.
+      fs.chmodSync(targetAccount.transcriptRoot, 0o700);
+    }
+    const requested = await patchPipeline(lane.id, request, h.ports, { kind: "operator" });
+    expect(requested.error).toBeUndefined();
+    expect(requested.runtimeSwitch).toMatchObject({ mode: "fork", to: { accountId: "target", model } });
+    if (scenario === "target-root-changed") fs.chmodSync(targetAccount.transcriptRoot, 0o775);
+    await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+    const after = loadPipelines()[0]!;
+    const attempt = after.runs[0]!.attempts[0]!;
+    const record = attempt.runtimeSwitches![0]!;
+    expect(after.worktreeDir).toBe(lane.worktreeDir); expect(after.branch).toBe(lane.branch);
+    expect(after.runs[0]!.attempts).toHaveLength(1); expect(attempt.n).toBe(1);
+    if (scenario === "target-root-changed") {
+      expect(record.phase).toBe("rolled-back");
+      expect(record.outcome).toContain("target transcript directory");
+      expect(after.state).toBe("running");
+      expect(attempt.accountId).toBe("default");
+      expect(fs.statSync(targetAccount.transcriptRoot).mode & 0o777).toBe(0o775);
+    } else if (scenario !== "continuation-refusal") {
+      expect(record.phase).toBe("committed"); expect(attempt.accountId).toBe("target");
+      expect(attempt.conversationId).toBe(conversationId); expect(attempt.launchId).toBe("launch-1");
+      expect(h.ports.conversationGeneration(conversationId)!.sessionId).not.toBe(sourceGeneration!.sessionId);
+      expect(h.continuations).toHaveLength(1); expect(providerCreates).toBe(1);
+    } else {
+      expect(after.state).toBe("needs_decision"); expect(attempt.verdict?.status).toBe("needs_decision");
+      h.ports.spawnReceipt = id => ({ state: "completed", launchId: id }) as never;
+      const retry = await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports);
+      expect(retry.error).toBeUndefined(); expect(retry.pipeline).toBeDefined();
+    }
+  });
+}
+
+
+test("runtime-switch cancellation awaits each admission and keeps its original revision fence", async () => {
+  const { cancelPendingRuntimeSwitch } = await import("./runtimeSwitch");
+  for (const changed of [false, true]) {
+    const effects: string[] = [];
+    let revision = 7;
+    const registry = {
+      deliveryWriteOrBusy: async (correlation: { label: string }, write: () => unknown) => {
+        effects.push(`wait:${correlation.label}`);
+        await new Promise<void>(resolve => setImmediate(resolve));
+        if (changed && correlation.label === "pipeline.switch-cancel") revision++;
+        return write();
+      },
+      conversation: () => ({ migration: { revision } }),
+      withdrawConversationReconfigure: () => {
+        effects.push("withdraw"); return { kind: "claimed", conversation: { migration: { revision } } };
+      },
+      reconfigureOwnedCancellableSwitch: () => true,
+      cancelConversationSwitch: (_id: string, expected: number) => {
+        effects.push(`cancel:${expected}`);
+        if (expected !== revision) throw new Error("migration revision is stale");
+      },
+      releaseSwitchHold: () => { effects.push("release"); },
+    };
+    const result = cancelPendingRuntimeSwitch(registry as never, STAGE_CONVERSATION, "switch-one");
+    expect(effects).toEqual(["wait:pipeline.switch-withdraw"]);
+    if (changed) await expect(result).rejects.toThrow("revision is stale");
+    else await result;
+    expect(effects).toEqual([
+      "wait:pipeline.switch-withdraw", "withdraw", "wait:pipeline.switch-cancel", "cancel:7",
+      ...changed ? [] : ["wait:pipeline.switch-release", "release"],
+    ]);
+  }
+});
+
+test("runtime-switch cancellation preserves settled failures and an admission failure releases nothing", async () => {
+  const { cancelPendingRuntimeSwitch } = await import("./runtimeSwitch");
+  for (const kind of ["refused", "settled", "failed", "missing"] as const) {
+    const effects: string[] = [];
+    const registry = {
+      deliveryWriteOrBusy: async (_correlation: unknown, write: () => unknown) => {
+        if (kind === "refused") throw new Error("writer deadline");
+        return write();
+      },
+      conversation: () => ({}),
+      withdrawConversationReconfigure: () => kind === "missing" ? { kind: "withdrawn", conversation: {} }
+        : { kind: "settled", conversation: { reconfigure: { status: kind === "failed" ? "failed" : "applied" } } },
+      releaseSwitchHold: () => { effects.push("release"); },
+    };
+    const result = cancelPendingRuntimeSwitch(registry as never, STAGE_CONVERSATION, "switch-one");
+    if (kind === "refused" || kind === "settled") {
+      await expect(result).rejects.toThrow(kind === "refused" ? "writer deadline" : "already settled");
+      expect(effects).toEqual([]);
+    } else {
+      await result; expect(effects).toEqual(["release"]);
+    }
+  }
+});
+
+
+test("a newer runtime selection or failed-switch hold appearing during release keeps its custody", async () => {
+  const { cancelPendingRuntimeSwitch } = await import("./runtimeSwitch");
+  for (const change of ["selection", "hold"] as const) {
+    let current = { reconfigure: { operationId: "switch-one", status: "cancelled" }, switchHold: null as unknown };
+    let released = false;
+    const registry = {
+      conversation: () => current,
+      withdrawConversationReconfigure: () => ({ kind: "replayed", conversation: structuredClone(current) }),
+      deliveryWriteOrBusy: async (correlation: { label: string }, write: () => unknown) => {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        if (correlation.label === "pipeline.switch-release") current = change === "selection"
+          ? { ...current, reconfigure: { operationId: "switch-two", status: "applying" } }
+          : { ...current, switchHold: { reason: "a newer failed switch" } };
+        return write();
+      },
+      releaseSwitchHold: () => { released = true; },
+    };
+    await expect(cancelPendingRuntimeSwitch(registry as never, STAGE_CONVERSATION, "switch-one"))
+      .rejects.toThrow("runtime switch changed");
+    expect(released).toBe(false);
+  }
 });

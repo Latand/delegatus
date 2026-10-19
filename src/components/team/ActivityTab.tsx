@@ -87,6 +87,8 @@ export function ActivityTab({ view }: { view: TeamView }) {
   const [data, setData] = useState<EventsAnswer | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [failed, setFailed] = useState(false);
+  /* A failed «Load more» with events on screen says so beside the button until the next press (audit F1). */
+  const [moreFailed, setMoreFailed] = useState(false);
 
   const load = useCallback(async (before: string | null) => {
     const params = new URLSearchParams();
@@ -94,12 +96,14 @@ export function ActivityTab({ view }: { view: TeamView }) {
     if (project) params.set("project", project);
     params.set("scope", scope);
     if (before) params.set("before", before);
+    if (before) setMoreFailed(false);
     const answer = await teamRequest<EventsAnswer>(`/api/team/events?${params}`);
     if (!answer.ok) {
-      setFailed(true);
+      if (before) setMoreFailed(true);
+      else setFailed(true);
       return;
     }
-    setFailed(false);
+    if (!before) setFailed(false);
     setData((current) => (before && current ? { ...answer.body, events: [...current.events, ...answer.body.events] } : answer.body));
   }, [member, project, scope]);
 
@@ -200,6 +204,7 @@ export function ActivityTab({ view }: { view: TeamView }) {
           {t("team.activity.loadMore")}
         </button>
       ) : null}
+      {moreFailed && data?.nextBefore ? <p role="alert" data-team-activity-more-failed="" className="m-0 self-center text-label text-danger">{t("team.activity.loadMoreFailed")}</p> : null}
     </div>
   );
 }

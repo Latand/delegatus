@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { FailedLaunchTaskMove } from "@/lib/tasks/membership";
 import { statePath } from "@/lib/configDir";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
@@ -24,7 +25,9 @@ export type SpawnNoticeSkip =
   /** The launcher was a seat since retired, and its project holds none now. */
   | "no-seat"
   /** The recipient resolved to the child itself. */
-  | "self";
+  | "self"
+  /** A lost launch is old, already answered, or its task has settled. */
+  | "loss-handled";
 
 export interface LostSpawnNotice {
   launchId: string;
@@ -203,6 +206,7 @@ export function settleSpawnNotices(child: string, turnIds: readonly string[], se
 /** Delete settled turn rows settled before `before`, at most `limit` per call,
     reading one bounded key page at a time. Pending rows are never touched. */
 export function pruneSpawnNotices(before: string, limit = 256): number {
+  return withViewerOperation("spawn-notice.prune", () => {
   const store = collection(false);
   if (!store) return 0;
   const stale: string[] = [];
@@ -226,4 +230,30 @@ export function pruneSpawnNotices(before: string, limit = 256): number {
     }
   });
   return doomed.length;
+  });
+}
+
+export async function reopenRevokedSpawnNotice(child: string, operationId: string): Promise<void> {
+  const records = collection(false);
+  if (!records) return;
+  const rows = records.keyRange(`t:${child}:`, `t:${child}:\uffff`, 256)
+    .filter((row): row is SpawnNoticeTurn => row.kind === "turn" && row.state === "sent" && row.operationId === operationId);
+  if (!rows.length) return;
+  await records.boundedPatchAsync(rows.length * 2 + 2, tx => {
+    for (const row of rows) {
+      const current = tx.get(spawnNoticeTurnKey(child, row.turnId));
+      if (current?.kind === "turn" && current.operationId === operationId && current.state === "sent")
+        tx.put({ ...current, state: "pending", settledAt: null });
+    }
+    const held = tx.get(childKey(child));
+    if (held?.kind === "child") tx.put({ ...held, lastSentAt: null, attempt: null });
+  });
+}
+export async function clearRevokedSpawnNoticeAttempt(child: string): Promise<void> {
+  const records = collection(false);
+  if (!records) return;
+  await records.boundedPatchAsync(2, tx => {
+    const held = tx.get(childKey(child));
+    if (held?.kind === "child") tx.put({ ...held, attempt: null });
+  });
 }

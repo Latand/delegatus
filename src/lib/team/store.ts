@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -108,10 +109,10 @@ function str(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-function parseJson<T>(value: unknown): T | null {
+function parseJson<T>(value: unknown, db: Db): T | null {
   if (typeof value !== "string" || !value) return null;
   try {
-    return JSON.parse(value) as T;
+    return parseSqliteJson(value, db) as T;
   } catch {
     return null;
   }
@@ -153,7 +154,7 @@ function sessionFrom(row: Row): MemberSession {
   };
 }
 
-function challengeFrom(row: Row): Challenge {
+function challengeFrom(row: Row, db: Db): Challenge {
   return {
     id: String(row.id),
     kind: row.kind as ChallengeKind,
@@ -166,9 +167,9 @@ function challengeFrom(row: Row): Challenge {
     consumedAt: str(row.consumed_at),
     attempts: Number(row.attempts ?? 0),
     invitedName: str(row.invited_name),
-    result: parseJson<ChallengeResult>(row.result_json),
-    requester: parseJson<ChallengeRequester>(row.requester_json),
-    payload: parseJson<Record<string, string>>(row.payload_json),
+    result: parseJson<ChallengeResult>(row.result_json, db),
+    requester: parseJson<ChallengeRequester>(row.requester_json, db),
+    payload: parseJson<Record<string, string>>(row.payload_json, db),
   };
 }
 
@@ -178,14 +179,14 @@ function startHolder(challenge: Challenge): string | null {
   return challenge.kind === "telegram" ? challenge.payload?.telegramUserId ?? null : null;
 }
 
-function passkeyFrom(row: Row): StoredPasskey {
+function passkeyFrom(row: Row, db: Db): StoredPasskey {
   return {
     id: String(row.id),
     memberId: String(row.member_id),
     rpId: String(row.rp_id),
     publicKey: String(row.public_key),
     counter: Number(row.counter ?? 0),
-    transports: parseJson<string[]>(row.transports_json) ?? [],
+    transports: parseJson<string[]>(row.transports_json, db) ?? [],
     deviceType: String(row.device_type ?? "singleDevice"),
     backedUp: Number(row.backed_up ?? 0) === 1,
     label: String(row.label ?? ""),
@@ -194,8 +195,8 @@ function passkeyFrom(row: Row): StoredPasskey {
   };
 }
 
-function eventFrom(row: Row): TeamEvent | null {
-  const actor = parseJson<TeamActor>(row.actor_json);
+function eventFrom(row: Row, db: Db): TeamEvent | null {
+  const actor = parseJson<TeamActor>(row.actor_json, db);
   const action = row.action as TeamEventAction;
   if (!actor || !(TEAM_EVENT_ACTIONS as readonly string[]).includes(action)) return null;
   const subjectKind = str(row.subject_kind);
@@ -209,7 +210,7 @@ function eventFrom(row: Row): TeamEvent | null {
     action,
     project: str(row.project),
     subject,
-    detail: parseJson<TeamEventDetail>(row.detail_json),
+    detail: parseJson<TeamEventDetail>(row.detail_json, db),
   };
 }
 
@@ -234,7 +235,7 @@ export class TeamStore {
     fs.closeSync(fs.openSync(filename, "a", 0o600));
     fs.chmodSync(filename, 0o600);
     this.db = openCurrentDatabase(filename, () => {
-      const db = new sqlite.Database(filename, { create: true, strict: true });
+      const db = observeSqlite(new sqlite.Database(filename, { create: true, strict: true }), "team");
       db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
       db.exec(`
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -457,32 +458,32 @@ export class TeamStore {
 
   challenge(id: string): Challenge | null {
     const row = this.db.query<Row, [string]>("SELECT * FROM challenges WHERE id = ?").get(id);
-    return row ? challengeFrom(row) : null;
+    return row ? challengeFrom(row, this.db) : null;
   }
 
   challengeBySecret(secretHash: string): Challenge | null {
     const row = this.db.query<Row, [string]>("SELECT * FROM challenges WHERE secret_hash = ?").get(secretHash);
-    return row ? challengeFrom(row) : null;
+    return row ? challengeFrom(row, this.db) : null;
   }
 
   challengeByUserCode(code: string): Challenge | null {
     const row = this.db.query<Row, [string]>(
       "SELECT * FROM challenges WHERE user_code = ? AND kind = 'approval' AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1",
     ).get(code);
-    return row ? challengeFrom(row) : null;
+    return row ? challengeFrom(row, this.db) : null;
   }
 
   /** A Telegram request by the hash of the code its deep link carries, kept
       in `user_code` so the link and the requester's proof stay two secrets. */
   telegramChallengeByLink(linkHash: string): Challenge | null {
     const row = this.db.query<Row, [string]>("SELECT * FROM challenges WHERE user_code = ? AND kind = 'telegram'").get(linkHash);
-    return row ? challengeFrom(row) : null;
+    return row ? challengeFrom(row, this.db) : null;
   }
 
   openChallenges(kind: ChallengeKind, nowIso: string): Challenge[] {
     return this.db.query<Row, [string, string]>(
       "SELECT * FROM challenges WHERE kind = ? AND consumed_at IS NULL AND expires_at > ? ORDER BY created_at DESC",
-    ).all(kind, nowIso).map(challengeFrom);
+    ).all(kind, nowIso).map(row => challengeFrom(row, this.db));
   }
 
   /** Open requests of one kind that name no member and no issuer and that
@@ -541,7 +542,7 @@ export class TeamStore {
        unanswered keyless requests is never read here. */
     const open = this.db.query<Row, [string]>(
       "SELECT * FROM challenges WHERE consumed_at IS NULL AND (member_id = ? OR result_json IS NOT NULL)",
-    ).all(memberId).map(challengeFrom);
+    ).all(memberId).map(row => challengeFrom(row, this.db));
     let consumed = 0;
     for (const challenge of open) {
       const result = challenge.result;
@@ -567,11 +568,11 @@ export class TeamStore {
 
   passkey(id: string): StoredPasskey | null {
     const row = this.db.query<Row, [string]>("SELECT * FROM passkeys WHERE id = ?").get(id);
-    return row ? passkeyFrom(row) : null;
+    return row ? passkeyFrom(row, this.db) : null;
   }
 
   passkeysFor(memberId: string): StoredPasskey[] {
-    return this.db.query<Row, [string]>("SELECT * FROM passkeys WHERE member_id = ? ORDER BY created_at").all(memberId).map(passkeyFrom);
+    return this.db.query<Row, [string]>("SELECT * FROM passkeys WHERE member_id = ? ORDER BY created_at").all(memberId).map(row => passkeyFrom(row, this.db));
   }
 
   passkeyCounts(): Map<string, number> {
@@ -612,7 +613,7 @@ export class TeamStore {
     params.push(query.limit);
     const sql = `SELECT * FROM events ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY id DESC LIMIT ?`;
     return this.db.query<Row, Array<string | number>>(sql).all(...params).flatMap((row) => {
-      const event = eventFrom(row);
+      const event = eventFrom(row, this.db);
       return event ? [event] : [];
     });
   }
@@ -659,6 +660,12 @@ export class TeamStore {
       at: String(row.at),
       textDigest: str(row.text_digest),
     }));
+  }
+
+  /** Activity's launch-chain fallback needs one author, without decoding messages. */
+  majorityMessageAuthor(conversationId: string): string | null {
+    return this.db.query<{ member_id: string }, [string]>(`SELECT member_id FROM message_authors
+      WHERE conversation_id = ? GROUP BY member_id ORDER BY COUNT(*) DESC, member_id LIMIT 1`).get(conversationId)?.member_id ?? null;
   }
 }
 

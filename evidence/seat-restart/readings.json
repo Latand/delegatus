@@ -1,0 +1,229 @@
+{
+  "schemaVersion": 1,
+  "baseCommit": "05f90f84db4ec8e60736491d8e3df3dc5e1f47e2",
+  "recordedAt": "2026-10-15T21:30:09.886932+00:00",
+  "sourceDigests": {
+    "src/lib/viewerLoopMonitor.ts": "d7bfc7f5c8421366ed8058f3058539e89110befafa9350500eea560e2187f827",
+    "src/lib/conversation/deliverability.ts": "ae721732c4bb78a721652269ec9c6b2230551c04c849c682acf642a2e5545e29",
+    "src/lib/runtime/http.ts": "8afbb6a755ba2a90d519182ad0334e845ad83bf70a1dd32d3e54e4d4ae9d9d7f",
+    "src/lib/runtime/structuredMessageDelivery.ts": "c827a1bd49a8204b6db41df1f9a22c13be9d03b00ab7f3fd3610cbaa1271f46e",
+    "src/lib/runtime/startup.ts": "f4b5bdee9ffc1a605e69eb3a095b07b68bbe4474e338ad6a476a3ada13b3f5be",
+    "src/lib/runtime/http.test.ts": "72d96e6c010d779f1f49e1ef34fee2022de1d0c5a9e3823180ff01dd31051f94",
+    "src/lib/runtime/structuredDeliveryController.ts": "af83a32415307f61d1659dfd481e81a13a1e01664cc32fc709565fe4598e61bf",
+    "src/lib/runtime/http.retryProgress.test.ts": "1acbcb8c0041f6578d281ad2534c236e9bd52cf159bbb9ec66a17749ab022836",
+    "src/lib/runtime/startup.handoverRetry.test.ts": "b082642b3f1fc96b39918fe8118e87e774fb898ea4538a229a77943183d412ec",
+    "src/lib/runtime/startup.test.ts": "2664661c8c87b637b057c29beba3fd200d4ba34158fdef68d0c4fe9ee31662b7",
+    "src/lib/runtime/structuredMessageDelivery.test.ts": "86707c5d8f3c7eb625f245415e1e1288f8faefe288d8581e9458b1ec497d96f3",
+    "src/lib/orchestrator/seats.ts": "9933950cd68d6af633348e4f79c4bb491ff5f0087d773f8e8cef680109eaf296"
+  },
+  "isolation": [
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "TMPDIR",
+    "LLV_STATE_DIR"
+  ],
+  "runner": "required owned gate wrapper",
+  "regressions": {
+    "pattern": "^D[1-4] ",
+    "main": {
+      "pass": 7,
+      "fail": 18
+    },
+    "head": {
+      "pass": 25,
+      "fail": 0
+    }
+  },
+  "checks": [
+    {
+      "label": "head-startup-final",
+      "command": [
+        "bun",
+        "test",
+        "--timeout",
+        "15000",
+        "src/lib/runtime/startup.test.ts",
+        "src/lib/runtime/startup.handoverRetry.test.ts",
+        "src/lib/runtime/structuredDeliveryController.test.ts"
+      ],
+      "exit": 1,
+      "counts": {
+        "pass": 149,
+        "fail": 3
+      },
+      "failures": [
+        "startup terminalizes a delivered Claude spawn whose unverifiable host claim survived reboot",
+        "startup settles a delivered pipeline retry and collapses its rebooted predecessor exactly once",
+        "deferred pipeline evidence completes the pass with both engines retained, reconciles pending spawns outside the fence, and re-probes only the evidence until it moves (#1501)"
+      ]
+    },
+    {
+      "label": "head-delivery-final",
+      "command": [
+        "bun",
+        "test",
+        "--timeout",
+        "15000",
+        "src/lib/runtime/structuredMessageDelivery.test.ts",
+        "src/lib/runtime/http.test.ts",
+        "src/lib/runtime/http.retryProgress.test.ts"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-15T21:26:48.531735+00:00",
+      "elapsedSeconds": 22.964,
+      "counts": {
+        "pass": 234,
+        "fail": 0
+      },
+      "failures": []
+    },
+    {
+      "label": "lint",
+      "command": [
+        "bun",
+        "node_modules/eslint/bin/eslint.js",
+        "src/lib/viewerLoopMonitor.ts",
+        "src/lib/conversation/deliverability.ts",
+        "src/lib/runtime/http.ts",
+        "src/lib/runtime/structuredMessageDelivery.ts",
+        "src/lib/runtime/startup.ts",
+        "src/lib/runtime/http.test.ts",
+        "src/lib/runtime/structuredDeliveryController.ts",
+        "src/lib/runtime/http.retryProgress.test.ts",
+        "src/lib/runtime/startup.handoverRetry.test.ts",
+        "src/lib/runtime/startup.test.ts",
+        "src/lib/runtime/structuredMessageDelivery.test.ts",
+        "src/lib/orchestrator/seats.ts"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-15T21:27:11.496323+00:00",
+      "elapsedSeconds": 5.913,
+      "counts": {},
+      "failures": []
+    },
+    {
+      "label": "types-final",
+      "command": [
+        "bun",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-15T21:27:17.409553+00:00",
+      "elapsedSeconds": 131.257,
+      "counts": {},
+      "failures": []
+    },
+    {
+      "label": "runtime-host-final",
+      "command": [
+        "bun",
+        "scripts/verify-runtime-host.ts"
+      ],
+      "exit": 0,
+      "startedAt": "2026-10-15T21:29:28.667435+00:00",
+      "elapsedSeconds": 16.717,
+      "counts": {},
+      "failures": []
+    }
+  ],
+  "mainComparisons": [
+    {
+      "label": "main-recovery-red",
+      "command": [
+        "bun",
+        "test",
+        "--timeout",
+        "15000",
+        "src/lib/runtime/startup.test.ts",
+        "src/lib/runtime/startup.handoverRetry.test.ts",
+        "-t",
+        "^D[1-3] |startup terminalizes a delivered Claude|startup settles a delivered pipeline retry|deferred pipeline evidence completes|startup transcript refresh skips historical structured hosts"
+      ],
+      "exit": 1,
+      "startedAt": "2026-10-15T21:22:50.542385+00:00",
+      "elapsedSeconds": 5.671,
+      "counts": {
+        "pass": 7,
+        "fail": 11
+      },
+      "failures": [
+        "D3 a failed Codex attachment does not hold an adopted Claude seat: pending-send",
+        "D3 a failed Codex attachment does not hold an adopted Claude seat: owed-continuation",
+        "startup terminalizes a delivered Claude spawn whose unverifiable host claim survived reboot",
+        "startup settles a delivered pipeline retry and collapses its rebooted predecessor exactly once",
+        "deferred pipeline evidence completes the pass with both engines retained, reconciles pending spawns outside the fence, and re-probes only the evidence until it moves (#1501)",
+        "D1 records the seat cut before reaping a surviving Claude tool process",
+        "D2 newer queued send settles the cut only with delivery evidence",
+        "D2 newer delivering send settles the cut only with delivery evidence",
+        "D2 newer uncertain send settles the cut only with delivery evidence",
+        "D2 newer failed-unknown send settles the cut only with delivery evidence",
+        "D2 newer failed send settles the cut only with delivery evidence"
+      ]
+    },
+    {
+      "label": "main-recipient-red",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/structuredMessageDelivery.test.ts",
+        "src/lib/runtime/http.test.ts",
+        "src/lib/runtime/http.retryProgress.test.ts",
+        "-t",
+        "^D4 "
+      ],
+      "exit": 1,
+      "startedAt": "2026-10-15T21:22:56.213498+00:00",
+      "elapsedSeconds": 0.862,
+      "counts": {
+        "pass": 1,
+        "fail": 10
+      },
+      "failures": [
+        "D4 the send route names a rotated seat's current successor with no new operation",
+        "D4 explicit failed retry refuses a rotated seat before recovery or a new attempt",
+        "D4 explicit uncertain retry refuses a rotated seat before recovery or a new attempt",
+        "D4 explicit rotate-during-status retry refuses a rotated seat before recovery or a new attempt",
+        "D4 explicit recovery-wait retry refuses a rotated seat before recovery or a new attempt",
+        "D4 explicit reservation-wait retry refuses a rotated seat before recovery or a new attempt",
+        "D4 rotated seat refuses fresh send at id before reservation or recovery",
+        "D4 rotated seat refuses fresh send at path before reservation or recovery",
+        "D4 rotated seat refuses fresh send at runtime-read before reservation or recovery",
+        "D4 rotated seat refuses fresh send at reservation-wait before reservation or recovery"
+      ]
+    }
+  ],
+  "runtimeHost": {
+    "checkedAt": "2026-10-15T21:29:28.982Z",
+    "runtime": "bun 1.4.0",
+    "succession": {
+      "predecessorReadyMs": 526,
+      "successorTookOverMs": 506,
+      "completed": true
+    },
+    "listener": {
+      "windowMs": 15000,
+      "polls": 27,
+      "answered": 27,
+      "abandoned": 13
+    },
+    "socket": {
+      "polls": 27,
+      "answered": 27,
+      "abandoned": 13
+    },
+    "ok": true
+  },
+  "baselineFailures": [
+    "startup terminalizes a delivered Claude spawn whose unverifiable host claim survived reboot",
+    "startup settles a delivered pipeline retry and collapses its rebooted predecessor exactly once",
+    "deferred pipeline evidence completes the pass with both engines retained, reconciles pending spawns outside the fence, and re-probes only the evidence until it moves (#1501)"
+  ],
+  "notes": [
+    "The same three startup assertion failures reproduce on main.",
+    "The historical transcript-refresh case hit the default five-second timeout once, passed its isolated replay and passed the final full startup selection with a fifteen-second per-test limit.",
+    "Release interruption coverage passed all 133 cases in its full-file run.",
+    "Controller, designation and outbox checks passed 68 cases in their explicit file run.",
+    "No performance improvement is claimed."
+  ]
+}

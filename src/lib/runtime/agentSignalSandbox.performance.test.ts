@@ -71,7 +71,7 @@ test.skipIf(!enabled || !process.env.LLV_CODEX_BINARY).each(profiles)("30 paired
     await sample(async (protectedRun, memoryCell) => {
       const access = materializeStructuredHostAccess(profile === "read-only" ? true : { readOnly: false, sandbox: profile === "restricted" ? "restricted" : "full" }, home.env, null, home.directory);
       return await CodexAppServerHost.start({ binary, cwd: home.directory, codexHome: home.codexHome, env: access.env, ...access.codex, ...access.host,
-        mcpServers: [], fileAuthCredentials: true, approvalPolicy: "never", memoryCell,
+        mcpServers: [], fileAuthCredentials: true, approvalPolicy: "never", memoryCell, persistentCallbacks: true,
         ...(protectedRun ? {} : { spawnProcess: transport }), eventStore: new FileRuntimeEventStore(path.join(home.directory, "events")) });
     }, async () => {}, "codex", profile);
   } finally { home.cleanup(); }

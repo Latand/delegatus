@@ -8,11 +8,11 @@ import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from 
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { conversationAgentRole, isSpawnDeniedRole, reviewerOriginSpawnGuidance, type SpawnRejectionCode } from "@/lib/agent/spawnAdmission";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { createPipelineFromRequest, getPipelines, type PipelineBriefer } from "@/lib/pipelines/engine";
+import { createPipelineFromRequest, type PipelineBriefer } from "@/lib/pipelines/engine";
 import type { CreatePipelineRequest, Pipeline, PipelineRepoPreflightErrorCode, PipelinesResponse } from "@/lib/pipelines/types";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
-import { selectPipelineListRecords } from "@/lib/pipelines/listProjection";
-import { loadArchivedPipelines } from "@/lib/pipelines/store";
+import { loadPipelineListRecords } from "@/lib/pipelines/listProjection";
+import { loadPipelinesForList } from "@/lib/pipelines/store";
 import type { PipelineValidationViolation } from "@/lib/pipelines/validation";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ENGINE_NOT_CONNECTED, EngineNotConnectedDetails } from "@/lib/accounts/engineConnection";
@@ -53,21 +53,34 @@ export async function GET(req: NextRequest): Promise<NextResponse<PipelinesRespo
   return withViewerOperation("pipelines.get", () => getPipelineList(req));
 }
 
-/** Serialize historical records in short slices. A whole hot response can be
-    tens of megabytes even when each individual record is cheap to encode. */
-async function pipelineListResponse(pipelines: readonly Pipeline[]): Promise<NextResponse<PipelinesResponse>> {
-  const parts = ['{"pipelines":['];
+/** Backpressure keeps only the current encoded row while the client reads. */
+function pipelineListResponse(pipelines: readonly Pipeline[]): NextResponse<PipelinesResponse> {
+  const encoder = new TextEncoder();
+  let index = -1;
   let slice = performance.now();
-  for (let index = 0; index < pipelines.length; index++) {
-    if (index) parts.push(",");
-    parts.push(JSON.stringify(pipelines[index]));
-    if (performance.now() - slice >= 4) {
-      await new Promise<void>(resolve => setTimeout(resolve, 0));
-      slice = performance.now();
-    }
-  }
-  parts.push("]}");
-  return new NextResponse(parts.join(""), { headers: { "content-type": "application/json" } });
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (performance.now() - slice >= 4) {
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        slice = performance.now();
+      }
+      if (cancelled) return;
+      try {
+        if (index === -1) { index = 0; controller.enqueue(encoder.encode('{"pipelines":[')); }
+        else if (index < pipelines.length) {
+          controller.enqueue(withViewerOperation("pipelines.get", () =>
+            encoder.encode(`${index ? "," : ""}${JSON.stringify(pipelines[index++])}`)));
+        } else {
+          pipelines = [];
+          controller.enqueue(encoder.encode("]}"));
+          controller.close();
+        }
+      } catch (error) { pipelines = []; controller.error(error); }
+    },
+    cancel() { cancelled = true; pipelines = []; },
+  }, { highWaterMark: 0 });
+  return new NextResponse(body, { headers: { "content-type": "application/json" } });
 }
 
 async function getPipelineList(req: NextRequest): Promise<NextResponse<PipelinesResponse | ApiError>> {
@@ -79,11 +92,10 @@ async function getPipelineList(req: NextRequest): Promise<NextResponse<Pipelines
     }, { status: 400 });
   }
   try {
-    if (params.size === 0) return await pipelineListResponse(getPipelines().pipelines);
+    if (params.size === 0) return pipelineListResponse(loadPipelinesForList());
     const includeClosed = params.get("includeClosed") === "true" || params.get("includeClosed") === "1";
     const limit = params.has("limit") ? Number(params.get("limit")) : null;
-    const records = includeClosed ? [...getPipelines().pipelines, ...loadArchivedPipelines()] : getPipelines().pipelines;
-    const pipelines = selectPipelineListRecords(records, {
+    const pipelines = await loadPipelineListRecords({
       project: params.get("project"),
       state: params.get("state"),
       includeClosed,
@@ -181,6 +193,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
     return NextResponse.json({
       ok: true,
       pipeline: result.pipeline,
+      ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
       ...(result.queued ? { queued: result.queued } : {}),
       ...(result.warnings?.length ? { warnings: result.warnings } : {}),
       ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}),

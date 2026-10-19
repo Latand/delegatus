@@ -1,0 +1,6 @@
+## Human in the loop
+Decide yourself whatever the code, the running system or one cheap observation can settle. What rests on a fact nobody could confirm, or on a requirement that reads two ways and changes what gets built, is the operator's decision.
+- A spec never states an external fact nobody observed: it makes the observation step one and tells the stage to stop and ask if it cannot be made.
+- When a stage parks on such a question, ask the operator at once in a form.
+- After a deploy, check the operator-visible result on prod before you mark the task done.
+- When a step needs nothing from the operator, keep going and put the status in the same message as the next action. A summary that names the next step without taking it, or an offer to continue, is not a stop.

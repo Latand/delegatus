@@ -1,3 +1,4 @@
+import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import type {
   AgentHostStatus,
   AgentRegistry,
@@ -25,8 +26,9 @@ import { StructuredHostAdoptionCleanupError, type HostState } from "./engineHost
 import { structuredHostsEnabled } from "./flags";
 import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
 import { restartCutEvidenceHolds } from "./restartCutHold";
-import { verifiedSignalDomainProcesses } from "./agentSignalSandbox";
+import { normalizeAgentSignalDomain, verifiedSignalDomainProcesses } from "./agentSignalSandbox";
 import { isDeepStrictEqual } from "node:util";
+import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 
 export { structuredHostsEnabled };
@@ -119,13 +121,7 @@ export async function persistCodexHost(
   writerClaimEpoch: number,
 ): Promise<AgentRegistryEntry> {
   const state = await host.health();
-  const persisted = registry.setStructuredHostClaimed(
-    key,
-    codexHostColumns(state, writerClaimEpoch),
-    registryStatus(state),
-    claimOwner,
-    writerClaimEpoch,
-  );
+  const persisted = (await registry.deliveryWriteOrBusy({ label: "registry.setStructuredHostClaimed" }, registry.setStructuredHostClaimed.bind(registry, key, codexHostColumns(state, writerClaimEpoch), registryStatus(state), claimOwner, writerClaimEpoch)));
   if (!persisted) throw new Error("structured host writer claim is stale");
   return persisted;
 }
@@ -557,13 +553,14 @@ export function reconcileDeadStructuredRegistryHosts(
   shouldRetain: StructuredHostAdoptionFilter = (entry) => restartCutEvidenceHolds(sessionKeyId(entry.key)),
 ): void {
   const snapshot = registry.readOnlySnapshot();
-  for (const conversation of Object.values(snapshot.conversations)) {
+  for (const entry of registry.structuredHostEntries()) {
+    if (!entry.structuredHost?.process) continue;
+    const key = entry.key;
+    const conversation = registryConversationsForEntryKey(snapshot, sessionKeyId(key)).find(candidate =>
+      candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
+    if (!conversation) continue;
     if (conversation.turn.state !== "terminal" && !conversation.supersededBy) continue;
-    const generation = conversation.generations.at(-1);
-    if (!generation) continue;
-    const key = { engine: conversation.engine, sessionId: generation.id } as const;
-    const entry = snapshot.entries[sessionKeyId(key)];
-    if (!entry?.structuredHost?.process || shouldRetain(entry)) continue;
+    if (shouldRetain(entry)) continue;
     reconcileDeadStructuredRegistryHost(registry, conversation.id, key);
   }
 }
@@ -664,8 +661,19 @@ async function endRecordedStructuredTree(
     ...dependencies,
   });
   if (outcome.ok) return true;
+  // The bound host can finish this same retirement while the termination
+  // ladder awaits process exit. Accept that completed outcome only for the
+  // captured domain, with no remaining process or writer custody.
+  if (recordedDomain) {
+    const completed = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    const retired = normalizeAgentSignalDomain(completed?.structuredHost?.signalDomain);
+    if (completed?.status === "dead" && !completed.claimOwner && !completed.structuredHost?.process
+      && retired?.retired === true
+      && isDeepStrictEqual(retired, { ...normalizeAgentSignalDomain(recordedDomain), retired: true })
+      && [retired.monitor, retired.bubblewrap, retired.init, retired.native].every(identity => processIdentityStatus(identity) === "dead")) return true;
+  }
   if (outcome.terminationStarted && outcome.survivors.length > 0) {
-    registry.recordStructuredTerminationSurvivors(key, root, outcome.survivors);
+    (await registry.deliveryWriteOrBusy({ label: "registry.recordStructuredTerminationSurvivors" }, registry.recordStructuredTerminationSurvivors.bind(registry, key, root, outcome.survivors)));
   }
   return false;
 }
@@ -731,7 +739,7 @@ export async function demoteSkippedStructuredRegistryHosts(
   admit: <T>(entry: AgentRegistryEntry, mutation: () => T) => Promise<T | undefined> = async (_entry, mutation) => mutation(),
   orphanStop: StructuredOrphanStopDependencies = {},
 ): Promise<void> {
-  const rows = Object.values(registry.readOnlySnapshot().entries).filter((entry) =>
+  const rows = registry.structuredHostEntries().filter((entry) =>
     entry.structuredHost && !shouldAdopt(entry));
   for (const [index, entry] of rows.entries()) {
     if (index > 0 && index % 16 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -788,7 +796,7 @@ export async function demoteSkippedStructuredRegistryHosts(
           activeFlags: [],
         }, "dead", claim.claimOwner!, claim.claimEpoch, true));
         if (demoted === undefined) {
-          registry.releaseStructuredHostClaim(entry.key, claim.claimOwner!, claim.claimEpoch);
+          (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claim.claimOwner!, claim.claimEpoch)));
           return;
         }
         if (!demoted) throw new Error("structured host writer claim is stale");
@@ -805,13 +813,14 @@ export async function demoteSkippedStructuredRegistryHosts(
 /** Boot seam: resume selected durable Codex rows when structured hosting is enabled. */
 export async function adoptCodexRegistryHosts(
   registry: AgentRegistry,
-  optionsFor: (entry: AgentRegistryEntry) => CodexAppServerHostOptions,
+  optionsFor: (entry: AgentRegistryEntry) => CodexAppServerHostOptions | Promise<CodexAppServerHostOptions>,
   env: NodeJS.ProcessEnv = process.env,
   shouldAdopt: StructuredHostAdoptionFilter = () => true,
   processed?: StructuredHostAdoptionProgress,
   dependencies: {
     adoptHost?: (sessionId: string, options: CodexAppServerHostOptions) => Promise<CodexAppServerHost>;
     onAdopted?: (item: AdoptedCodexHost) => void;
+    onFailure?: (entry: AgentRegistryEntry, error: unknown) => void;
     claimHost?: (entry: AgentRegistryEntry, owner: ProcessIdentity) => Promise<AgentRegistryEntry | null>;
     /** The ownership check before `adopt`; production resolves the tasks. */
     admit?: (entry: AgentRegistryEntry, snapshot: RegistryFile) => { error: string } | null;
@@ -820,7 +829,7 @@ export async function adoptCodexRegistryHosts(
   } = {},
 ): Promise<AdoptedCodexHost[]> {
   if (!structuredHostsEnabled(env)) return [];
-  const rows = Object.values(registry.readOnlySnapshot().entries).filter((entry) =>
+  const rows = registry.structuredHostEntries().filter((entry) =>
     entry.key.engine === "codex"
     && entry.structuredHost?.kind === "codex-app-server"
     && shouldAdopt(entry));
@@ -832,8 +841,10 @@ export async function adoptCodexRegistryHosts(
       await registry.withOperationLock(entry.key, owner, async () => {
         const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
         if (!current?.structuredHost || !shouldAdopt(current)) return;
-        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));
-        if (!claimed) {
+        const socketOwner = current.structuredHost.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
+          ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process, signalDomain: current.structuredHost.signalDomain } : undefined;
+        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner }))));
+        if (!claimed && !socketOwner) {
           const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
           const orphan = current?.structuredHost?.kind === "codex-app-server"
             ? current.structuredHost.process
@@ -844,12 +855,12 @@ export async function adoptCodexRegistryHosts(
             && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, dependencies.orphanStop)) {
             const retry = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
             if (!retry?.structuredHost || !shouldAdopt(retry)) return;
-            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));
+            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
           }
         }
         if (!claimed?.structuredHost) return;
         if (!shouldAdopt(claimed)) {
-          registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+          (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
           return;
         }
         /* M.4 seam 4: reopening the process is new work for every task the
@@ -858,21 +869,37 @@ export async function adoptCodexRegistryHosts(
         const refused = (dependencies.admit ?? adoptionRefusal)(claimed, registry.readOnlySnapshot());
         if (refused) {
           console.error(`[linked boards] boot adoption of ${sessionKeyId(entry.key)} refused: ${refused.error}`);
-          registry.setStructuredHostClaimed(entry.key, {
+          if (socketOwner) {
+            (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
+            return;
+          }
+          (await registry.deliveryWriteOrBusy({ label: "registry.setStructuredHostClaimed" }, registry.setStructuredHostClaimed.bind(registry, entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",
             process: null,
             activeTurnRef: null,
             pendingAttention: [],
             activeFlags: [],
-          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true);
+          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true)));
           return;
         }
         try {
+          const retainedProtocolVersion = claimed.structuredHost.protocolVersion;
           const options = {
-            ...optionsFor(claimed),
+            ...await optionsFor(claimed),
             initialEventCursor: claimed.structuredHost.eventCursor,
+            ...(socketOwner ? { socketOwner, readProtocolVersion: () => retainedProtocolVersion ?? "unknown" } : {}),
           };
+          // Preparing memory can wait for state admission. Recheck both the
+          // writer claim and admission before opening a new engine generation.
+          const fresh = registry.readOnlySnapshot();
+          const current = fresh.entries[sessionKeyId(entry.key)];
+          if (!current || !registry.ownsStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch)
+            || !shouldAdopt(current) || (dependencies.admit ?? adoptionRefusal)(current, fresh)) {
+            (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
+            options.releaseCleanup?.();
+            return;
+          }
           /* The production static method calls `this.open`; keep its class
              receiver instead of extracting it into an unbound function. */
           const host = dependencies.adoptHost
@@ -898,15 +925,20 @@ export async function adoptCodexRegistryHosts(
             return;
           }
           // A refused cell (work that cannot be contained) or a failed open; the next message relaunches it.
+          dependencies.onFailure?.(entry, error);
           console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
-          registry.setStructuredHostClaimed(entry.key, {
+          if (socketOwner && !processIdentityProvenDead(socketOwner.process)) {
+            (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
+            return;
+          }
+          (await registry.deliveryWriteOrBusy({ label: "registry.setStructuredHostClaimed" }, registry.setStructuredHostClaimed.bind(registry, entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",
             process: null,
             activeTurnRef: null,
             pendingAttention: [],
             activeFlags: [],
-          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true);
+          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true)));
         }
       });
     } catch (error) {
@@ -925,13 +957,14 @@ export async function adoptCodexRegistryHosts(
 /** Boot seam: resume selected durable Claude broker rows when structured hosting is enabled. */
 export async function adoptClaudeRegistryHosts(
   registry: AgentRegistry,
-  optionsFor: (entry: AgentRegistryEntry) => ClaudeStreamBrokerHostOptions,
+  optionsFor: (entry: AgentRegistryEntry) => ClaudeStreamBrokerHostOptions | Promise<ClaudeStreamBrokerHostOptions>,
   env: NodeJS.ProcessEnv = process.env,
   shouldAdopt: StructuredHostAdoptionFilter = () => true,
   processed?: StructuredHostAdoptionProgress,
   dependencies: {
     adoptHost?: (sessionId: string, options: ClaudeStreamBrokerHostOptions) => Promise<ClaudeStreamBrokerHost>;
     onAdopted?: (item: AdoptedClaudeHost) => void;
+    onFailure?: (entry: AgentRegistryEntry, error: unknown) => void;
     claimHost?: (entry: AgentRegistryEntry, owner: ProcessIdentity) => Promise<AgentRegistryEntry | null>;
     /** The ownership check before `adopt`; production resolves the tasks. */
     admit?: (entry: AgentRegistryEntry, snapshot: RegistryFile) => { error: string } | null;
@@ -940,7 +973,7 @@ export async function adoptClaudeRegistryHosts(
   } = {},
 ): Promise<AdoptedClaudeHost[]> {
   if (!structuredHostsEnabled(env)) return [];
-  const rows = Object.values(registry.readOnlySnapshot().entries).filter((entry) =>
+  const rows = registry.structuredHostEntries().filter((entry) =>
     entry.key.engine === "claude"
     && entry.structuredHost?.kind === "claude-broker"
     && shouldAdopt(entry));
@@ -952,7 +985,7 @@ export async function adoptClaudeRegistryHosts(
       await registry.withOperationLock(entry.key, owner, async () => {
         const eligible = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
         if (!eligible?.structuredHost || !shouldAdopt(eligible)) return;
-        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));
+        let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
         if (!claimed) {
           const current = registry.readOnlySnapshot().entries[`claude:${entry.key.sessionId}`];
           const orphan = current?.structuredHost?.kind === "claude-broker"
@@ -964,12 +997,12 @@ export async function adoptClaudeRegistryHosts(
             && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, dependencies.orphanStop)) {
             const retry = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
             if (!retry?.structuredHost || !shouldAdopt(retry)) return;
-            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true }));
+            claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
           }
         }
         if (!claimed?.structuredHost) return;
         if (!shouldAdopt(claimed)) {
-          registry.releaseStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch);
+          (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
           return;
         }
         /* M.4 seam 4: reopening the process is new work for every task the
@@ -978,21 +1011,31 @@ export async function adoptClaudeRegistryHosts(
         const refused = (dependencies.admit ?? adoptionRefusal)(claimed, registry.readOnlySnapshot());
         if (refused) {
           console.error(`[linked boards] boot adoption of ${sessionKeyId(entry.key)} refused: ${refused.error}`);
-          registry.setStructuredHostClaimed(entry.key, {
+          (await registry.deliveryWriteOrBusy({ label: "registry.setStructuredHostClaimed" }, registry.setStructuredHostClaimed.bind(registry, entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",
             process: null,
             activeTurnRef: null,
             pendingAttention: [],
             activeFlags: [],
-          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true);
+          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true)));
           return;
         }
         try {
           const options = {
-            ...optionsFor(claimed),
+            ...await optionsFor(claimed),
             initialEventCursor: claimed.structuredHost.eventCursor,
           };
+          // Preparing memory can wait for state admission. Recheck both the
+          // writer claim and admission before opening a new engine generation.
+          const fresh = registry.readOnlySnapshot();
+          const current = fresh.entries[sessionKeyId(entry.key)];
+          if (!current || !registry.ownsStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch)
+            || !shouldAdopt(current) || (dependencies.admit ?? adoptionRefusal)(current, fresh)) {
+            (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
+            options.releaseCleanup?.();
+            return;
+          }
           /* Claude adoption has the same receiver-bound static open seam. */
           const host = dependencies.adoptHost
             ? await dependencies.adoptHost(entry.key.sessionId, options)
@@ -1017,15 +1060,16 @@ export async function adoptClaudeRegistryHosts(
             return;
           }
           // A refused cell (work that cannot be contained) or a failed open; the next message relaunches it.
+          dependencies.onFailure?.(entry, error);
           console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
-          registry.setStructuredHostClaimed(entry.key, {
+          (await registry.deliveryWriteOrBusy({ label: "registry.setStructuredHostClaimed" }, registry.setStructuredHostClaimed.bind(registry, entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",
             process: null,
             activeTurnRef: null,
             pendingAttention: [],
             activeFlags: [],
-          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true);
+          }, "dead", claimed.claimOwner!, claimed.claimEpoch, true)));
         }
       });
     } catch (error) {
@@ -1038,4 +1082,19 @@ export async function adoptClaudeRegistryHosts(
     }
   }
   return adopted;
+}
+
+/** The exact live native listener is handed to the next Viewer. Its process
+ * and endpoint remain recorded; only the current writer claim is released. */
+export async function detachCodexHostForViewerRestart(registry: AgentRegistry, key: SessionKey, host: import("./engineHost").EngineHost): Promise<boolean> {
+  if (!(host instanceof CodexAppServerHost)) return false;
+  const state = await host.health();
+  const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+  if (!entry?.claimOwner || !entry.structuredHost?.process
+    || state.pid !== entry.structuredHost.process.pid
+    || state.processStartIdentity !== entry.structuredHost.process.startIdentity
+    || state.endpoint !== entry.structuredHost.endpoint) return false;
+  if (!host.detachForViewerRestart()) return false;
+  (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, key, entry.claimOwner, entry.claimEpoch)));
+  return true;
 }

@@ -2,6 +2,7 @@ import type { HostMemoryState } from "./agentMemory";
 import type { AgentSignalDomain } from "./agentSignalSandbox";
 import type { HostEndCause } from "./hostEndCause";
 import type { NativeQueueHost } from "./nativeQueueExecutor";
+
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
 import type { MessageOrigin } from "./messageOrigin";
@@ -14,7 +15,28 @@ import {
   type StructuredMessageContent,
 } from "./structuredContent";
 
+/** A callback result that must survive control-executor retries. */
+export class StructuredAnswerError extends Error {
+  constructor(message: string, readonly outcome: "uncertain" | "unavailable") { super(message); }
+}
+
+export interface InboxBatchPart {
+  operationId: string;
+  contentDigest: string;
+  admittedAt: string;
+  headerStart: number;
+  textStart: number;
+  textEnd: number;
+  imageStart: number;
+  imageEnd: number;
+  origin?: MessageOrigin;
+  selectedContext?: SelectedContextRef;
+  referenceTo?: string;
+  escaped?: boolean;
+}
+
 export interface QueueEntry {
+  parts?: InboxBatchPart[];
   id: string;
   content?: StructuredMessageContent;
   contentDigest?: string;
@@ -48,6 +70,7 @@ export interface FirstDispatchEvidence {
 }
 
 export interface NormalizedQueueEntry {
+  parts?: InboxBatchPart[];
   id: string;
   content: StructuredMessageContent;
   contentDigest: string;
@@ -68,6 +91,7 @@ export function normalizeQueueEntry(entry: QueueEntry): NormalizedQueueEntry {
     ...(entry.runtime ? { runtime: entry.runtime } : {}),
     ...(entry.selectedContext ? { selectedContext: entry.selectedContext } : {}),
     ...(entry.origin ? { origin: entry.origin } : {}),
+    ...(entry.parts ? { parts: structuredClone(entry.parts) } : {}),
   };
 }
 
@@ -95,14 +119,14 @@ export type RuntimeEvent =
   | { kind: "delta"; turnId: string; text: string; seq: number }
   | { kind: "item"; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null;
     /** Raw live user-echo observation, retained through event replay. */
-    deliveryEcho?: { operationId: string; at: string };
+    deliveryEcho?: { operationId: string; at: string; memberOperationIds?: string[] };
     /** Original native activity observation time; null for history whose time needs transcript evidence. */
     activityAt?: string | null; seq: number }
   | { kind: "voice-chunk"; turnId: string; delivery: RuntimeVoiceDelivery; seq: number }
   /** History can infer interruption after a lost process; it carries no operator pause intent. */
   | { kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error"; interruptionSource?: "history"; seq: number }
-  | { kind: "attention"; id: string; method: string; attention: unknown; seq: number }
-  | { kind: "attention-resolved"; id: string; resolution: "answered" | "host-restarted" | "server-resolved" | "turn-ended"; seq: number }
+  | { kind: "attention"; id: string; method: string; attention: unknown; codexReceipt?: import("./codexRequestReceipt").CodexRequestReceipt; seq: number }
+  | { kind: "attention-resolved"; id: string; resolution: "answered" | "host-restarted" | "server-resolved" | "turn-ended"; codexReceipt?: import("./codexRequestReceipt").CodexRequestReceipt; seq: number }
   | { kind: "limits"; snapshot: unknown; seq: number }
   | { kind: "realtime-delivery-progress"; deliveryId: string; digest: string; responseIndex: number; offset: number; seq: number }
   | { kind: "realtime-delivery-acknowledged"; deliveryId: string; digest: string; seq: number }
@@ -159,6 +183,8 @@ export class RuntimeReplayGapError extends Error {
 
 /** Shared structured-host boundary from the issue 25 spike. */
 export interface EngineHost {
+  /** Viewer-composed input at a current seat, only after its turn ends. */
+  readonly coalescesQueuedInput?: boolean;
   readonly nativeQueue?: NativeQueueHost;
   readonly supportsSteer?: boolean;
   /** send() accepts input into the engine's own queue while a turn is active
@@ -169,6 +195,11 @@ export interface EngineHost {
       message as the next one (Copilot's ACP has no steer). Absent keeps the
       host's own steer handling, or the `unsupported-steering` refusal. */
   readonly steerFallback?: "interrupt";
+  /** An `interrupt-active` send never cuts a turn that is running or awaiting
+      an answer: the delivery queue holds it until the turn ends and then
+      starts the next turn with it. Only an explicit interrupt stops the turn.
+      Absent keeps the replacement: the running turn is interrupted first. */
+  readonly sendWaitsForRunningTurn?: boolean;
   attach(afterSeq: number): AsyncIterable<RuntimeEvent>;
   send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt>;
   /** Acknowledges the write before waiting for input to land in the running turn. */
@@ -331,6 +362,8 @@ export class StructuredHostAdoptionCleanupError<Host extends EngineHost = Engine
 }
 
 /** A local precondition refused a send before a mutating engine request. */
+export class StructuredDispatchDeferredError extends Error {}
+
 export class StructuredSendRefusedError extends Error {
   constructor(message: string) { super(message); this.name = "StructuredSendRefusedError"; }
 }

@@ -1,4 +1,4 @@
-import { learnedRulesForLaunchProfile, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
+import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,9 +7,9 @@ import { accountManager } from "@/lib/accounts/manager";
 import { successorRefusal } from "@/lib/links/adoptionGuard";
 import type { AccountContext, AccountManager } from "@/lib/accounts/contracts";
 import { CodexAppServerClient, CodexAppServerError } from "@/lib/accounts/codexAppServer";
-import { sharedClaudeProjectsRoot } from "@/lib/accounts/claude";
 import { realClaudeLoginPorts } from "@/lib/accounts/claudeLogin";
 import { resumeCwd } from "@/lib/agent/cli";
+import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { agentRegistry, type AgentRegistry, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId } from "@/lib/agent/sessionKey";
@@ -34,6 +34,7 @@ import { cleanupTmuxHostIfMatches, forgetResumePaneIfMatches, verifyTmuxHostEvid
 
 import { launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ProviderReceipt, type SuccessorProviderPort, type ViewerConversationId } from "./contracts";
 import { forkClaudeHistory, hashValidatedHistory, HistorySecurityError, MigrationTargetUnavailableError, safeCopyHistory, validateHistorySource } from "./safeHistoryCopy";
+import { validateMigrationTargetRoot } from "./targetRoot";
 
 interface StructuredHostPublicationInput {
   receipt: ProviderReceipt;
@@ -311,38 +312,52 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   /* The successor runs in the cell a fresh launch of this conversation gets;
      work that cannot be contained is refused here, before anything starts. */
   const memoryCell = structuredHostCell(input.registry, "codex", input.receipt.operationId, input.conversationId as ViewerConversationId | undefined);
-  const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
-  const entry = input.registry.upsert({
-    ...(existing ?? {
+  const entry = await input.registry.deliveryWriteOrBusy({ label: "registry.upsert" }, () => {
+    const refused = successorRefusal(input, "codex", input.registry.readOnlySnapshot());
+    if (refused) throw new Error(refused.error);
+    const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    return input.registry.upsert({
+      ...(existing ?? {
+        key,
+        status: "unhosted" as const,
+        host: null,
+        claimEpoch: 0,
+        claimOwner: null,
+        pendingAction: null,
+      }),
       key,
-      status: "unhosted" as const,
-      host: null,
-      claimEpoch: 0,
-      claimOwner: null,
-      pendingAction: null,
-    }),
-    key,
-    artifactPath: input.receipt.path,
-    cwd: input.profile.cwd,
-    accountId: input.target.accountId,
-    launchProfile: input.profile,
-    structuredHostOperationId: input.receipt.operationId,
+      artifactPath: input.receipt.path,
+      cwd: input.profile.cwd,
+      accountId: input.target.accountId,
+      launchProfile: input.profile,
+      structuredHostOperationId: input.receipt.operationId,
+    });
   });
   if (!entry.structuredHost) {
-    input.registry.setStructuredHost(key, {
-      kind: "codex-app-server",
-      endpoint: "stdio:pending",
-      process: null,
-      eventCursor: 0,
-      protocolVersion: null,
-      writerClaimEpoch: entry.claimEpoch,
-      activeTurnRef: null,
-      pendingAttention: [],
-      activeFlags: [],
-    }, "unhosted");
+    await input.registry.deliveryWriteOrBusy({ label: "registry.setStructuredHost" }, () => {
+      const refused = successorRefusal(input, "codex", input.registry.readOnlySnapshot());
+      if (refused) throw new Error(refused.error);
+      if (!input.registry.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredHost) {
+        input.registry.setStructuredHost(key, {
+          kind: "codex-app-server",
+          endpoint: "stdio:pending",
+          process: null,
+          eventCursor: 0,
+          protocolVersion: null,
+          writerClaimEpoch: entry.claimEpoch,
+          activeTurnRef: null,
+          pendingAttention: [],
+          activeFlags: [],
+        }, "unhosted");
+      }
+    });
   }
   const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
-  const claimed = input.registry.claimStructuredHost(key, owner, { allowUnhosted: true });
+  const claimed = await input.registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, () => {
+    const refused = successorRefusal(input, "codex", input.registry.readOnlySnapshot());
+    if (refused) throw new Error(refused.error);
+    return input.registry.claimStructuredHost(key, owner, { allowUnhosted: true });
+  });
   if (!claimed?.claimOwner) throw new Error("successor Codex structured host claim is unavailable");
 
   const approvalPolicy = input.profile.permissionMode
@@ -364,16 +379,23 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   } catch (error) {
     /* Nothing was started: release the claim and discard the pending identity,
        as on the Claude path, where this step also sits inside the try. */
-    input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+    (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, input.registry.releaseStructuredHostClaim.bind(input.registry, key, claimed.claimOwner, claimed.claimEpoch)));
     identity?.restore();
     throw error;
   }
   try {
+    // A migration successor never widens native delegation, regardless of the
+    // source profile, so its memories feature follows that denied policy.
+    const nativeMemoryEnabled = await codexNativeMemoryEnabled(input.target.home, false, input.profile.cleanMemory === true);
+    const developerInstructions = await learnedRulesForLaunchProfile(input.profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, nativeMemoryEnabled });
+    if (input.ownsOperation && !await input.ownsOperation()
+      || !input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) throw Error("successor ownership changed during memory preparation");
     host = await CodexAppServerHost.adopt(input.receipt.nativeId, {
       cwd: input.profile.cwd,
       codexHome: input.target.home,
       cleanMemory: input.profile.cleanMemory === true,
-      developerInstructions: learnedRulesForLaunchProfile(input.profile),
+      nativeMemoryEnabled,
+      developerInstructions,
       fileAuthCredentials: input.target.kind === "managed",
       model: input.profile.model ?? undefined,
       effort: input.profile.effort ?? undefined,
@@ -414,7 +436,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     if (host) await host.release();
     else access.cleanup();
     stopPersistence();
-    input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+    (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, input.registry.releaseStructuredHostClaim.bind(input.registry, key, claimed.claimOwner, claimed.claimEpoch)));
     identity?.restore();
     throw error;
   }
@@ -447,38 +469,52 @@ async function publishClaudeSuccessorHost(
   /* The successor runs in the cell a fresh launch of this conversation gets;
      work that cannot be contained is refused here, before anything starts. */
   const memoryCell = structuredHostCell(input.registry, "claude", input.receipt.operationId, input.conversationId as ViewerConversationId | undefined);
-  const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
-  const entry = input.registry.upsert({
-    ...(existing ?? {
+  const entry = await input.registry.deliveryWriteOrBusy({ label: "registry.upsert" }, () => {
+    const refused = successorRefusal(input, "claude", input.registry.readOnlySnapshot());
+    if (refused) throw new Error(refused.error);
+    const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    return input.registry.upsert({
+      ...(existing ?? {
+        key,
+        status: "unhosted" as const,
+        host: null,
+        claimEpoch: 0,
+        claimOwner: null,
+        pendingAction: null,
+      }),
       key,
-      status: "unhosted" as const,
-      host: null,
-      claimEpoch: 0,
-      claimOwner: null,
-      pendingAction: null,
-    }),
-    key,
-    artifactPath: input.receipt.path,
-    cwd: input.profile.cwd,
-    accountId: input.target.accountId,
-    launchProfile: input.profile,
-    structuredHostOperationId: input.receipt.operationId,
+      artifactPath: input.receipt.path,
+      cwd: input.profile.cwd,
+      accountId: input.target.accountId,
+      launchProfile: input.profile,
+      structuredHostOperationId: input.receipt.operationId,
+    });
   });
   if (!entry.structuredHost) {
-    input.registry.setStructuredHost(key, {
-      kind: "claude-broker",
-      endpoint: "stdio:pending",
-      process: null,
-      eventCursor: 0,
-      protocolVersion: null,
-      writerClaimEpoch: entry.claimEpoch,
-      activeTurnRef: null,
-      pendingAttention: [],
-      activeFlags: [],
-    }, "unhosted");
+    await input.registry.deliveryWriteOrBusy({ label: "registry.setStructuredHost" }, () => {
+      const refused = successorRefusal(input, "claude", input.registry.readOnlySnapshot());
+      if (refused) throw new Error(refused.error);
+      if (!input.registry.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredHost) {
+        input.registry.setStructuredHost(key, {
+          kind: "claude-broker",
+          endpoint: "stdio:pending",
+          process: null,
+          eventCursor: 0,
+          protocolVersion: null,
+          writerClaimEpoch: entry.claimEpoch,
+          activeTurnRef: null,
+          pendingAttention: [],
+          activeFlags: [],
+        }, "unhosted");
+      }
+    });
   }
   const owner = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
-  const claimed = input.registry.claimStructuredHost(key, owner, { allowUnhosted: true });
+  const claimed = await input.registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, () => {
+    const refused = successorRefusal(input, "claude", input.registry.readOnlySnapshot());
+    if (refused) throw new Error(refused.error);
+    return input.registry.claimStructuredHost(key, owner, { allowUnhosted: true });
+  });
   if (!claimed?.claimOwner) throw new Error("successor Claude structured host claim is unavailable");
 
   let host: ClaudeStreamBrokerHost | null = null;
@@ -496,7 +532,7 @@ async function publishClaudeSuccessorHost(
     // Retirement awaits external cleanup. The operation and its account grant
     // must still own this successor before any native process can start.
     if (input.ownsOperation && !await input.ownsOperation()) {
-      input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+      (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, input.registry.releaseStructuredHostClaim.bind(input.registry, key, claimed.claimOwner, claimed.claimEpoch)));
       return async () => {};
     }
     identity = successorCapability(input);
@@ -505,18 +541,22 @@ async function publishClaudeSuccessorHost(
       input.target.env,
       identity.capability,
     );
+    const launchPaths = claudeHostLaunchPaths(input.target);
+    const appendSystemPrompt = await learnedRulesForLaunchProfile(input.profile, { engine: "claude", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.target.claudeProvider) });
+    if (input.ownsOperation && !await input.ownsOperation()
+      || !input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) throw Error("successor ownership changed during memory preparation");
     host = await ClaudeStreamBrokerHost.adopt(input.receipt.nativeId, {
       cwd: input.profile.cwd,
       claudeProjectsDir: input.target.transcriptRoot,
       cleanMemory: input.profile.cleanMemory === true,
-      appendSystemPrompt: learnedRulesForLaunchProfile(input.profile),
+      appendSystemPrompt,
       /* The successor is a re-host like any other, so it carries the grant the
          row already holds, the same way boot adoption and a fresh spawn do
          (#1732). The durable profile's list is already bounded by
          `grantedMcpServers`, so replaying it can only narrow, never widen.
          `allowSubagents` is deliberately not replayed here: it has no such
          bound, and widening native sub-agents is not a re-host's decision. */
-      ...claudeHostLaunchPaths(input.target),
+      ...launchPaths,
       mcpServers: input.profile.mcpServers,
       /* The Telegram tool is optional, so with Telegram disconnected the
          successor starts without the tool for this run, as any launch does. */
@@ -563,7 +603,7 @@ async function publishClaudeSuccessorHost(
     if (host) await host.release();
     else access?.cleanup();
     stopPersistence();
-    input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+    (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, input.registry.releaseStructuredHostClaim.bind(input.registry, key, claimed.claimOwner, claimed.claimEpoch)));
     identity?.restore();
     throw error;
   }
@@ -1352,32 +1392,6 @@ export async function authorizeCodexForkRetry(
   });
 }
 
-/* The shared Claude transcript store (issue #891, phase 1) is the one
-   transcript root that legitimately lives outside every account home; a
-   cut-over account reports its canonical path directly. */
-function isSharedClaudeTranscriptRoot(transcriptRoot: string): boolean {
-  try { return fs.realpathSync(transcriptRoot) === fs.realpathSync(sharedClaudeProjectsRoot()); }
-  catch { return false; }
-}
-
-function ensureTargetRoot(account: AccountContext): void {
-  const home = fs.lstatSync(account.home);
-  if (!home.isDirectory() || home.isSymbolicLink() || (process.getuid && home.uid !== process.getuid()) || (home.mode & 0o022) !== 0) {
-    throw new MigrationTargetUnavailableError("unsafe-home", "target account home failed safety checks");
-  }
-  if (path.dirname(path.resolve(account.transcriptRoot)) !== path.resolve(account.home)
-    && !(account.engine === "claude" && isSharedClaudeTranscriptRoot(account.transcriptRoot))) {
-    throw new Error("target transcript root is outside its account home");
-  }
-  try { fs.mkdirSync(account.transcriptRoot, { mode: 0o700 }); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-  const root = fs.lstatSync(account.transcriptRoot);
-  if (!root.isDirectory() || root.isSymbolicLink() || (process.getuid && root.uid !== process.getuid()) || (root.mode & 0o022) !== 0) {
-    throw new Error("target transcript root failed safety checks");
-  }
-}
-
 function claudePaneFromHost(receipt: ProviderReceipt): { paneId: string; panePid: number } {
   if (receipt.host.kind !== "claude-stream") throw new Error("successor Claude host identity is invalid");
   const matched = /^(%[0-9]+):([1-9][0-9]*)$/.exec(receipt.host.identity);
@@ -1439,7 +1453,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
   async create(input: Parameters<SuccessorProviderPort["create"]>[0]): Promise<ProviderReceipt> {
     const target = this.dependencies.accounts.resolveSpawn(input.engine, input.targetAccountId);
     const source = assertRegisteredRoots(this.dependencies.accounts.resolveTranscriptOwner(input.engine, input.source.path), target, input.source.path);
-    ensureTargetRoot(target);
+    await validateMigrationTargetRoot(target, true);
     return input.engine === "codex"
       ? this.createCodex(input.operationId, input.conversationId, input.source.id, input.source.path, input.source.launchProfile, source, target, input.recordContinuityPath)
       : this.createClaude(input.operationId, input.conversationId, input.source.path, input.source.launchProfile, source, target, input.recordContinuityPath);
@@ -1447,7 +1461,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
 
   async verify(receipt: ProviderReceipt, input: { engine: "claude" | "codex"; targetAccountId: string; launchProfile: LaunchProfile }): Promise<void> {
     const target = this.dependencies.accounts.resolveSpawn(input.engine, input.targetAccountId);
-    ensureTargetRoot(target);
+    await validateMigrationTargetRoot(target, true);
     if (input.engine === "claude") {
       const status = await this.dependencies.claudeStatus(target.home);
       if (!status.loggedIn) throw new MigrationTargetUnavailableError("not-authenticated", "target Claude account is not authenticated");
@@ -1570,7 +1584,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     /* Whichever instance releases the host, the identity staged for this
        operation goes with it: an instance that found the host already held
        staged nothing itself, and its release closure knows nothing of it. */
-    (this.dependencies.registry ?? agentRegistry()).discardSpawnCapabilityForOperation(receipt.operationId);
+    (await (this.dependencies.registry ?? agentRegistry()).deliveryWriteOrBusy({ label: "registry.discardSpawnCapabilityForOperation" }, (this.dependencies.registry ?? agentRegistry()).discardSpawnCapabilityForOperation.bind((this.dependencies.registry ?? agentRegistry()), receipt.operationId)));
   }
 
   private async cleanupRecoveredHost(receipt: ProviderReceipt): Promise<void> {

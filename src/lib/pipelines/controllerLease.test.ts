@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { expect, test, spyOn } from "bun:test";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { buildPipeline, loadPipelines, savePipelines, withPipelineControllerMutation, withPipelineMutation } from "./store";
@@ -34,16 +35,16 @@ test("a writer can change a lane while controller evidence is pending", async ()
     entered();
     await evidence;
     candidate.stateDetail = "stale evidence result";
-    persist([candidate]);
+    await persist([candidate]);
   }).then(() => null, error => error);
   await reading;
   const previous = process.env.LLV_PIPELINE_LOCK_WAIT_MS;
   process.env.LLV_PIPELINE_LOCK_WAIT_MS = "100";
   let writerError: unknown;
   try {
-    await withPipelineMutation((rows, persist) => {
+    await withPipelineMutation(async (rows, persist) => {
       rows[0]!.stateDetail = "operator changed lane";
-      persist([rows[0]!]);
+      await persist([rows[0]!]);
     });
   } catch (error) { writerError = error; }
   finally {
@@ -61,16 +62,16 @@ test("an unrelated writer survives repeated controller checkpoints", async () =>
   savePipelines([fixtureLane("first"), fixtureLane("neighbor")]);
   await withPipelineControllerMutation(async (rows, persist) => {
     rows[0]!.stateDetail = "first checkpoint";
-    persist([rows[0]!]);
-    await withPipelineMutation((fresh, write) => {
+    await persist([rows[0]!]);
+    await withPipelineMutation(async (fresh, write) => {
       fresh[1]!.stateDetail = "neighbor changed";
-      write([fresh[1]!]);
+      await write([fresh[1]!]);
     });
     rows[0]!.stateDetail = "second checkpoint";
-    persist();
+    await persist();
     // A default checkpoint must not adopt the neighbor's unseen revision.
     rows[1]!.stateDetail = "stale neighbor";
-    expect(() => persist([rows[1]!])).toThrow("controller snapshot changed");
+    await expect(persist([rows[1]!])).rejects.toThrow("controller snapshot changed");
   });
   expect(loadPipelines().map(row => row.stateDetail)).toEqual(["second checkpoint", "neighbor changed"]);
 });
@@ -78,13 +79,13 @@ test("an unrelated writer survives repeated controller checkpoints", async () =>
 test("a conflicting batch writes none of its decided results", async () => {
   savePipelines([fixtureLane("first"), fixtureLane("neighbor")]);
   await withPipelineControllerMutation(async (rows, persist) => {
-    await withPipelineMutation((fresh, write) => {
+    await withPipelineMutation(async (fresh, write) => {
       fresh[1]!.stateDetail = "neighbor changed";
-      write([fresh[1]!]);
+      await write([fresh[1]!]);
     });
     rows[0]!.stateDetail = "uncommitted first";
     rows[1]!.stateDetail = "stale neighbor";
-    expect(() => persist(rows)).toThrow("controller snapshot changed");
+    await expect(persist(rows)).rejects.toThrow("controller snapshot changed");
   });
   expect(loadPipelines().map(row => row.stateDetail)).toEqual([null, "neighbor changed"]);
 });
@@ -94,7 +95,7 @@ test("controller checkpoints defer immediately behind an admitted writer", async
   await withPipelineControllerMutation(async (rows, persist) => {
     await withPipelineMutation(async () => {
       rows[0]!.stateDetail = "deferred checkpoint";
-      expect(() => persist([rows[0]!])).toThrow("controller snapshot changed");
+      await expect(persist([rows[0]!])).rejects.toThrow("controller snapshot changed");
     });
   });
   expect(loadPipelines()[0]!.stateDetail).toBeNull();
@@ -110,9 +111,9 @@ test("the controller hold observer measures a sub-warning-threshold checkpoint",
     return original.apply(this, args);
   };
   try {
-    await withPipelineControllerMutation((rows, persist) => {
+    await withPipelineControllerMutation(async (rows, persist) => {
       rows[0]!.stateDetail = "measured checkpoint";
-      persist([rows[0]!]);
+      await persist([rows[0]!]);
     }, heldMs => observed.push(heldMs));
   } finally {
     prototype.persistSession = original;
@@ -137,4 +138,68 @@ test("the active loop monitor logger retains operation scopes across a visible g
   expect(diagnostic).toBeDefined();
   expect(JSON.parse(diagnostic!.slice("[viewer loop-gap] ".length)).operations)
     .toContainEqual(expect.objectContaining({ name: "pipelines.controller-mutation" }));
+});
+
+
+test("a competing SQLite writer after controller lease acquisition yields before the checkpoint", async () => {
+  savePipelines([fixtureLane("first")]);
+  const prototype = SqliteStateCollection.prototype as unknown as {
+    acquireLease(this: { filename: string }, wait?: number): Promise<string>;
+  };
+  const original = prototype.acquireLease;
+  let holder: Database | undefined;
+  let release: ReturnType<typeof setTimeout> | undefined;
+  let last = performance.now(), maxGap = 0, acknowledgments = 0;
+  const probe = setInterval(() => { const now = performance.now(); maxGap = Math.max(maxGap, now - last); last = now; }, 5);
+  prototype.acquireLease = async function(this: { filename: string }, wait?: number) {
+    const token = await original.call(this, wait);
+    holder = new Database(this.filename);
+    holder.exec("BEGIN IMMEDIATE");
+    release = setTimeout(() => { holder!.exec("ROLLBACK"); }, 100);
+    return token;
+  };
+  try {
+    await withPipelineControllerMutation(async (rows, persist) => {
+      rows[0]!.stateDetail = "checkpoint after contention";
+      await persist([rows[0]!]);
+      acknowledgments++;
+    });
+    await Bun.sleep(10);
+    expect(maxGap).toBeLessThanOrEqual(50);
+    expect(acknowledgments).toBe(1);
+    expect(loadPipelines()[0]!.stateDetail).toBe("checkpoint after contention");
+  } finally {
+    prototype.acquireLease = original;
+    clearInterval(probe); clearTimeout(release); holder?.close();
+  }
+});
+
+
+test("preparation tolerates an unrelated row write while each selected row retains its fence", async () => {
+  savePipelines([fixtureLane("selected"),fixtureLane("peer")]);
+  const { withControllerPipelineScope } = await import("./controllerScope");
+  const prototype = SqliteStateCollection.prototype as unknown as { prepareControllerSnapshot: (...args: unknown[]) => Promise<unknown> };
+  const original = prototype.prepareControllerSnapshot;
+  let changed = false;
+  const prepare = spyOn(prototype,"prepareControllerSnapshot").mockImplementation(async function(this: unknown, ...args) {
+    const result = await original.apply(this,args);
+    if (!changed) {
+      changed = true;
+      const db = new Database(`${process.env.LLV_STATE_DIR}/state.sqlite`);
+      try {
+        db.query("UPDATE state_rows SET value_json=json_set(value_json,'$.stateDetail','fresh peer'),row_revision=row_revision+1 WHERE collection='pipelines' AND row_key='peer'").run();
+        db.query("UPDATE state_collections SET revision=revision+1 WHERE collection='pipelines'").run();
+      } finally { db.close(); }
+    }
+    return result;
+  });
+  try {
+    await withControllerPipelineScope(["selected"], () => withPipelineControllerMutation(async (rows,persist,assertCurrent) => {
+      expect(rows.map(row => row.id)).toEqual(["selected"]);
+      assertCurrent(rows[0]!);
+      rows[0]!.stateDetail = "selected result";
+      await persist(rows);
+    }));
+  } finally { prepare.mockRestore(); }
+  expect(loadPipelines().map(row => row.stateDetail)).toEqual(["selected result","fresh peer"]);
 });

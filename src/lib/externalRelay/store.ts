@@ -95,7 +95,7 @@ export type RunRecord = {
   /** Present only on a full owner run, bound by the Viewer to its spawn receipt. */
   conversationId?: string;
   /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
-  ownerTurn?: { clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean };
+  ownerTurn?: { continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean };
   requestId: string;
   leaseId: string;
   relayId: string;
@@ -150,6 +150,14 @@ export function readRelayStore(): RelayStore {
   return store.pending.some((item) => expired(item, Date.now()))
     ? updateRelayStore((current) => current)
     : store;
+}
+/** Authority reads never create settings or prune pending pairings. */
+export function pairedTelegramOwner(userId: string): boolean {
+  try {
+    const store = JSON.parse(fs.readFileSync(externalRelayFile("relays"), "utf8")) as RelayStore;
+    return store.v === 1 && Array.isArray(store.relays) && store.relays.some(relay =>
+      relay?.paused === false && relay.owner?.namespace === "telegram" && relay.owner.id === userId);
+  } catch { return false; }
 }
 function readStoredRelays(): RelayStore {
   const file = externalRelayFile("relays");
@@ -227,6 +235,7 @@ export function withFileLock<T>(file: string, action: () => T): T {
         }
       }
       if (Date.now() >= deadline) throw new Error("relay store is busy");
+      // eslint-disable-next-line no-restricted-syntax -- Legacy relay-store write lock during serving relay mutations.
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
   }
@@ -247,7 +256,7 @@ export function withFileLock<T>(file: string, action: () => T): T {
 export class RelayStoreBusy extends Error {
   constructor() { super("relay store is busy"); this.name = "RelayStoreBusy"; }
 }
-export async function withFileLockAsync<T>(file: string, action: () => T, until: number): Promise<T> {
+export async function withFileLockAsync<T>(file: string, action: () => T | Promise<T>, until: number): Promise<T> {
   const lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   let fd: number | null = null;
@@ -289,7 +298,7 @@ export async function withFileLockAsync<T>(file: string, action: () => T, until:
         identity: procBackend.processIdentity(process.pid),
       }),
     );
-    return action();
+    return await action();
   } finally {
     fs.closeSync(fd);
     fs.rmSync(lock, { force: true });

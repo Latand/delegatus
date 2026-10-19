@@ -36,7 +36,11 @@ afterEach(() => {
   if (priorState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = priorState;
 });
-afterAll(() => fs.rmSync(artifactState, { recursive: true, force: true }));
+afterAll(async () => {
+  const { shutdownTaskPageWorker } = await import("@/lib/links/taskPageWorker");
+  await shutdownTaskPageWorker();
+  fs.rmSync(artifactState, { recursive: true, force: true });
+});
 
 function handoffFixture(prompt = "Build {{task}} from {{prev.output}}", spec = "AC: preserve the handoff") {
   const stage: PipelineStage = { id: "build", kind: "run", prompt, next: null,
@@ -71,16 +75,17 @@ test("a large multibyte specification is file-backed after the previous output",
 });
 
 test.each([
-  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "Small output\nsecond line", hash: "8d4532713f1953ef6f2d1d4c2c3302ab843717d61e7e9106027e2becec41a527" },
-  { prompt: "Build the task", scaffold: "Follow the task.", previous: "Small output\nsecond line", hash: "f13c8b8eabaae094e00549f3f3c88aef45bcb8a0b7c069421b35f10d1dd8b135" },
-  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "", hash: "5a9269fb8d231a0967c4a2e2451b0cce1d18e97770b050e3807d04ae98c9e39b" },
+  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "Small output\nsecond line", hash: "b99261e63378f3d373e76232582f92de1fd3aa68c515ba7dcc93442d7d822c12" },
+  { prompt: "Build the task", scaffold: "Follow the task.", previous: "Small output\nsecond line", hash: "e9accc5d9b0c634b236fcc93159fab0a0d21489e6643414cc698136aa7b6d5cf" },
+  { prompt: "Build {{task}} from {{prev.output}}", scaffold: "Follow {{task}} and {{prev.output}}.", previous: "", hash: "9ba9dab1f0881e1323294d89054d3ef94a5bb1b04eb602bd950ba2a7a9be145f" },
 ])("small stage inputs preserve the original renderer's bytes ($hash)", async ({ prompt, scaffold, previous, hash }) => {
   const { pipeline, stage } = handoffFixture(prompt);
   stage.effectiveRole.promptScaffold = scaffold;
   const rendered = await composeStageInput(pipeline, stage, stage.effectiveRole, previous);
   expect(rendered).toContain(`Pipeline branch: ${pipeline.branch}.`);
   expect(rendered).toContain(`Commit your changes on ${pipeline.branch}`);
-  // Retain the historical framing snapshots, normalizing only the
+  // Retain the framing snapshots (re-pinned when the stage wrapper took the
+  // working rules' mechanics and its role-keyed paragraphs), normalizing only the
   // installed-path guidance covered by the assembly regression tests.
   const originalGuidance = "Run test files by explicit path with bash scripts/gate-slot.sh bun test <file>, using isolated HOME, XDG, TMPDIR and LLV_STATE_DIR. The owned runner ends detached descendants on deadline or cancellation; never bypass it for lifecycle tests.";
   expect(rendered).toContain(resolveStageTestGuidance());
@@ -301,3 +306,24 @@ test.each([false, true])("settlement excludes controller artifacts despite repos
   expect(prompt).toContain("Full previous output file:");
   expect(prompt).toContain("Full specification file:");
 });
+
+test("launch filtering executes stored privacy patterns away from the calling thread", async () => {
+  const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
+  const lesson = "Preserve fixtureword evidence before publishing the final verification";
+  roleMemoryCollection(true)!.boundedPatch(1, tx => tx.put({
+    kind: "rule", id: "r_stage_privacy", scope: "machine", rule: lesson, why: "", state: "active", hints: [],
+    source: { project: "fixture", pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" },
+    createdAt: "2026-10-14T00:00:00Z", changedAt: "2026-10-14T00:00:00Z",
+  }));
+  const { pipeline, stage } = handoffFixture(`Build {{task}}. ${lesson}`);
+  const original = RegExp.prototype.exec;
+  RegExp.prototype.exec = function (text: string) {
+    if (this.source.includes("fixtureword")) throw new Error("launch privacy ran on the caller thread");
+    return original.call(this, text);
+  };
+  try {
+    const prompt = await composeStageInput(pipeline, stage, stage.effectiveRole, "");
+    expect(prompt).toContain("[learned rule]");
+    expect(prompt).not.toContain(lesson);
+  } finally { RegExp.prototype.exec = original; }
+}, 30_000);

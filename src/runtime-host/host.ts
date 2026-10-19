@@ -241,7 +241,11 @@ export class RuntimeHost {
         if (typeof afterEventSeq !== "number" || !Number.isSafeInteger(afterEventSeq) || afterEventSeq < 0) {
           throw new Error("runtime effect cursor is invalid");
         }
-        result = this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq);
+        if (request.params?.conditional === true) {
+          const version = this.journal.effectPageVersion();
+          result = request.params.knownVersion === version ? { version, unchanged: true }
+            : { version, effects: this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq) };
+        } else result = this.journal.effectBatch(100, kinds as string[] | undefined, afterEventSeq);
       } else if (request.method === "producer-cursor") {
         const producerKind = request.params?.producerKind;
         const eventKeyPrefix = request.params?.eventKeyPrefix;
@@ -256,7 +260,7 @@ export class RuntimeHost {
       } else if (request.method === "native-queue-transition") {
         if (!this.structuredHosts) throw new Error("structured hosts are disabled");
         const transition = request.params?.transition as NativeQueueTransition | undefined;
-        if (!transition || !["prepared", "acknowledged", "observed-queued", "withdrawn", "removed", "refused", "uncertain", "proven"].includes(transition.phase)) throw new Error("native queue transition is invalid");
+        if (!transition || !["prepared", "seat-withdrawal", "acknowledged", "observed-queued", "withdrawn", "removed", "refused", "uncertain", "proven"].includes(transition.phase)) throw new Error("native queue transition is invalid");
         result = this.journal.nativeQueueTransition(String(request.params?.operationId ?? ""), transition);
       } else if (request.method === "native-queue-settle-compacted") {
         if (!this.structuredHosts) throw new Error("structured hosts are disabled");

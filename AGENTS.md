@@ -113,10 +113,15 @@ skips types; scoped Linux tests are compared against the merge base like touched
 tests. A pipeline's publication runs this hook without the Viewer's own
 settings (`pipelinePublicationHookEnv`): on 2026-10-04 the Viewer's `LLV_LANG`
 reached a CLI test through the hook and parked five lanes that had changed
-nothing. A refused publication of an unchanged head retries after 1, 5 and 15
-minutes, then parks with the cause on its first line. A push that was
-interrupted before it reached the remote (a signal, its time limit, a stopped
-Viewer) is counted the same way, whatever the stage changed. A refusal of a
+nothing. A publication stopped only by an execution deadline retries after 1,
+5 and 15 minutes, then parks after those three retries with the cause on its
+first line. CPU admission waits do not spend the check budget, including the
+handoff into the admitted hook process. A named failing assertion, another
+failed check or failed cleanup keeps the refusal decisive. A refused
+publication of an unchanged head retries
+after 1, 5 and 15 minutes, then parks with the cause on its first line. A push
+interrupted by a signal or a stopped Viewer before it reached the remote is
+counted the same way, whatever the stage changed. A refusal of a
 head that changes files, or of commits privacy refused, gets one repair turn
 from the producer that wrote them; its park keeps the cause on the first line.
 `LLV_SKIP_HOOKS=1` is the escape hatch for a false positive. Pre-push warns if
@@ -139,6 +144,11 @@ Run the specific test files you touched, by path. If a change genuinely needs a
 broad sweep, point the run at an isolated state directory first and say so; do
 not sweep the live one. The same applies to any command that enumerates and acts
 on runtime processes — `pgrep -f <pattern>` matches your own command line too.
+
+The shipped role prompts tell a stage agent to isolate "any state-directory
+variable the project's instruction files name". Here that is `LLV_STATE_DIR`:
+besides HOME, XDG_CONFIG_HOME and TMPDIR, isolate `LLV_STATE_DIR` for every
+test run.
 
 ## This repository is public — publication surfaces carry no identities
 
@@ -220,11 +230,12 @@ PRs build only when image install, build or runtime inputs change.
 (`src/runtime-host/candidatePerformanceRun.ts`, bounds and reasons in
 `docs/design/candidate-performance-gate.md`) in another throwaway container,
 from the `candidate-gate` image (the candidate plus Chromium, never served):
-a synthetic registry of about 30,000 rows of retained history, two Viewer
+a synthetic registry of 53,299 rows of retained history, two Viewer
 releases as their own processes, live workers handed from one to the other
 through the real demotion and startup adoption, two concurrent writers, eight
 board scopes, and then eight Chromium views of the candidate's own production
-build while two writers run. A breached bound, a missing measurement, a
+build while two writers run. Duration thresholds are diagnostic warnings.
+A missing measurement, a
 missing report or a successor that fails refuses the candidate and the serving
 release keeps serving. Run it locally with `bun scripts/verify-viewer-runtime.ts
 --performance` after `bun run build`, with `CHROME_BIN` set; an empty registry
@@ -251,6 +262,9 @@ Three consequences worth keeping:
   the generations it starts.
 <!-- END:runtime-host-verification -->
 
+The runtime host is this repository's critical runtime: changes to it, to
+deploys and to the Bun pin are high risk and take three review rounds.
+
 # Host deploy command and team authentication
 
 `scripts/rebuild.sh [full-commit-sha]` uses `scripts/rebuild-http.ts` for both
@@ -260,6 +274,15 @@ creates no key, sends no member cookie or agent identity, validates and pins a
 resolved loopback address, and refuses redirects. Keep secrets inside that
 process and out of arguments and output. Tests run the real command against an
 isolated port-0 server; never use a live installation for a regression test.
+
+A Deployer working on a Delegatus checkout install reads `docs/deploy-checkout.md`
+and runs the committed `scripts/deploy-checkout.py` procedure with its private
+plan: preflight first, then its detached start after approval; it writes no
+replacement switch script. After the restart it reads
+`deploy-verdicts/latest-<install-id>.json` and the named run's `verdict.json`.
+A restart submission error or an exited old PID is an observation to reconcile;
+the final serving identities and protected work are judged from the
+procedure's verdict.
 
 # Rendered evidence: call the driver that exists, do not write a new one
 
@@ -280,6 +303,15 @@ an issue adds a case to it:
 The committed `evidence/**/*.json` files are the record and stay, including the
 ones whose driver is gone. Do not name a new file after your issue number; a
 driver whose only caller is the issue that wrote it is dead the day it merges.
+
+A visual critic frames product screens through the kanban board driver
+(`src/components/kanban/kanbanBoard.browser.test.tsx`), the conversation-window
+driver (`src/components/conversation/conversationWindow.browser.test.tsx`), the
+phone driver (`src/components/mobile/issue1671Evidence.browser.test.tsx`) and the
+board geometry capture (`scripts/capture-board-geometry.ts`). Run them in
+isolated state: a private HOME, TMPDIR and state directory, the Viewer control
+URL on a closed port, a short Chrome TMPDIR. This product ships in en and uk,
+light and dark.
 
 # Only a declared owner resolves the operator's state directory
 

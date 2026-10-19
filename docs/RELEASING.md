@@ -12,7 +12,7 @@ That command is the entire release, run from any checkout of the repository — 
 
 With both the argument and `LLV_DEPLOY_REVISION` absent, `scripts/rebuild.sh` reads the canonical `refs/heads/main` tip itself with `git ls-remote` against the canonical remote — which fetches no objects and moves no ref in the checkout — and posts that exact commit, so no SHA is ever retyped between a note and a deploy: a mangled tail deployed a revision that never existed for six hours (#1032, #1033). It prints the resolved SHA before requesting admission.
 
-`scripts/rebuild.sh` always names its target as `revision`, and `POST /api/runtime/deployments` accepts a `revision` only as a full 40-character commit SHA. The script accepts that SHA in either case and posts it lowercase; the default resolves the tip to one before sending. Nothing that reads as a started deployment — `deployment key: …`, `deployment admitted: …` — is printed until the endpoint has returned a valid receipt; a refused request prints its error on stderr and exits non-zero (#1309).
+`scripts/rebuild.sh` always names its target as `revision`, and `POST /api/runtime/deployments` accepts a full 40-character commit SHA. A checkout install also accepts a unique prefix of at least seven hex characters on its tracked branch; an ambiguous or missing prefix is refused. Managed installs require the full SHA or a `ref`. The script accepts that SHA in either case and posts it lowercase; the default resolves the tip to one before sending. Nothing that reads as a started deployment — `deployment key: …`, `deployment admitted: …` — is printed until the endpoint has returned a valid receipt; a refused request prints its error on stderr and exits non-zero (#1309).
 
 A pinned redeploy or rollback still names its commit: `scripts/rebuild.sh <full commit SHA>`, or `LLV_DEPLOY_REVISION`. A revision the canonical repository does not carry is refused at admission with `revision <sha> not found in the canonical repository (fetched from <remote>)`.
 
@@ -196,7 +196,13 @@ chooses «Випустити й більше не питати» or turns the ch
    annotated `vX.Y.Z` tag on the reviewed release head, message `Delegatus X.Y.Z`.
    The release PR merges into main after the pipeline finishes; the tag carries
    the soaked product source plus release metadata.
-6. The tag starts `publish.yml` (OIDC npm publication) and `docker-image.yml`.
+6. Every `v*` tag starts `publish.yml` and `docker-image.yml`. After immutable
+   tag verification, `publish.yml` publishes to npm through OIDC and creates
+   a GitHub Release in parallel jobs. The GitHub Release is titled
+   `Delegatus X.Y.Z` and uses that version's `CHANGELOG.md` section, including
+   its reference links, as its notes. Only that job receives `contents: write`,
+   using the repository's `GITHUB_TOKEN`; no additional secret is needed.
+   Each publication job reports its own result and runs even if the other fails.
    `macos-newcomer.yml` follows successful npm publication through
    [GitHub's workflow_run trigger](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run).
    It installs the exact version from the publisher's immutable receipt,
@@ -208,9 +214,12 @@ chooses «Випустити й більше не питати» or turns the ch
 
 Never retag, delete the tag or publish a version again. A failed publish can be
 recovered by dispatching `publish.yml` with the existing immutable tag; it skips
-an npm version that already exists. Otherwise release a patch. Automatic
-releases stay off until enabled, and missing capture tools hold the lane before
-it starts. The screenshot driver remains the existing one.
+an npm version that already exists and also runs the GitHub Release job.
+An existing GitHub Release is skipped, so rerunning the tag creates no duplicate.
+A missing or empty changelog section fails only the GitHub Release job. Dispatch
+from a revision containing this workflow to recover an older tag. Otherwise
+release a patch. Automatic releases stay off until enabled, and missing capture
+tools hold the lane before it starts. The screenshot driver remains the existing one.
 
 High-severity dependency exceptions require a reason and expiry in
 [`security/audit-allowlist.json`](../security/audit-allowlist.json); expired

@@ -5,6 +5,8 @@ import { createPortal } from "react-dom";
 
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Loader2, X, Zap } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useOverlayEscape } from "@/hooks/useOverlayEscape";
+import { Z } from "@/components/layers";
 import { type AccountLimits, useAccountName, useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { usePipelineRecord } from "@/hooks/useFiles";
 import { accountIdFromPath } from "@/lib/accounts/badge";
@@ -1117,6 +1119,8 @@ export function RuntimePopover({
   }, [panel]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  useOverlayEscape(onClose);
+
   useEffect(() => {
     const away = (event: PointerEvent) => {
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) onClose();
@@ -1173,7 +1177,7 @@ export function RuntimePopover({
       onKeyDown={onKeyDown}
       onPointerDown={(event) => event.stopPropagation()}
       style={{ bottom: at.bottom, left: at.left }}
-      className="fixed z-40 w-[240px] rounded-surface border border-border bg-raised p-1.5 shadow-2 motion-reduce:transition-none"
+      className={`fixed ${Z.popover} w-[240px] rounded-surface border border-border bg-raised p-1.5 shadow-2 motion-reduce:transition-none`}
     >
       {panel === "root" ? (
         <>
@@ -1457,14 +1461,13 @@ export function RuntimeSheet({
   const sheetRef = useRef<HTMLDivElement>(null);
   const immediate = Boolean(accountChoice?.immediate);
 
+  useOverlayEscape(onClose);
+
   useEffect(() => {
     sheetRef.current?.focus();
-    const key = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", key);
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
-      window.removeEventListener("keydown", key);
       document.body.style.overflow = previousOverflow;
     };
   }, [onClose]);
@@ -1478,7 +1481,7 @@ export function RuntimeSheet({
      (#1629) — into the document the pill is actually in. */
   return createPortal(
     <div
-      className="fixed inset-0 z-[70] flex items-end justify-center bg-black/40"
+      className={`fixed inset-0 ${Z.popover} flex items-end justify-center bg-black/40`}
       role="presentation"
       onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >

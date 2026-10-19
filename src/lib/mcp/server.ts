@@ -1,3 +1,9 @@
+import { blockingWaitRole } from "@/lib/blockingWaits";
+import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
+import { normalizeShortIdArgs } from "./shortIdArgs";
+import { relayAnswerSchema } from "@/lib/externalRelay/protocol";
+import { relayServiceToolsSchema } from "@/lib/externalRelay/ownerServiceTools";
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { runWithNativeCallProof } from "@/lib/attention/nativeCallProof";
 import { nativeAdmissionMessage, type NativeCallerRefusal } from "@/lib/attention/nativeCaller";
 import crypto from "node:crypto";
@@ -8,12 +14,15 @@ import type { Database as BunDatabase } from "bun:sqlite";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { z } from "zod";
 import { prototypePublishSchema } from "@/lib/prototypeReview/input";
 
 import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
+import { stateDatabaseBusy, stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
 import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/limits";
 import { operatorLocale } from "@/lib/operator/settings";
@@ -44,15 +53,13 @@ import { TASK_STEPS_LIMIT } from "@/lib/tasks/steps";
 import { TASK_COLORS, TASK_PRIORITIES } from "@/lib/tasks/types";
 import { BOT_MESSAGES_LIMIT, BOT_MESSAGES_MAX_CHARS, TELEGRAM_BOT_LIMITS } from "@/lib/telegram/bot/contracts";
 import {
-  MAX_REPLY_LABEL_CHARS, MAX_REPLY_SUGGESTIONS, MAX_REPLY_TEXT_BYTES, MIN_REPLY_SUGGESTIONS,
-} from "@/lib/suggestions/types";
-import {
   MAX_SCOPE_PATHS, MAX_SNAPSHOT_CHARS_PER_CONVERSATION, MAX_SNAPSHOT_LAST_MESSAGES, MAX_SNAPSHOT_STRING_LENGTH,
   MIN_SNAPSHOT_STRING_LENGTH, VIEW_RESOLUTIONS, VIEW_SCOPE_KINDS,
 } from "@/lib/view/types";
 
-import { runAsMcpHttpCaller, type McpHttpCaller } from "./callerContext";
+import { runWithMcpCallerResolution, runAsMcpHttpCaller, type McpHttpCaller } from "./callerContext";
 import type { McpToolPolicy } from "./toolAllowlist";
+import { MCP_TOOL_CATALOG_CAPABILITY } from "./toolCatalog";
 
 export const MCP_SERVER_NAME = "viewer";
 
@@ -93,7 +100,6 @@ export const MCP_TOOL_NAMES = [
   "agent_activity",
   "lifecycle_events",
   "request_attention",
-  "suggest_replies",
   "publish_prototype_review",
   "resend_prototype_review_telegram",
   "read_prototype_review",
@@ -116,6 +122,8 @@ export const MCP_TOOL_NAMES = [
   "telegram_bot_send_document",
   "telegram_bot_messages",
   "relay_owner_history",
+  "relay_answer",
+  "relay_service_tools",
   "issue_report",
 ] as const;
 
@@ -154,11 +162,6 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      is classified the same way rather than looking read-only by name. */
   "agent_activity",
   "request_attention",
-  /* Writes the conversation's current reply-draft set, which the operator's
-     composer reads. The record outlives this process, so a replayed
-     clientRequestId must answer from the receipt rather than re-offer drafts
-     under a question the operator has since answered. */
-  "suggest_replies",
   "publish_prototype_review",
   "resend_prototype_review_telegram",
   /* Clears a needs-you flag the operator is shown, durably and attributed. A
@@ -209,12 +212,14 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   "issue_report",
 ]);
 
-/** Private reads must never persist their answer, even with an explicit key. */
-export const RECEIPT_FREE_READ_TOOLS = new Set<McpToolName>(["relay_owner_history"]);
+/** Private request data is never receipted. Service actions use the relay call id for idempotency. */
+export const RECEIPT_FREE_READ_TOOLS = new Set<McpToolName>(["relay_owner_history", "relay_answer", "relay_service_tools"]);
 
 /** Explicit allowlist: read-like tools with durable effects still need keys. */
 export const OPTIONAL_READ_KEY_TOOLS = new Set<McpToolName>([
   "relay_owner_history",
+  "relay_answer",
+  "relay_service_tools",
   "read_prototype_review",
   "message_receipt", "list_conversations", "search_transcripts", "get_conversation",
   "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot",
@@ -262,13 +267,6 @@ const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolN
      payload under the same key is refused by the digest check above. */
   "publish_prototype_review",
   "resend_prototype_review_telegram",
-  /* Deliberately NOT here: `suggest_replies`. Its write is idempotent over the
-     record, but the record is retired by something outside the call — the
-     operator's own answer — so re-running an interrupted write would put the
-     drafts back under a question they have already answered. A disposable
-     draft is exactly the thing not worth resurrecting: the interrupted call
-     answers `call_interrupted`, and the seat offers a fresh set if it still
-     wants one. */
 ]);
 
 function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs): boolean {
@@ -384,6 +382,8 @@ export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) 
       caller's clientRequestId never answers another's. A refusal burns nothing.
       Must not mutate state. */
   receiptScope?: (args: McpToolArgs, context?: McpToolCallContext) => Promise<string>;
+  /** Resolve guarded references to their retained full identity before hashing a receipt. */
+  canonicalizeReceiptArgs?: (args: McpToolArgs) => McpToolArgs;
 };
 export type McpToolBindings = Record<McpToolName, McpToolBinding>;
 
@@ -584,6 +584,10 @@ export class McpUnadmittedRefusal extends McpToolRefusal {
     this.name = "McpUnadmittedRefusal";
   }
 }
+
+/** Publication owns an idempotent Viewer operation that may outlive this wait.
+    Keep its receipt open so the original key can recover the round. */
+export class McpPrototypePublicationPendingError extends Error {}
 
 export type McpToolResult = McpToolSuccess | McpToolFailure;
 
@@ -828,7 +832,7 @@ function withCreatedTarget(receipt: Receipt | undefined, binding: McpRequestBind
   const held = receipt?.binding;
   if (!receipt || receipt.stage !== "dispatching" || receipt.result || receipt.recoveryResult
     || !held || held.toolName !== "send_message_to_orchestrator"
-    || held.target.identity !== null || !/^conversation_[A-Za-z0-9_-]{1,128}$/.test(identity)
+    || !/^conversation_[A-Za-z0-9_-]{1,128}$/.test(identity)
     || JSON.stringify(held) !== JSON.stringify(binding)) return null;
   return { ...receipt, binding: { ...held, target: { ...held.target, identity } } };
 }
@@ -1734,6 +1738,8 @@ type StoredSqliteReceipt = {
 };
 
 export interface SqliteMcpReceiptStoreOptions {
+  /** Async callers use zero-timeout attempts and yield between retries. */
+  busyTimeoutMs?: number;
   legacyFilePath?: string;
   readReceiptCountCap?: number;
   readReceiptByteCap?: number;
@@ -1765,25 +1771,47 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
        handle. The journal mode cannot change inside a transaction, so these
        pragmas run before the schema transaction. */
     this.db = openCurrentDatabase(filename, () => {
-      const db = new sqlite.Database(filename, { create: true, strict: true });
-      db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA auto_vacuum = INCREMENTAL;");
-      return db;
+      const db = observeSqlite(new sqlite.Database(filename, { create: true, strict: true }), "mcp-receipts");
+      try {
+        db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(options.busyTimeoutMs ?? 5000))}`);
+        const walEnabled = () => db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal";
+        if (!walEnabled()) {
+          try { db.exec("PRAGMA journal_mode = WAL"); }
+          catch (error) {
+            // A concurrent opener can finish the mode switch while this
+            // connection's read-to-write upgrade is refused immediately.
+            if (!stateDatabaseBusy(error) || !walEnabled()) throw error;
+          }
+        }
+        db.exec("PRAGMA synchronous = FULL");
+        db.exec("PRAGMA journal_size_limit = 67108864");
+        db.exec("PRAGMA auto_vacuum = INCREMENTAL");
+        return db;
+      } catch (error) {
+        db.close();
+        throw error;
+      }
     }, { reopened: () => this.initializeSchema() });
     this.readReceiptCountCap = Math.max(1, Math.floor(options.readReceiptCountCap ?? FILE_RECEIPT_CAP));
     this.readReceiptByteCap = Math.max(1, Math.floor(options.readReceiptByteCap ?? SQLITE_READ_RECEIPT_BYTE_CAP));
     this.boundedPendingTtlMs = Math.max(1, Math.floor(options.boundedPendingTtlMs ?? SQLITE_BOUNDED_PENDING_TTL_MS));
     this.now = options.now ?? Date.now;
-    this.initializeSchema();
-    this.importLegacyFile(options.legacyFilePath);
-    this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.pruneBoundedReceipts(this.now());
-      this.db.exec("COMMIT");
+      this.initializeSchema();
+      this.importLegacyFile(options.legacyFilePath);
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        this.pruneBoundedReceipts(this.now());
+        this.db.exec("COMMIT");
+      } catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+        throw error;
+      }
+      this.secureFiles();
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      this.db.close();
       throw error;
     }
-    this.secureFiles();
   }
 
   claim(key: string, digest: string, retention: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim {
@@ -1963,7 +1991,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
     if (receipt.binding_json !== null) {
       let parsed: unknown;
       try {
-        parsed = JSON.parse(receipt.binding_json);
+        parsed = parseSqliteJson(receipt.binding_json, this.db);
       } catch (error) {
         throw new Error("invalid MCP receipt database binding JSON", { cause: error });
       }
@@ -1989,7 +2017,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
    * Creates the tables and adds every column a database from an earlier
    * schema lacks, in ONE write transaction. Several MCP processes start cold
    * against the same database at once; the write lock makes one of them
-   * inspect and migrate while the others wait on `busy_timeout` and then find
+   * inspect and migrate while the others retry admission and then find
    * the columns already there. Two processes that both inspected first would
    * both ALTER, and the second would throw "duplicate column name".
    */
@@ -2125,7 +2153,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
   private parseResult(key: string, serialized: string): McpToolResult {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(serialized);
+      parsed = parseSqliteJson(serialized, this.db);
     } catch (error) {
       throw new Error("invalid MCP receipt database result JSON", { cause: error });
     }
@@ -2157,6 +2185,30 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       }
     }
   }
+}
+
+/** Retry only receipt transactions, never the tool binding they protect. Each
+ * failed attempt has rolled back before yielding, including schema startup. */
+export async function openAsyncMcpReceiptStore(
+  filename: string,
+  options: Omit<SqliteMcpReceiptStoreOptions, "busyTimeoutMs"> = {},
+): Promise<McpRecoveryReceiptStore & { close(): void }> {
+  const attempt = <T>(phase: string, operation: () => T): Promise<T> =>
+    withViewerOperation("mcp.receipts", () => waitForStateLock(`mcp.receipts.${phase}`,
+      () => stateLockAttempt(`mcp.receipts.${phase}`, operation, "mcp-receipts"),
+      { waitMs: 5000, subject: "mcp-receipts" }));
+  const store = await attempt("initialize", () => new SqliteMcpReceiptStore(filename, { ...options, busyTimeoutMs: 0 }));
+  return {
+    claim: (...args) => attempt("claim", () => store.claim(...args)),
+    complete: (...args) => attempt("complete", () => store.complete(...args)),
+    release: (...args) => attempt("release", () => store.release(...args)),
+    lookup: (...args) => attempt("lookup", () => store.lookup(...args)),
+    markDispatching: (...args) => attempt("dispatch", () => store.markDispatching(...args)),
+    bindCreatedTarget: (...args) => attempt("bind", () => store.bindCreatedTarget(...args)),
+    fenceUndispatched: (...args) => attempt("fence", () => store.fenceUndispatched(...args)),
+    settle: (...args) => attempt("settle", () => store.settle(...args)),
+    close: () => store.close(),
+  };
 }
 
 function stable(value: unknown): unknown {
@@ -2545,7 +2597,7 @@ export function createMcpToolService(
   options: McpToolServiceOptions = {},
 ): McpToolService {
   const inFlight = new Map<string, { digest: string; result: Promise<McpToolResult> }>();
-  return {
+  const service: McpToolService = {
     callTool: async function callTool(toolName: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
       if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName)) {
         return failure(toolName, clientRequestId(args), "unknown_tool", `Unknown viewer tool: ${toolName}`, false);
@@ -2560,7 +2612,7 @@ export function createMcpToolService(
       }
       const typedTool = toolName as McpToolName;
       const normalized = normalizeBoundedMcpNumerics(typedTool, args);
-      const effectiveArgs = normalized.args;
+      let effectiveArgs = normalized.args;
       if (typedTool === "search_memory" && typeof effectiveArgs.clientRequestId === "string"
         && effectiveArgs.clientRequestId.trim().length > 256) {
         return failure(typedTool, null, "invalid_request", "clientRequestId must be at most 256 characters for search_memory", false);
@@ -2586,6 +2638,7 @@ export function createMcpToolService(
         : Math.max(0, context.deadlineAt - Date.now());
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
         result = withoutPrototypeTaskFields(result);
+        if (effectiveArgs.full !== true) result = shortIdsInAnswer(result);
         const serializationStartedAt = performance.now();
         let resultSizeBytes: number | undefined;
         try {
@@ -2603,6 +2656,14 @@ export function createMcpToolService(
         });
         return result;
       };
+      try { effectiveArgs = await measure("caller", () => normalizeShortIdArgs(effectiveArgs, context)); }
+      catch (error) {
+        const rawDetails = error !== null && typeof error === "object" && "details" in error ? error.details : undefined;
+        const details = isRecord(rawDetails) ? rawDetails : {};
+        return finish(failure(typedTool, clientRequestId(args), String(details.code ?? "tool_failed"),
+          error instanceof Error ? error.message : String(error), details.code === undefined, false, details),
+          context.signal?.aborted ? "cancelled" : "failure");
+      }
       const retention: ReceiptRetention = MUTATING_MCP_TOOL_NAMES.has(typedTool) ? "durable" : "bounded";
       const requestId = clientRequestId(effectiveArgs);
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
@@ -2669,6 +2730,9 @@ export function createMcpToolService(
         scope = await measure("caller", async () => await bindings[typedTool].receiptScope?.(effectiveArgs, context) ?? null);
       } catch (error) {
         // Nothing is claimed yet, so the same key may be tried again as it is.
+        if (error instanceof McpToolRefusal && error.details.code === "short_id_ambiguous") {
+          return finish(failure(typedTool, requestId, "short_id_ambiguous", error.message, false, false, error.details), "failure");
+        }
         return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), true), "failure");
       }
 
@@ -2679,7 +2743,8 @@ export function createMcpToolService(
       const digestArgs: McpToolArgs = recoverable
         ? Object.fromEntries(Object.entries(effectiveArgs).filter(([name]) => name !== "recoveryOnly"))
         : effectiveArgs;
-      const digest = requestDigest(typedTool, digestArgs);
+      const canonicalArgs = bindings[typedTool].canonicalizeReceiptArgs?.(digestArgs) ?? digestArgs;
+      const digest = requestDigest(typedTool, canonicalArgs);
       const key = receiptKey(typedTool, requestId, scope);
       /* A recoverable mutation never joins an in-process duplicate: who is
          calling is decided first, and every later call under the key — in
@@ -3188,7 +3253,11 @@ export function createMcpToolService(
           unfinishedAgeMs = claim.unfinishedAgeMs;
           return failure(toolName, requestId, "call_interrupted", "The previous MCP process ended before this call completed", true, true);
         }
-        if (claim.kind === "replay") {
+        // Earlier clients settled transport timeouts as retryable failures.
+        // The Viewer publication lock and payload digest make recovery safe.
+        const retryPrototypePublication = typedTool === "publish_prototype_review"
+          && claim.kind === "replay" && !claim.result.ok && claim.result.retryable;
+        if (claim.kind === "replay" && !retryPrototypePublication) {
           const replayStartedAt = performance.now();
           const replayed = { ...claim.result, replayed: true };
           phaseDurations.replay = performance.now() - replayStartedAt;
@@ -3216,6 +3285,11 @@ export function createMcpToolService(
             : context.signal?.aborted
               ? "cancelled"
               : "failure";
+          if (typedTool === "publish_prototype_review" && error instanceof McpPrototypePublicationPendingError) {
+            return failure(typedTool, requestId, "publication_in_progress",
+              `${error.message}; publication may still be running. Retry with the same clientRequestId to obtain its reviewId`,
+              true, false, { outcome: "unknown", nextAction: "retry-same-key" });
+          }
           const taskCode = (typedTool === "create_task" || typedTool === "update_task")
             && error instanceof McpToolRefusal && typeof error.details.code === "string"
             && (error.details.code.startsWith("TASK_") || error.details.code.startsWith("maintainer_")) ? error.details.code : null;
@@ -3304,15 +3378,17 @@ export function createMcpToolService(
       } finally {
         const totalMs = performance.now() - callStartedAt;
         if (totalMs >= 2_000) {
-          // Fixed vocabulary only: no keys, arguments, identities or error text.
+          // Process identity and fixed vocabulary only: no request keys,
+          // arguments, account identities or error text.
           // http is a subphase of binding; these wall times are not additive.
           phaseDurations.serviceTotal = totalMs;
-          console.error(`[mcp slow] tool=${typedTool} ${MCP_TIMING_PHASES
+          console.error(`[mcp slow] pid=${process.pid} role=${blockingWaitRole()} tool=${typedTool} ${MCP_TIMING_PHASES
             .map(phase => `${phase}Ms=${Math.round(phaseDurations[phase] ?? 0)}`).join(" ")}`);
         }
       }
     },
   };
+  return { callTool: (tool, args, context) => runWithMcpCallerResolution(() => service.callTool(tool, args, context)) };
 }
 
 /**
@@ -3374,7 +3450,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Create a Delegatus pipeline through the pipeline engine: a stage graph of agent conversations run in one worktree.",
     "`taskIds` binds the pipeline to existing board tasks in the same call (#1720): every stage launch reads that list and joins those tasks, and a pipeline created without it is given a placeholder task of its own.",
     "`finishesTask` marks this pipeline as the one that finishes its tasks (#2187): true for every linked task, or a list of ids from taskIds (others are dropped and named in `finishesTaskDropped`). With the project's merge setting on, a marked lane's task moves to Done when its PR merges; with it off, when the lane completes. Either way it waits for every other started pipeline on the task to end. Default off; set it only when this lane's PR delivers the whole task.",
-    "Stages are a graph, not a list: each stage names its pass successor with `next` (a stage id, or null to end the chain), and a run stage may name a fail successor with `onFail` ({to, maxRounds?, onExhausted?}). `maxRounds` defaults to 3; more requires an explicit value. What happens when the last review fails is `onExhausted`. advance (default): the fix stage (`to`) takes the last findings. A terminal gate (next:null) re-checks the fix once: pass completes, fail parks with the number of findings left. A nonterminal gate continues along its pass edge with unreviewed findings. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. A fail loop from another gate permits a fresh handoff; the round count remains cumulative. `next` defaults to null, so a plan whose stages never set it is a set of disconnected stages, not a chain.",
+    "Stages are a graph, not a list: each stage names its pass successor with `next` (a stage id, or null to end the chain), and a run stage may name a fail successor with `onFail` ({to, maxRounds?, onExhausted?}). `maxRounds` defaults to 3; more requires an explicit value. What happens when the last review fails is `onExhausted`. advance (default): the fix stage (`to`) takes the last findings. After that fix, the gate follows its pass edge or completes when next:null, with no further review. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. A fail loop from another gate permits a fresh handoff; the round count remains cumulative. `next` defaults to null, so a plan whose stages never set it is a set of disconnected stages, not a chain.",
     "A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage, and the fix stage's next is the reviewer, so every round gets a fresh reviewer on the new head. The fixer is builder mode=apply-fixes: it fixes every handed finding and every in-spec discovery immediately, adds focused checks, and leaves grading to reviewers. It never returns fail for its own discovery: it fixes it or lists an outside-spec observation under Notes. It returns fail only when blocked, setting blocked:true and blockedReason. A self-fail with a new committed head, without blocked:true, proceeds to review with the fixer's findings as notes for the reviewer; a fail with no new head still parks with its reason. `review-loop` is a legacy kind kept for stored lanes, and one must still be pass-reachable from a run stage through `next` edges: a new one is stored as a read-only reviewer and a fix stage with an advance fail edge, the answer's `convertedStages` names each pair as {reviewer, fixer}, and `legacyReview` lists any stage kept as sent with the refusals that kept it.",
     "Runtime overrides (engine, model, effort, access) belong on the stage; `role` carries only `roleId` and its `params`. access is the repository-mutation policy enforced at settlement. sandbox is the independent tool/network boundary, defaults to full, and never changes the repository policy.",
     "A read-only stage may name repository-relative outputs. It can write those paths, while the controller refuses undeclared worktree changes and agent-created commits and records only the declared outputs.",
@@ -3385,7 +3461,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "An invalid call is answered once with every violated constraint, each naming its field and expected shape.",
     "A refusal that happened before anything was admitted — the pipeline registry lock was never taken — does not consume the `clientRequestId` (#1766): it answers `retryable: true` with `outcome: not-executed` and `nextAction: retry-same-key`, and repeating the identical call under the SAME id runs the create instead of replaying the refusal. Every other refusal keeps its receipt, so a repeat replays it.",
   ].join(" "),
-  pipeline_action: "set-delivery-remote adopts a configured Git remote (remote, default origin) for an open owner lane with an empty delivery target. It never redirects an existing target; an in-flight publisher, another owner or a live legacy review flow refuses adoption. A passed-stage publication park resumes for publication on the next tick. Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. revision fingerprints the returned record; guarded graph edits still use stageDigests/graphDigest. Apply a supported action to an existing pipeline. Every accepted action answers pipelineId, state, cursor, closedAt and revision; graph edits or full:true include stageDigests and graphDigest. A close includes `close`; a graph edit includes `graphEdit`. get_pipeline reads the full record with full:true. Close persists immediately; close.status=pending and close.pending list the outstanding teardown, and get_pipeline returns closeReport with final per-host outcomes. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so edits apply from the next attempt. override-stage with applyNow:true stops the current turn and continues the same attempt, worktree, branch and receipts on the edited runtime. Same engine uses native fork/resume; an engine change uses a bounded handoff. Only engine/model/effort/serviceTier/account may accompany applyNow. Progress is in get_pipeline stageId → runtimeSwitch. set-edge takes {stageId, edge: pass | fail, to, maxRounds?, onExhausted?: advance | stop-after-fix | park}; maxRounds defaults to 3; more requires an explicit value. The last two apply to fail edges only, and a fail edge freezes once traversed. advance (default): the fix stage takes the last findings; a terminal gate re-checks once and completes only on pass, otherwise parks with the findings count. A nonterminal gate continues along its pass edge. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. add-stage preserves supplied edges and changes no other stage unless after names the pass edge to splice; index controls displayed order only. add-stage with a `review-loop` stage stores it as a read-only reviewer and a fix stage (role builder, mode apply-fixes, with its predecessor's domain and size, so its runtime comes from the fix row), joined by an advance fail edge, and answers convertedStages [{reviewer, fixer}]; when that needs a guess (no read-write predecessor, no free stage slot) the stage is stored as sent and the answer carries legacyReview [{stageId, refusals}]. Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
+  pipeline_action: "set-delivery-remote adopts a configured Git remote (remote, default origin) for an open owner lane with an empty delivery target. It never redirects an existing target; an in-flight publisher, another owner or a live legacy review flow refuses adoption. A passed-stage publication park resumes for publication on the next tick. Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. revision fingerprints the returned record; guarded graph edits still use stageDigests/graphDigest. Apply a supported action to an existing pipeline. Every accepted action answers pipelineId, state, cursor, closedAt and revision; graph edits or full:true include stageDigests and graphDigest. A close includes `close`; a graph edit includes `graphEdit`. get_pipeline reads the full record with full:true. Close persists immediately; close.status=pending and close.pending list the outstanding teardown, and get_pipeline returns closeReport with final per-host outcomes. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so edits apply from the next attempt. override-stage with applyNow:true stops the current turn and continues the same attempt, worktree, branch and receipts on the edited runtime. Same engine uses native fork/resume; an engine change uses a bounded handoff. Only engine/model/effort/serviceTier/account may accompany applyNow. Progress is in get_pipeline stageId → runtimeSwitch. set-edge takes {stageId, edge: pass | fail, to, maxRounds?, onExhausted?: advance | stop-after-fix | park}; maxRounds defaults to 3; more requires an explicit value. The last two apply to fail edges only, and a fail edge freezes once traversed. advance (default): the fix stage takes the last findings; after that fix, the gate follows its pass edge or completes when next:null, with no further review. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. add-stage preserves supplied edges and changes no other stage unless after names the pass edge to splice; index controls displayed order only. add-stage with a `review-loop` stage stores it as a read-only reviewer and a fix stage (role builder, mode apply-fixes, with its predecessor's domain and size, so its runtime comes from the fix row), joined by an advance fail edge, and answers convertedStages [{reviewer, fixer}]; when that needs a guess (no read-write predecessor, no free stage slot) the stage is stored as sent and the answer carries legacyReview [{stageId, refusals}]. Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   stage_report: [
     "Report the completion of the pipeline run stage THIS conversation is running.",
     "Completion fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], a short summary, and optional blocked/blockedReason. Set blocked:true only when a fixer cannot proceed (cannot build, cannot run required checks, or a handed finding is impossible within the specification); it requires fail and a non-empty blockedReason. Prose never classifies blocked state.",
@@ -3416,7 +3492,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   get_conversation: "Read a conversation summary and its recent messages and tools, newest kept within an answer budget: each record keeps its first maxChars characters with truncated:true when cut, and omitted counts the older records left out. full:true returns complete records and tail lines. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
   conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
   conversation_messages: "Read one conversation newest-first as engine-normalized records; Claude and Codex return the same shape, while hook attachments and usage envelopes are omitted. Identity accepts conversationId, transcriptPath, or selectedContext and resolves through the same bounded paths as get_conversation. kinds is a non-empty subset of message | reasoning | tool_call | tool_result | trace (default message). roles is a non-empty subset of user | assistant | system | tool (default all). since is an inclusive ISO timestamp lower bound. limit clamps to 1..200 (default 20); maxChars clamps to 1..16000 (default 4000), and truncated marks cut text after secret redaction. Records are newest-first. Pass the opaque cursor unchanged with an omitted or fresh clientRequestId for each next-older page while hasMore is true; cursors are bound to the transcript and filters. A normal empty page returns records: []. File work is bounded by the page, so a 100 MB rollout is never parsed in full.",
-  deploy_exact_sha: "Deploy one full commit SHA of the Delegatus application that serves this MCP — never the calling project's code, which this tool cannot deploy at all. The Delegatus project's designated orchestrator decides when to deploy and calls this directly; authority is the server-attributed designated seat, and nobody asks the operator for a confirmation, a phrase, or a SHA. Idempotent by clientRequestId; deployments serialize at the runtime host. An accepted deploy is recorded against the calling seat (wakeOnSettle:true), and the seat tick wakes that seat once when it reaches a terminal phase, listing the lanes the seat paused, so end the turn after the call.",
+  deploy_exact_sha: "Deploy the serving Delegatus application by commit SHA or unique prefix of at least 7 characters on the tracked branch. Never a branch name. Only its server-attributed designated seat deploys; other projects cannot deploy through this tool. Idempotent by clientRequestId; deployments serialize at the runtime host. An accepted deploy records wakeOnSettle:true for the seat: end the turn, and its next wake reports the terminal phase and paused lanes.",
   get_pipeline: "Read one pipeline by durable id, with stageDigests and graphDigest for a guarded graph edit. Use full:true for delivery ownership, closeReport, work links and retained bodies. Compact by default; full:true or compact:false returns the whole record, prompts, role scaffolds and attempt transcripts included. `stageId` narrows the answer to that stage and one attempt (the latest by default, or `attempt`): its verdict, findings, reported summary, conversation and error, with no prompts or transcripts. `compact: true` answers the list_pipelines compact row plus the digests.",
   board_snapshot: "Read a bounded, redacted snapshot of the Delegatus board, durable placement, and the selected project's hidden conversation count.",
   list_flows: "List durable implement-review flows newest-created first, compact by default, with a 24 KB row budget and cursor pagination. Rows include identity, state, revision, spec title/length and round count. omittedCount counts matching records outside this page; omittedRecordCount counts compacted records. Follow nextCursor with the same filters and a fresh clientRequestId until hasMore is false. full:true or compact:false returns complete records; get_flow(flowId) reads one full record. A single explicit full record can exceed the budget. Unknown states are ignored; limits clamp and invalid or mismatched cursors restart with cursorReset:true.",
@@ -3440,13 +3516,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A conversation target takes either its durable conversationId (resolved server-side to that conversation's current transcript, and the form to prefer because it survives resume and migration) or that transcript's path.",
     "A draft target also needs the top-level project argument; region and point accept intent \"show\" only. A rejected target names the kind it read and the fields that kind expects.",
   ].join(" "),
-  suggest_replies: [
-    "Offer the operator ready-made replies to your own message: 1\u20136 short drafts that render as pills under your latest turn in the dock and the board's conversation pane. Tapping one drops its text into their composer for editing \u2014 Delegatus never sends it, and nothing here decides anything.",
-    "Call it after every message that asks the operator something or proposes a course of action, with 2\u20134 short, distinct drafts written in the operator's own language. The set REPLACES whatever you offered last for that conversation, and the operator's next message clears it.",
-    "Authority is the same as request_attention's, and for the same reason \u2014 this writes into the surface they are answering in: the operator's own session or a designated orchestrator seat. A worker or unidentified caller is refused (SUGGEST_REPLIES_NOT_PERMITTED) with nothing recorded.",
-    "The drafts always land under your OWN message: conversationId defaults to your conversation, and naming any other one is refused. To offer drafts elsewhere, ask that conversation's own session to offer them.",
-  ].join(" "),
-  publish_prototype_review: "questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state. The paired owner also receives a rich Telegram carousel with up to 50 image previews; a definite Telegram limit refusal uses a smaller preview and a link to the full review. Failed or unconfirmed posts carry telegramPost state and a reason on the review and in the seat wake. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  publish_prototype_review: "For issue-report approval pass issueReport from show, omitting title, taskId, questions and variants. questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state. The paired owner also receives a rich Telegram carousel with up to 50 image previews; a definite Telegram limit refusal uses a smaller preview and a link to the full review. Failed or unconfirmed posts carry telegramPost state and a reason on the review and in the seat wake. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
   resend_prototype_review_telegram: "Resend a saved round to the paired owner as a rich Telegram carousel by reviewId. Only the caller’s project is readable, as with read_prototype_review. The same clientRequestId sends once; a new key intentionally sends another copy. The answer includes durable telegramPost state and a reason code on failure or uncertainty. This does not choose a variant or send the operator’s answer to the seat.",
   read_prototype_review: "Rounds carry questions; decision.answers holds option indexes per question id; decision.skipped:true means the operator took the recommendations, and an answer's skipped:true (no options) means the operator set that question aside as already decided or no longer relevant: do not ask it again. Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; a seat that omits it reads its own taskless questions; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
@@ -3467,13 +3537,13 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   send_message_to_orchestrator: [
     "A designated orchestrator seat may relay to another project's designated seat. The recipient sees the sending project and agent authorship, never operator authority. A live owner-tier relay verified by the paired service may also hand the owner's request to a designated seat with operator authority; the server quotes the original owner request and retains agent authorship. A resolved Telegram report reply includes the stored report and is bound to its project and source seat; forward the approval verbatim. Ask one short question for an unresolved ambiguous approval before creating work. Other workers, non-owner relays, pipeline stages, deputies and unidentified callers are refused. If a handoff fails, carry on with your available tools or explain the failure and the owner's concrete next action. Owner relay board tasks default to assigned so the seat tick can wake on unstarted-task; report the task and project, checking that a seat and its tick are enabled. Seat relays must omit Delegatus authority markers and bridge trailers; a seat cannot create a missing recipient. The operator's voice gateway keeps its existing path.",
     "For a shared project, pass machine as the linked machine label, install id or prefix; get_orchestrator names linkedSeats. Both machines must support seat messages. Unshared, revoked, unreachable and older peers are refused with project_not_linked, link_revoked, peer_unreachable or peer_cannot_relay. Only the shared project's seat sends remotely. Replies use the same tool back to the sending machine. A remote operationId has prefix seatmsg_; message_receipt reports queued, accepted or refused.",
-    "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first. The recipient is frozen before the message dispatch; a later seat rotation never redirects recovery. The answer reports acceptance: ask message_receipt what became of the operationId.",
+    "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first. A message still queued when the seat rotates is carried to the new seat; recovery under the same key never sends twice. The answer reports acceptance: ask message_receipt what became of the operationId.",
     RECOVERY_CONTRACT_DESCRIPTION,
   ].join(" "),
   ask_orchestrator_in_parallel: "While the project's orchestrator seat is busy with a turn, start its parallel self for one side ask: a fork of the seat's conversation that answers this one message with the seat's authority (no deploy, no rotation), shows live in the seat's own feed, and queues a note to the seat when it ends. For the voice gateway (the operator's root session) relaying the operator; any other agent is refused with asker_refused and sends to the orchestrator instead. Claude seats only; refused with seat_not_busy when the seat is idle (send to it directly then) and with deputy_limit while another parallel self is running. Idempotent by clientRequestId.",
   seat_tick_settings: [
     "Full autonomy is off by default. Only the operator enables or extends it; this project's seat may shorten or turn it off with why. Read autonomy.active and release.effectiveAskBeforePublish immediately before acting. Log decisions with autonomyDecision including why and undo; verbose:true reads the rules, episodes and log. An ended episode owes one status report with outcome autonomy and its episode key, including when wakes or bridge reports are off.",
-    "maintenance reads or changes the board maintenance timer and reads its run records; verbose adds the previous run log.",
+    "curation reads or changes the role memory curator timer and shows its latest conversation and result counts; verbose includes its untouched defaults. maintenance reads or changes the board maintenance timer and reads its run records; verbose adds the previous run log.",
     "Read — and change — one project's seat tick: whether Delegatus wakes that project's seat at all, how often, and what your own monitor prompt tells the wake to look at.",
     "Called with no change fields it is a read. `project` defaults to your own, and naming another project's is allowed rather than refused; the answer says which of the two you did, and the record, the board card and the tick's journal all carry who changed whose tick.",
     "`enabled: false` stops work wakes for that project (an ended autonomy episode still owes its report) until someone turns it back on — indefinitely, if that is the decision. `wakeIntervalMinutes` sets how often a wake may be sent (null restores the default hour); the tick cannot wake more often than it checks, so a value under the check interval simply means every check. `untilMinutes` is an optional expiry after which the setting lapses back to the default — omit it and the setting stands until it is changed.",
@@ -3510,8 +3580,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A Delegatus bug report on its way to Delegatus's own public repository: preview, show, publish. Nothing is filed without the digest of a preview the operator approved.",
     "action hints takes title and body and returns advisory hints (class, matched span, title/body, lines, and written/decoded reading), without storing text. Run it, then re-read the whole text yourself: hints may be false alarms and a clean result proves nothing. Remove or rewrite identifying content and operator quotes. Detector matches never refuse preview, storage or publication.",
     "action preview takes title, body and your privacyJudgment (assessment, removed, harmlessHints with reasons, uncertainties), stores the exact text with that judgment and remaining hints, and answers its digest. Known-name source failures appear as hintWarnings and leave the agent to review the text. Any identified session may preview.",
-    "action show takes digest and answers the stored title and body exactly, with privacyJudgment, remaining hints and hintWarnings, and a chat-ready previewText in the operator's interface language that marks where the published text starts and ends and lists them after it. To an orchestrator seat it also answers approvalReplies, the reply in English and Ukrainian that approves this exact text, and approvalReplyDrafts, the same reply with a label that fits suggest_replies. Put previewText in the existing chat as it is, then offer that draft with suggest_replies beside a no and an edit. The operator decides last and may approve a text that has hints.",
-    "action publish takes `digest` and files the stored text as one issue. Nothing the caller says is an approval: the server reads the seat's own conversation, and publishes when the operator's last message since the seat read the preview back contains the approving reply with this whole digest in either language, ignoring case and surrounding whitespace or punctuation (`issue_report_approval_required` otherwise, and nothing is sent). The reply may be part of a longer message with other answers or questions; one message may approve several previews, each by its own digest. Only operator-authored messages count; an agent message, relay or seat tick never approves. An explicit refusal of the same report overrides its approving reply. A free-form yes without the digest does not approve it. Only an orchestrator seat that has read the preview back with show may publish; a digest that names no stored preview, or a preview whose text no longer matches its digest, is refused. A changed title or body is a new preview with a new digest and its own approving reply. One digest is filed once, whoever calls: a publication whose outcome nobody recorded answers `issue_report_outcome_unknown` until the issue is found, and only a refusal that provably came before the write (`issue_report_publish_failed`) may be repeated. The answer carries `issueUrl`.",
+    "action show takes digest and answers the stored title and body exactly, with privacyJudgment, remaining hints and hintWarnings, and a chat-ready previewText in the operator's interface language that marks where the published text starts and ends and lists them after it. To an orchestrator seat it also answers approvalForm: {issueReport}. Put previewText in the existing chat as it is, then pass issueReport to publish_prototype_review without taskId; the server composes the exact consent form. The operator decides last and may approve a text that has hints.",
+    "action publish takes `digest` and files the stored text as one issue. Nothing the caller says is an approval: the server reads the newest approval form of this preview the seat asked after reading it back, and publishes when a person (the operator or a team member) chose its approving option (`issue_report_approval_required` with `reason` no_form, not_answered or not_an_approval otherwise, and nothing is sent). A form taken on its recommendations, a set-aside question, «Other», a custom note or an agent's decision never approves. An amended answer counts as it now stands. Only an orchestrator seat that has read the preview back with show may publish; a digest that names no stored preview, or a preview whose text no longer matches its digest, is refused. A changed title or body is a new preview with a new digest and its own approval form. One digest is filed once, whoever calls: a publication whose outcome nobody recorded answers `issue_report_outcome_unknown` until the issue is found, and only a refusal that provably came before the write (`issue_report_publish_failed`) may be repeated. The answer carries `issueUrl`.",
     "In a repository this installation declared as an App repository the issue is filed as the Delegatus GitHub App and is refused when that credential is unavailable; no person's credentials are used instead. Idempotent by clientRequestId, and a preview that was published answers its issue again instead of filing a second.",
   ].join(" "),
   telegram_bot_chats: [
@@ -3536,6 +3606,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Types: .md .markdown .txt .log .json .csv .pdf .png .jpg .jpeg .html, non-empty, at most 20 MB; text files are scanned, as UTF-8 and UTF-16, for private keys, tokens and credentials (including `password: word` assignments) and refused with document_secret naming the class (`details.secretClass`). Other refusals: document_invalid, document_outside_roots, document_forbidden_path, document_type, document_too_large.",
     "`document.filename` is the shown name (default the file's own name) and must keep the file's type class (text, PDF or image: a .md may be shown as .txt, never as .pdf); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. The post appears in telegram_bot_messages with kind document and its filename.",
   ].join(" "),
+  relay_answer: "Only while you answer a relay message as its owner: choose how your last message is delivered. format rich_markdown renders the Markdown subset and length in your prompt; buttons are https links; attachments are files under your document roots, sent after your message. Each call replaces the previous one. Refused in every other conversation and after the answer.",
+  relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Refused in any other conversation and once answered.",
   relay_owner_history: [
     "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. Received edits keep first text; Telegram-side deletions may remain stored. Author ids and file ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
     "Use history only to answer the operator in this conversation. Never copy message text, names, usernames, chat titles or chat ids into bridge reports, requests or messages to other agents or seats, spawn prompts, task text or details, files, commits, pull requests, issues or lessons. A report may say the answer is in this conversation.",
@@ -3572,15 +3644,6 @@ const conversationArchiveTargetSchema = z.object({
 }).strict().refine((target) => Boolean(target.conversationId || target.transcriptPath), {
   message: "conversationId or transcriptPath is required",
 });
-/* #1202: one reply draft. `label` is what the pill says, `text` is what lands
-   in the composer, and the object is closed because a third field would be a
-   caller inventing semantics the renderer does not have. */
-const replyDraftSchema = z.object({
-  label: z.string().min(1).max(MAX_REPLY_LABEL_CHARS)
-    .describe("What the pill says \u2014 a few words the operator reads at a glance."),
-  text: z.string().min(1)
-    .describe(`The draft itself, in the operator's language. Lands in their composer, editable, never sent by Delegatus. At most ${MAX_REPLY_TEXT_BYTES} bytes.`),
-}).strict();
 const entityIdSchema = z.string().min(1);
 const snapshotStringSchema = z.string()
   .min(MIN_SNAPSHOT_STRING_LENGTH)
@@ -3623,7 +3686,7 @@ const pipelineStageSchema = z.object({
     maxRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional()
       .describe(`How many times this stage reviews before its budget is spent (default ${DEFAULT_FAIL_EDGE_ROUNDS}). More than 3 requires an explicit value.`),
     onExhausted: z.enum(PIPELINE_FAIL_EDGE_EXHAUSTIONS).optional()
-      .describe("What a fail on the last round does. advance (default): the fail target fixes the last findings. If THIS stage has next:null, it re-checks the fix once more: a pass completes, a fail parks with budget spent: N findings left. Otherwise the fix follows THIS stage's pass edge and relays the findings as unreviewed. A fix loop from another gate permits a new handoff through a previously spent gate; rounds remain cumulative. stop-after-fix: after the last fix the lane waits in needs_review if the head changed; use it when the operator asked to look before merge. park: stop before the last fix (one more review after maxRounds fail loops). Nothing merges on its own."),
+      .describe("What a fail on the last round does. advance (default): the fail target fixes the last findings. After that fix, the gate follows THIS stage's pass edge or completes when next:null, with no further review. A fix loop from another gate permits a new handoff through a previously spent gate; rounds remain cumulative. stop-after-fix: after the last fix the lane waits in needs_review if the head changed; use it when the operator asked to look before merge. park: stop before the last fix (one more review after maxRounds fail loops). Nothing merges on its own."),
   }).nullable().optional()
     .describe("Fail successor for a run stage. A review-loop stage may not define one — it recovers through its own review flow."),
   role: z.object({
@@ -3733,7 +3796,7 @@ const taskStepsInputSchema = z.array(z.object({
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   publish_prototype_review: prototypePublishSchema,
-  resend_prototype_review_telegram: z.object({ clientRequestId: clientRequestIdSchema, reviewId: z.string().regex(/^pr_[a-f0-9]{32}$/) }).strict(),
+  resend_prototype_review_telegram: z.object({ clientRequestId: clientRequestIdSchema, reviewId: z.string().regex(/^pr_[a-f0-9]{7,32}$/i) }).strict(),
   read_prototype_review: z.object({ clientRequestId: clientRequestIdSchema.optional(), taskId: z.string().min(1).optional() }).strict(),
   spawn_agent: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -3836,7 +3899,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     refine: z.object({ text: z.string().trim().min(1).max(600).describe("Short human title on the first line (3–10 words), then up to two concise sentences.") }).optional()
       .describe("Optional fallback naming for a legacy placeholder task your conversation is linked to, once. Replaying the same text returns the prior result; an already named task answers already-named and keeps its title."),
     expectedProject: z.string().min(1).optional().describe("Required for pos or placement updates: copy the current task project exactly."),
-    expectedRevision: z.string().min(1).optional().describe("Required for pos or placement updates: copy the opaque revision from get_task or list_tasks."),
+    expectedRevision: z.string().min(1).optional().describe("For pos/placement: the revision get_task or list_tasks answered."),
     text: z.string().optional().describe("The HUMAN part: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context does not belong here; pass it as details."),
     hold: taskHoldInputSchema.nullable().optional(),
     steps: taskStepsInputSchema.nullable().optional(),
@@ -3881,7 +3944,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       branch: z.string().startsWith("refs/heads/"),
       remote: z.string().optional(),
       pr: z.number().int().positive().optional(),
-      rejectedHead: z.string().regex(/^[0-9a-f]{40}$/i).optional(),
+      rejectedHead: z.string().regex(/^[0-9a-f]{7,40}$/i).optional().describe("Commit SHA or unique local commit prefix (7+ hex)."),
       comparison: z.boolean().optional(),
     }).optional().describe("Delivery target, using the PR head repository remote and full branch. The canonical repository plus branch has one Delegatus publisher. A competing creation becomes an internal comparison lane and names its owner; host Git/gh tools remain unchanged."),
     task: z.string().min(1).describe("Board title for the pipeline."),
@@ -3892,7 +3955,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     spec: z.string().optional().describe("Acceptance criteria shared by every stage."),
     crossProjectRequest: z.string().optional()
       .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
-    repoDir: z.string().min(1).describe("Absolute path of the existing git repository the pipeline worktree is cut from."),
+    repoDir: z.string().min(1).describe("Absolute path of the project folder. A safe new folder receives a local main repository and first commit before provisioning. Existing repositories keep their remotes."),
     project: z.string().optional().describe("Optional project key, display name or repository name, in any letter case with surrounding whitespace. Must agree with repoDir; unknown, ambiguous or contradictory values refuse before claim or dispatch."),
     baseBranch: z.string().optional().describe("Branch the worktree is based on. A draft that pins this must also pass baseRef."),
     baseRef: z.string().optional().describe("Commit the pipeline is pinned to. Required when a draft (autoStart:false) pins baseBranch — resolve the SHA yourself."),
@@ -3917,7 +3980,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     index: z.number().int().optional().describe("add-stage: insertion position in the displayed stage order. A nonempty draft refuses index 0 because its entry must stay first."),
     stageIds: z.array(z.string()).optional().describe("reorder-stage: stage ids in the new displayed order."),
     toIndex: z.number().int().optional().describe("reorder-stage: destination index."),
-    expectedStageDigest: z.string().regex(/^[0-9a-f]{64}$/).optional().describe("Graph edit guard from get_pipeline: the stage digest for override-stage and set-edge, or the graph digest for add-stage, remove-stage and reorder-stage."),
+    expectedStageDigest: z.string().regex(/^[0-9a-f]{7,64}$/i).optional().describe("Graph edit guard from get_pipeline: the stage digest for override-stage and set-edge, or the graph digest for add-stage, remove-stage and reorder-stage."),
     edge: z.enum(["pass", "fail"]).optional().describe("set-edge: which successor to change."),
     to: z.string().nullable().optional().describe("set-edge: successor stage id, or null to clear the edge."),
     maxRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("set-edge fail edge: review budget, default 3. More than 3 requires an explicit value."),
@@ -3936,14 +3999,14 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     addRounds: z.number().int().min(1).max(MAX_FAIL_EDGE_ROUNDS).optional().describe("Legacy continue-review field: new additional rounds are refused; retained only to replay an already accepted historical request"),
     reviewLimit: z.number().int().optional().describe("preview/convert-legacy-review only: the finite review count the converted reviewer gets, 1–9. It runs that many times when every review fails, the final review included; the default is the limit recorded on the stage's review flow, or 3 when none is recorded. More than 3 requires an explicit value."),
     implementerStageId: z.string().min(1).optional().describe("preview/convert-legacy-review only: the run stage whose role the fix stage copies, when more than one run passes into the review."),
-    expectedRevision: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    expectedRevision: z.string().regex(/^[0-9a-f]{7,64}$/i).optional(),
     expectedStageId: z.string().min(1).optional(),
     expectedAttempt: z.number().int().nonnegative().optional().describe("With expectedStageId, or with override-stage applyNow: the attempt number the caller saw."),
     expectedConversationId: z.string().min(1).optional().describe("override-stage applyNow only: the conversation the caller saw running the attempt; another one is refused with STAGE_CHANGED."),
     expectedOwner: z.string().optional(),
     expectedEpoch: z.number().int().positive().optional(),
     reason: z.string().optional(),
-    acceptedSha: z.string().regex(/^[0-9a-f]{40}$/i).optional().describe("publish: requires a delivery remote. With none, add a remote and run set-delivery-remote first. Exact SHA to publish. A parked passed stage in committing can accept a moved head only when its worktree is clean, HEAD equals this SHA, its previously passed commit is an ancestor and all added work is verified clean integration of origin's configured main branch. Additional lane work or merge resolutions require a fresh review. Preserves pass and reviewed provenance, updates lastPassedCommit and advances automatically after publication. Omit to retry its existing accepted commit, including a settled failed publication; no takeover is needed. Deferred skip-stage, review retry-stage and takeover are refused when the serving controller cannot handle them."),
+    acceptedSha: z.string().regex(/^[0-9a-f]{7,40}$/i).optional().describe("publish: requires a delivery remote. With none, add a remote and run set-delivery-remote first. Exact SHA to publish. A parked passed stage in committing can accept a moved head only when its worktree is clean, HEAD equals this SHA, its previously passed commit is an ancestor and all added work is verified clean integration of origin's configured main branch. Additional lane work or merge resolutions require a fresh review. Preserves pass and reviewed provenance, updates lastPassedCommit and advances automatically after publication. Omit to retry its existing accepted commit, including a settled failed publication; no takeover is needed. Deferred skip-stage, review retry-stage and takeover are refused when the serving controller cannot handle them."),
     link: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
       .describe("attach-link and detach-link (#2059): a PR or issue as \"#123\", \"123\", \"PR 123\", \"owner/repo#123\" or a github.com URL, or a list. A bare number means the pipeline's delivery repository. Attach what discovery cannot see: the pipeline's lane and delivery branches, its delivery.pr and the PR its stages reported are found without it. Allowed in every state; detach removes only links attached by hand. The answer carries workLinks, the resolved links."),
     kind: z.enum(["pr", "issue"]).optional().describe("attach-link only: whether link names a pull request or an issue, when the number alone leaves it open."),
@@ -4027,7 +4090,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   backfill_worktree_projects: z.object({
     clientRequestId: clientRequestIdSchema.optional(),
     dryRun: z.boolean().optional().describe("Defaults to true. Set false only for an explicit operator-requested recovery."),
-    project: z.string().regex(/^repo-[0-9a-f]{32}$/).optional(),
+    project: z.string().regex(/^(repo|dir)-[0-9a-f]{7,32}$/i).optional(),
   }).passthrough(),
   search_memory: z.object({
     clientRequestId: clientRequestIdSchema.max(256, "clientRequestId must be at most 256 characters for the bounded memory response"),
@@ -4080,7 +4143,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     clientRequestId: clientRequestIdSchema,
     /* #795: authority is the caller's server-attributed designated-seat
        identity; the arguments carry only WHAT ships, never a proof. */
-    revision: z.string().regex(/^[0-9a-f]{40}$/i).describe("Full 40-hex commit SHA to deploy. Resolve it yourself (e.g. remote main); never a branch name."),
+    revision: z.string().regex(/^[0-9a-f]{7,40}$/i).describe("Commit SHA or unique tracked-branch prefix (7+ hex); never a branch name."),
   }).passthrough(),
   get_pipeline: z.object({
     full: z.boolean().optional().describe("true returns the complete pipeline, including prompts, transcripts, delivery and work links."),
@@ -4122,7 +4185,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     decision: z.enum(["submit-review", "continue-fixing", "stop", "completed"]).optional(),
     reason: z.string().optional(),
     expectedRevision: z.number().int().nonnegative().optional(),
-    expectedHead: z.string().regex(/^[0-9a-f]{40}$/).optional(),
+    expectedHead: z.string().regex(/^[0-9a-f]{7,40}$/i).optional(),
     round: z.number().int().nonnegative().optional(),
     turnId: z.string().optional(),
     stage: z.object({ pipelineId: z.string(), stageId: z.string(), attempt: z.number().int().positive() }).optional(),
@@ -4302,13 +4365,6 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     contextLabel: z.string().optional().describe("Named in the spoken sentence but never navigated to."),
     project: z.string().optional().describe("Required only for a target the server cannot attribute on its own (a board draft)."),
   }).passthrough(),
-  suggest_replies: z.object({
-    clientRequestId: clientRequestIdSchema,
-    conversationId: z.string().min(1).optional()
-      .describe("Durable conversation whose composer these drafts belong under. Defaults to the calling conversation, and must BE it \u2014 another conversation is refused."),
-    replies: z.array(replyDraftSchema).min(MIN_REPLY_SUGGESTIONS).max(MAX_REPLY_SUGGESTIONS)
-      .describe(`${MIN_REPLY_SUGGESTIONS}\u2013${MAX_REPLY_SUGGESTIONS} drafts, ordered as the operator should read them. Two to four distinct ones is the usual shape.`),
-  }).passthrough(),
   dismiss_attention: z.object({
     clientRequestId: clientRequestIdSchema,
     target: z.discriminatedUnion("kind", [
@@ -4422,6 +4478,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     problemId: z.string().trim().min(1).max(128).optional().describe("Read the full local problem report named by a wake, including after delivery. Undo or replacement returns null for the old identity."),
     autoRotate: z.object({ enabled: z.boolean().optional(), thresholdPercent: z.union([z.number(), z.string(), z.null()]).optional(), why: z.string().nullable().optional() }).optional()
       .describe("Automatic context rotation, off by default. thresholdPercent is 50–90 (default 50; null restores it). Every non-gateway change requires why, naming the request."),
+    curation: z.object({ enabled: z.boolean().optional(), intervalHours: z.union([z.number(), z.string()]).nullable().optional() }).optional()
+      .describe("Role memory curator: independent per-project timer, enabled by default, minimum gap 1–168 hours, default 6; null restores 6. Every trigger respects this gap. Needs no reason."),
     maintenance: z.object({ enabled: z.boolean().optional(), intervalHours: z.union([z.number(), z.string()]).nullable().optional() }).optional()
       .describe("Board maintenance (#2162): one built-in agent on the seat tick, off until enabled. intervalHours is the minimum gap (1–168, default 3; null restores 3). Needs no reason."),
     clientRequestId: clientRequestIdSchema,
@@ -4489,7 +4547,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       harmlessHints: z.string().trim().min(1).max(3000),
       uncertainties: z.string().trim().min(1).max(3000),
     }).optional().describe("preview: your own judgment after reading the whole text, what you removed, hints judged harmless and why, and uncertainties."),
-    digest: z.string().regex(/^[0-9a-f]{64}$/).optional().describe("show and publish: the digest a preview answered."),
+    digest: z.string().regex(/^[0-9a-f]{7,64}$/i).optional().describe("show and publish: the digest a preview answered."),
   }).passthrough(),
   telegram_bot_chats: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -4529,6 +4587,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     topicId: z.number().int().positive().optional().describe("Forum topic (message_thread_id) to post into."),
     silent: z.boolean().optional().describe("Send without a notification sound."),
   }).passthrough(),
+  relay_answer: relayAnswerSchema,
+  relay_service_tools: relayServiceToolsSchema,
   relay_owner_history: z.object({
     action: z.enum(["groups", "messages"]), chat: z.string().optional(), from: z.string().optional(), to: z.string().optional(),
     cursor: z.string().max(400).optional(), limit: boundedNumericInput("relay_owner_history", "limit"),
@@ -4569,27 +4629,72 @@ export function viewerMcpInstructions(locale?: "en" | "uk" | null): string {
 
 const VIEWER_MCP_BASE_INSTRUCTIONS = "This server is Delegatus, registered under the MCP key `viewer`, so its tools are named mcp__viewer__*. List tasks newest-first with status sets, openOnly, ids or query and follow nextCursor. Lists are compact by default; full:true retrieves complete records; get_pipeline is compact by default. Use get_task/get_flow for complete records. Writes acknowledge changedFields and revision. Use seat_tick_settings verbose:true to read the complete monitor note. Use clientRequestId on mutations; pure reads may omit it for a fresh observation. Static readMore hints require includeHints:true or full:true. Reuse it only when replaying the same logical operation. Launch admission names new tasks before the agent starts, using the supplied title and a concise launcher brief or a short title derived from the prompt. Refinement is optional: for a legacy placeholder, update_task with refine: { text } supplies a short human title (3–10 words) on the first line and at most two concise sentences. Read-only roles skip refinement. A refine that answers TASK_NOT_FOUND means your conversation holds no task; carry on. Keep an existing meaningful title; the reply says already-named when one exists. Reuse the same text on retry. A task's text is for the human who reviews the board, and refine writes only that; agent-facing context (the prompt, the working notes, the ids, the rules, the state) belongs in the separate details field of create_task and update_task, condensed, which the card shows behind one collapsed Details row. Use agent_fleet first for compact counts by engine, model, effort and account; request detail or filters only when needed. Read the board through these tools rather than curl: list_pipelines with state `open` and compact: true for the open lanes, get_pipeline with stageId for one stage's conclusion, deployment_status and agent_activity with compact: true, and account_limits for each account's usage windows.";
 
+function shortenSchemaDescriptions<T extends z.ZodType>(schema: T): T {
+  const def = (schema as unknown as { _zod?: { def?: { type?: string; element?: z.ZodType } } })._zod?.def;
+  let output: z.ZodType = schema;
+  if (schema instanceof z.ZodObject) {
+    output = schema.safeExtend(Object.fromEntries(Object.entries(schema.shape).map(([key, child]) => [key, shortenSchemaDescriptions(child)])));
+  } else if (def?.type === "array" && def.element) {
+    output = z.array(shortenSchemaDescriptions(def.element));
+  }
+  const description = schema.description;
+  if (description) output = output.meta({ ...output.meta(), description: shortenHashesInText(description) });
+  return output as T;
+}
+
 // The hook supplies this transport proof automatically. It is never part of
 // the logical arguments, their digest, downstream payload or durable answer.
 for (const name of MCP_TOOL_NAMES) TOOL_INPUT_SCHEMAS[name] = TOOL_INPUT_SCHEMAS[name].extend({ nativeCallerProof: z.string().regex(/^[A-Za-z0-9_-]{43}$/).optional().describe("Injected by the synchronous Delegatus Claude hook. Omit in ordinary arguments; never invent or copy a proof.") });
 
-export function createViewerMcpServer(service: McpToolService): McpServer {
+// Build fixed protocol schemas once beside the tool definitions.
+// Invalid optional task fields still reach the strict
+// task validation callback below before a receipt can be acquired.
+export const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(toolName => {
+  const schema = TOOL_INPUT_SCHEMAS[toolName];
+  return [toolName, toolName === "create_task" || toolName === "update_task" ? schema.extend(Object.fromEntries(
+    Object.entries(schema.shape).filter(([, fieldSchema]) => fieldSchema.isOptional())
+      .map(([field, fieldSchema]) => [field, fieldSchema.catch((context: { input: unknown } | undefined) => context?.input)]),
+  )) : schema];
+})) as typeof TOOL_INPUT_SCHEMAS;
+
+/** Presentation only: neither a client name nor a User-Agent
+ * grants caller identity or authority. */
+export function mcpTextResultClient(name: unknown): boolean {
+  return name === "codex-mcp-client" || name === "claude-code";
+}
+
+export function mcpToolResponse(result: McpToolResult, textOnly: boolean) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    ...(textOnly ? {} : { structuredContent: result }),
+    ...(result.ok ? {} : { isError: true }),
+  };
+}
+
+export function createViewerMcpServer(service: McpToolService, tools: readonly McpToolName[] = MCP_TOOL_NAMES, textOnly = false): McpServer {
+  // The SDK uses JSON Schema validation for outgoing elicitation, while tool
+  // inputs use Zod. Stateless tool calls need no AJV instance or meta-schemas.
+  // Keep the SDK's validator and its lifetime local to this server when used.
+  let elicitationValidator: AjvJsonSchemaValidator | undefined;
   const server = new McpServer({ name: MCP_SERVER_NAME, version: "1.0.0" }, {
     instructions: viewerMcpInstructions(),
+    jsonSchemaValidator: { getValidator(schema) {
+      return (elicitationValidator ??= new AjvJsonSchemaValidator()).getValidator(schema);
+    } },
+    capabilities: { experimental: { [MCP_TOOL_CATALOG_CAPABILITY]: { version: 1, tools: [...MCP_TOOL_NAMES] } } },
   });
-  for (const toolName of MCP_TOOL_NAMES) {
+  // Codex code mode can forward the whole envelope to its model. Claude
+  // forwards content and retains structuredContent as metadata. Keep their
+  // JSON text once; internal clients still consume the structured object.
+  // No registered tool declares outputSchema, so text-only output is valid.
+  const response = (result: McpToolResult) => mcpToolResponse(result,
+    textOnly || mcpTextResultClient(server.server.getClientVersion()?.name));
+  for (const toolName of tools) {
     const taskMutation = toolName === "create_task" || toolName === "update_task";
     const schema = TOOL_INPUT_SCHEMAS[toolName];
-    // The SDK's default validation error has no retryability or field envelope.
-    // Preserve the published input shape, but carry invalid optional task fields through
-    // to our strict validation below, before dispatch or receipt acquisition.
-    const inputSchema = taskMutation ? schema.extend(Object.fromEntries(
-      Object.entries(schema.shape).filter(([, fieldSchema]) => fieldSchema.isOptional())
-        .map(([field, fieldSchema]) => [field, fieldSchema.catch((context: { input: unknown } | undefined) => context?.input)]),
-    )) : schema;
     server.registerTool(toolName, {
       description: TOOL_DESCRIPTIONS[toolName],
-      inputSchema,
+      inputSchema: shortenSchemaDescriptions(TOOL_TRANSPORT_SCHEMAS[toolName]),
     }, async (args, extra) => {
       if (taskMutation) {
         const parsed = schema.safeParse(args);
@@ -4598,14 +4703,16 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
           const result = failure(toolName, String((args as McpToolArgs).clientRequestId), "TASK_INVALID_FIELD",
             issues.map(issue => `${issue.field}: ${issue.message}`).join("; "), false, false,
             { field: issues[0]?.field, issues });
-          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], structuredContent: result, isError: true };
+          return response(result);
         }
       }
       /* A call over the shared HTTP endpoint names its caller by the
          capability the route authenticated; it runs as that caller so every
          resolver reads the request's identity rather than this process's. */
       const httpCaller = mcpHttpCallerFromAuthInfo((extra as { authInfo?: unknown }).authInfo);
-      const timeoutMs = 30_000;
+      const forwardedDeadline = ((extra as { _meta?: Record<string, unknown> })._meta)?.["delegatus/deadlineAt"];
+      const timeoutMs = typeof forwardedDeadline === "number" && Number.isFinite(forwardedDeadline)
+        ? Math.max(0, Math.min(30_000, forwardedDeadline - Date.now())) : 30_000;
       const deadline = deadlineSignal(timeoutMs, {
         /* Over stdio a client's cancel reaches `extra.signal`. Over the
            stateless HTTP endpoint it arrives on a later POST, to another
@@ -4629,17 +4736,35 @@ export function createViewerMcpServer(service: McpToolService): McpServer {
              conversation last pointed at. */
           nativeWork: nativeWorkFromRequestMeta((extra as { _meta?: unknown })._meta),
         });
-        const result = await (httpCaller ? runAsMcpHttpCaller({ capability: httpCaller.capability }, call) : call());
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(result) }],
-          structuredContent: result,
-          ...(result.ok ? {} : { isError: true }),
-        };
+        const result = await (httpCaller ? runAsMcpHttpCaller(httpCaller, call) : call());
+        return response(result);
       } finally {
         deadline.release();
       }
     });
   }
+  return server;
+}
+
+/** The retired name exists only for a runtime-host-admitted update probe.
+ * Ordinary stdio and HTTP servers never register it, so agents cannot discover
+ * the compatibility surface in tools/list. */
+export function createViewerMcpHealthProbeServer(service: McpToolService): McpServer {
+  const server = createViewerMcpServer(service);
+  // Older installed deployers compare the candidate against their full catalog.
+  // Removal conditions: docs/verification/managed-mcp-catalog.md#bridge-removal.
+  // This registration never enters bindings, policy, receipts or agent prompts.
+  server.registerTool("suggest_replies", {
+    description: "Deprecated update compatibility entry. Always refuses; use publish_prototype_review with a decision form.",
+    inputSchema: z.looseObject({}),
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  }, async () => {
+    const result = {
+      ok: false, code: "tool_retired", retryable: false,
+      error: "Reply drafts are retired. Use publish_prototype_review with questions and no taskId to ask the operator in a decision form.",
+    };
+    return { isError: true, structuredContent: result, content: [{ type: "text", text: result.error }] };
+  });
   return server;
 }
 
@@ -4650,11 +4775,11 @@ export const MCP_HTTP_CLIENT_ID = "llv-spawn-capability";
     for a request that did not come through it (every stdio call). */
 function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancelSignal: (requestId: unknown) => AbortSignal | null }) | null {
   if (!authInfo || typeof authInfo !== "object") return null;
-  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown } };
+  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown; nativePeer?: McpHttpCaller["nativePeer"]; unidentified?: boolean } };
   if (clientId !== MCP_HTTP_CLIENT_ID || typeof token !== "string" || !token) return null;
   const lookup = typeof extra?.cancelSignal === "function" ? extra.cancelSignal as (requestId: unknown) => unknown : null;
   return {
-    capability: token,
+    ...(extra?.nativePeer ? { nativePeer: extra.nativePeer } : extra?.unidentified ? {} : { capability: token }),
     cancelSignal: (requestId) => {
       const signal = lookup?.(requestId);
       return signal instanceof AbortSignal ? signal : null;
@@ -4663,52 +4788,109 @@ function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancel
 }
 
 /**
- * The production tool service: bindings, the shared SQLite receipt store every
- * Viewer MCP server writes (so a clientRequestId replays the same way whichever
- * process or transport it arrives on), the per-call policy, and recovery.
+ * The Viewer owns production bindings, durable receipts, policy and recovery.
+ * Forwarded stdio calls use that same service and original request key.
  */
-export async function createProductionViewerMcpService(hostHealthProbe = false, stdioReads = false): Promise<McpToolService> {
-  /* Only a launched agent can delegate its identity. Candidate probes and
-     legacy clients identified by ancestry keep their existing local surface.
-     The Viewer's HTTP service must never delegate back to itself. */
-  if (stdioReads && !hostHealthProbe && /^[A-Za-z0-9_-]{43}$/.test(process.env.LLV_SPAWN_CAPABILITY ?? "")) {
-    const { VIEWER_LARGE_READS, readFromViewer } = await import("./largeReads");
-    let local: Promise<McpToolService> | null = null;
+export async function createProductionViewerMcpService(hostHealthProbe = false, stdio = false, taskExecutor = false): Promise<McpToolService> {
+  /* Forward before importing policy, bindings or receipts. The Viewer owns
+     one service and rechecks authority before disclosing a saved result.
+     Linux native clients prove their process through a per-call Unix peer
+     challenge. The admitted host probe keeps its local candidate service. */
+  if (stdio && !hostHealthProbe) {
+    const { callViewerMcp } = await import("./largeReads");
+    let active = 0;
     return {
       async callTool(toolName, args, context = {}) {
-        if (VIEWER_LARGE_READS.has(toolName as McpToolName)) {
-          try { return await readFromViewer(toolName as McpToolName, args, context); }
-          catch (error) {
-            return failure(toolName, typeof args.clientRequestId === "string" ? args.clientRequestId : null,
-              "tool_failed", error instanceof Error ? error.message : "Viewer MCP read failed", true);
-          }
-        }
-        if (!local) {
-          const created = createProductionViewerMcpService(hostHealthProbe);
-          local = created;
-          created.catch(() => {
-            if (local === created) local = null;
-          });
-        }
-        return (await local).callTool(toolName, args, context);
+        if (active >= 32) return failure(toolName, typeof args.clientRequestId === "string" ? args.clientRequestId : null,
+          "tool_failed", "The MCP adapter has 32 calls in progress; retry with the original request key.", true);
+        active++;
+        try { return await callViewerMcp(toolName as McpToolName, args, context); }
+        catch (error) {
+          // Once fetch starts, a lost reply cannot establish whether a write
+          // committed. Only the shared service may resolve the original key.
+          const mutation = isMutatingMcpTool(toolName as McpToolName);
+          return failure(toolName, typeof args.clientRequestId === "string" ? args.clientRequestId : null,
+            mutation ? "outcome_unknown" : "tool_failed",
+            error instanceof Error ? error.message : "Viewer MCP request failed", !mutation, false,
+            mutation ? { outcome: "unknown", nextAction: "original-key-lookup" } : {});
+        } finally { active--; }
       },
     };
   }
+  // Initialize the Viewer's binding graph before the first tool dispatch.
+  // Receipt construction remains lazy for the inline service; task calls keep
+  // their complete service and protocol work in the owned executor.
   const {
     productionViewerControlDependencies,
     viewerMcpBindings,
     viewerMcpRecoverableTools,
     viewerMcpToolPolicy,
   } = await import("./bindings");
+  if (!hostHealthProbe && !taskExecutor) {
+    const { TASK_EXECUTOR_TOOLS, viewerTaskExecutor } = await import("./taskExecutor");
+    const { currentMcpHttpCaller } = await import("./callerContext");
+    let inline: Promise<McpToolService> | undefined;
+    return { async callTool(name, args, context) {
+      if (TASK_EXECUTOR_TOOLS.has(name) && currentMcpHttpCaller()) {
+        try { return await viewerTaskExecutor().callTool(name, args, context); }
+        catch (error) {
+          return taskExecutorFailure(name, args, error);
+        }
+      }
+      if (!inline) {
+        const created = createProductionViewerMcpService(hostHealthProbe, false, true);
+        inline = created;
+        created.catch(() => { if (inline === created) inline = undefined; });
+      }
+      return (await inline).callTool(name, args, context);
+    } };
+  }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
-  return createMcpToolService(
+  return withMcpDispatchTurns(createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
-    new SqliteMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
+    await openAsyncMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
       legacyFilePath: statePath("mcp-receipts.json"),
     }),
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
-  );
+  ));
+}
+
+export function taskExecutorFailure(name: string, args: McpToolArgs, error: unknown): McpToolResult {
+  const mutation = isMutatingMcpTool(name as McpToolName);
+  return failure(name, clientRequestId(args), mutation ? "outcome_unknown" : "tool_failed",
+    error instanceof Error ? error.message : "task executor unavailable", !mutation, false,
+    mutation ? { outcome: "unknown", nextAction: "original-key-lookup" } : {});
+}
+
+/** Start one request per timer turn so a burst of synchronous store reads
+ * leaves the Viewer time to service sockets, cancellation and loop probes.
+ * Awaited operations remain concurrent; no transaction or request key is
+ * combined. Awaiting in the caller preserves its AsyncLocalStorage identity. */
+export function withMcpDispatchTurns(service: McpToolService): McpToolService {
+  const waiting: Array<() => void> = [];
+  let scheduled = false;
+  const next = () => {
+    const resume = waiting.shift();
+    if (!resume) { scheduled = false; return; }
+    setTimeout(() => { resume(); next(); }, 0);
+  };
+  return { async callTool(name, args, context) {
+    await new Promise<void>(resolve => {
+      waiting.push(resolve);
+      if (!scheduled) { scheduled = true; next(); }
+    });
+    if (context?.signal?.aborted || (context?.deadlineAt !== undefined && context.deadlineAt <= Date.now())) {
+      // This queued invocation has entered no policy or receipt code. A prior
+      // invocation under the same key may still have committed, so cancellation
+      // cannot establish that the logical mutation was never executed.
+      const mutation = isMutatingMcpTool(name as McpToolName);
+      return failure(name, clientRequestId(args), mutation ? "outcome_unknown" : "tool_failed",
+        "The MCP request ended while waiting for a dispatch turn.", !mutation, false,
+        mutation ? { outcome: "unknown", nextAction: "original-key-lookup" } : {});
+    }
+    return service.callTool(name, args, context);
+  } };
 }
 
 export async function startViewerMcpServer(): Promise<void> {
@@ -4717,7 +4899,9 @@ export async function startViewerMcpServer(): Promise<void> {
   delete process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
   const hostHealthProbe = await admittedMcpHealthProbe(healthProbeCapability);
   const service = await createProductionViewerMcpService(hostHealthProbe, true);
-  const server = createViewerMcpServer(service);
+  const server = hostHealthProbe
+    ? createViewerMcpHealthProbeServer(service)
+    : createViewerMcpServer(service);
   const transport = new StdioServerTransport();
   // The SDK does not close its transport on EOF. A dead client (including a
   // killed launcher) must not leave domain timers or in-flight reads resident.

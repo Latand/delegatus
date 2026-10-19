@@ -1,8 +1,10 @@
+import { currentSeat } from "@/lib/orchestrator/seatChannel";
+import { lookupOriginalSend, resolveSendReceipt, SEND_SEAT_REVOKED_REASON } from "@/lib/runtime/sendSettlement";
 import fs from "node:fs";
 
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, type SpawnReceipt } from "@/lib/agent/registry";
 import { boardFor } from "@/lib/board/store";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
@@ -12,13 +14,16 @@ import { tailRecords } from "@/lib/scanner/activity";
 import { recordValue, recordsValue, stringValue } from "@/lib/scanner/json";
 import { lastAssistantMessageFromRecords } from "@/lib/scanner/lastAssistantMessage";
 import { hardenedRedact } from "@/lib/view/compactText";
+import { taskSelectionSource } from "@/lib/tasks/store";
 
 import {
   pendingSpawnNotices,
+  clearRevokedSpawnNoticeAttempt,
   pruneSpawnNotices,
   readSpawnNoticeChild,
   recordSpawnNoticeAttempt,
   settleSpawnNotices,
+  type SpawnNoticeTurn,
 } from "./store";
 import {
   sweepSpawnNotices,
@@ -32,6 +37,24 @@ const ERROR_LIMIT = 500;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
 
+/** Recheck the receipt and its admitted task ids just before a lost notice
+    could resume its launcher, including a retry of a retained attempt. */
+export function spawnLossRelevant(row: SpawnNoticeTurn, ports: {
+  receipt(id: string): Pick<SpawnReceipt, "failureReporting" | "failureAnnouncementSuppressed" | "rejection"> | null;
+  task(id: string): { status: string } | null;
+} = {
+  receipt: id => agentRegistry().spawnReceipt(id),
+  task: id => taskSelectionSource()?.read(id) ?? null,
+}): boolean {
+  const launchId = row.lost?.launchId;
+  const receipt = launchId ? ports.receipt(launchId) : null;
+  if (!receipt?.failureReporting?.failedAt || receipt.failureAnnouncementSuppressed || receipt.rejection) return false;
+  return !(receipt.failureReporting.taskIds ?? row.lost?.tasks.map(move => move.taskId) ?? []).some(taskId => {
+    const task = ports.task(taskId);
+    return !task || task.status === "done";
+  });
+}
+
 /**
  * Who a notice goes to (spawn-completion-notice §3.3). A retired seat's notice
  * goes to the seat holding its project now; a launcher the registry no longer
@@ -43,10 +66,12 @@ export function spawnNoticeRecipient(
   launcher: string,
   ports: {
     seats: typeof readOrchestratorSeatFileOrNull;
+    current?: typeof currentSeat;
     conversation: (id: string) => ReturnType<ReturnType<typeof agentRegistry>["conversation"]>;
     hiddenPaths: (project: string) => readonly string[];
   } = {
     seats: readOrchestratorSeatFileOrNull,
+    current: currentSeat,
     conversation: (id) => agentRegistry().conversation(id as ViewerConversationId),
     hiddenPaths: (project) => boardFor(project).prefs.hidden,
   },
@@ -58,7 +83,7 @@ export function spawnNoticeRecipient(
       .filter((revocation) => revocation.conversationId === launcher)
       .sort((left, right) => right.revokedAt.localeCompare(left.revokedAt))[0];
     if (retired) {
-      const current = seats.seats[retired.project]?.conversationId;
+      const current = (ports.current ? ports.current(retired.project) : seats.seats[retired.project])?.conversationId;
       if (!current) return { kind: "skip", reason: "no-seat" };
       target = current;
     }
@@ -158,13 +183,32 @@ function productionPorts(): SpawnNoticeSweepPorts {
       }
     },
     recipient: (launcher) => spawnNoticeRecipient(launcher),
+    lossRelevant: row => spawnLossRelevant(row),
     finalMessage: spawnNoticeFinalMessage,
     origin: (child) => agentMessageOrigin(agentRegistry().conversationDeliverySnapshot({ conversationId: child }), child),
     recordAttempt: recordSpawnNoticeAttempt,
     settle: settleSpawnNotices,
+    clearAttempt: clearRevokedSpawnNoticeAttempt,
+    async revokedAttempt(attempt) {
+      const original = lookupOriginalSend(agentRegistry().readOnlySnapshot(), { conversationId: attempt.recipientConversationId, clientMessageId: attempt.clientMessageId });
+      if (original.kind !== "found") return false;
+      const receipt = await resolveSendReceipt(original.operationId);
+      return receipt?.state === "failed" && receipt.reason === SEND_SEAT_REVOKED_REASON;
+    },
     async deliver(request) {
+      const original = lookupOriginalSend(agentRegistry().readOnlySnapshot(), { conversationId: request.conversationId, clientMessageId: request.clientMessageId });
+      if (original.kind === "found") {
+        const receipt = await resolveSendReceipt(original.operationId);
+        if (receipt?.state === "delivered") return { ok: true, operationId: receipt.operationId };
+        if (!receipt || receipt.state === "in-flight") return { ok: false, error: "notice awaits its delivery receipt", uncertain: true };
+      }
       const outcome = await deliverConversationMessage(request);
-      if (outcome.ok) return { ok: true, operationId: outcome.operationId ?? null };
+      if (outcome.ok) {
+        if (!outcome.operationId) return { ok: true, operationId: null };
+        const receipt = await resolveSendReceipt(outcome.operationId);
+        return receipt?.state === "delivered" ? { ok: true, operationId: outcome.operationId }
+          : { ok: false, error: "notice awaits its delivery receipt", uncertain: true };
+      }
       return {
         ok: false,
         error: outcome.error,

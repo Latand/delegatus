@@ -5,6 +5,7 @@ import { useLayoutEffect, useRef, useState, type Dispatch, type ReactNode, type 
 
 import { Select } from "@/components/ui/Select";
 import { requestAccountPanel } from "@/lib/accounts/openPanel";
+import type { CurationAnswer } from "@/lib/memory/curation/answer";
 import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { useLocale, type MessageKey } from "@/lib/i18n";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
@@ -139,10 +140,10 @@ function maintenanceSignatureOf(record: SeatTickSettingsAnswer | null): string {
   return m ? [record?.project, m.enabled, m.intervalHours, m.updatedAt].join("") : "";
 }
 
-function maintenanceChangeOf(draft: MaintenanceDraft, maintenance: BoardMaintenanceAnswer | undefined): NonNullable<SeatTickChange["maintenance"]> {
+function maintenanceChangeOf(draft: MaintenanceDraft, maintenance: Pick<BoardMaintenanceAnswer, "enabled" | "intervalHours"> | undefined): NonNullable<SeatTickChange["maintenance"]> {
   const change: NonNullable<SeatTickChange["maintenance"]> = {};
   if (!maintenance) return change;
-  const current = maintenanceDraftOf(maintenance);
+  const current = { enabled: maintenance.enabled, hours: String(maintenance.intervalHours) };
   if (draft.enabled !== current.enabled) change.enabled = draft.enabled;
   if (draft.hours.trim() !== current.hours) {
     const raw = draft.hours.trim();
@@ -214,6 +215,8 @@ export interface SeatTickDraftState {
   autonomy: AutonomyDraft;
   setAutonomy: Dispatch<SetStateAction<AutonomyDraft>>;
   storedAutonomy: AutonomyView;
+  curation: MaintenanceDraft;
+  setCuration: Dispatch<SetStateAction<MaintenanceDraft>>;
   maintenance: MaintenanceDraft;
   setMaintenance: Dispatch<SetStateAction<MaintenanceDraft>>;
   /** The maintainer's runtime as drafted: the stored one until the operator
@@ -262,6 +265,13 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
     setMaintenance(maintenanceDraftOf(record?.maintenance));
   }
 
+  const [curation, setCuration] = useState<MaintenanceDraft>(() => ({ enabled: record?.curation?.enabled ?? true, hours: String(record?.curation?.intervalHours ?? 6) }));
+  const curationSignature = JSON.stringify([record?.project, record?.curation?.enabled, record?.curation?.intervalHours, record?.curation?.updatedAt]);
+  const [curationAdopted, setCurationAdopted] = useState(curationSignature);
+  if (curationSignature !== curationAdopted) {
+    setCurationAdopted(curationSignature);
+    setCuration({ enabled: record?.curation?.enabled ?? true, hours: String(record?.curation?.intervalHours ?? 6) });
+  }
   const [autoRotate, setAutoRotate] = useState(() => autoRotateDraftOf(record));
   const [autoAdopted, setAutoAdopted] = useState(() => autoRotateSignatureOf(record));
   const autoSignature = autoRotateSignatureOf(record);
@@ -288,11 +298,12 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
   const roleDirty = !!runtimeDraft && !!stored && !sameRuntime(runtimeDraft, stored);
 
   const tickChange = changeOf(draft, record);
+  const curationChange = maintenanceChangeOf(curation, record?.curation);
   const maintenanceChange = maintenanceChangeOf(maintenance, record?.maintenance);
   const maintenanceDirty = Object.keys(maintenanceChange).length > 0;
   const autoChange = autoRotateChangeOf(autoRotate, record);
   const releaseChange = releaseChangeOf(release, record);
-  const change: SeatTickChange = { ...(autonomyDirty ? { autonomy: { enabled: autonomy.enabled, ...(autonomy.enabled && autonomy.hours !== "keep" ? { hours: autonomy.hours === "unlimited" ? null : Number(autonomy.hours) } : {}) } } : {}), ...(Object.keys(releaseChange).length ? { release: releaseChange } : {}), ...tickChange, ...(maintenanceDirty ? { maintenance: maintenanceChange } : {}), ...(Object.keys(autoChange).length ? { autoRotate: autoChange } : {}) };
+  const change: SeatTickChange = { ...(autonomyDirty ? { autonomy: { enabled: autonomy.enabled, ...(autonomy.enabled && autonomy.hours !== "keep" ? { hours: autonomy.hours === "unlimited" ? null : Number(autonomy.hours) } : {}) } } : {}), ...(Object.keys(releaseChange).length ? { release: releaseChange } : {}), ...tickChange, ...(Object.keys(curationChange).length ? { curation: curationChange } : {}), ...(maintenanceDirty ? { maintenance: maintenanceChange } : {}), ...(Object.keys(autoChange).length ? { autoRotate: autoChange } : {}) };
   const requestDirty = Object.keys(change).length > 0;
 
   const save = async () => {
@@ -300,13 +311,16 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
     setRuntimeError(null);
     if (requestDirty) await read.save(change);
     if (roleDirty && runtimeDraft) {
+      /* The picker shows the new runtime as stored at once; a refusal puts the
+         operator's choice back as a draft beside the reason. A mapping that
+         moved under the panel shows the current value instead. */
+      const drafted = runtimeDraft;
+      setRuntimeDraft(null);
       setRoleSaving(true);
-      const result = await maintainer.save(runtimeDraft);
+      const result = await maintainer.save(drafted);
       setRoleSaving(false);
       if (!result.ok) setRuntimeError(result.error);
-      /* Saved, or the mapping moved under the panel: either way the stored
-         value is what the picker shows next. */
-      if (result.ok || result.stale) setRuntimeDraft(null);
+      if (!result.ok && !result.stale) setRuntimeDraft(drafted);
     }
   };
 
@@ -314,6 +328,7 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
     release, setRelease,
     draft,
     setDraft,
+    curation, setCuration,
     maintenance,
     setMaintenance,
     autoRotate,
@@ -701,6 +716,8 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         />
       ) : null}
 
+      {record?.curation ? <SeatTickCuration value={record.curation} state={state} control={control} row={row} phone={phone} now={now} locale={locale} onOpened={onOpenedCard} /> : null}
+
       {record?.autoRotate ? <SeatTickAutoRotate value={record.autoRotate} state={state} control={control} row={row} phone={phone} now={now} locale={locale} /> : null}
 
       {record?.release?.available ? <SeatTickRelease value={record.release} state={state} control={control} row={row} phone={phone} now={now} locale={locale} tickEnabled={record.effective.enabled} /> : null}
@@ -838,6 +855,79 @@ function SeatTickAutoRotate({ value, state, control, row, phone, now, locale }: 
         next: seatTickLocalTime(value.lastAttempt.nextAttemptAt, now, locale) ?? t("seatTick.unknown") })}
     </p> : null}
     {value.windowKnown === false ? <p data-seat-tick-auto-rotate-window-unknown role="status" className="min-w-0 break-words text-caption leading-4 text-warning">{t("seatTick.autoRotate.windowUnknown")}</p> : null}
+  </div>;
+}
+
+function SeatTickCuration({ value, state, control, row, phone, now, locale, onOpened }: {
+  value: CurationAnswer; state: SeatTickDraftState; control: string; row: string; phone: boolean; now: number; locale: string; onOpened?: () => void;
+}) {
+  const { t } = useLocale();
+  const { curation: draft, setCuration: setDraft } = state;
+  const run = value.lastRun;
+  const running = value.live;
+  const endedAt = run ? seatTickLocalTime(run.endedAt ?? run.claimedAt, now, locale) ?? t("seatTick.unknown") : null;
+  const startedAt = running ? seatTickLocalTime(running.claimedAt, now, locale) : null;
+  const nextAt = seatTickLocalTime(value.nextRunAt, now, locale);
+  const counts = run ? ([
+    ["calls", "seatTick.curation.count.calls"],
+    ["changed", "seatTick.curation.count.changed"],
+    ["rewritten", "seatTick.curation.count.rewritten"],
+    ["merged", "seatTick.curation.count.merged"],
+    ["moved", "seatTick.curation.count.moved"],
+    ["split", "seatTick.curation.count.split"],
+    ["archived", "seatTick.curation.count.archived"],
+    ["restored", "seatTick.curation.count.restored"],
+  ] as const).flatMap(([key, label]) => {
+    const count = run.counts[key];
+    return count > 0 ? [t(label, { count })] : [];
+  }).join(" · ") : "";
+  const next = value.waitingOn
+    ? t(`seatTick.curation.${value.waitingOn}`)
+    : (nextAt
+      ? t(run ? "seatTick.maintenance.next.at" : "seatTick.maintenance.next.firstRun", { time: nextAt })
+      : t("seatTick.unknown"));
+  return <div data-seat-tick-curation={value.live ? "running" : value.enabled ? "on" : "off"} className="flex min-w-0 flex-col gap-2 border-t border-border pt-2.5">
+    <div className={`flex min-w-0 items-center gap-2 ${row}`}>
+      <p className="min-w-0 flex-1 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.curation.head")}</p>
+      <Toggle on={draft.enabled} label={t(draft.enabled ? "seatTick.curation.disableAria" : "seatTick.curation.enableAria")} phone={phone} disabled={state.saving}
+        attr={{ "data-seat-tick-curation-enabled": String(draft.enabled) }} onToggle={() => setDraft(previous => ({ ...previous, enabled: !previous.enabled }))} />
+    </div>
+    {draft.enabled ? <label className={`flex min-w-0 items-center gap-2 ${row}`}>
+      <span className="min-w-0 flex-1 text-ui text-primary">{t("seatTick.maintenance.intervalLabel")}</span>
+      <input type="number" min={value.minIntervalHours} max={value.maxIntervalHours} step={1} inputMode="numeric" data-seat-tick-curation-interval
+        value={draft.hours} disabled={state.saving} onChange={event => setDraft(previous => ({ ...previous, hours: event.target.value }))}
+        className={`${control} ${phone ? "w-24" : "w-20"} shrink-0 text-right tabular-nums disabled:opacity-50`} />
+    </label> : null}
+    <div data-seat-tick-curation-rows className="flex min-w-0 flex-col gap-1">
+      {running ? <div data-seat-tick-curation-row="running" className="flex min-w-0 flex-col gap-0.5">
+        <div className={`flex min-w-0 items-baseline gap-2 ${phone ? "min-h-6" : ""}`}>
+          <span className="shrink-0 text-caption text-muted">{t(running.state === "running" ? "seatTick.curation.runningLabel" : "seatTick.curation.startingLabel")}</span>
+          <span className="min-w-0 flex-1 break-words text-right text-ui text-primary">{t(running.state === "running" ? "seatTick.curation.runningSince" : "seatTick.curation.startingSince", { time: startedAt ?? t("seatTick.unknown") })}</span>
+        </div>
+        {running.conversationId ? <div className="flex min-w-0 flex-wrap justify-end gap-x-3">
+          <a data-seat-tick-curation-live-conversation href={"#c=" + encodeURIComponent(running.conversationId)} onClick={onOpened}
+            className={`${LINK} text-ui ${phone ? "min-h-11" : "h-7"}`}>{t("seatTick.curation.conversation")}<ArrowUpRight className="h-3.5 w-3.5 shrink-0" aria-hidden /></a>
+        </div> : null}
+      </div> : null}
+      <div data-seat-tick-curation-row="last" className="flex min-w-0 flex-col gap-0.5">
+        <div className={`flex min-w-0 items-baseline gap-2 ${phone ? "min-h-6" : ""}`}>
+          <span className="shrink-0 text-caption text-muted">{t("seatTick.maintenance.row.last")}</span>
+          <span className="min-w-0 flex-1 break-words text-right text-ui text-primary">{run
+            ? t(run.state === "succeeded" ? "seatTick.maintenance.status.done" : "seatTick.maintenance.status.failed", { time: endedAt ?? t("seatTick.unknown") })
+            : t("seatTick.curation.never")}</span>
+        </div>
+        {counts ? <span data-seat-tick-curation-counts className="break-words text-right text-caption text-secondary">{counts}</span> : null}
+        {run?.failure ? <span role="status" className="break-words text-right text-caption text-warning">{run.failure}</span> : null}
+        {run?.conversationId ? <div className="flex min-w-0 flex-wrap justify-end gap-x-3">
+          <a data-seat-tick-curation-conversation href={"#c=" + encodeURIComponent(run.conversationId)} onClick={onOpened}
+            className={`${LINK} text-ui ${phone ? "min-h-11" : "h-7"}`}>{t("seatTick.curation.conversation")}<ArrowUpRight className="h-3.5 w-3.5 shrink-0" aria-hidden /></a>
+        </div> : null}
+      </div>
+      <div data-seat-tick-curation-row="next" className={`flex min-w-0 items-baseline gap-2 ${phone ? "min-h-6" : ""}`}>
+        <span className="shrink-0 text-caption text-muted">{t("seatTick.maintenance.row.next")}</span><span className="min-w-0 flex-1 break-words text-right text-ui text-primary">{next}</span>
+      </div>
+    </div>
+    {value.runsError ? <p role="status" className="break-words text-caption text-warning">{value.runsError}</p> : null}
   </div>;
 }
 

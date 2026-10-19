@@ -1,0 +1,1 @@
+The project's own rules govern the work: read its instruction files (AGENTS.md, CLAUDE.md, CONTRIBUTING, the README, or whatever the project uses) before you change or judge anything. Its required checks are the ones those files or its CI name. When the project names none, say which checks you ran and why they fit.

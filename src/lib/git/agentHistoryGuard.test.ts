@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,6 +25,29 @@ test("hooks stay in the shared home across a container-to-host launch and sandbo
     const reapplied = agentPublicationIdentityEnv(env);
     expect(reapplied.GIT_CONFIG_COUNT).toBe(env.GIT_CONFIG_COUNT);
     expect(reapplied[`GIT_CONFIG_VALUE_${last}`]).toBe(hooks);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("stage attempt bindings reuse warmed hook files across native launch configuration", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "guard-stage-binding-"));
+  try {
+    const source = (launchId: string): NodeJS.ProcessEnv => ({ HOME: root, TMPDIR: path.join(root, "tmp"), NODE_ENV: "test",
+      LLV_STAGE_GIT_RECEIPT: path.join(root, "receipts", launchId), LLV_STAGE_GIT_WORKTREE: path.join(root, "lane") });
+    fs.mkdirSync(path.join(root, "tmp"));
+    const first = source("first-launch");
+    const firstEnv = withAgentConfigSandbox({ NODE_ENV: "test" }, first);
+    const hookDir = firstEnv.LLV_AGENT_GIT_GUARD_DIR;
+    const write = spyOn(fs, "writeFileSync");
+    const rename = spyOn(fs, "renameSync");
+    try {
+      for (const launchId of ["second", "third", "fourth", "fifth", "sixth"]) {
+        const next = withAgentConfigSandbox({ NODE_ENV: "test" }, source(`${launchId}-launch`));
+        expect(next.LLV_AGENT_GIT_GUARD_DIR).toBe(hookDir);
+        expect(next.LLV_STAGE_GIT_RECEIPT).toBe(path.join(root, "receipts", `${launchId}-launch`));
+      }
+      expect(write).not.toHaveBeenCalled();
+      expect(rename).not.toHaveBeenCalled();
+    } finally { write.mockRestore(); rename.mockRestore(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -303,5 +326,142 @@ test("renaming and deleting branches preserves foreign commits without rewriting
     f.ok(["branch", "temporary"]);
     f.ok(["branch", "-d", "temporary"]);
     expect(f.ok(["rev-parse", "HEAD"])).toBe(before);
+  } finally { f.close(); }
+});
+
+test.each([false, true])("pre-push preserves the repository hook input and refusal with stage binding=%s", (bound) => {
+  const f = fixture();
+  try {
+    const origin = path.join(f.root, "origin.git");
+    f.ok(["init", "--bare", origin]);
+    f.ok(["remote", "add", "origin", origin]);
+    const hooks = path.join(f.root, ".git", "hooks");
+    fs.mkdirSync(hooks, { recursive: true });
+    fs.writeFileSync(path.join(hooks, "pre-push"),
+      '#!/bin/sh\ncat > push-input\necho "repository publication refused" >&2\nexit 7\n', { mode: 0o700 });
+    if (bound) {
+      const receipt = path.join(f.root, "receipt");
+      fs.mkdirSync(receipt);
+      fs.writeFileSync(path.join(receipt, "base"), f.ok(["rev-parse", "HEAD"]));
+      Object.assign(f.env, agentPublicationIdentityEnv({ ...f.env,
+        LLV_STAGE_GIT_RECEIPT: receipt, LLV_STAGE_GIT_WORKTREE: f.root }));
+    }
+    const head = f.ok(["rev-parse", "HEAD"]);
+    const pushed = f.run(["push", "origin", "HEAD:refs/heads/result"]);
+    expect(pushed.exitCode).not.toBe(0);
+    expect(pushed.stderr.toString()).toContain("repository publication refused");
+    expect(fs.readFileSync(path.join(f.root, "push-input"), "utf8")).toBe(`HEAD ${head} refs/heads/result ${"0".repeat(40)}\n`);
+    expect(f.ok(["--git-dir=" + origin, "for-each-ref", "--format=%(objectname)"])).toBe("");
+  } finally { f.close(); }
+});
+
+test("a stage Git binding preserves pushes from an unrelated fixture repository", () => {
+  const f = fixture();
+  try {
+    const receipt = path.join(f.root, "receipt");
+    fs.mkdirSync(receipt);
+    const original = f.ok(["rev-parse", "HEAD"]);
+    fs.writeFileSync(path.join(receipt, "base"), original);
+    Object.assign(f.env, agentPublicationIdentityEnv({ ...f.env,
+      LLV_STAGE_GIT_RECEIPT: receipt, LLV_STAGE_GIT_WORKTREE: f.root }));
+    const other = path.join(f.root, "fixture");
+    const origin = path.join(f.root, "fixture-origin.git");
+    f.ok(["init", "--bare", origin]);
+    f.ok(["init", "-b", "main", other]);
+    f.ok(["-C", other, "commit", "--allow-empty", "-m", "fixture"]);
+    f.ok(["-C", other, "remote", "add", "origin", origin]);
+    const pushed = f.run(["-C", other, "push", "origin", "main"]);
+    expect(pushed.exitCode, pushed.stderr.toString()).toBe(0);
+    expect(fs.existsSync(path.join(receipt, "refused"))).toBe(false);
+    expect(f.ok(["rev-parse", "HEAD"])).toBe(original);
+  } finally { f.close(); }
+});
+
+test.each(["foreign", "same-size", "oversized", "missing", ...(process.platform === "win32" ? [] : ["symlink", "mode"])])("launch verifies warmed hook bodies: %s", (kind) => {
+  const f = fixture();
+  const warnings = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const directory = f.env.LLV_AGENT_GIT_GUARD_DIR!;
+    const hook = path.join(directory, "pre-push");
+    const expected = fs.readFileSync(hook, "utf8");
+    const peer = path.join(f.root, "foreign-hook");
+    fs.writeFileSync(peer, "foreign body");
+    if (kind === "foreign") fs.writeFileSync(hook, "#!/bin/sh\necho transport rejected once >&2\nexit 1\n");
+    if (kind === "same-size") fs.writeFileSync(hook, expected.replace("set -eu", "set +eu"));
+    if (kind === "oversized") fs.writeFileSync(hook, "x".repeat(1_000_000));
+    if (kind === "missing") fs.unlinkSync(hook);
+    if (kind === "symlink") { fs.unlinkSync(hook); fs.symlinkSync(peer, hook); }
+    if (kind === "mode") fs.chmodSync(hook, 0o600);
+    const next = agentPublicationIdentityEnv(f.env);
+    expect(next.LLV_AGENT_GIT_GUARD_DIR).toBe(directory);
+    expect(fs.lstatSync(hook).isFile()).toBe(true);
+    expect(fs.readFileSync(hook, "utf8")).toBe(expected);
+    if (process.platform !== "win32") expect(fs.statSync(hook).mode & 0o777).toBe(0o700);
+    expect(fs.readFileSync(peer, "utf8")).toBe("foreign body");
+    expect(warnings).toHaveBeenCalledWith(expect.stringContaining("pre-push"));
+    warnings.mockClear();
+    agentPublicationIdentityEnv(next);
+    expect(warnings).not.toHaveBeenCalled();
+  } finally { warnings.mockRestore(); f.close(); }
+});
+
+test("a fresh launch process repairs an inherited guard before returning its environment", () => {
+  const f = fixture();
+  try {
+    const directory = f.env.LLV_AGENT_GIT_GUARD_DIR!;
+    const hook = path.join(directory, "pre-push");
+    const expected = fs.readFileSync(hook, "utf8");
+    fs.writeFileSync(hook, "foreign body");
+    const script = `import { agentPublicationIdentityEnv } from ${JSON.stringify(path.resolve("src/lib/git/agentPublicationIdentity.ts"))};
+      console.log(JSON.stringify(agentPublicationIdentityEnv(${JSON.stringify(f.env)})));`;
+    const child = Bun.spawnSync([process.execPath, "--eval", script], { env: { ...process.env, LLV_STATE_DIR: path.join(f.root, "child-state") }, stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode, child.stderr.toString()).toBe(0);
+    expect(JSON.parse(child.stdout.toString()).LLV_AGENT_GIT_GUARD_DIR).toBe(directory);
+    expect(fs.readFileSync(hook, "utf8")).toBe(expected);
+    expect(child.stderr.toString()).toContain("pre-push");
+  } finally { f.close(); }
+});
+
+test("launch refuses an unreplaceable hook and cleans its pending file", () => {
+  const f = fixture();
+  try {
+    const directory = f.env.LLV_AGENT_GIT_GUARD_DIR!;
+    const hook = path.join(directory, "pre-push");
+    fs.unlinkSync(hook); fs.mkdirSync(hook);
+    expect(() => agentPublicationIdentityEnv(f.env)).toThrow();
+    expect(fs.statSync(hook).isDirectory()).toBe(true);
+    expect(fs.readdirSync(directory).filter(name => name.startsWith("pre-push."))).toEqual([]);
+  } finally { f.close(); }
+});
+
+test("a guard source without HOME uses the runner's private home", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "guard-home-default-"));
+  const previous = process.env.HOME;
+  const passwdHome = spyOn(os, "homedir").mockReturnValue(path.join(root, "passwd-home"));
+  try {
+    process.env.HOME = path.join(root, "runner-home");
+    const env = agentPublicationIdentityEnv({ NODE_ENV: "test" });
+    expect(env.LLV_AGENT_GIT_GUARD_DIR!.startsWith(process.env.HOME + path.sep)).toBe(true);
+    expect(fs.existsSync(path.join(root, "passwd-home"))).toBe(false);
+  } finally {
+    passwdHome.mockRestore();
+    if (previous === undefined) delete process.env.HOME; else process.env.HOME = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test.skipIf(process.platform === "win32").each(["root", "directory"])("launch refuses a symlinked generated %s", (kind) => {
+  const f = fixture();
+  try {
+    const directory = f.env.LLV_AGENT_GIT_GUARD_DIR!;
+    const target = kind === "root" ? path.dirname(directory) : directory;
+    const moved = path.join(f.root, "foreign-directory");
+    fs.renameSync(target, moved);
+    fs.symlinkSync(moved, target, "dir");
+    const hook = path.join(moved, ...(kind === "root" ? [path.basename(directory)] : []), "pre-push");
+    fs.writeFileSync(hook, "foreign body");
+    expect(() => agentPublicationIdentityEnv(f.env)).toThrow("Invalid generated Git hook");
+    expect(fs.readFileSync(hook, "utf8")).toBe("foreign body");
   } finally { f.close(); }
 });

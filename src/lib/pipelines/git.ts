@@ -1,3 +1,4 @@
+import { shortId } from "@/lib/shortIds";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -17,6 +18,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
 import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifactsDir, pipelineDeliveryLookup, withDeliveryMutationAsync } from "./store";
 
+import { publicationDeadlineOnly } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
@@ -491,7 +493,7 @@ async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, sta
   const head = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir, signal);
   if (head.code !== 0) return failure("reading the interrupted pipeline checkout", head);
   if (head.stdout.trim() !== start) {
-    return { ok: false, error: `the interrupted pipeline checkout is at ${head.stdout.trim()}, not its start commit ${start}; remove the worktree and retry-stage` };
+    return { ok: false, error: `the interrupted pipeline checkout is at ${shortId(head.stdout.trim())}, not its start commit ${shortId(start)}; remove the worktree and retry-stage` };
   }
   // A checkout killed while Git is building its index can leave an empty
   // index, so use the selected start tree as the source of tracked paths.
@@ -1209,7 +1211,7 @@ export async function mapReplayPatchLocation(
 }
 
 /** The trusted publication detectors apply to names and messages alike. */
-function publicationTextSafe(text: string): string | null {
+function* publicationTextScan(text: string): Generator<void, string | null> {
   const decoded = canonicalSensitiveText(text, true);
   if (decoded.error) return null;
   const view = decoded.text.normalize("NFKC");
@@ -1220,10 +1222,27 @@ function publicationTextSafe(text: string): string | null {
   for (const fingerprint of publicationFingerprints.fingerprints) {
     const text = "exactOnly" in fingerprint && fingerprint.exactOnly ? normalized : compact;
     for (let offset = 0; offset + fingerprint.length <= text.length; offset++) {
+      if (offset % 256 === 0) yield;
       if (crypto.createHash("sha256").update(text.slice(offset, offset + fingerprint.length)).digest("hex") === fingerprint.sha256) return null;
     }
   }
   return normalized;
+}
+
+function publicationTextSafe(text: string): string | null {
+  const scan = publicationTextScan(text);
+  for (;;) { const next = scan.next(); if (next.done) return next.value; }
+}
+
+/** The controller yields between bounded fingerprint slices while checking
+ * a stage summary; synchronous commit validation keeps the same scanner. */
+export async function pipelinePublicationTextSafe(text: string): Promise<string | null> {
+  const scan = publicationTextScan(text);
+  for (;;) {
+    const next = scan.next();
+    if (next.done) return next.value;
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
 }
 
 /** Admit the literal attribution mailboxes the publication boundary allows.
@@ -1430,7 +1449,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
     missing ||= merged.code !== 0 || merged.stdout.split("\0")[0].trim() !== tree.stdout.trim();
   }
   if (missing) {
-    return { ok: false, error: `stage head ${head} does not preserve accepted head ${accepted}; dropped accepted commits: ${[...dropped, ...droppedMerges].join(", ")}; accepted content is missing or conflicts with the stage tree` };
+    return { ok: false, error: `stage head ${shortId(head)} does not preserve accepted head ${shortId(accepted)}; dropped accepted commits: ${[...dropped, ...droppedMerges].map(shortId).join(", ")}; accepted content is missing or conflicts with the stage tree` };
   }
   const commit = (await exec("git", ["commit-tree", tree.stdout.trim(), "-p", head, "-p", accepted,
     "-m", `pipeline(${pipeline.id}): reconcile rebased stage`], pipeline.worktreeDir, controllerCommitIdentityEnv()));
@@ -1551,7 +1570,8 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   if (failure.step === "preparing publication dependencies") return `installing the worktree's dependencies failed (bun install --frozen-lockfile, ${status})`;
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
   const phase = publicationFailurePhase(failure);
-  const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ")).map((line) => line.slice(7).replace(/ \[[\d.]+m?s\]$/, "")))];
+  const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
+    .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
   const tests = failed.length ? `, ${failed.length} failing test${failed.length === 1 ? "" : "s"}, first: ${failed[0]!.slice(0, 120)}` : "";
   if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests})`;
   const last = lines.filter(Boolean).at(-1);
@@ -1900,15 +1920,18 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         // remove the prefix that identifies a secret to the shared redactor.
         const output = redactPublicationOutput(executed.stdout, executed.stderr);
         const tail = output.slice(-4000);
-        const phases = [...new Set(output.split("\n").filter((line) => line.startsWith("pre-push: ")))]
-          .slice(-16).filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
-        // Long test diagnostics must not erase the hook's phase markers.
+        const lines = output.split("\n");
+        const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ")))].slice(-16);
+        const tests = [...new Set(lines.filter((line) => /^(?:\(fail\) |NEW (?!.*<runner error>))/.test(line)))].slice(0, 8);
+        const phases = [...checks, ...tests].filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
+        // Long diagnostics must not erase the hook phases or failing test names.
         const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
         const hookStop = preparingDependencies ? null : hookBudgetStop(output);
         const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
         failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
+          retryableDeadline: !preparingDependencies && publicationDeadlineOnly(output),
           ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
       return executed;
@@ -2056,14 +2079,14 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
 async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
   const acceptedSha = request.acceptedSha;
   if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) {
-    return { ok: false, error: `the accepted pipeline revision is not an exact commit SHA: ${acceptedSha || "absent"}` };
+    return { ok: false, error: `the accepted pipeline revision is not an exact commit SHA: ${shortId(acceptedSha || "absent")}` };
   }
   const local = (await currentPipelineBranchHead(pipeline, exec));
   if (!local.ok) return local;
   /* The worktree must still hold the accepted revision when publication starts.
      A head that has moved on is not this publication's business to push. */
   if (local.sha !== acceptedSha) {
-    return { ok: false, error: `the pipeline worktree is at ${local.sha}, not the accepted revision ${acceptedSha}; nothing was published` };
+    return { ok: false, error: `the pipeline worktree is at ${shortId(local.sha)}, not the accepted revision ${shortId(acceptedSha)}; nothing was published` };
   }
   if (request.publishedSha && request.publishedSha === acceptedSha) return { ok: true, sha: acceptedSha, remote: "published" };
 
@@ -2097,6 +2120,9 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
        discard work, so the pipeline parks and lets the operator choose. */
     const remoteIsAncestor = (await exec("git", ["merge-base", "--is-ancestor", remoteSha, acceptedSha], pipeline.worktreeDir));
     if (remoteIsAncestor.code === 1) {
+      const localIsAncestor = await exec("git", ["merge-base", "--is-ancestor", acceptedSha, remoteSha], pipeline.worktreeDir);
+      if (localIsAncestor.code === 0) return { ok: false, error: "the remote pipeline branch is ahead of the accepted head without a settled attempt proof; the producing stage must settle its proved push before review, or the additional work needs a fresh review; both tips are preserved" };
+      if (localIsAncestor.code !== 1) return failure("comparing the remote-ahead pipeline revision", localIsAncestor);
       return { ok: false, error: "the local and remote pipeline branches diverged; fetch and merge the remote commits into this worktree, then retry publication; both tips are preserved" };
     }
     if (remoteIsAncestor.code !== 0) return failure("comparing local and remote pipeline revisions", remoteIsAncestor);
@@ -2142,7 +2168,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   if (!confirm.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", detail: confirm.error, uncertain: true };
   const publishedHead = confirm.sha;
   if (publishedHead !== acceptedSha) {
-    return { ok: false, error: `publishing the pipeline branch did not land: origin/${pipeline.branch} is ${publishedHead || "absent"}, expected ${acceptedSha}` };
+    return { ok: false, error: `publishing the pipeline branch did not land: origin/${pipeline.branch} is ${shortId(publishedHead || "absent")}, expected ${shortId(acceptedSha)}` };
   }
   return { ok: true, sha: acceptedSha, remote: "published" };
 }

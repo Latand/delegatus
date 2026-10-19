@@ -77,18 +77,30 @@ export function encodedPowerShellCommand(script: string): string {
   return Buffer.from(script, "utf16le").toString("base64");
 }
 
-function runSnapshotCommand(): string {
+/** Raw command evidence retained for the platform verifier's failed attempts. */
+export interface WindowsSnapshotCommandResult {
+  stdout: string;
+  stderr: string;
+  status: number | null;
+  signal: string | null;
+  error: string | null;
+}
+
+function runSnapshotCommand(timeoutMs: number): WindowsSnapshotCommandResult {
+  // eslint-disable-next-line no-restricted-syntax -- Legacy Windows process snapshot backend used by serving liveness and ownership checks.
   const result = spawnSync(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPowerShellCommand(WINDOWS_PROCESS_SNAPSHOT_SCRIPT)],
-    { encoding: "utf8", maxBuffer: MAX_BUFFER, timeout: RUN_TIMEOUT_MS, windowsHide: true },
+    { encoding: "utf8", maxBuffer: MAX_BUFFER, timeout: timeoutMs, windowsHide: true },
   );
-  /* A missing or refused PowerShell degrades to "nothing found", the same way
-     the portable backend treats a missing `ps`. It is not silent in practice:
-     zero rows means zero agents on the board, and `platform-tests.yml` fails
-     when the call stops working on a supported runner. */
-  if (result.error || typeof result.stdout !== "string") return "";
-  return result.stdout;
+  const error: NodeJS.ErrnoException | undefined = result.error;
+  return {
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    status: result.status,
+    signal: result.signal,
+    error: error ? `${error.code ?? error.name}: ${error.message}` : null,
+  };
 }
 
 interface Snapshot {
@@ -106,11 +118,22 @@ export function resetWindowsSnapshotForTests(): void {
   snapshotMemo = null;
 }
 
+/** Take a fresh command result and populate the same cache every backend reader
+ * uses. The verifier calls this on each retry so the five-second TTL cannot
+ * replay a failed attempt. Ordinary backend reads retain their single call. */
+export function refreshWindowsSnapshot(timeoutMs = RUN_TIMEOUT_MS): WindowsSnapshotCommandResult {
+  const command = runSnapshotCommand(timeoutMs);
+  snapshotMemo = {
+    at: Date.now(),
+    data: parseWindowsProcessSnapshot(command.error ? "" : command.stdout),
+    cwds: new Map(),
+  };
+  return command;
+}
+
 function snapshot(): Snapshot {
-  const now = Date.now();
-  if (snapshotMemo && now - snapshotMemo.at < SNAPSHOT_TTL_MS) return snapshotMemo;
-  snapshotMemo = { at: now, data: parseWindowsProcessSnapshot(runSnapshotCommand()), cwds: new Map() };
-  return snapshotMemo;
+  if (!snapshotMemo || Date.now() - snapshotMemo.at >= SNAPSHOT_TTL_MS) refreshWindowsSnapshot();
+  return snapshotMemo!;
 }
 
 function cwdFor(pid: number): string | null {

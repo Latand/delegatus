@@ -1,4 +1,5 @@
 "use client";
+import { splitInboxBatchFeed } from "./feed/parse";
 
 import { ArrowDownToLine, CornerDownRight, type LucideIcon, Wrench } from "lucide-react";
 import { useCallback, Component, type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -68,7 +69,6 @@ import { GalleryOwnerProvider, ImageGalleryProvider } from "./feed/Lightbox";
 import { MessageProvenanceProvider, useDeliveredMessageProvenance } from "./feed/messageProvenance";
 import { RawLineProvider, type RawLineLookup } from "./feed/rawLine";
 import { ResponseDuration } from "./feed/ResponseDuration";
-import { SuggestedReplies } from "./feed/SuggestedReplies";
 import { BoundedLru, firstRowPastTop, readingRows } from "./feed/scrollMemory";
 import { ConversationAttention } from "./runtime/ConversationAttention";
 import { conversationSpeech, ownConversationFeed, SpeechScope } from "./feed/conversationSpeech";
@@ -338,12 +338,6 @@ class PrependViewport extends Component<PrependViewportProps> {
   render() { return this.props.children; }
 }
 
-function canScrollVertically(element: HTMLElement, deltaY: number): boolean {
-  if (deltaY < 0) return element.scrollTop > 0;
-  if (deltaY > 0) return element.scrollTop + element.clientHeight < element.scrollHeight;
-  return false;
-}
-
 function pointerHitsVerticalScrollbar(element: HTMLElement, clientX: number): boolean {
   if (element.scrollHeight <= element.clientHeight) return false;
   const bounds = element.getBoundingClientRect();
@@ -597,7 +591,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const feedTouchRef = useRef<{ x: number; y: number } | null>(null);
   const gestureRestPending = useRef(false);
   const autoAlignRef = useRef<{ delta: number; count: number } | null>(null);
-  const pillTouchRef = useRef<{ x: number; y: number } | null>(null);
   const restoreInitializedPathRef = useRef<string | null>(null);
   const pendingRestoreRef = useRef<PendingRestore | null>(null);
   const filePathRef = useRef(tailPath);
@@ -882,14 +875,14 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [session, file?.activity, tail.lines, tail.linesStart],
   );
-  const feed = useReasoningFeed(canonicalFeed, runtimeLiveTurn, `${memoryKey}\0${tailPath}`);
+  const unsplitFeed = useReasoningFeed(canonicalFeed, runtimeLiveTurn, `${memoryKey}\0${tailPath}`);
   /* Tool activity earns its cue from the parse itself: every newly appended
      call ticks once, keyed on the engine's call id — even one that settled
      inside a single tail tick — while re-parses, remounts and paged-in history
      stay silent. The window end anchors "newly appended" to the tail stream;
      loading gates the baseline so an unloaded feed is not mistaken for an
      empty conversation. */
-  useToolActivityCues(feed.items, memoryKey, tailPath, tail.linesStart + tail.lines.length, Boolean(file) && !tail.loading);
+  useToolActivityCues(unsplitFeed.items, memoryKey, tailPath, tail.linesStart + tail.lines.length, Boolean(file) && !tail.loading);
   /* Delivered-message authorship (#1117): joins the Claude delivery ledger by
      engine message id server-side, and on both engines joins each settled
      delivery occurrence (registry receipt or flow round: content digest,
@@ -909,9 +902,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   );
   const provenanceLookup = useDeliveredMessageProvenance(
     file?.engine === "claude" || file?.engine === "codex" ? tailPath : null,
-    feed.items,
+    unsplitFeed.items,
     awaitingSubmissions,
   );
+  const feed = useMemo(() => splitInboxBatchFeed(unsplitFeed, id => provenanceLookup.inboxPartsFor?.(id)), [unsplitFeed, provenanceLookup]);
   const hiddenLocal = Math.max(0, feed.items.length - visibleCount);
   const visibleItems = hiddenLocal ? feed.items.slice(-visibleCount) : feed.items;
   const visibleStartIndex = feed.items.length - visibleItems.length;
@@ -1773,12 +1767,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     [pendingOutbox, t, outboxSwitchHold, outboxSession],
   );
 
-  /* What says this conversation moved, for the reply-draft read (#1202): the
-     bytes the tail has seen plus the rows they parsed into. It changes exactly
-     when the transcript grows, so the drafts are read off the stream the pane
-     already has rather than off a timer of their own. */
-  const suggestionsRevision = `${tail.size}:${feed.items.length}`;
-
   /* The desktop's live-tail pill is centered on every surface — the same axis
      as the pinned TurnStatusBar below, per the issue #268 operator note: the
      two bottom elements share one axis and separate slots, so they can never
@@ -1796,14 +1784,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     };
     if (direction !== null && direction < 0 && magnetRef.current) setMagnet(false);
   };
-  const forwardPillVerticalDelta = (row: HTMLElement | null, deltaY: number): void => {
-    const el = scroller.current;
-    if (!el || !deltaY || (row && canScrollVertically(row, deltaY))) return;
-    releaseOwnStep.current();
-    markUserScroll(deltaY);
-    el.scrollTop += deltaY;
-  };
-
   /* Stepping between the operator's own messages
      (docs/design/own-message-steps.md). A delivered Claude record is a system
      row until the ledger names its sender, so while one is unanswered the
@@ -1929,47 +1909,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       {awayFromTail ? (
         <div data-feed-jump-strip className="pointer-events-none absolute bottom-0 right-2 z-20 flex">
           {wayBack}
-        </div>
-      ) : null}
-      {/* #1202: with the latest turn off-screen the drafts follow the operator
-          to the bottom of the pane, beside the way back to the tail.
-          Empty wrapper space targets the feed; vertical pill gestures are
-          forwarded because this overlay and the feed scroller are siblings. */}
-      {file && !magnet ? (
-        <div
-          className="pointer-events-none absolute inset-x-2 bottom-2 z-10 flex justify-center pr-32"
-          onWheel={(event) => {
-            const row = event.currentTarget.querySelector<HTMLElement>("[data-reply-suggestions]");
-            let scale = 1;
-            if (event.deltaMode === 1) scale = 16;
-            else if (event.deltaMode === 2) scale = scroller.current?.clientHeight ?? 1;
-            forwardPillVerticalDelta(row, event.deltaY * scale);
-          }}
-          onTouchStart={(event) => {
-            const touch = event.touches[0];
-            pillTouchRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
-          }}
-          onTouchMove={(event) => {
-            const touch = event.touches[0];
-            const previous = pillTouchRef.current;
-            if (!touch || !previous) return;
-            const deltaX = previous.x - touch.clientX;
-            const deltaY = previous.y - touch.clientY;
-            pillTouchRef.current = { x: touch.clientX, y: touch.clientY };
-            if (Math.abs(deltaY) <= Math.abs(deltaX)) return;
-            const row = event.currentTarget.querySelector<HTMLElement>("[data-reply-suggestions]");
-            forwardPillVerticalDelta(row, deltaY);
-          }}
-          onTouchEnd={() => { pillTouchRef.current = null; }}
-          onTouchCancel={() => { pillTouchRef.current = null; }}
-        >
-          <SuggestedReplies
-            file={file}
-            revision={suggestionsRevision}
-            items={feed.items}
-            outbox={pendingOutbox}
-            floating
-          />
         </div>
       ) : null}
       <div
@@ -2292,20 +2231,6 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
               </div>
             )}
             <ConversationAttention file={file} />
-            {/* #1202: the manager's reply drafts, directly under its latest
-                turn — one tap from the operator's composer. Absent unless the
-                conversation actually has a set, and yielded to the pinned row
-                above the composer once the magnet is released and that turn is
-                no longer the thing the operator is looking at, so the drafts
-                are offered in exactly one place at a time. */}
-            {magnet ? (
-              <SuggestedReplies
-                file={file}
-                revision={suggestionsRevision}
-                items={feed.items}
-                outbox={pendingOutbox}
-              />
-            ) : null}
             {feed.items.length && !file.pendingQuestion && !file.waitingInput && endedQuestion ? (
               <div className="my-4 rounded-[8px] border border-border bg-sunken px-4 py-3 text-[13px] font-semibold text-muted">{endedQuestion}</div>
             ) : null}

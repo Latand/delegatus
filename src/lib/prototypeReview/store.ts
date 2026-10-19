@@ -1,21 +1,24 @@
+import { resolveShortId } from "@/lib/shortIds";
 import crypto from "node:crypto";
-import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
-import { sniffAgrees } from "@/lib/artifact/serve";
-import { loadTasks, mutateTasks } from "@/lib/tasks/store";
+import { loadTasksForList, mutateTasks, loadPrototypeTask, mutateTaskPrototypeRound } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
-import { admittedSource, expandPrototypeInput, PrototypeError, PROTOTYPE_LIMITS, unreadableSource } from "./input";
-import { openedAt } from "@/lib/artifact/localFile";
+import { waitForStateLock } from "@/lib/state/lockWait";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { expandPrototypeInput, PrototypeError, PROTOTYPE_LIMITS } from "./input";
+import { copyMedia, mediaFilename } from "./copy";
+export { mediaFilename, sniffPrototype } from "./copy";
 import { findSeatRound, insertSeatRound, loadSeatRounds, mutateSeatRound } from "./seatRounds";
 import type { PrototypeMedia, PrototypeReviewRound, PublishPrototypeInput } from "./types";
 
-const MIME: Record<string, PrototypeMedia["mime"]> = {
-  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".mp4": "video/mp4", ".webm": "video/webm",
-};
 export const prototypeRoot = () => statePath("prototype-reviews");
+/** Admission covers only state access; media and network effects run outside it. */
+export function withPrototypeState<T>(work: () => T): Promise<T> {
+  return withViewerOperation("prototype.state", () => waitForStateLock("prototype.state", work));
+}
 /** The lock one round's decision is taken, read back and retried under. */
 export function decisionLock(reviewId: string): string {
   return path.join(prototypeRoot(), `${reviewId}.decision.lock`);
@@ -23,7 +26,7 @@ export function decisionLock(reviewId: string): string {
 const DECISION_LOCK_LEFTOVER = /^(pr_[a-f0-9]{32})\.decision\.lock\.write-locks?$/;
 /** Under the publication lock, retire only directories marked by this store. */
 async function removeOrphanCopies(): Promise<void> {
-  const rounds = [...loadTasks().flatMap(task => task.prototypeReviews ?? []), ...loadSeatRounds()];
+  const rounds = await withPrototypeState(() => [...loadTasksForList().flatMap(task => task.prototypeReviews ?? []), ...loadSeatRounds()]);
   const live = new Set(rounds.filter(round => !round.mediaRemovedAt).map(round => round.id));
   /* A round keeps its decision after its pictures are retired, so its lock is
      kept for as long as a task holds the round at all. */
@@ -62,92 +65,51 @@ export function storedMediaPath(realRoot: string, reviewId: string, media: Proto
   if (!/^pr_[a-f0-9]{32}$/.test(reviewId)) throw new PrototypeError("invalid review id");
   return path.join(realRoot, reviewId, mediaFilename(media));
 }
-export function mediaFilename(media: PrototypeMedia): string {
-  if (!/^[a-f0-9]{64}$/.test(media.id) || !Object.values(MIME).includes(media.mime)) throw new PrototypeError("invalid stored media");
-  const ext = media.mime.split("/")[1] === "jpeg" ? "jpg" : media.mime.split("/")[1];
-  return `${media.id}.${ext}`;
-}
 export function roundMedia(round: PrototypeReviewRound): PrototypeMedia[] {
   return round.variants.flatMap(v => [...v.frames.flatMap(f => [f.image, ...(f.original ? [f.original] : [])]), ...v.videos.map(v => v.media)]);
-}
-export function sniffPrototype(mime: PrototypeMedia["mime"], head: Buffer): boolean {
-  if (mime === "video/mp4") return head.length >= 16 && head.readUInt32BE(0) >= 16
-    && head.subarray(4,8).toString("ascii") === "ftyp" && /^(isom|iso[2-9]|mp4[12]|avc1|dash|M4V |MSNV)$/.test(head.subarray(8,12).toString("ascii"));
-  if (mime === "video/webm") return head.length >= 8 && head.subarray(0,4).equals(Buffer.from([0x1a,0x45,0xdf,0xa3]))
-    && head.includes(Buffer.from("webm"));
-  return sniffAgrees(mime, head);
-}
-async function copyMedia(raw: string, staging: string): Promise<PrototypeMedia> {
-  const mime = MIME[path.extname(raw).toLowerCase()];
-  if (!mime) throw new PrototypeError("media must be PNG, JPEG, WebP, MP4 or WebM");
-  const max = mime.startsWith("video/") ? PROTOTYPE_LIMITS.videoBytes : PROTOTYPE_LIMITS.imageBytes;
-  const real = await admittedSource(raw);
-  let handle;
-  try {
-    // Opened before it is known to be a file, so a pipe under that name must not hold the open.
-    handle = await fs.open(real, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    const pinned = await handle.stat();
-    // The roots are checked against the file that was opened, never against the path again.
-    if (!pinned.isFile() || !await openedAt(handle, real)) throw unreadableSource(raw);
-    if (pinned.size > max) throw new PrototypeError(`one ${mime.startsWith("video/") ? "video" : "image"} exceeds ${max} bytes`);
-    const buffer = Buffer.alloc(Math.min(max + 1, pinned.size + 1));
-    let size = 0;
-    while (size < buffer.length) {
-      const read = await handle.read(buffer, size, buffer.length - size, size);
-      if (!read.bytesRead) break;
-      size += read.bytesRead;
-    }
-    if (size !== pinned.size || (await handle.stat()).size !== pinned.size || size > max) throw new PrototypeError("media changed while publishing; nothing was published");
-    const data = buffer.subarray(0,size);
-    if (!sniffPrototype(mime,data.subarray(0,512))) throw new PrototypeError("content does not match the media type",415);
-    const media = { id: crypto.createHash("sha256").update(data).digest("hex"), mime, bytes: size };
-    await fs.writeFile(path.join(staging,mediaFilename(media)), data, { flag: "wx", mode: 0o600, flush: true }).catch(error => {
-      if (error.code !== "EEXIST") throw error;
-    });
-    return media;
-  } catch (error) {
-    if (error instanceof PrototypeError) throw error;
-    throw unreadableSource(raw);
-  } finally { await handle?.close(); }
 }
 /** One round's read-modify-write. A null task names the seat's own round,
     which has no task to hand the change (docs/design/operator-decision-forms.md §2.2). */
 export function mutatePrototypeRound<T>(taskId: string | null, reviewId: string, change: (round: PrototypeReviewRound, task: BoardTask | null) => T): T {
   if (taskId === null) return mutateSeatRound(reviewId, round => change(round, null));
-  return mutateTasks(tasks => {
-    const task = tasks.find(t => t.id === taskId);
-    const round = task?.prototypeReviews?.find(r => r.id === reviewId);
-    if (!task || !round) throw new PrototypeError("review not found",404);
-    const before = JSON.stringify(round);
-    const result = change(round,task);
-    if (JSON.stringify(round) === before) return { tasks: undefined, result };
-    task.updatedAt = new Date().toISOString();
-    return { tasks, result };
+  return mutateTaskPrototypeRound(taskId, reviewId, (round, task) => {
+    if (!round || !task) throw new PrototypeError("review not found", 404);
+    return change(round, task);
   });
 }
 export function findPrototypeRound(taskId: string | null, reviewId: string): PrototypeReviewRound | undefined {
-  if (taskId === null) return findSeatRound(reviewId);
-  return loadTasks().find(t => t.id === taskId)?.prototypeReviews?.find(r => r.id === reviewId);
+  if (taskId === null) {
+    const rounds = loadSeatRounds();
+    const resolved = resolvePrototypeReviewId(rounds, reviewId);
+    return resolved ? findSeatRound(resolved) : undefined;
+  }
+  const task = loadPrototypeTask(taskId);
+  const rounds = task?.prototypeReviews ?? [];
+  const resolved = resolvePrototypeReviewId(rounds, reviewId);
+  return resolved ? rounds.find(round => round.id === resolved) : undefined;
 }
 /** Metadata is a task extension in the existing revisioned, linked SQLite store.
     A null task is the seat asking without one: the round goes to the seat's
     collection under `seatProject`, and nothing else about it differs. */
 export async function publishPrototype(input: PublishPrototypeInput, taskId: string | null, source: PrototypeReviewRound["source"], seatProject?: string, critic?: PrototypeReviewRound["critic"]): Promise<PrototypeReviewRound> {
+  return withViewerOperation("prototype.publish", () => publishRound(input, taskId, source, seatProject, critic));
+}
+async function publishRound(input: PublishPrototypeInput, taskId: string | null, source: PrototypeReviewRound["source"], seatProject?: string, critic?: PrototypeReviewRound["critic"]): Promise<PrototypeReviewRound> {
   if (taskId === null && !seatProject) throw new PrototypeError("a seat round needs its project");
   const publicationKey = `${source.conversationId ?? "operator"}:${input.clientRequestId}`;
   const inputDigest = crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");
   const id = `pr_${crypto.createHash("sha256").update(publicationKey).digest("hex").slice(0,32)}`;
   const replay = () => {
-    const existing = [...loadTasks().flatMap(t => t.prototypeReviews ?? []), ...loadSeatRounds()].find(r => r.publicationKey === publicationKey);
+    const existing = [...loadTasksForList().flatMap(t => t.prototypeReviews ?? []), ...loadSeatRounds()].find(r => r.publicationKey === publicationKey);
     if (existing && (existing.inputDigest !== inputDigest || existing.taskId !== taskId)) throw new PrototypeError("publication key already belongs to another payload",409);
-    return existing;
+    return existing ? structuredClone(existing) : undefined;
   };
-  const held = replay(); if (held) return held;
+  const held = await withPrototypeState(replay); if (held) return held;
   // The resolved task also covers a pipeline publication with no explicit taskId.
   if (taskId !== null && input.questions && input.questions.length < 3) throw new PrototypeError("a task form needs 3–7 questions");
   await fs.mkdir(prototypeRoot(), { recursive: true, mode: 0o700 });
   return withFileTransaction(path.join(prototypeRoot(),"publication.lock"),"prototype publication is busy",async () => {
-    const held = replay(); if (held) return held;
+    const held = await withPrototypeState(replay); if (held) return held;
     await removeOrphanCopies();
     const expanded = await expandPrototypeInput(input);
     const count = (expanded.variants ?? []).reduce((n,v) => n + (v.frames ?? []).reduce((n,f) => n + (f.originalPath ? 2 : 1),0) + (v.videos?.length ?? 0),0);
@@ -163,7 +125,7 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
       round.telegramPost = { key: id, state: "pending", at: round.createdAt };
       let bytes = 0, imageBytes = 0;
       const copy = async (raw: string) => {
-        const media = await copyMedia(raw,staging); bytes += media.bytes;
+        const media = await withViewerOperation("prototype.copy", () => copyMedia(raw,staging)); bytes += media.bytes;
         if (media.mime.startsWith("image/")) imageBytes += media.bytes;
         if (bytes > PROTOTYPE_LIMITS.setBytes || imageBytes > PROTOTYPE_LIMITS.imageSetBytes) throw new PrototypeError("review exceeds 192 MiB total or 48 MiB of images");
         return media;
@@ -188,8 +150,8 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
       // The publication lock owns this id. An earlier interrupted copy has no metadata.
       await fs.rm(roundDirectory(id),{ recursive: true, force: true });
       await fs.rename(staging,roundDirectory(id));
-      if (taskId === null) removed.push(...insertSeatRound(round));
-      else mutateTasks(tasks => {
+      if (taskId === null) removed.push(...await withPrototypeState(() => insertSeatRound(round)));
+      else await withPrototypeState(() => mutateTasks(tasks => {
         const task = tasks.find(t => t.id === taskId);
         if (!task) throw new PrototypeError("task not found",404);
         round.project = task.project;
@@ -227,7 +189,7 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
         task.updatedAt = round.createdAt;
         // Bytes arrive before the metadata commit. A failed commit removes this owned directory.
         return { tasks, result: undefined };
-      });
+      }));
       committed = true;
       for (const old of removed) await fs.rm(roundDirectory(old),{ recursive: true, force: true });
       return round;
@@ -236,4 +198,10 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
       if (!committed) await fs.rm(roundDirectory(id),{ recursive: true, force: true });
     }
   });
+}
+
+export function resolvePrototypeReviewId(rounds: readonly Pick<PrototypeReviewRound, "id">[], given: string): string | null {
+  const result = resolveShortId(rounds.map(round => round.id), given);
+  if (result.kind === "ambiguous") throw Object.assign(new PrototypeError("reviewId is ambiguous; pass more characters", 409), { code: "short_id_ambiguous", candidates: result.candidates });
+  return result.kind === "match" ? result.value : null;
 }

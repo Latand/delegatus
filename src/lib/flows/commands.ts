@@ -227,7 +227,7 @@ export async function createFlowFromRequest(
   if (!resolvedPath) return { error: "implementer transcript is unknown", status: 404 };
   const owner = durableConversation
     ?? registry.conversationForPath(resolvedPath)
-    ?? registry.ensureConversation(roles.implementer.engine, resolvedPath, null);
+    ?? (await registry.deliveryWriteOrBusy({ label: "registry.ensureConversation" }, registry.ensureConversation.bind(registry, roles.implementer.engine, resolvedPath, null)));
   if (owner.engine !== roles.implementer.engine) {
     return { error: "implementer engine does not match its durable conversation", status: 400 };
   }
@@ -279,19 +279,19 @@ export async function createFlowFromRequest(
     createdAt: isoNow(),
     closedAt: null,
   };
-  const admission = await withFlowMutation((flows, persist) => {
+  const admission = await withFlowMutation(async (flows, persist) => {
     assertAuthorized?.();
     if (flows.some((current) =>
       (current.implementerConversationId === owner.id || current.implementerPath === resolvedPath)
       && current.closedAt === null && current.state !== "closed")) {
       return { error: "implementer already has an active flow", status: 409 };
     }
-    registry.rememberMembership(owner.id, {
+    (await registry.deliveryWriteOrBusy({ label: "registry.rememberMembership" }, registry.rememberMembership.bind(registry, owner.id, {
       kind: "flow", containerId: flow.id, role: "implementer", slot: "implementer",
       stageId: null, stageOrder: 0, round: null, parentConversationId: null,
-    });
+    })));
     flows.push(flow);
-    persist();
+    await persist();
     return { flow };
   });
   if (!admission.flow) return admission;
@@ -304,7 +304,7 @@ export async function createFlowFromRequest(
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     }
-    return await withFlowMutation((flows, persist) => {
+    return await withFlowMutation(async (flows, persist) => {
       const current = flows.find((item) => item.id === flow.id);
       if (!current) return { error: "flow changed during kickoff delivery", status: 409 };
       if (delivery) current.kickoffDelivery = delivery;
@@ -313,7 +313,7 @@ export async function createFlowFromRequest(
         current.pausedState = "waiting_ready";
         current.stateDetail = failure;
       }
-      persist();
+      await persist();
       return { flow: current };
     });
   }
@@ -384,7 +384,7 @@ export async function cancelRound(id: string): Promise<{ flow?: Flow; error?: st
   if (!(await stopReviewer(flow, round))) {
     return { error: "reviewer process group did not terminate", status: 409 };
   }
-  return await withFlowMutation((current, persist) => {
+  return await withFlowMutation(async (current, persist) => {
     const currentFlow = current.find((item) => item.id === id);
     if (!currentFlow) return { error: "flow not found", status: 404 };
     const currentRound = lastRound(currentFlow);
@@ -397,7 +397,7 @@ export async function cancelRound(id: string): Promise<{ flow?: Flow; error?: st
     currentRound.terminalAt = isoNow();
     currentFlow.state = "needs_decision";
     currentFlow.stateDetail = "round cancelled by user";
-    persist();
+    await persist();
     return { flow: currentFlow };
   });
 }
@@ -428,7 +428,7 @@ export async function closeFlow(id: string): Promise<{
     }
   }
   const stoppedReviewer = stoppedRound === null ? null : { round: stoppedRound.n };
-  return await withFlowMutation((current, persist) => {
+  return await withFlowMutation(async (current, persist) => {
     const currentFlow = current.find((item) => item.id === id);
     if (!currentFlow) return { error: "flow not found", status: 404 };
     if (currentFlow.state === "closed") return { flow: currentFlow, stoppedReviewer };
@@ -445,7 +445,7 @@ export async function closeFlow(id: string): Promise<{
     currentFlow.state = "closed";
     currentFlow.closedAt = isoNow();
     currentFlow.stateDetail = null;
-    persist();
+    await persist();
     return { flow: currentFlow, stoppedReviewer };
   });
 }

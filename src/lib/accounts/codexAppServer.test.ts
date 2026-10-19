@@ -1,3 +1,4 @@
+import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -100,12 +101,21 @@ function clientWith(handler: (child: FakeChild, message: Record<string, unknown>
 
 test("an unsupported executable is refused before spawning an account app-server", async () => {
   let spawned = false;
+  // Its generated schema lacks methods the newest pin has: not additive.
+  const generateProtocolSchemas = async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' });
   await expect(CodexAppServerClient.start({
     home: "/fake/home",
     readProtocolVersion: () => "0.999.0",
+    generateProtocolSchemas,
     signalProcess: signalFakeGroup,
     spawn: () => { spawned = true; return new FakeChild() as never; },
-  })).rejects.toThrow("has no pinned schema");
+  })).rejects.toThrow("CLI 0.999.0 has no pinned schema and is not an additive extension of pin 0.163.0. Pin the CLI");
+  await expect(CodexAppServerClient.start({
+    home: "/fake/home",
+    readProtocolVersion: () => "0.150.0",
+    signalProcess: signalFakeGroup,
+    spawn: () => { spawned = true; return new FakeChild() as never; },
+  })).rejects.toThrow("CLI 0.150.0 has no pinned schema and no older pin");
   expect(spawned).toBe(false);
 });
 
@@ -136,7 +146,7 @@ test("account-management app-server retains zero-MCP process isolation", async (
   client.close();
 });
 
-test.each(["0.154.0", "0.159.0", "0.162.1"])("a voice caller can choose app-server arguments and send experimental requests (%s)", async version => {
+test.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0"])("a voice caller can choose app-server arguments and send experimental requests (%s)", async version => {
   const child = new FakeChild();
   child.onWrite = message => { if (message.id) child.respond(requestId(message), {}); };
   let args: readonly string[] = [];
@@ -292,6 +302,33 @@ test("successor thread methods use the structured fork, resume, read, name, and 
     },
   });
   client.close();
+});
+
+test("account thread resume reads all five memory states on the same client", async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "account-memory-source-")); process.env.LLV_STATE_DIR = root;
+  const configs: Array<{ features: { memories?: boolean } }> = [];
+  const { start } = clientWith((fake, message) => {
+    if (message.method === "initialize") fake.respond(requestId(message), {});
+    else if (message.method === "config/read") fake.respond(requestId(message), { config: { mcp_servers: {} } });
+    else if (message.method === "thread/resume") {
+      configs.push((message.params as { config: typeof configs[number] }).config);
+      fake.respond(requestId(message), { thread: { id: "fixture-thread" } });
+    }
+  });
+  const client = await start({ protocolProfile: "thread-control" });
+  try {
+    for (const state of SOURCE_STATES) {
+      chooseSource(state);
+      await client.resumeThread("fixture-thread", { cwd: root });
+      expect(configs.at(-1)!.features.memories).toBe(sourceTurnsEnginesOff(state) ? false : undefined);
+    }
+    expect(configs[1]).toEqual(configs[0]);
+  } finally {
+    client.close();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("post-dispatch fork protocol failures have an unknown outcome", async () => {
@@ -607,6 +644,21 @@ test("account/rateLimits/read says whether the limit is reached even when every 
   reachedType = undefined;
   expect(await client.readRateLimits()).not.toHaveProperty("limitReached");
   client.close();
+});
+
+test("account/rateLimits/read retains paid balance separately from reset credits", async () => {
+  const { start } = clientWith((fake, message) => {
+    if (message.method === "initialize") fake.respond(requestId(message), {});
+    if (message.method === "account/rateLimits/read") fake.respond(requestId(message), {
+      rateLimits: { primary: { usedPercent: 99 }, credits: { hasCredits: true, balance: "12.50", unlimited: false } },
+      rateLimitResetCredits: { availableCount: 1 },
+    });
+  });
+  const client = await start();
+  try {
+    expect(await client.readRateLimits()).toMatchObject({ rateLimits: { credits: { hasCredits: true, balance: "12.50", unlimited: false } },
+      resetCredits: { availableCount: 1 } });
+  } finally { client.close(); }
 });
 
 test("a count-only or malformed reset-credit summary degrades to count-only or null, never a throw", async () => {

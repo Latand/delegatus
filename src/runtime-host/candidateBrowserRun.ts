@@ -8,7 +8,7 @@
    A request's time runs from the page issuing it to its last byte, so a wait
    for a free browser connection counts: the operator waits through it too.
    A request that failed counts the time until it did, and one still open
-   when the window closes counts its age so far; only the declared event
+   after the window's bounded drain counts its age so far; only the declared event
    streams (`CANDIDATE_BROWSER_STREAM_ROUTES`) stay open by design.
    Main-thread delay is bounded apart for the boot (navigation to a drawn
    board) and for operation after it. The server's own event loop is read
@@ -18,6 +18,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 import type { CandidateBrowserMeasurements, CandidateBrowserServerLoop, CandidateBrowserView } from "./candidateBrowser";
 import { CANDIDATE_BROWSER_STREAM_ROUTES, summarizeBrowserViews } from "./candidateBrowser";
@@ -25,6 +26,8 @@ import type { ServerLoopWindow } from "./candidateServerLoopProbe";
 
 export const CANDIDATE_BROWSER_VIEWS = 8;
 export const CANDIDATE_BROWSER_WINDOW_MS = 30_000;
+/** Complete requests already in flight before judging the observation window. */
+export const CANDIDATE_BROWSER_REQUEST_DRAIN_MS = 30_000;
 /** How long after its last board drew the server is still answering the views'
     opening requests. A view issues two dozen of them, and the slowest arrive
     for seconds after the board is on screen: that tail belongs to the opening,
@@ -49,7 +52,7 @@ export interface ServerLoopProbe {
   /** The process the probe is watching, once it has started. */
   pid(): number | null;
   /** The server's event loop between two wall-clock instants; null when it did not answer. */
-  read(from: number, to: number): Promise<ServerLoopWindow | null>;
+  read(from: number, to: number, recoveryTo?: number): Promise<ServerLoopWindow | null>;
   /** Hold the server's event loop once, for the gate's own refusal tests. */
   stall(ms: number): void;
 }
@@ -67,9 +70,9 @@ export function serverLoopProbe(prefix: string): ServerLoopProbe {
     pid() {
       try { return Number(fs.readFileSync(`${prefix}.pid`, "utf8")) || null; } catch { return null; }
     },
-    async read(from, to) {
+    async read(from, to, recoveryTo) {
       const id = `window-${asked += 1}`;
-      fs.writeFileSync(`${prefix}.ask.tmp`, JSON.stringify({ id, from, to }));
+      fs.writeFileSync(`${prefix}.ask.tmp`, JSON.stringify({ id, from, to, recoveryTo }));
       fs.renameSync(`${prefix}.ask.tmp`, `${prefix}.ask`);
       /* The probe looks every 100 ms of its own loop; a server held longer answers late. */
       for (const until = performance.now() + 15_000; performance.now() < until; await Bun.sleep(50)) {
@@ -136,6 +139,8 @@ export interface BrowserViewDiagnostics {
 }
 
 export interface BrowserRunResult {
+  /** The actual operating interval, ending before request drain or cleanup. */
+  operatingWindow: { fromUtcMs: number; toUtcMs: number; durationMs: number };
   views: CandidateBrowserView[];
   diagnostics: BrowserViewDiagnostics[];
   /** The server's event-loop delays of 100 ms or more, with the wall clock each ended at. */
@@ -204,10 +209,19 @@ export async function measureBoardInBrowser(options: {
 }): Promise<BrowserRunResult> {
   const { chromium } = await import("playwright-core");
   const windowMs = options.windowMs ?? CANDIDATE_BROWSER_WINDOW_MS;
+  // Chromium's singleton socket must fit AF_UNIX even under a long stage root.
+  // The descriptor aliases this owned directory without creating another root.
+  const chromeTmp = fs.mkdtempSync(path.join(os.tmpdir(), "candidate-chrome-"));
+  const chromeFd = process.platform === "linux" ? fs.openSync(chromeTmp, "r") : null;
+  const cleanChromeTmp = () => {
+    if (chromeFd !== null) fs.closeSync(chromeFd);
+    fs.rmSync(chromeTmp, { recursive: true, force: true });
+  };
   const browser = await chromium.launch({
     args: ["--no-sandbox", "--disable-dev-shm-usage"],
+    env: { ...process.env, TMPDIR: chromeFd === null ? chromeTmp : `/proc/${process.pid}/fd/${chromeFd}` },
     ...(options.executablePath ? { executablePath: options.executablePath } : {}),
-  });
+  }).catch(error => { cleanChromeTmp(); throw error; });
   let writers: ReturnType<typeof startWriters> | null = null;
   let operating: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -238,13 +252,14 @@ export async function measureBoardInBrowser(options: {
       /* Ordinary requests the page started and has not finished: what can
          hold a connection, and what an operator is still waiting for. */
       const open = new Map<object, { route: string; at: number; startedAt: number }>();
+      const tracking = { accepting: true };
       const ordinary = (url: URL) => url.pathname.startsWith("/api/") && !CANDIDATE_BROWSER_STREAM_ROUTES.has(url.pathname);
       page.on("request", (request) => {
         const url = new URL(request.url());
-        if (ordinary(url)) open.set(request, { route: url.pathname, at: Date.now() - navigatedAt, startedAt: Date.now() });
+        if (tracking.accepting && ordinary(url)) open.set(request, { route: url.pathname, at: Date.now() - navigatedAt, startedAt: Date.now() });
       });
       page.on("requestfinished", async (request) => {
-        open.delete(request);
+        if (!open.has(request)) return;
         const url = new URL(request.url());
         if (!ordinary(url)) return;
         const timing = request.timing();
@@ -258,9 +273,11 @@ export async function measureBoardInBrowser(options: {
           firstByteMs: Math.round(Math.max(0, timing.responseStart)),
           at: Math.round(timing.startTime - navigatedAt),
         });
+        open.delete(request);
       });
       page.on("requestfailed", (request) => {
         const started = open.get(request);
+        if (!started) return;
         open.delete(request);
         const url = new URL(request.url());
         if (!ordinary(url)) return;
@@ -275,14 +292,17 @@ export async function measureBoardInBrowser(options: {
       await page.goto(`${options.baseUrl}/#f=${encodeURIComponent(pin.path)}`, { waitUntil: "domcontentloaded" });
       const drawn = await page.waitForSelector("[data-kanban-board]", { timeout: 60_000 }).then(() => true, () => false);
       const readyMs = drawn ? Math.round(performance.now() - started) : Number.POSITIVE_INFINITY;
-      const drawnAt = await page.evaluate(() => performance.now());
-      return { index, context, page, pin, requests, failed, open, readyMs, drawnAt, staleSeen: 0, lostSeen: 0, inputs: [] as number[] };
+      const { drawnAt, timeOrigin } = await page.evaluate(() => ({ drawnAt: performance.now(), timeOrigin: performance.timeOrigin }));
+      return { index, context, page, pin, requests, failed, open, tracking, readyMs, drawnAt, timeOrigin, staleSeen: 0, lostSeen: 0, inputs: [] as number[] };
     }));
     writers = startWriters(options.writers, process.pid);
     /* The server's operation is read from here on; its opening until here. */
     const settleMs = Math.min(CANDIDATE_BROWSER_SETTLE_MS, windowMs / 3);
-    const operatingAt = Date.now() + settleMs;
-    operating = setTimeout(() => options.onOperating?.(windowMs - settleMs), settleMs);
+    let operatingAt = 0, operatingMono = 0;
+    operating = setTimeout(() => {
+      operatingAt = Date.now(); operatingMono = performance.now();
+      options.onOperating?.(windowMs - settleMs);
+    }, settleMs);
     const input = async (view: (typeof views)[number]) => {
       const inputStarted = performance.now();
       await view.page.mouse.wheel(0, 240);
@@ -307,10 +327,19 @@ export async function measureBoardInBrowser(options: {
       }
       await Bun.sleep(2_000);
     }
+    const operatingWindow = { fromUtcMs: operatingAt, toUtcMs: Date.now(),
+      durationMs: operatingMono ? Math.floor(performance.now() - operatingMono) : 0 };
+    // Freeze the measured request set before draining it. Polls started after
+    // the observation window cannot keep this drain alive or enter its result.
+    for (const view of views) view.tracking.accepting = false;
+    const drainDeadline = performance.now() + CANDIDATE_BROWSER_REQUEST_DRAIN_MS;
     const written = await writers.stop();
     writers = null;
     /* The server's own account of the two spans, asked once the load is over. */
     const closedLoopAt = Date.now();
+    while (views.some(view => view.open.size > 0) && performance.now() < drainDeadline) {
+      await Bun.sleep(25);
+    }
     const opened = await options.server?.read(openedAt, operatingAt) ?? null;
     const operated = await options.server?.read(operatingAt, closedLoopAt) ?? null;
     const server: CandidateBrowserServerLoop | null = opened && operated
@@ -320,7 +349,7 @@ export async function measureBoardInBrowser(options: {
     for (const view of views) {
       const lags = await view.page.evaluate(() => (window as unknown as { __historyProbe: { lags: Array<[number, number]> } }).__historyProbe.lags);
       const bootLags = lags.filter(([at]) => at <= view.drawnAt).map(([, lag]) => lag);
-      const operatingLags = lags.filter(([at]) => at > view.drawnAt).map(([, lag]) => lag);
+      const operatingLags = lags.filter(([at]) => at > view.drawnAt && view.timeOrigin + at <= closedLoopAt).map(([, lag]) => lag);
       const hash = await view.page.evaluate(() => decodeURIComponent(location.hash));
       const documentTiming = await view.page.evaluate(() => {
         const entry = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
@@ -347,7 +376,7 @@ export async function measureBoardInBrowser(options: {
       const stillSelected = await holdsSelection(view);
       if (await view.page.locator("[data-stale-focus-notice]").count()) view.staleSeen += 1;
       const answered = view.requests.filter((request) => request.files && request.status >= 200 && request.status < 400);
-      /* Still open as the window closes: its age so far is its time. */
+      /* Boundary requests still open after the drain retain their elapsed age. */
       const closedAt = Date.now();
       const unfinished = [...view.open.values()].map((request) => ({ route: request.route, at: request.at, ageMs: closedAt - request.startedAt }));
       const timed = [...view.requests.map((request) => ({ route: request.route, ms: request.ms })),
@@ -412,10 +441,10 @@ export async function measureBoardInBrowser(options: {
       maxMs: Math.round(Math.max(0, ...written.latencies)),
       failures: written.failures,
     };
-    return { views: readings, diagnostics, serverStalls: [...opened?.stalls ?? [], ...operated?.stalls ?? []], measurements: summarizeBrowserViews(readings, writes, server) };
+    return { operatingWindow, views: readings, diagnostics, serverStalls: [...opened?.stalls ?? [], ...operated?.stalls ?? []], measurements: summarizeBrowserViews(readings, writes, server) };
   } finally {
     clearTimeout(operating);
     if (writers) await writers.stop().catch(() => undefined);
-    await browser.close().catch(() => undefined);
+    try { await browser.close().catch(() => undefined); } finally { cleanChromeTmp(); }
   }
 }

@@ -1,6 +1,8 @@
+import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import crypto from "node:crypto";
 
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
+import { freshLaunchFailure } from "@/lib/tasks/launchFailureReporting";
 
 import type {
   SpawnNoticeAttempt,
@@ -71,17 +73,20 @@ export interface SpawnNoticeSweepPorts {
   /** Null when the registry no longer knows the child. */
   child(child: string): Promise<SpawnNoticeChildView | null>;
   recipient(launcher: string): SpawnNoticeRecipient;
+  lossRelevant?(row: SpawnNoticeTurn): boolean;
   finalMessage(child: string): SpawnNoticeFinalMessage;
   origin(child: string): MessageOrigin;
   recordAttempt(child: string, attempt: SpawnNoticeAttempt): void;
   settle(child: string, turnIds: readonly string[], settlement: SpawnNoticeSettlement, at: string): void;
   deliver(request: SpawnNoticeDeliveryRequest): Promise<SpawnNoticeDeliveryAnswer>;
   log?(message: string, error?: unknown): void;
+  revokedAttempt?(attempt: SpawnNoticeAttempt): Promise<boolean>;
+  clearAttempt?(child: string): void | Promise<void>;
 }
 
 /** One key per child turn, bounded for the delivery layer's 128-character key. */
 export function spawnNoticeMessageId(child: string, turnId: string): string {
-  return `spawn_notice_${crypto.createHash("sha256").update(`${child}:${turnId}`).digest("hex")}`;
+  return `${seatMessageKeys.spawn}${crypto.createHash("sha256").update(`${child}:${turnId}`).digest("hex")}`;
 }
 
 const VERDICT = /^\s*\**\s*Verdict:\s*\**\s*(pass|fail|needs_decision)\b/gim;
@@ -127,9 +132,10 @@ export function composeSpawnNotice(input: {
     return [
       `Agent lost before its first turn: ${lost?.title ?? input.title} (${input.child})`,
       `Launch ${lost?.launchId ?? newest.turnId} failed: ${lost?.reason ?? "no reason recorded"}`,
+      `Failed at ${newest.endedAt}.`,
       "No transcript was written.",
       ...(lost?.tasks ?? []).map(task => `Task ${task.taskId}: launch row failed, ${task.from} → ${task.to}.`),
-      "Relaunch with a new clientRequestId if the work is still wanted; the original key replays this failure.",
+      "The original key replays this failure.",
     ].join("\n");
   }
   const lines = [`Agent finished: ${input.title} (${input.child})`];
@@ -222,9 +228,25 @@ export async function sweepSpawnNotices(ports: SpawnNoticeSweepPorts): Promise<v
 }
 
 async function sweepChild(child: string, rows: SpawnNoticeTurn[], ports: SpawnNoticeSweepPorts): Promise<void> {
-  const record = ports.childRecord(child);
+  let record = ports.childRecord(child);
+  const obsolete = rows.filter(row => {
+    if (row.outcome !== "lost") return false;
+    const recipient = ports.recipient(row.launcherConversationId);
+    return !freshLaunchFailure(row.endedAt, ports.now()) || ports.lossRelevant?.(row) === false
+      || recipient.kind === "skip" || recipient.conversationId !== row.launcherConversationId
+      || Boolean(record?.attempt && record.attempt.recipientConversationId !== row.launcherConversationId);
+  });
+  if (obsolete.length) {
+    ports.settle(child, obsolete.map(row => row.turnId), { state: "skipped", reason: "loss-handled" }, iso(ports.now()));
+    rows = rows.filter(row => !obsolete.includes(row));
+    if (!rows.length) return;
+  }
   /* A notice already handed over is finished first, exactly as it was
      written, whatever the child has done since. */
+  if (record?.attempt && await ports.revokedAttempt?.(record.attempt)) {
+    await ports.clearAttempt?.(child);
+    record = { ...record, attempt: null };
+  }
   if (record?.attempt) {
     const attempt = { ...record.attempt, attempts: record.attempt.attempts + 1 };
     ports.recordAttempt(child, attempt);

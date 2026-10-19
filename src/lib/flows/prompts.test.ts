@@ -48,8 +48,9 @@ test("reviewer prompt includes pinned specification and acceptance criteria", ()
   const prompt = reviewerPrompt(flow("Add flow specs\nAC1: Fresh reviewers receive the spec"), { ...round, reviewHeadSha });
   expect(prompt).toContain("Pinned flow specification and acceptance criteria:");
   expect(prompt).toContain("AC1: Fresh reviewers receive the spec");
-  expect(prompt).toContain(`Exact review HEAD: ${reviewHeadSha}`);
+  expect(prompt).toContain(`Exact review HEAD: ${reviewHeadSha.slice(0, 8)}`);
   expect(prompt).toContain("how to show it fails");
+  expect(prompt).not.toMatch(/[a-f0-9]{20,}/i);
 });
 
 test("kickoff carries a pinned specification into the implementer session", () => {
@@ -58,7 +59,7 @@ test("kickoff carries a pinned specification into the implementer session", () =
 
 test("flow reviewers require base evidence and retain blocking head-only failures", () => {
   const prompt = reviewerPrompt(flow(), round);
-  expect(prompt).toContain("Test baseline comparison:");
+  expect(prompt).toContain("Test baseline:");
   expect(prompt).toContain("captured review base");
   expect(prompt).toContain("it alone never warrants a finding or a failing verdict");
   expect(prompt).toContain("New head-only failures still block");

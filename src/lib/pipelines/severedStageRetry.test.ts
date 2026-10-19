@@ -219,7 +219,7 @@ function stagePorts(
     spawnAgent: async ({ clientAttemptId }, onReserved) => {
       spawns.push(clientAttemptId);
       if (spawns.length === 1) {
-        onReserved({ launchId: stage.launchId, conversationId: stage.conversationId });
+        await onReserved({ launchId: stage.launchId, conversationId: stage.conversationId });
         return {
           launchId: stage.launchId,
           conversationId: stage.conversationId,
@@ -229,7 +229,7 @@ function stagePorts(
         };
       }
       const replacement = `replacement-${spawns.length - 1}`;
-      onReserved({ launchId: replacement, conversationId: `conversation_${replacement}` });
+      await onReserved({ launchId: replacement, conversationId: `conversation_${replacement}` });
       return {
         launchId: replacement,
         conversationId: `conversation_${replacement}`,

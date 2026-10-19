@@ -1,0 +1,82 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "readings": [
+    {
+      "name": "390-en-light-retained",
+      "loaded": {
+        "width": 720,
+        "src": "/api/image?done=task%3Arendered-phone&media=596d8cad6895d84645a3d1f7f41ff6e67f96093cbd62f9bda314d0666a86b62f"
+      },
+      "sourceRemoved": true,
+      "viewer": true
+    },
+    {
+      "name": "390-en-light-missing",
+      "whole": true,
+      "label": "Frames were not retained"
+    },
+    {
+      "name": "390-en-light-error",
+      "whole": true,
+      "label": "Frames were not retained"
+    },
+    {
+      "name": "390-en-dark-retained",
+      "loaded": {
+        "width": 720,
+        "src": "/api/image?done=task%3Arendered-phone&media=596d8cad6895d84645a3d1f7f41ff6e67f96093cbd62f9bda314d0666a86b62f"
+      },
+      "sourceRemoved": true,
+      "viewer": true
+    },
+    {
+      "name": "390-en-dark-missing",
+      "whole": true,
+      "label": "Frames were not retained"
+    },
+    {
+      "name": "390-en-dark-error",
+      "whole": true,
+      "label": "Frames were not retained"
+    },
+    {
+      "name": "390-uk-light-retained",
+      "loaded": {
+        "width": 720,
+        "src": "/api/image?done=task%3Arendered-phone&media=596d8cad6895d84645a3d1f7f41ff6e67f96093cbd62f9bda314d0666a86b62f"
+      },
+      "sourceRemoved": true,
+      "viewer": true
+    },
+    {
+      "name": "390-uk-light-missing",
+      "whole": true,
+      "label": "Кадри не збереглися"
+    },
+    {
+      "name": "390-uk-light-error",
+      "whole": true,
+      "label": "Кадри не збереглися"
+    },
+    {
+      "name": "390-uk-dark-retained",
+      "loaded": {
+        "width": 720,
+        "src": "/api/image?done=task%3Arendered-phone&media=596d8cad6895d84645a3d1f7f41ff6e67f96093cbd62f9bda314d0666a86b62f"
+      },
+      "sourceRemoved": true,
+      "viewer": true
+    },
+    {
+      "name": "390-uk-dark-missing",
+      "whole": true,
+      "label": "Кадри не збереглися"
+    },
+    {
+      "name": "390-uk-dark-error",
+      "whole": true,
+      "label": "Кадри не збереглися"
+    }
+  ],
+  "failures": []
+}

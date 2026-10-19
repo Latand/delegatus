@@ -1,3 +1,4 @@
+import { engineMemoryOff } from "@/lib/memory/source";
 import crypto from "node:crypto";
 
 import { claudeEnvPrefix } from "@/lib/agent/cli";
@@ -25,9 +26,10 @@ function shellQuote(value: string): string {
  */
 export function accountTerminalCommand(engine: "claude" | "codex", account: { kind: "legacy" | "managed"; home: string }): string {
   if (engine === "claude") {
-    if (account.kind !== "managed") return "claude";
+    const memoryEnv = engineMemoryOff() ? "env CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 " : "";
+    if (account.kind !== "managed") return `${memoryEnv}claude`;
     const provider = claudeProviderForHome(account.home);
-    if (!provider) return `${claudeEnvPrefix(account.home)} claude`;
+    if (!provider) return `${memoryEnv}${claudeEnvPrefix(account.home)} claude`;
     const sessionId = crypto.randomUUID();
     const policy = applyClaudeSpawnPolicy(account.home, {
       providerAccount: true, allowSubagents: true, profileId: `terminal-${sessionId}`,
@@ -37,7 +39,7 @@ export function accountTerminalCommand(engine: "claude" | "codex", account: { ki
       + ` --settings ${shellQuote(policy.settingsPath)} --strict-mcp-config --mcp-config ${shellQuote(policy.mcpConfigPath)}`;
   }
   const store = account.kind === "managed" ? " -c cli_auth_credentials_store=file" : "";
-  return `env -u LLV_TOKEN CODEX_HOME=${shellQuote(account.home)} codex${store}`;
+  return `env -u LLV_TOKEN CODEX_HOME=${shellQuote(account.home)} codex${store}${engineMemoryOff() ? " -c features.memories=false" : ""}`;
 }
 
 /**

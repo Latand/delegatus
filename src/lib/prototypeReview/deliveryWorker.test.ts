@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { NextRequest } from "next/server";
@@ -11,9 +11,12 @@ import { PROTOTYPE_DELIVERY_ATTENTION_MS, prototypeDeliveryPhase, prototypeRevie
 import { isPrototypeReplica } from "./replica";
 import { withPrototypeReviewSummaries } from "./read";
 import { prototypeWorld, type PrototypeWorld } from "./world";
+import { clearSeatRoundsForTests, insertSeatRound } from "./seatRounds";
 import type { PrototypeDecision, PrototypeReviewRead } from "./types";
 
 import { criticLane } from "./criticGate.fixture";
+import * as telegramPost from "./telegramPost";
+import * as telegramService from "@/lib/telegram/bot/service";
 const publishPOST: typeof gatedPublishPOST = (request, world) => gatedPublishPOST(request, world ?? {
   caller: () => ({ conversationId: "conversation_publisher", project: "project-a" }),
   stage: () => ({ taskIds: [TASK], project: "project-a", source: { conversationId: "conversation_publisher", pipelineId: "prototype-lane", stageId: "publish" } }),
@@ -197,9 +200,11 @@ test("a delivery that keeps failing asks for attention on the review, the card a
   expect(prototypeReviewNotices(loadTasks())).toEqual([expect.objectContaining({ id: `prototype-delivery:${id}`, reviewId: id, undelivered: true, target: { kind: "prototype-review", taskId: TASK, reviewId: id } })]);
   // The client computes the same notice from the board's summary alone.
   expect(prototypeReviewNotices(withPrototypeReviewSummaries(loadTasks()) as never)).toHaveLength(1);
-  // The operator's retry starts the wait over and sends at once.
+  // The operator's retry starts the wait over and reports the host's refusal.
   state.clock = Date.now();
-  expect((await reviewPOST(request({ reviewId: id, retry: true }), TASK, ports.world, ports.delivery, ports.now)).status).toBe(200);
+  const retry = await reviewPOST(request({ reviewId: id, retry: true }), TASK, ports.world, ports.delivery, ports.now);
+  expect(retry.status).toBe(503);
+  expect((await retry.json()).error).toContain("поки не вдалося доставити");
   await settlePrototypeDeliveriesForTests();
   expect(state.sends).toHaveLength(6);
   expect((await shown(id)).delivery.phase).toBe("delivering");
@@ -288,4 +293,148 @@ test("retries the runtime admits that each end failed keep their failure history
   expect(stored(id).delivery).toMatchObject({ state: "sent", operationId: "operation-admitted" });
   expect(stored(id).delivery.failures).toBeUndefined(); expect(stored(id).delivery.failingSince).toBeUndefined();
   expect((await shown(id)).delivery.phase).toBe("delivered");
+});
+
+
+test("bounded delivery passes rotate permanently due decisions and recover after worker reset", async () => {
+  const roundId = (n: number) => `pr_${n.toString(16).padStart(32, "0")}`;
+  const seed = await publish("bounded-seed");
+  const { ports, state } = seat();
+  decidePrototype(request(), TASK, { reviewId: seed, chosen: [1], comment: "" }, ports.world);
+  const template = loadTasks()[0]!;
+  const round = template.prototypeReviews![0]!;
+  saveTasks(Array.from({ length: 40 }, (_, n) => ({ ...template, id: `bounded-${n}`,
+    prototypeReviews: [{ ...round, id: roundId(n), taskId: `bounded-${n}`,
+      decision: { ...round.decision!, delivery: { ...round.decision!.delivery, clientMessageId: `bounded-${n}`, operationId: `operation-${n}` } } }] })));
+  const seen: string[] = [];
+  ports.delivery = { recover: async decision => { seen.push(decision.delivery.clientMessageId); return { state: "pending" }; },
+    send: async () => { throw new Error("already admitted"); }, retry: async () => { throw new Error("already pending"); } };
+  for (let pass = 0; pass < 6; pass++) {
+    const before = seen.length;
+    await sweepPrototypeDeliveries(ports, { force: true, limit: 16 });
+    expect(seen.length - before).toBeLessThanOrEqual(16);
+  }
+  expect(new Set(seen).size).toBe(40);
+  await resetPrototypeDeliveryWorkerForTests();
+  seen.length = 0;
+  await sweepPrototypeDeliveries(ports, { force: true, limit: 16 });
+  expect(seen).toHaveLength(16);
+  expect(state.sends).toHaveLength(0);
+  const childSource = `
+    import { sweepPrototypeDeliveries, startPrototypeDeliveryWorker, settlePrototypeDeliveriesForTests, resetPrototypeDeliveryWorkerForTests } from ${JSON.stringify(new URL("./deliveryWorker.ts", import.meta.url).pathname)};
+    const counts = []; let calls = 0;
+    const ports = { now: () => Date.parse("2030-01-01T00:00:00.000Z"),
+      world: { orchestrator: () => "conversation_seat" },
+      delivery: { recover: async decision => { calls++; return { state: "pending", operationId: decision.delivery.operationId }; },
+        send: async () => { throw new Error("already admitted"); }, retry: async () => { throw new Error("already pending"); } } };
+    startPrototypeDeliveryWorker(ports);
+    await new Promise(resolve => setImmediate(resolve));
+    await settlePrototypeDeliveriesForTests(); counts.push(calls);
+    for (let n = 0; n < 2; n++) { const before = calls; await sweepPrototypeDeliveries(ports, { force: true, limit: 16 }); counts.push(calls-before); }
+    await resetPrototypeDeliveryWorkerForTests();
+    console.log(JSON.stringify({ counts }));
+  `;
+  for (let restart = 0; restart < 2; restart++) {
+    const child = Bun.spawnSync([process.execPath, "-e", childSource], { env: { ...process.env }, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+    expect(child.exitCode).toBe(0);
+    const result = JSON.parse(new TextDecoder().decode(child.stdout)) as { counts: number[] };
+    expect(result.counts).toEqual([16, 16, 16]);
+  }
+});
+
+test("pending Telegram posts rotate across rounds when earlier post locks keep refusing", async () => {
+  const template = task();
+  const rounds = Array.from({ length: 17 }, (_, n) => {
+    const id = `pr_${(n + 1).toString(16).padStart(32, "0")}`;
+    return { id, taskId: TASK, project: "project-a", title: `Round ${n + 1}`, createdAt: "2026-10-01T00:00:00Z",
+      publicationKey: id, inputDigest: "fixture", source: { conversationId: null }, variants: [],
+      telegramPost: { key: id, state: "pending" as const, at: "2026-10-01T00:00:00Z" } };
+  });
+  saveTasks([{ ...template, prototypeReviews: rounds }]);
+  const seen: string[] = [];
+  const post = spyOn(telegramPost, "postPrototypeReviewToTelegram").mockImplementation(async round => {
+    seen.push(round.id);
+    throw new Error("Telegram review post is busy");
+  });
+  try {
+    for (let pass = 0; pass < 3; pass++) {
+      const before = seen.length;
+      try { await sweepPrototypeDeliveries({ now: () => Date.parse("2026-10-02T00:00:00Z"), delivery: { recover: async () => null,
+        send: async () => ({ state: "sent" as const }), retry: async () => ({ state: "sent" as const }) }, world: { ...prototypeWorld, orchestrator: () => null } }, { force: true, limit: 16 }); }
+      catch { /* The lock refusal is the behavior under test. */ }
+      expect(seen.length - before).toBeLessThanOrEqual(16);
+    }
+  } finally { post.mockRestore(); }
+  expect(seen.length).toBeLessThanOrEqual(48);
+  expect(seen).toContain(rounds[16]!.id);
+});
+
+test("poll recovery rotates across rounds whose poll locks remain owned", async () => {
+  const template = task();
+  const rounds = Array.from({ length: 17 }, (_, n) => {
+    const id = `pr_${(n + 1).toString(16).padStart(32, "0")}`;
+    return { id, taskId: TASK, project: "project-a", title: `Round ${n + 1}`, createdAt: "2026-10-01T00:00:00Z",
+      publicationKey: id, inputDigest: "fixture", source: { conversationId: null }, variants: [],
+      questions: [{ id: "question", text: "Choose?", options: [{ label: "Yes" }] }],
+      telegramPost: { key: id, state: "sent" as const, at: "2026-10-01T00:00:00Z" },
+      telegramPolls: { key: id, questions: [{ questionId: "question", state: "pending" as const }] } };
+  });
+  saveTasks([{ ...template, prototypeReviews: rounds }]);
+  const seen: string[] = [];
+  const service = spyOn(telegramService, "telegramBotService").mockReturnValue({
+    hasReviewPollWork: (id: string) => { seen.push(id); return true; },
+  } as unknown as ReturnType<typeof telegramService.telegramBotService>);
+  try {
+    for (let pass = 0; pass < 3; pass++) {
+      const before = seen.length;
+      await sweepPrototypeDeliveries({ now: () => Date.parse("2026-10-02T00:00:00Z"), delivery: { recover: async () => null,
+        send: async () => ({ state: "sent" as const }), retry: async () => ({ state: "sent" as const }) }, world: { ...prototypeWorld, orchestrator: () => null } }, { force: true, limit: 16 });
+      expect(seen.length - before).toBeLessThanOrEqual(16);
+    }
+  } finally { service.mockRestore(); }
+  expect(seen.length).toBeLessThanOrEqual(48);
+  expect(seen).toContain(rounds[16]!.id);
+});
+
+test("post and poll recovery cursors finish each bounded task page before advancing", async () => {
+  const tasks = Array.from({ length: 32 }, (_, taskIndex) => {
+    const rounds = Array.from({ length: 4 }, (_, roundIndex) => {
+      const n = taskIndex * 4 + roundIndex + 1;
+      const id = `pr_${n.toString(16).padStart(32, "0")}`;
+      return { id, taskId: `task-${String(taskIndex).padStart(2, "0")}`, project: "project-a", title: `Round ${n}`,
+        createdAt: "2026-10-01T00:00:00Z", publicationKey: id, inputDigest: "fixture", source: { conversationId: null }, variants: [],
+        questions: roundIndex >= 2 ? [{ id: "question", text: "Choose?", options: [{ label: "Yes" }] }] : undefined,
+        telegramPost: { key: id, state: roundIndex < 2 ? "pending" as const : "sent" as const, at: "2026-10-01T00:00:00Z" },
+        ...(roundIndex >= 2 ? { telegramPolls: { key: id, questions: [{ questionId: "question", state: "pending" as const }] } } : {}) };
+    });
+    return { ...task(), id: `task-${String(taskIndex).padStart(2, "0")}`, prototypeReviews: rounds };
+  });
+  saveTasks(tasks);
+  const seatRounds = Array.from({ length: 40 }, (_, index) => {
+    const n = 1000 + index;
+    const id = `pr_${n.toString(16).padStart(32, "0")}`;
+    return { id, taskId: null, project: "project-a", title: `Seat round ${n}`, createdAt: "2026-10-01T00:00:00Z",
+      publicationKey: id, inputDigest: "fixture", source: { conversationId: null }, variants: [],
+      ...(index >= 20 ? { questions: [{ id: "question", text: "Choose?", options: [{ label: "Yes" }] }] } : {}),
+      telegramPost: { key: id, state: index < 20 ? "pending" as const : "sent" as const, at: "2026-10-01T00:00:00Z" },
+      ...(index >= 20 ? { telegramPolls: { key: id, questions: [{ questionId: "question", state: "pending" as const }] } } : {}) };
+  });
+  for (const round of seatRounds) insertSeatRound(round);
+  const posted: string[] = [];
+  const polled: string[] = [];
+  const post = spyOn(telegramPost, "postPrototypeReviewToTelegram").mockImplementation(async round => { posted.push(round.id); throw new Error("post lock is held"); });
+  const service = spyOn(telegramService, "telegramBotService").mockReturnValue({
+    hasReviewPollWork: (id: string) => { polled.push(id); return true; },
+  } as unknown as ReturnType<typeof telegramService.telegramBotService>);
+  try {
+    for (let pass = 0; pass < 24; pass++) {
+      try {
+        await sweepPrototypeDeliveries({ now: () => Date.parse("2026-10-02T00:00:00Z"), delivery: { recover: async () => null,
+          send: async () => ({ state: "sent" as const }), retry: async () => ({ state: "sent" as const }) },
+          world: { ...prototypeWorld, orchestrator: () => null } }, { force: true, limit: 16 });
+      } catch { /* The post lock refusal is the behavior under test. */ }
+    }
+  } finally { post.mockRestore(); service.mockRestore(); clearSeatRoundsForTests(); }
+  expect(new Set(posted).size).toBe(84);
+  expect(new Set(polled).size).toBe(84);
 });

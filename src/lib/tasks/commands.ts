@@ -1,3 +1,4 @@
+import { matchesShortId } from "@/lib/shortIds";
 import crypto from "node:crypto";
 import { readFindingKey } from "./finding";
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -6,6 +7,7 @@ import { readTaskHold, storedTaskHold } from "./hold";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
 import { isoNow } from "./helpers";
+import { hasUndeliveredDecision, TaskDecisionUndeliveredError } from "./decisionCompletion";
 import { withTaskCompletion } from "./completion";
 import { countBoardTasks, taskShowsOnBoard } from "./boardVisibility";
 import { admissionSnapshot } from "./groupHide";
@@ -508,6 +510,10 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   const index = existing.findIndex((task) => task.id === id);
   if (index < 0) return { ok: false, error: "task not found", status: 404 };
   const task = existing[index]!;
+  if (input.status === "done" && task.status !== "done" && hasUndeliveredDecision(task)) {
+    const error = new TaskDecisionUndeliveredError();
+    return { ok: false, status: error.status, code: error.code, field: "status", error: error.message };
+  }
   /* A group hide is fenced on both surfaces: it is decided against the group
      the caller saw, and a group that changed since is the caller's to re-read. */
   const guardRequired = (options.requirePlacementGuards && (Object.hasOwn(input, "pos") || Object.hasOwn(input, "placement")))
@@ -521,7 +527,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (input.expectedProject !== task.project) {
       return { ok: false, status: 409, code: "TASK_PROJECT_MISMATCH", field: "expectedProject", error: "expectedProject does not match the current task project; read the task and reconsider the request" };
     }
-    if (input.expectedRevision !== taskRevision(task)) {
+    if (!matchesShortId(taskRevision(task), input.expectedRevision as string)) {
       return { ok: false, status: 409, code: "TASK_REVISION_MISMATCH", field: "expectedRevision", error: "expectedRevision is stale; read the task and reconsider the request" };
     }
   }
@@ -868,7 +874,7 @@ export function dismissUnstartedLaunch(existing: BoardTask[], id: string, ref: A
   });
   if (!matched) return { ok: true, tasks: existing, task };
   const placeholder = task.origin?.refinement === "pending" && (task.origin.kind === "launch" || task.origin.kind === "conversation");
-  const settled = placeholder && !options.linkedPipeline && task.status !== "done" && assignments.every((assignment) => assignment.state === "failed");
+  const settled = placeholder && !hasUndeliveredDecision(task) && !options.linkedPipeline && task.status !== "done" && assignments.every((assignment) => assignment.state === "failed");
   const updated: BoardTask = withTaskCompletion({ ...task, assignments, ...(settled ? { status: "done" as const } : {}), updatedAt: now }, task);
   const tasks = existing.slice();
   tasks[index] = updated;

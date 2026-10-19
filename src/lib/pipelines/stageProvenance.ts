@@ -1,3 +1,4 @@
+import { controllerAttemptSelected, controllerRuns } from "./controllerScope";
 import type { ExecPort } from "@/lib/workflows/provision";
 import crypto from "node:crypto";
 
@@ -103,7 +104,8 @@ export async function collectStageProvenance(
 /** Pending intent is durable. Observation is attached only to the same report
     sequence and conversation, including when its turn has already settled. */
 export async function settlePendingStageProvenance(ports: Pick<import("./engine").PipelinePorts, "exec" | "now">): Promise<void> {
-  for (const pipeline of await selectControllerPipelines("provenance")) for (const run of pipeline.runs) for (const attempt of run.attempts) {
+  for (const pipeline of await selectControllerPipelines("provenance")) for (const run of controllerRuns(pipeline)) for (const attempt of run.attempts) {
+    if (!controllerAttemptSelected(pipeline.id, run.stageId, attempt.n)) continue;
     const report = attempt.report;
     if (report?.provenance.state !== "pending") continue;
     const abort = new AbortController();
@@ -128,7 +130,7 @@ export async function settlePendingStageProvenance(ports: Pick<import("./engine"
     finally { clearInterval(watch); }
     revalidate();
     if (abort.signal.aborted) provenance = { ...report.provenance, state: "unknown", pullRequestState: "unknown" };
-    await withPipelineMutation((pipelines, persist) => {
+    await withPipelineMutation(async (pipelines, persist) => {
       const current = pipelines.find((item) => item.id === pipeline.id);
       const candidate = current?.runs.find((item) => item.stageId === run.stageId)?.attempts.find((item) => item.n === attempt.n);
       if (!current || candidate?.conversationId !== attempt.conversationId || candidate.report?.seq !== report.seq) return;
@@ -137,7 +139,7 @@ export async function settlePendingStageProvenance(ports: Pick<import("./engine"
       candidate.report = { ...candidate.report, provenance };
       current.stageReports = current.stageReports?.map((entry) => entry.seq === report.seq
         ? { ...entry, provenanceState: provenance.state, provenanceAt: ports.now() } : entry);
-      persist();
+      await persist();
       const repository = provenance.pullRequest ? pipelineRepository(current) : null;
       if (repository && provenance.pullRequest) {
         try { observeForgePullRequest(repository, provenance.pullRequest, provenance.branch, ports.now()); }

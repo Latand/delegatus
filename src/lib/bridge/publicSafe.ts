@@ -68,6 +68,10 @@ export interface PublicDenyList {
   projects: readonly { repository: string | null; names: readonly string[] }[];
   /** Role memory's stored rules and whys (src/lib/memory/roleStore.ts), which stay on this machine. */
   lessons?: readonly string[];
+  /** Worker-local patterns from the shared role-memory revision. Never serialized. */
+  lessonPatterns?: readonly RegExp[];
+  /** Class-only reports use the shared replacement matcher without enumerating overlaps. */
+  hasLesson?: (text: string) => boolean;
 }
 
 export const EMPTY_DENY_LIST: PublicDenyList = { accounts: [], people: [], local: [], projects: [] };
@@ -157,8 +161,12 @@ export interface PrivateMatch {
 export function privateMatches(text: string, deny: PublicDenyList = EMPTY_DENY_LIST): PrivateMatch[] {
   const found: PrivateMatch[] = [];
   const scan = (kind: PrivateClass, pattern: RegExp) => {
-    for (const match of text.matchAll(new RegExp(pattern.source, pattern.flags.replace("g", "") + "g"))) {
+    const matcher = pattern.global ? pattern : new RegExp(pattern.source, pattern.flags + "g");
+    matcher.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = matcher.exec(text))) {
       found.push({ class: kind, start: match.index, end: match.index + match[0].length });
+      if (!match[0].length) matcher.lastIndex += 1;
     }
   };
   const redacted = hardenedRedact(text);
@@ -182,14 +190,16 @@ export function privateMatches(text: string, deny: PublicDenyList = EMPTY_DENY_L
     if (project.repository?.includes("/")) scan("project", new RegExp(escape(project.repository), "i"));
     names("project", project.names.filter(repositoryShaped));
   }
-  for (const lesson of deny.lessons ?? []) {
-    const pattern = lessonPattern(lesson);
-    if (pattern) scan("lesson", pattern);
-  }
+  for (const pattern of deny.lessonPatterns ?? (deny.lessons ?? []).flatMap(text => {
+    const pattern = lessonPattern(text);
+    return pattern ? [pattern] : [];
+  })) scan("lesson", pattern);
   return found;
 }
 
 /** Every private class found in `text`, each once, in a stable order. */
 export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_LIST): PrivateClass[] {
-  return [...new Set(privateMatches(text, deny).map((match) => match.class))];
+  const classes = [...new Set(privateMatches(text, deny).map((match) => match.class))];
+  if (deny.hasLesson?.(text) && !classes.includes("lesson")) classes.push("lesson");
+  return classes;
 }

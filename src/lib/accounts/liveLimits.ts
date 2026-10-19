@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { creditGuardBlock, creditGuardUsedPercent, retainCreditGuardEvidence } from "./creditGuard";
 
 import type { ClaudeAccount } from "@/lib/accounts/claude";
 import type { CodexAccount } from "@/lib/accounts/codex";
@@ -9,6 +10,7 @@ import { gatingWindows, type QuotaObservation } from "@/lib/accounts/migration/q
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { logQuotaEvent } from "@/lib/events";
 import { forgetCachedLimits } from "@/lib/limits";
+import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySignal";
 
 /**
  * A live re-read of one account's limits, including after login (issue #1418).
@@ -28,7 +30,7 @@ import { forgetCachedLimits } from "@/lib/limits";
 export type LiveReadPhase = "operator-refresh" | "reset-credit-redeem" | "spawn-admission" | "login-complete";
 
 export interface LiveLimitsDeps {
-  registry?: Pick<AgentRegistry, "recordQuotaObservation">;
+  registry?: Pick<AgentRegistry, "recordQuotaObservation"> & Partial<Pick<AgentRegistry, "quotaObservations" | "deliveryWriteOrBusy">>;
   probe?: QuotaProbePort;
   now?: number;
   timeoutMs?: number;
@@ -53,8 +55,17 @@ export function recordLiveObservation(
   deps: LiveLimitsDeps = {},
 ): DurableQuotaObservation {
   const registry = deps.registry ?? agentRegistry();
+  if (observation.engine === "codex") {
+    const previous = registry.quotaObservations?.("codex").find(item => item.accountId === observation.accountId);
+    if (previous && observation.observedAt < Date.parse(previous.observedAt)) return previous;
+    observation = { ...observation, limits: retainCreditGuardEvidence(previous?.limits, observation.limits,
+      observation.authenticated && observation.provenance.source === "live") };
+  }
   const durable = durableQuotaObservation(observation, LIVE_READ_BOOT_ID);
   registry.recordQuotaObservation(durable);
+  if (observation.engine === "codex") void Promise.resolve(kickStructuredDeliveryQueue()).catch(error => {
+    console.error("[account limits] paid-credit guard reconciliation deferred", error);
+  });
   if (observation.engine === "codex") forgetCachedLimits(observation.engine, observation.accountId);
   if (observation.engine !== "copilot") logQuotaEvent({
     engine: observation.engine,
@@ -68,6 +79,19 @@ export function recordLiveObservation(
   return durable;
 }
 
+/** Re-read the prior observation only after asynchronous writer admission. */
+export async function recordLiveObservationOffLoop(
+  observation: QuotaObservation,
+  accountKind: "legacy" | "managed",
+  deps: LiveLimitsDeps = {},
+): Promise<DurableQuotaObservation> {
+  const registry = deps.registry ?? agentRegistry();
+  const write = () => recordLiveObservation(observation, accountKind, { ...deps, registry });
+  return registry.deliveryWriteOrBusy
+    ? registry.deliveryWriteOrBusy({ label: "quota.live-observation" }, write)
+    : write();
+}
+
 export async function refreshAccountLimits(engine: MigrationEngine, accountId: string, deps: LiveLimitsDeps = {}): Promise<LimitsRefreshResult> {
   const probe = deps.probe ?? liveQuotaProbe;
   const now = deps.now ?? Date.now();
@@ -79,7 +103,7 @@ export async function refreshAccountLimits(engine: MigrationEngine, accountId: s
       probe.probe(engine, account, now, { force: true }),
       probeTimeout(deps.timeoutMs ?? PROBE_TIMEOUT_MS),
     ]);
-    return { kind: "refreshed", account, observation: recordLiveObservation(observation, account.kind, deps) };
+    return { kind: "refreshed", account, observation: await recordLiveObservationOffLoop(observation, account.kind, deps) };
   } catch (error) {
     const detail = redactAppServerDetail(error instanceof Error ? error.message : String(error));
     logQuotaEvent({
@@ -114,8 +138,9 @@ export function exhaustionNeedsLiveRead(
   model?: string | null,
 ): boolean {
   if (!observation?.authenticated || !observation.limits) return false;
+  const threshold = creditGuardBlock(observation.engine, observation.limits) ? creditGuardUsedPercent() : 100;
   const exhausted = gatingWindows(observation.engine, observation.limits, model)
-    .flatMap((entry) => entry.value && entry.value.usedPercent >= 100 ? [entry.value] : []);
+    .flatMap((entry) => entry.value && entry.value.usedPercent >= threshold ? [entry.value] : []);
   if (!exhausted.length) return false;
   if (observation.provenance.source !== "live") return true;
   const nowSeconds = Math.floor(now / 1_000);

@@ -1,4 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import dns from "node:dns/promises";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -318,4 +320,64 @@ test("a confirm that lists no targets reads them once from the service", async (
   } finally {
     await server.close();
   }
+});
+
+
+test("publication cancellation settles while DNS is held and late DNS cannot emit", async () => {
+  let release!: (addresses: Array<{ address: string; family: number }>) => void;
+  const held = new Promise<Array<{ address: string; family: number }>>(resolve => { release = resolve; });
+  const lookup = spyOn(dns, "lookup").mockImplementation((() => held) as unknown as typeof dns.lookup);
+  const controller = new AbortController();
+  let prepared = false;
+  try {
+    const pending = relayCall("https://fixture.invalid/v1", "/targets/first/messages", "POST", {}, undefined,
+      { signal: controller.signal, prepareBody: () => { prepared = true; return {}; } });
+    const refused = pending.then(() => null, error => error);
+    controller.abort(new Error("fixture deadline"));
+    expect(await refused).toMatchObject({ message: "fixture deadline" });
+    release([{ address: "127.0.0.1", family: 4 }]);
+    await Promise.resolve();
+    expect(prepared).toBe(false);
+  } finally { release([]); lookup.mockRestore(); }
+});
+
+
+test("confirmed publication waits asynchronously for its reference transaction", async () => {
+  const server = await startTestRelay(() => ({ body: { message_key: "lock_reference", replayed: false } }));
+  const peer = new Database(path.join(state, "state.sqlite"), { create: true });
+  let advanced = false;
+  peer.exec("PRAGMA busy_timeout = 0");
+  peer.exec("BEGIN IMMEDIATE");
+  const timer = setTimeout(() => { advanced = true; peer.exec("ROLLBACK"); }, 20);
+  try {
+    expect((await relayCall(`${server.origin}/v1`, "/targets/first/messages", "POST",
+      { chat_id: 41, message_id: 17, message_thread_id: 7 })).status).toBe(200);
+    expect(advanced).toBe(true);
+  } finally {
+    clearTimeout(timer);
+    if (peer.inTransaction) peer.exec("ROLLBACK");
+    peer.close(); await server.close();
+  }
+});
+
+
+test("lease-bound binary PUT preserves bytes and refuses redirects and error envelopes", async () => {
+  const { relayPutBytes } = await import("./client");
+  const payload = Buffer.from([0, 255, 3, 10]);
+  const seen: { body: unknown; lease: unknown }[] = [];
+  const server = await startTestRelay((req, body) => {
+    seen.push({ body, lease: req.headers["delegatus-relay-lease"] });
+    if (req.url?.endsWith("/redirect")) return { status: 302, headers: { location: "/other" } };
+    if (req.url?.endsWith("/busy")) return { status: 429, body: { error: { code: "rate_limited", retry_after_s: 2 } } };
+    return { status: 201, body: { ok: true } };
+  });
+  try {
+    const headers = { "Content-Type": "image/png", "Delegatus-Relay-Lease": "lease" };
+    expect((await relayPutBytes(`${server.origin}/v1`, "/bytes", payload, headers, "x".repeat(43))).status).toBe(201);
+    expect(seen[0]).toEqual({ body: payload, lease: "lease" });
+    await expect(relayPutBytes(`${server.origin}/v1`, "/redirect", payload, headers)).rejects.toMatchObject({ status: 302 });
+    await expect(relayPutBytes(`${server.origin}/v1`, "/busy", payload, headers)).rejects.toMatchObject({ status: 429, code: "rate_limited", retryAfterSeconds: 2 });
+    await expect(relayPutBytes(`${server.origin}/v1`, "/bytes", payload, headers, undefined, { signal: AbortSignal.abort() })).rejects.toThrow();
+    expect(seen).toHaveLength(3);
+  } finally { await server.close(); }
 });

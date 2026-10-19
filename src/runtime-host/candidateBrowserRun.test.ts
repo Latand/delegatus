@@ -16,10 +16,9 @@ import { RuntimeJournal } from "./journal";
    every way but one. The page polls `/api/files`, asks for its host targets
    and its runtime snapshot once, and holds an event stream open, as the board
    does. Clean, it passes; with `/api/tmux/targets` never answering,
-   `/api/runtime/snapshot` answering 503, or the server's own event loop held
-   once for 800 ms while every request stays fast, the same helper refuses
-   it, and that verdict carried through the real host-command adapter and the
-   coordinator retires the candidate while the serving release keeps serving.
+   or `/api/runtime/snapshot` answering 503, the helper refuses it. A server
+   loop held for 800 ms with successful requests produces a timing warning.
+   The real host-command adapter and coordinator enforce those outcomes.
    The board is its own process carrying the gate's event-loop probe, as the
    production server does. Needs a Chromium (`CHROME_BIN` or the image's own). */
 
@@ -28,7 +27,7 @@ const WINDOW_MS = 12_000;
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-candidate-browser-"));
 afterAll(() => fs.rmSync(directory, { recursive: true, force: true }));
 
-type Fault = "none" | "stalled-targets" | "snapshot-503" | "held-server";
+type Fault = "none" | "stalled-targets" | "late-targets" | "snapshot-503" | "held-server";
 const HELD_MS = 800;
 
 const PAGE = `<!doctype html><html><body>
@@ -55,7 +54,17 @@ const server = Bun.serve({
     const route = new URL(request.url).pathname;
     if (route === "/") return new Response(page, { headers: { "content-type": "text/html" } });
     if (route === "/api/files") return Response.json({ files: [] });
-    if (route === "/api/tmux/targets") return fault === "stalled-targets" ? new Promise(() => {}) : Response.json({ targets: {} });
+    if (route === "/hold") {
+      const from = Date.now();
+      const until = performance.now() + 800;
+      while (performance.now() < until) {}
+      return Response.json({ from, to: Date.now() });
+    }
+    if (route === "/api/tmux/targets") {
+      if (fault === "stalled-targets") return new Promise(() => {});
+      if (fault === "late-targets") return new Promise(resolve => setTimeout(() => resolve(Response.json({ targets: {} })), 18000));
+      return Response.json({ targets: {} });
+    }
     if (route === "/api/runtime/snapshot") return fault === "snapshot-503" ? Response.json({ error: "runtime host is unavailable" }, { status: 503 }) : Response.json({ sessions: [] });
     if (route === "/api/streams") {
       return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(": open\\n\\n")); } }), {
@@ -108,7 +117,22 @@ async function measure(fault: Fault, probed = true) {
   }
 }
 
-async function refusedThroughCoordinator(measurements: NonNullable<CandidatePerformanceEvidence["measurements"]>) {
+test("the request probe includes the first recovery tick when a block leaves no samples inside the request", async () => {
+  const board = await serveBoard("none");
+  try {
+    const response = await fetch(`${board.url}/hold`);
+    const { from, to } = await response.json() as { from: number; to: number };
+    const interior = await board.probe.read(from + 100, to - 100);
+    expect(interior?.samples).toBe(0);
+    const recovered = await board.probe.read(from + 100, to - 100, Date.now());
+    expect(recovered?.pid).toBe(board.pid);
+    expect(recovered?.samples).toBe(1);
+    expect(recovered?.maxMs).toBeGreaterThanOrEqual(780);
+    expect(recovered?.recoveredAt).toBeGreaterThanOrEqual(to);
+  } finally { await board.stop(); }
+}, 30_000);
+
+async function throughCoordinator(measurements: NonNullable<CandidatePerformanceEvidence["measurements"]>) {
   const breaches = candidatePerformanceBreaches(measurements);
   const performance: CandidatePerformanceEvidence = {
     checkedAt: "2026-10-12T00:00:00.000Z", runtime: `bun ${Bun.version}`, bounds: CANDIDATE_PERFORMANCE_BOUNDS,
@@ -149,6 +173,9 @@ async function refusedThroughCoordinator(measurements: NonNullable<CandidatePerf
 test.skipIf(!browser)("a board fast in every way passes the browser bounds", async () => {
   const result = await measure("none");
   expect(candidateBrowserBreaches(result.measurements)).toEqual([]);
+  expect(result.operatingWindow.fromUtcMs).toBeGreaterThan(0);
+  expect(result.operatingWindow.durationMs).toBeGreaterThanOrEqual(WINDOW_MS - Math.min(5000, WINDOW_MS / 3) - 100);
+  expect(result.operatingWindow.toUtcMs).toBeGreaterThan(result.operatingWindow.fromUtcMs);
   expect(result.measurements).toMatchObject({ apiErrors: 0, apiFirstError: null, apiUnfinished: 0 });
   /* The server's own loop was read over the views' window, a sample every 10 ms. */
   expect(result.measurements.server!.samples).toBeGreaterThan(WINDOW_MS / 40);
@@ -157,8 +184,8 @@ test.skipIf(!browser)("a board fast in every way passes the browser bounds", asy
 
 /* The reviewer's reproduction: the server's event loop held once for 800 ms
    under eight views and two writers. Every bound read in the page passes; the
-   server's own reading refuses, through the adapter and the coordinator. */
-test.skipIf(!browser)("a server whose event loop is held under the views refuses the candidate and keeps the serving release", async () => {
+   server's own reading stays diagnostic through the adapter and coordinator. */
+test.skipIf(!browser)("a completed browser run with a slow server is promoted with its timing warning", async () => {
   const result = await measure("held-server");
   const { server, ...page } = result.measurements;
   expect(candidateBrowserBreaches({ ...page, server: { samples: 1_000, bootMaxMs: 0, p95Ms: 0, maxMs: 0 } })).toEqual([]);
@@ -167,37 +194,48 @@ test.skipIf(!browser)("a server whose event loop is held under the views refuses
   const breaches = candidateBrowserBreaches(result.measurements);
   expect(breaches).toHaveLength(1);
   expect(breaches[0]).toMatch(/^server event-loop delay max under the browser views \d+(\.\d+)?ms exceeds 500ms$/);
-  const outcome = await refusedThroughCoordinator({ ...passingCandidatePerformanceMeasurements(), browser: result.measurements });
-  expect(outcome.status).toMatchObject({ phase: "failed", terminal: true });
-  expect(outcome.status?.error).toContain("server event-loop delay max under the browser views");
-  expect(outcome).toMatchObject({ promoted: [], retired: true, servingKept: true });
+  const outcome = await throughCoordinator({ ...passingCandidatePerformanceMeasurements(), browser: result.measurements });
+  expect(outcome.status).toMatchObject({ phase: "succeeded", terminal: true });
+  expect(outcome.status?.health[0]?.performance?.timingWarnings).toContain(breaches[0]!);
+  expect(outcome.promoted).toHaveLength(1);
+  expect(outcome).toMatchObject({ retired: false, servingKept: false });
 }, 120_000);
 
 test.skipIf(!browser)("a server that carries no probe is not measured, and the candidate is refused", async () => {
   const result = await measure("none", false);
   expect(result.measurements.server).toBeNull();
   expect(candidateBrowserBreaches(result.measurements)).toEqual(["the server's event loop was not measured while the browser views ran"]);
-  const outcome = await refusedThroughCoordinator({ ...passingCandidatePerformanceMeasurements(), browser: result.measurements });
+  const outcome = await throughCoordinator({ ...passingCandidatePerformanceMeasurements(), browser: result.measurements });
   expect(outcome.status).toMatchObject({ phase: "failed", terminal: true });
   expect(outcome).toMatchObject({ promoted: [], retired: true, servingKept: true });
 }, 120_000);
 
-test.skipIf(!browser)("a side request left unanswered past the bound refuses the candidate and keeps the serving release", async () => {
+test.skipIf(!browser)("an in-flight request completed during the drain permits promotion with a warning", async () => {
+  const result = await measure("late-targets");
+  expect(result.measurements.apiUnfinished).toBe(0);
+  expect(result.measurements.apiMaxMs).toBeGreaterThanOrEqual(18000);
+  const outcome = await throughCoordinator({ ...passingCandidatePerformanceMeasurements(), browser: result.measurements });
+  expect(outcome.status).toMatchObject({ phase: "succeeded", terminal: true });
+  expect(outcome.status?.health[0]?.performance?.timingWarnings?.some(warning => warning.startsWith("browser /api/tmux/targets "))).toBe(true);
+}, 120_000);
+
+test.skipIf(!browser)("a side request left unanswered after draining refuses the candidate and keeps the serving release", async () => {
   const result = await measure("stalled-targets");
   const breaches = candidateBrowserBreaches(result.measurements);
-  expect(breaches).toHaveLength(1);
+  expect(breaches).toHaveLength(2);
   expect(breaches[0]).toMatch(/^browser \/api\/tmux\/targets \(unanswered\) \d+ms exceeds 10000ms$/);
+  expect(breaches[1]).toBe("8 browser API request(s) did not finish");
   expect(result.measurements.apiUnfinished).toBe(8);
-  const outcome = await refusedThroughCoordinator({ ...passingCandidatePerformanceMeasurements(), browser: result.measurements });
+  const outcome = await throughCoordinator({ ...passingCandidatePerformanceMeasurements(), browser: result.measurements });
   expect(outcome.status).toMatchObject({ phase: "failed", terminal: true });
-  expect(outcome.status?.error).toContain("browser /api/tmux/targets (unanswered)");
+  expect(outcome.status?.error).toContain("8 browser API request(s) did not finish");
   expect(outcome).toMatchObject({ promoted: [], retired: true, servingKept: true });
 }, 120_000);
 
 test.skipIf(!browser)("a side request answered 503 refuses the candidate and keeps the serving release", async () => {
   const result = await measure("snapshot-503");
   expect(candidateBrowserBreaches(result.measurements)).toEqual(["8 other browser API request(s) failed, first /api/runtime/snapshot HTTP 503"]);
-  const outcome = await refusedThroughCoordinator({ ...passingCandidatePerformanceMeasurements(), browser: result.measurements });
+  const outcome = await throughCoordinator({ ...passingCandidatePerformanceMeasurements(), browser: result.measurements });
   expect(outcome.status).toMatchObject({ phase: "failed", terminal: true });
   expect(outcome.status?.error).toContain("8 other browser API request(s) failed, first /api/runtime/snapshot HTTP 503");
   expect(outcome).toMatchObject({ promoted: [], retired: true, servingKept: true });

@@ -721,7 +721,7 @@ test("a running spawned child with no lane is open work, and the interval wake n
   /* A live turn the liveness plane calls running is not a stall, however long
      it has been open. */
   expect(rig.cards).toEqual([]);
-  expect(rig.liveness).toEqual([{ conversationId: child.id }]);
+  expect(rig.liveness).toEqual([{ conversationId: fixture.seat.conversationId }, { conversationId: child.id }]);
 });
 
 /* docs/design/ghost-seat.md §4 rule 5: the tick wakes the active seat and
@@ -806,8 +806,8 @@ test("a child whose host was released after a settled turn is finished, and harv
   expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], items: 1 });
   expect(rig.sent[0]!.text).toContain(`[child] ${child.id}`);
   expect(fixture.acknowledged()).toEqual([child.id]);
-  /* No liveness read for a turn the registry says has settled. */
-  expect(rig.liveness).toEqual([]);
+  /* Only the seat reachability probe; settled children need no liveness read. */
+  expect(rig.liveness).toEqual([{ conversationId: fixture.seat.conversationId }]);
 });
 
 test("a launch that failed before it ran is a terminal child with a failed outcome, harvested once (#1465)", async () => {
@@ -951,6 +951,11 @@ test("a wake the record says was delivered lands, on the plan the raising check 
   const fixture = childFixture("receipt-delivered");
   setAgentRegistryForTests(fixture.registry);
   const child = fixture.spawn({ title: "finished worker", turn: "terminal", terminalAt: ago(fixture, 20) });
+  const Clock = Date;
+  globalThis.Date = new Proxy(Clock, {
+    construct(target, args) { return Reflect.construct(target, args.length ? args : [fixture.now]); },
+    get(target, key, receiver) { return key === "now" ? () => fixture.now : Reflect.get(target, key, receiver); },
+  });
   const wake = recordedWake(fixture, { state: "delivered", children: [child.id] });
   fixture.seed({ outstandingWake: wake, eventsThrough: 1 });
   const rig = childRig(fixture, { realWakeState: true });
@@ -1356,7 +1361,7 @@ test("cross-project, pipeline-owned, engine-native and unrelated conversations a
   const record = await runSeatTickCheck(fixture.project, rig.deps);
   expect(record).toMatchObject({ verdict: "quiet", detail: "no eligible interval agenda: unparented workers and inbox cards alone do not qualify; the proposal slot is not due" });
   expect(rig.sent).toEqual([]);
-  expect(rig.liveness).toEqual([]);
+  expect(rig.liveness).toEqual([{ conversationId: fixture.seat.conversationId }]);
 });
 
 test("a child the registry cannot place is unknown: not open work, not harvested, and said so (#1465)", async () => {
@@ -1435,7 +1440,7 @@ test("a busy child whose host is gone is a stall the registry can see, reported 
   const record = await runSeatTickCheck(fixture.project, first.deps);
   /* Open work, so the interval wakes; the stall waits for its second check. */
   expect(record).toMatchObject({ verdict: "wake", reasons: ["interval"] });
-  expect(first.liveness).toEqual([]);
+  expect(first.liveness).toEqual([{ conversationId: fixture.seat.conversationId }]);
   expect(fixture.row().stalledSeen).toEqual([`child:${child.id}`]);
   const second = childRig(fixture, { now: fixture.now + 61 * MINUTE });
   const stalled = await runSeatTickCheck(fixture.project, second.deps);
@@ -1455,9 +1460,9 @@ test("the projection uses bounded keyed registry reads and targeted liveness wit
   expect(record).toMatchObject({ verdict: "wake", reasons: ["child-terminal"], items: 3 });
   /* The child source uses keyed projections without a registry snapshot. */
   expect(rig.snapshots).toBe(0);
-  /* Liveness is asked by id, for the one child whose turn is open, and never
-     project-wide: there is no lane to sweep for. */
-  expect(rig.liveness).toEqual([{ conversationId: busy.id }]);
+  /* One seat probe plus the one child whose turn is open, all by id.
+     No project-wide read or extra child probe is admitted. */
+  expect(rig.liveness).toEqual([{ conversationId: fixture.seat.conversationId }, { conversationId: busy.id }]);
   expect(rig.liveness.some((read) => read.project)).toBe(false);
   /* The fixture's transcripts exist, so the harvest can resolve them (#1783),
      and they are empty: nothing here read a byte of transcript CONTENT. */

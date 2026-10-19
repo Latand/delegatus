@@ -4,6 +4,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSyn
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { codexFixture, createGateSandbox, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runPushPair, runSteps, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
+import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 import { nativeBatches } from "./verify-native-codex-runtime";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
@@ -837,4 +838,15 @@ test("gate creation preserves unrelated filesystem failures and a refused fallba
   calls = 0;
   expect(() => createGateSandbox("win32", () => { calls++; throw fallback; })).toThrow(fallback);
   expect(calls).toBe(1);
+});
+
+test("the admitted hook credits its caller's completed admission instead of the supervisor's new ledger", () => {
+  const budget = cpuWaitBudget({ NODE_ENV: "test" });
+  const directory = JSON.parse(budget.env.LLV_CPU_WAIT_ROOTS!).at(-1);
+  try {
+    writeFileSync(path.join(directory, "wait.json"), JSON.stringify({ start: 100, end: 500 }));
+    const env = { LLV_GATE_PUSH_DEADLINE: "1000", LLV_GATE_ADMISSION_WAIT_ROOTS: budget.env.LLV_CPU_WAIT_ROOTS };
+    expect(pushDeadline(env, 1100, true)).toEqual({ at: 1400, startedAt: 1100 });
+    expect(pushDeadline(env, 1100)).toEqual({ at: 1000, startedAt: 1100 });
+  } finally { budget.close(); }
 });

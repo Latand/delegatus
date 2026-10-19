@@ -70,6 +70,7 @@ export function prepareCodexIntegrationTestHome(binary: string): CodexIntegratio
     return null;
   }
   const env = { ...isolatedEnv(directory), CODEX_HOME: codexHome };
+  // eslint-disable-next-line no-restricted-syntax -- Test-only isolated Codex login-status probe before integration children start.
   const auth = spawnSync(binary, ["-c", "cli_auth_credentials_store=file", "login", "status"], {
     env,
     stdio: "ignore",
@@ -98,7 +99,9 @@ export function prepareClaudeIntegrationTestHome(binary: string): ClaudeIntegrat
     { mode: 0o600 },
   );
   const env = { ...isolatedEnv(directory), CLAUDE_CONFIG_DIR: claudeConfigDir };
+  // eslint-disable-next-line no-restricted-syntax -- Test-only isolated Claude version probe before integration children start.
   const version = spawnSync(binary, ["--version"], { env, stdio: "ignore", timeout: 10_000 });
+  // eslint-disable-next-line no-restricted-syntax -- Test-only isolated Claude auth-status probe before integration children start.
   const auth = spawnSync(binary, ["auth", "status"], { env, encoding: "utf8", timeout: 10_000 });
   let status: Record<string, unknown> | null = null;
   try {

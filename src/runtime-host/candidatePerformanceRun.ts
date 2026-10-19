@@ -3,6 +3,10 @@
 
      bun run src/runtime-host/candidatePerformanceRun.ts [--scale <0..1>]
 
+   --profile-dir <directory> writes separate CPU profiles for both source
+   Viewer processes. A profiled run is diagnostic evidence; repeat without
+   profiling for release qualification.
+
    It builds the synthetic registry (registryPerformanceDataset.ts) and the
    newest conversations' transcripts in a private home, and returns the
    registry to the schema the previous release left. It starts the candidate's
@@ -33,7 +37,8 @@
    Every board answer is compared with its scope's settled answer from before
    the first write; every worker's progress is read back from its transcript.
    It prints one report line (`CANDIDATE_PERFORMANCE_REPORT_PREFIX`) and exits
-   non-zero when a bound is breached or a measurement is missing.
+   non-zero when an operation fails, a measurement is missing, or a fault is induced.
+   Duration threshold observations remain in timingWarnings.
    `verify-candidate` runs it inside a container from the candidate image.
    Everything it creates sits under one temporary directory removed on exit,
    and every process it starts leaves when it does; it never reads the
@@ -64,6 +69,7 @@ import {
 } from "./candidatePerformance";
 import { browserViewPins, candidateBrowserExecutable, measureBoardInBrowser, serverLoopProbe } from "./candidateBrowserRun";
 import { startCandidateRuntimeHost, waitForServerStartup, type CandidateRuntimeHost } from "./candidateRuntimeHost";
+import { CANDIDATE_HISTORY_PROJECT, CANDIDATE_HISTORY_SCOPE, CANDIDATE_HISTORY_PASS } from "./candidateStateDataset";
 import type { CandidateBrowserMeasurements } from "./candidateBrowser";
 
 const SCOPES = 8;
@@ -90,9 +96,9 @@ const BASELINE_SETTLE_MS = 30_000;
 const BUSY = /SQLITE_BUSY|database is locked/i;
 const ENTRY = path.join(import.meta.dir, "candidatePerformanceRun.ts");
 
-type Mode = "gate" | "viewer" | "writer" | "worker";
-type Induced = "worker-kill" | "worker-stall" | "runtime-stall" | "server-stall";
-const INDUCED: readonly Induced[] = ["worker-kill", "worker-stall", "runtime-stall", "server-stall"];
+type Mode = "gate" | "viewer" | "writer" | "worker" | "curator";
+type Induced = "worker-kill" | "worker-stall" | "runtime-stall" | "server-stall" | "host-loop-stall";
+const INDUCED: readonly Induced[] = ["worker-kill", "worker-stall", "runtime-stall", "server-stall", "host-loop-stall"];
 /** How long `--induce server-stall` holds the production server's event loop. */
 const INDUCED_SERVER_STALL_MS = 800;
 
@@ -127,6 +133,7 @@ function lagWindow() {
   const stalls: Array<{ at: number; ms: number }> = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
   let expected = 0;
+  let tickSeen: (() => void) | undefined;
   const tick = () => {
     const now = performance.now();
     const late = Math.max(0, now - expected);
@@ -134,8 +141,13 @@ function lagWindow() {
     if (late >= SLOW_STEP_MS && stalls.length < 20) stalls.push({ at: Date.now(), ms: Math.round(late) });
     expected = now + 10;
     timer = setTimeout(tick, 10);
+    const seen = tickSeen; tickSeen = undefined; seen?.();
   };
   return {
+    nextTick(): Promise<void> {
+      if (tickSeen) throw new Error("loop probe already has a tick waiter");
+      return new Promise(resolve => { tickSeen = resolve; });
+    },
     enable() {
       if (timer) return;
       expected = performance.now() + 10;
@@ -194,7 +206,7 @@ function sandboxEnvironment(root: string): Record<string, string> {
     /* The projection worker runs the candidate's source, as the releases do. */
     LLV_FILES_RESPONSE_WORKER_LAUNCH: "source",
   };
-  for (const name of ["LLV_CANDIDATE_PERFORMANCE_BIN", "LLV_BUN_EXECUTABLE", "LLV_CANDIDATE_PERFORMANCE_DEBUG", "BUN_OPTIONS", "LANG", "TZ"]) {
+  for (const name of ["LLV_CANDIDATE_PERFORMANCE_BIN", "LLV_BUN_EXECUTABLE", "LLV_CANDIDATE_PERFORMANCE_DEBUG", "LLV_FILES_RESPONSE_TRACE", "BUN_OPTIONS", "LANG", "TZ"]) {
     const value = process.env[name];
     if (value) env[name] = value;
   }
@@ -221,7 +233,10 @@ interface ChildOutcome {
     demotion with the demotion's code. */
 function child(mode: Exclude<Mode, "gate">, args: string[], env: Record<string, string>, reportFile?: string): { process: ChildProcess; result: Promise<ChildOutcome> } {
   const label = args.includes("--name") ? `${mode}:${args[args.indexOf("--name") + 1]}` : mode;
-  const started = spawn(runtimeBin(), [ENTRY, `--${mode}`, "--owner", String(process.pid), ...args], {
+  const profileDirectory = mode === "viewer" ? option("--profile-dir") : undefined;
+  if (profileDirectory) fs.mkdirSync(profileDirectory, { recursive: true });
+  const profile = profileDirectory ? ["--cpu-prof", `--cpu-prof-dir=${profileDirectory}`, `--cpu-prof-name=${label.replace(":", "-")}.cpuprofile`] : [];
+  const started = spawn(runtimeBin(), [...profile, ENTRY, `--${mode}`, "--owner", String(process.pid), ...args], {
     cwd: process.cwd(),
     env: env as NodeJS.ProcessEnv,
     stdio: ["ignore", "pipe", "pipe"],
@@ -506,7 +521,7 @@ async function viewerMain(): Promise<void> {
     registry.storageDiagnostics();
     report.registryOpenMs = performance.now() - openStarted;
     const snapshotStarted = performance.now();
-    registry.readOnlySnapshot();
+    await registry.prepareReadOnlySnapshot();
     report.snapshotMs = performance.now() - snapshotStarted;
     const { SqliteAgentRegistryStore, registryRowsMatching } = await import("@/lib/agent/sqliteRegistryStore");
     if (archive) {
@@ -521,7 +536,10 @@ async function viewerMain(): Promise<void> {
     }
     const { GET, filesProjectionQueueDiagnostics, filesProjectionsSettled, observeFilesProjectionBuilds } = await import("@/app/api/files/operatorProjection");
     const { drainFilesResponseWorker, filesResponseWorkerPoolDiagnostics } = await import("@/lib/scanner/filesResponseWorker");
-    observeFilesProjectionBuilds((sample) => samples.push(sample));
+    observeFilesProjectionBuilds((sample) => {
+      samples.push(sample);
+      if (sample.buildMs > 1_000) note(`projection ${JSON.stringify(sample)} at ${Date.now()}`);
+    });
     const firstStarted = performance.now();
     const first = await GET(new Request(`http://127.0.0.1/api/files?view=summary&path=${encodeURIComponent(firstScope)}`));
     await first.arrayBuffer();
@@ -772,6 +790,11 @@ function previousReleaseSchema(filename: string): void {
   const { Database } = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
   const db = new Database(filename);
   try {
+    // These receipt indexes are new to the candidate too. Seed-time schema
+    // preparation must not hide their first-boot migration cost.
+    for (const index of ["registry_archive_request_digest", "registry_archive_supersedes", "registry_lookup_requestDigest", "registry_lookup_supersedes_conversationId", "registry_lookup_structuredHost_kind", "registry_archive_structured_host_kind", "registry_rows_failure_repair"]) {
+      db.exec(`DROP INDEX IF EXISTS ${index}`);
+    }
     db.exec(`BEGIN IMMEDIATE;
       DROP VIEW registry_records;
       CREATE VIEW registry_records AS
@@ -839,6 +862,10 @@ async function browserPhase(input: {
   keys: ReadonlyArray<{ key: string; servers: string[] }>;
   children: ChildProcess[];
   note: (line: string) => void;
+  runtimeHost: CandidateRuntimeHost;
+  servingHistory: CandidatePerformanceMeasurements["servingHistory"];
+  hostLoop: CandidatePerformanceMeasurements["hostLoop"];
+  inducedHostStall?: boolean;
   /** Hold the server's event loop this long once the views operate. */
   inducedStallMs?: number;
 }): Promise<CandidateBrowserMeasurements | null> {
@@ -881,11 +908,37 @@ async function browserPhase(input: {
     await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
     /* The probe must be watching the process that serves, or its reading says nothing. */
     if (probe.pid() !== server.pid) throw new Error("the production server carries no event-loop probe");
+    let readsDoneAt = 0;
+    let rulesWindow: { from: number; to: number } | undefined;
+    let reads: Promise<void> | undefined;
     const result = await measureBoardInBrowser({
       baseUrl,
       executablePath,
       server: probe,
+      // Five seconds of browser warm-up followed by at least 75 seconds.
+      windowMs: 80_000,
       onOperating: (remainingMs) => {
+        reads = (async () => {
+          if (input.inducedHostStall) await input.runtimeHost.holdLoop(800);
+          const curator = child("curator", [], input.env);
+          input.children.push(curator.process);
+          const outcome = await curator.result;
+          if (!outcome.completed) throw new Error(outcome.error ?? "curator history read failed");
+          input.servingHistory.curatorReads = 1;
+          input.servingHistory.curatorMs = Number(outcome.report.ms);
+          input.servingHistory.curatorLoopMaxMs = Number(outcome.report.loopMaxMs);
+          const started = performance.now();
+          const rulesStartedAt = Date.now();
+          const response = await fetch(`${baseUrl}/api/role-memory?project=${CANDIDATE_HISTORY_PROJECT}`, { signal: AbortSignal.timeout(60_000) });
+          const body = await response.json() as { scopes?: { revision: number }[]; curation?: { passes?: unknown[] } };
+          if (!response.ok || body.scopes?.filter(scope => scope.revision > 0).length !== 100 || body.curation?.passes?.length !== 50) throw new Error("rules-window history view was incomplete");
+          input.servingHistory.rulesViews = 1;
+          input.servingHistory.rulesMs = Math.round(performance.now() - started);
+          rulesWindow = { from: rulesStartedAt, to: Date.now() };
+          readsDoneAt = Date.now();
+        })();
+        // Observe failures immediately, then propagate them after the window.
+        void reads.catch(() => {});
         if (!input.inducedStallMs) return;
         setTimeout(() => { probe.stall(input.inducedStallMs!); input.note(`induced: held the production server's event loop for ${input.inducedStallMs}ms`); }, remainingMs / 3);
       },
@@ -895,6 +948,21 @@ async function browserPhase(input: {
         registry: input.registry, keys: input.keys, stopFile: path.join(input.root, "browser-writers-stop"),
       },
     });
+    const window = result.operatingWindow;
+    input.servingHistory.windowMs = window.durationMs;
+    Object.assign(input.hostLoop, input.runtimeHost.loopReading(window.fromUtcMs, window.toUtcMs));
+    await reads?.catch(error => input.note(`history read failed: ${error instanceof Error ? error.message : String(error)}`));
+    if (!readsDoneAt || readsDoneAt > window.toUtcMs) {
+      input.servingHistory.curatorReads = input.servingHistory.rulesViews = 0;
+      input.note("history reads did not finish inside the serving window");
+    } else {
+      // Read sequentially after the browser driver's own probe requests.
+      const rulesLoop = rulesWindow ? await probe.read(rulesWindow.from, rulesWindow.to, window.toUtcMs) : null;
+      input.note(`rules-window loop reading ${JSON.stringify(rulesLoop)}`);
+      if (!rulesLoop?.samples || rulesLoop.pid !== server.pid) input.servingHistory.rulesViews = 0;
+      else input.servingHistory.rulesLoopMaxMs = rulesLoop.maxMs;
+    }
+    input.note(`RG2 serving history ${JSON.stringify(input.servingHistory)}; runtime-host loop ${JSON.stringify(input.hostLoop)}`);
     for (const view of result.diagnostics) {
       input.note(`browser view ${view.view}: slowest ${JSON.stringify(view.slowest.slice(0, 2))}`
         + (view.failures.length ? `; failed ${JSON.stringify(view.failures)}` : ""));
@@ -912,6 +980,66 @@ async function browserPhase(input: {
 
 const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? Math.round(value) : 0;
 const numbers = (value: unknown) => Array.isArray(value) ? value.filter((item): item is number => typeof item === "number" && Number.isFinite(item)) : [];
+
+/** A fresh process over a caller-owned COPY of one synthetic census. This
+ * diagnostic cell can be copied unchanged into a baseline source export;
+ * both versions use their own production registry/recovery implementation.
+ * It measures registry preparation separately from the full candidate gate. */
+async function startupProbeMain(): Promise<void> {
+  const filename = option("--registry");
+  if (!filename || !fs.existsSync(filename)) throw new Error("--registry must name an isolated census copy");
+  const loop = lagWindow(); loop.enable();
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  let loads = 0;
+  const started = performance.now();
+  const registry = new AgentRegistry(path.join(path.dirname(filename), "agent-registry.json"), undefined, undefined,
+    { sqliteMode: "sqlite", onSqliteSnapshotLoad: () => { loads++; } });
+  registry.storageDiagnostics();
+  const openMs = performance.now() - started;
+  const viewStarted = performance.now();
+  if (typeof registry.prepareReadOnlySnapshot === "function") await registry.prepareReadOnlySnapshot();
+  else registry.readOnlySnapshot();
+  const viewMs = performance.now() - viewStarted;
+  await Bun.sleep(20);
+  const bootLoop = loop.summary(); loop.disable();
+  const { Database } = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+  const db = new Database(filename, { readonly: true });
+  const retained = () => db.query<{ value_json: string }, []>(`SELECT value_json FROM registry_records
+    WHERE collection='heldDeliveries' OR collection='receipts' AND json_extract(value_json,'$.state')='path-pending'
+    ORDER BY collection,row_key`).all().map(row => row.value_json);
+  const before = retained();
+  const { RuntimeHost } = await import("./host");
+  const { RuntimeJournal } = await import("./journal");
+  const { serveRuntimeHost } = await import("./socket");
+  const { UnixRuntimeHostClient } = await import("@/lib/runtime/client");
+  const { recoverPendingStructuredSpawns } = await import("@/lib/runtime/structuredSpawn");
+  const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
+  const journal = new RuntimeJournal(path.join(path.dirname(filename), "probe-runtime.sqlite"), { structuredHosts: true });
+  const host = new RuntimeHost(journal);
+  const counts: Record<string, number> = {};
+  const socket = path.join(process.env.TMPDIR!, "probe.sock");
+  const server = serveRuntimeHost(socket, { handle: async (request, options) => {
+    counts[request.method] = (counts[request.method] ?? 0) + 1;
+    return host.handle(request, options);
+  } });
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  try {
+    performanceSpans.clear();
+    const recoveryLoop = lagWindow(); recoveryLoop.enable();
+    const recoveryStarted = performance.now();
+    const probeAt = db.query<{ at: string | null }, []>("SELECT MAX(json_extract(value_json,'$.createdAt')) AS at FROM registry_records WHERE collection='receipts' AND json_extract(value_json,'$.state')='path-pending'").get()?.at;
+    await recoverPendingStructuredSpawns(registry, new UnixRuntimeHostClient(socket), { now: () => probeAt ? Date.parse(probeAt) : Date.now() });
+    const recoveryMs = performance.now() - recoveryStarted;
+    await Bun.sleep(20); recoveryLoop.disable();
+    console.log(JSON.stringify({ openMs, viewMs, bootLoop, recoveryMs, recoveryLoop: recoveryLoop.summary(), counts, loads,
+      retained: before.length, preserved: JSON.stringify(before) === JSON.stringify(retained()),
+      longest: performanceSpans.snapshot().records.filter(row => row.kind === "sync").sort((a,b) => b.maxMs-a.maxMs).slice(0,6)
+        .map(row => ({ site: performanceSites[row.site], ms: row.maxMs })) }));
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close(); db.close(); registry.close();
+  }
+}
 
 async function gateMain(): Promise<CandidatePerformanceEvidence> {
   const checkedAt = new Date().toISOString();
@@ -941,6 +1069,9 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     /* The dataset is built here, under the sandbox's state directory and
        nothing of the caller's. */
     process.env.LLV_STATE_DIR = env.LLV_STATE_DIR;
+    const { buildCandidateStateDataset } = await import("./candidateStateDataset");
+    const stateHistory = await buildCandidateStateDataset(env.LLV_STATE_DIR!);
+    note(`generated state history ${JSON.stringify(stateHistory)}`);
     const { buildRegistryPerformanceDataset, REGISTRY_PERFORMANCE_SHAPE, scaledRegistryPerformanceShape } = await import("@/lib/agent/registryPerformanceDataset");
     const dataset = buildRegistryPerformanceDataset(
       env.LLV_STATE_DIR!,
@@ -960,6 +1091,13 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     const workers: WorkerSpec[] = dataset.workers.map((worker, index) => ({ ...worker, socket: path.join(root, "w", `${index}.sock`) }));
     const deliveryIds = [...dataset.pendingDeliveryIds, ...dataset.uncertainDeliveryIds];
     const deliveriesBefore = rowsOf(dataset.filename, "heldDeliveries", deliveryIds);
+    const { Database } = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
+    const censusDb = new Database(dataset.filename, { readonly: true });
+    const retainedDeliveryIds = censusDb.query<{ row_key: string }, []>("SELECT row_key FROM registry_records WHERE collection='heldDeliveries'").all().map(row => row.row_key);
+    const pendingLaunchIds = censusDb.query<{ row_key: string }, []>("SELECT row_key FROM registry_records WHERE collection='receipts' AND json_extract(value_json,'$.state')='path-pending'").all().map(row => row.row_key);
+    censusDb.close();
+    const retainedDeliveries = rowsOf(dataset.filename, "heldDeliveries", retainedDeliveryIds);
+    const pendingLaunches = rowsOf(dataset.filename, "receipts", pendingLaunchIds);
     /* Eight scopes, each pinning a different conversation with a transcript. */
     const pinned = Array.from({ length: SCOPES }, (_, scope) => dataset.conversationPaths[(scope * 7 + 3) % dataset.conversationPaths.length]!);
     const scopeQuery = (scope: number) => `/api/files?view=summary&path=${encodeURIComponent(pinned[scope]!)}`;
@@ -1220,16 +1358,21 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     const queues = [aReport.queue, bReport.queue].map((value) => (value ?? {}) as { maxWaiting?: number; refused?: number; expired?: number });
     const externalLatencies = numbers(externalOutcome.report.latencies);
     const deliveriesAfter = rowsOf(dataset.filename, "heldDeliveries", deliveryIds);
-    const deliveryPreserved = deliveryIds.every((id) => {
+    const retainedAfter = rowsOf(dataset.filename, "heldDeliveries", retainedDeliveryIds);
+    const launchesAfter = rowsOf(dataset.filename, "receipts", pendingLaunchIds);
+    const retainedPreserved = retainedDeliveryIds.every(id => retainedDeliveries.get(id)?.json === retainedAfter.get(id)?.json)
+      && pendingLaunchIds.every(id => pendingLaunches.get(id)?.json === launchesAfter.get(id)?.json);
+    const deliveryPreserved = retainedPreserved && deliveryIds.every((id) => {
       const before = deliveriesBefore.get(id);
       const after = deliveriesAfter.get(id);
       return before && after && !after.cold && before.json === after.json;
     });
     if (externalOutcome.error) note(`separate writer: ${externalOutcome.error}`);
-    /* An activation that never completed counts the time it had. */
+    /* Keep completion separate from the elapsed time of an unfinished activation. */
     const activationOf = (report: Record<string, unknown>, since: number | null) => {
       const value = (report.activation ?? {}) as { completed?: boolean; ms?: number | null; eventLoopMaxMs?: number };
       return {
+        completed: value.completed === true,
         ms: value.completed === true ? finite(value.ms) : since === null ? 0 : Math.max(0, workersCheckedAt - since),
         eventLoopMaxMs: Number.isFinite(value.eventLoopMaxMs) ? Number(value.eventLoopMaxMs) : 0,
       };
@@ -1258,21 +1401,25 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     for (const pid of workerPids) { try { process.kill(pid, "SIGCONT"); process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
     let browser: CandidateBrowserMeasurements | null = null;
     /* A run that holds the server is refused by what the browser half measures, so it runs it. */
-    const serverStall = induced.includes("server-stall");
+    const servingHistory = { windowMs: 0, curatorReads: 0, curatorMs: 0, curatorLoopMaxMs: 0, rulesViews: 0, rulesMs: 0, rulesLoopMaxMs: 0 };
+    const hostLoop = { records: 0, malformed: 0, maxMs: 0 };
+    const serverStall = induced.includes("server-stall") || induced.includes("host-loop-stall");
     if (!serverStall && (scale < 1 || inducedDelayMs || induced.length)) note("browser: skipped, this run is a refusal already");
     else {
       try {
         browser = await browserPhase({
           root, env, registry: dataset.filename, conversations: dataset.conversations,
           keys: entrySubjects.map(({ key, servers }) => ({ key, servers })), children, note,
-          ...(serverStall ? { inducedStallMs: INDUCED_SERVER_STALL_MS } : {}),
+          runtimeHost, servingHistory, hostLoop, inducedHostStall: induced.includes("host-loop-stall"),
+          ...(induced.includes("server-stall") ? { inducedStallMs: INDUCED_SERVER_STALL_MS } : {}),
         });
       } catch (error) {
         note(`browser: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
     const measurements: CandidatePerformanceMeasurements = {
-      dataset: { scale, rows: dataset.rows, coldRows: dataset.coldRows, payloadBytes: dataset.payloadBytes, transcripts: dataset.conversations.length, seedMs: Math.round(dataset.seedMs) },
+      stateHistory, servingHistory, hostLoop,
+      dataset: { scale, rows: dataset.rows, coldRows: dataset.coldRows, payloadBytes: dataset.payloadBytes, transcripts: dataset.conversations.length, seedMs: Math.round(dataset.seedMs), receipts: dataset.receipts },
       firstBoot: {
         registryOpenMs: finite(aReport.registryOpenMs),
         firstSnapshotMs: finite(aReport.snapshotMs),
@@ -1284,6 +1431,8 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       activation: {
         incumbentMs: incumbentActivation.ms,
         successorMs: successorActivation.ms,
+        incumbentCompleted: incumbentActivation.completed,
+        successorCompleted: successorActivation.completed,
         eventLoopMaxMs: Math.round(Math.max(incumbentActivation.eventLoopMaxMs, successorActivation.eventLoopMaxMs)),
       },
       grantWrites: {
@@ -1350,16 +1499,18 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
       sqliteBusy: finite(aReport.busy) + finite(bReport.busy) + finite(externalOutcome.report.busy),
       runtimeTimeouts: runtimeRpc.timeouts,
       runtimeRpc,
-      deliveryEvidence: { pending: dataset.pendingDeliveryIds.length, uncertain: dataset.uncertainDeliveryIds.length, preserved: deliveryPreserved },
+      deliveryEvidence: { pending: dataset.pendingDeliveryIds.length, uncertain: dataset.uncertainDeliveryIds.length, retained: retainedDeliveryIds.length, pendingLaunches: pendingLaunchIds.length, preserved: deliveryPreserved },
       browser,
     };
-    const breaches = candidatePerformanceBreaches(measurements);
+    const timingWarnings: string[] = [];
+    const breaches = candidatePerformanceBreaches(measurements, CANDIDATE_PERFORMANCE_BOUNDS, timingWarnings);
     return {
       checkedAt,
       runtime,
       bounds: CANDIDATE_PERFORMANCE_BOUNDS,
       measurements,
       breaches,
+      timingWarnings,
       ...inducedFields,
       ok: breaches.length === 0 && !inducedDelayMs && !induced.length,
       ...(breaches.length ? { detail: breaches[0] } : {}),
@@ -1387,11 +1538,40 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
   }
 }
 
+async function curatorMain(): Promise<void> {
+  const { readPass } = await import("@/lib/memory/curation/store");
+  const { readCuration } = await import("@/lib/memory/curation/read");
+  const loop = lagWindow(); loop.enable();
+  await loop.nextTick();
+  const started = performance.now();
+  const pass = readPass(CANDIDATE_HISTORY_PASS);
+  if (!pass) throw new Error("generated curator pass is missing");
+  const result = await readCuration(pass, CANDIDATE_HISTORY_SCOPE);
+  if (!("scope" in result)) throw new Error("curator read returned no scope");
+  const ms = Math.round(performance.now() - started);
+  await loop.nextTick();
+  const loopMaxMs = Math.round(loop.summary().maxMs); loop.disable();
+  console.log(JSON.stringify({ completed: true, ms, loopMaxMs }));
+}
+
+if (import.meta.main && option("--seed-census")) {
+  const { buildRegistryPerformanceDataset } = await import("@/lib/agent/registryPerformanceDataset");
+  const dataset = buildRegistryPerformanceDataset(option("--seed-census")!);
+  previousReleaseSchema(dataset.filename);
+  console.log(JSON.stringify({ rows: dataset.rows, receipts: dataset.receipts, payloadBytes: dataset.payloadBytes }));
+  process.exit(0);
+}
+if (import.meta.main && process.argv.includes("--probe-startup")) {
+  await startupProbeMain();
+  process.exit(0);
+}
 if (import.meta.main) {
-  const mode: Mode = process.argv.includes("--writer") ? "writer"
+  const mode: Mode = process.argv.includes("--curator") ? "curator" : process.argv.includes("--writer") ? "writer"
     : process.argv.includes("--viewer") ? "viewer"
       : process.argv.includes("--worker") ? "worker" : "gate";
-  if (mode === "worker") {
+  if (mode === "curator") {
+    await curatorMain(); process.exit(0);
+  } else if (mode === "worker") {
     await workerMain();
   } else if (mode === "writer") {
     await writerMain();

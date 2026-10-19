@@ -31,6 +31,7 @@ interface SnapshotRow {
 }
 
 function runCapture(cmd: string, args: string[]): string {
+  // eslint-disable-next-line no-restricted-syntax -- Legacy portable process snapshot backend used by serving liveness and ownership checks.
   const res = spawnSync(cmd, args, {
     encoding: "utf8",
     maxBuffer: MAX_BUFFER,

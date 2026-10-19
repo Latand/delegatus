@@ -1,21 +1,22 @@
 "use client";
 
 import { CircleCheck, GalleryHorizontalEnd, Loader2, MessageCircleQuestionMark, RotateCw, ZoomIn } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
 import { Check, ChevronDown } from "@/components/icons";
 import { MicButtonView } from "@/components/MicButton";
+import { currentDecisionDraft, initialDraft, saveDecisionDraft, useStoredDecisionDraft, type Draft } from "@/components/prototypeReview/decisionDrafts";
 import { DecisionQuestions, selectPrototypeAnswer } from "@/components/prototypeReview/DecisionQuestions";
 import { roundGallery } from "@/components/prototypeReview/PrototypeReview";
 import { PrototypeTelegramActions } from "@/components/prototypeReview/PrototypeTelegramActions";
 import { useDictation } from "@/hooks/useDictation";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import { useLocale, type TFunction } from "@/lib/i18n";
-import { normalizePrototypeAnswers, recommendedAnswers } from "@/lib/prototypeReview/questions";
-import type { OperatorDecisionView, PrototypeAnswer } from "@/lib/prototypeReview/types";
+import { normalizePrototypeAnswers } from "@/lib/prototypeReview/questions";
+import type { OperatorDecisionView } from "@/lib/prototypeReview/types";
 
-import { decisionDraft, type DecisionAnswer } from "./useOperatorDecisions";
+import type { DecisionAnswer } from "./useOperatorDecisions";
 
 /*
  * One operator decision as a form (docs/design/operator-decision-forms.md
@@ -111,7 +112,8 @@ export function DecisionRow({ decision, onOpen }: { decision: OperatorDecisionVi
       onClick={onOpen}
     >
       <Mark className="h-4 w-4 shrink-0 text-accent" aria-hidden />
-      <span className="min-w-0 flex-1 truncate text-ui font-semibold text-primary">{decision.title}</span>
+      <span className={`min-w-0 flex-1 text-ui font-semibold text-primary ${decision.decision ? "[overflow-wrap:anywhere]" : "truncate"}`}>{decision.title}</span>
+      {decision.decision ? <span data-decision-delivery={decision.decision.delivery.state} className="shrink-0 text-caption font-semibold text-warning">{t(decision.decision.delivery.phase === "attention" && decision.decision.delivery.state === "pending" ? "decisions.state.failed" : `decisions.state.${decision.decision.delivery.state}`)}</span> : null}
       <ChevronDown className="h-4 w-4 shrink-0 text-muted" aria-hidden />
     </button>
   );
@@ -131,18 +133,31 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
   const { t, locale } = useLocale();
   const questions = decision.questions ?? [];
   const asks = questions.length > 0;
-  /* A form the server refused comes back as the operator left it. */
-  const [answers, setAnswers] = useState<PrototypeAnswer[]>(() => decisionDraft(decision.id)?.answers ?? recommendedAnswers(questions));
-  const [comment, setComment] = useState(() => decisionDraft(decision.id)?.comment ?? "");
-  const [reject, setReject] = useState(() => decisionDraft(decision.id)?.reject === true);
+  /* The draft lives in the store as the operator types, so the form comes back
+     as they left it after a refusal, a fold, a tab switch or a reload, and the
+     review window of the same round shows the same words. */
+  const stored = useStoredDecisionDraft(decision);
+  const { answers, comment, reject, chosen } = stored ?? initialDraft(decision);
+  const latest = useRef(decision);
+  useEffect(() => { latest.current = decision; }, [decision]);
+  const edit = useCallback((change: (held: Draft) => Draft) => {
+    const own = latest.current;
+    saveDecisionDraft(own, change(currentDecisionDraft(own)));
+  }, []);
   const [sending, setSending] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
+  const errorLine = useRef<HTMLParagraphElement>(null);
+  /* A refusal lands under the button, which can sit below the scroll edge of
+     the dialog or the column: bring it into view with the field it belongs to. */
+  useEffect(() => {
+    if (error) errorLine.current?.scrollIntoView?.({ block: "nearest" });
+  }, [error]);
   const insertSpoken = useCallback((spoken: string) => {
-    setComment((held) => (held ? `${held.trimEnd()} ${spoken}` : spoken));
+    edit((held) => ({ ...held, comment: held.comment ? `${held.comment.trimEnd()} ${spoken}` : spoken }));
     setVoiceError(null);
     requestAnimationFrame(() => field.current?.focus({ preventScroll: true }));
-  }, []);
+  }, [edit]);
   const dictation = useDictation({ onError: setVoiceError, onUnclaimedText: insertSpoken, onLiveCommit: insertSpoken });
   const recording = dictation.phase === "rec";
   const shown = dictation.liveText ? (comment ? `${comment.trimEnd()} ` : "") + dictation.liveText : comment;
@@ -154,7 +169,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
   const send = async () => {
     if (!savable) return;
     setSending(true);
-    try { await onAnswer(decision.id, { chosen: [], comment, answers, ...(reject ? { reject: true as const } : {}) }); }
+    try { await onAnswer(decision.id, { chosen: reject ? [] : chosen, comment, answers, ...(reject ? { reject: true as const } : {}) }); }
     finally { setSending(false); }
   };
   const Mark = asks ? MessageCircleQuestionMark : GalleryHorizontalEnd;
@@ -177,7 +192,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
       {asks ? (
         <div className="flex flex-col gap-3 px-3 pt-3" data-prototype-questions="">
           <DecisionQuestions questions={questions} answers={answers} open={!sending} boxed={false} columns={columns}
-            onSelect={(questionId, option) => setAnswers((held) => selectPrototypeAnswer(questions, held, questionId, option))} />
+            onSelect={(questionId, option) => edit((held) => ({ ...held, answers: selectPrototypeAnswer(questions, held.answers, questionId, option) }))} />
         </div>
       ) : null}
       {asks ? (
@@ -185,7 +200,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
           <PrototypeTelegramActions key={decision.id} round={decision} disabled={sending} />
           {decision.variants.length ? (
             <button type="button" role="checkbox" aria-checked={reject} data-decision-reject="" disabled={sending}
-              className={`${SECONDARY} self-start ${reject ? "border-warning/60 bg-warning-soft text-warning" : ""}`} onClick={() => setReject((held) => !held)}>
+              className={`${SECONDARY} self-start ${reject ? "border-warning/60 bg-warning-soft text-warning" : ""}`} onClick={() => edit((held) => ({ ...held, reject: !held.reject, chosen: [] }))}>
               <span aria-hidden className="grid h-4 w-4 place-items-center rounded-sm border border-current">{reject ? <Check className="h-3 w-3" /> : null}</span>{t("proto.reject.none")}
             </button>
           ) : null}
@@ -200,7 +215,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
                 aria-label={t("proto.comment")}
                 placeholder={t(reject ? "proto.reject.needs" : "proto.q.commentPlaceholder")}
                 className={`max-h-32 min-h-8 resize-none bg-transparent py-1 text-body text-primary outline-none placeholder:text-muted [field-sizing:content] [@media(pointer:coarse)]:min-h-10 ${recording ? "w-full" : "min-w-0 flex-1"}`}
-                onChange={(event) => setComment(event.target.value)}
+                onChange={(event) => edit((held) => ({ ...held, comment: event.target.value }))}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send(); }
                 }}
@@ -216,7 +231,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
           </div>
           {reject && !comment.trim() ? <p role="status" data-decision-reject-needs="" className="m-0 text-label text-warning">{t("proto.reject.needs")}</p> : null}
           {!valid ? <p role="status" className="m-0 text-label text-muted">{t(answers.some((answer) => answer.other) && !comment.trim() ? "proto.q.otherNeedsComment" : "proto.q.answerAll")}</p> : null}
-          {error ? <p role="alert" data-decision-error="" className="m-0 text-label font-semibold text-danger">{t("decisions.refused", { error })}</p> : null}
+          {error ? <p ref={errorLine} role="alert" data-decision-error="" className="m-0 scroll-mb-3 text-label font-semibold text-danger">{t("decisions.refused", { error })}</p> : null}
           {voiceError ? <p role="alert" className="m-0 text-label font-semibold text-danger">{voiceError}</p> : null}
         </footer>
       ) : <div className="h-3" />}
@@ -241,15 +256,16 @@ export function DecisionRecord({ decision, onRetry, retrying = false, retryError
   const made = decision.decision;
   if (!made) return null;
   const state = made.delivery.state;
-  const retry = !decision.nativeAssociationState && onRetry && made.delivery.retryable && state !== "pending" && state !== "sent";
-  const tone = decision.nativeAssociationState === "approved" || state === "sent" ? "bg-success-soft text-success" : state === "pending" ? "bg-sunken text-secondary" : "bg-warning-soft text-warning";
+  const retry = !decision.nativeAssociationState && onRetry && made.delivery.retryable && (made.delivery.phase === "attention" || state !== "pending" && state !== "sent");
+  const attention = made.delivery.phase === "attention";
+  const tone = decision.nativeAssociationState === "approved" || state === "sent" ? "bg-success-soft text-success" : state === "pending" && !attention ? "bg-sunken text-secondary" : "bg-warning-soft text-warning";
   return (
     <section data-decision-card="answered" data-decision-review={decision.id} aria-label={t("decisions.recordAria", { title: decision.title })} className="min-w-0 rounded-surface border border-border bg-card">
-      <header className="flex min-w-0 items-center gap-1.5 px-3 py-2">
+      <header className="flex min-w-0 flex-wrap items-start gap-1.5 px-3 py-2">
         <CircleCheck className="h-4 w-4 shrink-0 text-success" aria-hidden />
         <span className="shrink-0 text-ui font-semibold text-primary">{t("decisions.answeredAt", { time: decisionClock(made.at, locale) })}</span>
-        <span className="min-w-0 flex-1 truncate text-label text-muted">· {decision.title}</span>
-        <span data-decision-delivery={state} className={`shrink-0 rounded-full px-1.5 py-0.5 text-caption font-semibold ${tone}`}>{t(decision.nativeAssociationState === "approved" ? "decisions.accessApproved" : decision.nativeAssociationState === "refused" ? "decisions.accessRefused" : `decisions.state.${state}`)}</span>
+        <span data-decision-record-title="" className="order-last min-w-0 basis-full text-ui font-semibold text-primary [overflow-wrap:anywhere]">{decision.title}</span>
+        <span data-decision-delivery={state} className={`ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-caption font-semibold ${tone}`}>{t(decision.nativeAssociationState === "approved" ? "decisions.accessApproved" : decision.nativeAssociationState === "refused" ? "decisions.accessRefused" : attention && state === "pending" ? "decisions.state.failed" : `decisions.state.${state}`)}</span>
       </header>
       {made.rejected ? <p data-decision-rejected="" className="m-0 px-3 pb-2.5 text-ui font-semibold text-warning">{t("proto.rejected")}</p> : null}
       {decision.questions?.length ? (

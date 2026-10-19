@@ -4,12 +4,13 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, setSystemTime, spyOn, test } from "bun:test";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { lifecycleJournalPath, queryLifecycleEvents } from "@/lib/lifecycle/journal";
 import * as journalModule from "@/lib/lifecycle/journal";
 import { pollLifecycleDigest } from "@/lib/lifecycle/digest";
 import type { FileEntry } from "@/lib/types";
+import { reconcileFileControllers } from "@/lib/scanner";
 import { nativeCodexFunctionCallMethod, observeCodexSubagentEvent, observeCodexSubagentTranscripts, recordCodexSubagentViolation } from "./codexSubagentDetection";
 import { bindStructuredDeliveryQueue, type StructuredDeliveryHost } from "./structuredDeliveryController";
 import { seatTickDecision, DEFAULT_SEAT_TICK_POLICY, SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
@@ -275,8 +276,9 @@ test.each([
   }
 });
 
-test("failed transcript writes retry children and tails, and settled children never reacquire the journal lock", () => {
+test("failed transcript writes retry through unchanged controller passes", async () => {
   const { registry, parentPath, sessionId, conversation } = launched();
+  setAgentRegistryForTests(registry);
   const childPath = path.join(root, `rollout-${randomUUID()}.jsonl`);
   fs.writeFileSync(childPath, JSON.stringify({ type: "session_meta", payload: { source: { subagent: { thread_spawn: { parent_thread_id: sessionId } } } } }) + "\n");
   fs.appendFileSync(parentPath, JSON.stringify({ timestamp: new Date().toISOString(), type: "response_item", payload: { type: "function_call", name: "spawn_agent", call_id: "retry-tail" } }) + "\n");
@@ -285,9 +287,9 @@ test("failed transcript writes retry children and tails, and settled children ne
   const journal = lifecycleJournalPath();
   fs.mkdirSync(path.dirname(journal), { recursive: true });
   fs.writeFileSync(journal, "{");
-  expect(() => observeCodexSubagentTranscripts(registry, entries)).not.toThrow();
+  await expect(reconcileFileControllers(entries, { inventoryChanged: false })).resolves.toBeUndefined();
   fs.unlinkSync(journal);
-  observeCodexSubagentTranscripts(registry, entries);
+  await reconcileFileControllers(entries, { inventoryChanged: false });
   expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(1);
   const persisted = fs.readFileSync(journal, "utf8");
   // A held transaction lock would block a replay, even when it is deduplicated.
@@ -296,10 +298,10 @@ test("failed transcript writes retry children and tails, and settled children ne
   fs.mkdirSync(journal);
   const append = spyOn(journalModule, "appendLifecycleEvents");
   try {
-    expect(() => observeCodexSubagentTranscripts(registry, entries)).not.toThrow();
+    await reconcileFileControllers(entries, { inventoryChanged: false });
     expect(append).not.toHaveBeenCalled();
-  } finally { append.mockRestore(); fs.rmdirSync(journal); fs.writeFileSync(journal, persisted); }
-  observeCodexSubagentTranscripts(registry, entries);
+  } finally { append.mockRestore(); fs.rmdirSync(journal); fs.writeFileSync(journal, persisted); setAgentRegistryForTests(null); }
+  await reconcileFileControllers(entries, { inventoryChanged: false });
   expect(queryLifecycleEvents({ conversationId: conversation.id }).events).toHaveLength(1);
 });
 
@@ -499,4 +501,21 @@ test("a new detector process retains its durable boundary and observes activity 
   const events = queryLifecycleEvents({ conversationId: conversation.id }).events;
   expect(events).toHaveLength(1);
   expect(events[0]?.at).toBe(activityAt);
+});
+
+
+test("a catalog beyond SQLite's bind limit still records denied native activity", () => {
+  setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+  const fixture = launched();
+  fixture.registry.close();
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    fs.appendFileSync(fixture.parentPath, JSON.stringify({ timestamp: "2030-01-01T00:00:00.000Z", type: "response_item",
+      payload: { type: "function_call", namespace: "multi_agent_v1", name: "spawn_agent", call_id: "large-catalog-denial" } }) + "\n");
+    const entries = Array.from({ length: 33_000 }, (_, n) => ({ engine: "codex", path: path.join(root, "missing", `missing-${n}.jsonl`), size: 0, mtime: 0 }) as FileEntry);
+    entries.push({ engine: "codex", path: fixture.parentPath, size: fs.statSync(fixture.parentPath).size,
+      mtime: fs.statSync(fixture.parentPath).mtimeMs / 1000 } as FileEntry);
+    observeCodexSubagentTranscripts(registry, entries);
+    expect(queryLifecycleEvents({ conversationId: fixture.conversation.id }).events).toHaveLength(1);
+  } finally { registry.close(); }
 });

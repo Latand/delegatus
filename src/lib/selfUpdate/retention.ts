@@ -1,9 +1,11 @@
+import { RetentionWorker, RetentionInspectionError, type RetentionInspection } from "./retentionWorker";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
-import { finishTreeTrash, inspectTree, mountPointsUnder, removeTreeViaTrash, resolvePhysicalPath, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
+import { finishTreeTrash, inspectTree, mountPointsUnder, removeTreeViaTrash, resolvePhysicalPath, type ProcessScan } from "@/lib/tempSweep";
 import { classifyStatus, disposableGeneratedTree, disposableIgnoredPath, keptIgnored, lockCheckoutHead, parseWorktreeList } from "@/lib/pipelines/worktreeSweep";
 import { runGit } from "./git";
 import { builtRevision } from "./steps";
@@ -20,6 +22,7 @@ export type RetentionReport = {
   reclaimedCacheBytes: number; kept: { dir: string; reason: string; bytes: number }[]; errors: string[];
 };
 export type RetentionPorts = {
+  inspection?: RetentionInspection;
   git?: typeof runGit; scan?: () => ProcessScan; mountPoints?: (directory: string) => string[];
   now?: () => number; env?: Readonly<Record<string, string | undefined>>; reportFile?: string;
   current?: () => { record: LauncherRecord; inputs: RetentionInputs };
@@ -27,21 +30,6 @@ export type RetentionPorts = {
   lockHead?: (directory: string) => (() => void) | null;
 };
 const under = (entry: string, root: string) => entry === root || entry.startsWith(root + path.sep);
-
-/** A lower-bound allocation count. Symlinks and device boundaries are never followed. */
-function bytesOf(directory: string): number {
-  let bytes = 0; let count = 0;
-  const pending = [directory];
-  const device = fs.lstatSync(directory).dev;
-  while (pending.length && count++ < 200_000) {
-    const file = pending.pop()!;
-    const stat = fs.lstatSync(file);
-    if (stat.dev !== device) continue;
-    if (stat.isDirectory()) pending.push(...fs.readdirSync(file).map(name => path.join(file, name)));
-    if (stat.isDirectory() || stat.nlink === 1) bytes += stat.blocks * 512;
-  }
-  return bytes;
-}
 
 function pointerDir(raw: string | null): string | null {
   if (raw === null) return null;
@@ -61,6 +49,13 @@ function releaseAge(directory: string, checkout: boolean): number {
 
 /** Successful applies call this after persisting their outcome, while update admission is held. */
 export async function retainReleases(record: LauncherRecord, inputs: RetentionInputs = {}, ports: RetentionPorts = {}): Promise<RetentionReport> {
+  return withViewerOperation("self-update.retention", async () => {
+  const inspection = ports.inspection ?? new RetentionWorker();
+  const bytesOf = async (directory: string) => {
+    try { return await inspection.bytes(directory); }
+    catch (error) { throw new RetentionInspectionError(String(error)); }
+  };
+  try {
   const now = ports.now ?? Date.now;
   const run = ports.git ?? runGit;
   const report: RetentionReport = { at: new Date(now()).toISOString(), removed: [], reclaimedCacheBytes: 0, kept: [], errors: [] };
@@ -69,10 +64,12 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   const previousTrash = fs.readdirSync(path.dirname(reportFile));
   const mounts = ports.mountPoints ?? mountPointsUnder;
   const read = () => ports.current?.() ?? { record, inputs };
-  const scan = () => {
-    const value = (ports.scan ?? scanProcesses)();
-    if (!value.ownNamespace) throw new Error("scan-unavailable: release retention requires /proc");
-    return value;
+  const scan = async () => {
+    try {
+      const value = ports.scan ? ports.scan() : await inspection.scan(path.resolve(record.releasesDir));
+      if (!value.ownNamespace || ("complete" in value && !value.complete)) throw new Error("scan-unavailable: incomplete /proc inventory");
+      return value;
+    } catch (error) { throw new RetentionInspectionError(String(error)); }
   };
   type Candidate = { dir: string; sha: string; age: number; locked: boolean; identity: string };
   const identity = (dir: string) => { const stat = fs.lstatSync(dir); return `${stat.dev}:${stat.ino}`; };
@@ -110,9 +107,13 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     if (!recovering && now() - releaseAge(candidate.dir, !!record.checkout) < DAY) return "recent";
     return null;
   };
+  const freshProtection = async (candidate: Candidate, recovering = false) => {
+    const processes = await scan();
+    return protect(candidate, read(), processes, recovering);
+  };
   try {
+    const processes = await scan();
     const initial = read();
-    const processes = scan();
     const root = path.resolve(record.releasesDir);
     if (fs.realpathSync(root) !== root) throw new Error("release root is an alias; skipped");
     let listed: ReturnType<typeof parseWorktreeList> = [];
@@ -157,33 +158,37 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     for (const candidate of candidates.sort((a, b) => a.age - b.age)) {
       try {
         const current = read();
-        let reason = protect(candidate, current, scan()) ?? (now() - candidate.age < DAY ? "recent" : newest.has(candidate.dir) ? "newest" : null);
+        let reason = protect(candidate, current, processes) ?? (now() - candidate.age < DAY ? "recent" : newest.has(candidate.dir) ? "newest" : null);
         if (mounts(candidate.dir).length) reason = "mount-boundary";
         if (identity(candidate.dir) !== candidate.identity || fs.realpathSync(candidate.dir) !== candidate.dir) reason = "changed";
         if (reason) {
-          const bytes = reason === "mount-boundary" ? 0 : bytesOf(candidate.dir);
+          const bytes = reason === "mount-boundary" ? 0 : await bytesOf(candidate.dir);
           report.kept.push({ dir: candidate.dir, reason, bytes });
           // Runtime caches and unfinished builds are kept. Only webpack is disposable.
-          if (["mount-boundary", "in-flight", "changed"].includes(reason) || !record.checkout) continue;
+          if (["mount-boundary", "in-flight", "changed"].includes(reason) || !record.checkout
+            || (read().inputs.inFlight ?? []).some(dir => under(dir, candidate.dir))) continue;
           const head = await run(["rev-parse", "HEAD"], candidate.dir);
           if (head.code !== 0 || builtRevision(candidate.dir) !== head.stdout.trim()) continue;
           const cache = path.join(candidate.dir, ".next/cache/webpack");
           if (!fs.existsSync(cache)) continue;
           if (fs.realpathSync(cache) !== cache || !fs.lstatSync(cache).isDirectory() || mounts(cache).length) continue;
           if (inspectTree(cache, { git: true, mounts: mounts(cache) }).hold) continue;
-          const bytesBefore = bytesOf(cache);
+          const bytesBefore = await bytesOf(cache);
           const journal = path.join(path.dirname(reportFile), `cache-trash-${randomUUID()}.json`);
-          const inUse = (trash: string) => heldByProcess(trash, scan()) || heldByProcess(cache, scan())
-            || (read().inputs.inFlight ?? []).some(dir => under(dir, candidate.dir));
-          if (inUse(cache) || mounts(candidate.dir).length || fs.realpathSync(cache) !== cache || identity(candidate.dir) !== candidate.identity
+          const inUse = async (trash: string) => {
+            const fresh = await scan();
+            return heldByProcess(trash, fresh) || heldByProcess(cache, fresh)
+              || (read().inputs.inFlight ?? []).some(dir => under(dir, candidate.dir));
+          };
+          if (await inUse(cache) || mounts(candidate.dir).length || fs.realpathSync(cache) !== cache || identity(candidate.dir) !== candidate.identity
             || inspectTree(cache, { git: true, mounts: mounts(cache) }).hold) continue;
           if (await removeTreeViaTrash(cache, { journal, held: inUse, remove: ports.removeTree,
             validate: trash => !inspectTree(trash, { git: true, mounts: mounts(trash) }).hold })) report.reclaimedCacheBytes += bytesBefore;
           continue;
         }
         // Awaited listing and measurements cannot carry stale authority into removal.
+        const fresh = await scan();
         const latest = read();
-        const fresh = scan();
         if (protect(candidate, latest, fresh) || mounts(candidate.dir).length || identity(candidate.dir) !== candidate.identity) {
           report.kept.push({ dir: candidate.dir, reason: "changed", bytes: 0 }); continue;
         }
@@ -196,18 +201,18 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         if (record.checkout) {
           const actualHead = await run(["rev-parse", "--verify", "HEAD"], candidate.dir);
           if (actualHead.code !== 0 || actualHead.stdout.trim() !== candidate.sha) {
-            report.kept.push({ dir: candidate.dir, reason: "uncommitted", bytes: bytesOf(candidate.dir) }); continue;
+            report.kept.push({ dir: candidate.dir, reason: "uncommitted", bytes: await bytesOf(candidate.dir) }); continue;
           }
           const listing = await run(["worktree", "list", "--porcelain", "-z"], record.checkout);
           if (listing.code !== 0) throw new Error("cannot refresh release worktree listing");
           const entry = parseWorktreeList(listing.stdout).find(entry => path.resolve(entry.path) === candidate.dir);
-          if (!entry || entry.locked || entry.head !== actualHead.stdout.trim() || protect(candidate, read(), scan()) || mounts(candidate.dir).length) {
+          if (!entry || entry.locked || entry.head !== actualHead.stdout.trim() || await freshProtection(candidate) || mounts(candidate.dir).length) {
             report.kept.push({ dir: candidate.dir, reason: "changed", bytes: 0 }); continue;
           }
           let content = await worktreeStatus(candidate.dir);
           if (!content.ok || content.changed.length || content.ignored.length || !await safeTrackedFlags(candidate.dir)
             || !await safeRef(actualHead.stdout.trim())) {
-            report.kept.push({ dir: candidate.dir, reason: "uncommitted", bytes: bytesOf(candidate.dir) }); continue;
+            report.kept.push({ dir: candidate.dir, reason: "uncommitted", bytes: await bytesOf(candidate.dir) }); continue;
           }
           for (const ignored of content.allIgnored) {
             if (!disposableIgnoredPath(candidate.dir, ignored)) { content = { ...content, ignored: [ignored] }; break; }
@@ -218,17 +223,17 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
             const generated = ignored.split("/").some(name => ["node_modules", ".next", ".turbo", ".cache", ".parcel-cache", ".svelte-kit", "out", "dist", "build", "coverage", "test-results", "playwright-report", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis", ".venv", "venv", ".tox", ".nox"].includes(name) || name.endsWith(".egg-info"));
             const journal = path.join(path.dirname(reportFile), `release-output-trash-${randomUUID()}.json`);
             if (!await removeTreeViaTrash(target, { journal, remove: ports.removeTree,
-              held: trash => !disposableGeneratedTree(trash, generated) || !!protect(candidate, read(), scan(), true),
+              held: async trash => !disposableGeneratedTree(trash, generated) || !!await freshProtection(candidate, true),
             })) { content = { ...content, ignored: [ignored] }; break; }
             content = await worktreeStatus(candidate.dir);
             if (!content.ok || content.changed.length || content.ignored.length || !await safeTrackedFlags(candidate.dir)) break;
           }
           if (!content.ok || content.changed.length || content.ignored.length) {
-            report.kept.push({ dir: candidate.dir, reason: "uncommitted", bytes: bytesOf(candidate.dir) }); continue;
+            report.kept.push({ dir: candidate.dir, reason: "uncommitted", bytes: await bytesOf(candidate.dir) }); continue;
           }
         }
-        const bytes = bytesOf(candidate.dir);
-        if (protect(candidate, read(), scan()) || mounts(candidate.dir).length || identity(candidate.dir) !== candidate.identity || fs.realpathSync(candidate.dir) !== candidate.dir) {
+        const bytes = await bytesOf(candidate.dir);
+        if (await freshProtection(candidate) || mounts(candidate.dir).length || identity(candidate.dir) !== candidate.identity || fs.realpathSync(candidate.dir) !== candidate.dir) {
           report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue;
         }
         if (record.checkout) {
@@ -243,7 +248,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           }
           const finalHead = await run(["rev-parse", "--verify", "HEAD"], candidate.dir);
           if (finalHead.code !== 0 || finalHead.stdout.trim() !== candidate.sha
-            || protect(candidate, read(), scan()) || mounts(candidate.dir).length
+            || await freshProtection(candidate) || mounts(candidate.dir).length
             || identity(candidate.dir) !== candidate.identity || fs.realpathSync(candidate.dir) !== candidate.dir) {
             report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue;
           }
@@ -273,11 +278,11 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         } else {
           const packageTree = inspectTree(candidate.dir, { git: true, mounts: mounts(candidate.dir) });
           if (packageTree.hold) {
-            report.kept.push({ dir: candidate.dir, reason: packageTree.hold, bytes: bytesOf(candidate.dir) }); continue;
+            report.kept.push({ dir: candidate.dir, reason: packageTree.hold, bytes: await bytesOf(candidate.dir) }); continue;
           }
           const journal = path.join(path.dirname(reportFile), `package-trash-${randomUUID()}.json`);
-          if (!await removeTreeViaTrash(candidate.dir, { journal, context: { sha: candidate.sha }, held: trash => {
-            const current = read(); const activeProcesses = scan();
+          if (!await removeTreeViaTrash(candidate.dir, { journal, context: { sha: candidate.sha }, held: async trash => {
+            const activeProcesses = await scan(); const current = read();
             const reason = protect({ dir: candidate.dir, sha: candidate.sha, age: candidate.age, locked: candidate.locked, identity: candidate.identity }, current, activeProcesses, true);
             if (reason) report.kept.push({ dir: candidate.dir, reason, bytes: 0 });
             return !!reason || heldByProcess(trash, activeProcesses)
@@ -286,7 +291,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         }
         report.removed.push({ dir: candidate.dir, sha: candidate.sha, bytes });
         } finally { releaseHead?.(); }
-      } catch (error) { report.errors.push(`${candidate.dir}: ${String(error)}`); }
+      } catch (error) { if (error instanceof RetentionInspectionError) throw error; report.errors.push(`${candidate.dir}: ${String(error)}`); }
     }
     // Recover only intents whose original path belongs to this releases root.
     for (const file of previousTrash) {
@@ -310,8 +315,8 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const candidate = candidates.find(candidate => row.directory === path.join(candidate.dir, ".next/cache/webpack"));
           if (!candidate || mounts(candidate.dir).length || identity(candidate.dir) !== candidate.identity) continue;
         }
-        const held = (trash: string) => {
-          const processes = scan();
+        const held = async (trash: string) => {
+          const processes = await scan();
           if (heldByProcess(trash, processes) || heldByProcess(row.directory, processes)) return true;
           if (outputCandidate) {
             const reason = protect(outputCandidate, read(), processes, true);
@@ -324,14 +329,14 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           return !!reason;
         };
         if (mounts(row.trash).length) { report.kept.push({ dir: row.directory, reason: "mount-boundary", bytes: 0 }); continue; }
-        const bytes = fs.existsSync(row.trash) ? bytesOf(row.trash) : 0;
+        const bytes = fs.existsSync(row.trash) ? await bytesOf(row.trash) : 0;
         if (await finishTreeTrash(journal, held, ports.removeTree,
           trash => (!outputCandidate || disposableGeneratedTree(trash, generatedOutput))
             && (outputTrash || !inspectTree(trash, { git: true, mounts: mounts(trash) }).hold))) {
           if (packageTrash) report.removed.push({ dir: row.directory, sha: row.context?.sha ?? "", bytes });
           else if (!outputTrash) report.reclaimedCacheBytes += bytes;
         }
-      } catch (error) { report.errors.push(String(error)); }
+      } catch (error) { if (error instanceof RetentionInspectionError) throw error; report.errors.push(String(error)); }
     }
   } catch (error) { report.errors.push(String(error)); }
   try { fs.mkdirSync(path.dirname(reportFile), { recursive: true }); writeJsonDurably(reportFile, report); }
@@ -341,6 +346,8 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   }
   console.log(`[self-update] retention removed ${report.removed.length}; reclaimed ${report.reclaimedCacheBytes} cache bytes; ${report.errors.length} error(s)`);
   return report;
+  } finally { await inspection.close(); }
+  });
 }
 
 export function releaseRetentionStatus() {

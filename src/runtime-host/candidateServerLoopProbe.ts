@@ -10,7 +10,7 @@
    answers the gate through files beside `LLV_CANDIDATE_SERVER_LOOP`:
 
    - `<prefix>.pid`: written once, the process being watched;
-   - `<prefix>.ask` holding `{ id, from, to }`: answered by `<prefix>.<id>.json`
+   - `<prefix>.ask` holding `{ id, from, to, recoveryTo? }`: answered by `<prefix>.<id>.json`
      with the samples whose wall clock lies in that window;
    - `<prefix>.stall` holding a number of milliseconds: the loop is held that
      long, once, so the gate's own tests can prove such a server is refused.
@@ -32,6 +32,7 @@ export interface ServerLoopWindow {
   p95Ms: number;
   maxMs: number;
   stalls: Array<{ at: number; ms: number }>;
+  recoveredAt?: number;
 }
 
 const prefix = process.env.LLV_CANDIDATE_SERVER_LOOP;
@@ -41,14 +42,22 @@ if (prefix && isMainThread) {
   let expected = performance.now() + INTERVAL_MS;
   let ticks = 0;
   const answer = () => {
-    let ask: { id?: unknown; from?: unknown; to?: unknown };
+    let ask: { id?: unknown; from?: unknown; to?: unknown; recoveryTo?: unknown };
     try { ask = JSON.parse(fs.readFileSync(`${prefix}.ask`, "utf8")) as typeof ask; } catch { return; }
     fs.rmSync(`${prefix}.ask`, { force: true });
     if (typeof ask.id !== "string" || !/^[a-z0-9-]+$/.test(ask.id) || typeof ask.from !== "number" || typeof ask.to !== "number") return;
+    if (ask.recoveryTo !== undefined && (typeof ask.recoveryTo !== "number" || !Number.isFinite(ask.recoveryTo) || ask.recoveryTo < ask.to)) return;
     const inside: number[] = [];
     const stalls: ServerLoopWindow["stalls"] = [];
+    let recoveredAt: number | undefined;
     for (let index = 0; index < at.length; index += 1) {
-      if (at[index]! < ask.from || at[index]! > ask.to) continue;
+      if (at[index]! < ask.from) continue;
+      if (at[index]! > ask.to) {
+        // A synchronous request can answer before the first delayed timer.
+        // Include exactly that recovery tick, bounded by the serving window.
+        if (recoveredAt !== undefined || typeof ask.recoveryTo !== "number" || at[index]! > ask.recoveryTo) continue;
+        recoveredAt = at[index]!;
+      }
       inside.push(late[index]!);
       if (late[index]! >= STALL_MS && stalls.length < 20) stalls.push({ at: at[index]!, ms: Math.round(late[index]!) });
     }
@@ -59,6 +68,7 @@ if (prefix && isMainThread) {
       p95Ms: inside.length ? Math.round(inside[Math.min(inside.length - 1, Math.ceil(inside.length * 0.95) - 1)]! * 10) / 10 : 0,
       maxMs: Math.round((inside.at(-1) ?? 0) * 10) / 10,
       stalls,
+      ...(recoveredAt === undefined ? {} : { recoveredAt }),
     };
     fs.writeFileSync(`${prefix}.${ask.id}.tmp`, JSON.stringify(window));
     fs.renameSync(`${prefix}.${ask.id}.tmp`, `${prefix}.${ask.id}.json`);

@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import os from "node:os";
 
@@ -11,7 +12,7 @@ import { seatDeputyView, type SeatDeputyView } from "@/lib/orchestrator/deputyVi
 import { allSeatConversationsIn, orchestratorSeatIn, previousOrchestratorSeatsIn, readOrchestratorSeatFileOrNull, seatTaskLookup, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatConversations, type SeatNotesTask } from "@/lib/orchestrator/seats";
 import { currentSeatFailure, type SeatHostObservation } from "@/lib/orchestrator/seatFailure";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasksForList } from "@/lib/tasks/store";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -79,6 +80,7 @@ interface SeatFailure {
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | SeatConversationsAnswer | ApiError>> {
+  return withViewerOperation("seat.panel", async () => {
   const project = req.nextUrl.searchParams.get("project")?.trim() ?? "";
   if (req.nextUrl.searchParams.get("scope")?.trim() === "all") {
     return NextResponse.json({ all: withDeputyRefs(allSeatConversationsIn(readOrchestratorSeatFileOrNull()), readDeputyFileOrNull()) });
@@ -119,9 +121,9 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
   const retired = previousOrchestratorSeatsIn(record, project);
   /* The task store is read only when there is a seat to find notes for. A
      failed read leaves the rows without notes; the seat answer still stands. */
-  let tasks: ReturnType<typeof loadTasks> = [];
+  let tasks: ReturnType<typeof loadTasksForList> = [];
   if (retired.length || active) {
-    try { tasks = loadTasks(); } catch { tasks = []; }
+    try { tasks = loadTasksForList(); } catch { tasks = []; }
   }
   const seatDeputies = active?.conversationId && deputies
     ? deputiesForSeatIn(deputies, active.conversationId).map(seatDeputyView)
@@ -145,6 +147,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
     /* docs/design/ghost-seat.md §5: the seat's feed draws each deputy's block
        from these, and the seat head and card point at the live one. */
     ...(seatDeputies.length ? { deputies: seatDeputies } : {}),
+  });
   });
 }
 

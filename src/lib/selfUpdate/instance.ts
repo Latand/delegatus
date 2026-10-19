@@ -626,6 +626,11 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       const client = runtimeHostClient();
       return client ? client.readViewerDeployment(deploymentId) : null;
     },
+    latestDeployments: async () => {
+      const client = runtimeHostClient();
+      if (!client?.listViewerDeployments) throw new Error("runtime host deployment list is unavailable");
+      return client.listViewerDeployments({ limit: 1, compact: true });
+    },
     findDeploymentByIdempotencyKey: async (idempotencyKey): Promise<ViewerDeploymentStatus | null> => {
       const client = runtimeHostClient();
       if (!client?.findViewerDeploymentByIdempotencyKey) throw new Error("runtime host cannot confirm deployment admission");
@@ -635,6 +640,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
     prepareCheckRepo: () => prepareManagedCheckRepo(join(dir, "check.git"), statePath("deployments", "canonical.git", "objects")),
     buildEnv: (scratch) => buildEnv(scratch),
     web: {
+      get revision() { return /^[a-f0-9]{40}$/.test(env.LLV_HOT_STATE_RELEASE_REVISION ?? "") ? env.LLV_HOT_STATE_RELEASE_REVISION : null; },
       pid: process.pid,
       port: Number.isInteger(port) && port > 0 ? port : null,
       startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),

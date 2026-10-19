@@ -1,0 +1,579 @@
+{
+  "date": "2026-10-15",
+  "baselineCommit": "f1083f301615c3af550e1bac56b2be1bda4ce1f0",
+  "bun": "1.4.0",
+  "inputSha256": {
+    "state.sqlite": "e5b529b2cce2033fff06de8771762e6ffe0b35a6e837f660a4ec36e7496b154c",
+    "agent-registry.sqlite": "a3adda4516e64741b70dada993b170c14ec6a06e6cddf716d1188b1b36fa3f9f",
+    "files-scan-snapshot.json": "b8c3d5011cf226719a3b7ba0dd77392b98b688d90f98e5cdcf3a7e6c914cba41"
+  },
+  "candidateSourceSha256": {
+    "src/lib/state/collectionReadCache.ts": "221530a3339e3b3a2acebdc3275f6e98fbe7b93ed8e8cbef5292cd6e7d746edf",
+    "src/lib/state/sqliteStateStore.ts": "dc9cec48ee083584d7b5369e151d4d91fdc4318939471f495a8a7082a7325ef2",
+    "src/lib/pipelines/store.ts": "a2215634c84e5931c29084e57858c130754716ce220bd43f6c057eb3ebae7901",
+    "src/lib/pipelines/listProjection.ts": "6e5af53582f4ec603cc63b48b52f92639c3c71aa1f42d1da5c76c85e8d868438",
+    "src/lib/tasks/store.ts": "d6706b5bcb75228d535fc8086822a486803ea5e4e50698836ea469fa42e87f86",
+    "src/app/api/pipelines/route.ts": "96c51dec977686a5d360b7f0d931c630306f1ac15c948512e64128e92c49fdea"
+  },
+  "method": {
+    "pairs": 3,
+    "iterationsPerRun": 180,
+    "timedResponsesPerRun": 378,
+    "warmupSecondsAfterInitialRequests": 15,
+    "timerMs": 100,
+    "viewerTimerMs": 10,
+    "cpuQuotaPercent": 300,
+    "memoryLimitBytes": 8589934592,
+    "cacheBudgetScope": "JavaScript VM",
+    "collectedHeapScope": "main JavaScript VM",
+    "cacheSourceBudgetBytes": 268435456,
+    "cacheSlots": 8,
+    "units": "MiB for memory, milliseconds for pauses and gaps; cache budget counts UTF-16 source input"
+  },
+  "runs": [
+    {
+      "run": "before-proof-1",
+      "ok": true,
+      "iterations": 180,
+      "durationMs": 187113.04744999998,
+      "timedDurationMs": 186704.0,
+      "rssMiB": {
+        "min": 1870.043,
+        "median": 2428.979,
+        "max": 2982.754
+      },
+      "collectedHeapMiB": 1175.985,
+      "collectedCapacityMiB": 1316.712,
+      "preCollectedHeapMiB": 1221.983,
+      "gc": {
+        "unattributedFragments": 0,
+        "pauseFragments": 293,
+        "meanPauseMs": 4.196,
+        "medianPauseMs": 4.244,
+        "p95PauseMs": 8.679,
+        "maxPauseMs": 14.118,
+        "totalPauseMs": 1229.408,
+        "cycles": 213,
+        "maxCycleMs": 98.65
+      },
+      "loop": {
+        "gapsAtLeast1000ms": 0,
+        "p95Ms": 50.823,
+        "maxMs": 314.204
+      },
+      "viewerLoop": {
+        "gapsAtLeast1000ms": 0,
+        "maxLoggedGapMs": null
+      },
+      "budget": {
+        "cpuMax": "60000 20000",
+        "memoryMax": "8589934592",
+        "cpuDelta": {
+          "usage_usec": 194668077,
+          "user_usec": 177096699,
+          "system_usec": 17571377,
+          "core_sched.force_idle_usec": 0,
+          "nr_periods": 9331,
+          "nr_throttled": 7,
+          "throttled_usec": 9396,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n"
+      },
+      "http": {
+        "/api/files?view=summary": {
+          "requests": 180,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            31251850
+          ],
+          "medianMs": 261.4367749999801,
+          "maxMs": 5742.5201369999995
+        },
+        "/api/pipelines?includeClosed=true": {
+          "requests": 18,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            16767130
+          ],
+          "medianMs": 550.0530024999898,
+          "maxMs": 1149.8633580000023
+        },
+        "/api/tasks": {
+          "requests": 180,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            7088642
+          ],
+          "medianMs": 106.0022444999995,
+          "maxMs": 365.0250240000023
+        }
+      }
+    },
+    {
+      "run": "after-proof-1",
+      "ok": true,
+      "iterations": 180,
+      "durationMs": 186898.803972,
+      "timedDurationMs": 186281.0,
+      "rssMiB": {
+        "min": 981.473,
+        "median": 1168.668,
+        "max": 1452.293
+      },
+      "collectedHeapMiB": 504.581,
+      "collectedCapacityMiB": 561.819,
+      "preCollectedHeapMiB": 463.573,
+      "gc": {
+        "unattributedFragments": 0,
+        "pauseFragments": 390,
+        "meanPauseMs": 4.086,
+        "medianPauseMs": 4.03,
+        "p95PauseMs": 9.946,
+        "maxPauseMs": 19.904,
+        "totalPauseMs": 1593.413,
+        "cycles": 246,
+        "maxCycleMs": 166.455
+      },
+      "loop": {
+        "gapsAtLeast1000ms": 0,
+        "p95Ms": 60.994,
+        "maxMs": 309.014
+      },
+      "viewerLoop": {
+        "gapsAtLeast1000ms": 0,
+        "maxLoggedGapMs": null
+      },
+      "budget": {
+        "cpuMax": "60000 20000",
+        "memoryMax": "8589934592",
+        "cpuDelta": {
+          "usage_usec": 192461756,
+          "user_usec": 174451453,
+          "system_usec": 18010304,
+          "core_sched.force_idle_usec": 0,
+          "nr_periods": 9294,
+          "nr_throttled": 21,
+          "throttled_usec": 73844,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n"
+      },
+      "http": {
+        "/api/files?view=summary": {
+          "requests": 180,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            31251850,
+            33061466
+          ],
+          "medianMs": 279.16130600000906,
+          "maxMs": 3177.638865000001
+        },
+        "/api/pipelines?includeClosed=true": {
+          "requests": 18,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            16767130
+          ],
+          "medianMs": 247.36542149999877,
+          "maxMs": 2307.0332959999796
+        },
+        "/api/tasks": {
+          "requests": 180,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            7088642
+          ],
+          "medianMs": 122.6103460000013,
+          "maxMs": 304.23698099999456
+        }
+      }
+    },
+    {
+      "run": "after-proof-2",
+      "ok": true,
+      "iterations": 180,
+      "durationMs": 195210.808182,
+      "timedDurationMs": 194754.0,
+      "rssMiB": {
+        "min": 1048.895,
+        "median": 1231.562,
+        "max": 1704.238
+      },
+      "collectedHeapMiB": 511.281,
+      "collectedCapacityMiB": 564.563,
+      "preCollectedHeapMiB": 544.203,
+      "gc": {
+        "unattributedFragments": 0,
+        "pauseFragments": 408,
+        "meanPauseMs": 4.903,
+        "medianPauseMs": 4.194,
+        "p95PauseMs": 12.619,
+        "maxPauseMs": 20.351,
+        "totalPauseMs": 2000.295,
+        "cycles": 240,
+        "maxCycleMs": 189.013
+      },
+      "loop": {
+        "gapsAtLeast1000ms": 0,
+        "p95Ms": 106.238,
+        "maxMs": 327.14
+      },
+      "viewerLoop": {
+        "gapsAtLeast1000ms": 0,
+        "maxLoggedGapMs": null
+      },
+      "budget": {
+        "cpuMax": "60000 20000",
+        "memoryMax": "8589934592",
+        "cpuDelta": {
+          "usage_usec": 218329852,
+          "user_usec": 197222401,
+          "system_usec": 21107451,
+          "core_sched.force_idle_usec": 0,
+          "nr_periods": 9734,
+          "nr_throttled": 11,
+          "throttled_usec": 77320,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n"
+      },
+      "http": {
+        "/api/files?view=summary": {
+          "requests": 180,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            31251850
+          ],
+          "medianMs": 354.24635449999914,
+          "maxMs": 3878.7279849999977
+        },
+        "/api/pipelines?includeClosed=true": {
+          "requests": 18,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            16767130
+          ],
+          "medianMs": 884.5584610000005,
+          "maxMs": 2741.4111739999935
+        },
+        "/api/tasks": {
+          "requests": 180,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            7088642
+          ],
+          "medianMs": 137.47244800000044,
+          "maxMs": 686.3853180000006
+        }
+      }
+    },
+    {
+      "run": "before-proof-2",
+      "ok": true,
+      "iterations": 180,
+      "durationMs": 212891.35581000004,
+      "timedDurationMs": 212192.0,
+      "rssMiB": {
+        "min": 1977.09,
+        "median": 2264.27,
+        "max": 2990.66
+      },
+      "collectedHeapMiB": 1188.367,
+      "collectedCapacityMiB": 1255.506,
+      "preCollectedHeapMiB": 1211.725,
+      "gc": {
+        "unattributedFragments": 0,
+        "pauseFragments": 500,
+        "meanPauseMs": 4.966,
+        "medianPauseMs": 1.444,
+        "p95PauseMs": 15.463,
+        "maxPauseMs": 37.85,
+        "totalPauseMs": 2483.202,
+        "cycles": 205,
+        "maxCycleMs": 437.802
+      },
+      "loop": {
+        "gapsAtLeast1000ms": 0,
+        "p95Ms": 182.912,
+        "maxMs": 537.782
+      },
+      "viewerLoop": {
+        "gapsAtLeast1000ms": 0,
+        "maxLoggedGapMs": 627
+      },
+      "budget": {
+        "cpuMax": "60000 20000",
+        "memoryMax": "8589934592",
+        "cpuDelta": {
+          "usage_usec": 236772732,
+          "user_usec": 214485261,
+          "system_usec": 22287471,
+          "core_sched.force_idle_usec": 0,
+          "nr_periods": 10604,
+          "nr_throttled": 13,
+          "throttled_usec": 34998,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "memoryEvents": "low 0\nhigh 0\nmax 210\noom 0\noom_kill 0\noom_group_kill 0\n"
+      },
+      "http": {
+        "/api/files?view=summary": {
+          "requests": 180,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            31152537
+          ],
+          "medianMs": 495.6874209999951,
+          "maxMs": 7002.627582000001
+        },
+        "/api/pipelines?includeClosed=true": {
+          "requests": 18,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            16725901
+          ],
+          "medianMs": 2089.673092000012,
+          "maxMs": 3245.387971999997
+        },
+        "/api/tasks": {
+          "requests": 180,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            7088632
+          ],
+          "medianMs": 179.87223700000322,
+          "maxMs": 777.9281820000033
+        }
+      }
+    },
+    {
+      "run": "before-proof-3",
+      "ok": true,
+      "iterations": 180,
+      "durationMs": 209343.563288,
+      "timedDurationMs": 208851.0,
+      "rssMiB": {
+        "min": 1813.27,
+        "median": 2156.293,
+        "max": 3088.988
+      },
+      "collectedHeapMiB": 1177.191,
+      "collectedCapacityMiB": 1244.585,
+      "preCollectedHeapMiB": 1213.883,
+      "gc": {
+        "unattributedFragments": 0,
+        "pauseFragments": 370,
+        "meanPauseMs": 4.749,
+        "medianPauseMs": 4.26,
+        "p95PauseMs": 11.085,
+        "maxPauseMs": 28.766,
+        "totalPauseMs": 1757.274,
+        "cycles": 218,
+        "maxCycleMs": 252.518
+      },
+      "loop": {
+        "gapsAtLeast1000ms": 0,
+        "p95Ms": 90.677,
+        "maxMs": 420.297
+      },
+      "viewerLoop": {
+        "gapsAtLeast1000ms": 0,
+        "maxLoggedGapMs": 618
+      },
+      "budget": {
+        "cpuMax": "60000 20000",
+        "memoryMax": "8589934592",
+        "cpuDelta": {
+          "usage_usec": 229134656,
+          "user_usec": 208868585,
+          "system_usec": 20266071,
+          "core_sched.force_idle_usec": 0,
+          "nr_periods": 10436,
+          "nr_throttled": 8,
+          "throttled_usec": 52223,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "memoryEvents": "low 0\nhigh 0\nmax 555\noom 0\noom_kill 0\noom_group_kill 0\n"
+      },
+      "http": {
+        "/api/files?view=summary": {
+          "requests": 180,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            31152537
+          ],
+          "medianMs": 367.9886594999989,
+          "maxMs": 22676.685943000004
+        },
+        "/api/pipelines?includeClosed=true": {
+          "requests": 18,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            16725901
+          ],
+          "medianMs": 909.6659129999971,
+          "maxMs": 1613.090521999984
+        },
+        "/api/tasks": {
+          "requests": 180,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            7088632
+          ],
+          "medianMs": 134.89571499999875,
+          "maxMs": 511.5181660000235
+        }
+      }
+    },
+    {
+      "run": "after-proof-3",
+      "ok": true,
+      "iterations": 180,
+      "durationMs": 192118.06527999998,
+      "timedDurationMs": 191696.0,
+      "rssMiB": {
+        "min": 1087.227,
+        "median": 1268.516,
+        "max": 1594.395
+      },
+      "collectedHeapMiB": 510.525,
+      "collectedCapacityMiB": 573.161,
+      "preCollectedHeapMiB": 498.752,
+      "gc": {
+        "unattributedFragments": 0,
+        "pauseFragments": 456,
+        "meanPauseMs": 4.203,
+        "medianPauseMs": 3.909,
+        "p95PauseMs": 9.909,
+        "maxPauseMs": 20.152,
+        "totalPauseMs": 1916.463,
+        "cycles": 256,
+        "maxCycleMs": 168.223
+      },
+      "loop": {
+        "gapsAtLeast1000ms": 0,
+        "p95Ms": 81.513,
+        "maxMs": 312.293
+      },
+      "viewerLoop": {
+        "gapsAtLeast1000ms": 0,
+        "maxLoggedGapMs": null
+      },
+      "budget": {
+        "cpuMax": "60000 20000",
+        "memoryMax": "8589934592",
+        "cpuDelta": {
+          "usage_usec": 216990028,
+          "user_usec": 195952975,
+          "system_usec": 21037054,
+          "core_sched.force_idle_usec": 0,
+          "nr_periods": 9582,
+          "nr_throttled": 19,
+          "throttled_usec": 144892,
+          "nr_bursts": 0,
+          "burst_usec": 0
+        },
+        "memoryEvents": "low 0\nhigh 0\nmax 555\noom 0\noom_kill 0\noom_group_kill 0\n"
+      },
+      "http": {
+        "/api/files?view=summary": {
+          "requests": 180,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            31152537,
+            33044003
+          ],
+          "medianMs": 323.1928509999925,
+          "maxMs": 5090.008291999999
+        },
+        "/api/pipelines?includeClosed=true": {
+          "requests": 18,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            16725901
+          ],
+          "medianMs": 595.4543090000006,
+          "maxMs": 2179.821752000018
+        },
+        "/api/tasks": {
+          "requests": 180,
+          "statuses": [
+            200
+          ],
+          "bytes": [
+            7088632
+          ],
+          "medianMs": 127.34647449999466,
+          "maxMs": 415.14756500002113
+        }
+      }
+    }
+  ],
+  "aggregate": {
+    "before": {
+      "rssMedianMiB": 2264.27,
+      "rssPeakMiB": 3088.988,
+      "collectedHeapMiB": 1177.191,
+      "gcPauseFragments": 1163,
+      "gcPauseTotalMs": 5469.884,
+      "gcPauseMaxMs": 37.85,
+      "viewerGapsAtLeast1s": 0,
+      "sampledGapsAtLeast1s": 0,
+      "sampledGapMaxMs": 537.782,
+      "gcPauseMeanMs": 4.703
+    },
+    "after": {
+      "rssMedianMiB": 1231.562,
+      "rssPeakMiB": 1704.238,
+      "collectedHeapMiB": 510.525,
+      "gcPauseFragments": 1254,
+      "gcPauseTotalMs": 5510.171,
+      "gcPauseMaxMs": 20.351,
+      "viewerGapsAtLeast1s": 0,
+      "sampledGapsAtLeast1s": 0,
+      "sampledGapMaxMs": 327.14,
+      "gcPauseMeanMs": 4.394
+    }
+  }
+}

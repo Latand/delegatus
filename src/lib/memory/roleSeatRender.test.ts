@@ -19,10 +19,11 @@ test("maintainers read seat guidance and leave no rules themselves", () => {
   expect(block).not.toContain("When you report with stage_report");
 });
 
-test("ordinary stages retain their original block byte for byte", () => {
+/* The notice yields to the working rules every role prompt carries (role-prompts-rewrite.md §3.3). */
+test("ordinary stages read their block byte for byte", () => {
   expect(renderLearnedRules(scopes("builder"))).toBe([
     "Learned rules (Delegatus role memory): 0 role · 0 project · 0 machine",
-    "Earlier agents left these when they finished their stages. They are rules of thumb: the brief, the pinned specification and the project's instruction files win where they disagree. Keep them on this machine: never copy a rule into a commit, pull request, issue, task or report; name it by its id.",
+    "Earlier agents left these when they finished their stages. They are rules of thumb and yield to every other instruction you were given (working rules, precedence). Keep them on this machine: never copy a rule into a commit, pull request, issue, task or report; name it by its id.",
     "", "Role rules · Builder on this project", "- none yet",
     "", "Role rules · Builder on every project", "- none yet",
     "", "Project rules · every role on this project", "- none yet",

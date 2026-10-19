@@ -25,7 +25,8 @@ Object.assign(globalThis, {
 });
 const { createRoot } = await import("react-dom/client");
 const { VoiceCompanionHost } = await import("./VoiceCompanionHost");
-const { VoiceCompanionSetting } = await import("./VoiceCompanionSetting");
+const { OPEN_VOICE_COMPANION_SETTINGS_EVENT, VoiceCompanionSetting, VoiceCompanionSettingsHost } = await import("./VoiceCompanionSetting");
+const { OPEN_KEYS_EVENT } = await import("@/components/keys/openKeys");
 const { COMPANION_SETTINGS_EVENT } = await import("./hostSurfaces");
 const { createCompanionStore } = await import("@/hooks/useVoiceCompanion");
 const { translate } = await import("@/lib/i18n/core");
@@ -210,11 +211,14 @@ test("on a view with no project, Talk says to open one and starts nothing", asyn
   expect(sessionCalls()).toEqual([]);
 });
 
-test("the settings rows: the switch reveals the choice of voice with the API chosen, its key is sent once and never shown again, its cap is saved; Codex shows the last call and its plan window and asks for no key", async () => {
+test("the settings rows: the switch reveals the choice of voice with the API chosen, its key opens «Keys» on the OpenAI key, its cap is saved; Codex shows the last call and its plan window and asks for no key", async () => {
   const stored = routes(settingsOf());
   let announced = 0;
   const heard = () => { announced += 1; };
+  const asked: unknown[] = [];
+  const askedKeys = (event: Event) => asked.push((event as CustomEvent).detail);
   window.addEventListener(COMPANION_SETTINGS_EVENT, heard);
+  window.addEventListener(OPEN_KEYS_EVENT, askedKeys);
   try {
     const host = await mount(<VoiceCompanionSetting />);
     const section = host.querySelector("[data-voice-companion-setting]")!;
@@ -224,18 +228,14 @@ test("the settings rows: the switch reveals the choice of voice with the API cho
     expect(stored.enabled).toBe(true);
     expect(announced).toBe(1);
 
-    const form = section.querySelector<HTMLFormElement>("[data-voice-companion-key]")!;
-    const input = form.querySelector<HTMLInputElement>("input")!;
-    expect(input.type).toBe("password");
-    expect(form.dataset.keySource).toBe("missing");
-    await act(async () => typeInto(input, FAKE_KEY));
-    await click(form.querySelector('button[type="submit"]'));
-    const keyCalls = harness.calls.filter((call) => call.url === "/api/voice-companion/key");
-    expect(keyCalls).toEqual([{ url: "/api/voice-companion/key", method: "PUT", body: { key: FAKE_KEY } }]);
-    expect(form.querySelector<HTMLInputElement>("input")!.value).toBe("");
-    expect(section.querySelector<HTMLFormElement>("[data-voice-companion-key]")!.dataset.keySource).toBe("file");
-    expect(document.body.innerHTML).not.toContain(FAKE_KEY);
-    expect(JSON.stringify({ ...localStorage })).not.toContain(FAKE_KEY);
+    /* The key is entered in «Keys»: this row says where it comes from and opens that page on it. */
+    const keyRow = section.querySelector<HTMLElement>("[data-voice-companion-key]")!;
+    expect(keyRow.dataset.keySource).toBe("missing");
+    expect(keyRow.querySelector("input, form")).toBeNull();
+    expect(keyRow.querySelector("[data-voice-companion-key-status]")?.textContent).toContain(translate("en", "voiceCompanion.settings.key.missing"));
+    await click(keyRow.querySelector("[data-voice-companion-open-keys]"));
+    expect(asked).toEqual([{ key: "openai" }]);
+    expect(harness.calls.filter((call) => call.url === "/api/voice-companion/key")).toEqual([]);
 
     const cap = section.querySelector<HTMLInputElement>("[data-voice-companion-cap] input")!;
     expect(cap.value).toBe("20");
@@ -249,7 +249,7 @@ test("the settings rows: the switch reveals the choice of voice with the API cho
     const choice = section.querySelector<HTMLElement>("[role='radiogroup'][data-voice-companion-backend]")!;
     expect([...choice.querySelectorAll<HTMLInputElement>("input[type='radio']")].map((radio) => [radio.value, radio.checked])).toEqual([["api", true], ["codex", false]]);
     expect([choice.querySelector("[data-voice-backend='api'] label")!.textContent, choice.querySelector("[data-voice-backend='codex'] label")!.textContent]).toEqual(["Through the API (with a key)", "Codex V3 (subscription)"]);
-    expect(section.querySelectorAll("input, button, select")).toHaveLength(8);
+    expect(section.querySelectorAll("input, button, select")).toHaveLength(7);
     expect(section.querySelector("[data-call-memory]")).not.toBeNull();
     expect(section.textContent).not.toMatch(/demo|демо/iu);
     expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }]);
@@ -278,7 +278,7 @@ test("the settings rows: the switch reveals the choice of voice with the API cho
     expect(codex.textContent).not.toMatch(/\bkey\b|OpenAI|\$/iu);
     expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }, { backend: "codex" }]);
     expect(sessionCalls()).toEqual([]);
-  } finally { window.removeEventListener(COMPANION_SETTINGS_EVENT, heard); }
+  } finally { window.removeEventListener(COMPANION_SETTINGS_EVENT, heard); window.removeEventListener(OPEN_KEYS_EVENT, askedKeys); }
 });
 
 test("a session a lost mint answer may have opened is said in settings, and only the operator's release lets a new call start", async () => {
@@ -294,15 +294,25 @@ test("a session a lost mint answer may have opened is said in settings, and only
   expect(sessionCalls()).toEqual([]);
 });
 
-test("a key from the environment takes precedence: it is said so and the field is closed", async () => {
+test("a key from the environment takes precedence: it is said so, with no field, and «Keys» still opens on it", async () => {
   routes(settingsOf({ enabled: true, keySource: "env" }));
   const host = await mount(<VoiceCompanionSetting />);
-  const form = host.querySelector<HTMLFormElement>("[data-voice-companion-key]")!;
-  expect(form.dataset.keySource).toBe("env");
-  expect(form.querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
-  expect(form.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true);
-  expect(form.querySelector("[data-voice-companion-key-status]")?.textContent).toContain("OPENAI_API_KEY");
+  const keyRow = host.querySelector<HTMLElement>("[data-voice-companion-key]")!;
+  expect(keyRow.dataset.keySource).toBe("env");
+  expect(keyRow.querySelector("input")).toBeNull();
+  expect(keyRow.querySelector("[data-voice-companion-key-status]")?.textContent).toContain("OPENAI_API_KEY");
+  expect(keyRow.querySelector("[data-voice-companion-open-keys]")).not.toBeNull();
   expect(harness.calls.filter((call) => call.url === "/api/voice-companion/key")).toEqual([]);
+});
+
+test("«Open Keys» closes the settings dialog, so the menu's «Keys» page is not under it", async () => {
+  routes(settingsOf({ enabled: true, keySource: "file" }));
+  await mount(<VoiceCompanionSettingsHost />);
+  await act(async () => { window.dispatchEvent(new Event(OPEN_VOICE_COMPANION_SETTINGS_EVENT)); });
+  await act(async () => settle());
+  expect(document.querySelector("[data-voice-companion-settings]")).not.toBeNull();
+  await click(document.querySelector("[data-voice-companion-open-keys]"));
+  expect(document.querySelector("[data-voice-companion-settings]")).toBeNull();
 });
 
 test("the store renders nothing for a level sample, resets on a new session and holds an old error back until the next session is ready", async () => {
@@ -420,7 +430,7 @@ async function liveHarness() {
   /** fail: "before" loses the request on its way in; "after" loses the reply to a request the Viewer handled. */
   const failing: { command: "before" | "after" | null } = { command: null };
   /** `start`: held until the test settles it, as a slow mint holds a real start. */
-  const holding: { start: Promise<void> | null } = { start: null };
+  const holding: { start: Promise<void> | null; command: Promise<void> | null } = { start: null, command: null };
   const document = settingsOf({ enabled: true, keySource: "file" });
   harness.setRoute(async (url, init) => {
     const target = new URL(url, "http://127.0.0.1:8898");
@@ -432,6 +442,7 @@ async function liveHarness() {
     if (target.pathname !== "/api/voice-companion/session") return jsonResponse({ error: "not routed in this test" }, 404);
     const body = typeof init?.body === "string" ? JSON.parse(init.body) as { action?: string } : null;
     if (body?.action === "start" && holding.start) await holding.start;
+    if (body?.action === "command" && holding.command) await holding.command;
     const lost = body?.action === "command" ? failing.command : null;
     if (lost === "before") { failing.command = null; return jsonResponse({ code: "COMPANION_UNAVAILABLE" }, 502); }
     const request = new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: init?.method ?? "GET", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" }, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
@@ -653,6 +664,37 @@ test("two visible confirmations keep Send, Cancel, retry and a spoken/tapped rac
         expect(live.sent).toHaveLength(0);
       }
     } finally { await unmountNow(); await live.release(); }
+  }
+}, 15_000);
+
+test("a tapped Send or Cancel draws its stage at once while the request is still on its way, and takes no second tap", async () => {
+  for (const decision of ["send", "cancel"] as const) {
+    const live = await liveHarness();
+    let release = () => {};
+    try {
+      await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
+      await click(document.querySelector("[data-companion-talk]"));
+      await pause();
+      await live.propose(live.provider.sessions[0].id, "Review the plan", "Two plans exist.");
+      const card = () => document.querySelector<HTMLElement>("[data-companion-delegation]");
+      expect(card()?.dataset.stage).toBe("awaiting-confirmation");
+      live.holding.command = new Promise<void>((resolve) => { release = resolve; });
+      await click(card()!.querySelector(decision === "send" ? "[data-companion-send]" : "[data-companion-cancel]"));
+      await pause(700);
+      /* The request is held: the card already reads as the tap asked, the buttons are gone and nothing was admitted. */
+      expect(card()?.dataset.stage).toBe(decision === "send" ? "sending" : "cancelled");
+      expect(card()!.querySelector("[data-companion-send], [data-companion-cancel], [data-companion-confirm-body]")).toBeNull();
+      if (decision === "send") {
+        expect(card()!.querySelector("[data-companion-instruction]")?.textContent).toBe("Review the plan");
+        expect(card()!.querySelector("[data-companion-track]")).not.toBeNull();
+      }
+      expect(live.sent).toEqual([]);
+      live.holding.command = null;
+      release();
+      await pause(700);
+      expect(card()?.dataset.stage).toBe(decision === "send" ? "queued" : "cancelled");
+      expect(live.sent).toHaveLength(decision === "send" ? 1 : 0);
+    } finally { release(); await unmountNow(); await live.release(); }
   }
 }, 15_000);
 
@@ -884,6 +926,30 @@ test("false playback stop and restart keep streaming words, bubble nodes, arriva
   expect(document.querySelectorAll('[data-floater][data-kind="speech"]').length).toBe(6);
   expect(document.querySelectorAll('[data-floater][data-kind="answer"], [data-floater][data-kind="report"]').length).toBe(4);
   expect(document.querySelector('[data-floater="delegation:waiting"]') === waiting).toBe(true);
+});
+
+test("an orchestrator message card in the lane keeps more than 4000 characters and its localized label", async () => {
+  const { VoiceCompanion } = await import("./VoiceCompanion");
+  const { setLocale } = await import("@/lib/i18n");
+  for (const locale of ["en", "uk"] as const) {
+    await act(async () => setLocale(locale));
+    const listeners = new Set<(event: CompanionEvent) => void>(); let seq = 0;
+    const publish = (payload: Payload) => {
+      const event = { ...payload, version: 1, sessionId: "whole-message", generation: 1, seq: ++seq, eventId: `whole-${seq}`, atMs: seq } as CompanionEvent;
+      for (const listener of listeners) listener(event);
+    };
+    const adapter: VoiceCompanionAdapter = { mode: "simulated", subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+      start: async () => { publish({ type: "session.ready", mode: "simulated" }); }, command: async () => {}, close: async () => {} };
+    await mount(<VoiceCompanion adapter={adapter} project="atlas" locale={locale} />);
+    await click(document.querySelector("[data-companion-talk]"));
+    const text = "Whole message line.\n".repeat(400);
+    await act(async () => { publish({ type: "orchestrator.report", reportId: "whole", status: "message", text, at: 0, project: "atlas" }); await settle(); });
+    const card = document.querySelector("[data-companion-report]")!;
+    expect(card.textContent).toContain(locale === "uk" ? "Повідомлення" : "Message");
+    expect(card.querySelector("[data-companion-answer]")!.textContent).toBe(text);
+    await unmountNow();
+  }
+  await act(async () => setLocale("en"));
 });
 
 

@@ -1,17 +1,22 @@
 import crypto from "node:crypto";
+import { performanceSpans } from "@/lib/performanceSpans";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
-import { canonicalProject } from "@/lib/projects/aliases";
-import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
+import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { databaseFileIdentity } from "@/lib/state/currentDatabase";
+import { effectiveCurationSetting, readSeatTickSettings, seatTickSettingsPath } from "@/lib/monitor/seatTickSettings";
+import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature, StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 
 import { appendRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
 import { roleMemoryEnabled } from "./settings";
-import { curationView } from "./curation/store";
+import { curationRevision, curationView } from "./curation/store";
+import { projectViewRows, projectViewRowsCooperatively, roleScopeKeys, roleViewVersion } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
-import { renderLearnedRules } from "./roleRender";
+import { renderLearnedRulesSelection } from "./roleRender";
 import {
   MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
@@ -34,10 +39,12 @@ import {
    same aliases without writing. */
 
 const COLLECTION = "role_memory";
-const HISTORY_LIMIT = 500;
-/** Pass rollback records cannot age out while the window still offers Undo. */
+export const ROLE_MEMORY_HISTORY_LIMIT = 10_000;
+/** Keep 10,000 ordinary changes independently of every curator Undo record.
+ * At 141 daily writes this covers over 70 days; delivery rows keep their own
+ * ordered ids and content hashes, so reconstruction never depends on this window. */
 function keepHistory(entries: ScopeHistoryEntry[]): ScopeHistoryEntry[] {
-  const recent = new Set(entries.slice(-HISTORY_LIMIT));
+  const recent = new Set(entries.filter(entry => !entry.pass).slice(-ROLE_MEMORY_HISTORY_LIMIT));
   return entries.filter(entry => !!entry.pass || recent.has(entry));
 }
 
@@ -122,7 +129,7 @@ export function joinMovedScopes(now = new Date().toISOString()): void {
   const held = roleMemoryCollection();
   if (!held) return;
   const resolve = scopeResolver();
-  const moved = held.snapshot().flatMap((row) => row.kind === "scope" && resolve(row.scope) !== row.scope ? [row.scope] : []);
+  const moved = roleScopeKeys().filter(scope => resolve(scope) !== scope);
   if (!moved.length) return;
   held.boundedPatch(4096, (tx) => {
     const rulesOf = (ids: readonly string[]) => ids.flatMap((id) => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; });
@@ -177,18 +184,27 @@ export function activeRules(scope: string): RoleMemoryRule[] {
 }
 
 /** The block a new stage of this role and project starts with. */
-export function learnedRulesBlock(project: string, roleId: string | null, maxBytes = Infinity): string {
+export function learnedRulesSnapshot(project: string, roleId: string | null, maxBytes = Infinity) {
   // A process start resolves aliases in its snapshot; it never joins or migrates state.
   const all = rows();
   const resolve = scopeResolver();
   const byId = new Map(all.flatMap(row => row.kind === "rule" ? [[row.id, row] as const] : []));
-  return renderLearnedRules(readableScopes(project, roleId).map(scope => {
+  const scopes = readableScopes(project, roleId).map(scope => {
     const active = all.flatMap(row => row.kind === "scope" && resolve(row.scope) === scope ? row.active : [])
       .flatMap(id => { const found = byId.get(id); return found?.state === "active" && !found.versionOf ? [found] : []; });
     // Two aliased rows can exceed one scope's bound before an owner joins them.
     // Apply the same retention decision to this snapshot without writing it.
-    return { scope, rules: retainRules(active, new Date().toISOString()).active.reverse() };
-  }), maxBytes);
+    const revisions = all.flatMap(row => row.kind === "scope" && resolve(row.scope) === scope
+      ? [{ scope: row.scope, revision: row.revision, revisionScope: row.revisionScope ?? row.scope }] : []);
+    return { scope, revisions, rules: retainRules(active, new Date().toISOString()).active.reverse() };
+  });
+  const rendered = renderLearnedRulesSelection(scopes, maxBytes);
+  return { block: rendered.block, scopes: scopes.map(({ scope, revisions }) => ({ scope, revisions })),
+    rules: rendered.rules.map(rule => ({ id: rule.id, hash: crypto.createHash("sha256").update(rule.rule).digest("hex") })) };
+}
+
+export function learnedRulesBlock(project: string, roleId: string | null, maxBytes = Infinity): string {
+  return learnedRulesSnapshot(project, roleId, maxBytes).block;
 }
 
 export function lessonRequest(pipelineId: string, stageId: string, attempt: number): LessonRequestRow | null {
@@ -484,18 +500,109 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
 
 /** The rules window: every scope the project reads or wrote, with what left each. */
 export function projectView(project: string, now = Date.now()): RoleMemoryProjectView {
-  joinMovedScopes();
+  return withViewerOperation("role-memory.view", () => performanceSpans.sync("memory.project-view", () => projectViewMemo(project, now)));
+}
+
+/** Production readers yield between bounded history slices on cold and revised views. */
+export async function projectViewAsync(project: string, now = Date.now()): Promise<RoleMemoryProjectView> {
+  return withViewerOperation("role-memory.view", () => projectViewAsyncMemo(project, now));
+}
+
+type ProjectViewMemo = { stamp: string; guard: string; from: number; until: number; bytes: number; value: RoleMemoryProjectView };
+// One LRU across Next server bundles, bounded by both entries and serialized
+// bytes. It owns only rendered views; scope histories never enter this memo.
+const projectViewOwner = globalThis as typeof globalThis & { __llvProjectViews?: Map<string, ProjectViewMemo> };
+const projectViews = projectViewOwner.__llvProjectViews ??= new Map();
+const PROJECT_VIEW_MEMO_BYTES = 8 * 1024 * 1024;
+const PROJECT_VIEW_MEMO_ENTRIES = 16;
+function freezeProjectView<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) freezeProjectView(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+function timedProjectView(value: RoleMemoryProjectView, now: number): RoleMemoryProjectView {
+  const curation = value.curation;
+  return { ...value, ...(curation ? { curation: { ...curation,
+    nextAt: curation.nextAt && Date.parse(curation.nextAt) < now ? new Date(now).toISOString() : curation.nextAt } } : {}) };
+}
+function projectViewContext(project: string, now: number): {
+  canonical: string; file: string; memoKey: string; guard: string; enabled: boolean;
+  stamp: () => string; hit: RoleMemoryProjectView | null;
+} {
   const canonical = canonicalProject(project);
+  const file = statePath("state.sqlite");
+  const memoKey = `${file}:${canonical}`;
+  const settingsFile = seatTickSettingsPath();
+  const fileStamp = (filename: string) => {
+    try { const stat = fs.statSync(filename, { bigint: true }); return `${filename}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}`; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return `${filename}:missing`; throw error; }
+  };
+  // The fast guard observes peer commits before checking collection revisions.
+  // File settings can change independently of SQLite.
+  // A relocated settings store has its own SQLite authority.
+  const settingsDatabase = path.join(path.dirname(settingsFile), "state.sqlite");
+  const guard = `${roleViewVersion()}:${settingsDatabase === file ? "" : stateDatabaseSignature(settingsDatabase)}:${[path.join(path.dirname(file), "project-aliases.json"), path.join(path.dirname(file), "memory-source.json"), settingsFile].map(fileStamp).join("|")}:${process.env.LLV_ROLE_MEMORY}`;
+  const memo = projectViews.get(memoKey);
+  if (memo?.guard === guard && now >= memo.from && now < memo.until) {
+    projectViews.delete(memoKey); projectViews.set(memoKey, memo);
+    return { canonical, file, memoKey, guard, enabled: roleMemoryEnabled(), stamp: () => "", hit: timedProjectView(memo.value, now) };
+  }
+  const enabled = roleMemoryEnabled();
+  const stamp = () => `${databaseFileIdentity(file)}:${roleMemoryCollection()?.revision()}:${curationRevision()}:${enabled}:${JSON.stringify(projectAliasSnapshot().aliases)}:${JSON.stringify(effectiveCurationSetting(readSeatTickSettings(canonical)))}`;
+  const revision = stamp();
+  if (memo?.stamp === revision && now >= memo.from && now < memo.until) {
+    memo.guard = guard;
+    projectViews.delete(memoKey); projectViews.set(memoKey, memo);
+    return { canonical, file, memoKey, guard, enabled, stamp, hit: timedProjectView(memo.value, now) };
+  }
+  return { canonical, file, memoKey, guard, enabled, stamp, hit: null };
+}
+
+function projectViewMemo(project: string, now: number): RoleMemoryProjectView {
+  const context = projectViewContext(project, now);
+  if (context.hit) return context.hit;
+  joinMovedScopes();
+  const buildRevision = context.stamp();
+  const all = projectViewRows(context.canonical);
+  return buildProjectView(context, now, buildRevision, all);
+}
+
+async function projectViewAsyncMemo(project: string, now: number): Promise<RoleMemoryProjectView> {
+  const context = projectViewContext(project, now);
+  if (context.hit) return context.hit;
+  joinMovedScopes();
+  const buildRevision = context.stamp();
+  const all = await projectViewRowsCooperatively(context.canonical);
+  return performanceSpans.sync("memory.project-view", () => buildProjectView(context, now, buildRevision, all));
+}
+
+function buildProjectView(context: ReturnType<typeof projectViewContext>, now: number, buildRevision: string, all: RoleMemoryRow[]): RoleMemoryProjectView {
+  const { canonical, file, memoKey, guard, enabled, stamp } = context;
   const resolve = scopeResolver();
-  const all = rows();
-  const rulesById = new Map(all.flatMap((row) => row.kind === "rule" ? [[row.id, row] as const] : []));
+  const rulesById = new Map<string, RoleMemoryRule>();
+  const scopesByKey = new Map<string, RoleMemoryScopeRow>();
+  const leftByScope = new Map<string, RoleMemoryRule[]>();
+  let until = Infinity;
+  for (const row of all) {
+    if (row.kind === "scope") scopesByKey.set(row.scope, row);
+    if (row.kind !== "rule") continue;
+    rulesById.set(row.id, row);
+    const boundary = Date.parse(row.createdAt) + DAY_MS;
+    if (boundary > now) until = Math.min(until, boundary);
+    if (row.state !== "active" && !row.versionOf) {
+      const scope = resolve(row.scope), list = leftByScope.get(scope) ?? [];
+      list.push(row); leftByScope.set(scope, list);
+    }
+  }
   const ruleTasks = taskCounter(all, rulesById);
   const wanted = [...all.flatMap((row) => row.kind === "scope" && (scopeProject(row.scope) === canonical || isCrossProjectRoleScope(row.scope)) && scopeKind(row.scope) === "role" ? [row.scope] : []).sort(),
     projectScope(canonical), MACHINE_SCOPE];
   const scopes: ScopeView[] = wanted.map((scope) => {
-    const held = all.find((row): row is RoleMemoryScopeRow => row.kind === "scope" && row.scope === scope);
+    const held = scopesByKey.get(scope);
     const active = (held?.active ?? []).flatMap((id) => { const found = rulesById.get(id); return found ? [found] : []; });
-    const left = [...rulesById.values()].filter((row) => row.state !== "active" && !row.versionOf && resolve(row.scope) === scope)
+    const left = (leftByScope.get(scope) ?? [])
       .sort((a, b) => b.changedAt.localeCompare(a.changedAt));
     return {
       scope, kind: scopeKind(scope), roleId: scopeRole(scope), revision: held?.revision ?? 0,
@@ -504,7 +611,18 @@ export function projectView(project: string, now = Date.now()): RoleMemoryProjec
       active: active.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))), left: left.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))),
     };
   });
-  return { project: canonical, enabled: roleMemoryEnabled(), scopes, curation: curationView(canonical, now) };
+  const value = { project: canonical, enabled, scopes, curation: curationView(canonical, now, all.flatMap(row => row.kind === "scope" ? [row] : []), false) };
+  if (stamp() !== buildRevision) throw new StateSnapshotChangedError();
+  const bytes = Buffer.byteLength(JSON.stringify(value));
+  projectViews.delete(memoKey);
+  freezeProjectView(value);
+  if (bytes <= PROJECT_VIEW_MEMO_BYTES) projectViews.set(memoKey, { stamp: buildRevision, guard, from: now, until, bytes, value });
+  let total = [...projectViews.values()].reduce((sum, entry) => sum + entry.bytes, 0);
+  while (projectViews.size > PROJECT_VIEW_MEMO_ENTRIES || total > PROJECT_VIEW_MEMO_BYTES) {
+    const oldest = projectViews.keys().next().value!;
+    total -= projectViews.get(oldest)!.bytes; projectViews.delete(oldest);
+  }
+  return timedProjectView(value, now);
 }
 
 /** What each stage attempt of a project left, for the line under its report on the card. */
@@ -567,16 +685,52 @@ export function storedLessonTexts(): string[] {
 const LESSON_MATCHER_SOURCE_LIMIT = 32_000;
 interface LessonMatcher { pattern: RegExp; prefilter: RegExp | null }
 interface LessonSource { source: string; words: string[]; anchor?: string }
-let matcherCache: { key: string; matchers: LessonMatcher[] } | null = null;
+type MatcherCache = { key: string; matchers: LessonMatcher[]; skipped: number; texts: string[]; exact?: RegExp[] };
+const matcherHost = globalThis as typeof globalThis & { __delegatusLessonMatcher?: MatcherCache };
+let privacyPhase: ((phase: "compile" | "match") => void) | undefined;
+/** Installed only by the leased worker; carries static phase names, never text. */
+export function observeLessonPrivacyPhase(observer: typeof privacyPhase) { privacyPhase = observer; }
+function privacyWork<T>(phase: "compile" | "match", work: () => T): T {
+  privacyPhase?.(phase);
+  return withViewerOperation(`memory.privacy.${phase}`, () => performanceSpans.sync(`privacy.${phase}`, work));
+}
+/** The readable store revision and file identity, without cloning its rows. */
+const privacyRevisionHost = globalThis as typeof globalThis & {
+  __llvLessonPrivacyRevision?: { file: string; signature: string; revision: string };
+};
+export function storedLessonRevision(): string {
+  try {
+    const file = statePath("state.sqlite");
+    const identity = () => {
+      const stat = fs.statSync(file, { bigint: true, throwIfNoEntry: false });
+      return stat ? `${stat.dev}:${stat.ino}:${stat.ctimeNs}` : "absent";
+    };
+    const signature = `${identity()}:${stateDatabaseSignature(file)}`;
+    const cached = privacyRevisionHost.__llvLessonPrivacyRevision;
+    if (cached?.file === file && cached.signature === signature) return cached.revision;
+    const held = roleMemoryCollection();
+    const stat = held ? fs.statSync(held.filename, { bigint: true }) : null;
+    const revision = held && stat ? `${stat.dev}:${stat.ino}:${held.signature()}` : "";
+    if (`${identity()}:${stateDatabaseSignature(file)}` === signature) privacyRevisionHost.__llvLessonPrivacyRevision = { file, signature, revision };
+    return revision;
+  } catch { throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE); }
+}
+
 /** Bounded alternatives in longest-first order, cached for this store signature. */
 function storedLessonMatchers(): LessonMatcher[] {
-  const { rows: all, signature } = readableRows();
-  if (matcherCache?.key !== signature) {
+  const signature = storedLessonRevision();
+  if (matcherHost.__delegatusLessonMatcher?.key === signature) return matcherHost.__delegatusLessonMatcher.matchers;
+  return privacyWork("compile", () => compileStoredLessonMatchers(signature));
+}
+function compileStoredLessonMatchers(signature: string): LessonMatcher[] {
+  const { rows: all } = readableRows();
+  if (matcherHost.__delegatusLessonMatcher?.key !== signature) {
     const matchers: LessonMatcher[] = [];
     let skipped = 0;
     const sources: LessonSource[] = [];
     const frequency = new Map<string, number>();
-    for (const text of lessonTextsOf(all)) {
+    const texts = lessonTextsOf(all);
+    for (const text of texts) {
       const source = lessonPatternSource(text);
       if (!source) continue;
       const wrapped = `(?:${source})`;
@@ -624,10 +778,22 @@ function storedLessonMatchers(): LessonMatcher[] {
       chunk.push(source);
     }
     compile(chunk);
-    matcherCache = { key: signature, matchers };
+    if (storedLessonRevision() !== signature) throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE);
+    matcherHost.__delegatusLessonMatcher = { key: signature, matchers, skipped, texts };
     if (skipped) console.warn(`stored-lesson matcher skipped ${skipped} oversized or uncompilable lesson text(s)`);
   }
-  return matcherCache.matchers;
+  return matcherHost.__delegatusLessonMatcher.matchers;
+}
+
+/** Exact per-lesson occurrences preserve report hint ordering and overlaps.
+ * These patterns and replacement chunks share one revision and one cache slot. */
+export function storedLessonPatterns(): readonly RegExp[] {
+  storedLessonMatchers();
+  const held = matcherHost.__delegatusLessonMatcher!;
+  return held.exact ??= privacyWork("compile", () => held.texts.flatMap(text => {
+    const source = lessonPatternSource(text);
+    return source === null ? [] : [new RegExp(source, "giu")];
+  }));
 }
 
 /** Merge matches on the original text: earliest start wins, and a tie goes
@@ -660,16 +826,30 @@ function withholdLessons(text: string, chunks: readonly LessonMatcher[]): string
   return pieces.join("");
 }
 
+/** Class-only reports need existence, including a lesson equal to the marker. */
+export function hasStoredLesson(text: string): boolean {
+  const chunks = storedLessonMatchers();
+  return privacyWork("match", () => chunks.some(chunk => {
+    if (chunk.prefilter && !chunk.prefilter.test(text)) return false;
+    chunk.pattern.lastIndex = 0;
+    return chunk.pattern.test(text);
+  }));
+}
+
 /** The text with every stored lesson it quotes withheld. */
 export function withoutStoredLessons(text: string): string {
   if (!text) return text;
-  return withholdLessons(text, storedLessonMatchers());
+  const chunks = storedLessonMatchers();
+  return privacyWork("match", () => withholdLessons(text, chunks));
 }
 
 /** withoutStoredLessons over every text a record holds, however deep; the
     record itself when none quotes a lesson. */
-export function withoutStoredLessonsIn<T>(value: T): T {
+export function withoutStoredLessonsIn<T>(value: T, options: { requireComplete?: boolean } = {}): T {
   const matchers = storedLessonMatchers();
+  if (options.requireComplete && matcherHost.__delegatusLessonMatcher?.skipped) {
+    throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", "a stored lesson could not be compiled by the privacy matcher; nothing was sent");
+  }
   if (!matchers.length) return value;
   const walk = (item: unknown): unknown => {
     if (typeof item === "string") return withholdLessons(item, matchers);
@@ -688,7 +868,7 @@ export function withoutStoredLessonsIn<T>(value: T): T {
     }
     return item;
   };
-  return walk(value) as T;
+  return privacyWork("match", () => walk(value) as T);
 }
 
 /** Where the stored lessons are kept as the publication gate's known values:

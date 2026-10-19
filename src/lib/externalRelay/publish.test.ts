@@ -132,3 +132,49 @@ test("429 pauses sibling messages and an unpaired queued message is skipped", as
     expect(bodies).toEqual([relayPublishBody(receipt), relayPublishBody(receipt)]);
   } finally { resume(); await server.close(); }
 });
+
+
+test("durable publication rechecks authorization after DNS before any HTTP emission", async () => {
+  const { publishDurableTelegramMessage } = await import("./telegramPublication");
+  const { destinationRelay } = await import("./ownerDestination.fixture");
+  const { updateRelayStore } = await import("./store");
+  let calls = 0;
+  const server = await startTestRelay(() => { calls++; return { body: { message_key: "fixture", replayed: false } }; });
+  const paired = destinationRelay(); paired.api_base = `${server.origin}/v1`;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  try {
+    let authorized = true;
+    const pending = publishDurableTelegramMessage(receipt, () => { if (!authorized) throw Error("fixture revoked"); });
+    authorized = false;
+    await expect(pending).rejects.toThrow("fixture revoked");
+    expect(calls).toBe(0);
+  } finally { await server.close(); updateRelayStore(s => ({ ...s, relays: [] })); }
+});
+
+test("credential rotation during DNS refuses the old credential before HTTP emission", async () => {
+  const { publishDurableTelegramMessage } = await import("./telegramPublication");
+  const { destinationRelay } = await import("./ownerDestination.fixture");
+  const { updateRelayStore } = await import("./store");
+  let calls = 0;
+  const server = await startTestRelay(() => { calls++; return { body: { message_key: "fixture", replayed: false } }; });
+  const paired = destinationRelay(); paired.api_base = `${server.origin}/v1`;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  try {
+    const pending = publishDurableTelegramMessage(receipt, () => {});
+    updateRelayStore(s => ({ ...s, relays: s.relays.map(r => ({ ...r, credential: "r".repeat(43) })) }));
+    await expect(pending).rejects.toThrow("pairing changed");
+    expect(calls).toBe(0);
+  } finally { await server.close(); updateRelayStore(s => ({ ...s, relays: [] })); }
+});
+
+
+test.each(["", "invalid key", "x".repeat(129)])("durable publication keeps an invalid acknowledgement pending (%s)", async messageKey => {
+  const { publishDurableTelegramMessage } = await import("./telegramPublication");
+  const { destinationRelay } = await import("./ownerDestination.fixture");
+  const { updateRelayStore } = await import("./store");
+  const server = await startTestRelay(() => ({ body: { message_key: messageKey, replayed: false } }));
+  const paired = destinationRelay(); paired.api_base = `${server.origin}/v1`;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  try { expect(await publishDurableTelegramMessage(receipt, () => {})).toBe("unconfirmed"); }
+  finally { await server.close(); updateRelayStore(s => ({ ...s, relays: [] })); }
+});

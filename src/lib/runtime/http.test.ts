@@ -7,6 +7,7 @@ import { expect, test } from "bun:test";
 
 import { NextRequest } from "next/server";
 
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { NOT_CARRIED_DELIVERY_REASONS } from "@/lib/accounts/migration/intentLiveness";
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -259,19 +260,19 @@ test("runtime send records operator activity before delivery failure and exclude
   }
 });
 
-test("#1202 an operator's structured message retires that conversation's reply drafts; an agent's does not", async () => {
-  /* Retired by the path that accepts the message, so a closed dock, an
+test("an operator's structured message records its admission; an agent's does not", async () => {
+  /* Recorded by the path that accepts the message, so a closed dock, an
      unmounted pane or a second device changes nothing about it. */
-  const retired: { conversationId: string; at: number }[] = [];
+  const recorded: { conversationId: string; at: number; key: string | undefined }[] = [];
   const agentCapability = "c".repeat(43);
   const dependencies: RuntimeHttpDependencies = {
     enabled: () => true,
     structuredEnabled: () => true,
     client: () => null,
     enqueue: async () => null,
-    retireReplySuggestions: (conversationId, at) => {
-      retired.push({ conversationId, at: at.getTime() });
-      return { cleared: true, pending: false };
+    recordOperatorAdmission: (conversationId, at, key) => {
+      recorded.push({ conversationId, at: at.getTime(), key });
+      return true;
     },
   };
   setCallerConversationResolverForTests(() => "conversation_agent");
@@ -287,30 +288,26 @@ test("#1202 an operator's structured message retires that conversation's reply d
       text: "worker status",
       idempotencyKey: "agent-traffic-one",
     }, { host: "127.0.0.1", [VIEWER_SPAWN_CAPABILITY_HEADER]: agentCapability }), "send", dependencies);
-    /* A permission answer is a keypress, not the sentence the drafts offered. */
+    /* A permission answer is a keypress, not a message. */
     await handleRuntimeCommand(request({
       conversationId: "conversation_asked",
       option: "yes",
       idempotencyKey: "operator-dialog-one",
     }), "answer", dependencies);
 
-    expect(retired.map((entry) => entry.conversationId)).toEqual(["conversation_asked"]);
-    /* Stamped when the message was accepted, so the compare-and-clear in the
-       store can spare a set offered while it was in flight. */
-    expect(retired[0]!.at).toBeGreaterThanOrEqual(before);
+    expect(recorded.map((entry) => [entry.conversationId, entry.key])).toEqual([["conversation_asked", "operator-answer-one"]]);
+    /* Stamped when the message was accepted. */
+    expect(recorded[0]!.at).toBeGreaterThanOrEqual(before);
   } finally {
     setCallerConversationResolverForTests(null);
   }
 });
 
-test("#1202 a structured message re-delivered under its own key spares drafts offered since it was admitted", async () => {
-  /* The client retries a send it already had accepted — same idempotency key,
-     minutes later. The manager has asked something else in between, and that
-     question the operator has never seen must survive the retry. */
+test("a structured message re-delivered under its own key keeps its first admission", async () => {
   const previousStateDir = process.env.LLV_STATE_DIR;
-  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-suggestions-"));
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-admissions-"));
   process.env.LLV_STATE_DIR = sandbox;
-  const { readReplySuggestions, recordReplySuggestions } = await import("@/lib/suggestions/store");
+  const { readReplySuggestionsFile } = await import("@/lib/suggestions/store");
   /* No stub: the durable store IS the thing under test here. */
   const dependencies: RuntimeHttpDependencies = {
     enabled: () => true,
@@ -325,26 +322,12 @@ test("#1202 a structured message re-delivered under its own key spares drafts of
     dependencies,
   );
   try {
-    recordReplySuggestions({
-      conversationId,
-      replies: [{ label: "hold", text: "Hold. Explain the rollback first." }],
-      origin: { kind: "manager", conversationId, role: "orchestrator" },
-      at: new Date(Date.now() - 60_000),
-    });
     await send("operator-answer-replayed");
-    expect(readReplySuggestions(conversationId)).toBeNull();
-    /* The route stamps the admission on the wall clock the record compares
-       against, so the next offer has to land in a later millisecond. */
+    const [first] = readReplySuggestionsFile().admissions;
+    expect(first).toMatchObject({ conversationId, key: "operator-answer-replayed" });
     await new Promise((resolve) => setTimeout(resolve, 10));
-
-    const offeredSince = recordReplySuggestions({
-      conversationId,
-      replies: [{ label: "ship it", text: "Ship it." }],
-      origin: { kind: "manager", conversationId, role: "orchestrator" },
-    });
     await send("operator-answer-replayed");
-
-    expect(readReplySuggestions(conversationId)?.setId).toBe(offeredSince.set.setId);
+    expect(readReplySuggestionsFile().admissions).toEqual([first!]);
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
@@ -817,7 +800,7 @@ test("runtime retry with an empty body recovers ownership and starts a fresh dur
   });
 
   expect(response.status).toBe(202);
-  expect(recoveries).toEqual([{ path: "", conversationId: "conversation_retry_empty" }]);
+  expect(recoveries).toEqual([{ path: "", conversationId: "conversation_retry_empty", admissionGuard: expect.any(Function) }]);
   expect(retried).toHaveLength(1);
   expect(retried[0]?.[0]).toBe("op-empty-original");
   expect(retried[0]?.[1]).toBeString();
@@ -1800,7 +1783,7 @@ test("runtime retry accepts an explicit fresh idempotency key", async () => {
 
   expect(response.status).toBe(202);
   expect(await response.json()).toMatchObject({ operationId: "op-two", receipt: { idempotencyKey: "send-two", status: "queued" } });
-  expect(recoveries).toEqual([{ path: "", conversationId: "conversation_retry" }]);
+  expect(recoveries).toEqual([{ path: "", conversationId: "conversation_retry", admissionGuard: expect.any(Function) }]);
   expect(retried).toEqual([["op-one", "send-two"]]);
   expect(kicks).toBe(1);
 
@@ -2398,5 +2381,36 @@ test("a discard whose registry write is refused answers retryable, keeps the loo
     await holder.close();
     registry.close();
     made.cleanup();
+  }
+});
+
+
+test("D4 the send route names a rotated seat's current successor with no new operation", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-route-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(directory, "state");
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("claude", path.join(directory, "old-seat.jsonl"), null);
+  const successor = registry.ensureConversation("claude", path.join(directory, "current-seat.jsonl"), null);
+  const designate = (id: string, pathname: string, key: string) => {
+    beginOrchestratorSeatIntent({ project: "route-seat", mandate: "coordinate work", clientRequestId: key, mode: "existing" });
+    completeOrchestratorSeatIntent({ project: "route-seat", clientRequestId: key, conversationId: id, path: pathname });
+  };
+  designate(conversation.id, conversation.generations.at(-1)!.path, "route-seat-old");
+  designate(successor.id, successor.generations.at(-1)!.path, "route-seat-current");
+  let commands = 0;
+  try {
+    const response = await handleRuntimeCommand(request({ conversationId: conversation.id, text: "wake the seat", idempotencyKey: "route-seat-message" }), "send", {
+      enabled: () => true, structuredEnabled: () => true, registry: () => registry, enqueue: enqueueStructuredMessage,
+      client: () => ({ command: async () => { commands += 1; throw new Error("retired recipient commanded"); } }) as unknown as RuntimeHostClient,
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ successorConversationId: successor.id });
+    expect(registry.readOnlySnapshot().heldDeliveries).toEqual({});
+    expect(commands).toBe(0);
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    registry.close(); fs.rmSync(directory, { recursive: true, force: true });
   }
 });

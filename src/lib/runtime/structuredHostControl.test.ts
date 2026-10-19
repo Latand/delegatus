@@ -1,9 +1,13 @@
 import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 
-import type { ProcessIdentity, RegistryFile } from "@/lib/agent/registry";
+import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
 import type { SessionKey } from "@/lib/agent/sessionKey";
 import { procBackend } from "@/lib/proc";
 import { systemBootEpoch } from "@/lib/processIdentity";
@@ -117,6 +121,44 @@ function ref(over: Partial<StructuredHostKillRef> & Pick<StructuredHostKillRef, 
 
 afterEach(async () => {
   for (const child of fixtures.splice(0)) await stopFixtureTree(child);
+});
+
+test("process-tree retirement preserves a replacement claim acquired during final writer admission", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-retirement-custody-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const key = { engine: "claude" as const, sessionId: CLAUDE_SESSION };
+  const process = { pid: 424_242, startIdentity: "424242:host", bootEpoch: BOOT_EPOCH };
+  const initial = entry({ key, claimEpoch: 1, claimOwner: "structured-host:old",
+    structuredHost: { kind: "claude-broker", endpoint: "stdio:old", process, eventCursor: 1,
+      protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  registry.upsert(initial as never);
+  setAgentRegistryForTests(registry);
+  const original = registry.deliveryWriteOrBusy.bind(registry);
+  const admission = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, write) => {
+    if (correlation.label !== "termination.retire") return original(correlation, write);
+    return original(correlation, () => {
+      const current = registry.readOnlySnapshot().entries[`claude:${CLAUDE_SESSION}`]!;
+      registry.upsert({ ...current, status: "live", claimEpoch: 2, claimOwner: "structured-host:replacement",
+        structuredHost: { ...current.structuredHost!, endpoint: "stdio:replacement", writerClaimEpoch: 2 } });
+      return write();
+    });
+  });
+  try {
+    const outcome = await terminateStructuredHostTree(ref({
+      pid: process.pid, startIdentity: process.startIdentity, bootEpoch: process.bootEpoch,
+      engine: "claude", sessionId: CLAUDE_SESSION,
+    }), { processIdentity: () => null, pidAlive: () => false, protectedPids: () => new Set() });
+    expect(outcome).toMatchObject({ ok: false, status: 409 });
+    expect(registry.readOnlySnapshot().entries[`claude:${CLAUDE_SESSION}`]).toMatchObject({
+      status: "live", claimEpoch: 2, claimOwner: "structured-host:replacement",
+      structuredHost: { endpoint: "stdio:replacement", writerClaimEpoch: 2, process },
+    });
+  } finally {
+    admission.mockRestore();
+    setAgentRegistryForTests(null);
+    registry.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("the inventory carries role, model, stage and ownership for every structured host", () => {
@@ -449,6 +491,121 @@ test("a host that already exited retires its row without signalling anything", a
   expect(signalled).toEqual([]);
   expect(retired).toEqual([{ engine: "claude", sessionId: CLAUDE_SESSION }]);
 });
+
+for (const retained of [false, true]) {
+  const survivors: ProcessIdentity[] = retained
+    ? [{ pid: 424_243, startIdentity: "424243:start", bootEpoch: BOOT_EPOCH }]
+    : [];
+  for (const result of ["success", "refusal", "rejection"] as const) {
+    test(`already-exited termination awaits ${result} from retirement (retained=${retained})`, async () => {
+      const failure = new Error("retirement writer unavailable");
+      let resolve!: (value: boolean) => void;
+      let reject!: (error: Error) => void;
+      const retirement = new Promise<boolean>((yes, no) => { resolve = yes; reject = no; });
+      // Collect a rejection even when broken code drops the returned promise.
+      void retirement.catch(() => {});
+      const calls: unknown[] = [];
+      const signals: number[] = [];
+      let settled = false;
+      const termination = terminateStructuredHostTree(
+        ref({ pid: 424_242, startIdentity: "424242:start", sessionId: CLAUDE_SESSION }), {
+          processIdentity: () => null, pidAlive: () => false, protectedPids: () => new Set(),
+          retainedSurvivors: survivors,
+          signal: pid => { signals.push(pid); },
+          retireRegistryEntry: (...args) => { calls.push(args); return retirement; },
+        });
+      const observed = termination.then(
+        value => { settled = true; return { value }; },
+        error => { settled = true; return { error }; },
+      );
+      try {
+        // An independent timer advances while durable admission is held.
+        await new Promise<void>(done => setTimeout(done, 0));
+        expect(settled).toBe(false);
+        expect(calls).toEqual([[
+          { engine: "claude", sessionId: CLAUDE_SESSION },
+          { pid: 424_242, startIdentity: "424242:start", bootEpoch: BOOT_EPOCH },
+          survivors,
+          null,
+        ]]);
+        if (result === "rejection") reject(failure);
+        else resolve(result === "success");
+        const outcome = await observed;
+        if (result === "rejection") expect("error" in outcome && outcome.error).toBe(failure);
+        else if (result === "refusal") expect(outcome).toEqual({ value: {
+          ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [],
+        } });
+        else expect(outcome).toEqual({ value: { ok: true, via: "already-exited", pids: survivors.map(identity => identity.pid) } });
+        expect(signals).toEqual([]);
+      } finally { resolve(true); await observed; }
+    });
+  }
+
+  for (const present of [false, true]) {
+    test(`already-exited default retirement waits for SQLite and persists its result (retained=${retained}, present=${present})`, async () => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "exited-retirement-"));
+      const filename = path.join(directory, "registry.json");
+      const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+      const key = { engine: "claude", sessionId: CLAUDE_SESSION } as const;
+      const keyId = `claude:${CLAUDE_SESSION}`;
+      const root = { pid: 424_242, startIdentity: "424242:start", bootEpoch: BOOT_EPOCH };
+      if (present) {
+        registry.upsert(snapshot({ entries: { [keyId]: entry({
+          structuredHost: { kind: "claude-broker", endpoint: "stdio", process: root },
+        }) } }).entries[keyId]!);
+        if (retained) expect(registry.recordStructuredTerminationSurvivors(key, root, survivors)).toBe(true);
+      }
+      let retirement: Promise<unknown> | undefined;
+      const write = registry.deliveryWriteOrBusy.bind(registry);
+      registry.deliveryWriteOrBusy = <T>(correlation: { label: string; operationId?: string | null }, mutation: () => T): Promise<T> => {
+        const pending = write(correlation, mutation);
+        retirement = pending;
+        void pending.catch(() => {});
+        return pending;
+      };
+      setAgentRegistryForTests(registry);
+      const peer = new Database(path.join(directory, "registry.sqlite"));
+      let locked = false;
+      let closed = false;
+      let settled = false;
+      let observed: Promise<unknown> | undefined;
+      try {
+        peer.exec("BEGIN IMMEDIATE"); locked = true;
+        const termination = terminateStructuredHostTree(ref({ ...root, sessionId: CLAUDE_SESSION }), {
+          processIdentity: () => null, pidAlive: () => false, protectedPids: () => new Set(),
+          retainedSurvivors: survivors,
+        });
+        observed = termination.then(
+          value => { settled = true; return { value }; },
+          error => { settled = true; return { error }; },
+        );
+        await new Promise<void>(done => setTimeout(done, 0));
+        expect(settled).toBe(false);
+        if (present) expect(registry.readOnlySnapshot().entries[keyId]?.structuredHost?.process).toEqual(root);
+        peer.exec("ROLLBACK"); locked = false;
+        if (present) expect(await termination).toEqual({ ok: true, via: "already-exited", pids: survivors.map(identity => identity.pid) });
+        else expect(await termination).toEqual({
+          ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [],
+        });
+        registry.close(); closed = true;
+        const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+        try {
+          const row = reopened.readOnlySnapshot().entries[keyId];
+          if (present) expect(row).toMatchObject({ status: "dead", structuredHost: null, structuredTerminationSurvivors: [] });
+          else expect(row).toBeUndefined();
+        } finally { reopened.close(); }
+      } finally {
+        if (locked) peer.exec("ROLLBACK");
+        await observed;
+        await retirement?.catch(() => {});
+        peer.close();
+        if (!closed) registry.close();
+        setAgentRegistryForTests(null);
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
+}
 
 test("a root-dead retry refuses a replacement at a retained survivor pid", async () => {
   const replacementPid = 5_501;
@@ -978,4 +1135,53 @@ test.each(["identity", "sleep"])("%s exceptions after TERM retain the captured t
       { pid: 8301, startIdentity: "8301:start" },
     ],
   });
+});
+
+
+test("termination waits for durable capture and withdrawal, then rechecks changed authority", async () => {
+  let captured!: () => void;
+  const capture = new Promise<void>(resolve => { captured = resolve; });
+  let withdrawn!: () => void;
+  const withdrawal = new Promise<void>(resolve => { withdrawn = resolve; });
+  const effects: string[] = [];
+  let allowed = true;
+  let settled = false;
+  const termination = terminateStructuredHostTree(
+    ref({ pid: 6_060, startIdentity: "6060:start", sessionId: CLAUDE_SESSION }), {
+      processIdentity: pid => `${pid}:start`, pidAlive: () => true, ppidMap: () => new Map(),
+      processGroupId: () => null, protectedPids: () => new Set(),
+      persistCapturedTree: async () => { effects.push("capture-pending"); await capture; effects.push("captured"); return true; },
+      withdrawCapturedTree: async () => { effects.push("withdraw-pending"); await withdrawal; effects.push("withdrawn"); },
+      authorize: () => allowed ? null : { status: 409, error: "authority changed during admission" },
+      terminateOwnedHost: async () => { effects.push("runtime"); return false; },
+      signal: () => { effects.push("signal"); },
+    }).then(value => { settled = true; return value; });
+  try {
+    expect(effects).toEqual(["capture-pending"]);
+    allowed = false; captured();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(effects).toEqual(["capture-pending", "captured", "withdraw-pending"]);
+    expect(settled).toBe(false);
+    withdrawn();
+    expect(await termination).toMatchObject({ ok: false, error: "authority changed during admission" });
+    expect(effects).toEqual(["capture-pending", "captured", "withdraw-pending", "withdrawn"]);
+  } finally { captured(); withdrawn(); await termination; }
+});
+
+test("an asynchronous capture refusal sends no signal and a rejected capture retains its error", async () => {
+  for (const rejects of [false, true]) {
+    const effects: string[] = [];
+    const result = terminateStructuredHostTree(
+      ref({ pid: 6_060, startIdentity: "6060:start", sessionId: CLAUDE_SESSION }), {
+        processIdentity: pid => `${pid}:start`, pidAlive: () => true, ppidMap: () => new Map(),
+        processGroupId: () => null, protectedPids: () => new Set(),
+        persistCapturedTree: async () => { await new Promise<void>(resolve => setImmediate(resolve));
+          if (rejects) throw new Error("capture storage unavailable"); return false; },
+        terminateOwnedHost: async () => { effects.push("runtime"); return false; },
+        signal: () => { effects.push("signal"); },
+      });
+    if (rejects) await expect(result).rejects.toThrow("capture storage unavailable");
+    else expect(await result).toMatchObject({ ok: false, error: expect.stringContaining("could not be persisted") });
+    expect(effects).toEqual([]);
+  }
 });

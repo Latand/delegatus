@@ -328,10 +328,9 @@ on a per-deploy candidate port behind the runtime host:
 
 ## Agents reach the Delegatus MCP tools over HTTP
 
-By default every spawned agent starts its own `bin/mcp-server.mjs` over stdio,
-a Bun process (plus a file-scan worker once it reads transcripts) per agent.
-The Viewer also serves the same tools at `/api/mcp` on its own port, over
-Streamable HTTP, statelessly. Each agent is identified by the per-launch spawn
+New managed agents prefer the shared `/api/mcp` endpoint over stateless
+Streamable HTTP when launch admission permits it. This transport starts no
+per-agent MCP processes. Each agent is identified by the per-launch spawn
 capability the Viewer already gives it (`LLV_SPAWN_CAPABILITY`), presented in
 the `x-llv-spawn-capability` header; the registry holds only its digest, and a
 relaunch rotates it. A request without a capability the registry recognises is
@@ -340,12 +339,11 @@ other route takes, so with `LLV_TOKEN` configured an agent gets through only by
 way of the stable local entry on 8898 while `viewer-gateway.json` trusts it
 (the entry supplies the key for loopback callers).
 
-To move new spawns to the shared endpoint, set the flag in `service.env` and
-remove the Viewer-managed Codex accounts' own `viewer` registration:
+Run the installer to remove the Viewer-managed Codex accounts' own `viewer`
+registration so each new thread can choose its admitted transport:
 
 ```sh
-echo 'LLV_MCP_TRANSPORT=http' >> "$DELEGATUS_CONFIG_DIR/service.env"
-LLV_MCP_TRANSPORT=http scripts/install-mcp.sh
+scripts/install-mcp.sh
 ```
 
 Claude spawns need nothing else: the Viewer writes their whole `--mcp-config`,
@@ -362,9 +360,9 @@ reaches the new release. Agents already running keep the transport they were
 launched with. The seat monitor reads the effective transport recorded on the
 launch receipt, including an HTTP request that fell back to stdio at admission;
 the current server flag does not change health checks for an existing seat.
-Older receipts without that field are checked as stdio. Removing the flag alone
-takes new spawns back to stdio; run the
-script with `LLV_MCP_TRANSPORT=stdio` to register the launcher again for Codex
+Older receipts without that field are checked as stdio. Set
+`LLV_MCP_TRANSPORT=stdio` to select stdio for new launches. Run the
+script with that setting to register the launcher again for Codex
 sessions started outside Delegatus.
 
 A Viewer launch stays on stdio whatever the flag says when the shared endpoint
@@ -374,6 +372,19 @@ match), or `LLV_TOKEN` is configured and the local entry is not trusted. A Codex
 session started outside Delegatus with an account whose registration the
 script removed has no Delegatus tools until the script is run with
 `LLV_MCP_TRANSPORT=stdio`.
+
+The stdio adapter forwards managed tool calls through the same Viewer service,
+including task writes and receipt recovery. On Linux, native Claude calls use
+a local socket challenge that lets the Viewer verify the adapter's process
+identity before applying native session proof and operator approval. These
+adapters retain no state database connection. A lost response requires looking
+up the original request key after the Viewer returns. The launcher watches its
+invoking agent; Linux also binds its child to launcher death in the kernel.
+Native callers on other platforms retain unidentified authority through the
+existing MCP service authentication. The Viewer applies the same operation
+checks, and their adapters also keep no database handles. Kernel-enforced
+launcher-death containment is currently verified on Linux; other platforms
+retain EOF, signal and parent-change shutdown.
 
 The gate is read at each launch from the running Viewer, so a key put in place
 later — phone access turning on the key file — sends the next launches back to

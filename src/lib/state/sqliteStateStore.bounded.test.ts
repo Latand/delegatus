@@ -2,9 +2,12 @@ import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { Database } from "bun:sqlite";
 import { initializeStateCollections, SqliteStateCollection, StateSnapshotChangedError } from "./sqliteStateStore";
 import { publishHotStateAuthority } from "./hotStateAuthority";
+import { pipelineHostHasLiveWork } from "@/lib/pipelines/hostRetirement";
+import type { Pipeline } from "@/lib/pipelines/types";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 
 type Row = { key: string; value: number };
@@ -35,6 +38,16 @@ test("controller caches follow decoding authority and refuse writes that race sn
     await expect(store.reconcileSnapshot(() => { entered = true; })).rejects.toThrow(StateSnapshotChangedError);
     expect(entered).toBe(false);
     expect(store.get("row-0")?.value).toBe(520);
+    onDecode = () => {};
+    authority = 30;
+    await store.reconcileSnapshot(async (records,persist,assertCurrent) => {
+      await Promise.resolve();
+      authority = 40;
+      expect(() => assertCurrent(records[0]!)).toThrow(StateSnapshotChangedError);
+      records[0]!.value = 999;
+      await expect(persist(records)).rejects.toThrow(StateSnapshotChangedError);
+    }, undefined, true, ["row-0"]);
+    expect(store.get("row-0")?.value).toBe(540);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -138,12 +151,12 @@ test("reconciliation avoids inactive revisions and warm decoding while yielding 
       } finally { serialization.mockRestore(); }
     } finally { clearInterval(timer); census.mockRestore(); }
     // Detached writes and ordinary implicit checkpoints retain their contract.
-    await store.reconcileSnapshot((records, persist, assertCurrent) => {
+    await store.reconcileSnapshot(async (records, persist, assertCurrent) => {
       records[0]!.value = 500;
-      persist();
+      await persist();
       assertCurrent(records[0]!);
       records[1]!.value = 600;
-      persist([records[1]!]);
+      await persist([records[1]!]);
     });
     expect(store.get("row-0")?.value).toBe(500);
     expect(store.get("row-1")?.value).toBe(600);
@@ -153,7 +166,7 @@ test("reconciliation avoids inactive revisions and warm decoding while yielding 
       peer.boundedPatch(2, tx => { const row = tx.get(stale.key)!; tx.put({ ...row, value: 700 }); });
       expect(() => assertCurrent(stale)).toThrow(StateSnapshotChangedError);
       stale.value = 800;
-      persist([stale]);
+      await persist([stale]);
     })).rejects.toThrow(StateSnapshotChangedError);
     expect(store.get("row-0")?.value).toBe(700);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
@@ -235,5 +248,167 @@ test("bounded collection pages and conditional patches stay atomic across indepe
       publishHotStateAuthority(dir, "fencing", "b".repeat(40));
     })).toThrow("fenced");
     expect(second.get("authority-race")).toBeNull();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test("indexed host and flow owners match custody predicates and follow old-writer SQL", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-refs-"));
+  type OwnerRow = { key: string; state: string; srcConversationId: string; srcPath: string; runs: unknown[]; [field: string]: unknown };
+  const options = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (row: OwnerRow) => row.key,
+    decode: (raw: unknown) => raw as OwnerRow, clone: (row: OwnerRow) => structuredClone(row) };
+  try {
+    const filename = path.join(dir,"state.sqlite");
+    initializeStateCollections(filename, [{ ...options, migrationId: "refs", loadRecords: () => [] }]);
+    const store = new SqliteStateCollection(filename, options), peer = new Database(filename);
+    const target = { conversationId: "shared-conversation", agentPath: "shared-transcript", paneId: "shared-pane", launchId: "shared-launch", sessionId: "shared-session" };
+    const operations = [undefined, { state: "running" }, { state: "settled", result: { ok: true, sha: "head", remote: "published" } },
+      { state: "settled", result: { ok: false, error: "refused" } }, { state: "settled", result: { ok: true, sha: "head", remote: "unreachable" } },
+      { state: "settled", result: { ok: true, sha: "head", remote: "published", uncertain: true } },
+      { state: "settled", result: { ok: true, sha: "head", remote: "published" }, executor: { finished: false } }];
+    for (const state of ["passed","failed","running","pending","reviewing","committing","needs_decision"]) for (const operation of operations) {
+      const row: OwnerRow = { key: "owner", state: "completed", srcConversationId: "source", srcPath: "source-path",
+        ...(operation ? { delivery: { operation } } : {}),
+        runs: [{ stageId: "build", attempts: [{ n: 1, ...target, state, verdict: { status: "pass" }, completedAt: "done", flowId: "flow" }] }] };
+      store.boundedPatch(1, tx => tx.put(row));
+      expect(store.pipelineOwnerExists([["flow","flow"]],false)).toBe(true);
+      for (const [kind,identity] of Object.entries(target)) {
+        expect(store.pipelineOwnerExists([[kind,identity]],true)).toBe(pipelineHostHasLiveWork([row as unknown as Pipeline], { [kind]: identity } as typeof target));
+      }
+      expect(store.pipelineAttemptWindow(row.key,-1,16).map(ref => ref.n)).toEqual([1]);
+    }
+    const encoded = peer.query<{ value_json: string }, []>("SELECT value_json FROM state_rows WHERE collection='pipelines' AND row_key='owner'").get()!.value_json;
+    peer.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key='owner'").run(encoded.replace('"n":1','"n":1.0'));
+    expect(store.pipelineAttemptWindow("owner",0,16).map(ref => ref.n)).toEqual([1]);
+    const quotedKey = "peer-a.value-r.value-h.value-'quote";
+    store.boundedPatch(1, tx => tx.put({ ...store.get("owner")!, key: quotedKey }));
+    for (const name of ["pipeline_refs_insert","pipeline_refs_update","pipeline_refs_delete"]) peer.exec(`DROP TRIGGER ${name}`);
+    peer.exec("DROP TABLE pipeline_attempt_refs"); peer.exec("DROP TABLE pipeline_owner_refs");
+    const reopened = new SqliteStateCollection(filename, options);
+    expect(reopened.pipelineOwnerExists([["flow","flow"]],false)).toBe(true);
+    expect(reopened.pipelineAttemptWindow("owner",-1,16)).toHaveLength(1);
+    expect(reopened.pipelineAttemptWindow(quotedKey,-1,16)).toHaveLength(1);
+    peer.query("DELETE FROM state_rows WHERE collection='pipelines' AND row_key=?").run(quotedKey);
+    peer.exec("CREATE TABLE ref_write_probe(n INTEGER)");
+    peer.exec("CREATE TRIGGER ref_write_probe AFTER INSERT ON pipeline_owner_refs BEGIN INSERT INTO ref_write_probe VALUES(1); END");
+    peer.query("UPDATE state_rows SET value_json=json_set(value_json,'$.stateDetail','ordinary metadata') WHERE collection='pipelines' AND row_key='owner'").run();
+    expect(peer.query("SELECT count(*) AS n FROM ref_write_probe").get()).toEqual({ n: 0 });
+    peer.exec("BEGIN IMMEDIATE");
+    peer.query("UPDATE state_rows SET value_json=json_set(value_json,'$.runs',json('[]')) WHERE collection='pipelines' AND row_key='owner'").run();
+    expect(store.pipelineOwnerExists([["flow","flow"]],false)).toBe(true);
+    peer.exec("ROLLBACK");
+    expect(store.pipelineOwnerExists([["flow","flow"]],false)).toBe(true);
+    peer.query("UPDATE state_rows SET value_json=json_set(value_json,'$.runs',json('[]')) WHERE collection='pipelines' AND row_key='owner'").run();
+    expect(store.pipelineOwnerExists([["flow","flow"]],false)).toBe(false);
+    expect(store.pipelineAttemptWindow("owner",-1,16)).toEqual([]);
+    peer.query("DELETE FROM state_rows WHERE collection='pipelines' AND row_key='owner'").run();
+    expect(peer.query("SELECT count(*) AS n FROM pipeline_owner_refs").get()).toEqual({ n: 0 });
+    peer.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("output-only old-writer edits leave compact references intact as retained history grows", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-reference-writes-"));
+  type Lane = { key: string; state: string; runs: { stageId: string; attempts: { n: number; conversationId: string; output: string; state: string; completedAt: string }[] }[] };
+  const options = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (row: Lane) => row.key,
+    decode: (raw: unknown) => raw as Lane, clone: (row: Lane) => structuredClone(row) };
+  try {
+    const filename = path.join(dir,"state.sqlite");
+    initializeStateCollections(filename,[{ ...options,migrationId: "writes",loadRecords: () => [] }]);
+    const store = new SqliteStateCollection(filename,options), peer = new Database(filename);
+    try {
+      peer.exec("CREATE TABLE ref_write_probe(n INTEGER)");
+      for (const table of ["pipeline_attempt_refs","pipeline_owner_refs"]) peer.exec(`CREATE TRIGGER probe_${table} AFTER INSERT ON ${table} BEGIN INSERT INTO ref_write_probe VALUES(1); END`);
+      const samples = [];
+      for (const history of [32,1024,4096]) {
+        const row: Lane = { key: "large-lane",state: "paused",runs: [{ stageId: "build",attempts: Array.from({ length: history },(_,index) => ({ n: index+1,
+          conversationId: `host-${index}`,state: "failed",completedAt: "done",output: "retained output ".repeat(32) })) }] };
+        store.boundedPatch(1,tx => tx.put(row));
+        peer.exec("DELETE FROM ref_write_probe");
+        const outputMs = [];
+        for (let sample = 0; sample < 3; sample++) {
+          const start = performance.now();
+          peer.query("UPDATE state_rows SET value_json=json_set(value_json,'$.runs[0].attempts[0].output',?) WHERE collection='pipelines' AND row_key='large-lane'").run(`new output ${sample}`);
+          outputMs.push(performance.now()-start);
+        }
+        expect(peer.query("SELECT count(*) AS n FROM ref_write_probe").get()).toEqual({ n: 0 });
+        expect(store.pipelineOwnerExists([["conversationId",`host-${history-1}`]],false)).toBe(true);
+        // A real ownership change remains atomic, including rollback and an
+        // older writer that updates only the JSON payload.
+        const start = performance.now();
+        peer.exec("BEGIN IMMEDIATE");
+        peer.query("UPDATE state_rows SET value_json=json_set(value_json,'$.runs[0].attempts[0].conversationId','replacement') WHERE collection='pipelines' AND row_key='large-lane'").run();
+        expect(peer.query("SELECT 1 FROM pipeline_owner_refs WHERE identity='replacement'").get()).not.toBeNull();
+        expect(store.pipelineOwnerExists([["conversationId","replacement"]],false)).toBe(false);
+        peer.exec("ROLLBACK");
+        const ownershipMs = performance.now()-start;
+        expect(store.pipelineOwnerExists([["conversationId","host-0"]],false)).toBe(true);
+        samples.push({ history,outputMs,ownershipMs });
+      }
+      if (process.env.LLV_CONTROLLER_WRITE_EVIDENCE) fs.appendFileSync(process.env.LLV_CONTROLLER_WRITE_EVIDENCE,JSON.stringify(samples)+"\n");
+    } finally { peer.close(); }
+  } finally { fs.rmSync(dir,{ recursive: true,force: true }); }
+},30_000);
+
+test("a fresh process upgrades the pre-compact reference schema before ordinary reads", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-reference-upgrade-"));
+  const filename = path.join(dir, "state.sqlite");
+  const row = { key: "legacy-lane", state: "paused", runs: [{ stageId: "build", attempts: [
+    { n: 1, conversationId: "legacy-host", state: "failed", completedAt: "done", output: "retained" },
+  ] }] };
+  const options = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (value: typeof row) => value.key,
+    decode: (raw: unknown) => raw as typeof row, clone: (value: typeof row) => structuredClone(value) };
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "legacy", loadRecords: () => [row] }]);
+    const db = new Database(filename);
+    // The previous schema has reference tables and the delete sentinel, but
+    // maintains references directly from state_rows, without compact inputs.
+    for (const name of ["pipeline_refs_insert", "pipeline_refs_update", "pipeline_ref_inputs_insert", "pipeline_ref_inputs_update"]) db.exec(`DROP TRIGGER ${name}`);
+    db.exec("DROP TRIGGER pipeline_refs_delete");
+    db.exec("DROP TABLE pipeline_ref_inputs");
+    db.exec("CREATE TRIGGER pipeline_refs_delete AFTER DELETE ON state_rows WHEN OLD.collection='pipelines' BEGIN DELETE FROM pipeline_attempt_refs WHERE row_key=OLD.row_key; DELETE FROM pipeline_owner_refs WHERE row_key=OLD.row_key; END");
+    const before = db.query("SELECT * FROM state_rows").all();
+    db.close();
+    const result = spawnSync(process.execPath, ["--eval", `
+      const { SqliteStateCollection } = await import(${JSON.stringify(path.resolve("src/lib/state/sqliteStateStore.ts"))});
+      const store = new SqliteStateCollection(process.env.UPGRADE_DATABASE, {
+        collection: 'pipelines', schemaVersion: 1, busyMessage: 'busy',
+        key: row => row.key, decode: row => row, clone: row => structuredClone(row),
+      });
+      if (!store.pipelineOwnerExists([['conversationId','legacy-host']],false)) throw new Error('missing backfill');
+    `], { env: { ...process.env, UPGRADE_DATABASE: filename }, encoding: "utf8", timeout: 10_000 });
+    expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
+    const upgraded = new Database(filename);
+    try {
+      expect(upgraded.query("SELECT * FROM state_rows").all()).toEqual(before);
+      expect(upgraded.query("SELECT row_key FROM pipeline_ref_inputs").all()).toEqual([{ row_key: row.key }]);
+      expect(upgraded.query("SELECT stageId,n FROM pipeline_attempt_refs").all()).toEqual([{ stageId: "build", n: 1 }]);
+      upgraded.exec("CREATE TABLE ref_upgrade_probe(n INTEGER)");
+      for (const table of ["pipeline_attempt_refs", "pipeline_owner_refs"]) upgraded.exec(`CREATE TRIGGER probe_${table} AFTER INSERT ON ${table} BEGIN INSERT INTO ref_upgrade_probe VALUES(1); END`);
+      upgraded.query("UPDATE state_rows SET value_json=json_set(value_json,'$.runs[0].attempts[0].output','new output') WHERE collection='pipelines'").run();
+      expect(upgraded.query("SELECT count(*) AS n FROM ref_upgrade_probe").get()).toEqual({ n: 0 });
+    } finally { upgraded.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test("paged moves preserve an identical target row under its own key selector", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "collection-move-keys-"));
+  const filename = path.join(dir, "state.sqlite");
+  const row: Row = { key: "one", value: 1 };
+  const sourceOptions = { collection: "source", schemaVersion: 1, busyMessage: "busy",
+    key: (value: Row) => value.key, decode: (value: unknown) => value as Row, clone: (value: Row) => structuredClone(value) };
+  const targetOptions = { ...sourceOptions, collection: "target", key: (value: Row) => `target-${value.key}` };
+  try {
+    initializeStateCollections(filename, [sourceOptions, targetOptions].map(options => ({
+      ...options, migrationId: "one", loadRecords: () => [row],
+    })));
+    const source = new SqliteStateCollection(filename, sourceOptions);
+    const target = new SqliteStateCollection(filename, targetOptions);
+    const revision = target.revision();
+    expect(await source.moveMatchingTo(target, () => true)).toBe(1);
+    expect(source.snapshot()).toEqual([]);
+    expect(target.get("target-one")).toEqual(row);
+    expect(target.revision()).toBe(revision);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

@@ -1,3 +1,4 @@
+import os from "node:os";
 import { POST as updatePost } from "@/app/api/self-update/update/route";
 import { POST as deployPost } from "@/app/api/runtime/deployments/route";
 import { ledgerDeployment } from "@/lib/runtime/deploymentLedger";
@@ -23,7 +24,7 @@ import { readLauncherRecord, requestRestart } from "./launcher";
 import { deploymentsEnabled, detectMode } from "./mode";
 import { readStartIdentity, sameProcess } from "./pid";
 import { getEvents, getSnapshot, getStepLog, postAuto, postCheck, postRestart, postUpdate, postInstallAction } from "./routes";
-import { prepareManagedCheckRepo, setSelfUpdateServiceForTests } from "./instance";
+import { prepareManagedCheckRepo, productionDeps, setSelfUpdateServiceForTests } from "./instance";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { UpdateRunner, type StepPorts } from "./steps";
 import { idleUpdate, stoppedProcess, type Snapshot } from "./types";
@@ -42,7 +43,7 @@ import type { LauncherRecord } from "./launcher";
  *   by the launcher's own request watcher.
  */
 
-const root = mkdtempSync("/var/tmp/self-update-routes-");
+const root = mkdtempSync(join(os.tmpdir(), "self-update-routes-"));
 const remote = join(root, "remote.git");
 const work = join(root, "work");
 const checkout = join(root, "checkout");
@@ -124,7 +125,7 @@ function baseDeps(dir: string, overrides: Partial<ServiceDeps>): ServiceDeps {
     releaseTarget: () => null,
     prepareCheckRepo: async () => { throw new Error("no check repository in this mode"); },
     buildEnv,
-    web: { pid: process.pid, port: 3000, startedAt: new Date().toISOString() },
+    web: { pid: process.pid, port: 3000, startedAt: new Date().toISOString(), revision: firstSha },
     ...overrides,
   };
 }
@@ -199,6 +200,74 @@ describe("the operator gate", () => {
 });
 
 describe("managed install: an update is one Viewer deployment", () => {
+  test("a service created before legacy-adapter activation observes the process revision once pinned", async () => {
+    const env: Record<string, string> = {};
+    const web = productionDeps(env).web;
+    const service = new SelfUpdateService(baseDeps(mkdtempSync(join(root, "activation-identity-")), {
+      web, mode: async () => ({ mode: "managed", reason: null, record: null }),
+      prepareCheckRepo: async () => checkout,
+      releaseTarget: () => ({ revision: firstSha }),
+    }));
+    try {
+      expect((await service.snapshot()).serving.web).toBeNull();
+      env.LLV_HOT_STATE_RELEASE_REVISION = tipSha;
+      expect((await service.snapshot()).serving.web?.sha).toBe(tipSha);
+      expect((await service.snapshot()).installed.sha).toBe(tipSha);
+    } finally { service.stop(); }
+  });
+
+  test.each(["2026-10-15T11:28:24Z", "2026-10-15T11:00:00Z"])("a newer external success supersedes the failed target without rewriting its receipt or retrying it (%s)", async createdAt => {
+    const { writeManagedRecord, readManagedRecord } = await import("./managed");
+    const dir = mkdtempSync(join(root, "external-deployment-"));
+    const failedAt = "2026-10-15T11:08:12Z";
+    const failed = { deploymentId: "old-attempt", idempotencyKey: "old-key", target: firstSha,
+      targetShort: firstSha.slice(0, 7), targetVersion: "1", requestedAt: "2026-10-15T11:00:00Z",
+      observed: {}, lastStep: "health" as const, finishedAt: failedAt, phase: "failed" as const,
+      error: "first boot loop gate refused", servingProgress: null };
+    writeManagedRecord(join(dir, "managed.json"), failed);
+    const bytes = readFileSync(join(dir, "managed.json"), "utf8");
+    let latest = true;
+    let lists = 0;
+    const requests: ViewerDeploymentRequest[] = [];
+    const deps = baseDeps(dir, {
+      mode: async () => ({ mode: "managed", reason: null, record: null }),
+      web: { pid: process.pid, port: 3000, startedAt: failedAt, revision: tipSha },
+      releaseTarget: () => ({ revision: firstSha }), // Pointer is not the process.
+      prepareCheckRepo: async () => checkout,
+      latestDeployments: async () => { lists++; return { deployments: latest ? [{ deploymentId: "external-success", phase: "succeeded", sha: tipSha, terminal: true,
+        startedAt: createdAt, finishedAt: "2026-10-15T11:38:51Z", error: null }] : [], nextCursor: null, hasMore: false }; },
+      readDeployment: async id => ({ deploymentId: id, idempotencyKey: "external-key", requestedRevision: tipSha, revision: tipSha,
+        phase: "succeeded", terminal: true, candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
+        health: [], error: null, owner: { pid: 1, startIdentity: null }, createdAt, updatedAt: "2026-10-15T11:38:51Z", revisionNumber: 1 }),
+      hostHealth: async () => ({ pid: 4242, generation: { revision: tipSha } }) as never,
+      requestDeployment: async request => { requests.push(request); throw new Error("stale retry was dispatched"); },
+    });
+    const service = new SelfUpdateService(deps);
+    try {
+      const s = await service.snapshot();
+      expect(s.update).toMatchObject({ state: "done", target: tipSha, deploymentId: "external-success" });
+      expect(s.previousAttempt).toMatchObject({ state: "failed", target: firstSha });
+      expect(s.serving.web?.sha).toBe(tipSha);
+      expect(s.installed.sha).toBe(tipSha);
+      expect(s.serving.runtimeHost?.sha).toBe(tipSha);
+      const { staleProcesses, appliedCopy } = await import("@/components/selfUpdate/selfUpdateCopy");
+      expect(staleProcesses(s)).toEqual({ web: false, host: false });
+      expect(appliedCopy(s, tipSha.slice(0, 7), key => key)).toBe("selfUpdate.applied.both");
+      await service.snapshot();
+      expect(lists).toBe(1);
+      expect((await service.retry("retry-stale")).ok).toBe(false);
+      expect(requests).toEqual([]);
+      expect(readFileSync(join(dir, "managed.json"), "utf8")).toBe(bytes);
+      expect(readManagedRecord(join(dir, "managed.json"))).toEqual(failed);
+      // Missing ledger observation still cannot authorize a downgrade.
+      latest = false;
+      const restarted = new SelfUpdateService(deps);
+      try { expect((await restarted.retry("retry-without-ledger")).ok).toBe(false); }
+      finally { restarted.stop(); }
+      expect(requests).toEqual([]);
+    } finally { await service.check(); service.stop(); }
+  });
+
   let phase: ViewerDeploymentPhase | null = null;
   let error: string | null = null;
   let requests: ViewerDeploymentRequest[] = [];
@@ -236,6 +305,13 @@ describe("managed install: an update is one Viewer deployment", () => {
       hostHealth: async () => ({ pid: 4242, startIdentity: "1", hostEpoch: 3, generation: { revision: hostRevision } }),
     }));
   }
+
+  test("managed installs refuse short revisions before runtime admission", async () => {
+    setSelfUpdateServiceForTests(managedService());
+    const response = await deployPost(post("/runtime/deployments", { revision: tipSha.slice(0, 9), idempotencyKey: "managed-short" }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "pass the full SHA or a ref" });
+  });
 
   test("check, deploy the exact revision, follow the phases to success", async () => {
     const service = managedService();
@@ -283,6 +359,28 @@ describe("managed install: an update is one Viewer deployment", () => {
     expect(s.update.state).toBe("done");
     expect(s.busy).toBeNull();
     expect(s.update.steps.every((step) => step.state === "done")).toBe(true);
+    await service.check();
+  });
+
+  test("a newer external failed target can be retried forward after two identical ledger observations", async () => {
+    await git(checkout, "fetch", "origin");
+    phase = "failed";
+    const failed = { ...status("external-forward")!, createdAt: "2026-10-15T12:00:00Z", updatedAt: "2026-10-15T12:01:00Z" };
+    const admitted: ViewerDeploymentRequest[] = [];
+    const service = new SelfUpdateService(baseDeps(mkdtempSync(join(root, "external-forward-")), {
+      mode: async () => ({ mode: "managed", reason: null, record: null }),
+      prepareCheckRepo: async () => checkout,
+      releaseTarget: () => ({ revision: firstSha }),
+      hostHealth: async () => ({ pid: 4242, generation: { revision: firstSha } }) as never,
+      latestDeployments: async () => ({ deployments: [{ deploymentId: failed.deploymentId, phase: "failed", sha: tipSha,
+        terminal: true, startedAt: failed.createdAt, finishedAt: failed.updatedAt, error: "candidate refused" }], nextCursor: null, hasMore: false }),
+      readDeployment: async () => ({ ...failed }),
+      requestDeployment: async request => { admitted.push(request); return { state: "accepted", deploymentId: "retry-forward", revision: tipSha, replayed: false }; },
+    }));
+    try {
+      expect((await service.retry("forward-retry")).ok).toBe(true);
+      expect(admitted).toMatchObject([{ revision: tipSha }]);
+    } finally { service.stop(); }
   });
 
   test("a rolled-back deployment is retried as a new deployment of the same revision", async () => {
@@ -376,7 +474,7 @@ describe("managed install: an update is one Viewer deployment", () => {
         return readRevision(checkout, sha);
       },
       check: async () => ({ ok: false, error: "fixture", installed: null }),
-      hostHealth: async () => ({ pid: 4242, startIdentity: "1", hostEpoch: 3 }),
+      hostHealth: async () => ({ pid: 4242, startIdentity: "1", hostEpoch: 3, generation: { revision: firstSha } }),
     })));
     /* Read by an agent, which starts no check (a finished check clears the hold). */
     setCallerConversationResolverForTests(() => "conversation_some_worker");
@@ -409,7 +507,7 @@ describe("managed install: an update is one Viewer deployment", () => {
       prepareCheckRepo: () => prepareManagedCheckRepo(join(dir, "check.git"), join(dir, "no-mirror", "objects")),
       /* The host answers; after its journal was reset it knows no such deployment. */
       readDeployment: async (id) => (known ? status(id) : null),
-      hostHealth: async () => ({ pid: 4242, startIdentity: "1", hostEpoch: 3 }),
+      hostHealth: async () => ({ pid: 4242, startIdentity: "1", hostEpoch: 3, generation: { revision: firstSha } }),
     })));
     await postCheck(post("/check"));
     await until((next) => next.check.state === "update-available");
@@ -453,11 +551,12 @@ describe("managed install: an update is one Viewer deployment", () => {
     expect((await runGit(["rev-parse", "--is-bare-repository"], join(dir, "check.git"))).stdout.trim()).toBe("true");
   });
 
-  test("a release target that cannot be read fails the check with a code, and no sentence of ours", async () => {
+  test("an unknown serving revision fails the check with a code", async () => {
     const dir = mkdtempSync(join(root, "managed-no-target-"));
     setSelfUpdateServiceForTests(new SelfUpdateService(baseDeps(dir, {
       mode: async () => ({ mode: "managed", reason: null, record: null }),
       releaseTarget: () => null,
+      web: { pid: process.pid, port: 3000, startedAt: new Date().toISOString(), revision: null },
       prepareCheckRepo: () => prepareManagedCheckRepo(join(dir, "check.git"), join(dir, "no-mirror", "objects")),
     })));
     await postCheck(post("/check"));
@@ -474,7 +573,7 @@ describe("managed install: an update is one Viewer deployment", () => {
       releaseTarget: () => ({ revision: firstSha }),
       prepareCheckRepo: () => prepareManagedCheckRepo(join(dir, "check.git"), join(dir, "no-mirror", "objects")),
       readDeployment: async (id) => status(id),
-      hostHealth: async () => ({ pid: 4242, startIdentity: "1", hostEpoch: 3 }),
+      hostHealth: async () => ({ pid: 4242, startIdentity: "1", hostEpoch: 3, generation: { revision: firstSha } }),
     });
     const first = new SelfUpdateService(deps);
     setSelfUpdateServiceForTests(first);
@@ -734,14 +833,14 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     } finally { h.service.stop(); }
   });
 
-  test("a checkout exact deploy is idempotent, applies once and settles its seat receipt", async () => {
+  test.each([40, 9])("a checkout exact deploy is idempotent, applies once and settles its seat receipt (%s characters)", async length => {
     const h = harness();
     const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
     record.launcher.relaunch = 1;
     writeFileSync(h.recordFile, JSON.stringify(record));
     h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
     h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
-    const body = { revision: tipSha, idempotencyKey: "checkout-exact-press" };
+    const body = { revision: tipSha.slice(0, length), idempotencyKey: "checkout-exact-press" };
     const response = await deployPost(post("/runtime/deployments", body));
     expect(response.status).toBe(202);
     const receipt = await response.json();

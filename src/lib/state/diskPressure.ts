@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 import { stateDir, statePath } from "@/lib/configDir";
+// eslint-disable-next-line no-restricted-imports -- The leased disk-pressure helper scans processes; injected ports keep direct test reads available.
 import { isOwnedTempConsumerName, ownTempRoots, scanProcesses, sweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
@@ -157,7 +158,7 @@ function stageDiskRoots(source: NodeJS.ProcessEnv, tempRoots: readonly TempSweep
 }
 
 function rootsForProvision(repoDir: string, worktreeDir: string, source: NodeJS.ProcessEnv, tempRoots: readonly TempSweepRoot[] | undefined, usesClaude: boolean): DiskRoot[] {
-  const views = tempRoots ?? (source.LLV_DOCKER_NSENTER_SHIMS === "1" ? sweepRoots(scanProcesses(), ownTempRoots(source)) : []);
+  const views = tempRoots ?? (source.LLV_DOCKER_NSENTER_SHIMS === "1" ? includeIdleHostViews(ownTempRoots(source).map(path => ({ path, via: "" })), source) : []);
   return [{ role: "state", directory: stateDir() }, { role: "worktrees", directory: worktreeDir },
     { role: "repository", directory: repoDir }, ...stageDiskRoots(source, views, usesClaude)];
 }
@@ -247,7 +248,7 @@ export function observeDiskPressureReport(file: string, probe: () => DiskVolume[
 }
 /** The current pressure, read from the volumes at most every 30 s. The
     consumer sizes are walked in the background and arrive on a later read. */
-export async function readDiskPressure(ports: {
+export async function readDiskPressureInHelper(ports: {
   /** Independent reader state and observation seams for sandbox checks. */
   caches?: Map<string, PressureCache>;
   roots?: DiskRoot[];
@@ -346,4 +347,12 @@ export async function readDiskPressure(ports: {
       .finally(() => { delete target.measuring; });
   }
   return structuredClone(cached.pressure);
+}
+
+/** The helper owns the 30 s observation cache, process inventory, probes and
+ * consumer walks. Only the compact pressure report crosses back to readers. */
+export async function readDiskPressure(ports: Parameters<typeof readDiskPressureInHelper>[0] = {}): Promise<DiskPressure> {
+  if (Object.keys(ports).length || process.env.LLV_STATE_OWNER === "mcp") return readDiskPressureInHelper(ports);
+  const { readDiskPressureOffThread } = await import("@/lib/pipelines/worktreeSweepWorker");
+  return readDiskPressureOffThread();
 }

@@ -21,10 +21,11 @@ const HANDOFF_HEADINGS = ["## Handoff from your predecessor", "## Rotation histo
 const SECTION_HEADING = /^#{1,2} /;
 
 /** The one directive delivery appends WITHOUT a heading
-    (`ORCHESTRATOR_PROTOTYPE_DIRECTIVE` in `prompt.ts`, #2658). It is the
-    mandate's, and it lands right after a bespoke rotation's handoff, so it
-    closes the handoff the way a heading does. */
-const DELIVERED_PARAGRAPH = "Prototype review: ";
+    (`ORCHESTRATOR_PROTOTYPE_DIRECTIVE` in `prompt.ts`, #2658), as v55 opens
+    it and as earlier versions did. It is the mandate's, and it lands right
+    after a bespoke rotation's handoff, so it closes the handoff the way a
+    heading does. */
+const DELIVERED_PARAGRAPHS = ["Decisions. Every operator decision is a form", "Prototype review: "] as const;
 
 export interface MandateMessage {
   /** Lines of the WHOLE delivered message, sections included — the size the
@@ -56,7 +57,7 @@ function handoffSpan(text: string): { start: number; end: number } | null {
     const isHandoff = HANDOFF_HEADINGS.some((heading) => line.startsWith(heading));
     if (start < 0) {
       if (isHandoff) start = offset;
-    } else if (!isHandoff && (SECTION_HEADING.test(line) || line.startsWith(DELIVERED_PARAGRAPH))) {
+    } else if (!isHandoff && (SECTION_HEADING.test(line) || DELIVERED_PARAGRAPHS.some((paragraph) => line.startsWith(paragraph)))) {
       return { start, end: offset };
     }
     offset += line.length + 1;

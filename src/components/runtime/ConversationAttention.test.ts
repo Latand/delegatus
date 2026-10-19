@@ -1,4 +1,8 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+
+import { CodexPinnedProtocol } from "@/lib/accounts/codexPinnedProtocol";
+import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "@/lib/runtime/codexServerRequests";
+import { projectEngineHostEvent } from "@/lib/runtime/engineHostEvents";
 
 import type { RuntimeAttention } from "./runtimeModel";
 import { approvalResolution, questionResolution, questionsResolution } from "./ConversationAttention";
@@ -55,4 +59,51 @@ test("subscription host approval responses match each engine protocol", () => {
   expect(approvalResolution(attention("codex"), true)).toEqual({ decision: "accept" });
   expect(approvalResolution(attention("claude"), true)).toEqual({ behavior: "allow" });
   expect(approvalResolution(attention("claude"), false)).toEqual({ behavior: "deny", message: "Denied in Viewer" });
+});
+
+test("Codex responses keep original option labels and custom answers under their exact question ids", () => {
+  const request = attention("codex");
+  request.request.questions = [
+    { prompt: "Pick one", options: [{ label: "Clipped…" }] },
+    { prompt: "Enter value", isOther: true, isSecret: true },
+  ];
+  request.request.protocol!.questionIds = ["choice-id", "secret-id"];
+  request.request.protocol!.questionOptions = [["Original complete option label"], []];
+  expect(questionsResolution(request, [[0], []], ["", "custom value"])).toEqual({ answers: {
+    "choice-id": { answers: ["Original complete option label"] }, "secret-id": { answers: ["custom value"] },
+  } });
+});
+
+describe.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0"])("Codex %s projected question responses", version => {
+  test.each(["", " \t\n"])("keeps visible choices aligned when blank labels are %j", blank => {
+    const protocol = new CodexPinnedProtocol(version);
+    const method = "item/tool/requestUserInput";
+    const longLabel = `  ${"Keep changes ".repeat(40)}  `;
+    const labels = [blank, "Keep", blank, longLabel, blank, "Later"];
+    const decoded = decodeCodexServerRequest(protocol, 7, method, {
+      threadId: "thread-one", turnId: "turn-one", itemId: "item-one", isBlocking: true,
+      questions: [{
+        id: "choice", header: "Choice", question: "Choose an action", isOther: false, isSecret: false,
+        options: labels.map(label => ({ label, description: "Offered action" })),
+      }],
+    });
+    const projected = projectEngineHostEvent("conversation-one", "codex:thread-one", {
+      kind: "attention", id: "question-one", method, attention: decoded.params, seq: 1,
+    });
+    const request = projected!.payload as unknown as RuntimeAttention;
+    const visible = request.request.question!.options!;
+    expect(visible).toHaveLength(3);
+    expect(visible[0]!.label).toBe("Keep");
+    expect(visible[1]!.label).toEndWith("…");
+    expect(visible[1]!.label.length).toBeLessThan(longLabel.length);
+    expect(visible[2]!.label).toBe("Later");
+
+    for (const [index, label] of ["Keep", longLabel, "Later"].entries()) {
+      const resolution = questionResolution(request, index);
+      expect(JSON.stringify(resolution)).not.toContain(longLabel);
+      const expanded = resolveCodexAttentionResponse(method, decoded.params, resolution, request.request.protocol!.responseRef!);
+      expect(expanded).toEqual({ answers: { choice: { answers: [label] } } });
+      expect(encodeCodexServerResponse(protocol, method, expanded, decoded.params)).toEqual(expanded);
+    }
+  });
 });

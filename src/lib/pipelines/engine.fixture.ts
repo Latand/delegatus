@@ -28,9 +28,23 @@ import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts
 import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
 import { realExec } from "@/lib/workflows/provision";
 import { worktreeDiskWait } from "@/lib/state/diskPressure";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
+// Native Git and reserved-host fixtures model their forge separately;
+// PR delivery regressions use a GitHub target and execute the real helper.
+const pullRequestModule = await import("./stagePullRequest");
+const realEnsureStagePullRequest = pullRequestModule.ensureStagePullRequest;
+const fixturePullRequests = spyOn(pullRequestModule, "ensureStagePullRequest").mockImplementation(async (pipeline, attempt, exec, acceptedHead) => {
+  if (pipeline.delivery && /^(?:\/|file:|git@example\.invalid:)/.test(pipeline.delivery.target.remote)) {
+    pipeline.delivery.target.pr ??= 17;
+    return { ok: true };
+  }
+  return realEnsureStagePullRequest(pipeline, attempt, exec, acceptedHead);
+});
+afterAll(() => fixturePullRequests.mockRestore());
 const { IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail } = engineModule;
 const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline: rawPatchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, reconcileEmbeddedReviewFlows, reviewNote, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
 const { verdictRoutesAsFail } = await import("./verdict");
@@ -59,7 +73,10 @@ type HostState = import("@/lib/runtime/engineHost").HostState;
    cursor; keep that wake-up away from the real default ports in this suite. */
 registerPipelineTick(async () => {});
 
-afterAll(() => fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }));
+afterAll(async () => {
+  await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
+  fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+});
 
 /** These state-machine assertions wait for remote settlement. Immediate
     acceptance and concurrent reads are covered by remoteActions.test.ts. */
@@ -135,6 +152,26 @@ function harness() {
       if (options?.stdoutEncoding === "latin1") return realExec(rawCommand, rawArgs, cwd, env, options);
       calls.push(`${rawCommand} ${rawArgs.join(" ")}`);
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
+      // Virtual worktree heads stand for commits produced by the fake agent.
+      // Real-worktree fixtures replace this port with actual Git.
+      if (args[0] === "rev-list" && args.includes("--max-count=128")) {
+        const [anchor, target] = args.at(-1)!.split("..");
+        return { code: 0, stdout: target && target !== anchor ? `${target}\n` : "", stderr: "" };
+      }
+      if (args[0] === "reflog") {
+        const pipeline = loadPipelines().find(p => p.worktreeDir === cwd) ?? loadPipelines()[0];
+        const attempt = pipeline?.runs.find(run => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1);
+        const stamp = Math.floor(Date.parse(attempt?.startedAt ?? new Date(clock).toISOString()) / 1000);
+        return Promise.resolve(ports.exec("git", ["rev-parse", "HEAD"], cwd)).then(head => ({ code: 0,
+          stdout: `${head.stdout.trim()}\0HEAD@{${stamp}}\0commit: stage work\n`, stderr: "" }));
+      }
+      if (args[0] === "log" && args.includes("--no-walk")) {
+        const identity = agentPublicationIdentityEnv(process.env);
+        return { code: 0, stdout: args.slice(args.indexOf("--no-walk") + 1)
+          .filter(sha => /^[0-9a-f]{40}$/.test(sha))
+          .map(sha => `${sha}\0${identity.GIT_AUTHOR_NAME}\0${identity.GIT_AUTHOR_EMAIL}\0${identity.GIT_COMMITTER_NAME}\0${identity.GIT_COMMITTER_EMAIL}`)
+          .join("\n") + "\n", stderr: "" };
+      }
       if (args[0] === "write-tree") return { code: 0, stdout: `${"8".repeat(40)}\n`, stderr: "" };
       if (args[0] === "symbolic-ref") return { code: 0, stdout: `refs/heads/${loadPipelines()[0]?.branch ?? "pipeline/test"}\n`, stderr: "" };
       if (args[0] === "rev-parse" && args.includes("--git-path")) return { code: 0, stdout: `${path.join(cwd, ".git", "index")}\n`, stderr: "" };
@@ -302,13 +339,39 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   const repo = path.join(root, "repo");
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
+  const h = harness();
+  // Model the identity pinned into a launched agent, independently of the
+  // runner's author/committer variables and the repository's Fixture config.
+  const { GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL } = agentPublicationIdentityEnv(process.env);
+  const identity = { GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL };
+  let agentEnv: Record<string, string | undefined> = identity;
+  let agentWorktree: string | undefined;
+  // Model native dispatch: each reservation gets its own starting head and
+  // generated hooks, including successor stages in the same worktree.
+  const spawnAgent = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (input, onReserved) => {
+    const launchId = `native-${input.clientAttemptId}`;
+    const spawned = await spawnAgent(input, async reservation => {
+      await onReserved({ ...reservation, launchId });
+      const guard = await prepareStageGitGuard(launchId, input.cwd, realExec, h.ports.now());
+      agentEnv = { ...guard, ...agentPublicationIdentityEnv({ ...process.env, ...guard }) };
+      agentWorktree = input.cwd;
+    });
+    return { ...spawned, launchId };
+  };
+  // Agent Git commands and the controller share one deterministic clock.
   const git = async (cwd: string, ...args: string[]) => {
-    const result = (await realExec("git", args, cwd));
+    const date = ["commit", "merge", "rebase", "am"].includes(args[0]!) ? h.ports.now() : undefined;
+    // Upstream writers and deliberate custody bypasses are fixture controls;
+    // only commands in the dispatched lane inherit its receipt bindings.
+    const result = (await realExec("git", args, cwd, { ...(cwd === agentWorktree ? agentEnv : identity),
+      ...(date ? { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } : {}) }));
     if (result.code !== 0) throw new Error(result.stderr || result.stdout);
     return result.stdout.trim();
   };
   fs.mkdirSync(repo);
   (await git(root, "init", "--bare", "--initial-branch=main", origin));
+  fs.mkdirSync(path.join(origin, "hooks"), { recursive: true });
   (await git(repo, "init", "--initial-branch=main"));
   (await git(repo, "config", "user.name", "Fixture"));
   (await git(repo, "config", "user.email", "noreply@example.com"));
@@ -319,7 +382,6 @@ async function realWorktreeLane(name: string, stages: unknown[], publication?: "
   (await git(repo, "remote", "add", "origin", origin));
   (await git(repo, "push", "origin", "main"));
   const base = (await git(repo, "rev-parse", "HEAD"));
-  const h = harness();
   h.ports.exec = realExec;
   h.ports.provisionExec = realProvisionExec;
   const created = await createPipelineFromRequest({ task: name, ...brief, repoDir: repo, baseRef: base, stages: stages as never,
@@ -1118,8 +1180,10 @@ function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boole
   h.ports.exec = (rawCommand, rawArgs, cwd) => {
     const command = rawCommand === "timeout" ? "git" : rawCommand;
     const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
-    if (command !== "git") return baseExec(command, args, cwd);
     const branch = loadPipelines()[0]?.branch ?? "pipeline/test";
+    if (command !== "git") return baseExec(command, args, cwd);
+    if (args[0] === "reflog") return { code: 0, stdout: `${localHead}\0HEAD@{${Math.floor(Date.parse(loadPipelines()[0]!.runs.flatMap(run => run.attempts).at(-1)!.startedAt!) / 1000)}}\0commit: stage work\n`, stderr: "" };
+    if (args[0] === "rev-list" && args.includes("--max-count=128")) return { code: 0, stdout: `${localHead}\n`, stderr: "" };
     if (args[0] === "status") return { code: 0, stdout: dirty ? " M src/lib/thing.ts\n" : "", stderr: "" };
     if (args[0] === "add") return { code: 0, stdout: "", stderr: "" };
     if (args[0] === "show" && args.includes("--format=%P%x00%T%x00%B")) return {
@@ -1384,7 +1448,7 @@ async function legacySpawnAttempt(h: ReturnType<typeof harness>) {
   h.ports.spawnAgent = async (_input, onReserved) => {
     fixtureCalls += 1;
     if (fixtureCalls === 1) throw new Error("structured initial message was not acknowledged");
-    onReserved({ launchId: "launch-fixture", conversationId: "conversation_fixture" });
+    await onReserved({ launchId: "launch-fixture", conversationId: "conversation_fixture" });
     throw new Error(HOST_UNAVAILABLE);
   };
   h.ports.spawnReceipt = (launchId) => launchId === "launch-fixture"
@@ -1497,15 +1561,15 @@ async function stagedRecoveryHarness(
   let statusFailures = 0;
   const lookups: string[] = [];
   const operations = new Map<string, import("@/lib/runtime/contracts").RuntimeOperationResult>();
-  const record = (id: string, conversationId: string, status: "queued" | "delivered" | "turn-started") => {
-    const result = { receipt: { operationId: id, conversationId, status }, replayed: false } as import("@/lib/runtime/contracts").RuntimeOperationResult;
+  const record = (id: string, conversationId: string, status: "queued" | "delivered" | "turn-started", kind: import("@/lib/runtime/contracts").RuntimeOperationKind = id === launchId ? "spawn" : "send") => {
+    const result = { operationId: id, receipt: { operationId: id, conversationId, status, kind }, replayed: false } as import("@/lib/runtime/contracts").RuntimeOperationResult;
     operations.set(id, result);
     return result;
   };
   const client = {
     command: async (command: Parameters<import("@/lib/runtime/client").RuntimeHostClient["command"]>[0]) => {
       if (!command.operationId || !command.conversationId) throw new Error("fixture requires original operation identity");
-      return operations.get(command.operationId) ?? record(command.operationId, command.conversationId, "queued");
+      return operations.get(command.operationId) ?? record(command.operationId, command.conversationId, "queued", command.kind);
     },
     producerCursor: async () => {
       if (mode === "permanent") throw new RuntimeHostUnavailableError("authentication denied", "UNAUTHORIZED");
@@ -1572,6 +1636,19 @@ async function stagedRecoveryHarness(
   const recover = async (id: string, eligible: () => boolean) => {
     await recoverStagedStructuredLaunch(id, registry, client, { now: () => clock, eligible });
   };
+  h.ports.originalLaunchOperations = async (id, conversationId, eligible) => {
+    const launch = await client.operationStatus(id);
+    if (!eligible()) return "unknown";
+    const message = await client.operationStatus(`spawn_message_${id}`);
+    if (!eligible()) return "unknown";
+    const conflicts = [[id, launch], [`spawn_message_${id}`, message]] as const;
+    if (conflicts.some(([operationId, operation]) => operation &&
+      (operation.operationId !== operationId || operation.receipt.operationId !== operationId
+        || operation.receipt.conversationId !== conversationId))) return "conflict";
+    if (!launch || !message || launch.receipt.kind !== "spawn" || message.receipt.kind !== "send") return "unknown";
+    if (message.receipt.status === "rejected" || message.receipt.status === "failed") return "rejected";
+    return eligible() ? "matched" : "unknown";
+  };
   h.ports.recoverStagedLaunch = recover;
   h.ports.scheduleTick = () => {};
   h.ports.conversationAgentActive = async () => true;
@@ -1602,6 +1679,9 @@ async function aliveStagedLaunch(options: Parameters<typeof stagedRecoveryHarnes
   f.h.ports.durableTurnEvidence = durableStageTurnEvidence;
   const working = () => {
     const at = Date.parse(f.h.ports.now());
+    const receipt = f.registry.readOnlySnapshot().receipts[f.launchId()]!;
+    void f.client.command({ operationId: `spawn_message_${f.launchId()}`, conversationId: receipt.conversationId,
+      kind: "send", text: "Build the change" } as Parameters<import("@/lib/runtime/client").RuntimeHostClient["command"]>[0]);
     fs.writeFileSync(transcript, [
       { timestamp: new Date(at - 2_000).toISOString(), type: "session_meta", payload: { id: "stage" } },
       { timestamp: new Date(at - 1_000).toISOString(), type: "event_msg", payload: { type: "task_started" } },

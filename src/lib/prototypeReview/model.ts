@@ -1,3 +1,4 @@
+import { PROTOTYPE_DELIVERY_MAX_ATTEMPTS } from "./deliveryPolicy";
 import { nativeAssociationDecisionApproves } from "@/lib/attention/nativeAssociationForm";
 import { firstLineTitle } from "@/lib/tasks/helpers";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -5,12 +6,12 @@ import type { PrototypeDecision, PrototypeDeliveryPhase, PrototypeDeliveryState,
 
 /** How long a decision's message may keep failing to reach the seat before it
     asks for the operator's attention. A deploy or a seat's rotation passes
-    inside it unnoticed; the background delivery keeps retrying either way. */
+    inside it unnoticed; the background delivery observes its persisted retry budget. */
 export const PROTOTYPE_DELIVERY_ATTENTION_MS = 5 * 60_000;
 /** The review's quiet word for a saved decision's message. */
 export function prototypeDeliveryPhase(delivery: PrototypeDecision["delivery"], now: number): PrototypeDeliveryPhase {
   if (delivery.state === "sent") return "delivered";
-  if (delivery.failingSince && now - Date.parse(delivery.failingSince) >= PROTOTYPE_DELIVERY_ATTENTION_MS) return "attention";
+  if (delivery.exhaustedAt || (delivery.attempts ?? 0) >= PROTOTYPE_DELIVERY_MAX_ATTEMPTS || delivery.failingSince && now - Date.parse(delivery.failingSince) >= PROTOTYPE_DELIVERY_ATTENTION_MS) return "attention";
   if (!delivery.conversationId) return "waiting-seat";
   return delivery.state === "pending" && !delivery.dispatchedAt && !delivery.operationId ? "saved" : "delivering";
 }
@@ -31,7 +32,7 @@ export function prototypeRoundMetadata(round: PrototypeReviewRound): PrototypeRo
 export function prototypeReviewReplica(task: BoardTask): PrototypeReviewReplica | undefined {
   const summary = prototypeReviewSummary(task.prototypeReviews ?? []);
   return summary ? { summary, rounds: task.prototypeReviews!.map(round => {
-    const { telegramPost: _localPost, ...metadata } = prototypeRoundMetadata({ ...round, taskId: task.id, project: task.project });
+    const { telegramPost: _localPost, telegramPolls: _localPolls, ...metadata } = prototypeRoundMetadata({ ...round, taskId: task.id, project: task.project });
     return metadata;
   }) } : task.prototypeReviewReplica;
 }
@@ -83,20 +84,18 @@ export function prototypeReviewNotices(tasks: readonly BoardTask[], seatOrNow: r
   return [...tasks.flatMap((task): PrototypeReviewNotice[] => {
     const summary = currentPrototypeSummary(task.prototypeReview ?? prototypeReviewSummary(task.prototypeReviews ?? []) ?? task.prototypeReviewReplica?.summary);
     const reviewId = summary?.waitingReviewId;
-    /* A decided latest round whose message keeps failing waits on the operator too: the row opens the review, where the retry is. */
-    if (summary?.decision && !reviewId) {
-      const held = task.prototypeReviews?.at(-1)?.decision;
-      const phase = held ? prototypeDeliveryPhase(held.delivery, now) : summary.decision.phase;
-      if (phase !== "attention") return [];
-      const latest = summary.latestReviewId;
-      return [{ id: `prototype-delivery:${latest}`, project: task.project, taskId: task.id, reviewId: latest, title: firstLineTitle(task.text), roundTitle: summary.title,
-        undelivered: true as const, createdAt: summary.decision.at, target: { kind: "prototype-review" as const, taskId: task.id, reviewId: latest } }];
-    }
-    if (!summary || !reviewId || !prototypeWaitsOnOperator(summary)) return [];
+    const undelivered = summary?.undelivered ?? (task.prototypeReviews
+      ? task.prototypeReviews.filter(round => round.decision && prototypeDeliveryPhase(round.decision.delivery, now) === "attention")
+        .map(round => ({ reviewId: round.id, title: round.title, at: round.decision!.at }))
+      : summary?.decision?.phase === "attention" ? [{ reviewId: summary.latestReviewId, title: summary.title, at: summary.decision.at }] : []);
+    const failures: PrototypeReviewNotice[] = undelivered.map(round => ({ id: `prototype-delivery:${round.reviewId}`, project: task.project,
+      taskId: task.id, reviewId: round.reviewId, title: firstLineTitle(task.text), roundTitle: round.title,
+      undelivered: true, createdAt: round.at, target: { kind: "prototype-review", taskId: task.id, reviewId: round.reviewId } }));
+    if (!summary || !reviewId || !prototypeWaitsOnOperator(summary)) return failures;
     /* The notice names the task the jump lands on; the waiting round's own title, which may be older than the latest, rides second. */
     const waiting = (task.prototypeReviews ?? task.prototypeReviewReplica?.rounds ?? []).find(round => round.id === reviewId);
     const roundTitle = waiting?.title ?? (reviewId === summary.latestReviewId ? summary.title : undefined);
-    return [{ id: `prototype:${reviewId}`, project: task.project, taskId: task.id, reviewId, title: firstLineTitle(task.text), ...(roundTitle ? { roundTitle } : {}),
+    return [...failures, { id: `prototype:${reviewId}`, project: task.project, taskId: task.id, reviewId, title: firstLineTitle(task.text), ...(roundTitle ? { roundTitle } : {}),
       ...(waiting?.questions?.length || summary.asks === "questions" ? { asks: "questions" as const } : {}),
       createdAt: summary.createdAt, target: { kind: "prototype-review" as const, taskId: task.id, reviewId } }];
   }), ...seat];

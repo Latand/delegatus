@@ -1,3 +1,4 @@
+import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { checkoutDeployments } from "@/lib/selfUpdate/deployments";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
@@ -43,7 +44,7 @@ function openLedger(env: NodeJS.ProcessEnv = process.env): Database | null {
   const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
   if (!sqlite) return null;
   try {
-    return new sqlite.Database(ledgerPath(env), { readonly: true, create: false });
+    return observeSqlite(new sqlite.Database(ledgerPath(env), { readonly: true, create: false }), "deployment-ledger");
   } catch {
     /* No journal on this host, or it is not readable from here. The caller
        reports that as unreadable rather than as an empty ledger. */
@@ -55,9 +56,9 @@ function unreadable<T>(): DeploymentLedgerRead<T> {
   return { state: "unreadable", error: UNREADABLE_LEDGER };
 }
 
-function deploymentStatus(raw: string, expectedId: string): ViewerDeploymentStatus | null {
+function deploymentStatus(raw: string, expectedId: string, db: Database): ViewerDeploymentStatus | null {
   try {
-    const value = JSON.parse(raw) as unknown;
+    const value = parseSqliteJson(raw, db) as unknown;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const status = value as Partial<ViewerDeploymentStatus>;
     if (
@@ -92,7 +93,7 @@ export function ledgerDeployments(
     ).all("deployment", Math.max(1, limit));
     const deployments: ViewerDeploymentStatus[] = [];
     for (const row of rows) {
-      const status = deploymentStatus(row.state_json, row.id);
+      const status = deploymentStatus(row.state_json, row.id, db);
       if (!status) return unreadable();
       deployments.push(status);
     }
@@ -158,7 +159,7 @@ export function latestLedgerDeployment(
       `SELECT id, state_json FROM entities WHERE kind = ?${NEWEST_DEPLOYMENT_FIRST} LIMIT 1`,
     ).get("deployment");
     if (!row) return { state: "ok", value: checkout };
-    const status = deploymentStatus(row.state_json, row.id);
+    const status = deploymentStatus(row.state_json, row.id, db);
     return status ? { state: "ok", value: checkout && Date.parse(checkout.createdAt) > Date.parse(status.createdAt) ? checkout : status } : unreadable();
   } catch {
     return unreadable();
@@ -186,7 +187,7 @@ export function ledgerDeployment(
       "SELECT state_json FROM entities WHERE kind = ? AND id = ?",
     ).get("deployment", deploymentId);
     if (!row) return { state: "ok", value: undefined };
-    const status = deploymentStatus(row.state_json, deploymentId);
+    const status = deploymentStatus(row.state_json, deploymentId, db);
     return status ? { state: "ok", value: status } : unreadable();
   } catch {
     return unreadable();

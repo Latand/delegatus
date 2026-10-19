@@ -34,6 +34,8 @@ export interface ReportLogRead {
   olderReports: boolean;
   olderAsks: boolean;
   loadingOlder: boolean;
+  /** The last «Older» press got no page; cleared by the next press (audit F1). */
+  olderFailed: boolean;
   loadOlder: () => void;
   /** The project's decision requests as the needs-you panel reads them:
       replaced whole on every page, never merged, so a tick follows the record. */
@@ -76,6 +78,7 @@ export function useReportLog(project: string, active: boolean, initial?: ReportL
   const [bridgeReports, setBridgeReports] = useState<boolean | null>(initial?.bridgeReports ?? null);
   const [github, setGithub] = useState<string | null>(initial?.github ?? null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderFailed, setOlderFailed] = useState(false);
   const [questions, setQuestions] = useState<ReportLogQuestions>(() => initial?.questions ?? NO_QUESTIONS);
   const held = useRef({ entries, asks, nextBefore, asksBefore, revision: initial?.revision ?? null as string | null, project });
 
@@ -153,11 +156,13 @@ export function useReportLog(project: string, active: boolean, initial?: ReportL
     if ((before === null && asksCursor === null) || loadingOlder) return;
     const asked = project;
     setLoadingOlder(true);
+    setOlderFailed(false);
     const params: Record<string, string | number> = {};
     if (before !== null) params.before = before;
     if (asksCursor !== null) params.asksBefore = asksCursor;
     void fetchPage(pageUrl(asked, params)).then((page) => {
       setLoadingOlder(false);
+      if (!page && held.current.project === asked) setOlderFailed(true);
       if (!page || held.current.project !== asked || held.current.nextBefore !== before || held.current.asksBefore !== asksCursor) return;
       if (before !== null) {
         const known = new Set(held.current.entries.map((entry) => entry.seq));
@@ -186,6 +191,7 @@ export function useReportLog(project: string, active: boolean, initial?: ReportL
     olderReports: nextBefore !== null,
     olderAsks: asksBefore !== null,
     loadingOlder,
+    olderFailed,
     loadOlder,
     questions,
   };

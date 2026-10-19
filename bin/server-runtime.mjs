@@ -150,10 +150,12 @@ export function browserOpenCommand(url, platform = process.platform) {
  *
  * @param {Readonly<Record<string, string | undefined>>} base
  * @param {{ socketPath: string, fencePath: string, journalPath: string }} config
+ * @param {string | null} [revision] The selected child release; diagnostics only.
  */
-export function cliRuntimeHostEnvironment(base, config) {
+export function cliRuntimeHostEnvironment(base, config, revision = null) {
   return {
     ...withoutUnsupportedApiCredentials(base),
+    LLV_DIAGNOSTIC_REVISION: typeof revision === "string" && /^[a-f0-9]{7,40}$/.test(revision) ? revision : undefined,
     LLV_RUNTIME_HOST_SOCKET: config.socketPath,
     LLV_RUNTIME_HOST_FENCE: config.fencePath,
     LLV_RUNTIME_JOURNAL: config.journalPath,

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { SqliteStateCollection, StateSnapshotChangedError } from "../state/sqliteStateStore";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -33,7 +34,8 @@ beforeEach(() => {
   saveWorkflows([]);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
   closeAgentRegistryForTests();
   globals[queueSymbol]?.queue.close();
   delete globals[queueSymbol];
@@ -163,12 +165,12 @@ test.each(["pause", "close", "update"] as const)("pipeline %s releases a head fo
   } finally { h.abort.abort(); h.release(); await pending; h.close(); }
 }, 20_000);
 
-test("pipeline admission retries a transient reconciliation refusal during a blocked real hook", async () => {
+test.each(["failure", "snapshot"] as const)("pipeline admission retries a transient %s during a blocked real hook", async kind => {
   const h = await harness();
   const reconcile = h.ports.cpuAdmissionReconcile!;
   let refuse = false;
   h.ports.cpuAdmissionReconcile = () => {
-    if (refuse) { refuse = false; throw new Error("temporary queue read failure"); }
+    if (refuse) { refuse = false; throw kind === "snapshot" ? new StateSnapshotChangedError() : new Error("temporary queue read failure"); }
     return reconcile();
   };
   const errors = spyOn(console, "error").mockImplementation(() => {});
@@ -180,7 +182,7 @@ test("pipeline admission retries a transient reconciliation refusal during a blo
     await until(() => h.hookCode() !== undefined);
     expect(h.hookCode()).toBe(0);
     expect(h.launches).toHaveLength(2);
-    expect(errors.mock.calls).toHaveLength(1);
+    expect(errors.mock.calls).toHaveLength(kind === "snapshot" ? 0 : 1);
   } finally { h.abort.abort(); h.release(); await pending; errors.mockRestore(); h.close(); }
 }, 20_000);
 
@@ -372,3 +374,17 @@ test("the scanner services a pipeline head after its pass ends while a workflow 
     pipelineTick.mockRestore(); workflowTick.mockRestore(); h.close();
   }
 }, 20_000);
+
+
+test("a CPU snapshot change preserves every queued ticket until the next observation", async () => {
+  const h = await harness();
+  const ports = engine.defaultPipelinePorts();
+  const db = new Database(cpuAdmissionFile(),{ readonly: true });
+  const before = db.query("SELECT key,seq,since FROM tickets ORDER BY seq").all();
+  expect(before.length).toBeGreaterThan(0);
+  const selection = spyOn(SqliteStateCollection.prototype,"pipelineControllerSelection").mockRejectedValueOnce(new StateSnapshotChangedError());
+  try {
+    await expect(Promise.resolve(ports.cpuAdmissionReconcile?.(ports))).resolves.toBeUndefined();
+    expect(db.query("SELECT key,seq,since FROM tickets ORDER BY seq").all()).toEqual(before);
+  } finally { selection.mockRestore(); db.close(); h.close(); }
+});

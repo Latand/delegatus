@@ -1,7 +1,7 @@
 import { readSummaryBootstrap } from "./summaryBootstrap";
-import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { signalFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { applyFilesDelta } from "@/lib/filesDelta";
 import fs from "node:fs";
@@ -11,6 +11,7 @@ import { spawnSync, type ChildProcess } from "node:child_process";
 
 import {
   buildFilesResponseInWorker,
+  drainFilesResponseWorker,
   filesResponseWorkerPoolDiagnostics,
   shutdownFilesResponseWorker,
   type FilesResponseWorkerRuntime,
@@ -25,6 +26,9 @@ function runtimeFor(stateDir: string, extra: Record<string, string> = {}): Files
       ...process.env,
       NODE_ENV: "production" as const,
       LLV_STATE_DIR: stateDir,
+      HOME: path.join(stateDir, "home"),
+      XDG_CONFIG_HOME: path.join(stateDir, "config"),
+      TMPDIR: stateDir,
       LLV_AGENT_REGISTRY_SQLITE: "off",
       LLV_FILES_RESPONSE_WORKER: "1",
       ...extra,
@@ -217,36 +221,81 @@ test("concurrent projections are served by one worker process", async () => {
   }
 });
 
-test("a worker that ends a build above the size threshold is retired", async () => {
+test("normal RSS and idle cache hits keep one warm worker and retirement logs its cause", async () => {
   const stateDir = scratchState();
   process.env.LLV_FILES_RESPONSE_WORKER_RSS_LIMIT_MB = "1";
+  process.env.LLV_FILES_RESPONSE_WORKER_IDLE_MS = "40";
+  const logs: unknown[][] = [];
+  const log = spyOn(console, "warn").mockImplementation((...args) => { logs.push(args); });
+  let fakeNow = 1_000_000;
+  const now = spyOn(Date, "now").mockImplementation(() => fakeNow);
+  const timers = new Map<object, { run: () => void; due: number }>();
+  const setTimer = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay = 0) => {
+    const handle = { unref() {} };
+    timers.set(handle, { run, due: fakeNow + Number(delay) });
+    return handle;
+  }) as never);
+  const clearTimer = spyOn(globalThis, "clearTimeout").mockImplementation(((handle: object) => { timers.delete(handle); }) as never);
+  const advance = async (ms: number) => {
+    const until = fakeNow + ms;
+    while (true) {
+      const next = [...timers].filter(([, timer]) => timer.due <= until).sort((a, b) => a[1].due - b[1].due)[0];
+      if (!next) break;
+      const [handle, timer] = next;
+      timers.delete(handle);
+      fakeNow = timer.due;
+      timer.run();
+      await Promise.resolve();
+    }
+    fakeNow = until;
+  };
   try {
     const before = filesResponseWorkerPoolDiagnostics().spawns;
     await buildFilesResponseInWorker(request, runtimeFor(stateDir));
-    expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe("size");
-    expect(filesResponseWorkerPoolDiagnostics().pid).toBeNull();
-    await buildFilesResponseInWorker(request, runtimeFor(stateDir));
-    expect(filesResponseWorkerPoolDiagnostics().spawns - before).toBe(2);
+    const pid = filesResponseWorkerPoolDiagnostics().pid;
+    expect(pid).not.toBeNull();
+    await advance(61_000);
+    await buildFilesResponseInWorker(request, runtimeFor(stateDir, { LLV_UNUSED_TEST_VALUE: "changed" }));
+    expect(filesResponseWorkerPoolDiagnostics().pid).toBe(pid);
+    expect(filesResponseWorkerPoolDiagnostics().spawns - before).toBe(1);
+    shutdownFilesResponseWorker("explicit test shutdown");
+    expect(logs).toContainEqual([`[files response worker] retired: explicit test shutdown`, { pid, rssBytes: expect.any(Number) }]);
   } finally {
+    clearTimer.mockRestore();
+    setTimer.mockRestore();
+    now.mockRestore();
+    log.mockRestore();
     await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
 
-test("a worker nobody asks for a projection is retired when it goes idle", async () => {
-  const stateDir = scratchState();
-  process.env.LLV_FILES_RESPONSE_WORKER_IDLE_MS = "40";
-  try {
-    await buildFilesResponseInWorker(request, runtimeFor(stateDir));
-    expect(filesResponseWorkerPoolDiagnostics().pid).not.toBeNull();
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe("idle");
-    expect(filesResponseWorkerPoolDiagnostics().pid).toBeNull();
-  } finally {
-    await stopTestWorker();
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
-});
+for (const quiet of [true, false]) {
+  test(`normal viewer exit keeps its retirement reason with quiet=${quiet}`, async () => {
+    const stateDir = scratchState();
+    const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+    const log = spyOn(console, "info").mockImplementation(() => {});
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await buildFilesResponseInWorker(request, runtimeFor(stateDir));
+      const child = (globalThis as typeof globalThis & { __llvFilesResponseWorker?: { child: ChildProcess } | null }).__llvFilesResponseWorker?.child;
+      if (!child) throw new Error("fixture worker did not start");
+      if (quiet) process.env.LLV_QUIET_DIAGNOSTICS = "1";
+      else delete process.env.LLV_QUIET_DIAGNOSTICS;
+      shutdownFilesResponseWorker("viewer exit");
+      await stopFixtureProcess(child);
+      expect(log).toHaveBeenCalledTimes(quiet ? 0 : 1);
+      expect(warn).not.toHaveBeenCalled();
+      expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe("viewer exit");
+    } finally {
+      if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
+      else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+      log.mockRestore(); warn.mockRestore();
+      await stopTestWorker();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+}
 
 test("a worker that dies mid-build fails its build and the next one starts a fresh worker", async () => {
   const stateDir = scratchState();
@@ -267,7 +316,86 @@ test("a worker that dies mid-build fails its build and the next one starts a fre
   }
 });
 
-/* #1994: the delta from a scope's previous representation survives the
+test("v2 resident worker preserves the certified base across discarded builds and retirement", async () => {
+  const { applyBoardDelta } = await import("@/lib/boardDelta");
+  const stateDir = scratchState();
+  const scoped = { ...request, url: "http://127.0.0.1/api/files?view=summary", deltaScope: "c".repeat(40), boardEpoch: "first" };
+  try {
+    const first = await buildFilesResponseInWorker(scoped, runtimeFor(stateDir));
+    expect(JSON.parse(first.body).boardProtocol).toBe(2);
+    const changed = structuredClone(scoped);
+    changed.snapshot!.projectCatalog = [{ project: "new", conversations: 0, smt: 1 }] as never;
+    const next = await buildFilesResponseInWorker(changed, runtimeFor(stateDir), first);
+    expect(next.delta?.base).toBe(first.etag);
+    expect(applyBoardDelta(JSON.parse(first.body), JSON.parse(next.delta!.body))).toEqual(JSON.parse(next.body));
+    const unpublished = structuredClone(changed);
+    unpublished.snapshot!.projectCatalog = [{ project: "discarded", conversations: 0, smt: 2 }] as never;
+    await buildFilesResponseInWorker(unpublished, runtimeFor(stateDir), next);
+    const certified = await buildFilesResponseInWorker(scoped, runtimeFor(stateDir), next);
+    expect(certified.delta?.base).toBe(next.etag);
+    expect(applyBoardDelta(JSON.parse(next.body), JSON.parse(certified.delta!.body))).toEqual(JSON.parse(certified.body));
+    await stopTestWorker();
+    const recovered = await buildFilesResponseInWorker(changed, runtimeFor(stateDir), certified);
+    expect(recovered.delta?.base).toBe(certified.etag);
+    expect(applyBoardDelta(JSON.parse(certified.body), JSON.parse(recovered.delta!.body))).toEqual(JSON.parse(recovered.body));
+    const restarted = await buildFilesResponseInWorker({ ...changed, boardEpoch: "second" }, runtimeFor(stateDir), recovered);
+    expect(restarted.etag).not.toBe(recovered.etag);
+    expect(restarted.delta).toBeUndefined();
+    const otherScope = await buildFilesResponseInWorker({ ...changed, deltaScope: "d".repeat(40) }, runtimeFor(stateDir), recovered);
+    expect(otherScope.delta).toBeUndefined();
+    expect(fs.readdirSync(path.join(stateDir, "files-response-results"))).toEqual([]);
+  } finally {
+    await stopTestWorker();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+for (const retirement of ["shutdown", "drained"] as const) {
+  test(`v2 keeps a small delta from the certified ETag after ${retirement} retirement`, async () => {
+    const { applyBoardDelta } = await import("@/lib/boardDelta");
+    const stateDir = scratchState();
+    const runtime = runtimeFor(stateDir);
+    const scoped = (mtime: number) => ({
+      ...request,
+      url: "http://127.0.0.1/api/files?view=summary",
+      deltaScope: "e".repeat(40), boardEpoch: "same-viewer",
+      snapshot: {
+        files: Array.from({ length: 20 }, (_, index) => ({
+          path: `/sessions/session-${index}.jsonl`, root: "codex-sessions", name: `session-${index}`,
+          project: "repo", title: "retained title ".repeat(1000), engine: "codex", kind: "session", fmt: "codex",
+          parent: null, mtime: index === 0 ? mtime : 1, size: 1, activity: "recent", proc: null, pid: null,
+          model: null, pendingQuestion: null, waitingInput: null,
+        })),
+        projectCatalog: [], complete: true,
+      },
+    });
+    let retiredChild: ChildProcess | undefined;
+    try {
+      const before = filesResponseWorkerPoolDiagnostics().spawns;
+      const first = await buildFilesResponseInWorker(scoped(1) as never, runtime);
+      const child = (globalThis as typeof globalThis & { __llvFilesResponseWorker?: { child: ChildProcess } }).__llvFilesResponseWorker!.child;
+      retiredChild = child;
+      if (retirement === "drained") await drainFilesResponseWorker("drained");
+      else shutdownFilesResponseWorker("shutdown");
+      expect(filesResponseWorkerPoolDiagnostics().lastRetirement).toBe(retirement);
+      expect(filesResponseWorkerPoolDiagnostics().pid).toBeNull();
+      await stopFixtureProcess(child);
+      delete process.env.LLV_FILES_RESPONSE_WORKER_RSS_LIMIT_MB;
+      const next = await buildFilesResponseInWorker(scoped(2) as never, runtime, first);
+      expect(filesResponseWorkerPoolDiagnostics().spawns - before).toBe(2);
+      expect(next.delta?.base).toBe(first.etag);
+      expect(Buffer.byteLength(next.delta!.body)).toBeLessThan(Buffer.byteLength(next.body) / 10);
+      expect(applyBoardDelta(JSON.parse(first.body), JSON.parse(next.delta!.body))).toEqual(JSON.parse(next.body));
+      expect(fs.readdirSync(path.join(stateDir, "files-response-results"))).toEqual([]);
+    } finally {
+      await stopTestWorker();
+      if (retiredChild) await stopFixtureProcess(retiredChild);
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+}
+
+/* #1994: the v1 delta from a scope's previous representation survives the
    worker being retired between two revisions. */
 test("a retired worker still answers the next revision with a delta from its persisted base", async () => {
   const stateDir = scratchState();
@@ -376,8 +504,139 @@ test("the production worker persists only a completed operator summary", async (
     const restored = await readSummaryBootstrap(stateDir);
     expect(restored?.etag).toBe(result.etag);
     expect(Buffer.from(restored!.body).toString()).toBe(result.body);
+    const scoped = { ...summary, deltaScope: "f".repeat(40), boardEpoch: "bootstrap-viewer" };
+    const encoded = await buildFilesResponseInWorker(scoped, runtime);
+    expect(JSON.parse(encoded.body).boardProtocol).toBe(2);
+    const savedV2 = await readSummaryBootstrap(stateDir);
+    expect(savedV2?.etag).toBe(encoded.etag);
+    expect(Buffer.from(savedV2!.body).toString()).toBe(encoded.body);
+    const changed = structuredClone(scoped);
+    changed.snapshot.projectCatalog = [{ project: "after-bootstrap", conversations: 0, smt: 1 }] as never;
+    const next = await buildFilesResponseInWorker(changed, runtime, encoded);
+    expect(next.delta?.base).toBe(encoded.etag);
+    const { applyBoardDelta } = await import("@/lib/boardDelta");
+    expect(applyBoardDelta(JSON.parse(encoded.body), JSON.parse(next.delta!.body))).toEqual(JSON.parse(next.body));
+    expect((await readSummaryBootstrap(stateDir))?.etag).toBe(next.etag);
   } finally {
     await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+
+test("seat agenda worker preserves asks and ordering from the exact board representation", async () => {
+  const { seatAgendaInWorker } = await import("./filesResponseWorker");
+  const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
+  const state = scratchState();
+  const now = Date.parse("2026-10-18T12:00:00Z") / 1000;
+  const lane = (id: string, project: string) => ({ id, task: id, project, state: "needs_decision", createdAt: "2026-10-18T10:00:00Z", stateDetail: "waiting", stages: [], runs: [], cursor: null, attentionRoute: { key: `lane:${id}:lane-decision:none`, owner: "seat", seat: "seat-fixture" } });
+  const body = { files: [], pipelines: [lane("first", "project-a"), lane("foreign", "elsewhere"), lane("second", "project-a")] };
+  try {
+    expect(await seatAgendaInWorker(JSON.stringify(body), "project-a", now, runtimeFor(state)))
+      .toEqual(seatAgendaAsks(body as never, now, "project-a"));
+    expect((await seatAgendaInWorker(JSON.stringify(body), "project-a", now, runtimeFor(state))).map(row => row.id)).toEqual(["first", "second"]);
+    await drainFilesResponseWorker("restart agenda reader");
+    expect(await seatAgendaInWorker(JSON.stringify(body), "project-a", now, runtimeFor(state)))
+      .toEqual(seatAgendaAsks(body as never, now, "project-a"));
+    await expect(seatAgendaInWorker("{torn", "project-a", now, runtimeFor(state))).rejects.toThrow();
+    expect(await seatAgendaInWorker(JSON.stringify({ files: [], pipelines: [] }), "project-a", now, runtimeFor(state))).toEqual([]);
+  } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+});
+
+
+test("an expired seat source leaves a queued peer alone and never dispatches later", async () => {
+  const { runSeatSourceInWorker } = await import("./filesResponseWorker");
+  const state = scratchState();
+  const program = path.join(state, "held-worker.ts");
+  fs.writeFileSync(program, String.raw`
+import fs from "node:fs";
+import path from "node:path";
+import { createInterface } from "node:readline";
+const state = process.env.LLV_STATE_DIR!;
+process.stdin.on("end", () => process.exit(0));
+createInterface({ input: process.stdin }).on("line", async line => {
+  const { id, request } = JSON.parse(line);
+  if (request.type === "project") {
+    fs.writeFileSync(path.join(state, "ready"), "ready");
+    while (!fs.existsSync(path.join(state, "release"))) await new Promise(resolve => setTimeout(resolve, 2));
+  } else fs.appendFileSync(path.join(state, "dispatches"), "one\n");
+  const directory = path.join(state, "files-response-results"); fs.mkdirSync(directory, { recursive: true });
+  const bodyFile = path.join(directory, id + ".json"); fs.writeFileSync(bodyFile, "[]");
+  process.stdout.write(JSON.stringify({ id, ok: true, result: { bodyFile, contentType: "application/json", etag: "", timing: "" }, rssBytes: 1 }) + "\n");
+});
+`);
+  const runtime = { ...runtimeFor(state), launch: { executable: process.execPath, workerPath: program } };
+  const peer = buildFilesResponseInWorker(request, runtime);
+  let peerFailure: unknown;
+  void peer.catch(error => { peerFailure = error; });
+  try {
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(path.join(state, "ready"))) {
+      if (peerFailure) throw peerFailure;
+      if (Date.now() >= deadline) throw new Error("worker readiness was not observed");
+      await new Promise(resolve => setTimeout(resolve, 2));
+    }
+    await expect(runSeatSourceInWorker({ type: "seat-reports", project: "fixture" }, { ...runtime, timeoutMs: 50 })).rejects.toThrow("deadline");
+    expect(filesResponseWorkerPoolDiagnostics().pid).not.toBeNull();
+    fs.writeFileSync(path.join(state, "release"), "release");
+    expect((await peer).body).toBe("[]");
+    expect((await runSeatSourceInWorker({ type: "seat-reports", project: "fixture" }, runtime)).body).toBe("[]");
+    expect(fs.readFileSync(path.join(state, "dispatches"), "utf8")).toBe("one\n");
+  } finally { await stopTestWorker(); await peer.catch(() => undefined); fs.rmSync(state, { recursive: true, force: true }); }
+}, 15_000);
+
+
+test("seat liveness uses the certified inventory generation and observes replacements across reads and restart", async () => {
+  const { runSeatSourceInWorker } = await import("./filesResponseWorker");
+  const state = scratchState(), snapshotFile = path.join(state, "inventory.json");
+  const runtime = runtimeFor(state);
+  const query = { project: "fixture", stallAfterMs: 60_000, limit: 1 };
+  const publish = (generation: number, title: string) => fs.writeFileSync(snapshotFile, JSON.stringify({ epoch: "fixture-epoch", generation,
+    snapshot: { complete: true, projectCatalog: [], files: [{ root: "claude-projects", name: "worker", path: path.join(state, "worker.jsonl"),
+      project: "fixture", title, kind: "session", engine: "claude", fmt: "claude", parent: null, mtime: Date.now() / 1000, size: 0,
+      activity: "live", proc: null, pid: null, model: null }] } }));
+  const read = async (generation: number) => JSON.parse((await runSeatSourceInWorker({ type: "seat-liveness", query,
+    scan: { snapshotFile, epoch: "fixture-epoch", generation } }, runtime)).body) as Array<{ title: string }>;
+  try {
+    publish(1, "First inventory");
+    expect((await read(1)).map(row => row.title)).toEqual(["First inventory"]);
+    publish(2, "Replacement inventory");
+    await expect(read(1)).rejects.toThrow("inventory changed");
+    expect((await read(2)).map(row => row.title)).toEqual(["Replacement inventory"]);
+    fs.writeFileSync(snapshotFile, "{torn");
+    await expect(read(2)).rejects.toThrow();
+    publish(3, "Recovered inventory");
+    await drainFilesResponseWorker("restart inventory reader");
+    expect((await read(3)).map(row => row.title)).toEqual(["Recovered inventory"]);
+  } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+}, 15_000);
+
+
+test("seat report worker persists outcomes once, filters foreign projects, and recovers after refusal and restart", async () => {
+  const { runSeatSourceInWorker } = await import("./filesResponseWorker");
+  const { buildPipeline, PIPELINES_SCHEMA_VERSION } = await import("@/lib/pipelines/store");
+  const state = scratchState(), runtime = runtimeFor(state);
+  runtime.env!.LLV_AGENT_REGISTRY_SQLITE = undefined;
+  const at = "2026-10-18T12:00:00Z";
+  const seat = { project: "fixture", seatEpoch: 1, conversationId: "conversation_fixture", path: null, mandate: "Run checks", state: "active",
+    intent: { clientRequestId: "fixture-intent", mode: "existing" }, designatedAt: at, activatedAt: at };
+  fs.writeFileSync(path.join(state, "orchestrator-seats.json"), JSON.stringify({ schemaVersion: 1, nextSeatEpoch: 2, seats: { fixture: seat }, pending: {} }));
+  const lane = (id: string, project: string) => ({ ...buildPipeline({ id, task: "Check work", project, repoDir: state, stages: [], srcPath: null, srcConversationId: null, now: at, state: "draft" }),
+    dismissedAt: at, dismissedBy: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  fs.writeFileSync(path.join(state, "pipelines.json"), JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION,
+    pipelines: [lane("pipeline_first", "fixture"), lane("pipeline_foreign", "elsewhere"), lane("pipeline_second", "fixture")] }));
+  const produce = () => runSeatSourceInWorker({ type: "seat-rule-reports", project: "fixture", at }, runtime);
+  const read = async (project: string) => JSON.parse((await runSeatSourceInWorker({ type: "seat-reports", project }, runtime)).body);
+  try {
+    await expect(runSeatSourceInWorker({ type: "seat-rule-reports", project: "fixture", at: "invalid" }, runtime)).rejects.toThrow("invalid request");
+    await produce();
+    const first = await read("fixture");
+    expect(first).toHaveLength(2);
+    expect(first.map((row: { origin: { conversationId: string } }) => row.origin.conversationId)).toEqual(["conversation_fixture", "conversation_fixture"]);
+    expect(await read("elsewhere")).toEqual([]);
+    await produce();
+    expect(await read("fixture")).toEqual(first);
+    await drainFilesResponseWorker("restart report reader");
+    expect(await read("fixture")).toEqual(first);
+  } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+}, 15_000);

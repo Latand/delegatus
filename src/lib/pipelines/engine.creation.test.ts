@@ -1,10 +1,11 @@
+import { startAutoAndSettle } from "./engineEnvironment.fixture";
 import { expect, spyOn, test, crypto, spawn, spawnSync, fs, os, path, monitorEventLoopDelay, Database, laneMovedAt, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, idleUpdate, stoppedProcess, endRestartGate, restartGateFile, realExec, engineModule, adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, pipelineAttemptTargetForSource, setPipelineDismissal, tickPipelines, AgentRegistry, setAgentRegistryForTests, rawCreatePipelineFromRequest, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, saveTasks, asStoredLegacyReviewLane, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, realWorktreeLane, create, boardTask, FETCHED_SHA, slowRemote, provisionRetryClock, DNS_FAILURE, realProvisioningRepo } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, LauncherRecord, PipelinePorts } from "./engine.fixture";
 
 
 test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage completes and its successor waits for both update roles: %s", async (admission) => {
   const h = harness();
-  const dir = fs.mkdtempSync("/var/tmp/drain-pipeline-");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "drain-pipeline-"));
   const target = "a".repeat(40);
   const old = "b".repeat(40);
   let now = Date.parse("2026-01-01T00:00:00Z");
@@ -20,7 +21,7 @@ test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage comp
     serving: { web: rev(record.web.revision === target.slice(0, 7) ? target : old), runtimeHost: rev(record.runtimeHost.revision === target.slice(0, 7) ? target : old) },
     processes: { web: { ...stoppedProcess(), state: "healthy", lastHealthOk: true, tail: [] }, runtimeHost: { ...stoppedProcess(), state: "healthy", lastHealthOk: true, tail: [] } },
     meta: { branch: "main", remote: "https://github.com/example/project", checkout: null, pollMinutes: 15, serverTime: new Date(now).toISOString() } });
-  const deps = { dir, now: () => now, env: {}, remote: "https://github.com/example/project", branch: "main", mode: async () => ({ mode: "checkout", record }),
+  const deps = { dir, now: () => now, env: {}, remote: "https://github.com/example/project", branch: "main", pollMinutes: 15, mode: async () => ({ mode: "checkout", record }),
     green: { read: async () => ({ state: "green" }) }, quiet: { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: loadPipelines, presence: () => [] },
     prune: async () => {}, findDeploymentByIdempotencyKey: async () => null,
     web: { pid: 101, port: 0, startedAt: "" }, processAlive: () => true, hostHealth: async () => ({ pid: 102 }),
@@ -71,9 +72,7 @@ test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage comp
       service.stop();
       now += DRAIN_LEASE_MS + 1;
       service = makeService();
-      service.startAuto();
-      expect(h.ports.drainHold()).not.toBeNull();
-      await Bun.sleep(0);
+      await startAutoAndSettle(service, () => expect(h.ports.drainHold!()).not.toBeNull());
     }
     await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(1);
@@ -98,6 +97,17 @@ test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage comp
       expect(h.spawnInputs).toHaveLength(1);
       record.web.revision = old.slice(0, 7);
     } else record.runtimeHost.revision = target.slice(0, 7);
+    if (admission === "early-switch-off") {
+      // Recovery continues the accepted update and files the second role's
+      // request. Model its acknowledgement before expecting custody to end.
+      const hostRequest = JSON.parse(fs.readFileSync(record.requestFile, "utf8"));
+      expect(hostRequest.role).toBe("runtime-host");
+      endRestartGate(restartGateFile(record.requestFile), hostRequest.autoGateId);
+      record.runtimeHost.requestId = hostRequest.requestId;
+      fs.rmSync(record.requestFile);
+      await service.autoTick();
+      expect(JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8")).autoPending).toBeNull();
+    }
     await service.autoTick();
     await tickPipelines([], h.ports);
     expect(h.spawnInputs).toHaveLength(2);
@@ -1278,6 +1288,26 @@ test("creation validates the 1–8 stage conversation graph and optional roles",
   ] as never }, ports)).error).toContain("role only accepts roleId");
 });
 
+test("delivery rejectedHead accepts a unique commit prefix and refuses unknown or ambiguous prefixes", async () => {
+  const h = harness();
+  const request = { task: "Rejected head prefix", repoDir: "/repo", autoStart: false, publication: "internal", stages: [],
+    delivery: { branch: "refs/heads/main", rejectedHead: ORIGIN_MAIN_SHA.slice(0, 8) } };
+  const unique = await createPipelineFromRequest(request as never, h.ports, { allowOperatorDraftWithoutLineage: true });
+  expect(unique.pipeline?.delivery?.target.rejectedHead).toBe(ORIGIN_MAIN_SHA);
+  expect(h.calls.some(call => call.includes(`${ORIGIN_MAIN_SHA.slice(0, 8)}^{commit}`))).toBe(true);
+
+  const ambiguousPorts = { ...h.ports, exec: async (command: string, args: string[]) => args.includes(`${ORIGIN_MAIN_SHA.slice(0, 8)}^{commit}`)
+    ? { code: 1, stdout: "", stderr: "short object ID is ambiguous" } : h.ports.exec(command, args, "/repo") } as never;
+  const ambiguous = await createPipelineFromRequest(request as never, ambiguousPorts, { allowOperatorDraftWithoutLineage: true });
+  expect(ambiguous.pipeline).toBeUndefined();
+  expect(ambiguous.status).toBe(409);
+  const unknownPorts = { ...h.ports, exec: async (command: string, args: string[]) => args.includes(`${ORIGIN_MAIN_SHA.slice(0, 8)}^{commit}`)
+    ? { code: 1, stdout: "", stderr: "unknown revision" } : h.ports.exec(command, args, "/repo") } as never;
+  const unknown = await createPipelineFromRequest(request as never, unknownPorts, { allowOperatorDraftWithoutLineage: true });
+  expect(unknown.pipeline).toBeUndefined();
+  expect(unknown.status).toBe(400);
+});
+
 test("a merger stage resolves through production role lookup during pipeline normalization", async () => {
   const h = harness();
   savePipelines([]);
@@ -1305,7 +1335,8 @@ test("a merger stage resolves through production role lookup during pipeline nor
       model: "gpt-6.1-sol",
       effort: "high",
       access: "read-write",
-      promptScaffold: expect.stringContaining("scripts/merge-batch.ts"),
+      /* The batch procedure is the project's own; Delegatus names it in CONTRIBUTING.md. */
+      promptScaffold: expect.stringContaining("Merge through the batch procedure the project's instruction files name"),
     },
   });
 });
@@ -1722,7 +1753,7 @@ test("a completed provision loses its fence when ownership changes before the ap
     current.delivery!.epoch += 1;
     current.delivery!.ownerId = "replacement-owner";
     current.delivery!.active = false;
-    persist();
+    await persist();
   });
   await holding;
   const tick = tickPipelines([], h.ports);
@@ -2494,7 +2525,7 @@ test("spawn reservations persist before actuation and concurrent creation waits 
   const spawnGate = new Promise<void>((resolve) => { releaseSpawn = resolve; });
   const reservation = new Promise<void>((resolve) => { reserved = resolve; });
   h.ports.spawnAgent = async (_input, onReserved) => {
-    onReserved({ launchId: "launch-durable", conversationId: "conversation_durable" });
+    await onReserved({ launchId: "launch-durable", conversationId: "conversation_durable" });
     reserved();
     await spawnGate;
     return { launchId: "launch-durable", conversationId: "conversation_durable", sessionId: "session-durable", transcript: "/codex/durable.jsonl", paneId: "%9" };
@@ -2609,7 +2640,7 @@ test("a dirty read-only stage parks without staging repository changes", async (
   expect(h.calls.some((call) => call.includes("git add"))).toBe(false);
 });
 
-test("restart after a bare spawn reservation parks instead of waiting forever", async () => {
+test("restart after a bare spawn reservation observes evidence under a bounded budget", async () => {
   const h = harness();
   await create(h.ports);
   await tickPipelines([], h.ports);
@@ -2644,8 +2675,16 @@ test("restart after a bare spawn reservation parks instead of waiting forever", 
   savePipelines([pipeline]);
 
   await tickPipelines([], h.ports);
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.state).toBe("running");
+  expect(waiting.stateDetail).toContain("stage spawn evidence pending: receipt starting");
+  const attempt = waiting.runs[0]!.attempts[0]!;
+  h.ports.now = () => new Date(Date.parse(attempt.controllerWait!.startedAt) + 601_000).toISOString();
+  await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
-  expect(loadPipelines()[0]!.stateDetail).toContain("cannot recover from receipt state starting");
+  expect(loadPipelines()[0]!.stateDetail).toContain("stage spawn evidence unresolved after bounded recovery: receipt starting");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.launchId).toBe("launch-reserved");
+  expect(h.spawnInputs).toHaveLength(0);
 });
 
 test("transient structured spawn handshakes retry twice before parking (#1056)", async () => {

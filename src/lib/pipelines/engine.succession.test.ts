@@ -1671,7 +1671,9 @@ for (const pool of [false, true]) {
       : { kind: "exhausted", resetsAt: due, allowedAccountIds: pool ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT] };
     while (f.now() < due * 1_000 + 120_000) { f.advance(30_000); await tickPipelines([], f.h.ports); }
     expect(f.h.spawnInputs).toHaveLength(2);
-  });
+    // Several hundred controller passes cover the full reset window; let them
+    // finish before the next fixture replaces their shared isolated store.
+  }, 30_000);
 }
 
 

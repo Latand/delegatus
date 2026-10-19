@@ -14,9 +14,11 @@ import { withFlowSnapshot } from "../flows/store";
 import { reconcileEmbeddedReviewFlows, tickPipelines } from "../pipelines/engine";
 import { withPipelineMutation } from "../pipelines/store";
 import { notifyQuestion } from "../push";
-import { overlaySessionTitles, sessionProjectProjection } from "../session/titleProjection";
+import { overlayControllerSessionTitles, sessionProjectProjection } from "../session/titleProjection";
 import { deputyConversationRefs } from "../orchestrator/deputies";
-import { admitScannedConversations } from "../tasks/membership";
+import { loadTasksForList } from "../tasks/store";
+import { waitForStateLock } from "../state/lockWait";
+import { admitScannedConversations, planAdmissions } from "../tasks/membership";
 import { loadPipelinesForProjection } from "../pipelines/store";
 import { panePidMap, resolveTarget } from "../tmux";
 import { tickWorkflows } from "../workflows/engine";
@@ -26,7 +28,7 @@ import { ctxFor } from "./context";
 import { lastAgentWorkAtFor, lastAssistantMessageAtFor, lastTurnFor } from "./turnDuration";
 import { discoverFiles, discoverFilesWithProjectCatalog } from "./discover";
 import { describeFile } from "./describe";
-import { durableServiceTierIndex, entryEffort, entryEffortResult, entryServiceTier } from "./effort";
+import { durableServiceTierIndexForPaths, entryEffort, entryEffortResult, entryServiceTier } from "./effort";
 import { linkEntries } from "./links";
 import { entryModelsResult } from "./model";
 import { agentProcesses, outputHolders } from "./process";
@@ -370,7 +372,7 @@ async function listFilesInternal(
   // activity() only consults holders on the same claude-tasks/.output path.
   const needsHolders = entries.some((entry) => entry.root === "claude-tasks" && entry.path.endsWith(".output"));
   const holders = needsHolders ? outputHolders() : NO_HOLDERS;
-  const durableTiers = durableServiceTierIndex();
+  const durableTiers = await durableServiceTierIndexForPaths(entries.map(entry => entry.path));
   const invalidTails = new Set<string>();
   const hydrateEntry = (entry: FileEntry) => {
     const verdict = activityVerdict(entry.root, entry.path, entry.mtime, entry.size);
@@ -497,13 +499,20 @@ async function questionRouteReader(entries: readonly FileEntry[]): Promise<(entr
 
 /** Durable controllers run outside request handlers. Flow ordering remains
     stable: workflows observe the flow state from the same controller tick. */
-export async function reconcileFileControllers(entries: FileEntry[]): Promise<void> {
-  await linkEntries(entries, { persist: true });
+export async function reconcileFileControllers(
+  entries: FileEntry[],
+  options: { inventoryChanged?: boolean } = {},
+): Promise<void> {
+  // The sidecar already compared the complete scan and a bounded registry
+  // cursor. Link/observation recovery needs another pass only for new inputs.
+  if (options.inventoryChanged !== false) await linkEntries(entries, { persist: true });
+  // The observer keeps its own successful-work cursor and retries failed or
+  // budget-deferred paths. Run it every pass without rebuilding registry links.
   observeCodexSubagentTranscripts(agentRegistry(), entries);
   await yieldToRuntime();
   // Custom session titles (issue #33) must reach push bodies too, so overlay
   // them before notifying — a rename shows the human name in notifications.
-  overlaySessionTitles(entries);
+  overlayControllerSessionTitles(entries, options.inventoryChanged === false);
   /* A worker's question waits on its project's seat first
      (docs/design/attention-auto-resolve.md): it reaches the operator's phone
      only when no seat can be woken for it. */
@@ -519,8 +528,8 @@ export async function reconcileFileControllers(entries: FileEntry[]): Promise<vo
      the controller path, never from a request. */
   try {
     await withPipelineMutation((pipelines, persist) =>
-      withFlowSnapshot((flows) => {
-        if (reconcileEmbeddedReviewFlows(pipelines, flows)) persist();
+      withFlowSnapshot(async (flows) => {
+        if (reconcileEmbeddedReviewFlows(pipelines, flows)) await persist();
       }));
   } catch (error) {
     console.error("[pipelines] skipping embedded review flow reconcile", error);
@@ -553,7 +562,13 @@ export async function reconcileFileControllers(entries: FileEntry[]): Promise<vo
      belongs to a task. Placeholders are minted here, on the durable controller
      pass, in bounded batches — never from a read-only files GET. */
   try {
-    admitScannedConversations(entries, loadPipelinesForProjection());
+    await waitForStateLock("controller.task-admission", () => {
+      const pipelines = loadPipelinesForProjection();
+      if (planAdmissions(entries, loadTasksForList(), pipelines).length > 0) {
+        // Admission derives the plan again under its writer lease.
+        admitScannedConversations(entries, pipelines);
+      }
+    }, { subject: "tasks" });
   } catch (error) {
     console.error("[tasks] skipping conversation admission", error);
   }

@@ -5,6 +5,7 @@ import path from "node:path";
 import tailwind from "@tailwindcss/postcss";
 import { chromium, type Browser, type ConnectOptions, type Page } from "playwright-core";
 import postcss from "postcss";
+import sharp from "sharp";
 
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
 
@@ -110,7 +111,7 @@ export async function serveEvidenceFixture(
   outDir: string,
   entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",
   responses: Record<string, unknown> = {},
-  options: { serialComposerPrerequisites?: boolean } = {},
+  options: { derivationTiming?: boolean; serialComposerPrerequisites?: boolean } = {},
 ): Promise<{ base: string; stop: () => void }> {
   /* Bundled in a separate process: inside the `bun test` process,
      `Bun.build` resolves the `@/` alias for some module graphs and not for
@@ -120,7 +121,7 @@ export async function serveEvidenceFixture(
   const build = Bun.spawnSync([
     process.execPath, path.resolve("src/components/kanban/buildEvidenceFixture.ts"), path.resolve(entryFixture), bundle,
     ...(options.serialComposerPrerequisites ? ["--serial-composer-prerequisites"] : []),
-  ], { stdout: "pipe", stderr: "pipe" });
+  ], { stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_DERIVATION_TIMING: options.derivationTiming ? "1" : "0" } });
   if (build.exitCode !== 0) throw new Error(`fixture bundle failed: ${build.stderr.toString()}${build.stdout.toString()}`);
   const entry = path.join(bundle, `${path.basename(entryFixture).replace(/\.tsx?$/, "")}.js`);
   const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
@@ -186,6 +187,73 @@ export async function openFixture(
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto(url);
   return { context, page, pageErrors };
+}
+
+/** Finished-frame lifetime, shared by the existing board and phone drivers.
+ * Serve the real state copy after deleting this case's capture directory. */
+export async function captureDoneFrames(browser: Browser, phone: boolean) {
+  const { preserveDoneFrame } = await import("@/lib/done/media");
+  const { copyDoneFrameSource } = await import("@/lib/done/source");
+  const { GET } = await import("@/app/api/image/route");
+  const { NextRequest } = await import("next/server");
+  const sharp = (await import("sharp")).default;
+  const out = path.resolve(".artifacts/done-frames",phone ? "phone" : "desktop");
+  fs.mkdirSync(out,{recursive:true});
+  const lane = fs.mkdtempSync(path.join(process.env.HOME!,"done-render-lane-"));
+  const source = path.join(lane,"result.png");
+  const raster = await sharp(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="720" height="460"><rect width="720" height="460" fill="#1b2332"/><rect x="40" y="45" width="640" height="110" rx="12" fill="#314660"/><text x="65" y="112" fill="#ffffff" font-family="sans-serif" font-size="34">Saved result</text><rect x="40" y="190" width="640" height="210" rx="12" fill="#243649"/></svg>')).png().toBuffer();
+  fs.writeFileSync(source,raster);
+  let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+  const readings: unknown[] = [], failures: string[] = [];
+  try {
+    const saved = await preserveDoneFrame(`task:rendered-${phone ? "phone" : "desktop"}`,{src:`/api/artifact?${new URLSearchParams({path:source})}`,caption:"Saved result"},copyDoneFrameSource,Date.parse("2026-10-18T08:00:00Z"));
+    if (saved.unavailable) throw new Error("fixture state copy failed");
+    fs.rmSync(lane,{recursive:true,force:true});
+    server = await serveEvidenceFixture(out,"src/components/attention/needsYouPanel.fixture.tsx",{
+      "/api/image":(request: Request)=>GET(new NextRequest(request)),
+    });
+    for (const width of phone ? [390] : [800,1440]) for (const lang of ["en","uk"] as const) for (const theme of ["light","dark"] as const) for (const state of ["retained","missing","error"] as const) {
+      const name = `${width}-${lang}-${theme}-${state}`;
+      const { page,context,pageErrors } = await openFixture(browser,`${server.base}?${new URLSearchParams({lang,open:"1",done:"1",doneframes:state,"done-frame-src":saved.src})}`,{width,height:phone?844:900},theme,lang,"reduce",phone);
+      try {
+        if (phone) {
+          await page.waitForFunction(()=>Number(document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count"))>1);
+          await page.locator('[data-mobile2-open="attention"]').click();
+        }
+        const section = page.locator(`[data-done-section="${phone ? "phone" : "desktop"}"][data-done-place="needs-you"]`);
+        await section.waitFor();
+        if (!phone) await page.waitForFunction(()=>document.querySelectorAll("[data-needs-you-section]").length >= 3);
+        if (state === "retained") {
+          await page.waitForFunction(()=>{const image=document.querySelector<HTMLImageElement>("[data-done-thumb] img");return Boolean(image?.complete && image.naturalWidth);});
+          const loaded=await section.locator("[data-done-thumb] img").evaluate((image)=>({width:(image as HTMLImageElement).naturalWidth,src:image.getAttribute("src")}));
+          if (loaded.width !== 720 || !loaded.src?.startsWith("/api/image?done=")) failures.push(`${name}: retained copy did not load`);
+          await section.scrollIntoViewIfNeeded();
+          await page.screenshot({path:path.join(out,`${name}.png`)});
+          await section.locator("[data-done-thumb]").click();
+          const dialog=page.locator('[role="dialog"][aria-modal="true"]:not([data-mobile2-sheet])'); await dialog.waitFor();
+          if (await dialog.locator("[data-lightbox-compare-side]").count() !== 2) failures.push(`${name}: pair did not open`);
+          await page.screenshot({path:path.join(out,`${name}-viewer.png`)});
+          await page.keyboard.press("Escape");
+          readings.push({name,loaded,sourceRemoved:!fs.existsSync(source),viewer:true});
+        } else {
+          const missing=section.locator("[data-done-frame-missing]"); await missing.waitFor(); await missing.scrollIntoViewIfNeeded();
+          const expected=lang==="uk" ? "Кадри не збереглися" : "Frames were not retained";
+          if ((await missing.innerText()).trim()!==expected || await section.locator("[data-done-thumb] img").count()) failures.push(`${name}: missing-frame state is wrong`);
+          const text=await missing.evaluate(element=>{
+            const box=element.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(element);
+            return {whole:[...range.getClientRects()].every(r=>r.left>=box.left && r.right<=box.right && r.top>=box.top && r.bottom<=box.bottom && r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight),label:element.textContent};
+          });
+          if (!text.whole) failures.push(`${name}: missing-frame text clipped`);
+          await page.screenshot({path:path.join(out,`${name}.png`)});
+          readings.push({name,...text});
+        }
+        if(pageErrors.length) failures.push(`${name}: ${pageErrors.join(", ")}`);
+      } finally {await context.close();}
+    }
+  } finally {server?.stop();fs.rmSync(lane,{recursive:true,force:true});}
+  const evidence=path.resolve("evidence/done-frames");fs.mkdirSync(evidence,{recursive:true});
+  fs.writeFileSync(path.join(evidence,phone ? "phone.json" : "desktop.json"),JSON.stringify({driver:phone ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx",readings,failures},null,2)+"\n");
+  return failures;
 }
 
 type WorkersRowReading = { icon: number; titleSize: number; titleWeight: number; titleColor: string; titleX: number; stateWeight: number; stateColor: string;
@@ -1125,4 +1193,180 @@ export async function captureReadAloudVoiceMenu(browser: Browser, mobile: boolea
     fs.mkdirSync("evidence/read-aloud-voice", { recursive: true });
     fs.writeFileSync(`evidence/read-aloud-voice/${mobile ? "phone" : "desktop"}.json`, JSON.stringify({ readings }, null, 2) + "\n");
   } finally { server.stop(); }
+}
+
+/* The pane ring as it was drawn before it moved onto the compositor: a
+   registered angle animated on a conic gradient. Kept here only as the
+   reference the new ring is compared against, pixel for pixel. */
+const LEGACY_RING_CSS = `
+@property --legacy-angle { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+.legacy-ring::before {
+  content: ""; pointer-events: none; position: absolute; inset: -2px; z-index: 1; border-radius: 12px; padding: 2px;
+  background: conic-gradient(from var(--legacy-angle), transparent 0deg 30deg, var(--pane-glow) 100deg, transparent 170deg 210deg, var(--pane-glow) 280deg, transparent 350deg 360deg);
+  -webkit-mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0); mask-composite: exclude;
+}`;
+
+type RingReading = { width: number; height: number; scheme: string; failures: string[]; [key: string]: unknown };
+
+/** The attention cues of a conversation waiting for the operator, shared by
+    the board and phone drivers. Over the fixture's waiting conversation:
+    the ring is a compositor animation (transform only, the 3.4s lap), it
+    turns, it matches the previous drawing pixel for pixel at five angles in
+    the pane's own size and in both themes, reduced motion stills it at the
+    angle the old ring started from, and the ring and the halos that grow a
+    shadow hold their frame while the composer has the focus and resume when it
+    loses it. */
+export async function captureAttentionRing(browser: Browser, base: string, out: string, phone: boolean) {
+  fs.mkdirSync(out, { recursive: true });
+  const readings: RingReading[] = [];
+  const widths = phone ? [390, 430] : [1440, 900];
+  const ANGLES = [0, 45, 135, 225, 300];
+  const LAP_S = 3.4;
+  for (const width of widths) for (const scheme of ["light", "dark"] as const) {
+    const height = phone ? 844 : 900;
+    const failures: string[] = [];
+    const label = `${phone ? "phone" : "desktop"}-${width}-${scheme}`;
+    const { context, page, pageErrors } = await openFixture(browser, `${base}#c=conversation_links-impl`, { width, height }, scheme, "en", "no-preference", phone);
+    try {
+      await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+      await page.waitForSelector(".pane-attention-ring .pane-attention-comets");
+      const motion = await page.evaluate(async () => {
+        const comets = document.querySelector<HTMLElement>(".pane-attention-comets")!;
+        const ring = comets.parentElement!;
+        const animation = document.getAnimations().find((candidate) => (candidate as CSSAnimation).animationName === "pane-orbit") as CSSAnimation | undefined;
+        const keyframes = animation ? (animation.effect as KeyframeEffect).getKeyframes() : [];
+        const properties = new Set(keyframes.flatMap((frame) => Object.keys(frame).filter((key) => !["offset", "easing", "composite", "computedOffset"].includes(key))));
+        const timing = animation?.effect?.getComputedTiming();
+        const before = getComputedStyle(comets).transform;
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        const after = getComputedStyle(comets).transform;
+        const frame = ring.getBoundingClientRect();
+        const pane = ring.parentElement!.querySelector("section")!.getBoundingClientRect();
+        return {
+          target: animation ? (animation.effect as KeyframeEffect).target === comets : false,
+          properties: [...properties], duration: timing?.duration, iterations: timing?.iterations, direction: timing?.direction, playState: animation?.playState,
+          turned: before !== after,
+          ringOutset: { left: pane.left - frame.left, top: pane.top - frame.top, right: frame.right - pane.right, bottom: frame.bottom - pane.bottom },
+          ringSize: { width: Math.round(frame.width), height: Math.round(frame.height) },
+          overflowX: document.documentElement.scrollWidth - window.innerWidth,
+          colour: getComputedStyle(ring.parentElement!).getPropertyValue("--pane-glow").trim(),
+        };
+      });
+      if (!motion.target) failures.push("pane-orbit does not animate the comets element");
+      if (motion.properties.join() !== "transform") failures.push(`pane-orbit animates ${motion.properties.join(",") || "nothing"}, not transform alone`);
+      if (motion.duration !== 3400 || motion.iterations !== Infinity || motion.playState !== "running") failures.push(`lap ${motion.duration} x ${motion.iterations} ${motion.playState}`);
+      if (!motion.turned) failures.push("the comets did not turn in 600 ms");
+      for (const [edge, value] of Object.entries(motion.ringOutset)) if (Math.abs(value - 2) > 1) failures.push(`the ring sits ${value}px off the card's ${edge} edge, not 2`);
+      if (motion.overflowX > 0) failures.push(`the page overflows sideways by ${motion.overflowX}px`);
+
+      /* Pixel comparison with the previous drawing, at the pane's own size. */
+      const size = motion.ringSize;
+      const box = { width: Math.min(size.width - 4, width - 40), height: Math.min(size.height - 4, 420) };
+      await page.addStyleTag({ content: LEGACY_RING_CSS });
+      const shot = async (variant: "legacy" | "current", angle: number) => {
+        await page.evaluate(({ variant, angle, box, lap }) => {
+          document.getElementById("ring-probe")?.remove();
+          const probe = document.createElement("div");
+          probe.id = "ring-probe";
+          probe.style.cssText = `position:fixed;left:0;top:0;width:${box.width + 24}px;height:${box.height + 24}px;background:#fff;z-index:2147483647;`;
+          const card = document.createElement("div");
+          card.style.cssText = `position:absolute;left:12px;top:12px;width:${box.width}px;height:${box.height}px;--pane-glow:var(--color-warning);`;
+          if (variant === "legacy") {
+            /* The registered angle does not inherit: it is set on the pseudo-element itself, as its keyframes did. */
+            card.classList.add("legacy-ring");
+            const rule = document.createElement("style");
+            rule.textContent = `#ring-probe .legacy-ring::before { --legacy-angle: ${angle}deg; }`;
+            probe.append(rule);
+          } else {
+            card.innerHTML = '<span class="pane-attention-ring"><span class="pane-attention-comets"></span></span>';
+            const comets = card.querySelector<HTMLElement>(".pane-attention-comets")!;
+            comets.style.animationPlayState = "paused";
+            comets.style.animationDelay = `${-(angle / 360) * lap}s`;
+          }
+          probe.append(card);
+          document.body.append(probe);
+        }, { variant, angle, box, lap: LAP_S });
+        await page.waitForTimeout(120);
+        return page.screenshot({ clip: { x: 0, y: 0, width: box.width + 24, height: box.height + 24 } });
+      };
+      const comparisons: { angle: number; ringPixels: number; differing: number; share: number; maxChannelDifference: number }[] = [];
+      for (const angle of ANGLES) {
+        const legacy = await sharp(await shot("legacy", angle)).raw().toBuffer({ resolveWithObject: true });
+        const current = await sharp(await shot("current", angle)).raw().toBuffer({ resolveWithObject: true });
+        if (angle === 45 || angle === 225) {
+          fs.writeFileSync(path.join(out, `${label}-${angle}-legacy.png`), await sharp(legacy.data, { raw: legacy.info }).png().toBuffer());
+          fs.writeFileSync(path.join(out, `${label}-${angle}-current.png`), await sharp(current.data, { raw: current.info }).png().toBuffer());
+        }
+        const channels = legacy.info.channels;
+        let ringPixels = 0, differing = 0, maxChannelDifference = 0;
+        for (let at = 0; at < legacy.data.length; at += channels) {
+          const lit = legacy.data[at]! < 250 || legacy.data[at + 1]! < 250 || legacy.data[at + 2]! < 250 || current.data[at]! < 250 || current.data[at + 1]! < 250 || current.data[at + 2]! < 250;
+          if (!lit) continue;
+          ringPixels += 1;
+          const difference = Math.max(Math.abs(legacy.data[at]! - current.data[at]!), Math.abs(legacy.data[at + 1]! - current.data[at + 1]!), Math.abs(legacy.data[at + 2]! - current.data[at + 2]!));
+          maxChannelDifference = Math.max(maxChannelDifference, difference);
+          if (difference > 48) differing += 1;
+        }
+        const share = ringPixels ? differing / ringPixels : 1;
+        comparisons.push({ angle, ringPixels, differing, share: Number(share.toFixed(4)), maxChannelDifference });
+        if (ringPixels < 200) failures.push(`angle ${angle}: only ${ringPixels} ring pixels drawn`);
+        if (share > 0.02) failures.push(`angle ${angle}: ${(share * 100).toFixed(1)}% of the ring's pixels differ from the previous drawing`);
+      }
+      await page.evaluate(() => document.getElementById("ring-probe")?.remove());
+
+      /* The shadow-growing halos hold while the composer has the focus. */
+      const halo = await page.evaluate(async () => {
+        const badge = document.createElement("span");
+        badge.className = "card-status-attention";
+        badge.style.cssText = "position:fixed;left:0;bottom:0;width:20px;height:20px;border-radius:10px;";
+        document.body.append(badge);
+        /* The standing liveness motion of a board: a running agent's glyph (an SVG group the main thread animates) and a pulsing status dot. */
+        const live = document.createElement("div");
+        live.style.cssText = "position:fixed;left:30px;bottom:0;width:20px;height:20px;";
+        live.innerHTML = '<span class="mglyph" data-live="1"><svg viewBox="0 0 16 16"><g class="mg-turn"><circle cx="8" cy="3" r="2" /></g></svg></span><span class="animate-pulse" style="display:block;width:6px;height:6px;"></span>';
+        document.body.append(live);
+        const field = document.querySelector<HTMLTextAreaElement>("textarea[data-composer-field]");
+        const comets = document.querySelector(".pane-attention-comets")!;
+        const state = () => getComputedStyle(badge).animationPlayState;
+        const turning = () => getComputedStyle(comets).animationPlayState;
+        const glyph = () => getComputedStyle(live.querySelector(".mg-turn")!).animationPlayState;
+        const dot = () => getComputedStyle(live.querySelector(".animate-pulse")!).animationPlayState;
+        const reading = { running: state(), ring: turning(), glyph: glyph(), dot: dot(), field: Boolean(field) } as Record<string, unknown>;
+        field?.focus();
+        reading.focused = state();
+        reading.ringFocused = turning();
+        reading.glyphFocused = glyph();
+        reading.dotFocused = dot();
+        reading.rootMarked = document.documentElement.hasAttribute("data-composer-focused");
+        field?.blur();
+        reading.blurred = state();
+        reading.ringBlurred = turning();
+        reading.glyphBlurred = glyph();
+        reading.dotBlurred = dot();
+        badge.remove();
+        live.remove();
+        return reading;
+      });
+      if (halo.running !== "running" || halo.focused !== "paused" || halo.blurred !== "running" || halo.ring !== "running" || halo.ringFocused !== "paused" || halo.ringBlurred !== "running" || halo.glyph !== "running" || halo.glyphFocused !== "paused" || halo.glyphBlurred !== "running" || halo.dot !== "running" || halo.dotFocused !== "paused" || halo.dotBlurred !== "running" || !halo.field || !halo.rootMarked) failures.push(`pause while the composer has the focus: ${JSON.stringify(halo)}`);
+      await page.screenshot({ path: path.join(out, `${label}.png`) });
+      if (pageErrors.length) failures.push(`page errors: ${pageErrors.join(" | ")}`);
+      readings.push({ width, height, scheme, failures, motion, comparisons, halo });
+    } finally { await context.close(); }
+
+    /* Reduced motion: the ring stays, still, where the old one began. */
+    const calm = await openFixture(browser, `${base}#c=conversation_links-impl`, { width, height }, scheme, "en", "reduce", phone);
+    try {
+      await calm.page.waitForSelector(".pane-attention-ring .pane-attention-comets");
+      const still = await calm.page.evaluate(() => {
+        const comets = document.querySelector<HTMLElement>(".pane-attention-comets")!;
+        return { animations: document.getAnimations().filter((candidate) => (candidate as CSSAnimation).animationName === "pane-orbit").length, transform: getComputedStyle(comets).transform };
+      });
+      const reading = readings.at(-1)!;
+      reading.reduced = still;
+      if (still.animations !== 0 || (still.transform !== "none" && still.transform !== "matrix(1, 0, 0, 1, 0, 0)")) reading.failures.push(`reduced motion leaves ${JSON.stringify(still)}`);
+    } finally { await calm.context.close(); }
+  }
+  const failures = readings.flatMap((reading) => reading.failures.map((failure) => `${phone ? "phone" : "desktop"} ${reading.width} ${reading.scheme}: ${failure}`));
+  return { failures, readings };
 }

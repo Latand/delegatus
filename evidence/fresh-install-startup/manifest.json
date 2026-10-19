@@ -1,0 +1,190 @@
+{
+  "base": "a25592beae64cdac38bceefe8863fe092dcd379b",
+  "platform": "linux-x64",
+  "sourceFiles": {
+    "bin/cli.mjs": "6bffd54b62ce71febd2899af7ee882d8911aba2bddb8a0fc93c215c8d03d7e4d",
+    "src/lib/agent/registry.ts": "ae30a91345104e4a6c09851c10614df8142d1fb3e8f676e1a11340711f8e0106",
+    "src/lib/viewerLoopMonitor.ts": "ab87c74b53b7f21bce7485a53e2a73e563a297a77ce25f914d87b3a0fc40276e",
+    "src/runtime-host/runtimeHostStartup.ts": "61cb1ffbbd9167e509f970e8a234e397943cc878494e0ddc6c46ab23aac5297d",
+    "src/lib/scanner/filesResponseWorker.ts": "09f361220a083c024ba0ca7e227217eb0246d4daded26e42944eab47512b5b00",
+    "src/lib/pipelines/controller.ts": "c176d791ca117501a7f785fa7f207071e3a0ca493d5f5a85beaef57381196bc7"
+  },
+  "captures": [
+    {
+      "path": "before-140-start-1.txt",
+      "runtime": "1.4.0",
+      "subject": "npm delegatus-cli@1.13.0",
+      "capturedAt": "2026-10-18T15:15:48.661483+00:00",
+      "sha256": "2dcac3dabc1fdd8e0979f22f55023f60cfaa0a51188b336c9a0ed2f83171c874",
+      "rawSha256": "635a8568a565a9bc3aaac0f6e8c3db1e96ebf0647748a9d7f082af8fcd050e66",
+      "rawBytes": 18091,
+      "bytes": 17643,
+      "runIdentifiersReplaced": 8,
+      "lines": 51,
+      "rootStatus": 200,
+      "identityFailures": 3,
+      "sqliteErrors": 0,
+      "telemetryNotices": 2,
+      "loopGaps": 2,
+      "markerAfterBothStarts": {}
+    },
+    {
+      "path": "before-140-start-2.txt",
+      "runtime": "1.4.0",
+      "subject": "npm delegatus-cli@1.13.0",
+      "capturedAt": "2026-10-18T15:16:05.201632+00:00",
+      "sha256": "3d188d416e2e36ec8f935c4d4caa3cb4c7229ef8d280acdbbe523331e4c1b871",
+      "rawSha256": "1322775e452d9ab57e6000182b95c2429da175e1fd4b5300f9eb0c53e8ad4c3c",
+      "rawBytes": 21847,
+      "bytes": 21483,
+      "runIdentifiersReplaced": 3,
+      "lines": 47,
+      "rootStatus": 200,
+      "identityFailures": 3,
+      "sqliteErrors": 0,
+      "telemetryNotices": 1,
+      "loopGaps": 1,
+      "markerAfterBothStarts": {}
+    },
+    {
+      "path": "before-143-start-1.txt",
+      "runtime": "1.4.3",
+      "subject": "npm delegatus-cli@1.13.0",
+      "capturedAt": "2026-10-18T15:16:24.771807+00:00",
+      "sha256": "2b46a5d4e7c8b193d38bd5a3bf02abf7193b2bb62ba5fa21044938279a72bf68",
+      "rawSha256": "b172cd9455b83c4049753ad458ae57567bf244c3fd2458754dfa7d9036b9843c",
+      "rawBytes": 19761,
+      "bytes": 19257,
+      "runIdentifiersReplaced": 8,
+      "lines": 66,
+      "rootStatus": 200,
+      "identityFailures": 3,
+      "sqliteErrors": 3,
+      "telemetryNotices": 2,
+      "loopGaps": 2,
+      "markerAfterBothStarts": {}
+    },
+    {
+      "path": "before-143-start-2.txt",
+      "runtime": "1.4.3",
+      "subject": "npm delegatus-cli@1.13.0",
+      "capturedAt": "2026-10-18T15:16:41.246956+00:00",
+      "sha256": "976d93e56f8892c6f8674597cfa68870c6a1028655858cf3f2dc8f6443035127",
+      "rawSha256": "05813f7182673cd1033767c280fcd09b2758c2cec21128001058b2fa37e07edd",
+      "rawBytes": 16088,
+      "bytes": 15724,
+      "runIdentifiersReplaced": 3,
+      "lines": 62,
+      "rootStatus": 200,
+      "identityFailures": 3,
+      "sqliteErrors": 3,
+      "telemetryNotices": 1,
+      "loopGaps": 1,
+      "markerAfterBothStarts": {}
+    },
+    {
+      "path": "after-140-start-1.txt",
+      "runtime": "1.4.0",
+      "subject": "compiled scratch source with sourceFiles digests",
+      "capturedAt": "2026-10-18T15:17:58.004646+00:00",
+      "sha256": "2cab26a088eb2d22b40953e5c0ceb4406d376fd9ea2d3636e8eca0e1364ba333",
+      "rawSha256": "83a07b2dd9bb4ffc5e1a4e8c899ce5ef1563cf690bb7a305fe451827ae6b387a",
+      "rawBytes": 1179,
+      "bytes": 1095,
+      "runIdentifiersReplaced": 1,
+      "lines": 19,
+      "rootStatus": 200,
+      "identityFailures": 0,
+      "sqliteErrors": 0,
+      "telemetryNotices": 1,
+      "loopGaps": 0,
+      "markerAfterBothStarts": {
+        "identity-wave-a-d-913": {
+          "completedAt": "2026-10-18T15:17:55.471Z",
+          "retitled": 0,
+          "rekeyed": 0,
+          "quarantinedRekeys": 0,
+          "edgesStamped": 0
+        }
+      }
+    },
+    {
+      "path": "after-140-start-2.txt",
+      "runtime": "1.4.0",
+      "subject": "compiled scratch source with sourceFiles digests",
+      "capturedAt": "2026-10-18T15:18:22.950871+00:00",
+      "sha256": "2c02a0fcc14453d7f1ac3b519100d28d2f8350a42d44da5d9dfe003dd2581ff8",
+      "rawSha256": "973be8459f599d46e09709b33ccb41f6b9a67a271cda6cf90e9b7ec3da7ddc15",
+      "rawBytes": 1010,
+      "bytes": 926,
+      "runIdentifiersReplaced": 1,
+      "lines": 18,
+      "rootStatus": 200,
+      "identityFailures": 0,
+      "sqliteErrors": 0,
+      "telemetryNotices": 0,
+      "loopGaps": 0,
+      "markerAfterBothStarts": {
+        "identity-wave-a-d-913": {
+          "completedAt": "2026-10-18T15:17:55.471Z",
+          "retitled": 0,
+          "rekeyed": 0,
+          "quarantinedRekeys": 0,
+          "edgesStamped": 0
+        }
+      }
+    },
+    {
+      "path": "after-143-start-1.txt",
+      "runtime": "1.4.3",
+      "subject": "compiled scratch source with sourceFiles digests",
+      "capturedAt": "2026-10-18T15:19:50.396659+00:00",
+      "sha256": "97f7ef7b7249b3522dddd4897b6eabfb1a7bb39a63cce5b6eb77443f9ed6c863",
+      "rawSha256": "e114d08ed963d9da92d4aeff933ed757f3643aa81caa0c1619c5340c5453764b",
+      "rawBytes": 1179,
+      "bytes": 1095,
+      "runIdentifiersReplaced": 1,
+      "lines": 19,
+      "rootStatus": 200,
+      "identityFailures": 0,
+      "sqliteErrors": 0,
+      "telemetryNotices": 1,
+      "loopGaps": 0,
+      "markerAfterBothStarts": {
+        "identity-wave-a-d-913": {
+          "completedAt": "2026-10-18T15:19:47.821Z",
+          "retitled": 0,
+          "rekeyed": 0,
+          "quarantinedRekeys": 0,
+          "edgesStamped": 0
+        }
+      }
+    },
+    {
+      "path": "after-143-start-2.txt",
+      "runtime": "1.4.3",
+      "subject": "compiled scratch source with sourceFiles digests",
+      "capturedAt": "2026-10-18T15:20:14.211874+00:00",
+      "sha256": "e5d1e11d3cb3ccf6b447260164abf95ba860a99c6d88a92d0ecc900e5ab7cc91",
+      "rawSha256": "3080574250752b2ab85af37e84ab17dd0cf4ee66cce6c5577b01ba1a5f104712",
+      "rawBytes": 1010,
+      "bytes": 926,
+      "runIdentifiersReplaced": 1,
+      "lines": 18,
+      "rootStatus": 200,
+      "identityFailures": 0,
+      "sqliteErrors": 0,
+      "telemetryNotices": 0,
+      "loopGaps": 0,
+      "markerAfterBothStarts": {
+        "identity-wave-a-d-913": {
+          "completedAt": "2026-10-18T15:19:47.821Z",
+          "retitled": 0,
+          "rekeyed": 0,
+          "quarantinedRekeys": 0,
+          "edgesStamped": 0
+        }
+      }
+    }
+  ]
+}

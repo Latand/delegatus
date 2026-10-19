@@ -1,3 +1,7 @@
+import { deepFreeze } from "@/lib/deepFreeze";
+import { forEachCooperatively } from "@/lib/cooperative";
+import { controllerPipelineKeys, controllerReferences, inheritControllerGuards } from "./controllerScope";
+import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import crypto from "node:crypto";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -10,6 +14,7 @@ import { pipelineHasPullRequest } from "@/lib/forge/resolve";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot, projectAliasResolver } from "@/lib/projects/aliases";
+import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
 import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
@@ -220,6 +225,11 @@ function isRuntimeSwitches(value: unknown): boolean {
     && typeof item.to.accountId === "string" && typeof item.to.accountPinned === "boolean"
     && ["cutAt", "continuedAt", "settledAt"].every(key => item[key] === undefined || typeof item[key] === "string" && Number.isFinite(Date.parse(item[key])))
     && (item.reconfigureNoop === undefined || typeof item.reconfigureNoop === "boolean")
+    && (item.retry === undefined || item.retry && typeof item.retry.reason === "string" && item.retry.reason.length <= 2000
+      && typeof item.retry.requestedAt === "string" && Number.isFinite(Date.parse(item.retry.requestedAt))
+      && (item.retry.completedAt === undefined || typeof item.retry.completedAt === "string" && Number.isFinite(Date.parse(item.retry.completedAt)))
+      && (item.retry.operatorStoppedAt === undefined || typeof item.retry.operatorStoppedAt === "string" && Number.isFinite(Date.parse(item.retry.operatorStoppedAt)))
+      && (item.retry.pendingReason === undefined || typeof item.retry.pendingReason === "string" && item.retry.pendingReason.length <= 2000))
     && (item.rollback === undefined || typeof item.rollback === "boolean")
     && (item.continuationKey === undefined || typeof item.continuationKey === "string")
     && (item.continuationDispatch === undefined || typeof item.continuationDispatch.key === "string"
@@ -228,6 +238,44 @@ function isRuntimeSwitches(value: unknown): boolean {
     && (item.launch === undefined || typeof item.launch.clientAttemptId === "string" && textOrNull(item.launch.launchId) && textOrNull(item.launch.conversationId))
     && (item.handoff === undefined || typeof item.handoff.prompt === "string" && /^[a-f0-9]{64}$/.test(item.handoff.digest)
       && item.handoff.bytes === Buffer.byteLength(item.handoff.prompt) && item.handoff.bytes <= 32000));
+}
+
+function isStageSuspension(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const suspension = value as Record<string, unknown>;
+  const dated = (time: unknown) => typeof time === "string" && Number.isFinite(Date.parse(time));
+  return (suspension.reason === "pause" || suspension.reason === "account") && typeof suspension.detail === "string"
+    && dated(suspension.requestedAt)
+    && (suspension.stoppedAt === undefined || dated(suspension.stoppedAt))
+    && (suspension.stopRevision === undefined || Number.isSafeInteger(suspension.stopRevision) && (suspension.stopRevision as number) >= 0)
+    && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt));
+}
+
+function isPublicationTextRepair(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const repair = value as Record<string, unknown>;
+  return typeof repair.sha === "string" && /^[0-9a-f]{40}$/i.test(repair.sha)
+    && (repair.pullRequestHead === undefined || typeof repair.pullRequestHead === "string" && /^[0-9a-f]{40}$/i.test(repair.pullRequestHead))
+    && typeof repair.stageId === "string" && typeof repair.detail === "string"
+    && Number.isSafeInteger(repair.attempt) && (repair.attempt as number) >= 1
+    && Number.isSafeInteger(repair.rounds) && (repair.rounds as number) >= 0
+    && Number.isSafeInteger(repair.maxRounds) && (repair.maxRounds as number) >= (repair.rounds as number)
+    && ["title", "body", "title/body"].includes(String(repair.part))
+    && ["pending", "answered", "exhausted"].includes(String(repair.state))
+    && (repair.reportSeq === null || Number.isSafeInteger(repair.reportSeq))
+    && typeof repair.requestedAt === "string" && Number.isFinite(Date.parse(repair.requestedAt))
+    && (repair.delivered === undefined || typeof repair.delivered === "boolean")
+    && (repair.answeredAt === undefined || typeof repair.answeredAt === "string" && Number.isFinite(Date.parse(repair.answeredAt)));
+}
+
+function isTerminalOutputPublication(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const publication = value as Record<string, unknown>;
+  return ["localSha", "pullRequestHead"].every(key => typeof publication[key] === "string"
+    && /^[0-9a-f]{40}$/i.test(publication[key] as string));
 }
 
 function isAttempt(value: unknown, index: number): boolean {
@@ -288,6 +336,8 @@ function isAttempt(value: unknown, index: number): boolean {
       && ["passedSha", "acceptedSha", "mainSha"].every((key) => typeof (attempt.publicationIntegration as Record<string, unknown>)[key] === "string"
         && /^[0-9a-f]{40}$/i.test((attempt.publicationIntegration as Record<string, string>)[key]))
     )) &&
+    isPublicationTextRepair(attempt.publicationTextRepair) &&
+    isTerminalOutputPublication(attempt.terminalOutputPublication) &&
     (attempt.publicationRetry === undefined || (
       attempt.publicationRetry !== null && typeof attempt.publicationRetry === "object"
       && !Array.isArray(attempt.publicationRetry)
@@ -308,6 +358,7 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.reviewedHead === undefined || isNullableString(attempt.reviewedHead)) &&
     isVerdictRecovery(attempt.verdictRecovery) &&
     isRuntimeSwitches(attempt.runtimeSwitches) &&
+    isStageSuspension(attempt.suspension) &&
     (attempt.runtimeEvidenceSince === undefined || typeof attempt.runtimeEvidenceSince === "string" && Number.isFinite(Date.parse(attempt.runtimeEvidenceSince))) &&
     (attempt.runtimeAccountPin === undefined || isNullableString(attempt.runtimeAccountPin)) &&
     isAttemptDefinition(attempt.definition) &&
@@ -551,7 +602,9 @@ function isCloseCustody(pipeline: Partial<Pipeline>): boolean {
 function isTerminalReap(value: unknown): value is PipelineTerminalReap {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const reap = value as Partial<PipelineTerminalReap>;
-  return Number.isInteger(reap.rounds) && (reap.rounds as number) >= 0
+  return (reap.attemptRounds === undefined || (reap.attemptRounds !== null && typeof reap.attemptRounds === "object" && !Array.isArray(reap.attemptRounds)
+      && Object.values(reap.attemptRounds).every(round => Number.isInteger(round) && round >= 0)))
+    && Number.isInteger(reap.rounds) && (reap.rounds as number) >= 0
     && Number.isInteger(reap.stopped) && (reap.stopped as number) >= 0
     && typeof reap.lastAt === "string"
     && (reap.settledAttempts === undefined
@@ -832,6 +885,12 @@ function isPipeline(value: unknown): value is Pipeline {
   catch { return false; }
 }
 
+/** Shared total validator for persisted projections that must match the
+ * authoritative pipeline reader's admission contract. */
+export function isStoredPipeline(value: unknown): value is Pipeline {
+  return isPipeline(value);
+}
+
 function isPipelineShape(value: unknown): value is Pipeline {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pipeline = value as Partial<Pipeline>;
@@ -1056,7 +1115,48 @@ export function controllerPipelineRowOrder(): number {
 }
 
 export async function selectControllerPipelines(kind: import("@/lib/state/pipelineControllerIndex").PipelineControllerSelection, throughOrder?: number): Promise<Pipeline[]> {
-  return pipelineStore().pipelineControllerSelection(kind, throughOrder);
+  return pipelineStore().pipelineControllerSelection(kind, throughOrder, controllerPipelineKeys());
+}
+
+export async function controllerPipelineVersion(id: string): Promise<string> {
+  return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-version", () => stateLockAttempt("pipelines.controller-version", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineControllerVersion(id)))));
+}
+export async function findControllerPipeline(id: string): Promise<Pipeline | null> {
+  return waitForStateLock("pipelines.controller-candidate", () => stateLockAttempt("pipelines.controller-candidate", () => pipelineStore().pipelineControllerCandidate(id)));
+}
+export async function controllerAttemptWindow(id: string, after: number, stage: string) {
+  return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-attempts", () =>
+    stateLockAttempt("pipelines.controller-attempts", () => performanceSpans.sync("controller.lane", () => ({
+      window: pipelineStore().pipelineAttemptWindow(id, after, 16), current: pipelineStore().pipelineCurrentReferences(id, stage),
+    })))));
+}
+export async function controllerOtherTerminalHosts(id: string, selected: readonly number[]): Promise<boolean> {
+  return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-attempts", () =>
+    stateLockAttempt("pipelines.controller-attempts", () => performanceSpans.sync("controller.lane", () => pipelineStore().pipelineOtherTerminalHosts(id,selected)))));
+}
+export async function controllerHostHasLiveWork(target: import("./types").PipelineStageHostRef): Promise<boolean> {
+  const identities: Array<[string, string]> = [];
+  for (const kind of ["conversationId", "agentPath", "paneId", "launchId"] as const) if (target[kind]) identities.push([kind,target[kind]!]);
+  if (target.conversationId) identities.push(["srcConversationId",target.conversationId]);
+  if (target.agentPath) identities.push(["srcPath",target.agentPath]);
+  return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-owners", () =>
+    stateLockAttempt("pipelines.controller-owners", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineOwnerExists(identities,true)))));
+}
+export async function controllerFlowAttached(id: string): Promise<boolean> {
+  return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-owners", () =>
+    stateLockAttempt("pipelines.controller-owners", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineOwnerExists([["flow",id]],false)))));
+}
+export async function selectPipelineControllerWork(now: number, excluded: readonly string[]) {
+  return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded)));
+}
+export async function deferPipelineControllerWork(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork) {
+  return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).deferPipelineTick(work);
+}
+export async function pipelineControllerReady(now: number, excluded: readonly string[]) {
+  return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickReady(now, excluded)));
+}
+export async function acknowledgePipelineControllerWork(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork, cursor: number, dueAt: number) {
+  return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).acknowledgePipelineTick(work, cursor, dueAt);
 }
 
 export type PipelineStartupOwnership = { id: string; attempts: Array<{ conversationId: string | null; state: string }>;
@@ -1175,7 +1275,7 @@ export async function loadPipelinesForStartupAsync(): Promise<Pipeline[]> {
   let slice = performance.now();
   let resolveProject = projectAliasResolver();
   for (const pipeline of evidence.pipelines) {
-    result.push(performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(pipeline, resolveProject), 1));
+    result.push(performanceSpans.sync("pipeline.copy", () => cloneLoadedPipeline(pipeline, resolveProject), 1));
     if (performance.now() - slice >= 4) {
       await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
       // A project move may have committed while this copy yielded.
@@ -1226,7 +1326,7 @@ export function loadPipelinesForStartup(): Pipeline[] {
   if (prepared) {
     if (prepared.ownership) throw new PipelineStoreError("full pipeline records require full startup admission");
     const resolveProject = projectAliasResolver();
-    return prepared.pipelines.map(pipeline => performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(pipeline, resolveProject), 1));
+    return prepared.pipelines.map(pipeline => performanceSpans.sync("pipeline.copy", () => cloneLoadedPipeline(pipeline, resolveProject), 1));
   }
   return readCompletePipelineRecords().flatMap((record) => { const decoded = decodePipeline(record); return decoded ? [decoded] : []; });
 }
@@ -1279,9 +1379,8 @@ export function planPipelineStateMigration(): {
   };
 }
 
-/** Fresh per-call copies of every layer a caller may write (pipeline, stage,
-    run, attempt, cursor rows), so cached records stay pristine while callers
-    receive independently mutable structures. Deep config leaves are shared. */
+/** Normalize defaults and project identity on decoded records. Nested config
+    can retain input references; shared records need cloneLoadedPipeline. */
 function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject): Pipeline {
   const settledAttempts = pipeline.terminalReap?.settledAttempts
     ?? (pipeline.terminalReap?.settledAt
@@ -1329,6 +1428,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       attempts: Array.isArray(run.attempts)
         ? run.attempts.map((attempt) => ({
             ...attempt,
+            ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
             ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
             launchId: attempt.launchId ?? null,
             conversationId: attempt.conversationId ?? null,
@@ -1370,7 +1470,62 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
   };
 }
 
-let projectionCache: { signature: string; pipelines: Pipeline[] } | null = null;
+/** Detach every nested field before a mutable reader or session sees a shared
+    decoded record, including configuration and historical attempt evidence. */
+function cloneLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject): Pipeline {
+  return performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(structuredClone(pipeline), resolveProject), 1);
+}
+
+/** Array slots detach on access. Length, direct lookup and append stay bounded;
+ * enumeration/serialization still sees the complete authoritative history. */
+function lazyControllerArray<T>(source: T[]): T[] {
+  const target: typeof source = [];
+  target.length = source.length;
+  let inheritedLength = source.length;
+  const deleted = new Set<string>();
+  const index = (key: string | symbol) => typeof key === "string" && /^(0|[1-9][0-9]*)$/.test(key) ? Number(key) : -1;
+  const copyAt = (array: typeof source, key: string | symbol) => {
+    const n = index(key);
+    if (n >= 0 && n < inheritedLength && n < array.length && !Object.hasOwn(array, key) && !deleted.has(String(key))) {
+      array[n] = performanceSpans.sync("pipeline.copy", () => structuredClone(source[n]!));
+    }
+  };
+  return new Proxy(target, {
+    get(array, key, receiver) {
+      copyAt(array,key);
+      return Reflect.get(array, key, receiver);
+    },
+    has: (array, key) => Reflect.has(array, key) || (index(key) >= 0 && index(key) < Math.min(inheritedLength,array.length) && !deleted.has(String(key))),
+    set(array, key, value) {
+      if (key === "length") inheritedLength = Math.min(inheritedLength, Number(value));
+      deleted.delete(String(key));
+      return Reflect.set(array, key, value);
+    },
+    deleteProperty(array, key) { deleted.add(String(key)); return Reflect.deleteProperty(array,key); },
+    ownKeys(array) {
+      const keys = new Set(Reflect.ownKeys(array));
+      for (let n = 0; n < Math.min(inheritedLength,array.length); n++) if (!deleted.has(String(n))) keys.add(String(n));
+      return [...keys];
+    },
+    getOwnPropertyDescriptor(array, key) {
+      copyAt(array,key);
+      return Reflect.getOwnPropertyDescriptor(array,key);
+    },
+  });
+}
+
+function cloneControllerPipeline(pipeline: Pipeline): Pipeline {
+  if (!controllerReferences(pipeline.id)) return cloneLoadedPipeline(pipeline);
+  return performanceSpans.sync("pipeline.copy", () => {
+    const copy: Pipeline = structuredClone({ ...pipeline, runs: [],
+      terminalReap: pipeline.terminalReap ? { ...pipeline.terminalReap, settledAttempts: [] } : undefined });
+    copy.runs = pipeline.runs.map(run => ({ ...run, attempts: lazyControllerArray(run.attempts) }));
+    if (pipeline.terminalReap) copy.terminalReap!.settledAttempts = lazyControllerArray(pipeline.terminalReap.settledAttempts);
+    inheritControllerGuards(pipeline,copy);
+    return copy;
+  }, 1);
+}
+
 const pipelineStores = new Map<string, {
   active: SqliteStateCollection<Pipeline>;
   archive: SqliteStateCollection<Pipeline>;
@@ -1471,13 +1626,14 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
   if (held) return held;
   initializeStateCollections(filename, pipelineStateCollectionSeeds());
   const common = {
+    readCacheKey: JSON.stringify(["pipeline-v1", PIPELINE_ROLE_IDS]),
     schemaVersion: PIPELINES_SCHEMA_VERSION,
     busyMessage: "pipeline state is busy",
     key: (pipeline: Pipeline) => pipeline.id,
     decode: decodePipeline,
     preserveRejectedRecords: true,
-    clone: reviveLoadedPipeline,
-    cloneController: (pipeline: Pipeline) => reviveLoadedPipeline(structuredClone(pipeline)),
+    clone: cloneLoadedPipeline,
+    cloneController: cloneControllerPipeline,
     decodeAuthority: () => JSON.stringify(projectAliasSnapshot()),
     decodeError: (error: unknown) => error instanceof PipelineStoreError
       ? error
@@ -1514,21 +1670,10 @@ function archiveStore(): SqliteStateCollection<Pipeline> {
   return stores().archive;
 }
 
-function pipelinesFileSignature(): string {
-  return pipelineStore().signature();
-}
-
-/** The validated pipeline projection keeps the signature cache introduced for
-    the JSON store. SQLite collection revisions invalidate it across processes.
-    The records are the cache itself — only the exported readers below decide
-    what a caller may do with them. */
-function cachedPipelines(): Pipeline[] {
-  const before = pipelinesFileSignature();
-  if (projectionCache?.signature === before) return projectionCache.pipelines;
-  const pipelines = [...pipelineStore().loadReadonly()];
-  const after = pipelinesFileSignature();
-  if (before === after) projectionCache = { signature: after, pipelines };
-  return pipelines;
+/** SQLite revisions, database identity and project aliases validate the shared
+    read cache. The exported reader decides whether to copy its records. */
+function cachedPipelines(): readonly Pipeline[] {
+  return pipelineStore().loadReadonly();
 }
 
 /** Read-only load for request-path projections (issue #798): no lease, and the
@@ -1537,7 +1682,7 @@ function cachedPipelines(): Pipeline[] {
     pass `loadPipelines` uses, so a projection overlay can never write into the
     cache. */
 export function loadPipelinesForProjection(): Pipeline[] {
-  return cachedPipelines().map((pipeline) => withDeliveryPublicationDetail(reviveLoadedPipeline(pipeline)));
+  return cachedPipelines().map((pipeline) => withDeliveryPublicationDetail(cloneLoadedPipeline(pipeline)));
 }
 
 /** Reuse the lane card's existing publication/detail slot. Never persist this
@@ -1552,7 +1697,7 @@ export function withDeliveryPublicationDetail(pipeline: Pipeline): Pipeline {
 
 /** The registry read behind bounded list projections (issue #863).
  *
- * Deliberately skips the per-caller `reviveLoadedPipeline` pass that every other
+ * Deliberately skips the per-caller `cloneLoadedPipeline` pass that every other
  * reader pays: a list page filters and slices these records and then copies only
  * the handful of scalars a row needs, so materializing mutable copies of 500
  * pipelines' nested stage/attempt history — for rows that are about to be
@@ -1562,8 +1707,27 @@ export function withDeliveryPublicationDetail(pipeline: Pipeline): Pipeline {
  * Anything that mutates a pipeline goes through `withPipelineMutation`, and
  * anything that overlays one takes `loadPipelinesForProjection`.
  */
+const pipelineProjectKeys = new WeakMap<readonly Pipeline[], { aliases: string; projects: ReadonlySet<string> }>();
 export function loadPipelinesForList(): readonly Pipeline[] {
-  return cachedPipelines();
+  const pipelines = cachedPipelines();
+  const aliases = JSON.stringify(projectAliasSnapshot().aliases);
+  let membership = pipelineProjectKeys.get(pipelines);
+  if (membership?.aliases !== aliases) {
+    membership = { aliases, projects: canonicalProjectKeys(pipelines.map(pipeline => pipeline.project)) };
+    pipelineProjectKeys.set(pipelines, membership);
+  }
+  replaceProjectKeySource("pipelines", membership.projects);
+  return pipelines;
+}
+
+/** Seat startup fills and freezes the shared list with timer opportunities. */
+export async function loadPipelinesForListAsync(): Promise<readonly Pipeline[]> {
+  const rows = await pipelineStore().loadReadonlyAsync();
+  if (!Object.isFrozen(rows)) {
+    await forEachCooperatively(rows, row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
+    Object.freeze(rows);
+  }
+  return loadPipelinesForList();
 }
 
 /** How long a pipeline mutation waits for the registry lease before it refuses
@@ -1589,26 +1753,28 @@ export function pipelineLockWaitMs(): number {
  * releases are retried in the background. */
 export async function withPipelineMutation<T>(
   mutate: (pipelines: Pipeline[], persist: {
-    (): void;
-    (records: readonly Pipeline[]): void;
+    (): Promise<void>;
+    (records: readonly Pipeline[]): Promise<void>;
   }) => Promise<T> | T,
   observeHold?: (heldMs: number) => void,
 ): Promise<T> {
-  return withViewerOperation("pipelines.mutation", () => refuseBusyBeforeAdmission((admitted) => pipelineStore().mutate((pipelines, persist) => {
+  return withViewerOperation("pipelines.mutation", () => refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() })).mutate((pipelines, persist) => {
     admitted();
     return mutate(pipelines, persist);
-  }, undefined, false, pipelineLockWaitMs(), observeHold)));
+  }, controllerPipelineKeys() ? context => {
+    if (context.structural) throw new Error("controller jobs cannot replace the collection");
+  } : undefined, false, pipelineLockWaitMs(), observeHold, controllerPipelineKeys())));
 }
 
 export async function withPipelineControllerMutation<T>(
   mutate: (pipelines: Pipeline[], persist: {
-    (): void;
-    (records: readonly Pipeline[]): void;
+    (): Promise<void>;
+    (records: readonly Pipeline[]): Promise<void>;
   }, assertCurrent: (pipeline: Pipeline) => void) => Promise<T> | T,
   observeHold?: (heldMs: number) => void,
   explicitOnly = false,
 ): Promise<T> {
-  return withViewerOperation("pipelines.controller-mutation", () => performanceSpans.wait(explicitOnly ? "controller.admission" : "controller.reconcile", () => pipelineStore().reconcileSnapshot(mutate, observeHold, explicitOnly)));
+  return withViewerOperation("pipelines.controller-mutation", () => performanceSpans.wait(explicitOnly ? "controller.admission" : "controller.reconcile", async () => (await waitForStateLock("pipelines.open", pipelineStore)).reconcileSnapshot(mutate, observeHold, explicitOnly, controllerPipelineKeys())));
 }
 
 /** Short startup state admission under the existing cross-process lease.
@@ -1626,7 +1792,7 @@ export async function withPipelineStartupAdmission<T>(
     let entered = false;
     try {
       let evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
-      const store = pipelineStore();
+      const store = await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() });
       // A first migration changes authority. Reread its result before taking
       // the lease; a corrupt legacy source has already refused preparation.
       if (evidence.signature !== evidenceSignature()) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
@@ -1678,12 +1844,23 @@ export function unclaimedPipelinePublications(): Pipeline[] {
   return pipelineStore().unclaimedPipelinePublications();
 }
 
+export async function controllerUnclaimedPublications(): Promise<Pipeline[]> {
+  const keys = controllerPipelineKeys();
+  if (!keys) return unclaimedPipelinePublications();
+  const rows: Pipeline[] = [];
+  for (const key of keys) {
+    const row = await findControllerPipeline(key);
+    if (row && !row.delivery && row.publication === "remote-branch" && row.state !== "completed" && row.state !== "closed") rows.push(row);
+  }
+  return rows;
+}
+
 export function withDeliveryMutation<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R): R {
   return pipelineStore().boundedPatch(16, operation);
 }
 
 export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R, limit = 16): Promise<R> {
-  return refuseBusyBeforeAdmission((admitted) => pipelineStore().boundedPatchAsync(limit, (tx) => {
+  return refuseBusyBeforeAdmission(async (admitted) => (await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() })).boundedPatchAsync(limit, (tx) => {
     admitted();
     return operation(tx);
   }, pipelineLockWaitMs()));
@@ -1781,16 +1958,44 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
 
 export function savePipelines(pipelines: Pipeline[]): void {
   pipelineStore().replaceSync(pipelines);
+  replaceProjectKeySource("pipelines", canonicalProjectKeys(pipelines.map(pipeline => pipeline.project)));
 }
 
 /** Settled records leave the hot registry after this long; the archive keeps
     the full record for the closed list and by-id reads. */
 const SETTLED_PIPELINE_ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 
+/** Shared archive rows, validated by revision, database identity and decoder
+ * authority. Projection consumers must never mutate this frozen graph. */
+export function loadArchivedPipelinesForList(): readonly Pipeline[] {
+  const rows = archiveStore().loadReadonly();
+  freezeArchive(rows);
+  return rows;
+}
+
+export async function loadArchivedPipelinesForListAsync(): Promise<readonly Pipeline[]> {
+  const rows = await archiveStore().loadReadonlyAsync();
+  if (!Object.isFrozen(rows)) {
+    await forEachCooperatively(rows, row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
+    Object.freeze(rows);
+  }
+  return rows;
+}
+
+function freezeArchive(value: unknown): void {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return;
+  for (const child of Object.values(value)) freezeArchive(child);
+  Object.freeze(value);
+}
+
 /** Cold records use the same per-record isolation and strict JSON parsing as
     the active collection. */
 export function loadArchivedPipelines(): Pipeline[] {
   return archiveStore().snapshot();
+}
+
+export function selectArchivedPipelines(select: (pipeline: Pipeline) => boolean, limit: number): Promise<Pipeline[]> {
+  return archiveStore().selectReadonlyAsync(select, limit);
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
@@ -1812,11 +2017,11 @@ export async function archiveSettledPipelines(
   nowMs = Date.now(),
   options: { beforeCommit?: () => void } = {},
 ): Promise<number> {
-  return pipelineStore().moveMatchingTo(
+  return withViewerOperation("pipelines.controller-read", () => pipelineStore().moveMatchingTo(
     archiveStore(),
     (pipeline) => pipelineSettledForArchive(pipeline, nowMs),
     options,
-  );
+  ));
 }
 
 export function checkpointPipelineRollbackMirrorsForDemotion(): { pipelines: number; pipelinesArchive: number } {
@@ -1845,6 +2050,28 @@ export async function checkpointPipelineRollbackMirrorsForDemotionAsync(): Promi
 export function pipelineSelectionSource() {
   const collection = pipelineStore();
   return { filename: stateDatabaseFile(), read: (id: string) => collection.get(id) };
+}
+
+/** Bind one in-flight operation to its store, avoiding state-path resolution
+ * on every tick. Replacement at the same path is guarded by the connection. */
+export function pipelineRecordReader(pipelineId: string) {
+  const { active, archive } = stores();
+  const aliasesFile = statePath("project-aliases.json");
+  // The decoder reads this file and worktree_recovery. Revision metadata for
+  // the latter travels in the same SQL query; no alias graph is copied here.
+  const authority = () => {
+    try {
+      const stat = fs.statSync(aliasesFile, { bigint: true });
+      return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.size}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+      throw error;
+    }
+  };
+  return {
+    version: active.pipelineRecordVersionReader(pipelineId, authority),
+    read: () => active.get(pipelineId) ?? archive.get(pipelineId),
+  };
 }
 
 /** Full-record read by id: the hot registry first, then the archive. */

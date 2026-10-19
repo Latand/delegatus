@@ -1,4 +1,5 @@
-import type { IssueReportLanguage } from "./approvalReply";
+import { shortId } from "@/lib/shortIds";
+import type { IssueReportLanguage } from "./approvalForm";
 import type { IssueReportFinding } from "./scrub";
 import type { IssueReportPreview } from "./store";
 
@@ -18,7 +19,7 @@ const COPY = {
     none: "None found. A clean result proves nothing; read the whole text.",
     inTitle: "title", line: "body, line", lines: "body, lines", decoded: "decoded form",
     warning: "Warning",
-    closing: "The approving reply files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
+    closing: "Approving it in the decision form files exactly the title and body above as a public issue in the Delegatus repository, readable by anyone. Hints do not prevent this.",
   },
   uk: {
     heading: "ПОПЕРЕДНІЙ ПЕРЕГЛЯД", digest: "Дайджест",
@@ -31,7 +32,7 @@ const COPY = {
     none: "Нічого не знайдено. Чистий результат нічого не доводить; прочитайте весь текст.",
     inTitle: "назва", line: "текст, рядок", lines: "текст, рядки", decoded: "розкодований вигляд",
     warning: "Попередження",
-    closing: "Схвальна відповідь створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
+    closing: "Схвалення у формі рішення створить із назви й тексту вище, без жодних змін, публічний issue в репозиторії Delegatus, який може прочитати будь-хто. Підказки цьому не перешкоджають.",
   },
 } as const;
 
@@ -80,7 +81,7 @@ export function issueReportPreviewText(preview: PreviewText, language: IssueRepo
   const place = (hint: IssueReportFinding) => (hint.where === "title" ? copy.inTitle
     : `${hint.lines.length > 1 ? copy.lines : copy.line} ${hint.lines.join(", ")}`) + (hint.reading === "decoded" ? `, ${copy.decoded}` : "");
   return [
-    copy.heading, `${copy.digest}: ${preview.digest}`, "",
+    copy.heading, `${copy.digest}: ${shortId(preview.digest)}`, "",
     `**━━ ${copy.from} ━━**`,
     `> ${copy.title}`, preview.title,
     `> ${copy.body}`, preview.body, ...(leavesFenceOpen(preview.body) ? ["```"] : []),
