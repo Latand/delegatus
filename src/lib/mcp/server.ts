@@ -1,3 +1,4 @@
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { blockingWaitRole } from "@/lib/blockingWaits";
 import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
 import { normalizeShortIdArgs } from "./shortIdArgs";
@@ -1750,6 +1751,11 @@ export interface SqliteMcpReceiptStoreOptions {
   now?: () => number;
 }
 
+const receiptIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS mcp_receipts_retention_sequence
+        ON mcp_receipts(retention, sequence)`,
+]);
+
 /**
  * Keyed durable receipts for the production MCP server.
  *
@@ -2025,6 +2031,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
    * both ALTER, and the second would throw "duplicate column name".
    */
   private initializeSchema(): void {
+    receiptIndexes.assertRepairAuthority(this.db, path.dirname(this.filename));
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.exec(`
@@ -2041,9 +2048,8 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
           storage_bytes INTEGER NOT NULL,
           claimed_at INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS mcp_receipts_retention_sequence
-        ON mcp_receipts(retention, sequence);
       `);
+      receiptIndexes.install(this.db, path.dirname(this.filename));
       /* #1490: the bound identity and dispatch stage of a recoverable mutation.
          Added in place so an existing database keeps every row it holds; rows
          from before carry NULL in both and are read as legacy. */
