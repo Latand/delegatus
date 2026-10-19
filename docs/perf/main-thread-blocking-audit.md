@@ -2485,13 +2485,90 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
 
 - **Evidence.** Suspect 1.
 - **Change.** `retainReleases` (`src/lib/selfUpdate/retention.ts:63`) scans
-  `/proc` once per pass (it now calls `scan()` per candidate at `:160`, 87
-  kept releases here) and runs `bytesOf` (`:32`, called at `:164`) in a helper.
+  `/proc` once per pass; the pre-L10 path called `scan()` per candidate (88
+  inventories for 87 kept releases) and counted `bytesOf` on the Viewer loop.
+  The candidate path now runs `bytesOf` in a helper.
 - **Acceptance.** A fixture of 87 release directories triggers one scan per
   pass and keeps the Viewer loop within 50 ms during the pass.
+  The focused 10 ms probe compares main-loop turns with an independent worker
+  heartbeat to distinguish loop blockage from process-wide scheduling pauses.
 - **Before/after.** `T19` extended to a full pass over copies of retained
   releases (read-only); production: the `self-update.retention` label and
   `self-update.bytes` spans after an apply.
+
+
+#### L10 implementation and replay
+
+Keep decisions share one process inventory for the entire pass. Production
+collects that inventory in a leased helper as well, so the Viewer does not
+walk `/proc`. Every destructive step still gets a fresh helper safety scan,
+including checks after awaited Git commands and trash renames. These safety
+scans are additional to the single keep inventory and run at the guards for
+attempted destructive steps. Serving revisions, rollback targets, active
+pointers, in-flight builds, process holders and the existing Git and mount
+checks retain their protection.
+
+The helper counts allocated bytes without following symlinks or counting
+multiply linked files. An unreadable tree, an incomplete byte walk, an
+unreadable process, malformed or partial replies, helper exit and
+request timeout refuse cleanup. An inspection refusal aborts the remaining
+pass. A refusal after a trash rename restores the original path; interrupted
+removals keep their durable recovery journal. The helper has one outstanding
+request, a bounded reply and a 60-second request deadline. The pass closes its
+recorded lease and waits for the guardian and its process group to end.
+`self-update.retention` remains the Viewer operation label;
+`self-update.bytes` records the asynchronous measurement waits in the Viewer
+and the synchronous byte walks in the helper.
+
+The T19 replay driver is `scripts/measure-release-retention.ts`. It requires
+exactly 87 already-copied release directories below its isolated `TMPDIR`,
+with write permissions removed. It refuses Git writes and verifies an
+inventory digest before and after the pass. Every copied release is in
+flight, so the replay measures a full keep pass without exercising removal.
+Both sides validate the entire inventory before timing, warming filesystem
+metadata equally. The same legacy process collector is injected on both sides
+to measure whole passes even when the stricter production scanner refuses
+unreadable proc entries. Success and refusal of the production scanner are tested separately.
+This replay measures the byte-helper and inventory-reuse changes; it does not
+measure production safety scans during removals.
+
+Use the same immutable seed and Bun for six alternating before/after pairs.
+Immediately before each sample, read the scoped `agent_fleet` summary and pass
+its `observedAt`, `agents.live` and `agents.running` values to the replay driver;
+the emitted sample keeps those workload counts beside its timing and load.
+Export the base and candidate source into scratch, copy this driver to the
+base export, and run each invocation through the admitted gate from its own
+export with isolated HOME, XDG_CONFIG_HOME and LLV_STATE_DIR, a stage-owned
+TMPDIR containing the seed, and a closed Viewer control URL:
+
+```sh
+bun scripts/measure-release-retention.ts "$TMPDIR/retained-releases" "$OUT" "$SOURCE_REVISION" "$AGENT_FLEET_OBSERVED_AT" "$LIVE_AGENTS" "$RUNNING_AGENTS"
+```
+
+The JSON output records the source tree digest and per-file fingerprints,
+measurement driver digest, seed digest, visited entry count, process scan
+count, full-pass duration, 10 ms timer gaps, retained allocation counts, load
+averages, CPU pressure, and cgroup CPU/memory limits and counters. The replay
+record is `evidence/release-retention-replay.json`.
+
+Six alternating pairs under Bun 1.4.0 visited 3,982,014 entries across the
+same 87 read-only release copies and returned identical keep reasons and
+91,987,001,344 allocated bytes. The shared gate bounded CPU to three cores;
+load averages, CPU pressure, and cgroup counters accompany every sample.
+
+| Full keep pass | Before | After |
+| --- | ---: | ---: |
+| Process inventories | 88 | 1 |
+| Median duration | 11,906.6 ms | 7,452.2 ms |
+| Duration range | 11,109.7–13,076.6 ms | 6,938.0–7,796.7 ms |
+| Median maximum 10 ms timer gap | 11,907.0 ms | 80.0 ms |
+| Maximum timer-gap range | 11,110.0–13,080.0 ms | 65.1–91.0 ms |
+
+The remaining replay gap includes the injected synchronous legacy collector.
+Production moves that inventory to the helper too. The separate 87-release
+fixture enforces the 50 ms loop bound during byte measurement.
+Production timing remains a post-deploy observation through the labels above;
+this stage deploys nothing.
 
 ## Regression guards
 
