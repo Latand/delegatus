@@ -432,15 +432,20 @@ async function recoverCandidate(
         ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}),
       };
       const releasedKey = current.key;
-      const releasedEpoch = registry.readOnlySnapshot().entries[sessionKeyId(releasedKey)]?.claimEpoch;
+      const releasedEntry = registry.readOnlySnapshot().entries[sessionKeyId(releasedKey)];
+      const releasedCustody = releasedEntry ? {
+        claimEpoch: releasedEntry.claimEpoch,
+        claimOwner: releasedEntry.claimOwner,
+        writerClaimEpoch: releasedEntry.structuredHost?.writerClaimEpoch ?? null,
+        process: releasedEntry.structuredHost?.process ?? null,
+      } : null;
       await ownership.releaseHost(releasedKey);
       await assertOwnership();
       await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
         request.authorityGuard?.();
         ownership.assertCurrent?.();
         assertPipelineTurnAllowed(candidate.conversationId, registry);
-        if (registry.readOnlySnapshot().entries[sessionKeyId(releasedKey)]?.claimEpoch !== releasedEpoch) return false;
-        return registry.terminateStructuredHost(releasedKey);
+        return registry.terminateStructuredHost(releasedKey, undefined, [], releasedCustody);
       });
       await assertOwnership();
       current = candidateFor(registry, request, true, park);
@@ -606,12 +611,19 @@ async function recoverCandidate(
       await assertAccountAuthorized();
     } catch (error) {
       if (ownsSuccessor()) {
+        const successorEntry = registry.readOnlySnapshot().entries[sessionKeyId(current.key)];
+        const successorCustody = successorEntry ? {
+          claimEpoch: successorEntry.claimEpoch,
+          claimOwner: successorEntry.claimOwner,
+          writerClaimEpoch: successorEntry.structuredHost?.writerClaimEpoch ?? null,
+          process: successorEntry.structuredHost?.process ?? null,
+        } : null;
         await ownership?.releaseHost(current.key);
         await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
           request.authorityGuard?.();
           ownership?.assertCurrent?.();
           assertPipelineTurnAllowed(current!.conversationId, registry);
-          if (ownsSuccessor()) registry.terminateStructuredHost(current!.key);
+          if (ownsSuccessor()) registry.terminateStructuredHost(current!.key, undefined, [], successorCustody);
         });
       }
       throw error;

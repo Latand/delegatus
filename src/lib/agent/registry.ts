@@ -220,6 +220,13 @@ export interface AgentRegistryEntry {
   updatedAt: string;
 }
 
+export interface StructuredHostCustody {
+  claimEpoch: number;
+  claimOwner: string | null;
+  writerClaimEpoch: number | null;
+  process: Readonly<ProcessIdentity> | null;
+}
+
 function hasCompleteProcessIdentity(identity: ProcessIdentity | null): identity is ProcessIdentity & {
   startIdentity: string;
   bootEpoch: string;
@@ -5549,26 +5556,52 @@ export class AgentRegistry {
     operation: () => T,
     correlate?: (value: T) => { label: string; operationId?: string | null } | null,
   ): Promise<{ acquired: true; value: T } | { acquired: false }> {
+    const startedAt = performance.now();
     return withViewerOperation("registry.write", () => this.withWriterAdmissionQueue(
       remaining => this.whenWriterAdmitted(correlation, operation, correlate, remaining),
       this.writerDeadlineMs ?? 5_000,
+      () => {
+        recordBlockingWait({ site: "registry-lock-async", synchronous: false,
+          durationMs: performance.now() - startedAt, correlation, subject: "agent-registry", refused: true });
+        return { acquired: false };
+      },
     ));
   }
 
   /** One FIFO covers every SQLite writer admission, including account mutations.
    * Its callback must acquire external leases only after its turn and release
    * them before any retry wait. */
-  private async withWriterAdmissionQueue<T>(operation: (remainingMs: number) => Promise<T>, deadlineMs: number): Promise<T> {
+  private async withWriterAdmissionQueue<T>(
+    operation: (remainingMs: number) => Promise<T>,
+    deadlineMs: number,
+    expired: () => T,
+  ): Promise<T> {
     if (accountMutationHeld() || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) {
       return operation(deadlineMs);
     }
     const queuedAt = performance.now();
+    const deadlineAt = queuedAt + deadlineMs;
     const previous = this.writerAdmissionTail;
     let release!: () => void;
     this.writerAdmissionTail = new Promise<void>((resolve) => { release = resolve; });
-    await previous;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const hasTurn = await Promise.race([
+      previous.then(() => true),
+      new Promise<false>(resolve => {
+        timeout = setTimeout(() => resolve(false), Math.max(0, deadlineAt - performance.now()));
+        timeout.unref?.();
+      }),
+    ]);
+    if (timeout) clearTimeout(timeout);
+    if (!hasTurn) {
+      // Keep this expired ticket in FIFO order until its predecessor finishes;
+      // later writers must not pass the writer whose turn they followed.
+      void previous.then(release);
+      return expired();
+    }
     try {
-      const remainingMs = Math.max(0, deadlineMs - (performance.now() - queuedAt));
+      const remainingMs = deadlineAt - performance.now();
+      if (remainingMs <= 0) return expired();
       return await operation(remainingMs);
     } finally {
       release();
@@ -6339,7 +6372,12 @@ export class AgentRegistry {
       }
     };
     if (inherited) return run(totalWaitMs);
-    return this.withWriterAdmissionQueue(run, totalWaitMs);
+    return this.withWriterAdmissionQueue(run, totalWaitMs, () => {
+      refused = true;
+      recordBlockingWait({ site: "registry-lock-async", synchronous: false,
+        durationMs: performance.now() - startedAt, correlation, subject: "agent-registry", refused: true });
+      return { acquired: false };
+    });
   }
 
   private reserveSpawnRequest(input: SpawnRequest): SpawnBeginResult {
@@ -7895,12 +7933,20 @@ export class AgentRegistry {
     key: SessionKey,
     expected?: Readonly<ProcessIdentity>,
     confirmedSurvivors: readonly ProcessIdentity[] = [],
+    expectedCustody?: StructuredHostCustody | null,
   ): boolean {
     return this.mutate((file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry) return false;
       const current = entry.structuredHost?.process ?? null;
+      if (expectedCustody !== undefined) {
+        if (!expectedCustody || entry.claimEpoch !== expectedCustody.claimEpoch
+          || entry.claimOwner !== expectedCustody.claimOwner
+          || (entry.structuredHost?.writerClaimEpoch ?? null) !== expectedCustody.writerClaimEpoch
+          || ((current === null) !== (expectedCustody.process === null))
+          || (current && expectedCustody.process && !sameRecordedProcessIdentity(current, expectedCustody.process))) return false;
+      }
       if (expected && current && !sameRecordedProcessIdentity(current, expected)) return false;
       const retained = entry.structuredTerminationSurvivors ?? [];
       if (retained.length > 0 && (!expected || !current || !sameRecordedProcessIdentity(current, expected))) return false;

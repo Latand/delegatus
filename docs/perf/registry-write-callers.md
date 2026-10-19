@@ -341,11 +341,22 @@ destructive registry write:
 
 | Sites | Verdict and guard |
 | --- | --- |
-| `src/lib/runtime/structuredReconfigure.ts` `terminateStructuredHost` calls at lines 222, 240, 245, 311, 339, 358 | **PASS** — all six use `terminateReleasedHost`, which rechecks the current operation and captured claim epoch, owner, writer epoch, and process identity inside the admitted callback. |
-| `src/lib/runtime/structuredRecovery.ts` `terminateStructuredHost` at line 434 | **PASS** — the admitted callback rechecks request authority, recovery operation ownership, pipeline permission, and captured claim epoch. |
-| `src/lib/runtime/structuredRecovery.ts` `terminateStructuredHost` at line 600 | **PASS** — the admitted cleanup callback rechecks request authority, recovery operation ownership, pipeline permission, and the successor claim. |
+| `src/lib/runtime/structuredReconfigure.ts` `terminateReleasedHost` calls at lines 277, 299, 308, 378, 411, 434 | **FIXED** — each checks operation/generation ownership and the captured claim epoch, owner, writer epoch, and process in the admitted callback; the registry mutator repeats custody atomically. |
+| `src/lib/runtime/structuredRecovery.ts` calls at lines 448 and 626 | **FIXED** — the first atomically compares captured row custody after checking request and operation ownership; failure cleanup also rechecks successor ownership and captured custody in its admitted callback. |
+| `src/lib/runtime/structuredDeliveryController.ts` qualified and unqualified `terminateActiveHost` calls at lines 1936 and 1951 | **FIXED** — both capture claim epoch, owner, writer epoch, and process before release, then compare that custody in the admitted registry mutation. |
+| `src/lib/runtime/structuredDeliveryController.ts` `retireRegistryEntry` at line 1278 | **FIXED** — captures custody before the process-tree termination awaits and passes it to the atomic retirement mutation alongside the authorized process and confirmed survivors. |
+| `src/lib/runtime/structuredHostControl.ts` default `retireRegistryEntry` at line 457 | **FIXED** — captures custody before any process-tree await and supplies it to every retirement outcome, including already-exited roots. |
+| `src/lib/runtime/registry.ts` orphan stop at line 646 | **ALREADY SAFE** — it uses `settleStructuredTerminationSurvivors`, whose atomic mutation requires the exact root process, a dead process owner, and confirmation of every retained survivor. |
+
+Other post-await ownership transfers in `src/lib/runtime/structuredSpawn.ts` and
+`src/lib/accounts/migration/provider.ts` release the old host before calling
+`claimStructuredHost`; the atomic claim mutator rechecks the current row and
+writer epoch. Direct synchronous `terminateStructuredHost` calls in tests and
+pipeline fixtures do not cross an await.
 
 `src/lib/agent/registry.ts` also gives `accountMutationWrite` the same FIFO
-admission queue as `deliveryWrite*`. Its retry waits run after the account
-lease is released, and both paths retain their invocation deadline. The mixed
-policy/quota race and the existing policy/policy ordering case pass.
+admission queue as `deliveryWrite*`. Each ticket's deadline includes time spent
+behind earlier tickets; an expired ticket refuses without invoking its writer
+callback, while later tickets retain FIFO order. Retry waits run after the
+account lease is released. The mixed policy/quota race, policy/policy ordering,
+and queued deadline refusals for both APIs pass.

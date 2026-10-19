@@ -461,6 +461,56 @@ test("Viewer policy writes commit in admission order when the writer is released
   }
 });
 
+test("delivery admission refuses at its own deadline while queued behind another writer", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "queued-delivery-deadline-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteWriterDeadlineMs: 30,
+  });
+  const holder = registryLockHolder(path.join(directory, "agent-registry.sqlite"));
+  let callbacks = 0;
+  try {
+    await holder.hold();
+    const earlier = registry.accountMutationWrite("earlier", () => { callbacks++; }, undefined, { waitMs: 1_000 });
+    const started = performance.now();
+    const later = registry.deliveryWrite({ label: "later" }, () => { callbacks++; });
+    const result = await later;
+    expect(result.acquired).toBe(false);
+    expect(performance.now() - started).toBeLessThan(100);
+    expect(callbacks).toBe(0);
+    await holder.release();
+    expect((await earlier).acquired).toBe(true);
+    expect(callbacks).toBe(1);
+  } finally {
+    await holder.close();
+    registry.close();
+  }
+});
+
+test("account mutation admission refuses at its own deadline while queued behind delivery", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "queued-account-deadline-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteWriterDeadlineMs: 1_000,
+  });
+  const holder = registryLockHolder(path.join(directory, "agent-registry.sqlite"));
+  let callbacks = 0;
+  try {
+    await holder.hold();
+    const earlier = registry.deliveryWrite({ label: "earlier" }, () => { callbacks++; });
+    const later = registry.accountMutationWrite("later", () => { callbacks++; }, undefined, { waitMs: 30 });
+    const started = performance.now();
+    const result = await later;
+    expect(result.acquired).toBe(false);
+    expect(performance.now() - started).toBeLessThan(100);
+    expect(callbacks).toBe(0);
+    await holder.release();
+    expect((await earlier).acquired).toBe(true);
+    expect(callbacks).toBe(1);
+  } finally {
+    await holder.close();
+    registry.close();
+  }
+});
+
 test("a later quota commit cannot overtake an earlier pending Viewer policy write", async () => {
   const { NextRequest } = await import("next/server");
   const { PATCH } = await import("@/app/api/accounts/claude/policy/route");

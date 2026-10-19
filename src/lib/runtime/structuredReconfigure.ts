@@ -79,7 +79,7 @@ async function terminateReleasedHost(
       || entry.claimOwner !== custody.claimOwner
       || (entry.structuredHost?.writerClaimEpoch ?? null) !== custody.writerClaimEpoch
       || !sameProcess(entry.structuredHost?.process ?? null, custody.process)) return false;
-    return registry.terminateStructuredHost(key, custody.process ?? undefined);
+    return registry.terminateStructuredHost(key, custody.process ?? undefined, [], custody);
   });
 }
 

@@ -1250,8 +1250,16 @@ export async function bindStructuredDeliveryQueue(
         };
         const refusal = authorize();
         if (refusal) throw new Error(refusal.error);
+        const retirementEntry = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)] ?? null;
+        const retirementCustody = retirementEntry ? {
+          claimEpoch: retirementEntry.claimEpoch,
+          claimOwner: retirementEntry.claimOwner,
+          writerClaimEpoch: retirementEntry.structuredHost?.writerClaimEpoch ?? null,
+          process: retirementEntry.structuredHost?.process ?? null,
+        } : null;
         const outcome = await terminateStructuredHostTree(ref, {
           retainedSurvivors,
+          registryCustody: retirementCustody,
           authorize,
           ...(onlyIfIdle ? { authorizeAsync: async () => await durableAuthority()
             ? null : { status: 409 as const, error: "idle-retirement-authority-lost" } } : {}),
@@ -1266,7 +1274,8 @@ export async function bindStructuredDeliveryQueue(
             }
             return persisted;
           },
-          retireRegistryEntry: (key, expected, confirmed) => registry.terminateStructuredHost(key, expected, confirmed),
+          retireRegistryEntry: (key, expected, confirmed, custody) =>
+            registry.terminateStructuredHost(key, expected, confirmed, custody),
         });
         if (!outcome.ok) {
           if (outcome.terminationStarted && outcome.survivors.length > 0) {
@@ -1910,20 +1919,36 @@ export async function bindStructuredDeliveryQueue(
        replacement host that claimed this key since the caller's snapshot is
        somebody else's live work and must survive untouched (#1199). */
     if (expected) {
+      const capturedEntry = registry.readOnlySnapshot().entries[id] ?? null;
+      const capturedCustody = capturedEntry ? {
+        claimEpoch: capturedEntry.claimEpoch,
+        claimOwner: capturedEntry.claimOwner,
+        writerClaimEpoch: capturedEntry.structuredHost?.writerClaimEpoch ?? null,
+        process: capturedEntry.structuredHost?.process ?? null,
+      } : null;
       const releaseIfOwned = (current.host as IdentityBoundEngineHost).releaseIfOwned;
       /* A health read can go stale before a later release signal. Real
          structured hosts expose an operation that rechecks the kernel
          identity inside that signal boundary. */
       if (!releaseIfOwned || !await releaseIfOwned.call(current.host, expected)) return false;
       const registered = takeRegistration(id, current.host);
-      (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, key, expected)));
+      (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" },
+        () => registry.terminateStructuredHost(key, expected, [], capturedCustody)));
       if (registered) await detachRegistration(id, registered);
       return true;
     }
+    const capturedEntry = registry.readOnlySnapshot().entries[id] ?? null;
+    const capturedCustody = capturedEntry ? {
+      claimEpoch: capturedEntry.claimEpoch,
+      claimOwner: capturedEntry.claimOwner,
+      writerClaimEpoch: capturedEntry.structuredHost?.writerClaimEpoch ?? null,
+      process: capturedEntry.structuredHost?.process ?? null,
+    } : null;
     const registered = takeRegistration(id, current.host);
     if (!registered) return false;
     await registered.host.release();
-    (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, registry.terminateStructuredHost.bind(registry, key, expected)));
+    (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" },
+      () => registry.terminateStructuredHost(key, undefined, [], capturedCustody)));
     await detachRegistration(id, registered);
     return true;
   };
