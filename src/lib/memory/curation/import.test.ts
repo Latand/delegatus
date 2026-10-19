@@ -114,6 +114,36 @@ test("one occurrence can be adopted and another dropped; explicit defer permits 
   expect(candidateState(candidateById(IMPORT_ID, b.id)!).state).toBe("dropped");
 });
 
+test("problem transfer dispositions only pending occurrences and undo preserves an earlier adoption", async () => {
+  const candidate = importCandidate(1);
+  candidate.occurrences.push({ ...candidate.occurrences[0], id: "o_0000000000000002", file: "projects/fixture/memory/second.md" });
+  await seedImport([candidate]);
+  const p = pass(); await readCuration(p, "imports");
+  const first = candidate.occurrences[0].id, second = candidate.occurrences[1].id;
+  const adopted = { ...adopt(candidate), occurrences: [first] };
+  const ruleId = applyCuration(p, scopeInput({ [candidate.suggestedScope]: [`adopt:${candidate.id}:0`] }, {
+    adopt: [adopted], defer: [{ candidate: candidate.id, occurrences: [second] }],
+  }), IMPORT_AT).placeholders[`adopt:${candidate.id}:0`];
+  expect(candidateState(candidateById(IMPORT_ID, candidate.id)!)).toMatchObject({ state: "pending", pending: [second], ruleIds: [ruleId] });
+  patchPass(p.id, { state: "succeeded", endedAt: new Date(NOW + 1).toISOString() });
+
+  const q = pass(IMPORT_PROJECT, NOW + 2); await readCuration(q, "imports");
+  applyCuration(q, scopeInput({ [candidate.suggestedScope]: [ruleId] }, { problem: [{
+    id: candidate.id, statement: "A concrete import issue needs review.", evidence: "The retained source records the incomplete transfer.", note: "Keep this occurrence visible for follow-up.",
+  }] }), new Date(NOW + 2).toISOString());
+  const transferred = candidateById(IMPORT_ID, candidate.id)!;
+  expect(transferred.dispositions.at(-1)?.occurrences).toEqual([second]);
+  const problemRule = roleMemoryCollection()!.snapshot().find(row => row.kind === "rule" && row.reason === "problem") as RoleMemoryRule;
+  expect(problemRule.source).toMatchObject({ occurrences: [candidate.occurrences[1]] });
+  expect(candidateState(transferred)).toMatchObject({ state: "adopted", ruleIds: [ruleId] });
+  patchPass(q.id, { state: "succeeded", endedAt: new Date(NOW + 3).toISOString() });
+
+  expect(revertCuratorPass(q.id, new Date(NOW + 4).toISOString()).importUndo?.state).toBe("partly undone");
+  expect(candidateState(candidateById(IMPORT_ID, candidate.id)!)).toMatchObject({ state: "pending", pending: [second], ruleIds: [ruleId] });
+  const r = pass(IMPORT_PROJECT, NOW + 5); await readCuration(r, "imports");
+  expect(() => applyCuration(r, scopeInput({ [candidate.suggestedScope]: [ruleId, `adopt:${candidate.id}:0`] }, { adopt: [adopt(candidate)] }), new Date(NOW + 5).toISOString())).toThrow(/surviving rule/);
+});
+
 test("an ended pass with missing import accounting fails, releases its claim, and keeps the cooldown", async () => {
   const candidate = importCandidate(1); await seedImport([candidate]);
   const p = pass();

@@ -145,6 +145,50 @@ test("a whitespace-only rescan adds its occurrence to every canonical part offer
   expect(JSON.stringify(offered)).toContain("Final condition: verify the decisive tail.");
 });
 
+test("retry rebuilds an interrupted group from its original backup topology before completing both manifest copies", async () => {
+  const instructions = Array.from({ length: 120 }, (_, index) =>
+    index === 119 ? "Final condition: verify the decisive tail." : `Rule ${String(index).padStart(3, "0")}: verify the owner before mutation.`);
+  await backup("Already imported baseline note.\n"); await dispose();
+  await advanceMemoryImportWork(request(10), { ...ports(), legacy: async () => ["legacy-claude"] });
+
+  for (let index = 0; index < 39; index++) {
+    await fs.writeFile(path.join(memory, `a-${String(index).padStart(2, "0")}.md`), `Independent note ${index}: verify ownership before mutation.\n`);
+  }
+  const expanded = instructions.join(" ".repeat(110));
+  const compact = instructions.join(" ");
+  await fs.writeFile(path.join(memory, "z-long.md"), expanded);
+  const { injectStateWriteFaultForTests } = await import("@/lib/state/sqliteStateStore");
+  try {
+    await expect(advanceMemoryImportWork(request(20), { ...ports(), legacy: async () => [], beforeCandidateBatch: index => {
+      if (index === 1) injectStateWriteFaultForTests({ site: "commit", collection: "role_memory_import", times: 1, error: Error("second candidate batch refused") });
+    } })).rejects.toThrow(/second candidate batch refused/);
+  } finally { injectStateWriteFaultForTests(null); }
+
+  const partial = readImportCandidates(ID).candidates.filter(row => row.title === "z-long.md");
+  expect(partial).toHaveLength(1);
+  expect(partial[0].part).toMatchObject({ index: 0, of: 3 });
+  await fs.writeFile(path.join(memory, "z-long.md"), compact);
+  await advanceMemoryImportWork(request(30), { ...ports(), legacy: async () => [] });
+
+  const repaired = readImportCandidates(ID).candidates.filter(row => row.title === "z-long.md").sort((a, b) => a.part.index - b.part.index);
+  expect(repaired).toHaveLength(3);
+  expect(repaired.map(row => row.part.index)).toEqual([0, 1, 2]);
+  expect(repaired.every(row => row.part.of === 3)).toBe(true);
+  const occurrenceIds = new Set(repaired.flatMap(row => row.occurrences.map(item => item.id)));
+  expect(occurrenceIds.size).toBe(2);
+  expect(repaired.every(row => row.occurrences.map(item => item.id).sort().join() === [...occurrenceIds].sort().join())).toBe(true);
+  const pass = claimPass({ project: PROJECT, repoDir: null, now: NOW + 40 })!;
+  const offered = await readCuration(pass, "imports");
+  const offeredParts = "candidates" in offered ? offered.candidates.filter(row => row.group === repaired[0].group).sort((a, b) => a.part.index - b.part.index) : [];
+  expect(offeredParts.map(row => row.part.index)).toEqual([0, 1, 2]);
+  expect(offeredParts.map(row => row.body).join("")).toBe(expanded);
+  expect(offeredParts.map(row => row.occurrences.flatMap(item => item.id)).flat().filter((id, index, all) => all.indexOf(id) === index).sort()).toEqual([...occurrenceIds].sort());
+  expect(JSON.stringify(offered)).toContain("Final condition: verify the decisive tail.");
+  const copies = (await manifest()).files.filter(entry => entry.file.endsWith("z-long.md"));
+  expect(copies).toHaveLength(2);
+  expect(copies.every(entry => entry.candidatesComplete === true)).toBe(true);
+});
+
 test("a retirement during a scan owes another final scan; failed scans never start the trial", async () => {
   await backup(); await dispose(); let legacy = ["legacy-claude"];
   await advanceMemoryImportWork(request(10), { ...ports(), legacy: async () => legacy, afterScan: async () => {

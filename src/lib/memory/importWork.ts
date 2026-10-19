@@ -11,7 +11,7 @@ import { assertPrivateImportDatabaseFiles, importCollection, withImportLookups, 
 import { candidateById, candidateKey } from "./importCuration";
 import { validateImportId } from "./importTypes";
 import type { ImportCandidate, ImportManifest, ImportManifestFile, ImportRecord, ImportRequest, ImportRoots, ImportWriter } from "./importTypes";
-import { ImportCandidates, topicMetadata } from "./importCandidates";
+import { ImportCandidates, importOccurrenceIds, topicMetadata } from "./importCandidates";
 import { commitImportManifest, pruneMemoryBackups } from "./importBackup";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { guardedContext } from "@/lib/stateOwnership";
@@ -67,6 +67,8 @@ export type ImportWorkPorts = {
   /** Integrity/race seam at the real copy boundary; never crosses the helper protocol. */
   afterCopy?: (file: string, source: string) => Promise<void>;
   phase?: (phase: "backup" | "candidates" | "retention") => void;
+  /** Deterministic persistence boundary used to exercise retries between batches. */
+  beforeCandidateBatch?: (index: number) => void;
 };
 async function digest(file: string) {
   const sum = createHash("sha256");
@@ -288,20 +290,31 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
           catch (error) { if (!missing(error)) throw error; }
         }
       }
-      const builder = new ImportCandidates(record.id);
       let resolveWriter = ports.writer;
-      for (const { file, entry, copied } of newFiles) {
-        if (entry.kind !== "claude_topic" && entry.kind !== "codex_summary") continue;
-        const bytes = await fs.readFile(path.join(record.backup, entry.copy));
+      const addBackupFile = async (builder: ImportCandidates, item: typeof newFiles[number]) => {
+        const { file, entry, copied } = item;
+        if (entry.kind !== "claude_topic" && entry.kind !== "codex_summary") return;
+        const backupFile = path.join(record.backup, entry.copy);
+        const bytes = await fs.readFile(backupFile);
         const body = bytes.toString("utf8");
-        if (!Buffer.from(body).equals(bytes)) throw new MemoryImportError("integrity");
+        if (!Buffer.from(body).equals(bytes) || await digest(backupFile) !== entry.sha256) throw new MemoryImportError("integrity");
         entry.loadedAtStart = request.rescan ? !copied && entry.loadedAtStart : entry.loadedAtStart || loaded.has(file.physical);
         const session = entry.engine === "claude" ? topicMetadata(body).session : undefined;
         if (session && !resolveWriter) resolveWriter = await (await import("./importWriter")).productionImportWriter();
         builder.add(entry, body, session ? await resolveWriter!(session) : undefined);
+        return body;
+      };
+      const builder = new ImportCandidates(record.id);
+      for (const item of newFiles) {
+        if (item.entry.kind === "claude_topic" || item.entry.kind === "codex_summary") await addBackupFile(builder, item);
       }
       const builtCandidates = builder.rows();
       const candidates: ImportCandidate[] = [];
+      const recoveryFiles = manifest.files.filter(entry => entry.kind === "claude_topic" || entry.kind === "codex_summary").map(entry =>
+        newFiles.find(item => item.entry.copy === entry.copy) ?? {
+          file: { ...entry, source: path.join(entry.home, entry.file), store: path.dirname(path.join(entry.home, entry.file)), physical: path.join(entry.home, entry.file) },
+          entry, copied: false,
+        });
       const groups = new Map<string, ImportCandidate[]>();
       for (const candidate of builtCandidates) {
         const group = groups.get(candidate.group) ?? [];
@@ -318,16 +331,43 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
           if (page.length < 40) break;
           cursor = page.at(-1)!.key;
         }
-        const canonicalCount = existing[0]?.part.of;
-        const canonical = existing.length > 0 && existing.length === canonicalCount
-          && existing.every((row, index) => row.part.of === canonicalCount && row.part.index === index);
-        if (!canonical) {
+        if (existing.length === 0) {
           candidates.push(...incoming);
           continue;
         }
+        const canonicalCount = existing[0].part.of;
+        const canonical = existing.length === canonicalCount
+          && existing.every((row, index) => row.part.of === canonicalCount && row.part.index === index);
+        let topology = canonical ? existing : null;
+        if (!topology) {
+          // The first committed occurrence fixes a group's byte topology. A
+          // later whitespace-equivalent copy may split differently, so rebuild
+          // that topology from the verified backup that established it.
+          const establishedOccurrence = existing[0].occurrences[0];
+          for (const item of recoveryFiles) {
+            if (item.entry.file !== establishedOccurrence.file || item.entry.sha256 !== establishedOccurrence.sha256
+              || item.entry.project !== establishedOccurrence.project) continue;
+            const recoveredBuilder = new ImportCandidates(record.id);
+            await addBackupFile(recoveredBuilder, item);
+            const recovered = recoveredBuilder.rows().filter(row => row.group === groupId);
+            if (recovered.some(row => row.occurrences.some(occurrence => occurrence.id === establishedOccurrence.id))) {
+              topology = recovered.sort((a, b) => a.part.index - b.part.index);
+              break;
+            }
+          }
+          if (!topology || topology.length !== canonicalCount
+            || topology.some((row, index) => row.part.index !== index || row.part.of !== canonicalCount)) {
+            throw new MemoryImportError("integrity");
+          }
+          for (const prior of existing) {
+            const recovered = topology[prior.part.index];
+            if (!recovered || recovered.id !== prior.id || recovered.body !== prior.body
+              || recovered.contentSha256 !== prior.contentSha256) throw new MemoryImportError("integrity");
+          }
+        }
         const occurrences = new Map(incoming.flatMap(row => row.occurrences).map(item => [item.id, item]));
         const linked = [...new Set(incoming.flatMap(row => row.linked))];
-        for (const row of existing) {
+        for (const row of topology) {
           candidates.push({ ...row,
             linked: [...new Set([...row.linked, ...linked])],
             occurrences: [...row.occurrences, ...[...occurrences.values()].filter(item => !row.occurrences.some(prior => prior.id === item.id))],
@@ -357,7 +397,8 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       }
       assertOwned();
       commitImportManifest(record.backup, manifest);
-      for (let offset = 0; offset < candidates.length; offset += 40) {
+      for (let offset = 0, batchIndex = 0; offset < candidates.length; offset += 40, batchIndex++) {
+        ports.beforeCandidateBatch?.(batchIndex);
         const batch = candidates.slice(offset, offset + 40);
         await importCollection(true)!.patch(() => {
           assertOwned();
@@ -367,6 +408,30 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
             return { ...prior, linked: [...new Set([...prior.linked, ...candidate.linked])], occurrences: [...prior.occurrences, ...candidate.occurrences.filter(o => !prior.occurrences.some(p => p.id === o.id))] };
           })) };
         });
+      }
+      for (const { entry } of newFiles) {
+        if (entry.kind !== "claude_topic" && entry.kind !== "codex_summary") continue;
+        const bytes = await fs.readFile(path.join(record.backup, entry.copy));
+        const body = bytes.toString("utf8");
+        if (!Buffer.from(body).equals(bytes) || await digest(path.join(record.backup, entry.copy)) !== entry.sha256) throw new MemoryImportError("integrity");
+        const occurrenceIds = new Set(importOccurrenceIds(entry as ImportManifestFile, body));
+        const expected = candidates.filter(candidate => candidate.occurrences.some(occurrence => occurrenceIds.has(occurrence.id)));
+        const groups = new Map<string, ImportCandidate[]>();
+        for (const candidate of expected) {
+          const group = groups.get(candidate.group) ?? [];
+          group.push(candidate); groups.set(candidate.group, group);
+        }
+        for (const rows of groups.values()) {
+          const count = rows[0].part.of;
+          if (rows.length !== count || rows.some((row, index) => row.part.of !== count || row.part.index !== index)) throw new MemoryImportError("integrity");
+          const groupOccurrences = rows[0].occurrences.map(occurrence => occurrence.id).filter(id => occurrenceIds.has(id));
+          for (const row of rows) {
+            const persisted = candidateById(record.id, row.id);
+            if (!persisted || persisted.group !== row.group || persisted.part.index !== row.part.index || persisted.part.of !== count
+              || groupOccurrences.some(id => !row.occurrences.some(occurrence => occurrence.id === id)
+                || !persisted.occurrences.some(occurrence => occurrence.id === id))) throw new MemoryImportError("integrity");
+          }
+        }
       }
       for (const { entry } of newFiles) entry.candidatesComplete = true;
       commitImportManifest(record.backup, manifest);
