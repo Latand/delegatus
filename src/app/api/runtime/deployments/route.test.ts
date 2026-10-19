@@ -11,6 +11,7 @@ import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { productionDeps, setSelfUpdateServiceForTests } from "@/lib/selfUpdate/instance";
 import { SelfUpdateService } from "@/lib/selfUpdate/service";
 import { POST } from "./route";
+import { beginSeatDeployment, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 
 /**
  * The HTTP deploy door, at parity with the MCP binding and the raw socket
@@ -65,6 +66,34 @@ function deployRequest(body: unknown): NextRequest {
     body: JSON.stringify(body),
   });
 }
+
+test("admission records the pending seat before a lost HTTP reply, including checkout installs", async () => {
+  for (const mode of ["managed", "checkout"] as const) {
+    const key = `lost-${mode}`;
+    await beginSeatDeployment({ conversationId: `seat-${mode}`, project: "viewer", revision: SHA,
+      requestedAt: "2026-10-19T12:00:00Z", idempotencyKey: key });
+    const service = new SelfUpdateService({ ...productionDeps(), mode: async () => ({ mode, record: null, reason: null }) });
+    if (mode === "checkout") service.deployRevision = async () => ({
+      state: "accepted", deploymentId: "checkout-admitted", revision: SHA, replayed: false,
+    });
+    setSelfUpdateServiceForTests(service);
+    // The handler finishes after the caller gives up; nobody consumes its reply.
+    await POST(deployRequest({ revision: SHA, idempotencyKey: key }));
+    expect(seatDeploymentsFor(`seat-${mode}`)).toMatchObject([{
+      deploymentId: mode === "managed" ? "deployment_1" : "checkout-admitted", idempotencyKey: key,
+    }]);
+  }
+});
+
+test("HTTP admission cannot invent a seat or attach a different busy SHA", async () => {
+  await POST(deployRequest({ revision: SHA, idempotencyKey: "no-pending-seat", conversationId: "forged-seat" }));
+  expect(seatDeploymentsFor("forged-seat")).toEqual([]);
+  await beginSeatDeployment({ conversationId: "waiting-seat", project: "viewer", revision: SHA,
+    requestedAt: "2026-10-19T12:00:00Z", idempotencyKey: "different-sha-busy" });
+  setDeploymentRuntimeForTests(async () => ({ state: "busy", deploymentId: "other-deployment", revision: "b".repeat(40) }));
+  expect((await POST(deployRequest({ revision: SHA, idempotencyKey: "different-sha-busy" }))).status).toBe(409);
+  expect(seatDeploymentsFor("waiting-seat")).toEqual([]);
+});
 
 test("a well-formed exact-SHA request is forwarded to host admission as-is", async () => {
   const response = await POST(deployRequest({ revision: SHA, idempotencyKey: "k1" }));

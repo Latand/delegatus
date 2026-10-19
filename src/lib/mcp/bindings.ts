@@ -262,6 +262,7 @@ import {
   McpDispatchNotExecutedError,
   McpDispatchUncertainError,
   McpPrototypePublicationPendingError,
+  McpDeploymentPendingError,
   McpDispatchVerdictError,
   McpDispatchSettledRefusalError,
   McpToolRefusal,
@@ -609,6 +610,9 @@ async function postViewerControl(
         ...(result.actuation === "started" ? { actuation: "started" } : {}),
       });
     }
+    if (pathname === "/api/runtime/deployments" && response.status >= 400 && response.status < 500 && response.status !== 408) {
+      throw new McpToolRefusal(message, { code: text(result.code) || "deploy_refused", retryable: false, status: response.status });
+    }
     throw new Error(message);
   }
   return result;
@@ -946,7 +950,7 @@ export interface ViewerMcpDomainDependencies {
   /** Records which seat started an accepted deployment (#2063), so the seat
       tick can wake that seat when it settles. Optional so partial harnesses
       fall back to the production store. */
-  recordSeatDeployment?(record: SeatDeploymentRecord): void;
+  recordSeatDeployment?(record: SeatDeploymentRecord, assertCaller?: () => void): void | Promise<void>;
   findDeploymentByIdempotencyKey?: typeof import("@/lib/orchestrator/seatDeployments").findSeatDeploymentByKey;
   /** The account↔project binding store (#1279). Optional so a partial harness
       can exercise the tool with no state directory; production reads and
@@ -3551,14 +3555,10 @@ function viewerSeatAuthority(
   return { ok: true, seat };
 }
 
-async function deployExactSha(
-  args: McpToolArgs,
-  control: ViewerControlDependencies,
+function deploySeatAuthority(
   dependencies: ViewerMcpDomainDependencies,
-): Promise<McpToolPayload> {
-  const revision = required(args, "revision");
-  if (!/^[0-9a-f]{7,40}$/i.test(revision)) throw new Error("revision must be a commit SHA or prefix of at least 7 characters");
-
+  revision?: string,
+) {
   const authority = viewerSeatAuthority(dependencies);
   if (!authority.ok) {
     const refusals: Record<ViewerSeatRefusal, [string, string]> = {
@@ -3571,41 +3571,66 @@ async function deployExactSha(
     const [message, code] = refusals[authority.reason];
     throw new McpToolRefusal(message, { code, revision });
   }
-  const seat = authority.seat;
+  return authority.seat;
+}
+
+async function deployExactSha(
+  args: McpToolArgs,
+  control: ViewerControlDependencies,
+  dependencies: ViewerMcpDomainDependencies,
+): Promise<McpToolPayload> {
+  const revision = required(args, "revision");
+  if (!/^[0-9a-f]{7,40}$/i.test(revision)) throw new Error("revision must be a commit SHA or prefix of at least 7 characters");
+  const seat = deploySeatAuthority(dependencies, revision);
+  const assertSeat = () => {
+    const current = deploySeatAuthority(dependencies, revision);
+    if (current.conversationId !== seat.conversationId || current.project !== seat.project) {
+      throw new McpToolRefusal("the designated deploy seat changed", { code: "deploy_caller_not_designated", retryable: false });
+    }
+  };
 
   const idempotencyKey = requestId(args);
   const pending = { conversationId: seat.conversationId, project: seat.project,
     revision: revision.toLowerCase(), requestedAt: new Date().toISOString(), idempotencyKey };
-  beginSeatDeployment(pending);
+  await beginSeatDeployment(pending, assertSeat);
+  assertSeat();
   let receipt: Record<string, unknown>;
   try {
     receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
   } catch (error) {
+    if (error instanceof McpToolRefusal) {
+      await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+      throw error;
+    }
     await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
       dependencies.recordSeatDeployment);
-    throw error;
+    throw new McpDeploymentPendingError(error instanceof Error ? error.message : "Deployment control wait ended");
   }
+  const matchingBusy = receipt.state === "busy" && typeof receipt.revision === "string"
+    && /^[0-9a-f]{40}$/i.test(receipt.revision) && receipt.revision.toLowerCase().startsWith(revision.toLowerCase());
+  if (matchingBusy) receipt = { ...receipt, state: "accepted" };
   if (receipt.state === "busy" || receipt.state === "refused") {
-    forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+    await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
   }
   /* #2063: the ledger never learns who asked, and the seat ends its turn so
      the promotion can replace its host. Recording the pair is what lets the
-     seat tick wake this seat when the deployment settles. A `busy` receipt
-     names someone else's deployment, which is not this seat's to be woken on.
+     seat tick wake this seat when the deployment settles. A matching busy
+     receipt joins the same SHA; a different SHA remains a busy refusal.
      A failed write costs the wake and nothing else: the deployment is
      already admitted, so the answer says so rather than failing the call. */
   let wakeOnSettle = false;
   if (receipt.state === "accepted" && typeof receipt.deploymentId === "string" && receipt.deploymentId) {
     try {
-      (dependencies.recordSeatDeployment ?? recordSeatDeployment)({
+      assertSeat();
+      await (dependencies.recordSeatDeployment ?? recordSeatDeployment)({
         deploymentId: receipt.deploymentId,
         conversationId: seat.conversationId,
         project: seat.project,
         revision: typeof receipt.revision === "string" ? receipt.revision : revision.toLowerCase(),
         requestedAt: pending.requestedAt,
         idempotencyKey,
-      });
-      forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+      }, assertSeat);
+      await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
       wakeOnSettle = true;
     } catch (error) {
       console.error(`[deploy_exact_sha] could not record the seat for deployment ${receipt.deploymentId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -7999,7 +8024,10 @@ export function viewerMcpBindings(
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),
     conversation_messages: reads.conversation_messages,
-    deploy_exact_sha: (args, context) => deployExactSha(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    deploy_exact_sha: Object.assign(
+      (args: McpToolArgs, context?: McpToolCallContext) => deployExactSha(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+      { authorizeReceipt: () => { deploySeatAuthority(domainDependencies); } },
+    ),
     get_pipeline: reads.get_pipeline,
     board_snapshot: (args) => boardSnapshot(args, domainDependencies),
     list_flows: (args) => Promise.resolve(listFlows(args, domainDependencies)),

@@ -2,7 +2,8 @@ import { runtimeHostClient } from "@/lib/runtime/client";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { statePath } from "@/lib/configDir";
 import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { withFileTransaction } from "@/lib/state/fileTransaction";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 /**
  * Which seat started which deployment (#2063).
@@ -51,6 +52,11 @@ export function seatDeploymentsFile(): string {
   return statePath("seat-deployments.json");
 }
 
+function seatDeploymentTransaction<T>(filePath: string, busyMessage: string, operation: () => T): Promise<T> {
+  return withViewerOperation("orchestrator.deploy-attribution", () => withFileTransaction(filePath, busyMessage,
+    () => withViewerOperation("orchestrator.deploy-attribution.write", operation)));
+}
+
 function isRecord(value: unknown): value is SeatDeploymentRecord {
   if (!value || typeof value !== "object") return false;
   const row = value as Partial<SeatDeploymentRecord>;
@@ -68,17 +74,40 @@ function readRecords(filePath: string): SeatDeploymentRecord[] {
 
 /** Record one accepted deployment. A replayed request names the same
     deployment and leaves one row. */
-export function recordSeatDeployment(record: SeatDeploymentRecord): void {
+export async function recordSeatDeployment(record: SeatDeploymentRecord, assertCaller?: () => void): Promise<void> {
   const filePath = seatDeploymentsFile();
-  withFileTransactionSync(filePath, "the seat deployment record is busy", () => {
-    const previous = readRecords(filePath);
-    const rows = previous.filter((row) => row.deploymentId !== record.deploymentId);
-    const existing = previous.find(row => row.deploymentId === record.deploymentId);
-    if (existing && existing.conversationId !== record.conversationId) throw new Error("deployment is attributed to another seat");
-    rows.push(record);
-    const pending = readPending(filePath).filter(row => row.idempotencyKey !== record.idempotencyKey);
-    const file: SeatDeploymentFile = { schemaVersion: 1, deployments: rows.slice(-SEAT_DEPLOYMENTS_LIMIT), pending };
-    writeJsonDurably(filePath, file);
+  await seatDeploymentTransaction(filePath, "the seat deployment record is busy", () => {
+    assertCaller?.();
+    writeRecord(filePath, record);
+  });
+}
+
+/** The caller holds this file's transaction. */
+function writeRecord(filePath: string, record: SeatDeploymentRecord): void {
+  const previous = readRecords(filePath);
+  const rows = previous.filter((row) => row.deploymentId !== record.deploymentId);
+  const existing = previous.find(row => row.deploymentId === record.deploymentId);
+  if (existing && existing.conversationId !== record.conversationId) throw new Error("deployment is attributed to another seat");
+  rows.push(record);
+  const pending = readPending(filePath).filter(row => row.idempotencyKey !== record.idempotencyKey);
+  const file: SeatDeploymentFile = { schemaVersion: 1, deployments: rows.slice(-SEAT_DEPLOYMENTS_LIMIT), pending };
+  writeJsonDurably(filePath, file);
+}
+
+/** Attach the seat at the HTTP admission boundary, even if its control caller
+    has disconnected. Reads only the bounded attribution file, never history.
+    The original pending key and revision supply the authority; an HTTP caller
+    without that prior binding cannot invent a seat or subscribe another SHA. */
+export async function recordSeatDeploymentAdmission(idempotencyKey: string, receipt: {
+  state: string; deploymentId?: string; revision?: string;
+}): Promise<void> {
+  const { state, deploymentId, revision } = receipt;
+  if ((state !== "accepted" && state !== "busy") || !deploymentId || !revision || !/^[0-9a-f]{40}$/i.test(revision)) return;
+  const filePath = seatDeploymentsFile();
+  await seatDeploymentTransaction(filePath, "the seat deployment admission is busy", () => {
+    const pending = readPending(filePath).find(row => row.idempotencyKey === idempotencyKey);
+    if (!pending || !revision.toLowerCase().startsWith(pending.revision.toLowerCase())) return;
+    writeRecord(filePath, { ...pending, deploymentId, revision: revision.toLowerCase() });
   });
 }
 
@@ -95,14 +124,17 @@ function readPending(filePath: string): PendingSeatDeployment[] {
 }
 
 /** Persist attribution before any transport can admit the request. */
-export function beginSeatDeployment(record: PendingSeatDeployment): void {
+export async function beginSeatDeployment(record: PendingSeatDeployment, assertCaller?: () => void): Promise<void> {
   const filePath = seatDeploymentsFile();
-  withFileTransactionSync(filePath, "the seat deployment record is busy", () => {
+  await seatDeploymentTransaction(filePath, "the seat deployment record is busy", () => {
+    assertCaller?.();
     const deployments = readRecords(filePath);
     const pending = readPending(filePath);
     const previous = [...deployments, ...pending].find(row => row.idempotencyKey === record.idempotencyKey);
     if (previous) {
-      if (previous.conversationId !== record.conversationId || previous.revision !== record.revision
+      const sameRevision = previous.revision === record.revision
+        || "deploymentId" in previous && previous.revision.startsWith(record.revision);
+      if (previous.conversationId !== record.conversationId || !sameRevision
         || previous.project !== record.project) throw new Error("deployment request key is already attributed to another request");
       return;
     }
@@ -113,9 +145,9 @@ export function beginSeatDeployment(record: PendingSeatDeployment): void {
 }
 
 /** Remove a request after definite refusal or durable accepted attribution. */
-export function forgetSeatDeploymentRequest(idempotencyKey: string, conversationId: string): void {
+export async function forgetSeatDeploymentRequest(idempotencyKey: string, conversationId: string): Promise<void> {
   const filePath = seatDeploymentsFile();
-  withFileTransactionSync(filePath, "the seat deployment record is busy", () => {
+  await seatDeploymentTransaction(filePath, "the seat deployment record is busy", () => {
     writeJsonDurably(filePath, { schemaVersion: 1, deployments: readRecords(filePath),
       pending: readPending(filePath).filter(row => row.idempotencyKey !== idempotencyKey || row.conversationId !== conversationId) });
   });
@@ -132,15 +164,15 @@ export async function findSeatDeploymentByKey(idempotencyKey: string): Promise<V
 export async function recoverSeatDeploymentRequests(
   conversationId: string,
   lookup: (key: string) => Promise<ViewerDeploymentStatus | null> = findSeatDeploymentByKey,
-  record: (row: SeatDeploymentRecord) => void = recordSeatDeployment,
+  record: (row: SeatDeploymentRecord) => void | Promise<void> = recordSeatDeployment,
 ): Promise<void> {
   for (const pending of readPending(seatDeploymentsFile()).filter(row => row.conversationId === conversationId)) {
     try {
       const status = await lookup(pending.idempotencyKey);
       if (!status || !status.deploymentId || status.idempotencyKey !== pending.idempotencyKey
         || status.requestedRevision.toLowerCase() !== pending.revision.toLowerCase()) continue;
-      record({ ...pending, deploymentId: status.deploymentId, revision: status.revision });
-      forgetSeatDeploymentRequest(pending.idempotencyKey, pending.conversationId);
+      await record({ ...pending, deploymentId: status.deploymentId, revision: status.revision });
+      await forgetSeatDeploymentRequest(pending.idempotencyKey, pending.conversationId);
     } catch {
       // Attribution remains durable for the next controller check.
     }
