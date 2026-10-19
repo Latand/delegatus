@@ -38,6 +38,9 @@ export async function POST(request: NextRequest) {
     return answer(body.project);
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) return Response.json({ error: error.code }, { status: 409 });
+    // The shared helper may have been created by another compiled entry point.
+    // These two fixed protocol codes survive its distinct refusal constructor.
+    if (error && typeof error === "object" && "code" in error && (error.code === "CURATE_LIVE" || error.code === "CURATE_INVALID")) return Response.json({ error: error.code }, { status: 409 });
     return Response.json({ error: "write_failed" }, { status: 500 });
   }
 }
