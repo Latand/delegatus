@@ -24,7 +24,7 @@ test("the production config gives Next's TypeScript child enough heap", () => {
         if (config.typescript.ignoreBuildErrors) throw new Error('type checking is disabled');
         const child = await runTypeScriptCli({ cwd: process.cwd(), tscPath: process.argv[1], args: [], captureOutput: true });
         if (child.exitCode) throw new Error(child.stderr);
-        console.log(JSON.stringify({ configPath: config.typescript.tsconfigPath, ...JSON.parse(child.stdout) }));
+        console.log(JSON.stringify({ configPath: config.typescript.tsconfigPath, workers: config.experimental.cpus, ...JSON.parse(child.stdout) }));
       })().catch(error => { console.error(error); process.exitCode = 1; });
     `;
     for (const heap of ["--max-old-space-size=4096", "--max_old_space_size=8192"]) {
@@ -36,6 +36,7 @@ test("the production config gives Next's TypeScript child enough heap", () => {
       expect(result.status, result.stderr).toBe(0);
       const observed = JSON.parse(result.stdout.trim().split("\n").at(-1)!);
       expect(observed.configPath).toBe("tsconfig.production.json");
+      expect(observed.workers).toBe(2);
       expect(observed.warnings).toBe(true);
       expect(observed.limit).toBeGreaterThanOrEqual((heap.includes("8192") ? 8192 : 6144) * 1024 * 1024);
     }

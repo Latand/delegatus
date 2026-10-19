@@ -302,8 +302,11 @@ private sandbox path replaced by placeholders. That covers an error between
 tests and a run that did not finish (no complete report, a timeout, a runner
 exit that disagrees with its report). Such a diagnostic prints as
 `PRE-EXISTING ... (the base run of this file is broken the same way)`. A
-diagnostic only the head shows, or one whose error line differs, is `NEW` and
-refuses the push. A base file that did not finish while the head finished it,
+between-tests diagnostic only the head shows gets one isolated full-file
+retry. If it disappears, it is `FLAKY`; if it repeats, it stays `NEW`. A
+different diagnostic is retained as `NEW`; a new assertion still refuses the push.
+Incomplete reports, ownership failures and failed cleanup retain their strict
+verdict without this retry. A base file that did not finish while the head finished it,
 or failed to finish differently, remains a gate error. During confirmation a
 side may repeat the between-tests errors of its own initial sample; any other
 runner or between-tests error in a retry is a gate error.
@@ -313,6 +316,14 @@ When several assertions share the same file, suite and test name, retry
 evidence and the initial base/head comparison preserve their occurrence numbers;
 a recovered occurrence is `FIXED` while a separately failing head occurrence
 remains `NEW`.
+
+When a complete comparison still reports new between-tests diagnostics and
+also labels flakiness, the hook reruns that check phase once in fresh isolation
+before parking the lane. Its new-failure count must match the diagnostic rows.
+A new assertion, a runner failure, an incomplete comparison or failed ownership
+cleanup vetoes this retry. A retry without a verdict preserves the first
+refusal. Both attempts share the push execution budget and existing admission;
+the retry never starts another push or repeats publication effects.
 
 Clean head samples and failures already present in the initial base sample
 incur no reruns. The three rounds share a five-minute
@@ -353,7 +364,12 @@ stage, a branch that only trails `origin/main`) runs privacy with
 `.txt` files skips types. Any other changed file keeps every scoped check.
 The native Codex phase runs the files that start the Codex executable once per
 supported version (`verify-native-codex-runtime.ts --engine-only`) and the rest
-once (`--shared-only`), all three at the same time. A caller that kills the
+once (`--shared-only`), all three at the same time. Local publication gives the
+shared selection its merge base through `LLV_GATE_COMPARE_BASE`; it uses the
+same isolated comparator and bounded retries as touched tests. Hosted shared
+verification keeps its absolute verdict. Both modes isolate every file's
+roots and preserve nested service CPU placement and admission accounting.
+A caller that kills the
 push at a limit of its own hands the hook a Unix-millisecond deadline in
 `LLV_GATE_PUSH_DEADLINE`; the controller's publication sets it a minute before
 its fifteen-minute limit. The fetch of `origin/main`, a cold-cache Bun or Codex
@@ -394,7 +410,12 @@ independent identity-bound guardian with best-effort execution and one warning
 per owning run; a detached child can escape between guardian polls. The strong
 lifetime guarantee applies to Linux native containment, as recorded in
 `docs/verification/test-child-lifetime.md`.
-An existing `NODE_OPTIONS` is preserved.
+An existing `NODE_OPTIONS` is preserved. Production builds cap page-data
+workers at two to fit the gate's three-CPU quota. The Viewer build and its
+runtime consumers share a private source tree with read-only dependencies;
+they neither contend on another build's `.next/lock` nor consume its output.
+The hook labels CPU admission for publication checks and prints its measured
+queue wait, excluded from the execution budget.
 
 Run an individual test as `bash scripts/gate-slot.sh bun test <file>` with an
 isolated home, config, state and temporary root. The preload registers real

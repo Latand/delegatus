@@ -80,7 +80,13 @@ export default function configureNext(phase: string): NextConfig {
     const heap = Math.max(6144, ...limits.map(match => Number(match[1])));
     process.env.NODE_OPTIONS = `${options} --max-old-space-size=${heap}`.trim();
     // Keep the full repository check in tsconfig.json for development and gates.
-    return { ...nextConfig, typescript: { tsconfigPath: "tsconfig.production.json" } };
+    return { ...nextConfig,
+      // Heavy gates have a three-CPU quota. Next otherwise sees the host's
+      // online CPUs and starts 23 page-data workers in each lane. Leave one
+      // CPU for their coordinator and bound their aggregate memory demand.
+      experimental: { ...nextConfig.experimental, cpus: 2 },
+      typescript: { tsconfigPath: "tsconfig.production.json" },
+    };
   }
   return nextConfig;
 }

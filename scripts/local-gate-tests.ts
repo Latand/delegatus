@@ -41,8 +41,35 @@ const occurrenceCount = (sites: readonly TestSite[], site: TestSite) => sites.fi
  */
 export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "base" | "head", sites: readonly TestSite[]) => TestRun | Promise<TestRun>) {
   const comparison = compareTests(base, head);
-  const candidates = [...new Map(comparison.introduced.filter(site => site.kind === "test").map(site => [occurrenceKey(site), site])).values()];
   const flaky: FlakySite[] = [];
+  // A completed file can still report an unhandled rejection after a timed-out
+  // test. Re-run that entire file once before a transient diagnostic parks a
+  // lane. Ownership, incomplete reports and failed cleanup remain decisive.
+  const diagnostics = comparison.introduced.filter(site => site.kind === "error" && site.name.startsWith("<between-tests error> "));
+  if (diagnostics.length) {
+    const retry = await rerun("head", diagnostics);
+    const files = new Set(diagnostics.map(site => site.file));
+    if ([...files].some(file => !retry.completed.includes(file))) throw new Error("head diagnostic retry: incomplete file");
+    const recovered = new Set<string>();
+    for (const site of diagnostics) {
+      if (retry.failures.some(other => key(other) === key(site))) continue;
+      recovered.add(key(site));
+      flaky.push({ ...site, base: { pass: base.completed.includes(site.file) ? 1 : 0, fail: 0 }, head: { pass: 1, fail: 1 } });
+    }
+    comparison.introduced = comparison.introduced.filter(site => !recovered.has(key(site)));
+    // A different failure on retry still refuses publication. The single retry
+    // is not an opportunity to discard a new assertion or diagnostic.
+    const known = new Set(head.failures.map(comparisonKey));
+    const additional = retry.failures.filter(site => !known.has(comparisonKey(site)));
+    const retried = compareTests(base, { ...retry, failures: additional });
+    comparison.introduced.push(...retried.introduced);
+    comparison.preexisting.push(...retried.preexisting);
+    const repeated = new Set(additional.map(comparisonKey));
+    comparison.fixed = comparison.fixed.filter(site => !repeated.has(comparisonKey(site)));
+  }
+  // Only assertions in the initial sample have the occurrence counts required
+  // for filtered confirmation. New retry failures above remain blocking.
+  const candidates = [...new Map(comparison.introduced.filter(site => site.kind === "test" && head.failures.some(other => comparisonKey(other) === comparisonKey(site))).map(site => [occurrenceKey(site), site])).values()];
   if (!candidates.length) return { ...comparison, flaky };
   const evidence = candidates.map(site => ({ site,
     base: { pass: occurrenceCount(base.passed, site), fail: occurrenceCount(base.failures, site) },
@@ -358,13 +385,15 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const headErrors = new Set(head.failures.filter(site => site.kind === "error").map(key));
     for (const site of baseline.failures) if (site.kind === "error" && site.name.startsWith(RUNNER_ERROR) && !headErrors.has(key(site))) throw new Error(`baseline: ${site.file}: ${diagnosticName(site).slice(RUNNER_ERROR.length)}`);
     const retryStarted = performance.now(), deadline = retryStarted - budget.elapsed() + FLAKY_BUDGET_MS;
-    let reruns = 0;
+    let reruns = 0, diagnosticReruns = 0;
     const comparison = await confirmFailures(baseline, head, async (side, sites) => {
-      reruns++;
+      if (sites.some(site => site.kind === "error")) diagnosticReruns++;
+      else reruns++;
       const retryFiles = [...new Set(sites.map(site => site.file))].filter(file => side === "head" || baseFiles.has(file));
       if (!retryFiles.length) return { failures: [], passed: [], completed: [], elapsedMs: 0 };
-      return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, sites, deadline });
+      return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, ...(sites.some(site => site.kind === "error") ? {} : { sites }), deadline });
     });
+    if (diagnosticReruns) log(`touched-tests: between-tests diagnostic retry: ${diagnosticReruns} isolated full-file run (shared budget ${FLAKY_BUDGET_MS}ms)`);
     if (reruns) log(`touched-tests: flaky confirmation ${FLAKY_RERUNS} reruns per side, ${(performance.now() - retryStarted).toFixed(0)}ms (shared budget ${FLAKY_BUDGET_MS}ms)`);
     for (const site of comparison.flaky) log(`FLAKY ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)} (base ${site.base.pass} pass/${site.base.fail} fail; head ${site.head.pass} pass/${site.head.fail} fail)`);
     for (const [label, sites] of [["NEW", comparison.introduced], ["PRE-EXISTING", comparison.preexisting], ["FIXED", comparison.fixed], ["REMOVED/SKIPPED", comparison.absent]] as const) {
