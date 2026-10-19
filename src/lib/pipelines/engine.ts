@@ -8849,15 +8849,29 @@ function unansweredLaunchRecovery(attempt: PipelineStageAttempt, receipt: Pipeli
     reason: `${STAGED_RECOVERY_EXHAUSTED}; recorded silent launch settlement pending` } : null;
 }
 
+function isCappedUnansweredReplacement(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): boolean {
+  const detail = `${UNANSWERED_STAGE_PREFIX} in the automatic replacement; retry-stage to start another attempt`;
+  const previousAttempt = attempt.restartContext?.previousAttempt;
+  const previous = previousAttempt === undefined
+    ? null : runFor(pipeline, stage.id)?.attempts.find(candidate => candidate.n === previousAttempt);
+  return pipeline.state === "needs_decision" && pipeline.cursor?.stageId === stage.id
+    && attempt.state === "needs_decision" && Boolean(attempt.completedAt)
+    && attempt.error === detail && pipeline.stateDetail === detail
+    && previousAttempt !== undefined && attempt.restartRecovery?.replacedAttempt === previousAttempt
+    && previous?.error?.startsWith(UNANSWERED_STAGE_PREFIX) === true;
+}
+
 /** One automatic replacement per unanswered chain, recorded in attempt history
  * rather than a process-local counter. A manual retry authorizes a fresh chain. */
 async function replaceUnansweredStageLaunch(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   recovery: StagedLaunchRecovery, ports: PipelinePorts, manual = false,
 ): Promise<boolean> {
+  const retryingCappedReplacement = manual && isCappedUnansweredReplacement(pipeline, stage, attempt);
   if ((!["running", "needs_decision"].includes(pipeline.state) && !(manual && pipeline.state === "paused"))
     || (attempt.state !== "spawning" && !(attempt.state === "needs_decision" && isStructuredSpawnPark(pipeline, attempt)))
-    || !ports.failStoppedStageLaunch || !attempt.launchId || !attempt.conversationId || attempt.report || attempt.verdict || attempt.completedAt
+    || !ports.failStoppedStageLaunch || !attempt.launchId || !attempt.conversationId || attempt.report || attempt.verdict
+    || (attempt.completedAt && !retryingCappedReplacement)
     || attempt.activation || attempt.paneId || openRuntimeSwitch(attempt) || pipelineSurvivorRefusal(pipeline)
     || (recovery.stopped && !recovery.reason.startsWith(STAGED_RECOVERY_EXHAUSTED))
     || (!recovery.stopped && (recovery.checks === 0 || unixMs(ports.now()) - recovery.startedAt < STAGED_RECOVERY_BUDGET_MS))) return false;
@@ -8867,7 +8881,9 @@ async function replaceUnansweredStageLaunch(
     const latest = current && currentAttempt(current, stage.id);
     return current?.state === observedState && current.cursor?.stageId === stage.id
       && latest?.n === attempt.n && latest.launchId === attempt.launchId && latest.conversationId === attempt.conversationId
-      && !latest.report && !latest.verdict && !latest.completedAt && !pipelineSurvivorRefusal(current);
+      && latest.completedAt === attempt.completedAt
+      && (!latest.completedAt || retryingCappedReplacement && isCappedUnansweredReplacement(current, stage, latest))
+      && !latest.report && !latest.verdict && !pipelineSurvivorRefusal(current);
   };
   const receipt = ports.spawnReceipt(attempt.launchId);
   if (!receipt || receipt.conversationId !== attempt.conversationId || receipt.staged && receipt.currentGeneration === false
@@ -8914,6 +8930,13 @@ async function replaceUnansweredStageLaunch(
   }
   await startReplacementAttempt(pipeline, stage, attempt, host?.state === "alive" ? "engine-stop" : "host-lost",
     { bootId: ports.restartRecoveryBootId?.() ?? PIPELINE_RECOVERY_BOOT_ID, requestedAt: ports.now(), lastRecordAt: null }, null, ports);
+  // The operator starts a fresh bounded chain after the automatic limit. Keep
+  // restart recovery evidence, while removing the prior attempt as this chain's
+  // automatic replacement parent.
+  if (manual) {
+    const fresh = currentAttempt(pipeline, stage.id);
+    if (fresh && fresh.n !== attempt.n) delete fresh.restartContext;
+  }
   attempt.error = `${UNANSWERED_STAGE_PREFIX}; recorded host stopped; replaced by a fresh stage attempt`;
   if (manual) {
     attempt.error = `manual retry: ${attempt.error}`;

@@ -179,7 +179,8 @@ test("retry-stage never terminates a replacement after its first native answer a
       { timestamp: at, type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "I am working" }] } },
     ].map(row => JSON.stringify(row)).join("\n") + "\n");
     replacement.state = "needs_decision";
-    replacement.error = "stage spawn recovery stopped: runtime host recovery exhausted after 11 checks; original launch retained";
+    replacement.completedAt = f.h.ports.now();
+    replacement.error = "stage spawn first message remained unanswered in the automatic replacement; retry-stage to start another attempt";
     lane.state = "needs_decision"; lane.stateDetail = replacement.error;
     lane.cursor!.state = "spawning";
     savePipelines([lane]);
@@ -192,9 +193,9 @@ test("retry-stage never terminates a replacement after its first native answer a
     }, f.h.ports);
 
     expect(stopCalls).toBe(0);
-    expect(result.error).toBeUndefined();
+    expect(result.error).toContain("could not verify that the first message remains unanswered");
     expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
-    expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.state).toBe("running");
+    expect(loadPipelines()[0]!.runs[0]!.attempts[1]).toMatchObject({ state: "needs_decision", completedAt: expect.any(String) });
   } finally { setAgentRegistryForTests(null); await f.host.end(); }
 });
 
@@ -233,12 +234,39 @@ test("replacement budget survives a fresh controller process", async () => {
     h.ports.conversationHostProcess = async () => ({ state: "gone", pid: null });
     h.ports.stopStageAgent = async () => ({ outcome: "not-running" });
     h.ports.failStoppedStageLaunch = async () => true;
+    const spawnAgent = h.ports.spawnAgent;
     h.ports.spawnAgent = async () => { throw new Error("replacement budget must park before launch"); };
     await tickPipelines([], h.ports);
     const parked = loadPipelines()[0]!;
     expect(parked.runs[0]!.attempts).toHaveLength(2);
     expect(parked.state).toBe("needs_decision");
     expect(parked.stateDetail).toContain("in the automatic replacement; retry-stage");
+    const capped = parked.runs[0]!.attempts.at(-1)!;
+    const retried = await patchPipeline(parked.id, {
+      action: "retry-stage", stageId: "build", launchId: capped.launchId!,
+    }, h.ports);
+    expect(retried.error).toBeUndefined();
+    const resumed = loadPipelines()[0]!;
+    expect(resumed.runs[0]!.attempts).toHaveLength(3);
+    expect(resumed.runs[0]!.attempts[2]!.restartContext).toBeUndefined();
+    const freshRoot = resumed.runs[0]!.attempts[2]!;
+    const freshLaunchId = "launch-manual-retry";
+    const freshConversationId = "conversation_manual_retry";
+    const freshStartedAt = "2026-10-19T12:00:00Z";
+    Object.assign(freshRoot, { state: "spawning", launchId: freshLaunchId, conversationId: freshConversationId,
+      agentPath: null, sessionId: null, paneId: null, startedAt: freshStartedAt, completedAt: null });
+    resumed.state = "running"; resumed.cursor!.state = "spawning";
+    savePipelines([resumed]);
+    h.ports.spawnReceipt = id => id === freshLaunchId ? ({ launchId: id, conversationId: freshConversationId, state: "path-pending",
+      sessionId: null, transcript: null, paneId: null, currentGeneration: true,
+      error: "structured launch recovery: " + JSON.stringify({ phase: "uncertain", checks: 16, startedAt: Date.parse(freshStartedAt),
+        nextTryAt: 0, stopped: true, reason: "runtime host recovery exhausted after 16 checks" }) }) : null;
+    h.ports.spawnAgent = spawnAgent;
+    await tickPipelines([], h.ports);
+    const chained = loadPipelines()[0]!;
+    expect(chained.runs[0]!.attempts).toHaveLength(4);
+    expect(chained.state).toBe("running");
+    expect(chained.runs[0]!.attempts[3]!.restartContext).toMatchObject({ previousAttempt: 3 });
     console.log("replacement cap survived restart");
     return;
   }
