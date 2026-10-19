@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 
+const ISOLATED_ROOT_KEYS = ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_STATE_DIR", "TMPDIR"] as const;
+
 /** `--engine-only` runs the files that start the Codex executable named on the
     command line, the only part whose verdict depends on the Codex version.
     `--shared-only` runs the rest without a Codex fixture argument or executable.
@@ -12,8 +14,7 @@ export const SELECTIONS = ["--steering-only", "--engine-only", "--shared-only"] 
 export type Selection = (typeof SELECTIONS)[number];
 
 /* The files that start the executable through NATIVE_CODEX_QUEUE_TEST_BINARY,
-   LLV_CODEX_HISTORY_CLI or LLV_CODEX_BINARY. They share one process, as they
-   do inside the main batch below. */
+   LLV_CODEX_HISTORY_CLI or LLV_CODEX_BINARY, once per supported version. */
 export const engineFiles = [
   "src/lib/runtime/codexSocketTransport.native.test.ts",
   "src/lib/agent/processCleanupPolicy.native.test.ts",
@@ -129,7 +130,7 @@ export const domFiles = [
   "src/lib/realtime/codexRealtimeClient.selectedContext.dom.test.ts",
   "src/lib/realtime/codexRealtimeClient.transport.dom.test.ts",
 ];
-/** The batches a selection runs, each one `bun test` process. */
+/** Selected file groups. The CLI runs each file in its own process and roots. */
 export function nativeBatches(selection?: Selection): string[][] {
   const singles = [...domFiles, ...registryFiles, ...injectionFiles, ...attachmentFiles];
   if (selection === "--steering-only") return [["src/lib/runtime/codexSteerDelivery.integration.test.ts"]];
@@ -159,17 +160,33 @@ if (import.meta.main) {
     }),
     LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
   };
-  // Nested test runners need the existing manager connection for containment.
-  for (const key of ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]) {
+  // Nested runners create services of their own. Preserve their placement and
+  // admission accounting as well as the manager connection, or those services
+  // escape the publication's work slice and lose its queue-wait credit. The
+  // step token also keeps their services visible to cancellation cleanup.
+  for (const key of ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "LLV_OWNED_RUN_CPU_SLICE", "LLV_OWNED_RUN_CPU_QUOTA", "LLV_GATE_MEM", "LLV_CPU_WAIT_ROOTS", "LLV_GATE_SLOT_LEASE", "LLV_GATE_STEP"]) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   }
-  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_STATE_DIR", "TMPDIR"]) {
+  for (const key of ISOLATED_ROOT_KEYS) {
     env[key] = join(roots, key === "TMPDIR" ? "t" : key.toLowerCase()); mkdirSync(env[key]!);
   }
   const batches = nativeBatches(selection as Selection | undefined);
   for (const file of batches.flat()) if (!existsSync(file)) throw new Error(`Missing named native runtime check: ${file}`);
+  if (sharedOnly && process.env.LLV_GATE_COMPARE_BASE) {
+    // The local publication judges the shared contracts against the same base
+    // as touched tests. Hosted verification retains its absolute verdict, and
+    // engine-specific checks retain their explicit executable fixtures.
+    const { touchedTests } = await import("./local-gate-tests");
+    const result = await touchedTests(process.cwd(), process.env.LLV_GATE_COMPARE_BASE, batches.flat(), { env });
+    process.exit(result.introduced.length ? 1 : 0);
+  }
   for (const file of batches.flat()) {
-    const result = spawnSync(process.execPath, ["test", file], { env, stdio: "inherit", timeout: 300_000, killSignal: "SIGKILL" });
+    const fileRoot = mkdtempSync(join(roots, "file-"));
+    const fileEnv = { ...env };
+    for (const key of ISOLATED_ROOT_KEYS) {
+      fileEnv[key] = join(fileRoot, key === "TMPDIR" ? "t" : key.toLowerCase()); mkdirSync(fileEnv[key]!);
+    }
+    const result = spawnSync(process.execPath, ["test", file], { env: fileEnv, stdio: "inherit", timeout: 300_000, killSignal: "SIGKILL" });
     if (result.error) throw result.error;
     if (result.status !== 0) process.exit(result.status ?? 1);
   }
