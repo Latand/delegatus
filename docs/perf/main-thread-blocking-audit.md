@@ -2474,8 +2474,8 @@ Keep decisions share one process inventory for the entire pass. Production
 collects that inventory in a leased helper as well, so the Viewer does not
 walk `/proc`. Every destructive step still gets a fresh helper safety scan,
 including checks after awaited Git commands and trash renames. These safety
-scans are additional to the single keep inventory; their count follows the
-number of destructive steps. Serving revisions, rollback targets, active
+scans are additional to the single keep inventory and run at the guards for
+attempted destructive steps. Serving revisions, rollback targets, active
 pointers, in-flight builds, process holders and the existing Git and mount
 checks retain their protection.
 
@@ -2496,9 +2496,10 @@ exactly 87 already-copied release directories below its isolated `TMPDIR`,
 with write permissions removed. It refuses Git writes and verifies an
 inventory digest before and after the pass. Every copied release is in
 flight, so the replay measures a full keep pass without exercising removal.
-The same legacy process collector is injected on both sides to measure whole
-passes even when the stricter production scanner refuses unreadable proc
-entries. Success and refusal of the production scanner are tested separately.
+Both sides validate the entire inventory before timing, warming filesystem
+metadata equally. The same legacy process collector is injected on both sides
+to measure whole passes even when the stricter production scanner refuses
+unreadable proc entries. Success and refusal of the production scanner are tested separately.
 This replay measures the byte-helper and inventory-reuse changes; it does not
 measure production safety scans during removals.
 
@@ -2516,7 +2517,9 @@ The JSON output records the source tree digest and per-file fingerprints,
 measurement driver digest, seed digest, visited entry count, process scan
 count, full-pass duration, 10 ms timer gaps, retained allocation counts, load
 averages, CPU pressure, and cgroup CPU/memory limits and counters. The replay
-record is `evidence/release-retention-replay.json`. Six alternating pairs under Bun 1.4.0 visited 3,982,014 entries across the
+record is `evidence/release-retention-replay.json`.
+
+Six alternating pairs under Bun 1.4.0 visited 3,982,014 entries across the
 same 87 read-only release copies and returned identical keep reasons and
 90,565,795,840 allocated bytes. The shared gate bounded CPU to three cores;
 load averages, CPU pressure, and cgroup counters accompany every sample.
@@ -2524,10 +2527,10 @@ load averages, CPU pressure, and cgroup counters accompany every sample.
 | Full keep pass | Before | After |
 | --- | ---: | ---: |
 | Process inventories | 88 | 1 |
-| Median duration | 11,894.1 ms | 7,255.8 ms |
-| Duration range | 11,340.3–12,519.8 ms | 7,025.0–8,007.1 ms |
-| Median maximum 10 ms timer gap | 11,894.5 ms | 70.4 ms |
-| Maximum timer-gap range | 11,340.6–12,520.2 ms | 64.2–88.3 ms |
+| Median duration | 11,235.5 ms | 7,097.7 ms |
+| Duration range | 11,040.2–12,135.1 ms | 6,945.9–7,599.9 ms |
+| Median maximum 10 ms timer gap | 11,235.8 ms | 67.6 ms |
+| Maximum timer-gap range | 11,040.5–12,135.4 ms | 63.7–72.1 ms |
 
 The remaining replay gap includes the injected synchronous legacy collector.
 Production moves that inventory to the helper too. The separate 87-release

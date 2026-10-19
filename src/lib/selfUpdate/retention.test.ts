@@ -819,3 +819,31 @@ test.skipIf(process.platform !== "linux")("the leased helper rescans before late
     const pid = Number(fs.readFileSync(path.join(h.root, "helper-pid"), "utf8")); expect(() => process.kill(pid, 0)).toThrow();
   } finally { await worker.close(); }
 }, 30_000);
+
+test("an inspection failure after a completed removal stops all remaining destructive work", async () => {
+  const h = fixture(5); h.inputs.inFlight = [h.dirs[0]!]; h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  const run = h.ports.git!; let removed = false;
+  h.ports.scan = () => { if (removed) throw new Error("later safety scan unavailable"); return EMPTY; };
+  h.ports.git = async (args, cwd) => {
+    const result = await run(args, cwd);
+    if (args[0] === "worktree" && args[1] === "remove") removed = true;
+    return result;
+  };
+  const report = await h.run();
+  expect(report.errors.length).toBeGreaterThan(0);
+  expect(report.removed.map(row => row.dir)).toEqual([h.dirs[1]!]);
+  for (const dir of [h.dirs[0]!, ...h.dirs.slice(2)]) expect(exists(dir)).toBeTrue();
+});
+
+test.skipIf(process.platform !== "linux")("87 keep decisions request exactly one inventory from the leased helper", async () => {
+  const h = fixture(87); h.inputs.inFlight = [...h.dirs]; h.ports.scan = undefined;
+  const proc = path.join(h.root, "proc"); fs.mkdirSync(path.join(proc, "self/ns"), { recursive: true }); fs.symlinkSync("mnt:[fixture]", path.join(proc, "self/ns/mnt"));
+  const worker = new RetentionWorker({ executable: process.execPath, entry: path.join(import.meta.dir, "retention.fixture.ts"), args: [h.root, "inspect"] }); h.ports.inspection = worker;
+  try {
+    await worker.bytes(h.root);
+    const report = await h.run();
+    expect(report.errors).toEqual([]); expect(report.removed).toEqual([]); expect(report.kept.map(row => row.dir)).toEqual(h.dirs);
+    expect(fs.readFileSync(path.join(h.root, "requests"), "utf8").split("\n").filter(kind => kind === "scan")).toHaveLength(1);
+    const pid = Number(fs.readFileSync(path.join(h.root, "helper-pid"), "utf8")); expect(() => process.kill(pid, 0)).toThrow();
+  } finally { await worker.close(); }
+}, 30_000);
