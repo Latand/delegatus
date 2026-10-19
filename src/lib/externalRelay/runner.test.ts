@@ -3313,7 +3313,8 @@ test.each(["ok","lease_lost","refused","media_only_refused","outside","ignore"])
     if(mode==="lease_lost") {expect(result).toBeNull();expect(sent).toEqual([]);}
     else if(mode==="media_only_refused") expect(result).toMatchObject({outcome:"failed",reason:"invalid_answer"});
     else if(mode==="ignore") expect(result).toMatchObject({outcome:"answered",answer:{action:"ignore",text:"",format:"plain",buttons:[]}});
-    else if(mode==="outside" || mode==="refused") {expect(result).toMatchObject({outcome:"answered"});expect(result && "answer" in result ? result.answer.attachments??[]:[]).toEqual([]);}
+    else if(mode==="refused") expect(result).toMatchObject({outcome:"failed",reason:"invalid_answer"});
+    else if(mode==="outside") {expect(result).toMatchObject({outcome:"answered"});expect(result && "answer" in result ? result.answer.attachments??[]:[]).toEqual([]);}
     else {expect(result).toMatchObject({outcome:"answered",answer:{attachments:[{kind:"photo",caption:"Picture"}]}});}
     expect(puts).toBe(mode==="outside" || mode==="ignore"?0:1);
     expect(fs.existsSync(seenRunDir)).toBe(false);
@@ -3321,7 +3322,7 @@ test.each(["ok","lease_lost","refused","media_only_refused","outside","ignore"])
     expect(record).toHaveProperty("features",request.features);
     expect(JSON.stringify(record)).not.toContain(seenRunDir);
     if(mode==="outside") expect(record).toHaveProperty("drops",[{part:"attachment",index:0,reason:"outside_run"}]);
-    if(mode.includes("refused")) expect(record).toHaveProperty("drops",[{part:"attachment",reason:"unsupported_media_type"}]);
+    if(mode.includes("refused")) expect(record).toHaveProperty("drops",[{part:"attachment",reason:"unsupported_media_type"},...(mode==="refused"?[{part:"answer",reason:"attachment_not_ready"}]:[])]);
   } finally {await server.close();}
 });
 
@@ -3353,12 +3354,12 @@ test.each(["claude","codex"])("owner %s returns rich text, buttons and a documen
         try{
           await expect(binding({deputy:"seat"}).relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
           await expect(binding(undefined,"voice-gateway").relay_answer({format:"rich_markdown"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
-          await own.relay_answer({format:"rich_markdown",buttons:[[{text:"Open",url:"https://example.com/report"}]],attachments:[{path:file,kind:"document",caption:"Report"}]});
+          await own.relay_answer({format:"rich_markdown",mentions:[{author_key:"u1",offset:2,length:6}],buttons:[[{text:"Open",url:"https://example.com/report"}]],attachments:[{path:file,kind:"document",caption:"Report"}]});
         }catch(error){observedError=error;}
         return {state:"ended",finalText:text};
       },stop:async()=>{},pollMs:1}});
     if(observedError)throw observedError;
-    expect(result).toMatchObject({outcome:"answered",answer:{text,format:"rich_markdown",buttons:[[{text:"Open"}]],attachments:[{kind:"document",caption:"Report"}]}});
+    expect(result).toMatchObject({outcome:"answered",answer:{text,format:"rich_markdown",mentions:[{author_key:"u1",offset:2,length:6}],buttons:[[{text:"Open"}]],attachments:[{kind:"document",caption:"Report"}]}});
     expect(events).toEqual(["upload","complete"]);
     await expect(own.relay_answer({format:"plain"})).rejects.toMatchObject({details:{code:"relay_answer_unavailable"}});
   }finally{await server.close(); if(oldHome===undefined)delete process.env.HOME;else process.env.HOME=oldHome; if(oldState===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=oldState;fs.rmSync(ownerHome,{recursive:true,force:true});}
@@ -3690,5 +3691,138 @@ test("owner tool lease loss interrupts the owner and completes nothing", async (
     expect(result).toBeNull(); expect(stops).toEqual(["interrupt"]); expect(posts).toBe(1);
     await expect(bindings.relay_service_tools({ op: "list" })).rejects.toMatchObject({ details: { code: "relay_tools_unavailable" } });
     expect(posts).toBe(1);
+  } finally { await server.close(); }
+});
+
+test("typed mentions cross the restricted runner without source rewriting", async () => {
+  const { richRequest } = await import("./rich.fixture");
+  const request = richRequest(); request.request_id = "request_typed_mentions";
+  const key = request.input.conversation[0]!.author.key;
+  const answer = { action: "reply", text: "😀 Person", reply_to: null, format: "rich_markdown", buttons: [], mentions: [{ author_key: key, offset: 2, length: 6 }] };
+  const captures: unknown[] = [];
+  const server = await startTestRelay((req, body) => { if (req.url?.endsWith("/complete")) captures.push(body); return { body: { status: "ok" } }; });
+  const fake = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify(${JSON.stringify(answer)}));`);
+  try {
+    const result = await runClaimedRequest(relay(`${server.origin}/v1`), request, undefined, { command: fake });
+    expect(result).toMatchObject({ outcome: "answered", answer }); expect(captures).toEqual([result]);
+  } finally { await server.close(); }
+});
+
+test("inbound lease loss stops the runner without completion or agent launch", async () => {
+  const { richRequest } = await import("./rich.fixture");
+  const request = richRequest(true); request.request_id = "inbound_lease_lost";
+  request.features!.push("requester_context", "relay_media_in");
+  request.input.conversation[0]!.media = [{ ref: "lost_media", kind: "document", availability: "ready", mime_type: "text/plain", byte_size: 5,
+    filename: "input.txt", expires_at: "2099-01-01T00:00:00Z" }];
+  const completions: unknown[] = [];
+  const server = await startTestRelay(req => {
+    if (req.url?.endsWith("/media/lost_media")) return { status: 409, body: { error: { code: "lease_lost", message: "gone" } } };
+    if (req.url?.endsWith("/complete")) completions.push(req);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  const marker = path.join(root, "inbound-agent-launched");
+  const fake = stub(`await Bun.stdin.text(); await Bun.write(${JSON.stringify(marker)}, "launched");`);
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: fake });
+    expect(result).toBeNull();
+    expect(completions).toEqual([]);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(readAnswerRecord(paired.id, "target_1", request.request_id)).toMatchObject({ state: "finished", outcome: "lease_lost", delivery: null });
+  } finally { await server.close(); }
+});
+
+test("lease loss during an active inbound stream stops consumption before agent launch", async () => {
+  const { richRequest } = await import("./rich.fixture");
+  const request = richRequest(true); request.request_id = "inbound_stream_lease_lost";
+  request.features!.push("requester_context", "relay_media_in");
+  request.liveness.heartbeat_interval_s = 2;
+  request.input.conversation[0]!.media = [{ ref: "stream_media", kind: "document", availability: "ready", mime_type: "text/plain", byte_size: 20 * 1024 * 1024,
+    filename: "input.txt", expires_at: "2099-01-01T00:00:00Z" }];
+  let partialWritten!: () => void, lostLease!: () => void;
+  const partial = new Promise<void>(resolve => { partialWritten = resolve; });
+  const heartbeatLost = new Promise<void>(resolve => { lostLease = resolve; });
+  let completions = 0, bytesSent = 0;
+  const nativeServer = http.createServer(async (req, response) => {
+    const bodyChunks: Buffer[] = [];
+    for await (const chunk of req) bodyChunks.push(Buffer.from(chunk));
+    const body = Buffer.concat(bodyChunks).toString("utf8");
+    if (req.url?.endsWith("/heartbeat") && (JSON.parse(body) as { seq: number }).seq > 1) {
+      lostLease(); response.writeHead(409, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { code: "lease_lost", message: "gone" } })); return;
+    }
+    if (req.url?.endsWith("/media/stream_media")) {
+      response.writeHead(200, { "content-type": "text/plain", "content-length": String(20 * 1024 * 1024) });
+      const first = Buffer.alloc(65536, 120); response.write(first); bytesSent += first.length; partialWritten();
+      await heartbeatLost;
+      if (!response.destroyed) response.end(Buffer.alloc(65536, 120));
+      return;
+    }
+    if (req.url?.endsWith("/complete")) completions++;
+    response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ status: "ok" }));
+  });
+  await new Promise<void>(resolve => nativeServer.listen(0, "127.0.0.1", resolve));
+  const address = nativeServer.address(); if (!address || typeof address === "string") throw new Error("missing port");
+  const marker = path.join(root, "inbound-stream-agent-launched");
+  const fake = stub(`await Bun.stdin.text(); await Bun.write(${JSON.stringify(marker)}, "launched");`);
+  try {
+    const running = runClaimedRequest(relay(`http://127.0.0.1:${address.port}/v1`), request, undefined, { command: fake });
+    await partial;
+    const result = await running;
+    expect(result).toBeNull();
+    expect(bytesSent).toBeLessThan(20 * 1024 * 1024);
+    expect(completions).toBe(0);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(readAnswerRecord(relay(`http://127.0.0.1:${address.port}/v1`).id, "target_1", request.request_id)).toMatchObject({ state: "finished", outcome: "lease_lost", delivery: null });
+  } finally {
+    lostLease(); nativeServer.closeAllConnections(); await new Promise<void>(resolve => nativeServer.close(() => resolve()));
+  }
+});
+
+test.each(["codex", "claude"])("inbound originals reach the %s native image input and are removed after the answer", async engine => {
+  const { richRequest } = await import("./rich.fixture");
+  const sharp = (await import("sharp")).default;
+  const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
+  const request = richRequest(true); request.request_id = `inbound_original_${engine}`;
+  request.features!.push("requester_context", "relay_media_in");
+  request.input.conversation[0]!.media = [{ ref: "inbound_photo", kind: "photo", availability: "ready", mime_type: "image/png", byte_size: bytes.length, expires_at: "2099-01-01T00:00:00Z" }];
+  let downloads = 0;
+  const server = await startTestRelay((req) => {
+    if (req.url?.endsWith("/media/inbound_photo")) {
+      downloads++; expect(req.headers["delegatus-relay-lease"]).toBe(request.lease_id);
+      return { raw: bytes, headers: { "content-type": "image/png", "content-length": String(bytes.length) } };
+    }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.engine = engine;
+  const marker = path.join(root, `inbound-path-${engine}`);
+  const fake = stub(`const a=process.argv.slice(2), input=await Bun.stdin.text();
+    const prompt=${engine === "claude" ? "JSON.parse(input).message.content.find(p=>p.type==='text').text" : "input"};
+    const media=JSON.parse(prompt.split('<inbound_media>')[1].split('</inbound_media>')[0]);
+    if(await Bun.file(media[0].local_path).size!==${bytes.length})process.exit(2);
+    await Bun.write(${JSON.stringify(marker)},media[0].local_path);
+    const answer={action:'reply',text:'Photo received',reply_to:null,format:'plain',buttons:[],mentions:[],attachments:[]};
+    if(a.includes('--output-last-message')) {
+      if(!a.includes('--image')||!a.includes(media[0].local_path))process.exit(3);
+      await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify(answer));
+    }else{
+      const frame=JSON.parse(input); if(frame.message.content.find(p=>p.type==='image').source.data!==${JSON.stringify(bytes.toString("base64"))})process.exit(4);
+      console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));
+      console.log(JSON.stringify({type:'result',subtype:'success',structured_output:answer}));
+    }`);
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: fake });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Photo received" } });
+    expect(downloads).toBe(1); expect(fs.existsSync(fs.readFileSync(marker, "utf8"))).toBe(false);
+  } finally { await server.close(); }
+});
+test.each(["mention", "photo"])("v2 %s contract refusal remains decisive without a changed completion", async kind => {
+  const bodies: unknown[] = [];
+  const server = await startTestRelay((_req, body) => { bodies.push(body); return { status: kind === "mention" ? 400 : 422, body: { error: { code: kind === "mention" ? "malformed" : "attachment_not_ready" } } }; });
+  const body = { lease_id: sampleRequest.lease_id, outcome: "answered" as const, duration_ms: 1, answer: { action: "reply" as const, text: "Person", reply_to: null, format: "rich_markdown" as const,
+    ...(kind === "mention" ? { mentions: [{ author_key: "foreign", offset: 0, length: 6 }] } : { attachments: [{ attachment_id: "missing", kind: "photo" as const }] }) } };
+  try {
+    expect(await completeRelayRequest(relay(`${server.origin}/v1`), "refused_composition", body, () => Date.now() + 5000)).toEqual({ body, delivery: "refused" });
+    expect(bodies).toEqual([body]);
   } finally { await server.close(); }
 });

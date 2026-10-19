@@ -1,3 +1,4 @@
+import { admittedSeedMedia } from "./mediaInputValidation";
 import { createHash } from "node:crypto";
 import { ExternalRelayError, isUnknownFeatureRefusal, relayCall } from "./client";
 import { isOwnerTool, ownerRateLimitSchema, RELAY_OWNER_TOOLS, toolCallResultSchema, type ExternalRelayRequest, type ExternalRelayRequester, type RoundCall, type ToolCallResult } from "./protocol";
@@ -205,6 +206,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         let args: unknown;
         try { args = JSON.parse(call.arguments); } catch { return local("invalid_arguments"); }
         if (!args || typeof args !== "object" || Array.isArray(args)) return local("invalid_arguments");
+        if (!admittedSeedMedia(request, args as Record<string, unknown>)) return local("invalid_arguments");
         logical = { tool: call.tool, arguments: args as Record<string, unknown> };
       }
       const body = callBody(request, logical);
