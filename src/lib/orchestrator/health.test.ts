@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { contextWindowPolicyFor, ROTATION_THRESHOLD_FRACTION } from "./contextPolicy";
+import { CODEX_TOKEN_COUNT } from "./codexUsage.fixture";
 import {
   ATTACHMENT_ESTIMATE_TOKENS,
   contextReading,
@@ -236,11 +237,32 @@ test("the fallback estimate follows a growing transcript and a replaced one", ()
   expect(estimatedContextTokens(file, fs.statSync(file).size)).toBe(1);
 });
 
-test("codex token-usage info rows are read too", () => {
-  const file = transcript([
-    { payload: { info: { last_token_usage: { input_tokens: 30_000, cached_input_tokens: 20_000 } } } },
-  ]);
-  expect(lastReportedContextTokens(file, fs.statSync(file).size)).toBe(50_000);
+test("Codex context matches the last provider total, counting cached input and reasoning once", () => {
+  const file = transcript([CODEX_TOKEN_COUNT]);
+  const usage = CODEX_TOKEN_COUNT.payload.info.last_token_usage;
+  expect(usage.cached_input_tokens).toBeLessThanOrEqual(usage.input_tokens);
+  expect(usage.input_tokens + usage.output_tokens).toBe(usage.total_tokens);
+  expect(lastReportedContextTokens(file, fs.statSync(file).size)).toBe(106_380);
+  const gathered = readOrchestratorTranscriptFacts(file, null);
+  expect(gathered.reportedContextTokens).toBe(106_380);
+  expect(contextReading({ policy: null, facts: gathered })).toMatchObject({
+    tokens: 106_380, limit: 475_000, percent: 22, estimated: false,
+  });
+});
+
+test.each([
+  [{ input_tokens: 30_000, cached_input_tokens: 20_000 }, 30_000],
+  [{ input_tokens: 30_000, cached_input_tokens: 20_000, output_tokens: 1_000, reasoning_output_tokens: 600 }, 31_000],
+  [{ input_tokens: 30_000, output_tokens: 1_000, total_tokens: 31_000 }, 31_000],
+  [{ input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, total_tokens: 0 }, 0],
+  [{ cached_input_tokens: 20_000 }, null],
+])("sparse Codex usage %j yields %j", (usage, expected) => {
+  for (const key of ["last_token_usage", "total_token_usage"]) {
+    const file = transcript([
+      { type: "event_msg", payload: { type: "token_count", info: { [key]: usage } } },
+    ]);
+    expect(lastReportedContextTokens(file, fs.statSync(file).size)).toBe(expected);
+  }
 });
 
 test("with no provider usage the reading is a byte-derived guess, CLEARLY labelled an estimate", () => {
