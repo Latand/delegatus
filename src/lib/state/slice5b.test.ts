@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import { slice5bCases } from "./slice5b.fixture";
+import { presetStore } from "@/lib/flows/store";
 import { initializeStateCollections, readStateImport } from "./sqliteStateStore";
 import { resetLegacyDocumentStoresForTests, setLegacyDocumentWriteHookForTests } from "./legacyDocumentStore";
 import { changeRoleMapping, clearRoleOverrides, hasRoleOverrides, loadRoleOverrides, saveRoleOverrides } from "@/lib/roles/store";
@@ -222,6 +223,64 @@ test("a prior direct push writer that lands after COMMIT is reconciled before re
 
   expect(outcome.incident?.kind).toBe("legacy-reconciled");
   expect((store.read(file) as { endpoint: string }[]).map(subscription => subscription.endpoint)).toContain(written[0]!.endpoint);
+});
+
+test("consumed retired preset snapshots do not restore later SQLite deletions after restart", async () => {
+  for (const mode of ["late-writer", "rollback-mirror"] as const) {
+    const root = sandbox(), file = seed(root, "review-loop-presets.json", { presets: [] });
+    const presets = ["A", "B"].map(name => ({ name, implementer: { engine: "codex" as const, model: `model-${name}`, effort: "high" as const }, reviewer: { engine: "codex" as const, model: `model-${name}`, effort: "high" as const } }));
+    if (mode === "late-writer") {
+      presetStore.importLegacy(file, { reconcile: true, hooks: { afterCommit: () => {
+        const temp = `${file}.predecessor.tmp`;
+        fs.writeFileSync(temp, JSON.stringify({ presets }), { mode: 0o600 });
+        fs.renameSync(temp, file);
+      } } });
+    } else {
+      presetStore.importLegacy(file);
+      presetStore.checkpointRollbackMirror(file);
+      fs.writeFileSync(file, JSON.stringify({ presets }), { mode: 0o600 });
+      presetStore.importLegacy(file);
+    }
+    expect((presetStore.read(file) as typeof presets).map(item => item.name)).toEqual(["A", "B"]);
+    presetStore.mutate(file, () => ({ next: [presets[0]!], result: undefined }));
+
+    for (let restart = 0; restart < 2; restart++) {
+      resetLegacyDocumentStoresForTests();
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "slice5b.fixture.ts"), root], {
+        env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe",
+      });
+      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(stderr).toBe(""); expect(code).toBe(0);
+      const reopened = JSON.parse(stdout) as { name: string; value: { name: string }[] }[];
+      expect(reopened.find(item => item.name === "review-loop-presets.json")?.value.map(item => item.name)).toEqual(["A"]);
+    }
+  }
+});
+
+test("a valid predecessor write replacing torn preset JSON is reconciled and survives restart", async () => {
+  const root = sandbox(), file = path.join(root, "review-loop-presets.json");
+  const torn = Buffer.from('{"presets":[');
+  fs.writeFileSync(file, torn, { mode: 0o600 });
+  const presets = ["A", "B"].map(name => ({ name, implementer: { engine: "codex" as const, model: `model-${name}`, effort: "high" as const }, reviewer: { engine: "codex" as const, model: `model-${name}`, effort: "high" as const } }));
+  const imported = presetStore.importLegacy(file, { reconcile: true, hooks: { afterCommit: () => {
+    const temp = `${file}.predecessor.tmp`;
+    fs.writeFileSync(temp, JSON.stringify({ presets }), { mode: 0o600 });
+    fs.renameSync(temp, file);
+  } } });
+  expect(imported.record.gap).toBe("legacy-unreadable");
+  const unreadable = fs.readdirSync(root).find(name => name.startsWith("review-loop-presets.json.unreadable-"));
+  expect(unreadable).toBeTruthy();
+  expect(fs.readFileSync(path.join(root, unreadable!))).toEqual(torn);
+  expect((presetStore.read(file) as typeof presets).map(item => item.name)).toEqual(["A", "B"]);
+
+  resetLegacyDocumentStoresForTests();
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "slice5b.fixture.ts"), root], {
+    env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(stderr).toBe(""); expect(code).toBe(0);
+  const reopened = JSON.parse(stdout) as { name: string; value: { name: string }[] }[];
+  expect(reopened.find(item => item.name === "review-loop-presets.json")?.value.map(item => item.name)).toEqual(["A", "B"]);
 });
 
 test("an audit refusal rolls back every role row and preserves retirements", () => {

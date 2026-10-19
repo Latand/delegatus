@@ -245,9 +245,10 @@ export class LegacyDocumentStore<D> {
    * comes back at roll-forward. A store whose older writers do carry a marker
    * through their writes needs a merge of its own.
    */
-  private merge(filePath: string, document: D, baseline: StateImportRecord, options: { fenceOwner: boolean }): LegacyReconcileSummary {
+  private merge(filePath: string, document: D, baseline: StateImportRecord, options: { fenceOwner: boolean; consumedSha256?: string }): LegacyReconcileSummary {
     const collection = this.open(this.databasePath(filePath));
     const since = legacyBaselineRevision(baseline);
+    const consumedSha256 = options.consumedSha256;
     const summary: LegacyReconcileSummary = { added: 0, replaced: 0, removed: 0, kept: 0, keys: [], conflicts: [], spared: [] };
     collection.patchSync(() => {
       const current = new Map(collection.snapshot().map((row) => [row.key, row] as const));
@@ -283,7 +284,14 @@ export class LegacyDocumentStore<D> {
       }
       for (const key of current.keys()) if (!incomingKeys.has(key)) summary.spared.push(key);
       return { records };
-    }, { fenceOwner: options.fenceOwner });
+    }, {
+      fenceOwner: options.fenceOwner,
+      ...(consumedSha256 ? { afterPersist: (db) => {
+        const result = db.query("UPDATE state_imports SET reconciled_sha256 = ? WHERE collection = ?")
+          .run(consumedSha256, this.options.collection);
+        if (result.changes !== 1) throw new Error(`missing import evidence for ${this.options.collection} reconciliation`);
+      } } : {}),
+    });
     return summary;
   }
 
