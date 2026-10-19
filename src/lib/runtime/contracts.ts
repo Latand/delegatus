@@ -963,6 +963,8 @@ export interface ViewerDeploymentOwner {
 export interface ViewerDeploymentStatus {
   /** Live adapter observation; does not authorize readiness or terminal state. */
   servingProgress?: string;
+  /** Request keys that joined this deployment while it was already active. */
+  idempotencyKeys?: string[];
   deploymentId: string;
   idempotencyKey: string;
   requestedRevision: string;

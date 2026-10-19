@@ -36,6 +36,7 @@ test("admission survives a control timeout and the original MCP key resolves thr
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const receipt = await coordinator.requestViewerDeployment(await request.json());
     deploymentId = receipt.deploymentId;
+    await recordSeatDeploymentAdmission("lost-admission-reply", receipt);
     if (first) {
       first = false;
       // Abort only after the real admission committed. The response is lost.
@@ -140,6 +141,118 @@ test("a reconnect refusal after admission stays unknown and original-key replay 
   }
 });
 
+test("a truncated accepted body followed by refusal keeps its receipt pending until restart recovery", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-truncated-body-"));
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 2_500 });
+  const adapter = new FakeDeploymentAdapter();
+  const coordinator = new ViewerDeploymentCoordinator(journal, adapter, { pid: 25, startIdentity: "25:1" });
+  let requests = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    requests++;
+    if (requests === 1) {
+      const body = await request.json() as { revision: string; idempotencyKey: string };
+      const admitted = await coordinator.requestViewerDeployment(body);
+      await recordSeatDeploymentAdmission(body.idempotencyKey, admitted);
+      return new Response("{", { status: 202, headers: { "content-type": "application/json" } });
+    }
+    return Response.json({ error: "reconnect refused" }, { status: 403 });
+  } });
+  const previous = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  const receiptPath = path.join(root, "mcp.sqlite");
+  let store = new SqliteMcpReceiptStore(receiptPath);
+  const domainWithLookup = {
+    ...domain,
+    findDeploymentByIdempotencyKey: (key: string) => coordinator.findViewerDeploymentByIdempotencyKey(key),
+  };
+  const args = { revision: SHA, clientRequestId: "truncated-admission-body" };
+  try {
+    const first = await createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domainWithLookup as never), store)
+      .callTool("deploy_exact_sha", args, { deadlineAt: Date.now() + 5_000 });
+    expect(first).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
+    expect(JSON.stringify(first)).toContain("deployment_status");
+    expect(journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)?.deploymentId).toBeTruthy();
+    store.close();
+    store = new SqliteMcpReceiptStore(receiptPath);
+    const replay = await createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domainWithLookup as never), store)
+      .callTool("deploy_exact_sha", args, { deadlineAt: Date.now() + 5_000 });
+    expect(replay).toMatchObject({
+      ok: true,
+      state: "accepted",
+      deploymentId: journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)?.deploymentId,
+      wakeOnSettle: true,
+    });
+    expect(requests).toBe(2);
+    expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
+  } finally {
+    store.close();
+    const admitted = journal.viewerDeploymentByIdempotencyKey(args.clientRequestId);
+    if (admitted) await coordinator.waitForDeployment(admitted.deploymentId);
+    server.stop(true);
+    journal.close();
+    if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a pending deploy replay never turns a reconnect refusal into a failed receipt", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-pending-refusal-"));
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 2_750 });
+  const adapter = new FakeDeploymentAdapter();
+  const coordinator = new ViewerDeploymentCoordinator(journal, adapter, { pid: 27, startIdentity: "27:1" });
+  let requests = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    requests++;
+    if (requests === 1) {
+      await coordinator.requestViewerDeployment(await request.json());
+      return Response.json({ error: "upstream lost the admission response" }, { status: 502 });
+    }
+    return Response.json({ error: "reconnect refused" }, { status: 403 });
+  } });
+  const previous = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
+  const receiptPath = path.join(root, "mcp.sqlite");
+  let store = new SqliteMcpReceiptStore(receiptPath);
+  let admissionVisible = false;
+  const domainWithDelayedLookup = {
+    ...domain,
+    findDeploymentByIdempotencyKey: (key: string) => admissionVisible
+      ? coordinator.findViewerDeploymentByIdempotencyKey(key)
+      : Promise.resolve(null),
+  };
+  const args = { revision: SHA, clientRequestId: "pending-refusal-key" };
+  try {
+    const first = await createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domainWithDelayedLookup as never), store)
+      .callTool("deploy_exact_sha", args, { deadlineAt: Date.now() + 5_000 });
+    expect(first).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
+    store.close();
+    store = new SqliteMcpReceiptStore(receiptPath);
+
+    const pendingReplay = await createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domainWithDelayedLookup as never), store)
+      .callTool("deploy_exact_sha", args, { deadlineAt: Date.now() + 5_000 });
+    expect(pendingReplay).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
+    expect(JSON.stringify(pendingReplay)).toContain("deployment_status");
+    expect(requests).toBe(2);
+
+    admissionVisible = true;
+    const recovered = await createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domainWithDelayedLookup as never), store)
+      .callTool("deploy_exact_sha", args, { deadlineAt: Date.now() + 5_000 });
+    expect(recovered).toMatchObject({ ok: true, state: "accepted", wakeOnSettle: true });
+    expect(requests).toBe(2);
+    expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
+  } finally {
+    store.close();
+    const admitted = journal.viewerDeploymentByIdempotencyKey(args.clientRequestId);
+    if (admitted) await coordinator.waitForDeployment(admitted.deploymentId);
+    server.stop(true);
+    journal.close();
+    if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("legacy stored reconnect failures resolve through the same admission key", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-deploy-receipt-"));
   const file = path.join(root, "mcp.sqlite");
@@ -156,13 +269,18 @@ test("legacy stored reconnect failures resolve through the same admission key", 
     const bindings = viewerMcpBindings(undefined, { post: async (_url, body) => {
       keys.push(body.idempotencyKey);
       return { state: "accepted", deploymentId: "legacy-admitted", revision: SHA, replayed: true };
-    } }, domain as never);
+    } }, {
+      ...domain,
+      findDeploymentByIdempotencyKey: async (idempotencyKey: string) => ({
+        deploymentId: "legacy-admitted", idempotencyKey, requestedRevision: SHA, revision: SHA,
+      } as never),
+    } as never);
     const service = createMcpToolService(bindings, store);
     expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: true, deploymentId: "legacy-admitted", wakeOnSettle: true });
     expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: true, replayed: true, deploymentId: "legacy-admitted" });
-    expect(keys).toEqual([args.clientRequestId]);
+    expect(keys).toEqual([]);
     expect(await service.callTool("deploy_exact_sha", { ...args, revision: "b".repeat(40) })).toMatchObject({ code: "idempotency_conflict" });
-    expect(keys).toHaveLength(1);
+    expect(keys).toHaveLength(0);
   } finally {
     store.close();
     fs.rmSync(root, { recursive: true, force: true });

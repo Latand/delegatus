@@ -9,7 +9,7 @@ import { FakeDeploymentAdapter } from "../../runtime-host/fixtures/fakeDeploymen
 import { RuntimeJournal } from "../../runtime-host/journal";
 import { viewerMcpBindings } from "./bindings";
 import { createMcpToolService, SqliteMcpReceiptStore } from "./server";
-import { beginSeatDeployment, recordSeatDeployment, recordSeatDeploymentAdmission, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
+import { beginSeatDeployment, recordSeatDeployment, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 
 const SHA = "a".repeat(40);
 const SEAT = "conversation_deploy_seat";
@@ -37,12 +37,20 @@ test("a lost busy-join reply replays its durable admission before and after sett
   await beginSeatDeployment({ conversationId: SEAT, project: PROJECT, revision: SHA,
     requestedAt: "2026-10-19T12:01:00.000Z", idempotencyKey: joinKey });
   let posts = 0;
+  let attributionWritable = false;
+  const joinDomain = {
+    ...domain,
+    findDeploymentByIdempotencyKey: (key: string) => coordinator.findViewerDeploymentByIdempotencyKey(key),
+    recordSeatDeployment: async (record: Parameters<typeof recordSeatDeployment>[0]) => {
+      if (!attributionWritable) throw new Error("seat attribution storage temporarily refused the write");
+      await recordSeatDeployment(record);
+    },
+  };
   const bindings = viewerMcpBindings(undefined, { post: async (_url, body) => {
     posts++;
-    const receipt = await coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string });
-    await recordSeatDeploymentAdmission(joinKey, receipt);
-    throw new Error("busy-join response was lost after HTTP attribution committed");
-  } }, domain as never);
+    await coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string });
+    throw new Error("same-SHA join response was lost after runtime admission");
+  } }, joinDomain as never);
   const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
   const service = createMcpToolService(bindings, store);
   const args = { revision: SHA, clientRequestId: joinKey };
@@ -63,6 +71,7 @@ test("a lost busy-join reply replays its durable admission before and after sett
   try {
     const lost = await service.callTool("deploy_exact_sha", args);
     expect(lost).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
+    attributionWritable = true;
     const replay = await service.callTool("deploy_exact_sha", args);
     expect(replay).toMatchObject({ ok: true, state: "accepted", deploymentId, wakeOnSettle: true });
     expect(posts).toBe(1);

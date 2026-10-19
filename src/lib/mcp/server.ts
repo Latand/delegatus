@@ -3297,7 +3297,7 @@ export function createMcpToolService(
         let unadmitted = false;
         const bindingStartedAt = performance.now();
         try {
-          const payload = await bindings[typedTool](effectiveArgs, retryDeployment
+          const payload = await bindings[typedTool](effectiveArgs, typedTool === "deploy_exact_sha" && (retryDeployment || claim.kind === "pending")
             ? { ...context, priorAttemptUncertain: true }
             : context);
           settled = {

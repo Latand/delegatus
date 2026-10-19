@@ -462,6 +462,7 @@ async function requestViewerControl(
           lastFailure = "status 503";
         } catch {
           if (context.signal?.aborted) throw context.signal.reason;
+          if (init.method === "POST") uncertainPriorPost = true;
           if (!retryable) {
             return { response, parsed: null, unreadable: true, uncertainPriorPost };
           } else if (attempt.signal.aborted) {
@@ -3585,6 +3586,7 @@ async function deployExactSha(
   args: McpToolArgs,
   control: ViewerControlDependencies,
   dependencies: ViewerMcpDomainDependencies,
+  callContext: McpToolCallContext = {},
 ): Promise<McpToolPayload> {
   const revision = required(args, "revision");
   if (!/^[0-9a-f]{7,40}$/i.test(revision)) throw new Error("revision must be a commit SHA or prefix of at least 7 characters");
@@ -3601,6 +3603,21 @@ async function deployExactSha(
     revision: revision.toLowerCase(), requestedAt: new Date().toISOString(), idempotencyKey };
   await beginSeatDeployment(pending, assertSeat);
   assertSeat();
+  if (callContext.priorAttemptUncertain) {
+    await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
+      dependencies.recordSeatDeployment);
+    const recovered = seatDeploymentForRequestKey(idempotencyKey);
+    if (recovered) {
+      if (recovered.conversationId !== seat.conversationId || recovered.project !== seat.project
+        || !recovered.revision.toLowerCase().startsWith(revision.toLowerCase())) {
+        throw new McpToolRefusal("the deployment request key is attributed to a different seat or revision", {
+          code: "deploy_request_key_conflict", retryable: false,
+        });
+      }
+    } else {
+      throw new McpDeploymentPendingError("the prior deploy request is still being reconciled; no new admission was sent");
+    }
+  }
   let receipt: Record<string, unknown>;
   const priorAdmission = seatDeploymentForRequestKey(idempotencyKey);
   if (priorAdmission) {
@@ -8042,7 +8059,7 @@ export function viewerMcpBindings(
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),
     conversation_messages: reads.conversation_messages,
     deploy_exact_sha: Object.assign(
-      (args: McpToolArgs, context?: McpToolCallContext) => deployExactSha(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+      (args: McpToolArgs, context?: McpToolCallContext) => deployExactSha(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
       { authorizeReceipt: () => { deploySeatAuthority(domainDependencies); } },
     ),
     get_pipeline: reads.get_pipeline,

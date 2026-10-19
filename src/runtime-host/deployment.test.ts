@@ -85,6 +85,45 @@ test("deployment admission is serialized and idempotent", async () => {
   store.close();
 });
 
+test("a matching busy SHA durably binds its join key through settlement and journal reopen", async () => {
+  const file = journalFile("busy-join-key");
+  const store = new RuntimeJournal(file, { now: () => 1_000 });
+  const adapter = new FakeDeploymentAdapter();
+  let releaseBuild!: () => void;
+  adapter.buildGate = new Promise<void>((resolve) => { releaseBuild = resolve; });
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+  const revision = "a".repeat(40);
+  let closed = false;
+  try {
+    const first = await coordinator.requestViewerDeployment({ revision, idempotencyKey: "seat-a-key" });
+    if (first.state !== "accepted") throw new Error("first deployment was not accepted");
+    const joined = await coordinator.requestViewerDeployment({ revision, idempotencyKey: "seat-b-join" });
+    expect(joined).toEqual({ state: "accepted", deploymentId: first.deploymentId, revision, replayed: false });
+    expect(await coordinator.requestViewerDeployment({ revision: "b".repeat(40), idempotencyKey: "different-sha-key" }))
+      .toEqual({ state: "busy", deploymentId: first.deploymentId, revision });
+    expect(store.viewerDeploymentByIdempotencyKey("seat-b-join")).toMatchObject({
+      deploymentId: first.deploymentId,
+      idempotencyKey: "seat-b-join",
+      requestedRevision: revision,
+    });
+    releaseBuild();
+    await coordinator.waitForDeployment(first.deploymentId);
+    store.close();
+    closed = true;
+
+    const reopened = new RuntimeJournal(file, { now: () => 2_000 });
+    const replayCoordinator = new ViewerDeploymentCoordinator(reopened, new FakeDeploymentAdapter(), { pid: 11, startIdentity: "11:1" });
+    expect(await replayCoordinator.requestViewerDeployment({ revision, idempotencyKey: "seat-b-join" }))
+      .toEqual({ state: "accepted", deploymentId: first.deploymentId, revision, replayed: true });
+    expect(reopened.viewerDeploymentByIdempotencyKey("seat-b-join")?.terminal).toBe(true);
+    reopened.close();
+    expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
+  } finally {
+    releaseBuild();
+    if (!closed) store.close();
+  }
+});
+
 test("issue 1033: a branch ref is resolved by the host and the ledger records the exact commit", async () => {
   const store = journal("ref-admission");
   const adapter = new FakeDeploymentAdapter();
