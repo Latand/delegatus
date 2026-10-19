@@ -127,7 +127,16 @@ original=$(GIT_CONFIG_COUNT=${count} git config --path --get core.hooksPath) || 
   original="$common/hooks"
 }
 target="$original/$hook"
+# A repository may have persisted the launch override, including through a
+# symlink or a parent worktree's config. Keep its checked-in hooks reachable.
+if [ "$target" -ef "$0" ]; then target=".githooks/$hook"; fi
 [ -x "$target" ] || exit 0
+[ ! "$target" -ef "$0" ] || exit 0
+# A repository wrapper can invoke this guard again. Apply the guard above on
+# every entry, but forward to the same repository hook only once per chain.
+chain_target=$(CDPATH= cd -P "\${target%/*}" && pwd -P)/$hook
+[ "\${LLV_AGENT_GIT_CHAINED_HOOK:-}" != "$chain_target" ] || exit 0
+export LLV_AGENT_GIT_CHAINED_HOOK="$chain_target"
 if [ "$hook" = reference-transaction ] || [ "$hook" = pre-push ] || [ "$hook" = post-rewrite ]; then
   if [ "$hook" = pre-push ] && [ -z "\${LLV_STAGE_GIT_RECEIPT:-}" ]; then exec "$target" "$@"; fi
   printf '%s\\n' "$input" | "$target" "$@"
