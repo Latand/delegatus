@@ -229,7 +229,7 @@ for (const family of ["flow", "resume"] as const) for (const phase of ["reservat
 }
 
 for (const family of ["flow", "resume"] as const) test(`${family} reports refused revocation cleanup and a reopened writer can finish it`, async () => {
-  const f = fixture(false, 0); f.seed();
+  const f = fixture(false, 1_000); f.seed();
   const peer = new Database(f.sqliteFilename);
   let locked = false;
   const current = () => {
