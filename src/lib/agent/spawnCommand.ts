@@ -84,7 +84,7 @@ import { AGENT_SPAWN_LINEAGE_ERROR, agentSpawnLineageError, authenticatedAgentSp
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { spawnAccountErrorResponse } from "@/app/api/spawn/accountError";
 import { attributeNamedAccountChoice } from "@/lib/accounts/accountOverrides";
-import { machinePass } from "@/lib/memory/curation/store";
+import { machinePassAuthority } from "@/lib/memory/curation/store";
 import { canonicalProject } from "@/lib/projects/aliases";
 
 const SUGGEST_SCAN_LIMIT = 80;
@@ -575,7 +575,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   }
   const authorizeLaunch = () => {
     if (role.value?.role === "curator") {
-      const pass = machinePass();
+      const pass = machinePassAuthority();
       const project = canonicalProject(explicitProject ?? projectForCwd(cwd) ?? "");
       if (!dependencies.authorizeAutonomousLaunch || !clientAttemptId || !pass || pass.id !== clientAttemptId
         || canonicalProject(pass.project) !== project) throw new CuratorSpawnAdmissionError();

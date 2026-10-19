@@ -37,6 +37,11 @@ describe("task statusBy", () => {
     expect(same.ok && same.task.statusBy).toEqual(by);
   });
 
+  test("an explicit operator assignment reopens a task returned to Inbox by its terminal lane", () => {
+    const moved = patchTask([task({ status: "assigned" })], "task-1", { status: "assigned" }, "2026-10-19T06:00:00.000Z", { statusActor: { kind: "operator" } });
+    expect(moved.ok && moved.task.statusBy).toEqual({ actor: { kind: "operator" }, from: "assigned", at: "2026-10-19T06:00:00.000Z" });
+  });
+
   test("a status change with no named writer drops the earlier writer's record", () => {
     const by = { actor: SEAT, from: "inbox" as const, at: "2026-10-06T10:05:00.000Z" };
     const moved = patchTask([task({ status: "assigned", statusBy: by })], "task-1", { status: "done" }, "2026-10-06T10:06:00.000Z");

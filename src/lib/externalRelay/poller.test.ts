@@ -989,3 +989,8 @@ test("claim advertises on-demand tools only when the stored descriptor offers th
   expect(relayClaimCapabilities({ features: ["relay_tool_calls"] }).features).not.toContain("relay_tools_on_demand");
   expect(relayClaimCapabilities().features).not.toContain("relay_tools_on_demand");
 });
+
+test("inbound media is advertised only when the descriptor offers it and includes requester context", () => {
+  expect(relayClaimCapabilities({ features: ["relay_media_in"] }).features).toEqual(expect.arrayContaining(["relay_media_in", "requester_context"]));
+  expect(relayClaimCapabilities({ features: [] }).features).not.toContain("relay_media_in");
+});

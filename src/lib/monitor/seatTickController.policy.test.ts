@@ -1,3 +1,4 @@
+import { seatTickInstructionLines } from "./seatTickInstructions";
 import { expect, spyOn, test, fs, path, createHash, spawn, SANDBOX, runSeatTickCheck, SEAT_TICK_WAKE_UNRESOLVED_REF, wakeReached, DEFAULT_SEAT_TICK_POLICY, seatMcpHealth, viewerMcpTransportForLaunch, defaultSeatTickSettings, deliverConversationMessage, readSeatTickState, writeSeatTickState, statePath, setAgentRegistryForTests, emptyLaunchProfile, sessionKeyFromTranscript, mcpLauncherImports, emptySeatTickState, PROJECT, CONVERSATION, SUCCESSOR, NOW, MINUTE, WALL_DATE, harness, OVERDUE, RECENT, outstandingWake, OPEN_LANE, terminalEvent, offSettings, FINISHED_LANE, FINISHED_PR_CREATED, ARCHIVED_LANE, standingGap, MONITOR_PROMPT, childFixture, childRig, ago } from "./seatTickController.fixture";
 import type { SeatTickSettings, GithubRunner, RuntimeHostClient, AgentLivenessRecord } from "./seatTickController.fixture";
 
@@ -71,7 +72,7 @@ test("a tick setting that reached its expiry is written back to the default by t
   /* The wake goes out — the setting lapsed — and the record on disk stops
      saying "off" beside a tick that is ticking. */
   expect(record).toMatchObject({ verdict: "wake" });
-  expect(persisted).toEqual([{ ...defaultSeatTickSettings(PROJECT), reason: settings.reason, updatedAt: settings.updatedAt, setBy: settings.setBy }]);
+  expect(persisted).toEqual([{ ...defaultSeatTickSettings(PROJECT), reason: settings.reason, instructionLines: seatTickInstructionLines(settings), updatedAt: settings.updatedAt, setBy: settings.setBy }]);
   expect(rig.cards[0]!.card).toMatchObject({ state: "resolved" });
 });
 
@@ -86,7 +87,7 @@ test("the lapse ends the setting that expired and keeps the monitor prompt it ne
   expect(persisted).toEqual([{
     ...defaultSeatTickSettings(PROJECT),
     monitorPrompt: MONITOR_PROMPT,
-    reason: settings.reason,
+    reason: settings.reason, instructionLines: seatTickInstructionLines(settings),
     updatedAt: settings.updatedAt,
     setBy: settings.setBy,
   }]);

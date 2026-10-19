@@ -8,8 +8,9 @@ import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountC
 import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 import { ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
-import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
-import { pipelineHostHasLiveWork, providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
+import { findPipelineRecord } from "@/lib/pipelines/store";
+import { pipelineRetirementReader, type RetirementTarget } from "@/lib/pipelines/retirementEvidence";
+import { providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { runtimeIdleKillMatches } from "./contracts";
@@ -1120,22 +1121,28 @@ export async function bindStructuredDeliveryQueue(
       }
       let capturedRetirement: { root: ProcessIdentity; claimEpoch: number } | null = null;
       let recoveryStartedAt: string | null = null;
+      let pipelineReader: Awaited<ReturnType<typeof pipelineRetirementReader>> | null = null;
       const recoveryTarget = () => ({ conversationId, sessionId: expectedKey.sessionId, engine: expectedKey.engine,
         agentPath: registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.artifactPath ?? null });
       const durableAuthority = async (): Promise<boolean> => {
         if (!onlyIfIdle) return true;
         if (!authority || stopped || state.activeQueue !== queue) return false;
-        const result = await client.operationStatus(authority.operationId).catch(() => null);
         recoveryStartedAt = null;
+        try { pipelineReader = await pipelineRetirementReader(); }
+        catch { pipelineReader = null; return false; }
         if (providerRecovery) {
           try {
             const snapshot = registry.readOnlySnapshot();
-            const attempt = providerRecoveryAttempt(loadPipelinesForRetirement(), providerRecovery, recoveryTarget(),
+            const pipeline = findPipelineRecord(providerRecovery.pipelineId);
+            const attempt = providerRecoveryAttempt(pipeline ? [pipeline] : [], providerRecovery, recoveryTarget(),
               id => resolveConversationAlias(snapshot, id as ViewerConversationId));
             if (!attempt || !await providerRecoveryTurnProven(attempt, providerRecovery)) return false;
             recoveryStartedAt = attempt.startedAt;
           } catch { return false; }
         }
+        // Read the operation after preparation and native proof. Neither wait
+        // may carry a superseded executor claim into the signal boundary.
+        const result = await client.operationStatus(authority.operationId).catch(() => null);
         // Rebind may have happened while the socket read was pending.
         return !stopped && state.activeQueue === queue && result?.receipt.status === "delivering"
           && result.receipt.retirementClaim?.executorId === authority.claim.executorId
@@ -1156,14 +1163,17 @@ export async function bindStructuredDeliveryQueue(
         const conversation = registry.conversation(conversationId as ViewerConversationId);
         const generation = conversation?.generations.at(-1);
         try {
-          const pipelines = loadPipelinesForRetirement();
+          if (!pipelineReader) return false;
           const resolve = (id: string) => resolveConversationAlias(snapshot, id as ViewerConversationId);
+          const pipeline = providerRecovery ? findPipelineRecord(providerRecovery.pipelineId) : null;
           const recoveryAttempt = providerRecovery
-            ? providerRecoveryAttempt(pipelines, providerRecovery, recoveryTarget(), resolve) : null;
+            ? providerRecoveryAttempt(pipeline ? [pipeline] : [], providerRecovery, recoveryTarget(), resolve) : null;
           if (providerRecovery && (!recoveryAttempt || !recoveryStartedAt || recoveryAttempt.startedAt !== recoveryStartedAt)) return false;
-          if (pipelineHostHasLiveWork(pipelines, {
-            conversationId, sessionId: expectedKey.sessionId, agentPath: entry?.artifactPath ?? null, paneId: null,
-          }, resolve, recoveryAttempt ?? undefined)) return false;
+          const target: RetirementTarget = {
+            conversations: conversationIdsResolvingTo(snapshot, resolve(conversationId) as ViewerConversationId),
+            sessionId: expectedKey.sessionId, agentPath: entry?.artifactPath ?? null,
+          };
+          if (pipelineReader(target, recoveryAttempt ? providerRecovery : undefined)) return false;
         } catch { return false; }
         // Turn idleness cannot release a seat. Read designation and revocation
         // epochs together, afresh before each signal; silence defers retirement.

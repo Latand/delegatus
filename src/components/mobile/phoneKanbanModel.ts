@@ -163,7 +163,7 @@ function liveReasons(card: KanbanCard, closing: ReadonlySet<string>): NeedReason
 
 /** The task's prototype review still waits for the operator's choice. */
 function prototypeWaits(card: KanbanCard): boolean {
-  return prototypeWaitsOnOperator(card.task?.prototypeReview);
+  return prototypeWaitsOnOperator(card.task?.prototypeReview, card.task);
 }
 
 /** Whether the card needs the operator, as the ⚠ queue reads it. */

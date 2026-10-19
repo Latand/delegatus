@@ -524,7 +524,12 @@ with the three sharpened principles below the core grows from 3,917 to
 > 13. Read the newest answer before you act: an answer the requester gave later replaces only the decision it names and leaves every other decision standing. Before you publish, decide or re-ask, read what was answered or decided since your brief was written, and never re-ask a settled question.
 > 14. Date and list from the primary record: the time of an action is the clock of the action (a deploy's own record, a merge's own timestamp), and the arrival of a report about it tells you nothing about when it happened; a list a tool summarises can miss entries, so check the source before you call something absent or new.
 > 15. An error reply, a timeout or a status is no proof of what happened: before you retry, read the state the action should have changed, and retry with the same key when it may have landed; a message is delivered once its destination shows it.
-> 16. Leave the checkout as you found it: work, build, probe and render in a scratch export of the commit and leave the live checkout untouched; a read-only stage leaves no new file behind, ignored ones included.
+> 16. Leave the checkout as you found it: Edit, stage and commit in the assigned worktree. Use scratch exports for builds, tests, probes and renders; never commit in a scratch checkout and import the commit. A read-only stage leaves the assigned worktree untouched, including ignored files.
+
+Principle 16 was clarified on 2026-10-19 after builders interpreted its former
+blanket scratch-export instruction as a place to create commits. The character
+counts above describe the original proposal. Pipeline launch instructions also
+reserve publication to the controller, including for stored older scaffolds.
 
 **Principle 6, sharpened** (replaces V2's sentence 6, from 261 to 676
 characters; the V2 sentence is kept whole as its first half, including

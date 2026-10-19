@@ -66,18 +66,7 @@ export function pipelineHostHasLiveWork(
     && resolveConversation(id) === resolveConversation(target.conversationId);
   const samePath = (value: string | null) => !!value && !!target.agentPath && value === target.agentPath;
   for (const pipeline of pipelines) {
-    const publication = pipeline.delivery?.operation;
-    const result = publication?.result;
-    const publishing = (publication !== undefined && (publication.state !== "settled" || !result
-      || (result.ok !== true && result.ok !== false)
-      || (result.ok === false && typeof result.error !== "string")
-      || (result.ok === true && (typeof result.sha !== "string"
-        || !["published", "unavailable"].includes(result.remote)
-        || (result.uncertain !== undefined && result.uncertain !== false)))
-      || (publication.executor !== undefined && publication.executor.finished !== true)))
-      || pipeline.publicationAdmission?.state === "pending"
-      || pipeline.remoteAction?.state === "pending"
-      || pipeline.cursor?.state === "committing";
+    const publishing = pipelinePublicationHoldsHost(pipeline);
     if ((sameConversation(pipeline.srcConversationId) || samePath(pipeline.srcPath))
       && (publishing || !["completed", "closed"].includes(pipeline.state))) return true;
     for (const run of pipeline.runs) for (const attempt of run.attempts) {
@@ -97,4 +86,20 @@ export function pipelineHostHasLiveWork(
     }
   }
   return false;
+}
+
+/** Publication keeps every matching host in custody until its receipt settles. */
+export function pipelinePublicationHoldsHost(pipeline: Pipeline): boolean {
+  const publication = pipeline.delivery?.operation;
+  const result = publication?.result;
+  return (publication !== undefined && (publication.state !== "settled" || !result
+      || (result.ok !== true && result.ok !== false)
+      || (result.ok === false && typeof result.error !== "string")
+      || (result.ok === true && (typeof result.sha !== "string"
+        || !["published", "unavailable"].includes(result.remote)
+        || (result.uncertain !== undefined && result.uncertain !== false)))
+      || (publication.executor !== undefined && publication.executor.finished !== true)))
+      || pipeline.publicationAdmission?.state === "pending"
+      || pipeline.remoteAction?.state === "pending"
+      || pipeline.cursor?.state === "committing";
 }

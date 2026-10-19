@@ -7,7 +7,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { failUnstartedLaunchMembership } from "@/lib/tasks/membership";
 
 import { attentionSystemClears, retiredSeatConversations, type ReconcileFacts } from "./reconcile";
-import { reconcileAttentionOnce, type AttentionReconcilePorts } from "./reconcileController";
+import { pipelineOwnershipIds, reconcileAttentionOnce, type AttentionReconcilePorts } from "./reconcileController";
 
 /*
  * docs/design/attention-auto-resolve.md, acceptance 2: a wait clears itself
@@ -174,4 +174,54 @@ test("a late failure timestamp cannot make the newest failed launch look superse
 
   const clears = attentionSystemClears([launchA, launchB], now, facts({ tasks: [task] }));
   expect(clears.map(clear => [clear.path, clear.rule])).toEqual([[launchA.path, "launch-relaunched"]]);
+});
+
+
+test("admission rechecks a resumed host, reopened task and replaced lane before clearing", async () => {
+  for (const changed of ["host", "task", "lane"] as const) {
+    let release!: () => void, ready!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const entered = new Promise<void>(resolve => { ready = resolve; });
+    const observed = { host: {}, task: {}, lane: {} };
+    const current = { ...observed };
+    const writes: unknown[] = [];
+    const ports: AttentionReconcilePorts = {
+      now: () => new Date(now * 1000),
+      board: async () => ({ files: [file("retired", { proc: "done", operatorAsk: ask("ask-race") })], pipelines: [] }),
+      facts: () => facts({ retiredSeats: new Set(["conversation_retired"]) }),
+      admit: async write => { ready(); await held; return write(); },
+      current: () => Object.keys(observed).every(key => observed[key as keyof typeof observed] === current[key as keyof typeof current]),
+      write: clears => { writes.push(...clears); return [...clears]; }, announce: async () => {},
+    };
+    const running = reconcileAttentionOnce(ports);
+    await entered; current[changed] = {}; release();
+    expect(await running).toEqual([]); expect(writes).toEqual([]);
+  }
+});
+
+test("losing release authority during admission rejects without clearing", async () => {
+  let release!: () => void, ready!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const entered = new Promise<void>(resolve => { ready = resolve; });
+  let active = true, writes = 0;
+  const running = reconcileAttentionOnce({
+    now: () => new Date(now * 1000),
+    board: async () => ({ files: [file("retired", { proc: "done", operatorAsk: ask("ask-race") })], pipelines: [] }),
+    facts: () => facts({ retiredSeats: new Set(["conversation_retired"]) }),
+    admit: async write => { ready(); await held; return write(); },
+    current: () => { if (!active) throw new Error("release retired"); return true; },
+    write: clears => { writes++; return [...clears]; }, announce: async () => {},
+  });
+  await entered; active = false; release();
+  await expect(running).rejects.toThrow("release retired"); expect(writes).toBe(0);
+});
+
+
+test("reconciliation requests archived owners named by current file and registry memberships", () => {
+  const fileOwner = { kind: "pipeline" as const, containerId: "archived-file-owner", stageId: "build", stageOrder: 0, role: "builder", slot: "build", round: null, parentConversationId: null };
+  const registryOwner = { ...fileOwner, containerId: "archived-registry-owner" };
+  const fileWithLineage = file("archived", { durableLineage: { kind: "spawn", role: "builder", depth: 0, parentConversationId: null, reviewsConversationId: null, memberships: [fileOwner] } as FileEntry["durableLineage"] });
+  expect(pipelineOwnershipIds([fileWithLineage], { "conversation_archived": [registryOwner] }, new Set(["active-owner"]))).toEqual([
+    "archived-file-owner", "archived-registry-owner",
+  ]);
 });

@@ -1,3 +1,4 @@
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
 import crypto from "node:crypto";
@@ -19,6 +20,7 @@ import { parseMemory, type MemoryKind, type MemorySource } from "./parsers";
 import { nativeHookCursor, nativeOccurrenceAfter } from "./native";
 import { nativeMatch, queryFor, type Candidate } from "./selection";
 import { resolveShortId } from "@/lib/shortIds";
+import { searchRoleRules } from "./roleSearch";
 
 interface MemoryItem {
   id: string;
@@ -27,7 +29,7 @@ interface MemoryItem {
   scope: "project" | "global";
   project: string | null;
   sourcePath: string;
-  sourceKind: MemorySource["sourceKind"];
+  sourceKind: MemorySource["sourceKind"] | "role_rule";
   title: string;
   summary: string;
   body: string;
@@ -54,6 +56,13 @@ function displayPath(filename: string): string {
   const home = os.homedir();
   return filename.startsWith(home + path.sep) ? "$HOME/" + path.relative(home, filename) : filename;
 }
+
+const memoryIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS memory_entries_source ON memory_entries(engine, sourceKind, sourcePath)`,
+  `CREATE INDEX IF NOT EXISTS memory_entries_kind ON memory_entries(engine, kind)`,
+  `CREATE INDEX IF NOT EXISTS memory_terminal_pending ON memory_terminal_deliveries(conversation, request, digest)`,
+  `CREATE INDEX IF NOT EXISTS memory_project_scopes_project ON memory_project_scopes(project)`,
+]);
 
 /** A rebuildable, private derivative. Every source is opened read-only. */
 export class MemoryIndex {
@@ -134,6 +143,8 @@ export class MemoryIndex {
     this.db = observeSqlite(new sqlite.Database(filename, { create: true }), "memory-index");
     fsSync.chmodSync(filename, 0o600);
     try {
+      this.db.exec("PRAGMA busy_timeout = 0");
+      memoryIndexes.assertRepairAuthority(this.db, path.dirname(filename));
       this.db.exec(`
         PRAGMA busy_timeout = 0;
         PRAGMA journal_mode = WAL;
@@ -144,8 +155,6 @@ export class MemoryIndex {
           sourcePath TEXT, sourceKind TEXT, title TEXT, summary TEXT, body TEXT, writtenAt TEXT, flags TEXT
         );
         CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(id UNINDEXED, title, summary, body);
-        CREATE INDEX IF NOT EXISTS memory_entries_source ON memory_entries(engine, sourceKind, sourcePath);
-        CREATE INDEX IF NOT EXISTS memory_entries_kind ON memory_entries(engine, kind);
         CREATE TABLE IF NOT EXISTS memory_offers (
           memory_id TEXT NOT NULL, request_id TEXT NOT NULL, conversation_id TEXT,
           at TEXT NOT NULL, channel TEXT NOT NULL, score REAL, outcome TEXT, outcome_at TEXT,
@@ -158,7 +167,6 @@ export class MemoryIndex {
           delivery TEXT PRIMARY KEY, conversation TEXT, transcript TEXT, occurrence TEXT, offset INTEGER,
           UNIQUE(conversation, transcript, occurrence)
         );
-        CREATE INDEX IF NOT EXISTS memory_terminal_pending ON memory_terminal_deliveries(conversation, request, digest);
         CREATE TABLE IF NOT EXISTS memory_native_turns (
           conversation TEXT, request TEXT, transcript TEXT, offset INTEGER, digest TEXT, occurrence TEXT,
           PRIMARY KEY(conversation, request), UNIQUE(conversation, occurrence)
@@ -172,7 +180,7 @@ export class MemoryIndex {
         CREATE TABLE IF NOT EXISTS memory_hook_attempts (conversation TEXT, request TEXT, PRIMARY KEY(conversation, request));
         CREATE TABLE IF NOT EXISTS memory_unmatched_turns (conversation TEXT, request TEXT, at TEXT NOT NULL, PRIMARY KEY(conversation, request));
       `);
-      this.db.exec("CREATE INDEX IF NOT EXISTS memory_project_scopes_project ON memory_project_scopes(project)");
+      memoryIndexes.install(this.db, path.dirname(filename));
       if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_injection_names'").get()) {
         // Migrate once, atomically, without waiting behind a live writer. A hook
         // can abandon a contended first open and retry on a later prompt.
@@ -269,8 +277,12 @@ export class MemoryIndex {
         AND (? IS NULL OR e.kind = ?)
       ORDER BY bm25(memory_fts, 0, 5, 2, 1), e.writtenAt DESC, e.id LIMIT ?
     `).all(terms.map(term => `"${term}"`).join(" AND "), scope, scope, input.kind ?? null, input.kind ?? null, Math.max(1, Math.min(20, input.limit ?? 10)));
-    const page = { items: [] as Array<Omit<MemoryItem, "body" | "flags"> & { flags: string[] }>, truncated: false };
-    for (const item of items) {
+    const limit = Math.max(1, Math.min(20, input.limit ?? 10));
+    const roleItems = !input.kind || input.kind === "instruction"
+      ? searchRoleRules({ terms: terms.map(term => term.toLowerCase()), project: input.project, limit: limit + 1 }) : [];
+    const combined = [...roleItems, ...items];
+    const page = { items: [] as Array<Omit<MemoryItem, "body" | "flags"> & { flags: string[] }>, truncated: combined.length > limit };
+    for (const item of combined.slice(0, limit)) {
       const hit = {
         id: item.id, engine: item.engine, kind: item.kind, scope: item.scope, project: item.project,
         sourcePath: displayPath(item.sourcePath), sourceKind: item.sourceKind,
@@ -299,8 +311,11 @@ export class MemoryIndex {
       if (resolution.kind === "none") return null;
       resolvedId = resolution.value;
     }
-    const item = db.query<MemoryItem, [string, string | null, string | null]>("SELECT * FROM memory_entries WHERE id = ? AND (? IS NULL OR project IN (SELECT value FROM json_each(?)) OR scope = 'global')").get(resolvedId, scope, scope);
+    const item = /^r_[a-f0-9]{16}$/i.test(id)
+      ? searchRoleRules({ id: id.toLowerCase(), project, limit: 1 })[0]
+      : db.query<MemoryItem, [string, string | null, string | null]>("SELECT * FROM memory_entries WHERE id = ? AND (? IS NULL OR project IN (SELECT value FROM json_each(?)) OR scope = 'global')").get(resolvedId, scope, scope);
     if (!item) return null;
+    resolvedId = item.id;
     const ledgerKey = crypto.createHash("sha256").update(`${conversationId ?? ""}\0${requestId}`).digest("hex");
     const recordOpened = () => {
       const at = new Date().toISOString();

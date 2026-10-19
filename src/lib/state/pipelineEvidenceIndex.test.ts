@@ -14,6 +14,11 @@ test("compact evidence validates changed rows across raw writes, deletion, rollb
       migrationId: "one", key: (row: { id: string }) => row.id, loadRecords: () => Array.from({ length: 100 }, (_, i) => ({ id: `${collection}-${i}` })) })));
     const db = new Database(filename);
     try {
+      const plan = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN SELECT e.collection,e.row_key,e.revision,r.row_key AS present
+        FROM pipeline_evidence_rows e INDEXED BY pipeline_evidence_changed LEFT JOIN state_rows r
+        ON r.collection=e.collection AND r.row_key=e.row_key
+        WHERE e.revision>? AND e.collection IN ('pipelines','pipelines_archive') ORDER BY e.revision,e.collection,e.row_key`).all(0);
+      expect(plan.some(row => /SEARCH e USING COVERING INDEX pipeline_evidence_changed.*revision>/.test(row.detail))).toBe(true);
       let decodes = 0;
       const project = (raw: unknown) => { decodes++; return (raw as { id: string }).id; };
       let cache = (await readCompactPipelineEvidence(filename, undefined, project))!;
@@ -23,7 +28,9 @@ test("compact evidence validates changed rows across raw writes, deletion, rollb
       const before = pipelineEvidenceRevision(filename);
       db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key='pipelines-0'").run('{"id":"changed"}');
       expect(pipelineEvidenceRevision(filename)).not.toBe(before);
+      const pinned = cache;
       cache = (await readCompactPipelineEvidence(filename, cache, project))!;
+      expect(pinned.rows.get(JSON.stringify(["pipelines", "pipelines-0"]))?.value).toBe("pipelines-0");
       expect(decodes).toBe(201);
       expect([...cache.rows.values()].map(row => row.value)).toContain("changed");
       db.exec("BEGIN IMMEDIATE");

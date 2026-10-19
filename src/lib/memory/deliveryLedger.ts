@@ -1,3 +1,4 @@
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { engineMemoryOff } from "@/lib/memory/source";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -114,6 +115,10 @@ async function engineMemory(start: MemoryEngineStart, clean: boolean) {
   return [{ kind: start.engine === "claude" ? "claude-index" as const : "codex-summary" as const, hash: hash(data), bytes: data.length, loadedBytes: loaded.length, data }];
 }
 
+const deliveryLedgerIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS files_hash ON files(hash)`,
+]);
+
 /** One owner, no module cache: rows, private content-addressed copies and their
  * eviction commit together. Readers page by sequence. No ledger content is
  * included in prompts, known values, or public API responses. */
@@ -135,6 +140,7 @@ export async function recordMemoryDelivery(start: MemoryEngineStart, clean: bool
         const db = new Database(filename, { create: true });
         fs.chmodSync(filename, 0o600);
         try {
+          deliveryLedgerIndexes.assertRepairAuthority(db, path.dirname(filename));
           db.exec("PRAGMA busy_timeout=0");
           db.exec("PRAGMA foreign_keys=ON");
           db.exec("BEGIN IMMEDIATE");
@@ -142,7 +148,7 @@ export async function recordMemoryDelivery(start: MemoryEngineStart, clean: bool
             db.exec("CREATE TABLE IF NOT EXISTS deliveries (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL)");
             db.exec("CREATE TABLE IF NOT EXISTS versions (hash TEXT PRIMARY KEY, content BLOB NOT NULL)");
             db.exec("CREATE TABLE IF NOT EXISTS files (sequence INTEGER REFERENCES deliveries(sequence) ON DELETE CASCADE, hash TEXT REFERENCES versions(hash), PRIMARY KEY(sequence, hash))");
-            db.exec("CREATE INDEX IF NOT EXISTS files_hash ON files(hash)");
+            deliveryLedgerIndexes.install(db, path.dirname(filename));
             // Select after asynchronous admission; rules and their ordered metadata
             // are captured together, including omissions at the byte ceiling.
             const selection = select();
