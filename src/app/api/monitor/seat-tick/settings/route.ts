@@ -36,12 +36,13 @@ export const dynamic = "force-dynamic";
  *   read, as the tool's is.
  * - **Every change is attributed.** Guarded sub-settings apply their actor rules.
  *   Controls are a capability
- *   (`rotationActor`, #1402): the browser records as `gateway` — the
+ *   (`rotationActor`, #1402): a same-origin browser fetch records as `gateway` — the
  *   operator's own session, which is what the board card already calls it — a
  *   caller that named itself with the target project's active seat records as
  *   `manager` with that seat's epoch, and any other identified caller records
  *   as `agent` with its conversation. Nothing in the body can name who made a
- *   change. The perimeter is `rejectCrossOrigin`, which runs first on the
+ *   change. Unverified scripts and unresolved capabilities stay unidentified
+ *   and cannot author instruction lines. The perimeter is `rejectCrossOrigin`, which runs first on the
  *   write, as it does on every other mutating route here.
  */
 

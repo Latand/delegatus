@@ -18503,7 +18503,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       { text: "Check the release before resuming the paused lane.", author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 7 }, at },
       { text: "A legacy note with no author recorded.", author: null, at: null },
     ];
-    const initial = { ...defaultSeatTickSettings("atlas"), reason: instructionLines.map(line => line.text).join("\n"), instructionLines, updatedAt: at };
+    const initial = { ...defaultSeatTickSettings("atlas"), wakeIntervalMinutes: 30, reason: instructionLines.map(line => line.text).join("\n"), instructionLines, updatedAt: at };
     let stored = structuredClone(initial);
     const response = () => ({ ...tickAnswer(stored.reason!), settings: stored });
     const server = await serveEvidenceFixture(out, undefined, {
@@ -18572,7 +18572,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     let frozenAnswer = tickAnswer(storedReason);
     const answerWith = (reason: string) => ({
       ...frozenAnswer,
-      settings: { ...frozenAnswer.settings, reason, instructionLines: [{ text: reason, author: frozenAnswer.actor, at: frozenAnswer.settings.instructionLines[0]!.at }] },
+      settings: { ...frozenAnswer.settings, reason, instructionLines: reason.split("\n").map(text => ({ text, author: frozenAnswer.actor, at: frozenAnswer.settings.instructionLines[0]!.at })) },
       effective: { ...frozenAnswer.effective, reason },
     });
     let putRequests = 0;

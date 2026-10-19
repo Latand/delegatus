@@ -184,6 +184,7 @@ export interface SeatTickSettingsChange {
   enabled?: boolean;
   /** `null` restores the default interval. */
   wakeIntervalMinutes?: number | null;
+  /** Replace only the server-identified author’s lines; null removes them. */
   reason?: string | null;
   /** The seat's own additional prompt for its monitor; `null` clears it. */
   monitorPrompt?: string | null;

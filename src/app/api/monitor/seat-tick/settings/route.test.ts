@@ -543,3 +543,19 @@ test("a delayed seat request merges into the operator's latest lines at write ad
   expect(stored.instructionLines![0]).toEqual(protectedLine);
   expect(stored.reason).toBe("Latest operator instruction.\nSeat note after its wait.");
 });
+
+
+test("a replacement seat epoch never stamps a predecessor's instruction", async () => {
+  setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+  seatFile({ project: PROJECT, conversationId: "conversation_replacement_seat", seatEpoch: 13 });
+  const predecessor = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: SEAT_CONVERSATION }),
+    callerProject: () => PROJECT,
+    authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
+  } as never);
+  await predecessor.seat_tick_settings({ clientRequestId: "instruction-replaced-seat", reason: "A predecessor note." });
+  const line = readSeatTickSettings(PROJECT, settingsFile).instructionLines![0]!;
+  expect(line.author?.kind).not.toBe("gateway");
+  expect(line.author?.conversationId).toBe(SEAT_CONVERSATION);
+  expect(line.author?.seatEpoch).toBeNull();
+});

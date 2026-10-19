@@ -4634,11 +4634,12 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   let changed = false;
   let maintenanceNotes: string[] | undefined;
   if (Object.keys(change).length > 0) {
+    const activeSeat = own === project ? orchestratorSeatFor(project).active : null;
     const actor: SeatTickSettingsActor = {
       kind: attribution.kind === "gateway" && callerSeat ? "manager" : attribution.kind,
       conversationId: attribution.conversationId,
       project: own,
-      seatEpoch: own === project ? orchestratorSeatFor(project).active?.seatEpoch ?? null : null,
+      seatEpoch: activeSeat?.conversationId === attribution.conversationId ? activeSeat.seatEpoch : null,
       ...(attribution.via ? { via: attribution.via } : {}),
     };
     const review = change.autonomyDecision?.review;

@@ -1235,4 +1235,7 @@ test("the editor contains operator lines and the panel attributes every stored l
   expect(entries[2]!.textContent).toContain("author unknown");
   expect(entries[0]!.querySelector("time")?.getAttribute("datetime")).toBe(at);
   expect(entries[2]!.querySelector("time")).toBeNull();
+  const protectedCharacters = instructionLines.slice(1).map(line => line.text).join("\n").length + 1;
+  type(field<HTMLTextAreaElement>("[data-seat-tick-reason]"), "x".repeat(500 - protectedCharacters));
+  expect(body().querySelector("[data-seat-tick-character-count]")?.getAttribute("data-seat-tick-character-count")).toBe("500");
 });
