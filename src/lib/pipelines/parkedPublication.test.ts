@@ -1,4 +1,4 @@
-import { afterAll, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -134,7 +134,24 @@ for (const alreadyRemote of [false, true]) test(`parked publication accepts a cl
 
 for (const failure of ["lookup", "head"] as const) test(`parked publication retains its pass when the PR service refuses ${failure}`, async () => {
   const h = fixture();
+  let restoreVerifier = () => {};
   try {
+    let clock = 0;
+    const waits: number[] = [];
+    const timing = { now: () => clock, sleep: async (milliseconds: number) => {
+      waits.push(milliseconds);
+      clock += milliseconds;
+    } };
+    const stagePullRequest = await import("./stagePullRequest");
+    const verifyPullRequest = stagePullRequest.ensureStagePullRequest;
+    // Current main retries a just-published PR head through this injected
+    // clock. Delegate to the real verifier so its bounded backoff stays
+    // deterministic; older heads ignore the extra optional timing argument.
+    const verifier = spyOn(stagePullRequest, "ensureStagePullRequest").mockImplementation(
+      (pipeline, attempt, exec, acceptedHead) => Reflect.apply(verifyPullRequest, stagePullRequest,
+        [pipeline, attempt, exec, acceptedHead, timing]),
+    );
+    restoreVerifier = () => verifier.mockRestore();
     const ports = { ...h.ports, exec: async (...args: Parameters<typeof realExec>) => {
       if (args[0] !== "gh") return h.ports.exec(...args);
       if (failure === "lookup") return { code: 1, stdout: "", stderr: "fixture lookup refused" };
@@ -150,7 +167,12 @@ for (const failure of ["lookup", "head"] as const) test(`parked publication reta
     expect(h.current().runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
     expect(h.current().delivery!.target.pr).toBeUndefined();
     expect(h.pushes()).toBe(1);
-  } finally { h.cleanup(); }
+    if (failure === "head") {
+      expect(waits).toEqual([1_000, 2_000, 4_000, 8_000, 14_000].slice(0, waits.length));
+      expect(waits.length).toBeLessThanOrEqual(5);
+      expect(clock).toBeLessThanOrEqual(30_000);
+    }
+  } finally { restoreVerifier(); h.cleanup(); }
 });
 
 test("publication refuses stale and ambiguous short heads without changing accepted evidence", async () => {
