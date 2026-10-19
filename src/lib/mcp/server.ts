@@ -1,6 +1,7 @@
 import { blockingWaitRole } from "@/lib/blockingWaits";
 import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
 import { normalizeShortIdArgs } from "./shortIdArgs";
+import { withMcpPageCursors, bindMcpPageCursorResult, mcpPageCursorCaller, MCP_PAGE_CURSOR_TOOLS, MCP_PAGE_CURSOR_DESCRIPTION } from "./pageCursors";
 import { relayAnswerSchema } from "@/lib/externalRelay/protocol";
 import { relayServiceToolsSchema } from "@/lib/externalRelay/ownerServiceTools";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
@@ -549,6 +550,8 @@ export type McpToolFailure = {
   error: string;
   code: string;
   retryable: boolean;
+  /** The continuation was unavailable; restart the page query without cursor. */
+  cursorReset?: true;
   /** Structured evidence a binding attached to its refusal, so an agent gets the
       same payload an HTTP caller does instead of only the prose message. */
   details?: McpToolPayload;
@@ -2611,6 +2614,7 @@ export function createMcpToolService(
           () => callTool(toolName, logicalArgs, context));
       }
       const typedTool = toolName as McpToolName;
+      const pageCaller = mcpPageCursorCaller();
       const normalized = normalizeBoundedMcpNumerics(typedTool, args);
       let effectiveArgs = normalized.args;
       if (typedTool === "search_memory" && typeof effectiveArgs.clientRequestId === "string"
@@ -2637,6 +2641,7 @@ export function createMcpToolService(
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
+        if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
         if (effectiveArgs.full !== true) result = shortIdsInAnswer(result);
         const serializationStartedAt = performance.now();
@@ -3365,6 +3370,7 @@ export function createMcpToolService(
           phaseDurations.completion = performance.now() - releaseStartedAt;
           return settled;
         }
+        settled = bindMcpPageCursorResult(typedTool, settled, pageCaller);
         await measure("completion", () => receipts.complete(key, digest, settled, retention));
         return settled;
       })();
@@ -3388,7 +3394,7 @@ export function createMcpToolService(
       }
     },
   };
-  return { callTool: (tool, args, context) => runWithMcpCallerResolution(() => service.callTool(tool, args, context)) };
+  return withMcpPageCursors({ callTool: (tool, args, context) => runWithMcpCallerResolution(() => service.callTool(tool, args, context)) });
 }
 
 /**
@@ -4693,7 +4699,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
     const taskMutation = toolName === "create_task" || toolName === "update_task";
     const schema = TOOL_INPUT_SCHEMAS[toolName];
     server.registerTool(toolName, {
-      description: TOOL_DESCRIPTIONS[toolName],
+      description: TOOL_DESCRIPTIONS[toolName] + (MCP_PAGE_CURSOR_TOOLS.has(toolName) ? ` ${MCP_PAGE_CURSOR_DESCRIPTION}` : ""),
       inputSchema: shortenSchemaDescriptions(TOOL_TRANSPORT_SCHEMAS[toolName]),
     }, async (args, extra) => {
       if (taskMutation) {
