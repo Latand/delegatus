@@ -824,7 +824,8 @@ function isRefreshOf(value: unknown): boolean {
 function isMergeRefresh(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const refresh = value as Record<string, unknown>;
-  return Number.isSafeInteger(refresh.attempt) && (refresh.attempt as number) >= 0
+  return (refresh.baseBranch === undefined || typeof refresh.baseBranch === "string" && !!refresh.baseBranch)
+    && Number.isSafeInteger(refresh.attempt) && (refresh.attempt as number) >= 0
     && typeof refresh.base === "string" && /^[0-9a-f]{40}$/i.test(refresh.base)
     && typeof refresh.head === "string" && /^[0-9a-f]{40}$/i.test(refresh.head)
     && typeof refresh.key === "string" && !!refresh.key
