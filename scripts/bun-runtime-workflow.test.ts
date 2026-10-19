@@ -195,3 +195,15 @@ exit "$CONTROL_EXIT"
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("README seed and all frame layouts run against the PR build with isolated state", () => {
+  const index = steps.findIndex(step => step.name === "Check README seed and frame layout");
+  expect(index).toBeGreaterThan(steps.findIndex(step => step.name === "Build the Viewer"));
+  const step = steps[index]!;
+  expect(step.if).toBeUndefined();
+  for (const name of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "TMPDIR"]) expect(step.env?.[name]).toContain("${{ runner.temp }}/readme-");
+  expect(step.env?.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
+  expect(step.run).toContain("install --with-deps chromium");
+  expect(step.run).toContain("bash scripts/gate-slot.sh bun test scripts/capture-readme-media.test.ts");
+  expect(step.run).toContain("bash scripts/gate-slot.sh bun scripts/capture-readme-media.ts --check-layout");
+});
