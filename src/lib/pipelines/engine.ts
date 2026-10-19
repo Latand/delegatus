@@ -1,3 +1,4 @@
+import { FLOW_ARCHIVE, STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
 import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequestResult } from "./stagePullRequest";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
@@ -19,7 +20,7 @@ import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
-import { stateDatabaseBusy, stateLockDeferral } from "@/lib/state/lockWait";
+import { waitForStateLock, stateDatabaseBusy, stateLockDeferral } from "@/lib/state/lockWait";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
 import { claudeHostEndText } from "@/lib/runtime/hostEndCause";
 import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
@@ -147,7 +148,7 @@ import { pipelineValidationError, type PipelineValidationViolation } from "./val
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
 import { pipelineHostHasLiveWork } from "./hostRetirement";
 import { pipelineRecordRevalidator } from "./revalidation";
-import { controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -3289,6 +3290,7 @@ export type PipelineAttemptTarget = {
 /** Resolves the durable container slot that owns a fallback spawn source. */
 export function pipelineAttemptTargetForSource(sourceConversationId: string): PipelineAttemptTarget | null {
   for (const pipeline of loadPipelines()) {
+    if (hasRetiredStage(pipeline.stages)) continue;
     for (let stageOrder = 0; stageOrder < pipeline.runs.length; stageOrder += 1) {
       const run = pipeline.runs[stageOrder]!;
       const source = run.attempts.find((attempt) => attempt.conversationId === sourceConversationId);
@@ -3310,6 +3312,7 @@ export function adoptAttempt(
   stageId: string,
   conversationRef: PipelineAttemptConversationRef,
 ): PipelineStageAttempt | null {
+  if (hasRetiredStage(pipeline.stages)) return null;
   const run = runFor(pipeline, stageId);
   const stage = pipeline.stages.find((candidate) => candidate.id === stageId) ?? null;
   if (!run || !stage) return null;
@@ -3664,6 +3667,7 @@ export function reconcileEmbeddedReviewFlows(
   flows: readonly Flow[],
   synchronizedAt = new Date().toISOString(),
 ): boolean {
+  if (FLOW_ARCHIVE.retired) return false;
   const byId = new Map(flows.map((flow) => [flow.id, flow] as const));
   const claimedFlowIds = new Set(pipelines.flatMap((pipeline) =>
     pipeline.runs.flatMap((run) => run.attempts.flatMap((attempt) => attempt.flowId ? [attempt.flowId] : []))));
@@ -5038,6 +5042,7 @@ async function commitPassedStage(
     the next review head. The same stage committer enforces the declared paths
     and preserves every other worktree path. */
 export async function preparePipelineReviewRepair(flowId: string, ports: PipelinePorts = defaultPipelinePorts()): Promise<{ ok: true } | { ok: false; retryable: boolean; detail: string }> {
+  if (FLOW_ARCHIVE.retired) return { ok: false, retryable: false, detail: `${STAGE_RETIREMENT.code}: ${STAGE_RETIREMENT.error}` };
   const preview = loadPipelines().find((candidate) => candidate.cursor?.stageId
     && candidate.runs.some((run) => run.stageId === candidate.cursor!.stageId
       && run.attempts.some((attempt) => attempt.flowId === flowId)));
@@ -6170,7 +6175,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           await withPipelineMutation(async (pipelines, persist) => {
             const live = pipelines.find((item) => item.id === snapshot.id);
             const attempt = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === original.n);
-            if (attempt?.activation && JSON.stringify(attempt.activation) === JSON.stringify(reservation)) {
+            if (live && !hasRetiredStage(live.stages) && attempt?.activation && JSON.stringify(attempt.activation) === JSON.stringify(reservation)) {
               holdActivationAdmission(attempt);
               await persist([live!]);
             }
@@ -6186,7 +6191,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
         const claimed = await withPipelineMutation(async (pipelines, persist) => {
           const pipeline = pipelines.find((item) => item.id === snapshot.id);
           const attempt = pipeline && runFor(pipeline, run.stageId)?.attempts.find((item) => item.n === original.n);
-          if (!pipeline || !attempt?.activation || JSON.stringify(attempt.activation) !== JSON.stringify(reservation)) return null;
+          if (!pipeline || hasRetiredStage(pipeline.stages) || !attempt?.activation || JSON.stringify(attempt.activation) !== JSON.stringify(reservation)) return null;
           // The mutation lease may have waited while update admission closed.
           if (ports.drainHold?.() && activationAwaitingAdmission(attempt)) {
             holdActivationAdmission(attempt);
@@ -6208,7 +6213,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           await withPipelineMutation(async (pipelines, persist) => {
             const live = pipelines.find((item) => item.id === claimed.id);
             const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
-            if (!live || !current || activationFence(live) !== activation.fence
+            if (!live || hasRetiredStage(live.stages) || !current || activationFence(live) !== activation.fence
               || JSON.stringify(current) !== expectedAttempt) throw new ActivationSuperseded();
             live.state = claimed.state;
             live.stateDetail = claimed.stateDetail;
@@ -6254,7 +6259,7 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
           await withPipelineMutation(async (pipelines, persist) => {
             const live = pipelines.find((item) => item.id === claimed.id);
             const current = live && runFor(live, run.stageId)?.attempts.find((item) => item.n === attempt.n);
-            if (!live || current?.activation?.id !== activation.id) return;
+            if (!live || hasRetiredStage(live.stages) || current?.activation?.id !== activation.id) return;
             if (!finished) {
               // Leave uncertain dispatch in custody, readable by every generation.
               if (admissionHeld) holdActivationAdmission(current);
@@ -7927,6 +7932,7 @@ async function tickReviewStage(
   ports: PipelinePorts,
   persist: () => void | Promise<void>,
 ): Promise<void> {
+  if (FLOW_ARCHIVE.retired) { await park(pipeline, `${STAGE_RETIREMENT.code}: ${STAGE_RETIREMENT.error}`); return; }
   const prior = currentAttempt(pipeline, stage.id);
   const attempt = pipeline.cursor?.state === "pending" && prior && ["passed", "failed", "needs_decision", "skipped"].includes(prior.state)
     ? await newAttempt(pipeline, stage)
@@ -8635,6 +8641,7 @@ export function terminalFlowStageVerdict(flow: Flow): ParsedStageVerdict | null 
 }
 
 async function reconcileBoundReviewFlow(pipeline: Pipeline, ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
+  if (FLOW_ARCHIVE.retired) return false;
   if (pipeline.state !== "needs_decision") return false;
   const stage = currentStage(pipeline);
   if (stage?.kind !== "review-loop") return false;
@@ -10368,7 +10375,7 @@ function requiresReviewIngress(pipeline: Pipeline): boolean {
   const stage = currentStage(pipeline);
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
   const fixer = stage && attempt && attempt.state !== "committing" && fixerHasNextReviewer(pipeline, stage, attempt);
-  const review = stage?.kind === "review-loop"
+  const review = !FLOW_ARCHIVE.retired && stage?.kind === "review-loop"
     && (!attempt?.flowId || pipeline.cursor?.state === "pending")
     && (attempt?.state !== "committing" || pipeline.cursor?.state === "pending");
   return ["running", "needs_decision"].includes(pipeline.state) && Boolean(fixer || review);
@@ -11016,6 +11023,7 @@ export function normalizeStages(
   minStages: number = MIN_STARTED_PIPELINE_STAGES,
   project = "",
 ): { stages?: PipelineStage[]; error?: string; violations?: PipelineValidationViolation[]; legacyReview?: legacyReview.NewLegacyReviewOutcome } {
+  if (hasRetiredStage(value)) return { error: `${STAGE_RETIREMENT.code}: ${STAGE_RETIREMENT.error}` };
   if (!Array.isArray(value) || value.length < minStages || value.length > MAX_PIPELINE_STAGES) {
     return stageViolations([{
       field: "stages",
@@ -11236,10 +11244,8 @@ export function normalizeStages(
   const graphError = graphViewComplete ? pipelineGraphError(graphView) : null;
   if (graphError) violations.push({ field: "stages[].next", message: graphError, expected: STAGE_GRAPH_SHAPE });
   if (violations.length) return stageViolations(violations);
-  /* #2187 §3.2: creation and every add-stage come through here, so this is
-     the one place a new review-loop stage becomes a reviewer, a fix stage and
-     an `advance` fail edge. Stages already in the plan are preserved as they
-     are, and a conversion that would need a guess stores the stage as sent. */
+  /* The pre-freeze conversion helper stays until S8. New legacy definitions
+     refuse above; stored definitions use the explicit conversion action. */
   const converted = legacyReview.convertNewLegacyReviewStages(stages, preservedStages, (candidate) => pipelineGraphError(candidate), lookup);
   return {
     stages: converted.stages,
@@ -11553,12 +11559,26 @@ function pipelineTasksRunElsewhere(taskIds: readonly string[], tasks: readonly B
   return refusal ? { error: refusal.error, status: refusal.status, code: TASK_RUNS_ELSEWHERE } : null;
 }
 
+/** Retained legacy lanes are history, including their attempt/cursor bytes. */
+async function selectControllerPipelines(...args: Parameters<typeof selectAllControllerPipelines>): Promise<Pipeline[]> {
+  return (await selectAllControllerPipelines(...args)).filter(pipeline => !hasRetiredStage(pipeline.stages));
+}
+
+function withPipelineControllerMutation<T>(
+  mutate: Parameters<typeof withAllPipelineControllerMutation<T>>[0],
+  observeHold?: (heldMs: number) => void,
+  explicitOnly = false,
+): Promise<T> {
+  return withAllPipelineControllerMutation((pipelines, persist, assertCurrent) =>
+    mutate(pipelines.filter(pipeline => !hasRetiredStage(pipeline.stages)), persist, assertCurrent), observeHold, explicitOnly);
+}
+
 export type PipelineMutationResult = {
   repositoryInitialization?: import("./types").RepositoryInitialization;
   pipeline?: Pipeline;
   error?: string;
   status?: number;
-  code?: PipelineRepoPreflightErrorCode | typeof ENGINE_NOT_CONNECTED | typeof TASK_RUNS_ELSEWHERE;
+  code?: PipelineRepoPreflightErrorCode | typeof ENGINE_NOT_CONNECTED | typeof TASK_RUNS_ELSEWHERE | typeof STAGE_RETIREMENT.code;
   /** Set with ENGINE_NOT_CONNECTED: the stage, role and engine, and the two
       surfaces that resolve it (#1876). */
   details?: EngineNotConnectedDetails;
@@ -11720,6 +11740,7 @@ export async function createPipelineFromRequest(
       return { pipeline: replay, ...(repositoryInitialization ? { repositoryInitialization } : {}) };
     }
   }
+  if (hasRetiredStage(req.stages)) return STAGE_RETIREMENT;
   /* #1026: every request-shape constraint is evaluated before the request is
      answered, and the response carries all of them. The checks and their
      verdicts are the ones that were here before, only their reporting is
@@ -12934,6 +12955,11 @@ export async function patchPipeline(
   ports: PipelinePorts = defaultPipelinePorts(),
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
 ): Promise<PipelinePatchResult> {
+  if (hasRetiredStage([req.stage])) return STAGE_RETIREMENT;
+  // A retained definition can be read/previewed/converted, never restarted or copied back into execution.
+  const legacyAction = (pipeline: Pipeline | null) => hasRetiredStage(pipeline?.stages)
+    && !["preview-legacy-review", "convert-legacy-review", "revert-legacy-review", "remove-stage", "attach-link", "detach-link"].includes(req.action);
+  if (legacyAction(await withViewerOperation("pipelines.revalidate", () => waitForStateLock("pipelines.retired-definition", () => findPipelineRecord(id))))) return STAGE_RETIREMENT;
   let draftRepository: string | undefined;
   if (req.action === "update-draft" && typeof req.repoDir === "string" && req.repoDir.trim()) {
     const remote = (await ports.exec("git", ["remote", "get-url", "origin"], req.repoDir.trim()));
@@ -13157,6 +13183,8 @@ export async function patchPipeline(
       }
       return { error: "pipeline not found", status: 404 };
     }
+    // Recheck after preparatory I/O and admission: a peer can replace the graph.
+    if (legacyAction(pipeline) || hasRetiredStage([req.stage])) return STAGE_RETIREMENT;
     if (req.action === "convert-legacy-review" || req.action === "revert-legacy-review") {
       const result = req.action === "convert-legacy-review" ? convertLegacyReview(pipeline, req, actor, ports) : revertLegacyReview(pipeline, req, actor, ports);
       if (result.pipeline && !result.replayed) await persist();
@@ -14416,7 +14444,9 @@ async function resolveStageCompletionTarget(
      report — so a reviewer's call would be recorded on the attempt and shown
      on the card while nothing acted on it. A stage an edit has since removed
      from the graph is refused the same way: it has nothing left to route. */
-  const runStages = named.filter((candidate) => stageKindOf(candidate) === "run");
+  const executable = named.filter(candidate => !hasRetiredStage(candidate.pipeline.stages));
+  if (!executable.length && named.length) return { refusal: { ...STAGE_RETIREMENT, slots: slots(named) } };
+  const runStages = executable.filter((candidate) => stageKindOf(candidate) === "run");
   if (runStages.length === 0) {
     const other = named.at(-1)!;
     const kind = stageKindOf(other);

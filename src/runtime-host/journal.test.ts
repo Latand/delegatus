@@ -2132,16 +2132,16 @@ test("engine output acknowledges before a slow unrelated consumer and checkpoint
   const consumerRelease = new Promise<void>(resolve => { releaseConsumer = resolve; });
   const host = new RuntimeHost(journal, {
     flowReady: () => undefined,
-    workflowStageCompleted: async () => {
+    taskDeliveryAcknowledged: async () => {
       started();
       await consumerRelease;
       unrelatedFinished = true;
     },
-    taskDeliveryAcknowledged: () => undefined,
+    workflowStageCompleted: () => undefined,
   });
   const unrelated = host.handle({ id: "unrelated", method: "append", params: { event: {
-    scope: runtimeScope("workflow", "other"), kind: "workflow.stage.completed",
-    payload: { workflowId: "other", stage: 0 },
+    scope: runtimeScope("task", "other"), kind: "task.delivery.acked",
+    payload: { taskId: "other", assignmentId: "assignment" },
   } } });
   await consumerStarted;
   const event = projectEngineHostEvent("worker", "codex:worker", {
@@ -2167,7 +2167,7 @@ test("engine output acknowledges before a slow unrelated consumer and checkpoint
   console.info(`[output acknowledgement] held consumer acknowledgement=${acknowledgementMs.toFixed(2)}ms`);
   expect([first.ok, retry.ok, second.ok]).toEqual([true, true, true]);
   expect(retry.result).toEqual(first.result);
-  expect(events.map((item) => item.kind)).toEqual(["workflow.stage.completed", "delta", "delta"]);
+  expect(events.map((item) => item.kind)).toEqual(["task.delivery.acked", "delta", "delta"]);
   expect(checkpoints).toEqual(events.map((item) => item.eventId));
   expect(acknowledgedWhileBlocked).toBe(true);
   expect(unrelatedFinished).toBe(true);
@@ -2181,12 +2181,12 @@ test("engine publication allowlist preserves terminal, operation and unknown-eve
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const host = new RuntimeHost(journal, {
     flowReady: () => undefined,
-    workflowStageCompleted: async () => { started(); await gate; },
-    taskDeliveryAcknowledged: () => undefined,
+    taskDeliveryAcknowledged: async () => { started(); await gate; },
+    workflowStageCompleted: () => undefined,
   });
   const unrelated = host.handle({ id: "unrelated", method: "append", params: { event: {
-    scope: runtimeScope("workflow", "other"), kind: "workflow.stage.completed",
-    payload: { workflowId: "other", stage: 0 },
+    scope: runtimeScope("task", "other"), kind: "task.delivery.acked",
+    payload: { taskId: "other", assignmentId: "assignment" },
   } } });
   await consumerStarted;
   const pending: Promise<unknown>[] = [unrelated];
@@ -2209,7 +2209,7 @@ test("engine publication allowlist preserves terminal, operation and unknown-eve
         expectedPrompt.push(send(kind, producer));
       }
     }
-    for (const kind of ["turn-ended", "turn.completed", "workflow.stage.completed", "task.delivery.acked", "future-engine-event", "session-status"]) send(kind);
+    for (const kind of ["turn-ended", "turn.completed", "task.delivery.acked", "task.delivery.acked", "future-engine-event", "session-status"]) send(kind);
     send("delta", "viewer-compat");
     send("delta", "codex-app-server", "operation");
     send("delta", "codex-app-server", "append", { operationId: "operation-one" });
@@ -2233,13 +2233,14 @@ test("a serial engine producer waits for its terminal projection before publishi
   const consumerStarted = new Promise<void>((resolve) => { started = resolve; });
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const host = new RuntimeHost(journal, {
-    flowReady: async (id) => { started(); await gate; return { id, state: "spawn_pending" } as unknown as Flow; },
+    flowReady: () => undefined,
+    spawnTurnEnded: async () => { started(); await gate; },
     workflowStageCompleted: () => undefined,
     taskDeliveryAcknowledged: () => undefined,
   });
   const events = [
     projectEngineHostEvent("worker", "claude:worker", { kind: "delta", seq: 1, turnId: "one", text: "first" })!,
-    { ...projectEngineHostEvent("worker", "claude:worker", { kind: "turn-ended", seq: 2, turnId: "one", status: "completed" })!, payload: { flowId: "flow-one" } },
+    { ...projectEngineHostEvent("worker", "claude:worker", { kind: "turn-ended", seq: 2, turnId: "one", status: "completed" })!, payload: { conversationId: "worker", turnId: "one", outcome: "completed" } },
     projectEngineHostEvent("worker", "claude:worker", { kind: "turn-started", seq: 3, turnId: "two" })!,
   ];
   const acknowledged: string[] = [];
@@ -2247,7 +2248,7 @@ test("a serial engine producer waits for its terminal projection before publishi
     for (const event of events) {
       const response = await host.handle({ id: event.kind, method: "append", params: { event } });
       expect(response.ok).toBe(true);
-      if (event.kind === "turn-ended") expect(journal.snapshot().flows[0]?.value).toMatchObject({ id: "flow-one" });
+      if (event.kind === "turn-ended") expect(journal.snapshot().flows).toEqual([]);
       acknowledged.push(event.kind);
     }
   })();
@@ -2261,7 +2262,7 @@ test("a serial engine producer waits for its terminal projection before publishi
     await host.recoverConsumers();
   }
   expect(acknowledged).toEqual(["delta", "turn-ended", "turn-started"]);
-  expect(journal.replay(0).events.map((event) => event.kind)).toEqual(["delta", "turn-ended", "flow.state", "turn-started"]);
+  expect(journal.replay(0).events.map((event) => event.kind)).toEqual(["delta", "turn-ended", "turn-started"]);
   journal.close();
 });
 
@@ -2277,11 +2278,11 @@ test.each([20_000, 2])("acknowledged engine events survive a crash with a %i-eve
     const ready = new Promise(resolve => { started = resolve; });
     const host = new RuntimeHost(journal, {
       flowReady: () => undefined,
-      workflowStageCompleted: async () => { started(); await new Promise(() => {}); },
-      taskDeliveryAcknowledged: () => undefined,
+      taskDeliveryAcknowledged: async () => { started(); await new Promise(() => {}); },
+      workflowStageCompleted: () => undefined,
     });
     void host.handle({ id: "unrelated", method: "append", params: { event: {
-      scope: "workflow:other", kind: "workflow.stage.completed", payload: { workflowId: "other", stage: 0 },
+      scope: "task:other", kind: "task.delivery.acked", payload: { taskId: "other", assignmentId: "assignment" },
     } } });
     await ready;
     let response;
@@ -2324,11 +2325,11 @@ test.each([20_000, 2])("acknowledged engine events survive a crash with a %i-eve
   let workflowCalls = 0;
   const host = new RuntimeHost(journal, {
     flowReady: () => undefined,
-    workflowStageCompleted: () => { workflowCalls += 1; },
-    taskDeliveryAcknowledged: () => undefined,
+    taskDeliveryAcknowledged: () => { workflowCalls += 1; },
+    workflowStageCompleted: () => undefined,
   });
   try {
-    expect(events.map((event) => event.kind)).toEqual(["workflow.stage.completed", "delta", "delta", "delta", "turn-ended"]);
+    expect(events.map((event) => event.kind)).toEqual(["task.delivery.acked", "delta", "delta", "delta", "turn-ended"]);
     expect(journal.unconsumedEvents("orchestration")).toHaveLength(5);
     expect(await host.recoverConsumers()).toBe(5);
     expect(await host.recoverConsumers()).toBe(0);
@@ -2421,7 +2422,7 @@ test("first upgrade retains legacy pending events through epoch claim, crash and
     expect(await host.recoverConsumers()).toBe(pending.length);
     expect(await host.recoverConsumers()).toBe(0);
     expect(checkpoints).toEqual(pending.map((event) => event.eventId));
-    expect(calls).toEqual([0, 2]);
+    expect(calls).toEqual([]);
     journal.compact();
   } finally { checkpoint.mockRestore(); journal.close(); }
   const reopened = new RuntimeJournal(filename, { maxEvents: 4 });
@@ -2433,7 +2434,7 @@ test("first upgrade retains legacy pending events through epoch claim, crash and
       taskDeliveryAcknowledged: () => undefined,
     });
     expect(await host.recoverConsumers()).toBe(0);
-    expect(calls).toEqual([0, 2]);
+    expect(calls).toEqual([]);
   } finally { reopened.close(); }
 });
 
@@ -2525,12 +2526,12 @@ test("a compacted consumer checkpoint stays completed when its producer retries 
   const filename = path.join(sandbox("consumer-compacted-retry"), "events.sqlite");
   let calls = 0;
   const ports = {
-    flowReady: () => { calls += 1; },
+    taskDeliveryAcknowledged: () => { calls += 1; },
     workflowStageCompleted: () => undefined,
-    taskDeliveryAcknowledged: () => undefined,
+    flowReady: () => undefined,
   };
   const terminal = {
-    scope: runtimeScope("session", "worker"), kind: "turn-ended", payload: { flowId: "flow-one" },
+    scope: runtimeScope("session", "worker"), kind: "task.delivery.acked", payload: { taskId: "flow-one", assignmentId: "assignment" },
     producer: { kind: "codex-app-server" as const, eventKey: "engine-host:codex:worker:1" },
   };
   const journal = new RuntimeJournal(filename, { maxEvents: 2 });
@@ -2553,7 +2554,7 @@ test("a compacted consumer checkpoint stays completed when its producer retries 
   } finally { restarted.close(); }
 });
 
-test("runtime host advances and publishes a flow from a terminal event without file polling", async () => {
+test("runtime host consumes a retired flow terminal event without advancing or publishing it", async () => {
   const dir = sandbox("flow-consumer");
   const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { maxEvents: 100, now: () => 100 });
   const calls: string[] = [];
@@ -2608,13 +2609,13 @@ test("runtime host advances and publishes a flow from a terminal event without f
     },
   });
   expect(response.ok).toBe(true);
-  expect(calls).toEqual(["flow-one:REVIEW_READY: finished"]);
+  expect(calls).toEqual([]);
   expect(progressSignals).toBe(1);
-  expect(journal.snapshot().flows[0]).toMatchObject({ revision: 1, value: { id: "flow-one", state: "spawn_pending" } });
+  expect(journal.snapshot().flows).toEqual([]);
   journal.close();
 });
 
-test("a newly committed terminal event wakes promptly once while flow delivery is pending", async () => {
+test("a newly committed terminal event wakes promptly once while a completion notice is pending", async () => {
   const journal = new RuntimeJournal(path.join(sandbox("terminal-wake-before-consumer"), "events.sqlite"), { maxEvents: 100, now: () => 100 });
   let releaseFlowReady = () => {};
   let markFlowReadyStarted = () => {};
@@ -2622,10 +2623,10 @@ test("a newly committed terminal event wakes promptly once while flow delivery i
   const flowReadyGate = new Promise<void>((resolve) => { releaseFlowReady = resolve; });
   let progressSignals = 0;
   const host = new RuntimeHost(journal, {
-    flowReady: async (flowId) => {
+    flowReady: () => undefined,
+    spawnTurnEnded: async () => {
       markFlowReadyStarted();
       await flowReadyGate;
-      return { id: flowId, state: "spawn_pending" } as unknown as Flow;
     },
     workflowStageCompleted: () => undefined,
     taskDeliveryAcknowledged: () => undefined,
@@ -2637,7 +2638,7 @@ test("a newly committed terminal event wakes promptly once while flow delivery i
         scope: runtimeScope("session", "implementer"),
         kind: "turn.completed" as const,
         producerKey: "terminal-wake-before-consumer",
-        payload: { flowId: "flow-one", readyNote: "REVIEW_READY: finished" },
+        payload: { conversationId: "implementer", turnId: "turn-one", outcome: "completed" },
       },
     },
   };
@@ -2686,22 +2687,22 @@ test("runtime host retries an uncheckpointed consumer after a committed event", 
   const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { maxEvents: 100, now: () => 100 });
   let attempts = 0;
   const host = new RuntimeHost(journal, {
-    flowReady: (flowId) => {
+    taskDeliveryAcknowledged: (flowId) => {
       attempts += 1;
       if (attempts === 1) throw new Error("consumer interrupted");
-      return { id: flowId, state: "spawn_pending" } as unknown as Flow;
+      return { id: flowId, state: "spawn_pending" } as never;
     },
     workflowStageCompleted: () => undefined,
-    taskDeliveryAcknowledged: () => undefined,
+    flowReady: () => undefined,
   });
   const request = {
     method: "append" as const,
     params: {
       event: {
         scope: runtimeScope("session", "implementer"),
-        kind: "turn.completed",
+        kind: "task.delivery.acked",
         producerKey: "terminal-consumer-retry",
-        payload: { flowId: "flow-one", readyNote: "REVIEW_READY: finished" },
+        payload: { taskId: "flow-one", assignmentId: "assignment", readyNote: "REVIEW_READY: finished" },
       },
     },
   };
@@ -2711,7 +2712,7 @@ test("runtime host retries an uncheckpointed consumer after a committed event", 
   expect((await host.handle({ id: "request-two", ...request })).ok).toBe(true);
   expect((await host.handle({ id: "request-three", ...request })).ok).toBe(true);
   expect(attempts).toBe(2);
-  expect(journal.snapshot().flows[0]).toMatchObject({ value: { id: "flow-one", state: "spawn_pending" } });
+  expect(journal.snapshot().tasks[0]).toMatchObject({ value: { id: "flow-one", state: "spawn_pending" } });
   journal.close();
 });
 
@@ -2719,15 +2720,15 @@ test("runtime host quarantines a deterministic consumer failure without poisonin
   const journal = new RuntimeJournal(path.join(sandbox("consumer-poison"), "events.sqlite"), { maxEvents: 100, now: () => 100 });
   let attempts = 0;
   const host = new RuntimeHost(journal, {
-    flowReady: () => { attempts += 1; throw new Error("poison event"); },
+    taskDeliveryAcknowledged: () => { attempts += 1; throw new Error("poison event"); },
     workflowStageCompleted: () => undefined,
-    taskDeliveryAcknowledged: () => undefined,
+    flowReady: () => undefined,
   });
   const event = {
     scope: runtimeScope("session", "implementer"),
-    kind: "turn.completed",
+    kind: "task.delivery.acked",
     producerKey: "terminal-consumer-poison",
-    payload: { flowId: "flow-one", readyNote: "REVIEW_READY: poison" },
+    payload: { taskId: "flow-one", assignmentId: "assignment", readyNote: "REVIEW_READY: poison" },
   };
   for (let index = 0; index < 4; index += 1) {
     expect((await host.handle({ id: `request-${index}`, method: "append", params: { event } })).ok).toBe(true);
@@ -2745,20 +2746,20 @@ test("runtime host serializes concurrent duplicate consumer delivery", async () 
   const consumerStarted = new Promise<void>((resolve) => { markStarted = resolve; });
   const consumerGate = new Promise<void>((resolve) => { releaseConsumer = resolve; });
   const host = new RuntimeHost(journal, {
-    flowReady: async (flowId) => {
+    taskDeliveryAcknowledged: async (flowId) => {
       calls += 1;
       markStarted();
       await consumerGate;
-      return { id: flowId, state: "spawn_pending" } as unknown as Flow;
+      return { id: flowId, state: "spawn_pending" } as never;
     },
     workflowStageCompleted: () => undefined,
-    taskDeliveryAcknowledged: () => undefined,
+    flowReady: () => undefined,
   });
   const event = {
     scope: runtimeScope("session", "implementer"),
-    kind: "turn.completed",
+    kind: "task.delivery.acked",
     producerKey: "terminal-concurrent",
-    payload: { flowId: "flow-one", readyNote: "REVIEW_READY: finished" },
+    payload: { taskId: "flow-one", assignmentId: "assignment", readyNote: "REVIEW_READY: finished" },
   };
   const first = host.handle({ id: "request-one", method: "append", params: { event } });
   await consumerStarted;
@@ -2767,7 +2768,7 @@ test("runtime host serializes concurrent duplicate consumer delivery", async () 
   const responses = await Promise.all([first, second]);
   expect(responses.every((response) => response.ok)).toBe(true);
   expect(calls).toBe(1);
-  expect(journal.snapshot().flows).toHaveLength(1);
+  expect(journal.snapshot().tasks).toHaveLength(1);
   journal.close();
 });
 
@@ -2780,19 +2781,19 @@ test("runtime command acknowledgements do not wait for a slow committed-event co
   const consumerStarted = new Promise<void>((resolve) => { markStarted = resolve; });
   const consumerGate = new Promise<void>((resolve) => { releaseConsumer = resolve; });
   const host = new RuntimeHost(journal, {
-    flowReady: async () => {
+    taskDeliveryAcknowledged: async () => {
       consumerHasStarted = true;
       markStarted();
       await consumerGate;
-      return { id: "flow-one", state: "spawn_pending" } as unknown as Flow;
+      return { id: "flow-one", state: "spawn_pending" } as never;
     },
     workflowStageCompleted: () => undefined,
-    taskDeliveryAcknowledged: () => undefined,
+    flowReady: () => undefined,
   }, undefined, true);
   journal.append({
     scope: runtimeScope("session", "slow-consumer"),
-    kind: "turn.completed",
-    payload: { flowId: "flow-one", readyNote: "REVIEW_READY: slow" },
+    kind: "task.delivery.acked",
+    payload: { taskId: "flow-one", assignmentId: "assignment", readyNote: "REVIEW_READY: slow" },
   });
 
   const response = host.handle({
@@ -2825,19 +2826,19 @@ test("runtime host acknowledges a durable command while consumer recovery is slo
   const consumerStarted = new Promise<void>((resolve) => { markStarted = resolve; });
   const consumerGate = new Promise<void>((resolve) => { releaseConsumer = resolve; });
   const host = new RuntimeHost(journal, {
-    flowReady: async (flowId) => {
+    taskDeliveryAcknowledged: async (flowId) => {
       markStarted();
       await consumerGate;
-      return { id: flowId, state: "spawn_pending" } as unknown as Flow;
+      return { id: flowId, state: "spawn_pending" } as never;
     },
     workflowStageCompleted: () => undefined,
-    taskDeliveryAcknowledged: () => undefined,
+    flowReady: () => undefined,
   });
   const pendingConsumerEvent = journal.append({
     scope: runtimeScope("session", "implementer"),
-    kind: "turn.completed",
+    kind: "task.delivery.acked",
     producerKey: "terminal-before-command",
-    payload: { flowId: "flow-one", readyNote: "REVIEW_READY: finished" },
+    payload: { taskId: "flow-one", assignmentId: "assignment", readyNote: "REVIEW_READY: finished" },
   });
 
   const response = await Promise.race([
@@ -2869,7 +2870,7 @@ test("runtime host acknowledges a durable command while consumer recovery is slo
   journal.close();
 });
 
-test("runtime host recovers committed consumer work after restart", async () => {
+test("runtime host consumes legacy flow events after restart without actuation", async () => {
   const dir = sandbox("consumer-restart");
   const filename = path.join(dir, "events.sqlite");
   const journal = new RuntimeJournal(filename, { maxEvents: 100, now: () => 100 });
@@ -2904,8 +2905,8 @@ test("runtime host recovers committed consumer work after restart", async () => 
   });
   expect(await host.recoverConsumers()).toBe(2);
   expect(await host.recoverConsumers()).toBe(0);
-  expect(calls).toEqual(["flow-one:REVIEW_READY: recovered"]);
-  expect(reopened.snapshot().flows[0]).toMatchObject({ value: { id: "flow-one", state: "spawn_pending" } });
+  expect(calls).toEqual([]);
+  expect(reopened.snapshot().flows).toEqual([]);
   reopened.close();
 });
 

@@ -1,3 +1,4 @@
+import { FLOW_ARCHIVE } from "@/lib/flows/retirement";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument } from "@/lib/state/registryRecords";
 import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
@@ -463,6 +464,7 @@ function mergeWorkflowOwnershipPatches(patches: readonly WorkflowOwnershipPatch[
 }
 
 export function reconcileWorkflowConversationOwnership(registry: ConversationLookup = agentRegistry()): void {
+  if (FLOW_ARCHIVE.retired) return;
   const workflows = loadWorkflows();
   let dirty = false;
   for (const workflow of workflows) {
@@ -473,6 +475,7 @@ export function reconcileWorkflowConversationOwnership(registry: ConversationLoo
 }
 
 export async function reconcileWorkflowConversationOwnershipCooperatively(registry: ConversationLookup = agentRegistry()): Promise<void> {
+  if (FLOW_ARCHIVE.retired) return;
   const workflows = loadWorkflows();
   const patches: WorkflowOwnershipPatch[] = [];
   await forEachCooperatively(workflows, async (workflow) => {

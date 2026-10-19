@@ -125,10 +125,17 @@ const LEGACY_STAGES = [
 
 async function legacyDraft(ports: PipelinePorts, stages: unknown[] = LEGACY_STAGES): Promise<Pipeline> {
   savePipelines([]);
-  const created = await createPipelineFromRequest({ task: "Legacy review", spec: "AC", repoDir: "/repo", baseBranch: "main", baseRef: BASE, publication: "internal", stages: stages as never, autoStart: false, src: "/codex/creator.jsonl" }, ports);
+  // Seed a pre-freeze definition through the store; the current create API
+  // accepts run stages only. This fixture does not reopen legacy admission.
+  const runnable = stages.map(value => {
+    const stage = value as { kind: string };
+    return stage.kind === "review-loop" ? { ...stage, kind: "run" } : stage;
+  });
+  const created = await createPipelineFromRequest({ task: "Legacy review", spec: "AC", repoDir: "/repo", baseBranch: "main", baseRef: BASE, publication: "internal", stages: runnable as never, autoStart: false, src: "/codex/creator.jsonl" }, ports);
   if (!created.pipeline) throw new Error(created.error);
   /* A draft stored before #2187, whose review-loop creation did not convert. */
-  const draft = asStoredLegacyReviewLane(created.pipeline, created.convertedStages);
+  const draft = created.pipeline;
+  draft.stages = draft.stages.map((stage, index) => ({ ...stage, kind: (stages[index] as { kind: typeof stage.kind }).kind }));
   savePipelines([draft]);
   return draft;
 }
@@ -407,6 +414,7 @@ test("an unexecuted conversion reverts explicitly; once a new attempt ran it is 
   expect(reverted.error).toBeUndefined();
   expect(current().stages).toEqual(draft.stages);
   expect(current().runs).toEqual(draft.runs);
+  expect(await patchPipeline(draft.id, { action: "start" }, h.ports)).toMatchObject({ status: 410, code: "STAGE_KIND_RETIRED" });
   /* The original and the reverted conversion both stay in history. */
   expect(current().legacyReviewConversions![0]).toMatchObject({ clientRequestId: "convert-1", reverted: { clientRequestId: "revert-1" } });
   expect((await patchPipeline(draft.id, { action: "revert-legacy-review", clientRequestId: "revert-1", stageId: "reviewer", expectedRevision: reverted.legacyReviewConversion!.expectedRevision } as never, h.ports, creator)).replayed).toBe(true);
@@ -431,8 +439,8 @@ test("start refuses a draft whose legacy review-loop no run reaches", async () =
   savePipelines([orphan]);
   expect(findPipelineRecord(orphan.id)!.stages[1]!.next).toBe("ship");
   const started = await patchPipeline(orphan.id, { action: "start" }, h.ports);
-  expect(started.status).toBe(409);
-  expect(started.error).toContain("review-loop stage reviewer is unreachable");
+  expect(started.status).toBe(410);
+  expect(started.code).toBe("STAGE_KIND_RETIRED");
   expect(current().state).toBe("draft");
 });
 

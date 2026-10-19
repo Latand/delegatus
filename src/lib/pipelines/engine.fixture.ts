@@ -765,7 +765,7 @@ function networkDown(h: ReturnType<typeof harness>): { remoteCalls: string[] } {
 const NO_CODE_TEST_STAGES = [
   { id: "observe", kind: "run", access: "read-only", prompt: "observe", next: "verify" },
   { id: "verify", kind: "run", access: "read-only", prompt: "verify", next: "review" },
-  { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "review", next: null },
+  { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "review", next: null },
 ] as const;
 
 async function persistedCommittingReview() {
@@ -1269,7 +1269,7 @@ function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boole
 
 const PUBLISH_STAGES = [
   { id: "build", kind: "run", role: { roleId: "builder" }, ["prompt"]: "build", next: "review" },
-  { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, ["prompt"]: "review", next: null },
+  { id: "review", kind: "run", role: { roleId: "reviewer" }, ["prompt"]: "review", next: null },
 ] as const;
 
 async function deliveryRefusalPark() {
@@ -1326,13 +1326,13 @@ async function interruptedPublication() {
 const SKIP_STAGES = [
   { id: "plan", kind: "run", role: { roleId: "builder" }, ["prompt"]: "plan", next: "build" },
   { id: "build", kind: "run", role: { roleId: "builder" }, ["prompt"]: "build", next: "review" },
-  { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, ["prompt"]: "review", next: null },
+  { id: "review", kind: "run", role: { roleId: "reviewer" }, ["prompt"]: "review", next: null },
 ] as const;
 
 const FAIL_EDGE_STAGES = [
   { id: "plan", kind: "run", role: { roleId: "builder" }, ["prompt"]: "plan", next: "build" },
   { id: "build", kind: "run", role: { roleId: "builder" }, ["prompt"]: "build", next: "review", onFail: { to: "review", maxRounds: 2 } },
-  { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, ["prompt"]: "review", next: null },
+  { id: "review", kind: "run", role: { roleId: "reviewer" }, ["prompt"]: "review", next: null },
 ] as const;
 
 /* #1678: the 7eef4743 prototype's confirm stage. The spawn reserved a launch,

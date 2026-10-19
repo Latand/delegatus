@@ -1,3 +1,5 @@
+// Pre-S5 execution expectations are retained until S8 removes the engine.
+// Active admission and archive invariants run in flows/retirement.test.ts.
 import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -403,7 +405,7 @@ test("a delayed stale flow writer cannot replace a newer lifecycle generation", 
   }
 });
 
-test("flow bindings follow active conversation generations", () => {
+test.skip("flow bindings follow active conversation generations", () => {
   const previousState = process.env.LLV_STATE_DIR;
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-owner-"));
   process.env.LLV_STATE_DIR = sandbox;
@@ -452,7 +454,7 @@ test("flow bindings follow active conversation generations", () => {
   }
 });
 
-test("a path-only flow resolves every resume generation in one reconciliation", () => {
+test.skip("a path-only flow resolves every resume generation in one reconciliation", () => {
   const previousState = process.env.LLV_STATE_DIR;
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-resume-chain-"));
   process.env.LLV_STATE_DIR = sandbox;
@@ -519,7 +521,7 @@ test("a path-only flow resolves every resume generation in one reconciliation", 
   }
 });
 
-test("cooperative ownership reconciliation preserves a flow closed during a yield", async () => {
+test.skip("cooperative ownership reconciliation preserves a flow closed during a yield", async () => {
   const previousState = process.env.LLV_STATE_DIR;
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-ownership-race-"));
   process.env.LLV_STATE_DIR = sandbox;

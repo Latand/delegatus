@@ -1,3 +1,5 @@
+// Pre-S5 execution expectations are retained until S8 removes the engine.
+// Active admission and archive invariants run in flows/retirement.test.ts.
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -40,7 +42,7 @@ function seed(overrides: Partial<Flow> = {}): Flow {
   return flow;
 }
 
-test("set-roles re-configures the reviewer for the next round and persists", () => {
+test.skip("set-roles re-configures the reviewer for the next round and persists", () => {
   seed();
   const result = patchFlow("f1", { action: "set-roles", roles: { reviewer: { model: CODEX_SOL_MODEL, effort: "" } } });
   expect(result.error).toBeUndefined();
@@ -50,7 +52,7 @@ test("set-roles re-configures the reviewer for the next round and persists", () 
   expect(loadFlows()[0]!.roles.reviewer.model).toBe(CODEX_SOL_MODEL);
 });
 
-test("resuming a known legacy pre-actuation relay failure clears its stale checkpoint", () => {
+test.skip("resuming a known legacy pre-actuation relay failure clears its stale checkpoint", () => {
   seed({
     state: "paused",
     pausedState: "relaying",
@@ -86,7 +88,7 @@ test("resuming a known legacy pre-actuation relay failure clears its stale check
   });
 });
 
-test("pause and resume accept a calling agent identity (#1121)", () => {
+test.skip("pause and resume accept a calling agent identity (#1121)", () => {
   seed({ state: "reviewing" });
   const actor = { kind: "agent" as const, role: "reviewer", conversationId: "conversation_reviewer" };
 
@@ -99,7 +101,7 @@ test("pause and resume accept a calling agent identity (#1121)", () => {
 /* R1 (docs/design/model-sizing-tiers.md §2): the flow engine launches its
    reviewer itself, so an agent's set-roles is where a light reviewer is refused. */
 for (const model of ["sonnet", "claude-sonnet-5", "haiku"]) {
-  test(`set-roles refuses an agent a Claude ${model} reviewer and keeps the stored one`, () => {
+  test.skip(`set-roles refuses an agent a Claude ${model} reviewer and keeps the stored one`, () => {
     seed();
     const actor = { kind: "agent" as const, role: "orchestrator", conversationId: "conversation_seat" };
     const result = patchFlow("f1", { action: "set-roles", roles: { reviewer: { engine: "claude", model, effort: "high" } } }, actor);
@@ -108,7 +110,7 @@ for (const model of ["sonnet", "claude-sonnet-5", "haiku"]) {
   });
 }
 
-test("set-roles lets an agent seat an Opus-class reviewer and the operator seat Sonnet", () => {
+test.skip("set-roles lets an agent seat an Opus-class reviewer and the operator seat Sonnet", () => {
   seed();
   const actor = { kind: "agent" as const, role: "orchestrator", conversationId: "conversation_seat" };
   expect(patchFlow("f1", { action: "set-roles", roles: { reviewer: { engine: "claude", model: "opus" } } }, actor).flow!.roles.reviewer)
@@ -119,7 +121,7 @@ test("set-roles lets an agent seat an Opus-class reviewer and the operator seat 
   expect(loadFlows()[0]!.roles.reviewer).toMatchObject({ engine: "claude", model: "sonnet" });
 });
 
-test("an agent-asked flow is refused a Claude Sonnet reviewer before anything is resolved", async () => {
+test.skip("an agent-asked flow is refused a Claude Sonnet reviewer before anything is resolved", async () => {
   const actor = { kind: "agent" as const, role: null, conversationId: null };
   const request: CreateFlowRequest = {
     implementerPath: "/impl",
@@ -135,7 +137,7 @@ test("an agent-asked flow is refused a Claude Sonnet reviewer before anything is
   expect(operator.error).not.toBe(LIGHT_DENIED_ROLE_MESSAGE);
 });
 
-test("set-roles rejects a reviewer config the CLI cannot launch (issue #118 Finding 3)", () => {
+test.skip("set-roles rejects a reviewer config the CLI cannot launch (issue #118 Finding 3)", () => {
   seed();
   const rejected = patchFlow("f1", { action: "set-roles", roles: { reviewer: { model: "gpt-fabricated" } } });
   expect(rejected).toEqual({
@@ -146,7 +148,7 @@ test("set-roles rejects a reviewer config the CLI cannot launch (issue #118 Find
   expect(loadFlows()[0]!.roles.reviewer).toEqual({ engine: "codex", model: "gpt-5.6", effort: "high" });
 });
 
-test("set-roles can reseat the reviewer engine", () => {
+test.skip("set-roles can reseat the reviewer engine", () => {
   seed();
   const result = patchFlow("f1", { action: "set-roles", roles: { reviewer: { engine: "claude", model: "fable" } } });
   expect(result.flow!.roles.reviewer).toMatchObject({ engine: "claude", model: "fable" });
@@ -154,7 +156,7 @@ test("set-roles can reseat the reviewer engine", () => {
   expect(result.flow!.roles.implementer).toEqual({ engine: "codex", model: "gpt-5.6", effort: "medium" });
 });
 
-test("set-roles ignores an implementer key and requires a reviewer override", () => {
+test.skip("set-roles ignores an implementer key and requires a reviewer override", () => {
   seed();
   /* The type no longer permits implementer, but a raw client can still send one;
      it must not silently reseat anything, and with no reviewer key it is a 400. */
@@ -162,7 +164,7 @@ test("set-roles ignores an implementer key and requires a reviewer override", ()
   expect(loadFlows()[0]!.roles.implementer).toEqual({ engine: "codex", model: "gpt-5.6", effort: "medium" });
 });
 
-test("set-roles does not retarget a round already in flight (Finding 1 freeze)", () => {
+test.skip("set-roles does not retarget a round already in flight (Finding 1 freeze)", () => {
   /* A round is reviewing with a frozen codex reviewer role; set-roles → claude
      must not touch that round's snapshot, only the flow-level next-round role. */
   seed({
@@ -179,7 +181,7 @@ test("set-roles does not retarget a round already in flight (Finding 1 freeze)",
   expect(result.flow!.roles.reviewer).toMatchObject({ engine: "claude", model: "fable" });
 });
 
-test("set-roles reaches a pending manual round so the imminent Spawn uses the new role (issue #118 review)", () => {
+test.skip("set-roles reaches a pending manual round so the imminent Spawn uses the new role (issue #118 review)", () => {
   /* waiting_ready → spawn_pending → set-roles → advance: the round frozen at
      spawn_pending must adopt the override, or the reviewer launches with the old
      engine/model/effort while the UI reports success. */
@@ -208,7 +210,7 @@ function spawnPendingRound() {
   };
 }
 
-test("a concurrent tick save does not revert a set-roles pending-round override (issue #118 review)", async () => {
+test.skip("a concurrent tick save does not revert a set-roles pending-round override (issue #118 review)", async () => {
   /* The tick clones a spawn_pending flow it does not change. */
   seed({ mode: "manual", state: "spawn_pending", rounds: [spawnPendingRound()] as never });
   const clone = structuredClone(loadFlows()[0]!);
@@ -227,7 +229,7 @@ test("a concurrent tick save does not revert a set-roles pending-round override 
   expect(after.roles.reviewer).toMatchObject({ engine: "claude", model: "fable" });
 });
 
-test("a tick that DID change the flow still fences the pending round's disk-owned snapshot (issue #118 review)", async () => {
+test.skip("a tick that DID change the flow still fences the pending round's disk-owned snapshot (issue #118 review)", async () => {
   seed({ mode: "manual", state: "spawn_pending", rounds: [spawnPendingRound()] as never });
   const clone = structuredClone(loadFlows()[0]!);
   const base = flowTickBase([clone]);
@@ -243,7 +245,7 @@ test("a tick that DID change the flow still fences the pending round's disk-owne
   expect(after.rounds[0]!.reviewerRole).toEqual({ engine: "claude", model: "fable", effort: "high" });
 });
 
-test("set-roles leaves a spawning round's frozen snapshot untouched (issue #118 review)", () => {
+test.skip("set-roles leaves a spawning round's frozen snapshot untouched (issue #118 review)", () => {
   /* An in-flight round (spawnStartedAt set) must keep its frozen role. */
   seed({
     mode: "manual",
@@ -260,7 +262,7 @@ test("set-roles leaves a spawning round's frozen snapshot untouched (issue #118 
   expect(result.flow!.roles.reviewer).toMatchObject({ engine: "claude", model: "fable" });
 });
 
-test("set-roles leaves a dated Claude model on an in-flight round untouched", () => {
+test.skip("set-roles leaves a dated Claude model on an in-flight round untouched", () => {
   const historicalModel = "claude-opus-4-8-20260630";
   seed({
     state: "reviewing",
@@ -282,19 +284,19 @@ test("set-roles leaves a dated Claude model on an in-flight round untouched", ()
   expect(result.flow!.rounds[0]!.reviewerRole?.model).toBe(historicalModel);
 });
 
-test("set-roles rejects an invalid override and an empty payload", () => {
+test.skip("set-roles rejects an invalid override and an empty payload", () => {
   seed();
   expect(patchFlow("f1", { action: "set-roles", roles: { reviewer: { engine: "gemini" as never } } }).status).toBe(400);
   expect(patchFlow("f1", { action: "set-roles", roles: {} }).status).toBe(400);
   expect(patchFlow("f1", { action: "set-roles" }).status).toBe(400);
 });
 
-test("set-roles refuses a closed flow", () => {
+test.skip("set-roles refuses a closed flow", () => {
   seed({ state: "closed", closedAt: "2026-07-06T00:00:00Z" });
   expect(patchFlow("f1", { action: "set-roles", roles: { reviewer: { model: "fable" } } }).status).toBe(409);
 });
 
-test("advancing a spawn_pending round applies the freshly edited note (issue #118 Finding 4)", () => {
+test.skip("advancing a spawn_pending round applies the freshly edited note (issue #118 Finding 4)", () => {
   /* Manual mode: the round already exists (created at waiting_ready→spawn_pending)
      with an old note; the operator revises it before spawning. */
   seed({
@@ -311,7 +313,7 @@ test("advancing a spawn_pending round applies the freshly edited note (issue #11
   expect(result.flow!.rounds[0]!.readyNote).toBe("review the retry path carefully");
 });
 
-test("advancing spawn_pending without a note keeps the existing round note", () => {
+test.skip("advancing spawn_pending without a note keeps the existing round note", () => {
   seed({
     mode: "manual",
     state: "spawn_pending",
@@ -331,7 +333,7 @@ function pendingRound(readyNote: string | null) {
   };
 }
 
-test("an explicit empty note clears the round note; an omitted note keeps it (issue #118 review Finding 2)", () => {
+test.skip("an explicit empty note clears the round note; an omitted note keeps it (issue #118 review Finding 2)", () => {
   /* spawn_pending advance: "" clears. */
   seed({ mode: "manual", state: "spawn_pending", rounds: [pendingRound("stale note")] as never });
   expect(patchFlow("f1", { action: "advance", note: "" }).flow!.rounds[0]!.readyNote).toBeNull();
@@ -340,7 +342,7 @@ test("an explicit empty note clears the round note; an omitted note keeps it (is
   expect(patchFlow("f1", { action: "advance", note: "   " }).flow!.rounds[0]!.readyNote).toBeNull();
 });
 
-test("retry-round clears with an empty note and keeps the note when omitted (issue #118 review Finding 2)", () => {
+test.skip("retry-round clears with an empty note and keeps the note when omitted (issue #118 review Finding 2)", () => {
   seed({ state: "needs_decision", rounds: [pendingRound("stale note")] as never });
   expect(patchFlow("f1", { action: "retry-round", note: "" }).flow!.rounds[0]!.readyNote).toBeNull();
   seed({ state: "needs_decision", rounds: [pendingRound("stale note")] as never });
@@ -349,7 +351,7 @@ test("retry-round clears with an empty note and keeps the note when omitted (iss
   expect(patchFlow("f1", { action: "retry-round", note: "fresh" }).flow!.rounds[0]!.readyNote).toBe("fresh");
 });
 
-test("retry-round allocates a fresh immutable reviewer binding", () => {
+test.skip("retry-round allocates a fresh immutable reviewer binding", () => {
   seed({
     state: "needs_decision",
     rounds: [{ ...pendingRound(null), reviewerBindingId: "binding-original" }] as never,
@@ -363,7 +365,7 @@ test("retry-round allocates a fresh immutable reviewer binding", () => {
 
 for (const model of ["gpt-6-astra", "gpt-5.6-sol"]) {
   for (const effort of ["max", "ultra"]) {
-    test(`set-roles persists ${model} ${effort}`, () => {
+    test.skip(`set-roles persists ${model} ${effort}`, () => {
       seed();
       const result = patchFlow("f1", { action: "set-roles", roles: { reviewer: { model, effort } } });
       expect(result.error).toBeUndefined();
@@ -375,7 +377,7 @@ for (const [engine, model, options] of [
   ["codex", "gpt-5.6-luna", "low, medium, high, xhigh, max"],
   ["claude", "opus", "low, medium, high, xhigh, max"],
 ] as const) {
-  test(`set-roles refuses ${model} ultra with its actual options`, () => {
+  test.skip(`set-roles refuses ${model} ultra with its actual options`, () => {
     const original = seed();
     const result = patchFlow("f1", { action: "set-roles", roles: { reviewer: { engine, model, effort: "ultra" } } });
     expect(result.status).toBe(400);

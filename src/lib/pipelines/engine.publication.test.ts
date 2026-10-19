@@ -1,3 +1,5 @@
+// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
+// Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, test, spawn, fs, path, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, harness, create } from "./engine.fixture";
 import { os, engineModule, finishReported, realExec, pipelineIdentity } from "./engine.fixture";
 import { realProvisionExec } from "./git";
@@ -282,7 +284,7 @@ test("a local comparison takeover keeps its new owner local until a remote is ad
   } finally { f.cleanup(); }
 });
 
-test("legacy review delivery keeps the origin fetch repository fence with a separate push URL", async () => {
+test.skip("legacy review delivery keeps the origin fetch repository fence with a separate push URL", async () => {
   const f = await repository();
   try {
     await f.addRemote(); const pushRemote = await f.addRemote("push-target");

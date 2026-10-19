@@ -1,3 +1,5 @@
+// Pre-S5 execution expectations are retained until S8 removes the engine.
+// Active admission and archive invariants run in flows/retirement.test.ts.
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -48,7 +50,7 @@ beforeEach(() => {
 });
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
-test("decision waits for native completion; replay after consumption preserves one round and original receipt", async () => {
+test.skip("decision waits for native completion; replay after consumption preserves one round and original receipt", async () => {
   const accepted = await submitFlowDecision(request, owner);
   expect(accepted.decision.disposition).toBe("accepted");
   expect((await tick()).rounds).toHaveLength(0);
@@ -63,13 +65,13 @@ test("decision waits for native completion; replay after consumption preserves o
   expect(loadFlows()[0]?.rounds).toHaveLength(1);
 });
 
-test("racing duplicate submissions share the atomic receipt", async () => {
+test.skip("racing duplicate submissions share the atomic receipt", async () => {
   const results = await Promise.all([submitFlowDecision(request, owner), submitFlowDecision(request, owner)]);
   expect(results[0]?.decision).toEqual(results[1]?.decision);
   expect(loadFlows()[0]?.agentDecisions).toHaveLength(1);
 });
 
-test("foreign owner, changed payload, stale revision/head/round/turn and paused flow are refused", async () => {
+test.skip("foreign owner, changed payload, stale revision/head/round/turn and paused flow are refused", async () => {
   await expect(submitFlowDecision(request, "conversation_foreign")).rejects.toThrow("owner");
   for (const change of [{ expectedRevision: 999 }, { expectedHead: "a".repeat(40) }, { round: 1 }, { turnId: "old-turn" }]) {
     await expect(submitFlowDecision({ ...request, ...change }, owner)).rejects.toThrow();
@@ -79,7 +81,7 @@ test("foreign owner, changed payload, stale revision/head/round/turn and paused 
   await expect(submitFlowDecision(request, null)).rejects.toThrow("owner");
 });
 
-test("another terminal turn cannot consume an accepted decision", async () => {
+test.skip("another terminal turn cannot consume an accepted decision", async () => {
   await submitFlowDecision(request, owner);
   record("task_started", { turn_id: "turn-b" });
   record("task_complete", { turn_id: "turn-b", last_agent_message: "finished later" });
@@ -88,7 +90,7 @@ test("another terminal turn cannot consume an accepted decision", async () => {
   expect(result.rounds).toHaveLength(0);
 });
 
-test("unknown completion and aborted completion never complete a decision", async () => {
+test.skip("unknown completion and aborted completion never complete a decision", async () => {
   await submitFlowDecision({ ...request, decision: "completed" }, owner);
   fs.writeFileSync(transcript, "");
   expect((await tick()).agentDecisions?.[0]?.disposition).toBe("accepted");
@@ -97,14 +99,14 @@ test("unknown completion and aborted completion never complete a decision", asyn
   expect((await tick()).state).toBe("needs_decision");
 });
 
-test("a terminal record without a turn identity cannot inherit an older identity", async () => {
+test.skip("a terminal record without a turn identity cannot inherit an older identity", async () => {
   await submitFlowDecision({ ...request, decision: "completed" }, owner);
   record("task_complete", { turn_id: null, last_agent_message: "unbound completion" });
   expect((await tick()).state).toBe("needs_decision");
   expect(loadFlows()[0]?.agentDecisions?.[0]?.disposition).toBe("needs_decision");
 });
 
-test("rotation fences a late decision without launching a reviewer", async () => {
+test.skip("rotation fences a late decision without launching a reviewer", async () => {
   await submitFlowDecision(request, owner);
   const current = loadFlows()[0]!;
   current.implementerPath = path.join(root, "rotated.jsonl");
@@ -113,7 +115,7 @@ test("rotation fences a late decision without launching a reviewer", async () =>
   expect(loadFlows()[0]?.rounds).toHaveLength(0);
 });
 
-test("round limit changed after acceptance refuses settlement", async () => {
+test.skip("round limit changed after acceptance refuses settlement", async () => {
   const { newRound } = await import("./engine");
   flow.rounds = [newRound(flow, "button", null)];
   saveFlows([flow]);
@@ -127,7 +129,7 @@ test("round limit changed after acceptance refuses settlement", async () => {
   expect(loadFlows()[0]?.rounds).toHaveLength(1);
 });
 
-test("process restart recovers the original decision from SQLite", async () => {
+test.skip("process restart recovers the original decision from SQLite", async () => {
   await submitFlowDecision(request, owner);
   const child = Bun.spawn([process.execPath, "-e", `
     const { submitFlowDecision } = await import("./src/lib/flows/decisions.ts");
@@ -141,7 +143,7 @@ test("process restart recovers the original decision from SQLite", async () => {
   expect(loadFlows()[0]?.agentDecisions).toHaveLength(1);
 });
 
-test("a second round keeps its submitted HEAD while waiting to launch", async () => {
+test.skip("a second round keeps its submitted HEAD while waiting to launch", async () => {
   const { newRound } = await import("./engine");
   flow.rounds = [newRound(flow, "button", null)];
   saveFlows([flow]);
@@ -163,7 +165,7 @@ test("a second round keeps its submitted HEAD while waiting to launch", async ()
 });
 
 for (const [decision, expected] of [["stop", "closed"], ["completed", "done_comment"], ["continue-fixing", "needs_decision"]] as const) {
-  test(`explicit ${decision} settles with its reason and no approval`, async () => {
+  test.skip(`explicit ${decision} settles with its reason and no approval`, async () => {
     await submitFlowDecision({ ...request, decision }, owner);
     record("task_complete", { last_agent_message: "decision submitted" });
     const result = await tick();
@@ -173,7 +175,7 @@ for (const [decision, expected] of [["stop", "closed"], ["completed", "done_comm
   });
 }
 
-test("atomic receipt survives a stale controller save", async () => {
+test.skip("atomic receipt survives a stale controller save", async () => {
   const base = flowTickBase([flow]);
   await submitFlowDecision(request, owner);
   flow.stateDetail = "stale projection";
@@ -181,7 +183,7 @@ test("atomic receipt survives a stale controller save", async () => {
   expect(loadFlows()[0]?.agentDecisions).toHaveLength(1);
 });
 
-test("a budget change racing completion discards the stale transition and retries acceptance", async () => {
+test.skip("a budget change racing completion discards the stale transition and retries acceptance", async () => {
   const { newRound } = await import("./engine");
   flow.rounds = [newRound(flow, "button", null)];
   saveFlows([flow]);
@@ -211,7 +213,7 @@ test("pipeline context requires exact current stage attempt and refuses omission
   expect(decisionStageMatches(flow, stage, [pipeline])).toBe(false);
 });
 
-test("MCP rechecks caller authority on replay and after service restart", async () => {
+test.skip("MCP rechecks caller authority on replay and after service restart", async () => {
   const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
   const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
   let caller = owner;
@@ -230,13 +232,13 @@ test("MCP rechecks caller authority on replay and after service restart", async 
   expect(loadFlows()[0]?.agentDecisions).toHaveLength(1);
 });
 
-test("HTTP/general action path cannot bypass MCP owner admission", async () => {
+test.skip("HTTP/general action path cannot bypass MCP owner admission", async () => {
   const { patchFlow } = await import("./commands");
   expect(patchFlow(flow.id, { action: "agent-decision" })).toMatchObject({ status: 403 });
   expect(loadFlows()[0]?.agentDecisions).toBeUndefined();
 });
 
-test("completed legacy turn without decision has an explicit recoverable state", async () => {
+test.skip("completed legacy turn without decision has an explicit recoverable state", async () => {
   record("task_complete", { last_agent_message: "work finished" });
   const entry = { path: transcript } as FileEntry;
   await tickFlow(flow, [entry], new Map([[transcript, entry]]), () => {});
@@ -245,7 +247,7 @@ test("completed legacy turn without decision has an explicit recoverable state",
   expect(flow.rounds).toHaveLength(0);
 });
 
-test("silent native completion requires a decision", async () => {
+test.skip("silent native completion requires a decision", async () => {
   record("task_complete");
   const entry = { path: transcript } as FileEntry;
   await tickFlow(flow, [entry], new Map([[transcript, entry]]), () => {});
@@ -253,7 +255,7 @@ test("silent native completion requires a decision", async () => {
   expect(flow.decisionRequired).toBe(true);
 });
 
-test("explicit stop preserves unfinished files", async () => {
+test.skip("explicit stop preserves unfinished files", async () => {
   const unfinished = path.join(cwd, "unfinished.txt");
   fs.writeFileSync(unfinished, "keep this work");
   try {
@@ -264,7 +266,7 @@ test("explicit stop preserves unfinished files", async () => {
   } finally { fs.unlinkSync(unfinished); }
 });
 
-test("paused flow refuses new decisions and preserves pending decisions until resumed", async () => {
+test.skip("paused flow refuses new decisions and preserves pending decisions until resumed", async () => {
   flow.state = "paused";
   saveFlows([flow]);
   request.expectedRevision = loadFlows()[0]!.revision!;
@@ -283,7 +285,7 @@ test("paused flow refuses new decisions and preserves pending decisions until re
 });
 
 
-test("legacy readiness followed by abort never schedules review", async () => {
+test.skip("legacy readiness followed by abort never schedules review", async () => {
   record("agent_message", { message: "REVIEW_READY: interrupted repair" });
   record("turn_aborted");
   const entry = { path: transcript, activity: "live" } as FileEntry;
@@ -293,7 +295,7 @@ test("legacy readiness followed by abort never schedules review", async () => {
 });
 
 for (const previous of ["previous answer", "REVIEW_READY: previous work"]) {
-  test(`silent completion after an older ${previous} requires a current decision`, async () => {
+  test.skip(`silent completion after an older ${previous} requires a current decision`, async () => {
     fs.writeFileSync(transcript, [
       { timestamp: previous.startsWith("REVIEW_READY") ? "2026-09-08T09:15:00Z" : "2026-09-08T09:00:00Z", type: "event_msg", payload: { type: "task_complete", turn_id: "old", last_agent_message: previous } },
       { timestamp: "2026-09-08T09:20:00Z", type: "event_msg", payload: { type: "task_started", turn_id: "current" } },
@@ -308,7 +310,7 @@ for (const previous of ["previous answer", "REVIEW_READY: previous work"]) {
   });
 }
 
-test("short flow HEAD is stored whole, replays in full and refuses a stale prefix", async () => {
+test.skip("short flow HEAD is stored whole, replays in full and refuses a stale prefix", async () => {
   await expect(submitFlowDecision({ ...request, expectedHead: "ffffffff" }, owner)).rejects.toThrow("HEAD");
   const result = await submitFlowDecision({ ...request, expectedHead: request.expectedHead.slice(0, 8) }, owner);
   expect(result.decision.expectedHead).toBe(request.expectedHead);

@@ -1,3 +1,4 @@
+import { FLOW_ARCHIVE, FLOW_RETIREMENT, assertFlowExecution } from "./retirement";
 import { shortId } from "@/lib/shortIds";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { classifyProviderCondition } from "@/lib/pipelines/providerConditions";
@@ -215,8 +216,10 @@ export function reserveReviewerSpawn(
   round: Round,
   role: RoleConfig,
   accountId: string | null,
-  registry: AgentRegistry = agentRegistry(),
+  registry?: AgentRegistry,
 ): Exclude<SpawnBeginResult, { kind: "conflict" }> {
+  assertFlowExecution();
+  registry ??= agentRegistry();
   agentPublicationIdentityEnv(process.env);
   return commitReviewerSpawn(flow, round, role, accountId, registry);
 }
@@ -471,6 +474,7 @@ export async function sendToImplementer(
   text: string,
   overrides: RelayDeliveryOverrides = {},
 ): Promise<string> {
+  assertFlowExecution();
   const entry = entriesByPath.get(currentConversationPath(flow.implementerConversationId, flow.implementerPath));
   if (!entry) throw new Error("implementer transcript is missing from scanner");
   /* Structured hosts first, exactly as deliverConversationMessage does. The
@@ -660,6 +664,7 @@ function launchHasHandle(round: Round): boolean {
     exact leased launch during its pre-handle checkpoint. Operator lifecycle
     actions and different launch ids remain authoritative. */
 export function adoptSyntheticLaunchTakeover(flowId: string, launchedRound: Round): boolean {
+  assertFlowExecution();
   if (!launchedRound.launchId || !launchHasHandle(launchedRound)) return false;
   const flows = loadFlows();
   const diskFlow = flows.find((item) => item.id === flowId);
@@ -703,6 +708,7 @@ export function adoptSyntheticLaunchTakeover(flowId: string, launchedRound: Roun
  * restart. Synchronous load-modify-save, so no patchFlow interleaves.
  */
 export function abandonLaunch(flowId: string, roundNumber: number): void {
+  assertFlowExecution();
   const flows = loadFlows();
   const flow = flows.find((item) => item.id === flowId);
   const round = flow?.rounds.find((item) => item.n === roundNumber);
@@ -1041,6 +1047,7 @@ const headlessGuardPasses = store.__llvHeadlessCreditGuardPasses ??= new WeakMap
 /** Detached reviewers have no structured host. Their flow owns termination
  * and retry, including across a Viewer restart with only a persisted PID. */
 export function enforceHeadlessAccountCreditGuard(registry: AgentRegistry, blockedAccounts: ReadonlySet<string>): Promise<void> {
+  if (FLOW_ARCHIVE.retired) return Promise.resolve();
   const pending = headlessGuardPasses.get(registry);
   if (pending) return pending;
   const pass = withViewerOperation("controller.flows", async () => {
@@ -1275,6 +1282,7 @@ function completeRelayTransition(flow: Flow, round: Round): void {
  * synchronously right before the decision, so it matches what the merge persists.
  */
 export function relayFixOrPark(flow: Flow): void {
+  assertFlowExecution();
   const roundLimit = loadFlows().find((item) => item.id === flow.id)?.roundLimit ?? flow.roundLimit;
   flow.roundLimit = roundLimit;
   if (roundLimit > 0 && flow.rounds.length >= roundLimit) {
@@ -1291,6 +1299,7 @@ export async function tickFlow(
   entriesByPath: Map<string, FileEntry>,
   persistCheckpoint: () => void | Promise<void>,
 ): Promise<boolean> {
+  assertFlowExecution();
   const before = JSON.stringify(flow);
   flow.implementerPath = currentConversationPath(flow.implementerConversationId, flow.implementerPath);
   for (const round of flow.rounds) {
@@ -1744,6 +1753,7 @@ export async function persistTickFlows(
   base: Map<string, FlowTickBase>,
   candidateIds?: ReadonlySet<string>,
 ): Promise<void> {
+  assertFlowExecution();
   const tickById = new Map(flows.map((flow) => [flow.id, flow] as const));
   const ids = candidateIds ?? new Set(tickById.keys());
   await patchFlowRows(ids, (diskFlows) => {
@@ -1817,7 +1827,8 @@ export async function persistTickFlows(
   });
 }
 
-export async function tickFlows(entries: FileEntry[]): Promise<TickResult> {
+export async function tickFlows(entries: FileEntry[]): Promise<TickResult & Partial<typeof FLOW_RETIREMENT>> {
+  if (FLOW_ARCHIVE.retired) return { ...FLOW_RETIREMENT, flows: [], changed: false };
   if (store.__llvFlowTick) {
     const flows = cloneFlows(loadFlows());
     annotateFlowEntries(entries, flows);

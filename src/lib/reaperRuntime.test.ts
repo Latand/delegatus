@@ -1,3 +1,5 @@
+// Pre-S5 execution expectations are retained until S8 removes the engine.
+// Active admission and archive invariants run in flows/retirement.test.ts.
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -1494,7 +1496,7 @@ test("headless reviewer termination rejects pid reuse and verifies process exit"
   expect(signals).toBe(1);
 });
 
-test("persisted GitHub merge evidence survives a deleted checkout and allows flow cleanup", async () => {
+test("retired flow evidence stays historical and cannot authorize fresh cleanup", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-merged-flow-"));
   const pathname = path.join(directory, "rollout-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1345.jsonl");
   const now = Date.parse("2026-07-12T12:00:00.000Z");
@@ -1539,13 +1541,13 @@ test("persisted GitHub merge evidence survives a deleted checkout and allows flo
       actuation: { loadFlows: () => [flow], now: () => now },
     });
 
-    expect(report.agents[0]).toMatchObject({ class: "flow-worker", eligible: true, protectedReasons: [] });
+    expect(report.agents[0]).toMatchObject({ class: "flow-worker", eligible: false, protectedReasons: ["flow-not-merged"] });
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
-test("a squash-merged GitHub PR becomes durable evidence before checkout deletion", async () => {
+test.skip("a squash-merged GitHub PR becomes durable evidence before checkout deletion", async () => {
   const now = Date.parse("2026-07-12T12:00:00.000Z");
   const flow = {
     ...headlessFlow(now),
@@ -1587,7 +1589,7 @@ test("a squash-merged GitHub PR becomes durable evidence before checkout deletio
   expect(saves).toBe(1);
 });
 
-test("a changed checkout SHA clears prior positive merge evidence", async () => {
+test.skip("a changed checkout SHA clears prior positive merge evidence", async () => {
   const now = Date.parse("2026-07-12T12:00:00.000Z");
   const oldSha = "a".repeat(40);
   const newSha = "b".repeat(40);
@@ -1620,7 +1622,7 @@ test("a changed checkout SHA clears prior positive merge evidence", async () => 
   });
 });
 
-test("a numbered PR merge with a different head SHA cannot authorize cleanup", async () => {
+test.skip("a numbered PR merge with a different head SHA cannot authorize cleanup", async () => {
   const now = Date.parse("2026-07-12T12:00:00.000Z");
   const flow = {
     ...headlessFlow(now),
@@ -1647,7 +1649,7 @@ test("a numbered PR merge with a different head SHA cannot authorize cleanup", a
   expect(flow.mergeEvidence?.mergedAt).toBeNull();
 });
 
-test("approved uncommitted work cannot inherit merge status from its base HEAD", async () => {
+test.skip("approved uncommitted work cannot inherit merge status from its base HEAD", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-dirty-flow-"));
   const now = Date.parse("2026-07-12T12:00:00.000Z");
   try {
@@ -1689,7 +1691,7 @@ test("approved uncommitted work cannot inherit merge status from its base HEAD",
   }
 });
 
-test("a clean detached checkout cannot retain stale merge authorization", async () => {
+test.skip("a clean detached checkout cannot retain stale merge authorization", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-detached-head-"));
   const now = Date.parse("2026-07-12T12:00:00.000Z");
   try {
@@ -1729,7 +1731,7 @@ test("a clean detached checkout cannot retain stale merge authorization", async 
   }
 });
 
-test("merge probes are concurrent and a stalled probe times out fail closed", async () => {
+test.skip("merge probes are concurrent and a stalled probe times out fail closed", async () => {
   const now = Date.parse("2026-07-12T12:00:00.000Z");
   const stalled = {
     ...headlessFlow(now),
@@ -1786,7 +1788,7 @@ test("merge probes are concurrent and a stalled probe times out fail closed", as
   expect(stalled.mergeEvidence?.mergedAt).toBeNull();
 });
 
-test("merge evidence persistence cannot roll back a concurrent flow transition", async () => {
+test.skip("merge evidence persistence cannot roll back a concurrent flow transition", async () => {
   const now = Date.parse("2026-07-12T12:00:00.000Z");
   const reviewedSha = "1".repeat(40);
   const stale = {
@@ -1822,7 +1824,7 @@ test("merge evidence persistence cannot roll back a concurrent flow transition",
   expect(stored[0]?.mergeEvidence?.mergedAt).toBeNull();
 });
 
-test("merge evidence moving underneath the refresh is not a concurrent transition", async () => {
+test.skip("merge evidence moving underneath the refresh is not a concurrent transition", async () => {
   /* The other side of the concurrency check: the revision compared against the
      store deliberately EXCLUDES mergeEvidence, because the evidence is the very
      thing this pass rewrites. A revision that included it would see the refresh's
@@ -1859,7 +1861,7 @@ test("merge evidence moving underneath the refresh is not a concurrent transitio
   expect(stored[0]?.mergeEvidence?.mergedAt).toBe(new Date(now - 60_000).toISOString());
 });
 
-test("an existing checkout with unverified cleanliness loses merge authorization", async () => {
+test.skip("an existing checkout with unverified cleanliness loses merge authorization", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-unverified-checkout-"));
   const now = Date.parse("2026-07-12T12:00:00.000Z");
   const reviewedSha = "2".repeat(40);
@@ -1891,7 +1893,7 @@ test("an existing checkout with unverified cleanliness loses merge authorization
   }
 });
 
-test("local merge evidence persists the reviewed SHA without GitHub identity", async () => {
+test.skip("local merge evidence persists the reviewed SHA without GitHub identity", async () => {
   const now = Date.parse("2026-07-12T12:00:00.000Z");
   const reviewedSha = "3".repeat(40);
   const flow = {
