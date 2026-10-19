@@ -10,6 +10,7 @@ export type ViewerOperation = "temp.sweep" | "resources.read" | "worktrees.sweep
   | "transcript.index" | "memory.discovery" | "memory.refresh"
   | "memory.privacy.compile" | "memory.privacy.match" | "memory.privacy.worker"
   | "memory.source-read" | "memory.source-write"
+  | "memory.import" | "memory.import.backup" | "memory.import.candidates" | "memory.import.retention"
   | "tasks.system-run" | "telegram.report-task-settle" | "memory.curation-cleanup"
   | "delivery.inbox-batch"
   | "http.render" | "links.task-export" | "role-memory.view"
