@@ -2006,7 +2006,11 @@ function wakeItems(context: {
   for (const entry of context.stalledChildren) if (!unmovedChildren.includes(entry)) childStall(entry);
   for (const reminder of context.reminders) {
     const existing = items.find(item => item.kind === reminder.kind && item.id === reminder.id);
-    if (existing) Object.assign(existing, reminder);
+    if (existing) {
+      const fulfilled = agendaVersion(existing, input);
+      Object.assign(existing, reminder);
+      if (fulfilled) existing.creditVersions = [...new Set([...(existing.creditVersions ?? []), fulfilled])];
+    }
     else items.push(reminder);
   }
   for (const entry of context.unstarted) task(entry);
@@ -2108,6 +2112,8 @@ export function seatTickWakeCommitPlan(
      carried it is what announces it, once. */
   const announcedMaintenance = items.filter(item => item.kind === "maintenance").flatMap(item => item.maintenance ? [item.maintenance.runId] : []);
   const announcedDeploys = items.filter((item) => item.kind === "deploy").map((item) => item.id);
+  const deployResumeThrough = items.filter(item => item.kind === "deploy" && item.occurredAt && Number.isFinite(Date.parse(item.occurredAt)))
+    .map(item => item.occurredAt!).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
   /* The outcomes the report log is owed once this wake lands (§5.1). */
   const catchUp = verdict.catchUp && items.length === verdict.items.length ? verdict.catchUp : undefined;
   const reportsOwed = context.bridgeReports ? catchUp
@@ -2142,11 +2148,13 @@ export function seatTickWakeCommitPlan(
   return {
     ...(catchUp ? { catchUp } : {}),
     ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}),
+    ...(deployResumeThrough ? { deployResumeThrough } : {}),
     proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough: deliveredThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
     ...(verdict.activeStallTokens ? { activeStallTokens: verdict.activeStallTokens } : {}),
     ...(disk ? { diskPressure: { episode: disk.diskPressureEpisode!, version: disk.itemVersion! } } : {}),
-    itemsShown: items.flatMap(item => item.itemVersion ? [item.itemVersion] : []),
-    itemLines: items.flatMap(item => item.itemVersion ? [{ version: item.itemVersion, line: redactMonitorText(item.manifestLine ?? seatTickBullet(item)) }] : []),
+    itemsShown: items.flatMap(item => [item.itemVersion, ...(item.creditVersions ?? [])].filter((version): version is string => !!version)),
+    itemLines: items.flatMap(item => [item.itemVersion, ...(item.creditVersions ?? [])].filter((version): version is string => !!version)
+      .map(version => ({ version, line: redactMonitorText(item.manifestLine ?? seatTickBullet(item)) }))),
     acknowledgmentLines,
     ...(reportsOwed.length > 0 ? { reportsOwed } : {}),
     ...(reportedStalls.length > 0 ? { reportedStalls } : {}),
@@ -2244,7 +2252,9 @@ export function seatTickWakeCommit(
     announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
     announcedMaintenance: announced(state.announcedMaintenance ?? [], commit.announcedMaintenance ?? [], SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
     announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? [], SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
-    ...(commit.announcedDeploys?.length ? { deployResumeThrough: received } : {}),
+    ...(commit.deployResumeThrough && Number.isFinite(Date.parse(commit.deployResumeThrough)) ? { deployResumeThrough: new Date(Math.max(
+      Date.parse(state.deployResumeThrough ?? "") || 0, Date.parse(commit.deployResumeThrough),
+    )).toISOString() } : {}),
     ...(commit.activeStallTokens
       ? { reportedStalls: [...new Set([...(state.reportedStalls ?? []), ...(commit.reportedStalls ?? [])].filter(token => commit.activeStallTokens!.includes(token)))] }
       : commit.reportedStalls?.length || state.reportedStalls

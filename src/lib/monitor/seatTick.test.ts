@@ -2105,6 +2105,35 @@ test("later deploy resume instructions drain every previously shown paused lane"
   expect(seatTickDecision(input({ now: NOW + 270 * MINUTE, state: finished, pipelines: [...pipelines, newlyPaused] })).verdict.kind).toBe("quiet");
 });
 
+test("a deploy reminder credits the matching ordinary pause agenda", () => {
+  const paused = lane({ pausedBy: "seat", state: "inert", pausedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() });
+  const deploy = { deploymentId: "deploy-pause-credit", phase: "succeeded" as const, sha: "c".repeat(40), error: null,
+    settledAt: new Date(NOW - MINUTE).toISOString() };
+  const first = seatTickDecision(input({ pipelines: [paused], state: stateWith({ stalledSeen: [paused.id] }), settledDeploys: [deploy] }));
+  expect(first.verdict.kind).toBe("wake");
+  if (first.verdict.kind !== "wake") return;
+  expect(first.verdict.items.map(item => item.id)).toEqual([deploy.deploymentId, paused.id]);
+  expect(first.verdict.items[1]).toMatchObject({ reminderKind: "pause" });
+  const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  const quiet = seatTickDecision(input({ now: NOW + 90 * MINUTE, pipelines: [paused], state: landed, settledDeploys: [] }));
+  expect(quiet.verdict.kind).toBe("quiet");
+  expect(seatTickDecision(input({ now: NOW + 24 * 60 * MINUTE, pipelines: [paused], state: landed, settledDeploys: [] })).verdict.kind).toBe("wake");
+});
+
+test("a deployment cutoff excludes pauses that began after settlement", () => {
+  const deploy = { deploymentId: "deploy-cutoff", phase: "succeeded" as const, sha: "d".repeat(40), error: null,
+    settledAt: new Date(NOW - 30 * MINUTE).toISOString() };
+  const laterPause = lane({ pausedBy: "seat", state: "inert", pausedAt: new Date(NOW - 10 * MINUTE).toISOString() });
+  const first = seatTickDecision(input({ pipelines: [laterPause], settledDeploys: [deploy] }));
+  expect(first.verdict.kind).toBe("wake");
+  if (first.verdict.kind !== "wake") return;
+  expect(first.verdict.items.map(item => item.id)).toEqual([deploy.deploymentId]);
+  const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  expect(landed.deployResumeThrough).toBe(deploy.settledAt);
+  const next = seatTickDecision(input({ now: NOW + 90 * MINUTE, pipelines: [laterPause], state: landed, settledDeploys: [] }));
+  expect(next.verdict.kind).toBe("quiet");
+});
+
 test("cropped outcome bullets leave child, deployment and maintenance obligations unacknowledged", () => {
   const verdict: Extract<SeatTickVerdict, { kind: "wake" }> = {
     kind: "wake", reasons: [{ kind: "own-lane-settled", detail: "settled outcomes" }], deferred: 0,

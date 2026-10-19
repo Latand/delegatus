@@ -62,6 +62,7 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
   if (typeof raw.eventsThrough !== "number" || !Number.isInteger(raw.eventsThrough) || raw.eventsThrough < 0) return null;
   return {
     ...(raw.diskPressure && typeof raw.diskPressure === "object" && "episode" in raw.diskPressure && "version" in raw.diskPressure && typeof raw.diskPressure.episode === "string" && typeof raw.diskPressure.version === "string" ? { diskPressure: { episode: raw.diskPressure.episode, version: raw.diskPressure.version } } : {}),
+    ...(isoOrNull(raw.deployResumeThrough) ? { deployResumeThrough: isoOrNull(raw.deployResumeThrough)! } : {}),
     ...(raw.catchUp && typeof raw.catchUp === "object" && typeof (raw.catchUp as Record<string, unknown>).key === "string"
       && isoOrNull((raw.catchUp as Record<string, unknown>).from) && isoOrNull((raw.catchUp as Record<string, unknown>).through)
       ? { catchUp: { key: String((raw.catchUp as Record<string, unknown>).key), from: String((raw.catchUp as Record<string, unknown>).from),

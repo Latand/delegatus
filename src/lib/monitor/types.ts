@@ -259,6 +259,8 @@ export interface SeatTickItem {
   diskPressureEpisode?: string;
   /** Version credited only by delivery of this visible item. */
   itemVersion?: string;
+  /** Other agenda versions this same visible line also fulfills. */
+  creditVersions?: string[];
   outcomeId?: string;
   /** Every owed outcome this ONE line stands for (#1783). A child's outcome
       identity is a turn of a ledger generation, so a worker the seat spawned
@@ -891,6 +893,8 @@ export interface SeatTickWakeCommit {
   wakeIntervalMs?: number;
   catchUp?: { key: string; from: string; through: string; covers: string[] };
   diskPressure?: { episode: string; version: string };
+  /** Latest settlement timestamp carried by this delivered deploy agenda. */
+  deployResumeThrough?: string;
   /** Versions of agenda items carried by this frozen delivery plan. */
   itemsShown?: string[];
   /** Stall episodes still active when this wake was decided. */

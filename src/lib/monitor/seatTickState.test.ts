@@ -43,7 +43,9 @@ const row = {
     conversationId: CONVERSATION,
     seatEpoch: 7,
     operationId: "op-wake-1",
-    commit: { proposal: false, reasons: ["interval" as const], fingerprint: "fp-1", eventsThrough: 44, children: [CONVERSATION] },
+    commit: { proposal: false, reasons: ["interval" as const], fingerprint: "fp-1", eventsThrough: 44, children: [CONVERSATION],
+      deployResumeThrough: "2026-08-28T09:30:00.000Z", itemsShown: ["reminder:pause@1798521600000", "pipeline@revision"],
+      itemLines: [{ version: "reminder:pause@1798521600000", line: "- [pipeline] lane — paused" }, { version: "pipeline@revision", line: "- [pipeline] lane — paused" }] },
   },
   harvestedChildren: [CONVERSATION],
   pullRequestGap: {
