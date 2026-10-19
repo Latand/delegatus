@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { Worker } from "node:worker_threads";
 import { retainReleases, type RetentionInputs, type RetentionPorts } from "./retention";
 import { finishTreeTrash, removeTreeViaTrash, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 import type { LauncherRecord } from "./launcher";
@@ -12,11 +11,80 @@ import { RetentionWorker } from "./retentionWorker";
 
 const DAY = 86_400_000;
 const LOOP_PROBE_INTERVAL_MS = 10;
-const missedLoopTimeMs = (workerTicks: number) => Math.max(0, workerTicks - 1) * LOOP_PROBE_INTERVAL_MS;
-function assertLoopProbeAvailable(worker: Worker, error: unknown, missingProgressMs = 0) {
-  if (error !== undefined) throw new Error(`loop probe heartbeat failed: ${String(error)}`);
-  if (worker.threadId === -1) throw new Error("loop probe heartbeat exited during measurement");
-  if (missingProgressMs > 50) throw new Error(`loop probe heartbeat made no progress for ${missingProgressMs.toFixed(1)} ms`);
+const LOOP_PROBE_SOURCE = `
+  const { performance } = require("node:perf_hooks");
+  const startedAt = performance.now();
+  process.stdin.setEncoding("utf8");
+  let input = "";
+  process.stdin.on("data", chunk => {
+    input += chunk;
+    for (let end; (end = input.indexOf("\\n")) !== -1;) {
+      const line = input.slice(0, end); input = input.slice(end + 1);
+      const message = JSON.parse(line);
+      if (message.type === "finish") {
+        process.stdout.write(JSON.stringify({ type: "result", elapsedMs: performance.now() - startedAt }) + "\\n");
+        process.exit(0);
+      }
+    }
+  });
+  setInterval(() => {
+    process.stdout.write(JSON.stringify({ type: "probe" }) + "\\n");
+  }, ${LOOP_PROBE_INTERVAL_MS});
+`;
+function assertLoopStallDetected(measurement: { maxBlockedMs: number }) {
+  expect(measurement.maxBlockedMs).toBeGreaterThan(50);
+}
+function startLoopProbe() {
+  const child = spawn(process.execPath, ["-e", LOOP_PROBE_SOURCE], { stdio: ["pipe", "pipe", "inherit"] });
+  children.push(child);
+  let output = "";
+  let settled = false;
+  let lastProbeAt: number | undefined;
+  let maxBlockedMs = 0;
+  let samples = 0;
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  let resolveResult!: (result: { maxBlockedMs: number; samples: number; elapsedMs: number }) => void;
+  let rejectResult!: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+  const result = new Promise<{ maxBlockedMs: number; samples: number; elapsedMs: number }>((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", chunk => {
+    output += chunk;
+    for (let end; (end = output.indexOf("\n")) !== -1;) {
+      const line = output.slice(0, end); output = output.slice(end + 1);
+      const message = JSON.parse(line);
+      if (message.type === "probe") {
+        const at = performance.now();
+        if (lastProbeAt !== undefined) maxBlockedMs = Math.max(maxBlockedMs, at - lastProbeAt - LOOP_PROBE_INTERVAL_MS);
+        lastProbeAt = at;
+        samples++;
+        resolveReady();
+      } else if (message.type === "result") {
+        settled = true;
+        resolveResult({ ...message, maxBlockedMs, samples });
+      }
+    }
+  });
+  child.once("error", error => { rejectReady(error); if (!settled) rejectResult(error); });
+  child.once("exit", (code, signal) => {
+    if (code !== 0 || signal) {
+      const error = new Error(`loop probe exited before a verdict (${signal ?? code})`);
+      rejectReady(error);
+      if (!settled) rejectResult(error);
+    }
+  });
+  return {
+    child,
+    ready,
+    result,
+    finish: async () => { child.stdin.write(JSON.stringify({ type: "finish" }) + "\n"); return result; },
+    stop: async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = new Promise<void>(resolve => child.once("exit", () => resolve())); child.kill("SIGKILL"); await exited;
+      }
+    },
+  };
 }
 const roots: string[] = [];
 const children: ChildProcess[] = [];
@@ -78,67 +146,29 @@ test("keep decisions over 87 releases use one inventory; destructive steps use f
   expect(scans).toBe(1);
 });
 
-test("the loop probe maps independently observed missed 10 ms turns to elapsed time", () => {
-  expect(missedLoopTimeMs(1)).toBe(0);
-  expect(missedLoopTimeMs(6)).toBe(50);
-  expect(missedLoopTimeMs(7)).toBe(60);
-});
-
-test("the loop probe refuses a heartbeat that exits after readiness", async () => {
-  const heartbeat = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-  const worker = new Worker(`
-    const { parentPort, workerData } = require("node:worker_threads");
-    const pulses = new Int32Array(workerData);
-    let ready = false;
-    setInterval(() => { Atomics.add(pulses, 0, 1); if (!ready) { ready = true; parentPort.postMessage("ready"); } }, 10);
-  `, { eval: true, workerData: heartbeat });
+test("the loop probe rejects observer loss after its readiness handshake", async () => {
+  const probe = startLoopProbe();
   try {
-    await new Promise<void>((resolve, reject) => {
-      worker.once("message", value => value === "ready" ? resolve() : reject(new Error("heartbeat did not become ready")));
-      worker.once("error", reject);
-      worker.once("exit", code => reject(new Error(`heartbeat exited before ready (${code})`)));
-    });
-    expect(() => assertLoopProbeAvailable(worker, undefined, 51)).toThrow("made no progress");
-    await worker.terminate();
-    expect(() => assertLoopProbeAvailable(worker, undefined)).toThrow("exited during measurement");
+    await probe.ready;
+    probe.child.kill("SIGKILL");
+    await expect(probe.result).rejects.toThrow("loop probe exited before a verdict");
   } finally {
-    if (worker.threadId !== -1) await worker.terminate();
+    await probe.stop();
   }
 });
 
-test("a known 120 ms loop stall exceeds the 50 ms probe budget with a live heartbeat", async () => {
-  const heartbeat = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-  const ticks = new Int32Array(heartbeat);
-  const worker = new Worker(`
-    const { parentPort, workerData } = require("node:worker_threads");
-    const pulses = new Int32Array(workerData);
-    let ready = false;
-    setInterval(() => { Atomics.add(pulses, 0, 1); if (!ready) { ready = true; parentPort.postMessage("ready"); } }, 10);
-  `, { eval: true, workerData: heartbeat });
-  let timer: ReturnType<typeof setInterval> | undefined;
-  let lastTicks = 0;
-  let maxBlockedMs = 0;
+test("a separately sampled 120 ms loop stall exceeds the 50 ms budget", async () => {
+  const probe = startLoopProbe();
   try {
-    await new Promise<void>((resolve, reject) => {
-      worker.once("message", value => value === "ready" ? resolve() : reject(new Error("heartbeat did not become ready")));
-      worker.once("error", reject);
-      worker.once("exit", code => reject(new Error(`heartbeat exited before ready (${code})`)));
-    });
-    lastTicks = Atomics.load(ticks, 0);
-    timer = setInterval(() => {
-      maxBlockedMs = Math.max(maxBlockedMs, missedLoopTimeMs(Atomics.load(ticks, 0) - lastTicks));
-      lastTicks = Atomics.load(ticks, 0);
-    }, LOOP_PROBE_INTERVAL_MS);
+    await probe.ready;
     await new Promise(resolve => setTimeout(resolve, 25));
-    const before = performance.now();
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120);
-    maxBlockedMs = Math.max(maxBlockedMs, performance.now() - before - LOOP_PROBE_INTERVAL_MS);
-    assertLoopProbeAvailable(worker, undefined);
-    expect(Atomics.load(ticks, 0)).toBeGreaterThan(lastTicks);
-    expect(maxBlockedMs).toBeGreaterThan(50);
+    const measured = await probe.finish();
+    expect(measured.samples).toBeGreaterThan(0);
+    assertLoopStallDetected(measured);
+    expect(() => assertLoopStallDetected({ maxBlockedMs: 0 })).toThrow();
   } finally {
-    if (timer) clearInterval(timer);
-    await worker.terminate();
+    await probe.stop();
   }
 });
 
@@ -150,69 +180,19 @@ test("the loop stays within 50 ms while counting 87 retained release trees", asy
     fs.mkdirSync(tree);
     for (let i = 0; i < 128; i++) fs.writeFileSync(path.join(tree, `${i}.js`), "fixture");
   }
-  const heartbeat = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-  const ticks = new Int32Array(heartbeat);
-  const worker = new Worker(`
-    const { parentPort, workerData } = require("node:worker_threads");
-    const pulses = new Int32Array(workerData);
-    let ready = false;
-    setInterval(() => { Atomics.add(pulses, 0, 1); if (!ready) { ready = true; parentPort.postMessage("ready"); } }, 10);
-  `, { eval: true, workerData: heartbeat });
-  let heartbeatError: unknown;
-  worker.on("error", error => { heartbeatError = error; });
-  let timer: ReturnType<typeof setInterval> | undefined;
-  let lastTicks = 0;
-  let lastHeartbeatProgressAt = performance.now();
-  let maxBlockedMs = 0;
-  let maxObservedGapMs = 0;
-  let last = performance.now();
-  let samples = 0;
-  let probeFailure: Error | undefined;
-  let nextSample: (() => void) | undefined;
-  const sample = () => new Promise<void>(resolve => { nextSample = resolve; });
+  const probe = startLoopProbe();
   try {
-    await new Promise<void>((resolve, reject) => {
-      worker.once("message", value => value === "ready" ? resolve() : reject(new Error("loop probe heartbeat did not become ready")));
-      worker.once("error", reject);
-      worker.once("exit", code => reject(new Error(`loop probe heartbeat exited before ready (${code})`)));
-    });
-    lastTicks = Atomics.load(ticks, 0);
-    lastHeartbeatProgressAt = performance.now();
-    timer = setInterval(() => {
-      const at = performance.now();
-      maxObservedGapMs = Math.max(maxObservedGapMs, at - last);
-      last = at;
-      const currentTicks = Atomics.load(ticks, 0);
-      if (heartbeatError !== undefined) probeFailure = new Error(`loop probe heartbeat failed: ${String(heartbeatError)}`);
-      else if (worker.threadId === -1) probeFailure = new Error("loop probe heartbeat exited during measurement");
-      else if (currentTicks !== lastTicks) lastHeartbeatProgressAt = at;
-      else if (at - lastHeartbeatProgressAt > 50) probeFailure = new Error("loop probe heartbeat made no progress during measurement");
-      maxBlockedMs = Math.max(maxBlockedMs, missedLoopTimeMs(currentTicks - lastTicks));
-      lastTicks = currentTicks;
-      samples++;
-      const resolve = nextSample;
-      nextSample = undefined;
-      resolve?.();
-    }, LOOP_PROBE_INTERVAL_MS);
-    await sample();
-    maxBlockedMs = 0;
-    maxObservedGapMs = 0;
-    const before = samples;
+    await probe.ready;
     const report = await h.run();
-    const during = samples - before;
-    // Observe the timer overdue at completion before deciding the pass was responsive.
-    await sample();
+    const measurement = await probe.finish();
     expect(report.errors).toEqual([]);
     expect(report.kept).toHaveLength(87);
     expect(report.kept.every(row => row.bytes > 0)).toBeTrue();
-    expect(probeFailure).toBeUndefined();
-    expect(() => assertLoopProbeAvailable(worker, heartbeatError)).not.toThrow();
-    console.info("[retention fixture]", JSON.stringify({ releases: 87, maxBlockedMs, maxObservedGapMs, timerSamplesDuringPass: during }));
-    expect(maxBlockedMs).toBeLessThanOrEqual(50);
-    expect(during).toBeGreaterThan(0);
+    console.info("[retention fixture]", JSON.stringify({ releases: 87, maxBlockedMs: measurement.maxBlockedMs, samples: measurement.samples, elapsedMs: measurement.elapsedMs }));
+    expect(measurement.maxBlockedMs).toBeLessThanOrEqual(50);
+    expect(measurement.samples).toBeGreaterThan(0);
   } finally {
-    if (timer) clearInterval(timer);
-    await worker.terminate();
+    await probe.stop();
   }
 }, 30_000);
 
