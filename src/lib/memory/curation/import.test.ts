@@ -86,6 +86,22 @@ test("equal bodies in two projects keep both narrow scopes and refuse adoption b
   expect(roleMemoryCollection()?.get("s:machine")).toBeNull();
 });
 
+test("undo of an adoption merged into pre-existing text re-pends its candidate and preserves that text", async () => {
+  const candidate = importCandidate(1); await seedImport([candidate]);
+  const target = "r_1111111111111111", scope = candidate.suggestedScope;
+  roleMemoryCollection(true)!.boundedPatch(2, tx => {
+    tx.put({ kind: "rule", id: target, scope, rule: RULE, why: WHY, state: "active", hints: [], createdAt: IMPORT_AT, changedAt: IMPORT_AT,
+      source: { origin: "seat", project: IMPORT_PROJECT, roleId: "orchestrator", fixRound: false, conversationId: "conversation_fixture" } });
+    tx.put({ kind: "scope", scope, active: [target], revision: 1, history: [] });
+  });
+  const p = pass(); expect(await adoptOne(candidate, p)).toBe(target);
+  expect(candidateState(candidateById(IMPORT_ID, candidate.id)!)).toMatchObject({ state: "adopted", ruleIds: [target] });
+  patchPass(p.id, { state: "succeeded", endedAt: new Date(NOW + 1).toISOString() });
+  expect(revertCuratorPass(p.id, new Date(NOW + 2).toISOString())).toMatchObject({ skipped: [], importUndo: { state: "undone", kept: 0 } });
+  expect(rule(target)).toMatchObject({ state: "active", rule: RULE });
+  expect(candidateState(candidateById(IMPORT_ID, candidate.id)!).state).toBe("pending");
+});
+
 test("one occurrence can be adopted and another dropped; explicit defer permits another call", async () => {
   const a = importCandidate(1), b = importCandidate(2); a.occurrences.push({ ...a.occurrences[0], id: "o_0000000000000003" });
   await seedImport([a, b]); const p = pass(); await readCuration(p, "imports");

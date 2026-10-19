@@ -45,6 +45,9 @@ export function survivingImportRules(ids: readonly string[]): string[] {
     seen.add(id);
     const row = held?.get(`r:${id}`);
     if (row?.kind !== "rule" || row.versionOf) continue;
+    // Undo removes this import's contribution, including a provenance row
+    // initially merged into text that already existed before the import.
+    if (row.state === "archived" && row.reason === "undone") continue;
     if (row.state === "active") active.add(id);
     if (row.mergedInto) pending.push(row.mergedInto);
     pending.push(...row.splitChildren ?? []);
