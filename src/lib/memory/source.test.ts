@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
-import { memorySource, engineMemoryOff, readMemorySourceFile, setMemorySource, selectMemorySource, restoreMemorySourceAfterImport } from "./source";
+import { memorySource, engineMemoryOff, readMemorySourceFile, setMemorySource, restoreMemorySourceAfterImport } from "./source";
 import { roleMemoryEnabled, roleMemorySelectorEnabled } from "./settings";
 import { SOURCE_STATES, CHANGED_AT, chooseSource, sourceTurnsEnginesOff } from "./fixtures/source";
 
@@ -92,6 +92,7 @@ test("warm reads reuse one small parsed file; a fresh process follows durable ch
 });
 
 test("failed-import recovery waits asynchronously behind a later operator choice", async () => {
+  const { selectMemorySource } = await import("./source");
   const { withFileTransaction } = await import("@/lib/state/fileTransaction");
   chooseSource("importing");
   // An idempotent UI selection creates the normal source lock queue.
