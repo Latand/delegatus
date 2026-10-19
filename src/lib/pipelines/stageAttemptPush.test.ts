@@ -484,7 +484,8 @@ async function foreignIntegration(local: boolean) {
     await f.own("fetch", "origin", "pipeline/proof");
     await f.own("merge", "--ff-only", "FETCH_HEAD");
   }
-  const checks = { headRefOid: head, baseRefName: "main", state: "OPEN", isDraft: false,
+  const checks: { headRefOid: string; baseRefName: string; state: string; isDraft: boolean;
+    statusCheckRollup: Array<Record<string, unknown>> } = { headRefOid: head, baseRefName: "main", state: "OPEN", isDraft: false,
     statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }] };
   let required: unknown = { protected: true, protection: { required_status_checks: { contexts: ["ci"] } } };
   let checksCode = 0;
@@ -591,6 +592,20 @@ test.each(["pending", "red", "empty", "malformed rollup", "stale head", "wrong b
       f.setChecksCode(0);
       expect(await settleStageAttemptPush(f.pipeline, f.attempt, f.exec, NOW)).toEqual({ ok: true, sha: f.head });
     }
+  } finally { await f.close(); }
+});
+
+test.each(["FAILURE", "PENDING"] as const)("a green check run cannot hide an independent %s status context", async state => {
+  const f = await foreignIntegration(true);
+  try {
+    f.checks.statusCheckRollup = [
+      { __typename: "StatusContext", context: "ci", state, startedAt: "2026-10-16T10:00:00Z" },
+      { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-16T10:01:00Z" },
+    ];
+    const result = await settleStageAttemptPush(f.pipeline, f.attempt, f.exec, NOW);
+    expect(result?.ok).toBe(false);
+    if (state === "PENDING") expect(result).toMatchObject({ deferred: true });
+    expect(await f.own("rev-parse", "HEAD")).toBe(f.head);
   } finally { await f.close(); }
 });
 
