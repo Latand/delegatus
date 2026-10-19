@@ -199,7 +199,18 @@ export class ViewerDeploymentCoordinator {
       return { state: "accepted", deploymentId: existing.deploymentId, revision: existing.revision, replayed: true };
     }
     const active = this.journal.activeViewerDeployment();
-    if (active) return { state: "busy", deploymentId: active.deploymentId, revision: active.revision };
+    if (active) {
+      const requested = requestedRevision.toLowerCase();
+      if (/^[0-9a-f]{7,40}$/.test(requested) && active.revision.toLowerCase().startsWith(requested)) {
+        const joined = await this.journal.joinActiveViewerDeployment({
+          idempotencyKey: request.idempotencyKey,
+          requestedRevision,
+          expectedDeploymentId: active.deploymentId,
+        });
+        if (joined) return joined;
+      }
+      return { state: "busy", deploymentId: active.deploymentId, revision: active.revision };
+    }
     const revision = await this.adapter.resolveRevision(requestedRevision);
     if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error("canonical repository did not resolve an immutable commit SHA");
 

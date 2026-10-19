@@ -455,6 +455,7 @@ test("membership cooldown starts when a queued scan starts", async () => {
     let timerScheduled!: () => void;
     const timerReady = new Promise<void>(resolve => { timerScheduled = resolve; });
     globalThis.setTimeout = ((handler: TimerHandler, delay?: number) => {
+      if (delay !== 9_900) return originalSetTimeout(handler, delay);
       scheduledDelay = delay ?? 0;
       const handle = originalSetTimeout(() => {}, 2_147_483_647);
       fireTimer = () => {

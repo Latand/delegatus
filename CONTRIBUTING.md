@@ -274,7 +274,7 @@ On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
 a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
-Touched tests run the branch first, up to three explicit files at once, each
+Touched tests run the branch first, up to four explicit head files at once, each
 in its own owned process and isolated roots. A green branch skips the baseline
 entirely. For a red branch, only failing files run on the merge base, filtered
 to failing assertions; runner diagnostics need the whole file. The three verdicts read as follows.
@@ -285,7 +285,7 @@ sample, and then gave mixed results on at least one side. It is listed with the
 file, suite/test name and pass/fail counts for both sides, and permits the push.
 `NEW`: the assertion fails every head sample and never fails on base. It
 refuses the push.
-Only an assertion that could end as `NEW` is confirmed: it runs three more
+Only an assertion that could end as `NEW` is confirmed: it runs up to three more
 times on each side, filtered by its full test name in its file. A failure on
 any base retry or a pass on any head retry makes it `FLAKY`. New tests have
 zero base observations. Missing, skipped or incomplete retry results are gate
@@ -326,13 +326,20 @@ refusal. Both attempts share the push execution budget and existing admission;
 the retry never starts another push or repeats publication effects.
 
 Clean head samples and failures already present in the initial base sample
-incur no reruns. The three rounds share a five-minute
-budget across all candidate files and both sides, including baseline checkout
-and dependency setup. Each child command is capped by the
-remaining budget; exhausting it blocks with a gate error. This adds at most
+incur no reruns. An occurrence with a complete passing head retry or failing
+base retry is already `FLAKY` and leaves the later confirmation selections.
+Unresolved occurrences still receive up to three rounds per side. The base and
+head of a round run concurrently in separate sandboxes, with at most three
+files per side. Both sides settle before evidence is judged, including when
+one refuses. Duplicate names retain their occurrence identities; filtering one name can still execute
+its other occurrences. The rounds share a five-minute budget across all
+candidate files and both sides, including baseline checkout and dependency setup.
+Counts on a `FLAKY` row stop at its classification. Each child command is capped
+by the remaining budget; exhausting it blocks with a gate error. This adds at most
 five minutes of subprocess execution/setup, plus ordinary report parsing and
-sandbox cleanup. After an initially passing base sample, three independent
-reruns detect a one-in-ten base failure with probability `1 - 0.9^3 = 27.1%`.
+sandbox cleanup. For an unresolved occurrence after an initially passing
+base sample, three independent reruns detect a one-in-ten base failure with
+probability `1 - 0.9^3 = 27.1%`.
 Four independent base samples detect it with probability `34.39%` overall;
 rare or correlated failures can still evade this bounded sampling. Head
 recovery supplies a separate opportunity to identify intermittency.

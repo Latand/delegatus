@@ -9,6 +9,7 @@ import { scheduleTranscriptIndex, type TranscriptIndexFeed } from "@/lib/search/
 
 import type { FileCatalogScan, FileScanOptions } from "./index";
 import { transcriptIndexFeed } from "./discover";
+import { conversationSearchProjection } from "./conversationSearchProjection";
 import {
   beginProjectCatalogScan,
   isProjectCatalogScanCurrent,
@@ -234,6 +235,7 @@ export function collectFileScanInWorker(
         performanceSpans.sync("scanner.publication", () =>
           publishConversationCatalogForScan(completedConversationCatalog!, catalogScanToken, completed!.complete));
         if (currentScan) {
+          if (completed!.complete) void conversationSearchProjection().prepare(completedConversationCatalog!).catch(() => undefined);
           (runtime.transcriptIndexScheduler ?? scheduleTranscriptIndex)(
             performanceSpans.sync("transcript.feed", () =>
               transcriptIndexFeed(completedConversationCatalog!, completed!.complete, undefined, listedAt)),

@@ -266,6 +266,26 @@ jobs:
           NEXT_PUBLIC_RUNTIME_UI: "1"
         run: bun run build
 
+      # Reuse the production build on every PR: seeded stores and rendered
+      # surfaces have too many transitive dependencies for a safe path list.
+      - name: Check README seed and frame layout
+        env:
+          HOME: ${{ runner.temp }}/readme-home
+          XDG_CONFIG_HOME: ${{ runner.temp }}/readme-config
+          LLV_STATE_DIR: ${{ runner.temp }}/readme-state
+          TMPDIR: ${{ runner.temp }}/readme-tmp
+          LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/readme-browsers
+          # Hosted runners have no Delegatus user systemd manager.
+          DELEGATUS_AGENT_CPU: "off"
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR"
+          bun node_modules/playwright-core/cli.js install --with-deps chromium
+          export CHROME_BIN="$(bun -e 'console.log(require("playwright-core").chromium.executablePath())')"
+          bash scripts/gate-slot.sh bun test scripts/capture-readme-media.test.ts
+          time bash scripts/gate-slot.sh bun scripts/capture-readme-media.ts --check-layout
+
       - name: Enforce MCP answer size budgets on an isolated board
         env:
           HOME: ${{ runner.temp }}/mcp-home
