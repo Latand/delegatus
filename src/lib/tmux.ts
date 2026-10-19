@@ -1308,7 +1308,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
   const session = await activeTmuxSession(endpoint);
   const server = await tmuxServerReference(endpoint);
   if (!server) throw new Error("tmux server identity is unavailable before spawn");
-  const initialCapability = recoveringPane ? null : agentRegistry().rotateSpawnCapabilityForReceipt(receipt.launchId);
+  const initialCapability = recoveringPane ? null : (await agentRegistry().deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForReceipt" }, agentRegistry().rotateSpawnCapabilityForReceipt.bind(agentRegistry(), receipt.launchId)));
   const binding = existingPane
     ? existingPane
     : await createSpawnWindow({
@@ -1339,7 +1339,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
   } else {
     const marker = await runBoundTmux(["set-option", "-p", "-t", target, "@llv_launch_id", receipt.launchId]);
     if (marker.code !== 0) throw new Error(marker.stderr.trim() || "could not bind launch marker to pane");
-    const bound = agentRegistry().bindSpawnPane(receipt.launchId, binding);
+    const bound = (await agentRegistry().deliveryWriteOrBusy({ label: "registry.bindSpawnPane" }, agentRegistry().bindSpawnPane.bind(agentRegistry(), receipt.launchId, binding)));
     if (bound.state === "conflicted") throw new Error("spawn pane binding conflict");
   }
 
@@ -1352,7 +1352,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
       if (reset.code !== 0) throw new Error(reset.stderr.trim() || "could not reset pane before spawn recovery");
     }
     if (placement) await placePaneInCpuScope(binding, spec.engine, placement, endpoint, runBoundTmux);
-    const capability = initialCapability ?? agentRegistry().rotateSpawnCapabilityForReceipt(receipt.launchId);
+    const capability = initialCapability ?? (await agentRegistry().deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForReceipt" }, agentRegistry().rotateSpawnCapabilityForReceipt.bind(agentRegistry(), receipt.launchId)));
     const bootSpec = withSpawnCapability(spec, capability);
     await sendShellCommandToPane(target, spec.cwd, bootSpec.command, runBoundTmux);
   }
@@ -1416,7 +1416,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
     agent: { pid: agent.pid, startIdentity: agentStartIdentity },
     argv: [...agent.argv],
   };
-  const verified = agentRegistry().markSpawnHostVerified(receipt.launchId, host);
+  const verified = (await agentRegistry().deliveryWriteOrBusy({ label: "registry.markSpawnHostVerified" }, agentRegistry().markSpawnHostVerified.bind(agentRegistry(), receipt.launchId, host)));
   if (verified.state === "conflicted") throw new Error(verified.error ?? "spawn host verification conflict");
   logEvent("spawn", {
     target,
@@ -1436,7 +1436,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("pane is unavailable") || message.includes("pane identity changed during delivery")) {
-        agentRegistry().invalidateSpawnHost(receipt.launchId, "spawn_host_identity_conflict");
+        (await agentRegistry().deliveryWriteOrBusy({ label: "registry.invalidateSpawnHost" }, agentRegistry().invalidateSpawnHost.bind(agentRegistry(), receipt.launchId, "spawn_host_identity_conflict")));
       }
       throw error;
     }
@@ -1446,7 +1446,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
       promptScreen = await paneScreen(target, endpoint);
       const promptFailure = detectLaunchFailure(spec.engine, promptScreen);
       if (promptFailure) {
-        agentRegistry().invalidateSpawnHost(receipt.launchId, promptFailure.message);
+        (await agentRegistry().deliveryWriteOrBusy({ label: "registry.invalidateSpawnHost" }, agentRegistry().invalidateSpawnHost.bind(agentRegistry(), receipt.launchId, promptFailure.message)));
         throw new Error(promptFailure.message);
       }
       if (launchPromptLanded(spec.engine, promptScreen, fencedPrompt)) {
@@ -1462,10 +1462,10 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
     !pidAlive(agent.pid) ||
     (agentStartIdentity !== null && procBackend.processIdentity(agent.pid) !== agentStartIdentity) ||
     ancestryDistance(agent.pid, panePid, readPpid) === null) {
-    agentRegistry().invalidateSpawnHost(receipt.launchId, "spawn_host_identity_conflict");
+    (await agentRegistry().deliveryWriteOrBusy({ label: "registry.invalidateSpawnHost" }, agentRegistry().invalidateSpawnHost.bind(agentRegistry(), receipt.launchId, "spawn_host_identity_conflict")));
     throw new Error("spawn host identity changed before launch confirmation");
   }
-  agentRegistry().markSpawnPromptDelivered(receipt.launchId);
+  (await agentRegistry().deliveryWriteOrBusy({ label: "registry.markSpawnPromptDelivered" }, agentRegistry().markSpawnPromptDelivered.bind(agentRegistry(), receipt.launchId)));
   return {
     paneId: target,
     display,

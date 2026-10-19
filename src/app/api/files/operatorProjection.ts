@@ -22,7 +22,7 @@ import { markBoardViewed } from "@/lib/links/boardPresence";
 import { buildFilesResponse } from "./response";
 import { cachedFileScan, fileScanBootstrapEpoch } from "@/lib/scanner/scanCache";
 import { readSummaryBootstrap, type SummaryBootstrap } from "@/lib/scanner/summaryBootstrap";
-import { buildFilesResponseInWorker, filesResponseWorkerEnabled } from "@/lib/scanner/filesResponseWorker";
+import { buildFilesResponseInWorker, filesResponseWorkerEnabled, seatAgendaInWorker } from "@/lib/scanner/filesResponseWorker";
 import { createFilesProjectionQueue, FilesProjectionQueueError, type FilesProjectionBuildSample, type FilesProjectionQueue, type FilesProjectionQueueDiagnostics } from "./projectionQueue";
 
 
@@ -816,11 +816,21 @@ async function getFiles(request: Request, skipBootstrap = false, afterResponse: 
 
 /** The operator's summary representation, sharing the poll's scan and cache.
     Internal reads neither mark presence nor run the board migration. */
-export async function operatorBoardRepresentation(): Promise<import("@/lib/attention/needsYouRead").NeedsYouBody> {
+async function operatorBoardBody(): Promise<string> {
   const request = new Request("http://localhost/api/files?view=summary");
   const scan = await cachedFileScan(undefined, undefined, Date.now(), undefined, undefined, { copySnapshot: false });
   const scope = projectionScopeKey(undefined, true, false);
   const cached = projectionCache().get(scope)?.representation;
   const projected = filesystemExhausted() && cached ? { representation: cached } : await projectionFor(scope, projectionKey(projectionBaseKey(scan, undefined)), request, scan, true);
-  return JSON.parse(projected.representation.body);
+  return projected.representation.body;
+}
+
+
+export async function operatorBoardRepresentation(): Promise<import("@/lib/attention/needsYouRead").NeedsYouBody> {
+  return JSON.parse(await operatorBoardBody());
+}
+
+/** The exact panel representation, decoded and reduced outside the Viewer. */
+export async function operatorSeatAgenda(project: string): Promise<import("@/lib/monitor/types").SeatTickWorkerAskInput[]> {
+  return seatAgendaInWorker(await operatorBoardBody(), project, Date.now() / 1000);
 }

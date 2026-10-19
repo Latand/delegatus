@@ -76,7 +76,7 @@ import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "@/lib/agent/capabilityHeader";
 import { existingInternalServiceHeaders, INTERNAL_SERVICE_HEADER } from "@/lib/agent/callerClaims";
 import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { currentMcpHttpCaller } from "./callerContext";
+import { currentMcpHttpCaller, resolveMcpCallerValue } from "./callerContext";
 import { attentionCallerAuthority, processAncestry, type AttentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { UNREAD_FRAME_RECT } from "@/lib/attention/frames";
 import {
@@ -1101,8 +1101,12 @@ export function callerAttributionFrom(
 }
 
 function attributionOf(dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">): CallerAttribution {
-  return dependencies.callerAttribution?.()
-    ?? callerAttributionFrom(dependencies.attentionAuthority(), () => false);
+  return resolveMcpCallerValue(dependencies, "attribution", () => dependencies.callerAttribution?.()
+    ?? callerAttributionFrom(authorityOf(dependencies), () => false));
+}
+
+function authorityOf(dependencies: Pick<ViewerMcpDomainDependencies, "attentionAuthority">): AttentionCallerAuthority {
+  return resolveMcpCallerValue(dependencies, "authority", () => dependencies.attentionAuthority());
 }
 
 /** MCP mutations always remain agent-attributed, including an unidentified caller. */
@@ -1127,10 +1131,7 @@ function mcpSenderOrigin(
 ): MessageOrigin {
   let attribution: CallerAttribution | null = null;
   try {
-    attribution = dependencies.callerAttribution?.()
-      ?? (dependencies.attentionAuthority
-        ? callerAttributionFrom(dependencies.attentionAuthority(), () => false)
-        : null);
+    attribution = dependencies.attentionAuthority ? attributionOf(dependencies as ViewerMcpDomainDependencies) : dependencies.callerAttribution?.() ?? null;
   } catch {
     attribution = null;
   }
@@ -1185,33 +1186,51 @@ function rootSessionSource(): RootSessionSource {
  * carried null pids while its host was alive resolved to "unidentified" and was
  * refused every manager-only tool.
  */
+type CallerHost = NonNullable<RegistrySnapshot["entries"][string]["host"]>["agent"];
+interface CallerRecord { conversationId: string; role: string | null; hosts: (CallerHost | null)[] }
+function callerRecordsFromSnapshot(snapshot: Pick<RegistrySnapshot, "conversations" | "entries">): CallerRecord[] {
+  const owners = new Map<string, string>();
+  const hosted = new Map<string, CallerRecord>();
+  for (const conversation of Object.values(snapshot.conversations)) {
+    for (const generation of conversation.generations) owners.set(generation.path, conversation.id);
+    hosted.set(conversation.id, { conversationId: conversation.id, role: conversationRole(conversation), hosts: [] });
+  }
+  for (const entry of Object.values(snapshot.entries)) {
+    const owner = owners.get(entry.artifactPath);
+    if (owner) hosted.get(owner)!.hosts.push(entry.host?.agent ?? null, entry.structuredHost?.process ?? null);
+  }
+  return [...hosted.values()];
+}
+function hostedFromRecords(records: CallerRecord[], probe?: ProcessIdentityProbe) {
+  return records.map(({ hosts, ...conversation }) => ({ ...conversation, pids: hosts.filter(host => {
+    if (!host || typeof host.pid !== "number" || host.pid <= 0) return false;
+    if (!probe) return true;
+    const startIdentity = probe.processIdentity(host.pid);
+    return host.startIdentity != null && startIdentity != null && probe.pidAlive(host.pid)
+      && sameRecordedProcessIdentity({ pid: host.pid, startIdentity, bootEpoch: probe.bootEpoch() }, host);
+  }).map(host => host!.pid) }));
+}
 export function hostedConversationsFromSnapshot(
   snapshot: Pick<RegistrySnapshot, "conversations" | "entries">,
   probe?: ProcessIdentityProbe,
 ): { conversationId: string; role: string | null; pids: number[] }[] {
-  return performanceSpans.sync("mcp.caller-enumeration", () => {
-  const owners = new Map<string, { id: string; role: string | null }>();
-  const hosted = new Map<string, { conversationId: string; role: string | null; pids: number[] }>();
-  for (const conversation of Object.values(snapshot.conversations)) {
-    const owner = { id: conversation.id, role: conversationRole(conversation) };
-    for (const generation of conversation.generations) owners.set(generation.path, owner);
-    hosted.set(owner.id, { conversationId: owner.id, role: owner.role, pids: [] });
+  return performanceSpans.sync("mcp.caller-enumeration", () => hostedFromRecords(callerRecordsFromSnapshot(snapshot), probe));
+}
+
+/** One legacy enumeration owner across compiled bundles. Snapshot identity
+ * includes revision and database replacement; each call still verifies PIDs. */
+const LEGACY_CALLER_KEY = Symbol.for("llv.mcp.legacyCallerRecords");
+function legacyCallerMemo(snapshot: RegistrySnapshot, probe: ProcessIdentityProbe) {
+  const holder = globalThis as typeof globalThis & { [LEGACY_CALLER_KEY]?: { snapshot: RegistrySnapshot; boot: string | null; configuredRootId: string | null; rootConversationId: string | null; records: CallerRecord[] } };
+  const boot = probe.bootEpoch();
+  const configuredRootId = process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null;
+  let cached = holder[LEGACY_CALLER_KEY];
+  if (!cached || cached.snapshot !== snapshot || cached.boot !== boot || cached.configuredRootId !== configuredRootId) {
+    cached = holder[LEGACY_CALLER_KEY] = { snapshot, boot, configuredRootId,
+      rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null,
+      records: performanceSpans.sync("mcp.caller-enumeration", () => callerRecordsFromSnapshot(snapshot)) };
   }
-  for (const entry of Object.values(snapshot.entries)) {
-    const owner = owners.get(entry.artifactPath);
-    if (!owner) continue;
-    const pids = [entry.host?.agent, entry.structuredHost?.process]
-      .filter((host) => {
-        if (!host || typeof host.pid !== "number" || host.pid <= 0) return false;
-        if (!probe) return true;
-        const startIdentity = probe.processIdentity(host.pid);
-        return host.startIdentity != null && startIdentity != null && probe.pidAlive(host.pid)
-          && sameRecordedProcessIdentity({ pid: host.pid, startIdentity, bootEpoch: probe.bootEpoch() }, host);
-      }).map((host) => host!.pid);
-    hosted.get(owner.id)!.pids.push(...pids);
-  }
-  return [...hosted.values()];
-  });
+  return cached;
 }
 
 /** The value of the launch-injected spawn capability, resolved to the
@@ -1241,32 +1260,42 @@ function callerCapability(): string | undefined {
   return caller ? caller.capability : process.env[VIEWER_SPAWN_CAPABILITY_ENV];
 }
 
-function attentionCallerSources(): AttentionCallerSources {
+export function attentionCallerSources(
+  registry = agentRegistry(),
+  probe: ProcessIdentityProbe = {
+    pidAlive: (pid) => procBackend.pidAlive(pid) && !procBackend.processExited(pid),
+    processIdentity: (pid) => procBackend.processIdentity(pid),
+    bootEpoch: systemBootEpoch,
+  },
+  ancestry?: () => readonly number[],
+): AttentionCallerSources {
   const httpCaller = currentMcpHttpCaller();
+  const capability = callerCapability();
+  const resolveCapability = capabilityConversationResolver(capability, digest => registry.conversationIdForSpawnCapabilityDigest(digest));
+  let capabilityId: string | null | undefined;
+  const callerId = () => capabilityId === undefined ? capabilityId = resolveCapability() : capabilityId;
+  const callerAncestry = ancestry ?? (httpCaller ? () => httpCaller.nativePeer && processIdentityStatus(httpCaller.nativePeer) === "alive"
+    ? processAncestry(httpCaller.nativePeer.pid, pid => procBackend.readPpid(pid)) : []
+    : () => processAncestry(process.pid, pid => procBackend.readPpid(pid)));
+  let selected: ReturnType<typeof registry.mcpCallerSnapshot> | undefined;
+  const selection = () => selected ??= registry.mcpCallerSnapshot(callerId()!, callerAncestry(), process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null);
   return {
     /* An HTTP call is served from the Viewer's own process, whose ancestry
        leads to no agent host; the capability alone names that caller, exactly
        as it does for a stdio agent whose host pids were never recorded. */
-    ancestry: httpCaller ? () => httpCaller.nativePeer && processIdentityStatus(httpCaller.nativePeer) === "alive"
-      ? processAncestry(httpCaller.nativePeer.pid, (pid) => procBackend.readPpid(pid)) : []
-      : () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
-    rootConversationId: () => liveRootSession(rootSessionSource())?.conversationId ?? null,
-    hosted: () => hostedConversationsFromSnapshot(agentRegistry().readOnlySnapshot(), {
-      pidAlive: (pid) => procBackend.pidAlive(pid) && !procBackend.processExited(pid),
-      processIdentity: (pid) => procBackend.processIdentity(pid),
-      bootEpoch: systemBootEpoch,
-    }),
-    capabilityPresented: () => callerCapability() !== undefined,
+    ancestry: callerAncestry,
+    rootConversationId: () => callerId() ? selection().rootConversationId
+      : legacyCallerMemo(registry.readOnlySnapshot(), probe).rootConversationId,
+    hosted: () => callerId() ? hostedConversationsFromSnapshot(selection().snapshot, probe)
+      : hostedFromRecords(legacyCallerMemo(registry.readOnlySnapshot(), probe).records, probe),
+    capabilityPresented: () => capability !== undefined,
     nativeCaller: () => {
       if (httpCaller && (!httpCaller.nativePeer || processIdentityStatus(httpCaller.nativePeer) !== "alive")) return nativeCallerRefusal("no-claude-ancestor");
       if (procBackend.name !== "linux") return nativeCallerRefusal("platform-unverified");
-      try { return resolveNativeCaller(nativeCallerSources(() => agentRegistry().readOnlySnapshot(), httpCaller?.nativePeer?.pid)); }
+      try { return resolveNativeCaller(nativeCallerSources(() => registry.readOnlySnapshot(), httpCaller?.nativePeer?.pid)); }
       catch { return nativeCallerRefusal("session-record-invalid"); }
     },
-    capabilityCallerConversationId: capabilityConversationResolver(
-      callerCapability(),
-      (digest) => agentRegistry().conversationIdForSpawnCapabilityDigest(digest),
-    ),
+    capabilityCallerConversationId: callerId,
   };
 }
 
@@ -1411,7 +1440,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     let seats: ReturnType<typeof authorizedManagerSeats> | null = null;
     const managers = () => (seats ??= authorizedManagerSeats(productionManagerAuthoritySources()));
     return callerAttributionFrom(
-      attentionCallerAuthority(attentionCallerSources()),
+      authorityOf(productionDomainDependencies),
       (conversationId) => managers().some((seat) => seat.conversationId === conversationId),
       (conversationId) => productionDeputyPrincipal(conversationId)?.seatConversationId ?? null,
     );
@@ -2303,7 +2332,7 @@ const STAGE_LAUNCHING_PIPELINE_ACTIONS: ReadonlySet<string> = new Set(["start", 
 
 /** A capability pins the launch receipt and its exact native generation. */
 function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): string {
-  const authority = dependencies.attentionAuthority();
+  const authority = authorityOf(dependencies);
   const capability = callerCapability();
   const snapshot = dependencies.registrySnapshot();
   const digest = capability ? crypto.createHash("sha256").update(capability).digest("hex") : null;
@@ -5675,7 +5704,7 @@ function boardReadProject(
   dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "authorizedSeats"> & Partial<Pick<ViewerMcpDomainDependencies, "attentionAuthority">>,
 ): string {
   const requested = text(args.project);
-  const caller = dependencies.callerAttribution?.() ?? (dependencies.attentionAuthority ? callerAttributionFrom(dependencies.attentionAuthority(), () => false) : null);
+  const caller = dependencies.attentionAuthority ? attributionOf(dependencies as ViewerMcpDomainDependencies) : dependencies.callerAttribution?.() ?? null;
   if (!caller || (caller.kind !== "manager" && caller.kind !== "gateway")) return requested ? canonicalProject(requested) : "";
   const seat = caller.conversationId && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
     .find(candidate => candidate.conversationId === caller.conversationId);
@@ -6912,7 +6941,7 @@ async function requestAttention(
      conflicting, unknown and cross-project designations. A refused caller
      files nothing, names nothing and learns nothing about the board — the
      identity half runs before the target is even read. */
-  const authority = dependencies.attentionAuthority();
+  const authority = authorityOf(dependencies);
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
   const admission = permitAttentionHandoff(authority, seats, null);
   if (!admission.allowed) {
@@ -7113,7 +7142,7 @@ async function dismissThroughService(
   dependencies: ViewerMcpDomainDependencies,
   reason?: string,
 ) {
-  const authority = dependencies.attentionAuthority();
+  const authority = authorityOf(dependencies);
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
   const admission = permitAttentionDismissal(authority, seats, null);
   if (!admission.allowed) {
@@ -7205,7 +7234,7 @@ async function escalateThroughService(
   operationKey: string,
   dependencies: ViewerMcpDomainDependencies,
 ): Promise<McpToolPayload> {
-  const authority = dependencies.attentionAuthority();
+  const authority = authorityOf(dependencies);
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
   const admission = permitAttentionDismissal(authority, seats, null);
   if (!admission.allowed) throw new McpToolRefusal(admission.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: admission.refusedAs });
@@ -7271,7 +7300,7 @@ async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDo
   if (args.target === undefined && args.escalate !== undefined) throw new McpToolRefusal("escalate needs the target it hands to the operator", { code: "INVALID_TARGET" });
   if (args.target === undefined) {
     if (args.undo !== undefined || args.reason !== undefined) throw new McpToolRefusal("undo and reason require a target", { code: "INVALID_TARGET" });
-    const authority = dependencies.attentionAuthority();
+    const authority = authorityOf(dependencies);
     const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
     const caller = maintenanceCaller(dependencies);
     const maintainer = caller ? { ...caller, project: caller.project ? canonicalOrchestratorProject(caller.project) : null } : null;
@@ -7337,7 +7366,7 @@ export function viewerMcpToolPolicy(
   const policy = mcpToolPolicy(
     () => hostHealthProbe
       ? { kind: "health-probe" }
-      : mcpCallerIdentity(domainDependencies.attentionAuthority(), callerManagerTarget()),
+      : mcpCallerIdentity(authorityOf(domainDependencies), callerManagerTarget()),
   );
   return {
     permit: (tool, args) => {
@@ -7369,13 +7398,26 @@ export function viewerMcpToolPolicy(
     projection the call already holds — never a separately resolved guess. An
     authority or registry that faults reads as unidentified, which fails both
     a fresh claim and a recovery closed. */
-function recoveryCaller(dependencies: Partial<Pick<ViewerMcpDomainDependencies, "attentionAuthority" | "registrySnapshot" | "recoveryPredecessors">>): McpRequestCaller {
+function recoveryCaller(
+  dependencies: Partial<Pick<ViewerMcpDomainDependencies, "attentionAuthority" | "registrySnapshot" | "recoveryPredecessors">>,
+  revalidateNative = false,
+): McpRequestCaller {
   const unidentified: McpRequestCaller = { kind: "unidentified", conversationId: null, project: null };
   let authority: AttentionCallerAuthority;
   try {
-    authority = dependencies.attentionAuthority?.() ?? { kind: "unidentified" };
+    authority = dependencies.attentionAuthority ? authorityOf(dependencies as ViewerMcpDomainDependencies) : { kind: "unidentified" };
   } catch {
     return unidentified;
+  }
+  /* Caller attribution is shared for the whole tool call, while a native
+     session proof is a live fence: generation changes must be visible at each
+     recovery check even when the original authority is memoized. */
+  if (revalidateNative && authority.kind !== "unidentified" && authority.nativeProof && dependencies.attentionAuthority) {
+    try {
+      authority = dependencies.attentionAuthority();
+    } catch {
+      return unidentified;
+    }
   }
   if (authority.kind === "unidentified") return { ...unidentified, ...(authority.admission ? { admission: authority.admission } : {}) };
   if (authority.conversationId === null) return { kind: authority.kind, conversationId: null, project: null };
@@ -7809,7 +7851,7 @@ export function viewerMcpRecoverableTools(
 ): Partial<Record<McpToolName, McpRecoverableTool>> {
   return {
     create_pipeline: {
-      currentCaller: () => recoveryCaller(domainDependencies),
+      currentCaller: () => recoveryCaller(domainDependencies, true),
       bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "repoDir"),
       bind: async (args) => {
         args = await namedLaunchProject(args, domainDependencies, "repoDir");
@@ -7829,7 +7871,7 @@ export function viewerMcpRecoverableTools(
     },
     spawn_agent: {
       bind: (args) => bindSpawn(args, domainDependencies),
-      currentCaller: () => recoveryCaller(domainDependencies),
+      currentCaller: () => recoveryCaller(domainDependencies, true),
       bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "cwd"),
       authorizeClaim: (args, binding) => {
         requireMcpDeployerCaller(args, binding.target.project, domainDependencies);
@@ -7838,13 +7880,13 @@ export function viewerMcpRecoverableTools(
       recover: (binding, options) => recoverSpawn(binding, options.legacy, domainDependencies, options.args, options.context),
     },
     send_message_to_orchestrator: {
-      currentCaller: () => recoveryCaller(domainDependencies),
+      currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindOrchestratorSend(args, domainDependencies),
       bindForRecovery: (args) => bindOrchestratorSend(args, domainDependencies, true),
       recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
     },
     send_message: {
-      currentCaller: () => recoveryCaller(domainDependencies),
+      currentCaller: () => recoveryCaller(domainDependencies, true),
       bind: (args) => bindSend(args, domainDependencies),
       recover: (binding, options) => recoverSend(binding, options.legacy, domainDependencies, options.args),
     },

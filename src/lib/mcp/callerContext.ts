@@ -41,3 +41,23 @@ export function runAsMcpHttpCaller<T>(caller: McpHttpCaller, operation: () => T)
 export function currentMcpHttpCaller(): McpHttpCaller | null {
   return store().getStore() ?? null;
 }
+
+/** One lazy resolution per dependency owner and tool call. The async scope is
+ * discarded with the call, so parallel callers and receipt replays never share it. */
+const RESOLUTION_KEY = Symbol.for("llv.mcp.callerResolution");
+type Resolutions = Map<object, Map<string, unknown>>;
+function resolutions(): AsyncLocalStorage<Resolutions> {
+  const holder = globalThis as typeof globalThis & { [RESOLUTION_KEY]?: AsyncLocalStorage<Resolutions> };
+  return holder[RESOLUTION_KEY] ??= new AsyncLocalStorage<Resolutions>();
+}
+export function runWithMcpCallerResolution<T>(operation: () => T): T {
+  return resolutions().run(new Map(), operation);
+}
+export function resolveMcpCallerValue<T>(owner: object, key: string, resolve: () => T): T {
+  const scope = resolutions().getStore();
+  if (!scope) return resolve();
+  let values = scope.get(owner);
+  if (!values) scope.set(owner, values = new Map());
+  if (!values.has(key)) values.set(key, resolve());
+  return values.get(key) as T;
+}

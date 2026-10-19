@@ -389,7 +389,7 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
     };
   },
   retireUnconsumedLaunch: async (clientRequestId, reason) => {
-    agentRegistry().retireUnconsumedSpawn(clientRequestId, reason);
+    (await agentRegistry().deliveryWriteOrBusy({ label: "registry.retireUnconsumedSpawn" }, agentRegistry().retireUnconsumedSpawn.bind(agentRegistry(), clientRequestId, reason)));
   },
   resolvedConversation: (conversationId) => {
     if (!conversationId) return null;

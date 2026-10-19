@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import { agentRegistry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
+import { agentRegistry, type ProcessIdentity, type RegistryFile, type StructuredHostCustody } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { hotRegistryRows, registryConversationsForEntryKey, registryHasEntryKeyIndex } from "@/lib/agent/sqliteRegistryStore";
@@ -370,7 +370,9 @@ export interface StructuredHostTerminationDependencies {
       comparing them against what it observed beforehand stops comparing. */
   onFirstEffect?(): void;
   terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity): Promise<boolean>;
-  retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]): boolean | void | Promise<boolean | void>;
+  retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[], custody: StructuredHostCustody | null): boolean | void | Promise<boolean | void>;
+  /** Captured from the caller's registry before this termination can await. */
+  registryCustody?: StructuredHostCustody | null;
   /** Previously captured descendants whose root may have exited between retries. */
   retainedSurvivors?: readonly ProcessIdentity[];
   protectedPids?(): Set<number>;
@@ -436,18 +438,28 @@ export async function terminateStructuredHostTree(
   const ppids = dependencies.ppidMap ?? (() => procBackend.ppidMap());
   const groupOf = dependencies.processGroupId ?? linuxProcessGroupId;
   const signal = dependencies.signal ?? ((pid: number, value: NodeJS.Signals) => { process.kill(pid, value); });
+  const { pid } = ref;
+  const key: SessionKey | null = ref.sessionId ? { engine: ref.engine, sessionId: ref.sessionId } : null;
+  const defaultRegistry = !dependencies.retireRegistryEntry && key ? agentRegistry() : null;
+  const registryCustody = dependencies.registryCustody !== undefined
+    ? dependencies.registryCustody
+    : key && defaultRegistry
+      ? (() => {
+        const entry = defaultRegistry.readOnlySnapshot().entries[sessionKeyId(key)];
+        return entry ? { claimEpoch: entry.claimEpoch, claimOwner: entry.claimOwner,
+          writerClaimEpoch: entry.structuredHost?.writerClaimEpoch ?? null,
+          process: entry.structuredHost?.process ?? null } : null;
+      })()
+      : null;
   const retire = dependencies.retireRegistryEntry
-    ?? ((key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[]) => {
-      const registry = agentRegistry();
-      return registry.deliveryWriteOrBusy({ label: "termination.retire" },
-        () => registry.terminateStructuredHost(key, expected, confirmed));
-    });
+    ?? ((target: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[], custody: StructuredHostCustody | null) =>
+      defaultRegistry!.deliveryWriteOrBusy({ label: "termination.retire" },
+        () => defaultRegistry!.terminateStructuredHost(target, expected, confirmed, custody)));
   const terminateOwned = dependencies.terminateOwnedHost ?? terminateStructuredDeliveryHost;
   const sleep = dependencies.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const graceMs = dependencies.graceMs ?? TERMINATION_GRACE_MS;
   const deadlineMs = dependencies.deadlineMs ?? TERMINATION_DEADLINE_MS;
 
-  const { pid } = ref;
   if (!Number.isSafeInteger(pid) || pid <= 1) return { ok: false, status: 409, error: "host pid is invalid", remaining: [], survivors: [] };
   if (typeof ref.startIdentity !== "string" || ref.startIdentity.length === 0) {
     return { ok: false, status: 409, error: "host process identity is unknown — refresh the resource list", remaining: [], survivors: [] };
@@ -458,14 +470,13 @@ export async function terminateStructuredHostTree(
   if ((dependencies.protectedPids ?? ownAncestry)().has(pid)) {
     return { ok: false, status: 403, error: "this pid belongs to the viewer's own process chain", remaining: [], survivors: [] };
   }
-  const key: SessionKey | null = ref.sessionId ? { engine: ref.engine, sessionId: ref.sessionId } : null;
   const expected: ProcessIdentity = { pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch };
 
   const initialStatus = processIdentityStatus(expected, identityProbe);
   if (initialStatus === "dead" && !alive(pid)) {
     const retained = dependencies.retainedSurvivors ?? [];
     if (retained.length === 0) {
-      if (key && await retire(key, expected, []) === false) {
+      if (key && await retire(key, expected, [], registryCustody) === false) {
         return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
       }
       return { ok: true, via: "already-exited", pids: [] };
@@ -475,7 +486,7 @@ export async function terminateStructuredHostTree(
       catch { return true; }
     });
     if (stillUnresolved.length === 0) {
-      if (key && await retire(key, expected, retained) === false) {
+      if (key && await retire(key, expected, retained, registryCustody) === false) {
         return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
       }
       return { ok: true, via: "already-exited", pids: retained.map(identity => identity.pid) };
@@ -717,7 +728,7 @@ export async function terminateStructuredHostTree(
     /* The runtime can release its root before detached descendants are gone.
        Retire only after the full captured tree has passed identity checks, and
        require the registry to accept that exact evidence on every path. */
-    if (key && await retire(key, expected, [...identities.values()]) === false) {
+    if (key && await retire(key, expected, [...identities.values()], registryCustody) === false) {
       return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
     }
     completed = true;

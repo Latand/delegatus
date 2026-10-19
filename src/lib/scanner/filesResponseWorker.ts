@@ -45,6 +45,13 @@ export type FilesResponseWorkerRequest = {
   boardEpoch?: string;
 };
 
+export type SeatSourceWorkerRequest =
+  | { type: "seat-liveness"; query: Parameters<import("@/lib/monitor/seatTickSources").SeatTickSources["liveness"]>[0]; scan: import("./scanCache").PersistedFileScanGeneration & { snapshotFile: string } }
+  | { type: "seat-agenda"; bodyFile: string; project: string; now: number }
+  | { type: "seat-reports"; project: string }
+  | { type: "seat-rule-reports"; project: string; at: string };
+type WorkerRequest = FilesResponseWorkerRequest | SeatSourceWorkerRequest;
+
 export interface FilesResponseWorkerRuntime {
   launch?: { executable: string; workerPath: string };
   cwd?: string;
@@ -381,7 +388,7 @@ function residentWorker(runtime: FilesResponseWorkerRuntime): ResidentWorker {
 
 function askWorker(
   worker: ResidentWorker,
-  request: FilesResponseWorkerRequest,
+  request: WorkerRequest,
   timeoutMs: number,
 ): Promise<FilesResponseWorkerWireRepresentation> {
   return new Promise<FilesResponseWorkerWireRepresentation>((resolve, reject) => {
@@ -416,14 +423,14 @@ async function readBody(worker: ResidentWorker, file: string): Promise<string> {
 }
 
 async function dispatch(
-  request: FilesResponseWorkerRequest,
+  request: WorkerRequest,
   runtime: FilesResponseWorkerRuntime,
   previous?: { body: string; etag: string },
 ): Promise<FilesResponseRepresentation> {
   const worker = residentWorker(runtime);
   let previousFile: string | undefined;
   try {
-    if (previous && request.deltaScope) {
+    if (previous && request.type === "project" && request.deltaScope) {
       previousFile = path.join(worker.resultDirectory, `${process.pid}-${crypto.randomUUID()}.base.json`);
       await fs.promises.mkdir(worker.resultDirectory, { recursive: true, mode: 0o700 });
       await fs.promises.writeFile(previousFile, previous.body, { encoding: "utf8", mode: 0o600 });
@@ -467,4 +474,36 @@ export function buildFilesResponseInWorker(
   const current = previousBuild.catch(() => undefined).then(() => dispatch(request, runtime, previous));
   pool.__llvFilesResponseWorkerTail = current.then(() => undefined, () => undefined);
   return current;
+}
+
+
+/** Use the existing bounded worker queue and lifetime for seat source reads. */
+export function runSeatSourceInWorker(request: SeatSourceWorkerRequest, runtime: FilesResponseWorkerRuntime = testRuntime ?? {}): Promise<FilesResponseRepresentation> {
+  const deadline = Date.now() + (runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS);
+  const previous = pool.__llvFilesResponseWorkerTail ?? Promise.resolve();
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout>;
+  const current = previous.catch(() => undefined).then(() => {
+    const remaining = deadline - Date.now();
+    if (expired || remaining <= 0) throw new Error("seat source worker deadline exceeded in queue");
+    return dispatch(request, { ...runtime, timeoutMs: remaining });
+  });
+  pool.__llvFilesResponseWorkerTail = current.then(() => undefined, () => undefined);
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { expired = true; reject(new Error("seat source worker deadline exceeded")); }, Math.max(1, deadline - Date.now()));
+  });
+  return Promise.race([current, timeout]).finally(() => clearTimeout(timer));
+}
+
+export async function seatAgendaInWorker(body: string, project: string, now: number, runtime: FilesResponseWorkerRuntime = testRuntime ?? {}): Promise<import("@/lib/monitor/types").SeatTickWorkerAskInput[]> {
+  // The frame carries a filename. Serialising the whole board into the pipe
+  // would recreate the large synchronous encode on the Viewer.
+  const directory = runtime.env?.LLV_STATE_DIR ? path.resolve(runtime.env.LLV_STATE_DIR, "files-response-results") : statePath("files-response-results");
+  await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
+  const file = path.join(directory, `seat-agenda-${crypto.randomUUID()}.json`);
+  try {
+    await fs.promises.writeFile(file, body, { encoding: "utf8", mode: 0o600 });
+    const result = await runSeatSourceInWorker({ type: "seat-agenda", bodyFile: file, project, now }, runtime);
+    return JSON.parse(result.body);
+  } finally { await fs.promises.rm(file, { force: true }); }
 }

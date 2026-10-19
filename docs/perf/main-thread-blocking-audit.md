@@ -1090,6 +1090,9 @@ for db in state.sqlite agent-registry.sqlite mcp-receipts.sqlite memory-index.sq
     "$PROD/$db" "$P/state/$db"
 done
 install -m 600 "$PROD/runtime-events-$INSTALL.sqlite.key" "$P/state/"   # the journal refuses to open without its key; never print it
+if [ -d "$PROD/structured-host-events" ]; then
+  cp -a "$PROD/structured-host-events" "$P/state/"
+fi
 for f in board-summary-bootstrap.bin lifecycle-journal.json orchestrator-seats.json worktree-sweep-report.json \
          operator-asks.json view-presence.json host-retirement-journal.ndjson project-catalog.json self-update/history.jsonl \
          project-aliases.json project-remotes.json worktree-map.json; do
@@ -1123,6 +1126,27 @@ sed -i 's/^const MAX_BYTES = 256 \* 1024 \* 1024;/const MAX_BYTES = 512 * 1024 *
 grep -q '^const MAX_BYTES = 512 \* 1024 \* 1024;' "$P/export512/src/lib/state/collectionReadCache.ts"
 cp "$(dirname "$0")/probe.ts" "$P/export/probe.ts"; cp "$(dirname "$0")/probe.ts" "$P/export512/probe.ts"
 ```
+
+For `T9-check`, also copy `scripts/probe-seat-tick.ts` from the reviewed lane
+into `scripts/` of both code exports. That adapter runs the complete controller,
+records each source's calls, synchronous entry time and awaited wall time, and
+uses the same evidence suppression in the response worker. It refuses an open
+control port and any state, home, config, temp or Codex root outside `PROBE_ROOT`.
+Record current live/running agent counts as `PROBE_LIVE_AGENTS` and
+`PROBE_RUNNING_AGENTS`; copied registry statuses are reported separately.
+Module imports, inert summary/catalogue decoding and the registry scale count
+precede run 0; task, pipeline and memory lists remain cold. The case writes only
+the copy. It uses `NODE_ENV=test` so an inbox imported by the controller stays
+inside the stage sandbox when that sandbox lives below the state scratch root;
+it declares no live-state owner. For a paired replay, retain an immutable copy of the prepared inputs
+and restore it to the same private state path before each side, so neither
+side starts from outcomes the other wrote. Set `PROBE_NOW` to the copied
+state timestamp in milliseconds for both sides; native performance timers stay
+real while wake eligibility stays identical. The adapter certifies the copied
+scan generation and suppresses transcript evidence in both processes.
+A standalone six-run replay is
+`bun scripts/probe-seat-tick.ts T9-check`; `--enforce` refuses a loop interval
+over 100 ms or a synchronous source entry over 50 ms.
 
 `probe.ts` (copied into both exports by `prepare.sh`):
 
@@ -1164,7 +1188,7 @@ async function roleTarget() {
   return { project: view.project, scopes: view.scopes.map(s => s.scope), scope: scope.scope, rules: count(view), scopeRules: scope.active.length };
 }
 
-type Case = { run: (index: number) => unknown; reset?: () => unknown | Promise<unknown>; readiness?: unknown; cleanup?: () => void };
+type Case = { run: (index: number) => unknown; reset?: () => unknown | Promise<unknown>; readiness?: unknown; cleanup?: () => void | Promise<void> };
 const cases: Record<string, () => Promise<Case>> = {
   // D. whole-collection readers and writers
   D1: async () => { const t = await import("@/lib/tasks/store"); return { run: () => t.loadTasks().length }; },
@@ -1209,6 +1233,7 @@ const cases: Record<string, () => Promise<Case>> = {
   T7: async () => { const body = summaryBody(); return { readiness: { bodyBytes: body.length }, run: () => Object.keys(JSON.parse(body)).length }; },
   "H2-encode": async () => { const body = JSON.parse(summaryBody()); return { run: () => JSON.stringify(body).length }; },
   S6: async () => { const text = fs.readFileSync(path.join(state, "project-catalog.json"), "utf8"); return { readiness: { bytes: text.length }, run: () => Object.keys(JSON.parse(text).files).length }; },
+  "T9-check": async () => (await import("./scripts/probe-seat-tick")).prepareSeatTickProbe(),
   "T9-liveness": async () => {
     const l = await import("@/lib/lifecycle/liveness"); const reg = await import("@/lib/agent/registry");
     const catalogue = JSON.parse(fs.readFileSync(path.join(state, "project-catalog.json"), "utf8")).files;
@@ -1333,7 +1358,7 @@ for (let index = 0; index < Number(runsText); index++) {
   console.log(JSON.stringify({ name, index, utc: new Date().toISOString(), wallMs, cpuMs: (used.user + used.system) / 1000, maxLoopGapMs: maxGap,
     heapDeltaBytes, rssDeltaBytes, rchar: after.rchar - before.rchar, result: typeof result === "string" ? { chars: result.length } : result ?? null, load: os.loadavg() }));
 }
-clearInterval(timer); probe.cleanup?.();
+clearInterval(timer); await probe.cleanup?.();
 console.log(JSON.stringify({ event: "end", name, utc: new Date().toISOString() }));
 process.exit(process.exitCode ?? 0);
 ```
@@ -1349,7 +1374,7 @@ set -euo pipefail
 CODEX_SESSIONS=$(for d in "$HOME"/.config/delegatus/accounts/codex/*/sessions; do printf '%s\t%s\n' "$(find "$d" -name '*.jsonl' | wc -l)" "$d"; done | sort -rn | head -1 | cut -f2)
 REL="$HOME/.cache/delegatus/self-update/$INSTALL/releases/${REV:0:12}"
 if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then echo "port $PORT is open; choose a closed one" >&2; exit 1; fi
-mkdir -p "$P/out"
+mkdir -p "$P/out" "$P/home/.codex"
 run() { # run <export dir> <NODE_ENV> <case> <runs>
   ( cd "$1" && env HOME="$P/home" XDG_CONFIG_HOME="$P/xdg" XDG_CACHE_HOME="$P/cache" CODEX_HOME="$P/home/.codex" TMPDIR="$P/run-tmp" \
       LLV_STATE_DIR="$P/state" LLV_VIEWER_CONTROL_URL="http://127.0.0.1:$PORT/" LLV_TEMP_SWEEP=dry-run LLV_WORKTREE_SWEEP=dry-run \
@@ -1366,6 +1391,7 @@ run "$P/export" production role-projects 10
 run "$P/export" production T6-evict 12 -256
 run "$P/export512" production T6-evict 12 -512
 for c in D1-write S2 D4-incremental T6-pass T3 R3; do run "$P/export" production "$c" 6; done
+run "$P/export" test T9-check 6
 ```
 
 `summarize.py`:

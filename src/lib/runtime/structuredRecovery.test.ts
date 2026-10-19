@@ -1020,6 +1020,112 @@ test("live structured ownership prevents a duplicate recovery host", async () =>
   expect(spawnCalls).toBe(0);
 });
 
+test("recovery never clears a host after its ownership is revoked during writer admission", async () => {
+  const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const sessionId = crypto.randomUUID();
+  const cwd = path.join(sandbox, `revoked-recovery-${sessionId}`);
+  const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.writeFileSync(artifactPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const holder = registryLockHolder(path.join(cwd, "registry.sqlite"));
+  const conversation = registry.ensureConversation("codex", artifactPath, "retained-account");
+  registry.upsert({
+    key: { engine: "codex", sessionId }, artifactPath, cwd, accountId: "retained-account",
+    launchProfile: emptyLaunchProfile({ cwd }), status: "idle", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:revoked", process: { pid: process.pid, startIdentity: null },
+      eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 4, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 4, claimOwner: "structured-host:revoked", pendingAction: null,
+  });
+  const before = registry.readOnlySnapshot().entries[`codex:${sessionId}`];
+  let current = true;
+  let revoke: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await holder.hold(150);
+    await expect(recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
+      registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+      ownership: {
+        operationId: "recovery-revocation", revision: 1,
+        owns: async () => current,
+        assertCurrent: () => { if (!current) throw new Error("structured recovery operation is superseded"); },
+        releaseHost: async () => { revoke = setTimeout(() => { current = false; }, 10); return true; },
+      },
+      spawn: async () => { throw new Error("revoked recovery must not spawn"); },
+    })).rejects.toThrow("superseded");
+    expect(current).toBe(false);
+    expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toEqual(before);
+  } finally {
+    if (revoke) clearTimeout(revoke);
+    await holder.close();
+    registry.close();
+  }
+});
+
+test("recovery cleanup preserves its successor when ownership is revoked during termination admission", async () => {
+  const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const sessionId = crypto.randomUUID();
+  const cwd = path.join(sandbox, `revoked-cleanup-${sessionId}`);
+  const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.writeFileSync(artifactPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const holder = registryLockHolder(path.join(cwd, "registry.sqlite"));
+  const conversation = registry.ensureConversation("codex", artifactPath, "retained-account");
+  registry.upsert({ key: { engine: "codex", sessionId }, artifactPath, cwd, accountId: "retained-account",
+    launchProfile: emptyLaunchProfile({ cwd }), status: "dead", host: null, structuredHost: null,
+    claimEpoch: 4, claimOwner: null, pendingAction: null });
+  const account: AccountContext = { engine: "codex", accountId: "retained-account", kind: "managed",
+    home: path.join(cwd, "account"), transcriptRoot: cwd, env: { NODE_ENV: "test" } };
+  let current = true;
+  let authorizationCalls = 0;
+  let releaseCalls = 0;
+  let revoke: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
+      registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+      resolveAccount: () => account,
+      ownership: {
+        operationId: "recovery-cleanup-revocation", revision: 1,
+        owns: async () => current,
+        assertCurrent: () => { if (!current) throw new Error("structured recovery operation is superseded"); },
+        authorizeAccount: async () => {
+          if (++authorizationCalls >= 3) {
+            await holder.hold(150);
+            revoke = setTimeout(() => { current = false; }, 10);
+            throw new Error("authorization changed after host publication");
+          }
+        },
+        releaseHost: async () => { releaseCalls += 1; return true; },
+      },
+      spawn: async input => {
+        input.resumeAdmission?.beforeClaim();
+        const claim = registry.claimStructuredHost({ engine: "codex", sessionId }, { pid: process.pid, startIdentity: null }, {
+          allowUnhosted: true,
+          setupHost: { kind: "codex-app-server", endpoint: "stdio:successor", process: null, eventCursor: 0, protocolVersion: "v2",
+            writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+          setupEntry: { artifactPath, cwd, accountId: "retained-account", launchProfile: emptyLaunchProfile({ cwd }) },
+        });
+        if (!claim?.claimOwner) throw new Error("successor host claim was unavailable");
+        input.resumeAdmission?.claimed(claim);
+        return { ok: true, target: null, path: artifactPath, launchId: input.receipt.launchId,
+          conversationId: conversation.id, launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
+      },
+    }).then(() => null, (error: unknown) => error);
+    expect(result).toBeInstanceOf(Error);
+    expect(releaseCalls).toBe(1);
+    expect((result as Error).message).toContain("superseded");
+    expect(current).toBe(false);
+    expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toMatchObject({
+      status: "dead", claimEpoch: 5, claimOwner: expect.any(String),
+      structuredHost: { endpoint: "stdio:successor", writerClaimEpoch: 5, process: null },
+    });
+  } finally {
+    if (revoke) clearTimeout(revoke);
+    await holder.close();
+    registry.close();
+  }
+});
+
 test("a live owner with a pending action stays synchronizing and never spawns a successor", async () => {
   const sessionId = crypto.randomUUID();
   const cwd = path.join(sandbox, `live-pending-${sessionId}`);

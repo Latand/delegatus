@@ -13,7 +13,7 @@ export type ViewerOperation = "temp.sweep" | "resources.read" | "worktrees.sweep
   | "tasks.system-run" | "telegram.report-task-settle" | "memory.curation-cleanup"
   | "delivery.inbox-batch"
   | "http.render" | "links.task-export" | "role-memory.view"
-  | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
+  | "registry.write" | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "pipelines.evidence" | "pipelines.get" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
@@ -27,7 +27,7 @@ export type ViewerOperation = "temp.sweep" | "resources.read" | "worktrees.sweep
   | "hosts.retirement" | "self-update.retention" | "spawn-notice.prune" | "delivery-progress.prune"
   | "resources.read" | "seat.panel" | "attention.read" | "pipelines.revalidate" | "runtime-journal.receipt-sweep"
   | "done.sweep" | "done.media" | "done.frame-source"
-  | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
+  | "seat-tick.prepare" | "seat-tick.liveness" | "seat-tick.children" | "seat-tick.reports" | "seat-tick.worker-asks" | "seat-tick.rule-reports" | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
   | "codex.protocol-admission"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"
   | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel";

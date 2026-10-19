@@ -202,3 +202,38 @@ test("ordered key selection seeks metadata only, deduplicates and observes peer 
   expect(store.keysInOrder(["a", "b"], 8)).toEqual(["b"]);
   expect(decodes).toBe(afterWrite);
 }));
+
+
+test("asynchronous shared reads yield while cold, clone nothing, and reuse warm rows", () => fixture(async filename => {
+  let decodes = 0, clones = 0;
+  const peer = new SqliteStateCollection(filename, options(value => value as Row));
+  peer.replaceSync(Array.from({ length: 64 }, (_, i) => row(`row-${i}`)));
+  const store = new SqliteStateCollection(filename, { ...options(value => { decodes++; return value as Row; }),
+    clone: value => { clones++; return structuredClone(value); } });
+  let observedYield = false;
+  const observed = new Promise<void>(resolve => setImmediate(() => { observedYield = decodes < 64; resolve(); }));
+  const cold = await store.loadReadonlyAsync();
+  await observed;
+  expect(observedYield).toBe(true);
+  expect(cold).toHaveLength(64);
+  expect(clones).toBe(0);
+  const count = decodes;
+  expect(await store.loadReadonlyAsync()).toBe(cold);
+  expect(decodes).toBe(count);
+  peer.boundedPatch(1, tx => tx.put(row("row-0", "updated")));
+  expect((await store.loadReadonlyAsync())[0]).toEqual(row("row-0", "updated"));
+  expect(decodes - count).toBe(1);
+  expect(clones).toBe(0);
+}));
+
+test("a peer write during asynchronous cold preparation refuses publication and a retry recovers", () => fixture(async filename => {
+  const peer = new SqliteStateCollection(filename, options(value => value as Row));
+  peer.replaceSync(Array.from({ length: 32 }, (_, i) => row(`row-${i}`)));
+  let changed = false;
+  const store = new SqliteStateCollection(filename, { ...options(value => {
+    if (!changed) { changed = true; queueMicrotask(() => peer.boundedPatch(1, tx => tx.put(row("row-0", "peer")))); }
+    return value as Row;
+  }), readCacheKey: "async-race" });
+  await expect(store.loadReadonlyAsync()).rejects.toThrow("snapshot changed");
+  expect((await store.loadReadonlyAsync())[0]).toEqual(row("row-0", "peer"));
+}));

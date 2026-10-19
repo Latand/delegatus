@@ -1,14 +1,15 @@
 import { prototypeDeliveryExhausted } from "./deliveryPolicy";
 import { prototypeDeliveryPhase } from "./model";
 import { canonicalProject } from "@/lib/projects/aliases";
-import { runsElsewhere } from "@/lib/links/linked";
+import { linkedContext, runsElsewhere } from "@/lib/links/linked";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { SeatTickSignalInput } from "@/lib/monitor/types";
 import type { PrototypeReviewRound } from "./types";
 
 /** Failure obligations join the seat's existing wake agenda as durable items. */
 export function telegramPostSignals(project: string, tasks: readonly BoardTask[], seatRounds: readonly PrototypeReviewRound[]): SeatTickSignalInput[] {
-  const rounds = [...tasks.filter(t => !runsElsewhere(t)).flatMap(t => t.prototypeReviews ?? []), ...seatRounds]
+  const context = linkedContext();
+  const rounds = [...tasks.filter(t => !runsElsewhere(t, context)).flatMap(t => t.prototypeReviews ?? []), ...seatRounds]
     .filter(r => canonicalProject(r.project) === canonicalProject(project));
   return [...rounds.filter(round => round.decision && round.decision.delivery.state !== "sent" && (["failed", "uncertain", "no-orchestrator"].includes(round.decision.delivery.state)
       || (round.decision.delivery.failures ?? 0) > 0 || prototypeDeliveryExhausted(round.decision, Date.now())
