@@ -242,6 +242,25 @@ test.skipIf(!enabled || !process.env.LLV_CODEX_BINARY)("real Codex socket adopti
         command: ["python3", script, String(foreign.pid), marker, path.resolve("scripts/gate-slot.sh")], sandboxPolicy: { type: "dangerFullAccess" }, timeoutMs: 10_000 });
       expect(result.exitCode, result.stderr).toBe(0);
     }, false, false);
+    const missingKey = { engine: "codex" as const, sessionId: key.sessionId.replace(/.$/, digit => digit === "0" ? "1" : "0") };
+    registry.upsert({ key: missingKey, artifactPath: path.join(home.directory, "missing.jsonl"), cwd: home.directory,
+      accountId: null, status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+      structuredHost: codexHostColumns(await host.health(), 0) });
+    let refusals = 0;
+    const adoptMissing = () => adoptCodexRegistryHosts(registry, () => options, { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
+      entry => entry.key.sessionId === missingKey.sessionId, undefined, { admit: () => null, onFailure: () => { refusals++; } });
+    expect(await adoptMissing()).toHaveLength(0);
+    const missing = registry.readOnlySnapshot().entries[`codex:${missingKey.sessionId}`]!;
+    expect(missing.status).toBe("unhosted");
+    expect(missing.claimOwner).toBeNull();
+    expect(missing.structuredHost?.ended?.reason).toBe("missing-rollout");
+    expect(missing.structuredHost?.process).toEqual(domain.native);
+    expect(missing.structuredHost?.signalDomain).toEqual(domain);
+    expect(await adoptMissing()).toHaveLength(0);
+    expect(refusals).toBe(1);
+    await (host as unknown as { rpc(method: string, params: unknown): Promise<unknown> }).rpc("thread/read", {
+      threadId: key.sessionId, includeTurns: false });
+    expect(processIdentityStatus(domain.native)).toBe("alive");
     const entry = registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
     registry.upsert({ ...entry, claimOwner: null, status: "dead" });
     const stopped = await stopTerminalStructuredOrphan(registry, key, { graceMs: 100, deadlineMs: 3_000 });
@@ -249,6 +268,7 @@ test.skipIf(!enabled || !process.env.LLV_CODEX_BINARY)("real Codex socket adopti
       row: registry.readOnlySnapshot().entries[`codex:${key.sessionId}`] })).toBeTrue();
     for (const record of [domain.monitor, domain.bubblewrap, domain.init, domain.native]) expect(processIdentityStatus(record)).toBe("dead");
     expect(registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!.structuredHost!.signalDomain?.retired).toBeTrue();
+    expect(registry.terminateStructuredHost(missingKey)).toBeTrue();
     expect(processIdentityStatus(foreignIdentity)).toBe("alive");
   } finally {
     await host?.release();

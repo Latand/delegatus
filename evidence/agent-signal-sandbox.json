@@ -134,7 +134,7 @@
   ],
   "performanceInterpretation": [
     "Launch samples alternate baseline and protected mode, with the same engine, profile and resource limits; 30 samples per mode for every engine/profile.",
-    "Added launch medians of 59\u2013132 ms exceed the proposed 50 ms investigation threshold. The shared launcher adds two Python startups, delegation, Bubblewrap setup and readiness checks before native execution.",
+    "Added launch medians of 59–132 ms exceed the proposed 50 ms investigation threshold. The shared launcher adds two Python startups, delegation, Bubblewrap setup and readiness checks before native execution.",
     "The short gate workload shows 9.211% overhead. One full TypeScript pair showed no sustained slowdown; a single pair does not establish a speedup or a statistical performance bound.",
     "Protection remains enabled in every protected sample. Native model responses use loopback providers."
   ],
@@ -276,6 +276,340 @@
       "privatePidPersisted": false,
       "recoveryClosesLivingClaim": false,
       "originalDispatchesOnce": true
+    }
+  },
+  "continuation": {
+    "measuredOn": "2026-10-19",
+    "nativeMeasurementSource": {
+      "algorithm": "sha256 of sorted repository-relative paths and binary SHA-256 digests",
+      "scope": "all tracked src, bin, scripts and patches plus Dockerfile, lockfile, package and compiler/Next configuration",
+      "files": 4848,
+      "digest": "6ab40f48c644ffa038abc64fa8075614d383e44c3b57689f54f8c601b95984a2",
+      "revision": "352aba2cd3d4a1ebdc1075c3d79dc6a4a193466e"
+    },
+    "nativeBinaries": {
+      "codex": {
+        "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+        "version": "0.163.0"
+      },
+      "claude": {
+        "sha256": "60d7eb7f12fbb28a52533fe8be5884097403562aa02dc73991a021c7067e29a5",
+        "version": "2.1.302"
+      }
+    },
+    "performance": [
+      {
+        "engine": "codex",
+        "profile": "full",
+        "samplesPerMode": 30,
+        "cpuPercent": 200,
+        "memoryBytes": 2147483648,
+        "baseline": {
+          "medianMs": 456.674,
+          "p95Ms": 691.179
+        },
+        "protected": {
+          "medianMs": 578.286,
+          "p95Ms": 728.305
+        },
+        "addedMedianMs": 121.612,
+        "idleHelperRssMedianKiB": 19132
+      },
+      {
+        "engine": "codex",
+        "profile": "restricted",
+        "samplesPerMode": 30,
+        "cpuPercent": 200,
+        "memoryBytes": 2147483648,
+        "baseline": {
+          "medianMs": 488.25,
+          "p95Ms": 897.21
+        },
+        "protected": {
+          "medianMs": 595.661,
+          "p95Ms": 1653.506
+        },
+        "addedMedianMs": 107.411,
+        "idleHelperRssMedianKiB": 19128
+      },
+      {
+        "engine": "codex",
+        "profile": "read-only",
+        "samplesPerMode": 30,
+        "cpuPercent": 200,
+        "memoryBytes": 2147483648,
+        "baseline": {
+          "medianMs": 474.873,
+          "p95Ms": 649.357
+        },
+        "protected": {
+          "medianMs": 601.087,
+          "p95Ms": 881.2
+        },
+        "addedMedianMs": 126.214,
+        "idleHelperRssMedianKiB": 19116
+      },
+      {
+        "workload": "gate bundle plus CPU admission tests",
+        "samplesPerMode": 3,
+        "baselineMedianMs": 703.178,
+        "protectedMedianMs": 744.108,
+        "slowdownPercent": 5.821
+      },
+      {
+        "workload": "four parallel protected gates",
+        "slots": 2,
+        "completed": 4,
+        "maximumActive": 2,
+        "wallMs": 15754.153
+      },
+      {
+        "engine": "claude",
+        "profile": "full",
+        "samplesPerMode": 30,
+        "cpuPercent": 200,
+        "memoryBytes": 2147483648,
+        "baseline": {
+          "medianMs": 836.672,
+          "p95Ms": 981.975
+        },
+        "protected": {
+          "medianMs": 956.135,
+          "p95Ms": 1112.668
+        },
+        "addedMedianMs": 119.463,
+        "idleHelperRssMedianKiB": 19132
+      },
+      {
+        "engine": "claude",
+        "profile": "restricted",
+        "samplesPerMode": 30,
+        "cpuPercent": 200,
+        "memoryBytes": 2147483648,
+        "baseline": {
+          "medianMs": 766.519,
+          "p95Ms": 1017.766
+        },
+        "protected": {
+          "medianMs": 867.484,
+          "p95Ms": 1283.756
+        },
+        "addedMedianMs": 100.965,
+        "idleHelperRssMedianKiB": 19104
+      },
+      {
+        "engine": "claude",
+        "profile": "read-only",
+        "samplesPerMode": 30,
+        "cpuPercent": 200,
+        "memoryBytes": 2147483648,
+        "baseline": {
+          "medianMs": 824.794,
+          "p95Ms": 1025.176
+        },
+        "protected": {
+          "medianMs": 938.357,
+          "p95Ms": 1164.76
+        },
+        "addedMedianMs": 113.563,
+        "idleHelperRssMedianKiB": 19096
+      }
+    ],
+    "initialQualification": {
+      "sourceRevision": "352aba2cd3d4a1ebdc1075c3d79dc6a4a193466e",
+      "metadataPassed": 9,
+      "kernelPassed": 12,
+      "mcpPassed": 2,
+      "gatePassed": 7,
+      "nativePassed": 9,
+      "terminalPassed": 1,
+      "cpuScopePassed": 12,
+      "behaviorPassed": 52,
+      "performancePassed": 7
+    },
+    "performanceNotes": [
+      "Every profile alternates 30 retained baseline/protected pairs after two discarded warmup pairs, with matching 200% CPU and 2 GiB limits.",
+      "Both Codex modes use the persistent socket transport. Claude uses the real checkout-local stdio MCP entry and a loopback Messages provider.",
+      "Added launch medians of 101–126 ms exceed the investigation threshold; the protected path includes two Python interpreter starts, scope/delegation setup, Bubblewrap and kernel readiness checks.",
+      "The short build/test workload showed 5.821% overhead. The sustained TypeScript pair is recorded separately."
+    ],
+    "finalValidationSource": {
+      "algorithm": "sha256 of compact JSON array of [repository-relative path, file SHA-256], sorted by path",
+      "scope": "all tracked src, bin, scripts and patches plus Dockerfile, lockfile, package and compiler/Next configuration",
+      "files": 4852,
+      "digest": "20002fc2cd63ec7d305201fd6fcf3a1629750698619a8be59d5ee3524ed5492a",
+      "baseRevision": "1445c1fd8be8ca9788b35d69831ab7eb45742315",
+      "mergedMainRevision": "1d45cbd6841ada98b4e0c0fccd40c327ab838e86"
+    },
+    "finalQualification": {
+      "metadataPassed": 9,
+      "kernelPassed": 12,
+      "mcpPassed": 2,
+      "gatePassed": 7,
+      "nativePassed": 9,
+      "nativeAssertions": 107,
+      "terminalPassed": 1,
+      "behaviorPassed": 40,
+      "containerCasesExcludedFromThisRun": 2,
+      "missingRolloutRetainsDomainRoot": true,
+      "liveSocketPeerStillAnswersAfterThreadRetirement": true
+    },
+    "sustainedPerformance": {
+      "cpuPercent": 200,
+      "memoryBytes": 8589934592,
+      "initialPair": {
+        "workload": "full TypeScript check",
+        "samplesPerMode": 1,
+        "baselineMedianMs": 184125.381876,
+        "protectedMedianMs": 196667.375726,
+        "slowdownPercent": 6.811659382434554
+      },
+      "reverseRepeat": [
+        {
+          "workload": "full TypeScript sample",
+          "protectedRun": true,
+          "elapsedMs": 265632.53493900003,
+          "commands": [
+            {
+              "cpuTimeMicros": {
+                "user": 310179614,
+                "system": 5370547,
+                "total": 315550161
+              },
+              "contextSwitches": {
+                "voluntary": 66923,
+                "involuntary": 75697
+              },
+              "maxRSSBytes": 5983563776
+            }
+          ],
+          "cpuStatDeltas": [
+            {
+              "usage_usec": 315580540,
+              "user_usec": 310206472,
+              "system_usec": 5374068,
+              "core_sched.force_idle_usec": 0,
+              "nr_periods": 0,
+              "nr_throttled": 0,
+              "throttled_usec": 0,
+              "nr_bursts": 0,
+              "burst_usec": 0
+            },
+            {
+              "usage_usec": 315580540,
+              "user_usec": 310206472,
+              "system_usec": 5374068,
+              "core_sched.force_idle_usec": 0,
+              "nr_periods": 13282,
+              "nr_throttled": 1282,
+              "throttled_usec": 51891627,
+              "nr_bursts": 0,
+              "burst_usec": 0
+            }
+          ],
+          "effectiveCpuPercent": 200,
+          "effectiveMemoryBytes": 8589934592
+        },
+        {
+          "workload": "full TypeScript sample",
+          "protectedRun": false,
+          "elapsedMs": 280261.937501,
+          "commands": [
+            {
+              "cpuTimeMicros": {
+                "user": 329287160,
+                "system": 5371352,
+                "total": 334658512
+              },
+              "contextSwitches": {
+                "voluntary": 62712,
+                "involuntary": 67374
+              },
+              "maxRSSBytes": 5982765056
+            }
+          ],
+          "cpuStatDeltas": [
+            {
+              "usage_usec": 336125976,
+              "user_usec": 330374578,
+              "system_usec": 5751399,
+              "core_sched.force_idle_usec": 0,
+              "nr_periods": 14013,
+              "nr_throttled": 1406,
+              "throttled_usec": 65715251,
+              "nr_bursts": 0,
+              "burst_usec": 0
+            },
+            {
+              "usage_usec": 336125976,
+              "user_usec": 330374578,
+              "system_usec": 5751399,
+              "core_sched.force_idle_usec": 0,
+              "nr_periods": 14013,
+              "nr_throttled": 0,
+              "throttled_usec": 0,
+              "nr_bursts": 0,
+              "burst_usec": 0
+            }
+          ],
+          "effectiveCpuPercent": 200,
+          "effectiveMemoryBytes": 8589934592
+        },
+        {
+          "workload": "full TypeScript check",
+          "samplesPerMode": 1,
+          "reversed": true,
+          "baselineMedianMs": 280261.937501,
+          "protectedMedianMs": 265632.53493900003,
+          "slowdownPercent": -5.219903456190078
+        }
+      ],
+      "interpretation": "The initial pair showed 6.812% slowdown. The reverse-order repeat showed -5.220%, with lower protected CPU time and throttling. These single pairs do not establish a consistent sustained penalty, a speedup or a statistical performance bound."
+    },
+    "imageQualification": {
+      "checkedAt": "2026-10-19T07:19:05.707Z",
+      "image": "sha256:c737eed08ff53db3f00c5546fb75561e8c8a03679a093e1f31ee6b4b394877f5",
+      "containerBridgePassed": 2,
+      "rehearsal": {
+        "checkedAt": "2026-10-19T07:19:05.707Z",
+        "runtime": "bun 1.4.0",
+        "succession": {
+          "predecessorReadyMs": 519,
+          "successorTookOverMs": 1011,
+          "completed": true
+        },
+        "listener": {
+          "windowMs": 15000,
+          "polls": 27,
+          "answered": 27,
+          "abandoned": 13
+        },
+        "socket": {
+          "polls": 27,
+          "answered": 27,
+          "abandoned": 13
+        },
+        "recovery": {
+          "retained": {
+            "image": "agent-log-viewer:rehearsal-aaaaaaaaaaaa",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "container": "llv-runtime-host-aaaaaaaaaaaa-8da5b43f3b8c"
+          },
+          "failed": {
+            "image": "delegatus:rehearsal-dddddddddddd",
+            "revision": "dddddddddddddddddddddddddddddddddddddddd",
+            "container": "delegatus-runtime-host-dddddddddddd-f2708ccc4718"
+          },
+          "docker": [
+            "container inspect delegatus-runtime-host-dddddddddddd-f2708ccc4718",
+            "container update --restart no delegatus-runtime-host-dddddddddddd-f2708ccc4718",
+            "container stop --time 40 delegatus-runtime-host-dddddddddddd-f2708ccc4718",
+            "container rm -f delegatus-runtime-host-dddddddddddd-f2708ccc4718"
+          ]
+        },
+        "ok": true
+      },
+      "note": "Earlier continuation image qualification; the final local pre-push gate re-verifies the working tree under the pin."
     }
   }
 }

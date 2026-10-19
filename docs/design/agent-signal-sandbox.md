@@ -443,7 +443,7 @@ blocker through Viewer routing. No MCP writer files were changed.
 
 ### Continuation, 2026-10-19
 
-The branch integrates main through `dcefdaf67`, including #2930 and the
+The branch integrates main through `1d45cbd68`, including #2930 and the
 main-thread audit. The two real stdio-MCP recovery cases pass with 34
 assertions: neither held claim persists a private PID, becomes `not_executed`
 while its owner lives, or loses its original dispatch.
@@ -454,6 +454,11 @@ runs the foreign/own signal proof and bounded gate, and then exercises the
 registry's orphan cleanup while the adopted host is still alive. Missing
 tooling and failed listener startup retain explicit errors and reap the
 recorded namespace processes.
+
+A missing-rollout refusal retires only that thread's attachment, preserving
+the protected invocation's root and domain for explicit orphan cleanup.
+The native test repeats the refusal, checks that a live peer still answers,
+then verifies authorized teardown reaps every recorded domain process.
 
 Temporary roots can be symbolic links. Launch receipts use their physical
 path so Bubblewrap binds the intended directory, and nested gates compare the
@@ -466,3 +471,41 @@ their own home, config, temporary root, state and inert control endpoint.
 This prevents the mandatory Viewer registration from choosing the installed
 runtime during an isolated native test. The production registration and
 MCP routing behavior are unchanged.
+
+The refreshed launch measurements use the sources committed as `352aba2cd`,
+Codex 0.163.0 and Claude 2.1.302. Each profile alternates thirty retained pairs
+after two warmup pairs, under matching 200% CPU and 2 GiB memory limits.
+Both Codex modes use persistent sockets. Source and binary digests, sample
+counts and helper memory are recorded in the evidence file.
+
+| Engine / profile | Baseline median / p95, ms | Protected median / p95, ms | Added median, ms |
+| --- | --- | --- | --- |
+| Codex full | 456.7 / 691.2 | 578.3 / 728.3 | 121.6 |
+| Codex restricted | 488.2 / 897.2 | 595.7 / 1653.5 | 107.4 |
+| Codex read-only | 474.9 / 649.4 | 601.1 / 881.2 | 126.2 |
+| Claude full | 836.7 / 982.0 | 956.1 / 1112.7 | 119.5 |
+| Claude restricted | 766.5 / 1017.8 | 867.5 / 1283.8 | 101.0 |
+| Claude read-only | 824.8 / 1025.2 | 938.4 / 1164.8 | 113.6 |
+
+The protected launch still includes two Python interpreter starts, delegated
+scope setup, Bubblewrap and the kernel readiness handshake. Median helper RSS
+was 19,096–19,132 KiB. The short build/test workload took 703.2 ms baseline and
+744.1 ms protected, a 5.8% increase. Four protected gate jobs again completed
+with at most two active workloads for two slots.
+
+A sustained TypeScript pair initially took 184.1 s baseline and 196.7 s
+protected, crossing the 5% investigation threshold at 6.8%. A repeat in reverse
+order took 280.3 s baseline and 265.6 s protected under the same effective
+200% CPU and 8 GiB limits. Protected CPU time was 315.6 s versus 334.7 s
+baseline; throttling counters at the bounded roots recorded 51.9 s protected
+versus 65.7 s baseline. Peak child RSS was about 5.57 GiB in both modes.
+The changed ordering and counters show substantial run variation. These
+single pairs establish neither a consistent sustained penalty nor a speedup
+or statistical performance bound. The evidence retains both pairs and the
+repeat's source fingerprint and resource counters.
+
+The final focused replay passed forty behavior cases, including both Viewer
+receipt recovery windows, all three native profiles for both engines,
+persistent socket adoption and retirement, nested gate cleanup and terminal
+behavior. The continuation's rebuilt-image bridge cases and runtime-host
+rehearsal are recorded separately from this host-side replay.

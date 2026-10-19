@@ -930,10 +930,13 @@ export async function adoptCodexRegistryHosts(
             (await registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, registry.releaseStructuredHostClaim.bind(registry, entry.key, claimed.claimOwner!, claimed.claimEpoch)));
             return;
           }
+          const domain = claimed.structuredHost.signalDomain;
           (await registry.deliveryWriteOrBusy({ label: "registry.setStructuredHostClaimed" }, registry.setStructuredHostClaimed.bind(registry, entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",
-            process: null,
+            // Keep the protected invocation's root available to an explicit
+            // orphan stop after this thread's terminal refusal.
+            process: missingRollout && domain && domain.retired !== true ? claimed.structuredHost.process : null,
             activeTurnRef: null,
             pendingAttention: [],
             activeFlags: [],

@@ -88,7 +88,7 @@ test.skipIf(!enabled)("paired gate build/test throughput and bounded parallel na
   const events = path.join(root, "parallel.jsonl");
   const commands = sustained ? [[Bun.which("node")!, "node_modules/typescript/bin/tsc", "--noEmit", "--incremental", "false"]]
     : [[process.execPath, "scripts/build-gate.ts"], [process.execPath, "test", "src/lib/runtime/cpuAdmission.test.ts"]];
-  fs.writeFileSync(script, `import fs from "node:fs";
+  fs.writeFileSync(script, `import fs from "node:fs"; import path from "node:path";
 const started = performance.now();
 if (process.env.PARALLEL_EVENTS) {
   fs.appendFileSync(process.env.PARALLEL_EVENTS, JSON.stringify({ event: "start", at: Date.now() }) + "\\n");
@@ -96,11 +96,33 @@ if (process.env.PARALLEL_EVENTS) {
   const end = performance.now() + 1000; while (performance.now() < end) Math.sqrt(Math.random());
   fs.appendFileSync(process.env.PARALLEL_EVENTS, JSON.stringify({ event: "end", at: Date.now() }) + "\\n");
 } else {
+  const group = fs.readFileSync('/proc/self/cgroup', 'utf8').split('\\n').find(line => line.startsWith('0::')).slice(3);
+  const controls = [];
+  let effectiveCpuPercent = Infinity, effectiveMemoryBytes = Infinity;
+  for (let directory = '/sys/fs/cgroup' + group;; directory = path.dirname(directory)) {
+    const read = name => fs.existsSync(path.join(directory, name)) ? fs.readFileSync(path.join(directory, name), 'utf8').trim() : null;
+    const cpu = read('cpu.max')?.split(/\\s+/), memory = read('memory.max');
+    if (cpu?.[0] !== 'max' && cpu?.[0]) effectiveCpuPercent = Math.min(effectiveCpuPercent, Number(cpu[0]) / Number(cpu[1]) * 100);
+    if (memory && memory !== 'max') effectiveMemoryBytes = Math.min(effectiveMemoryBytes, Number(memory));
+    const file = path.join(directory, 'cpu.stat');
+    if (controls.length < 2 && fs.existsSync(file)) controls.push(file);
+    if (directory === '/sys/fs/cgroup') break;
+  }
+  const counters = () => controls.map(file => Object.fromEntries(fs.readFileSync(file, 'utf8').trim().split('\\n').map(line => {
+    const [name, value] = line.split(/\\s+/); return [name, Number(value)];
+  })));
+  const before = counters(), commands = [];
   for (const command of ${JSON.stringify(commands)}) {
     const child = Bun.spawn(command, { stdout: "inherit", stderr: "inherit" });
     if (await child.exited !== 0) throw new Error("representative workload failed");
+    const usage = child.resourceUsage();
+    if (!usage) throw new Error('representative workload omitted CPU usage');
+    commands.push({ cpuTimeMicros: usage.cpuTime, contextSwitches: usage.contextSwitches, maxRSSBytes: usage.maxRSS });
   }
-  fs.writeFileSync(process.env.WORKLOAD_RESULT, JSON.stringify({ elapsedMs: performance.now() - started }));
+  const elapsedMs = performance.now() - started;
+  const cpuStatDeltas = counters().map((after, index) => Object.fromEntries(Object.entries(after).map(([name, value]) => [name, value - (before[index][name] ?? 0)])));
+  fs.writeFileSync(process.env.WORKLOAD_RESULT, JSON.stringify({ elapsedMs, commands, cpuStatDeltas, effectiveCpuPercent, effectiveMemoryBytes },
+    (_key, value) => typeof value === 'bigint' ? Number(value) : value));
 }
 `);
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: root, TMPDIR: root, XDG_CONFIG_HOME: path.join(root, "config"), LLV_STATE_DIR: path.join(root, "state"),
@@ -118,17 +140,23 @@ if (process.env.PARALLEL_EVENTS) {
     child.stdout!.on("data", chunk => { output = (output + chunk).slice(-4000); });
     await once(child, "close"); live.delete(child);
     expect(child.exitCode, errors + output).toBe(0);
-    return parallel ? 0 : Number(JSON.parse(fs.readFileSync(result, "utf8")).elapsedMs);
+    if (parallel) return 0;
+    const observation = JSON.parse(fs.readFileSync(result, "utf8"));
+    expect(observation.effectiveCpuPercent).toBe(200);
+    expect(observation.effectiveMemoryBytes).toBe(sustained ? 8 * GIB : 2 * GIB);
+    if (sustained) report({ workload: "full TypeScript sample", protectedRun, ...observation });
+    return Number(observation.elapsedMs);
   };
   try {
     const times: number[][] = [[], []];
     const count = sustained ? 1 : 3;
-    for (let round = sustained ? 0 : -1; round < count; round++) for (const mode of round % 2 === 0 ? [0, 1] : [1, 0]) {
+    const reversed = process.env.LLV_SIGNAL_PERFORMANCE_REVERSE === "1";
+    for (let round = sustained ? 0 : -1; round < count; round++) for (const mode of (round % 2 === 0) !== reversed ? [0, 1] : [1, 0]) {
       const elapsed = await run(mode === 1);
       if (round >= 0) times[mode]!.push(elapsed);
     }
     const baseline = quantile(times[0]!, .5), protectedRun = quantile(times[1]!, .5);
-    report({ workload: sustained ? "full TypeScript check" : "gate bundle plus CPU admission tests", samplesPerMode: count, baselineMedianMs: baseline, protectedMedianMs: protectedRun, slowdownPercent: (protectedRun / baseline - 1) * 100 });
+    report({ workload: sustained ? "full TypeScript check" : "gate bundle plus CPU admission tests", samplesPerMode: count, reversed, baselineMedianMs: baseline, protectedMedianMs: protectedRun, slowdownPercent: (protectedRun / baseline - 1) * 100 });
     if (sustained) return;
     const started = performance.now();
     await Promise.all([run(true, true), run(true, true), run(true, true), run(true, true)]);
