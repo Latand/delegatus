@@ -1224,6 +1224,7 @@ export function acknowledgeBridgeReports(
  */
 function mergeLegacyLog(legacyPath: string, body: BridgeReportLogV1, options: { fenceOwner: boolean; consumedSha256?: string }): LegacyReconcileSummary {
   const collection = openCollection(legacyDatabasePath(legacyPath), REPORTS_COLLECTION);
+  const consumedSha256 = options.consumedSha256;
   const summary: LegacyReconcileSummary = { added: 0, replaced: 0, removed: 0, kept: 0, keys: [], conflicts: [], spared: [] };
   collection.patchSync(() => {
     const rows = collection.snapshot();
@@ -1268,9 +1269,9 @@ function mergeLegacyLog(legacyPath: string, body: BridgeReportLogV1, options: { 
     return diffRows(rows, rowsFromLog(log));
   }, {
     fenceOwner: options.fenceOwner,
-    ...(options.consumedSha256 ? { afterPersist: (db) => {
+    ...(consumedSha256 ? { afterPersist: (db) => {
       const result = db.query("UPDATE state_imports SET reconciled_sha256 = ? WHERE collection = ?")
-        .run(options.consumedSha256, REPORTS_COLLECTION);
+        .run(consumedSha256, REPORTS_COLLECTION);
       if (result.changes !== 1) throw new Error(`missing import evidence for ${REPORTS_COLLECTION} reconciliation`);
     } } : {}),
   });

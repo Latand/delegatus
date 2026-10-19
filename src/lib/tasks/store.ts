@@ -404,6 +404,7 @@ function parseLegacyBody(raw: unknown): LegacyTasksBody {
 function mergeLegacyTasks(filePath: string, body: LegacyTasksBody, baseline: StateImportRecord, options: { fenceOwner: boolean; consumedSha256?: string }): LegacyReconcileSummary {
   const collection = openTaskCollection(legacyDatabasePath(filePath));
   const since = legacyBaselineRevision(baseline);
+  const consumedSha256 = options.consumedSha256;
   const descends = baseline.mirrorRevision !== null && body.mirrorOf === baseline.mirrorRevision;
   const summary: LegacyReconcileSummary = { added: 0, replaced: 0, removed: 0, kept: 0, keys: [], conflicts: [], spared: [] };
   collection.patchSync(() => {
@@ -454,9 +455,9 @@ function mergeLegacyTasks(filePath: string, body: LegacyTasksBody, baseline: Sta
     return { records, deleteKeys };
   }, {
     fenceOwner: options.fenceOwner,
-    ...(options.consumedSha256 ? { afterPersist: (db) => {
+    ...(consumedSha256 ? { afterPersist: (db) => {
       const result = db.query("UPDATE state_imports SET reconciled_sha256 = ? WHERE collection = ?")
-        .run(options.consumedSha256, TASK_COLLECTION);
+        .run(consumedSha256, TASK_COLLECTION);
       if (result.changes !== 1) throw new Error("missing import evidence for tasks reconciliation");
     } } : {}),
   });

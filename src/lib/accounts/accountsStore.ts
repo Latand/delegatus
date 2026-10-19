@@ -1026,6 +1026,7 @@ function mergeRows(
   consumedSha256?: string,
 ): void {
   const since = legacyBaselineRevision(baseline);
+  const consumedDigest = consumedSha256;
   collection.patchSync(() => {
     const current = new Map(collection.snapshot().filter((row) => spec.owns(row.k)).map((row) => [row.k, row] as const));
     const revisions = collection.rowRevisions();
@@ -1068,9 +1069,9 @@ function mergeRows(
     return { records, deleteKeys };
   }, {
     fenceOwner: options.fenceOwner,
-    ...(consumedSha256 ? { afterPersist: (db) => {
+    ...(consumedDigest ? { afterPersist: (db) => {
       const result = db.query("UPDATE state_imports SET reconciled_sha256 = ? WHERE collection = ?")
-        .run(consumedSha256, ACCOUNTS_COLLECTION);
+        .run(consumedDigest, ACCOUNTS_COLLECTION);
       if (result.changes !== 1) throw new Error(`missing import evidence for ${ACCOUNTS_COLLECTION} reconciliation`);
     } } : {}),
   });
