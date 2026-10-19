@@ -683,7 +683,12 @@ export async function seedDemoOrchestrator(layout: DemoLayout & { files: Record<
   const { readSeatTickState, writeSeatTickState } = await import("@/lib/monitor/seatTickState");
   writeSeatTickState(project, { ...readSeatTickState(project), seatEpoch: 1, lastWakeAt: iso(now - 60_000) });
 
-  const { appendBridgeReports } = await import("@/lib/bridge/store");
+  /* The Viewer imports the bridge channels when it activates, and the seed
+     runs before any Viewer: an append reads the manager channel inside its
+     own transaction, where a first import of that collection is refused as
+     busy. Read the channel once here so the import commits first. */
+  const { appendBridgeReports, readBridgeChannel } = await import("@/lib/bridge/store");
+  readBridgeChannel();
   const report = (key: string, minutesAgo: number, kind: "status" | "completed" | "review_verdict", body: string) => ({
     key: `readme-demo:${key}`, class: kind, at: iso(now - minutesAgo * 60_000), project, targetSeatConversationId: conversationId, body,
   });

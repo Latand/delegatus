@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "00c1570ac28fe395c9e36ca411dfdfe7938334881bb3f6200b55a6c748bb526a",
+  "generatorSha256": "227dd72e826c6743ebfc4ca0a7d2f1577c3b3bee0b7f401a8d0e478c1da1d10a",
   "seed": "scripts/readme-demo-state.ts",
-  "seedSha256": "4f9ae80434b95b97639f1330e7e67ba4041ddf0207456a4fd53794192e2d9fb3",
+  "seedSha256": "a87949b4f1615a6a66fa13611b07548a7fd2fb33a331f422fc29538981151710",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
   "assets": [
     {
@@ -21,37 +21,37 @@
         "height": 418
       },
       "colorScheme": "dark",
-      "rasterTiles": 19,
+      "rasterTiles": 17,
       "renderBack": {
-        "worstTileMean": 5.104,
+        "worstTileMean": 5.085,
         "changedTileShare": 0,
         "meanDifference": 0.196,
         "ringsClipped": 0
       },
-      "sha256": "218b8573450a13cabae6a221d5c098627fffde76d59302b8ee2b94058717e590"
+      "sha256": "c8dfd7129787c61a339fa71d3991ae057f176d613889f0f45312336709fad85b"
     },
     {
       "path": "orchestrator.svg",
       "description": "A project's orchestrator: its chat with the operator, its worker count against the limit, and beside it a task's decision form waiting for an answer, already sent to Telegram.",
       "viewport": {
         "width": 1728,
-        "height": 1040
+        "height": 1200
       },
       "crop": {
         "x": 469,
         "y": 61,
         "width": 1038,
-        "height": 778
+        "height": 898
       },
       "colorScheme": "dark",
-      "rasterTiles": 20,
+      "rasterTiles": 14,
       "renderBack": {
-        "worstTileMean": 16.144,
-        "changedTileShare": 0.097,
-        "meanDifference": 1.278,
+        "worstTileMean": 13.385,
+        "changedTileShare": 0.008,
+        "meanDifference": 0.448,
         "ringsClipped": 1
       },
-      "sha256": "f866d10d40a1171c2a3b654b5643d3bd374dca3bd912041339a6c4b4029043ec"
+      "sha256": "3124722ead31a94e938f1c506c9e22bb9c71c5850a35d7f72193246cf76b28b7"
     },
     {
       "path": "conversation.svg",
@@ -67,14 +67,14 @@
         "height": 1016
       },
       "colorScheme": "dark",
-      "rasterTiles": 26,
+      "rasterTiles": 16,
       "renderBack": {
-        "worstTileMean": 13.31,
-        "changedTileShare": 0.006,
-        "meanDifference": 0.367,
+        "worstTileMean": 14.152,
+        "changedTileShare": 0.007,
+        "meanDifference": 0.368,
         "ringsClipped": 2
       },
-      "sha256": "4b1fa78f94fc3da7bbbbca122ce4a15aa84533a74819d025625fe3bb24cd892c"
+      "sha256": "021212e1fb0e34f8208ec59635b0bcc6d03a7ab934b41612209c83f3e8de43dc"
     },
     {
       "path": "pipeline.svg",
@@ -90,14 +90,14 @@
         "height": 920
       },
       "colorScheme": "dark",
-      "rasterTiles": 43,
+      "rasterTiles": 31,
       "renderBack": {
         "worstTileMean": 9.363,
         "changedTileShare": 0.001,
-        "meanDifference": 0.273,
+        "meanDifference": 0.27,
         "ringsClipped": 0
       },
-      "sha256": "dcb2f7347a73d1d36f3ec3f14c077492515ce4471ec865979d521b48fbb3779b"
+      "sha256": "77226407b2fe7682ce19975c2926035864126eabfc89cb31ab754e536d5d456f"
     },
     {
       "path": "card-menu.svg",
@@ -113,14 +113,14 @@
         "height": 418
       },
       "colorScheme": "dark",
-      "rasterTiles": 23,
+      "rasterTiles": 21,
       "renderBack": {
-        "worstTileMean": 4.952,
+        "worstTileMean": 4.934,
         "changedTileShare": 0,
-        "meanDifference": 0.297,
+        "meanDifference": 0.307,
         "ringsClipped": 0
       },
-      "sha256": "131e63968cc2330dcf4e8d959719cb2ad9e9700bbe35fbac366892678a88a49f"
+      "sha256": "918d6981d8c890d006b590366e0d28109bf6ae85cb3d7b2acd1a0811663f32e4"
     },
     {
       "path": "accounts.svg",
@@ -136,14 +136,14 @@
         "height": 478
       },
       "colorScheme": "dark",
-      "rasterTiles": 21,
+      "rasterTiles": 19,
       "renderBack": {
         "worstTileMean": 3.062,
         "changedTileShare": 0,
-        "meanDifference": 0.23,
+        "meanDifference": 0.258,
         "ringsClipped": 0
       },
-      "sha256": "af2ddd0ab9a9b66876d544dcb1083d7f076055bcff27296b5cdb09111eb14bef"
+      "sha256": "097b9c12344b568379b8728b03de80cd3490919eaaba1a65000ef8a1445fe001"
     },
     {
       "path": "phone-conversation.svg",
@@ -153,14 +153,14 @@
         "height": 848
       },
       "colorScheme": "dark",
-      "rasterTiles": 5,
+      "rasterTiles": 1,
       "renderBack": {
         "worstTileMean": 11.912,
-        "changedTileShare": 0.017,
-        "meanDifference": 0.773,
+        "changedTileShare": 0.016,
+        "meanDifference": 0.756,
         "ringsClipped": 0
       },
-      "sha256": "41bda3c5390d47777e98171bfd099f91637489b7623d5bc3526717a386882d99"
+      "sha256": "ed4564ccfa7d02094f461bcd9cdd28189e703c839917d2de227120fed235c257"
     },
     {
       "path": "phone-board.svg",
@@ -174,10 +174,10 @@
       "renderBack": {
         "worstTileMean": 12.37,
         "changedTileShare": 0.022,
-        "meanDifference": 0.421,
+        "meanDifference": 0.42,
         "ringsClipped": 0
       },
-      "sha256": "bdaba06e47d7ebc509d93fdbb8c5db4f94974a6e25fb3a329338159f793eb0dd"
+      "sha256": "4116962fb351bea1c0905cca9a76e5d741a6ffdf5aa15a199c8419b07e5ff33b"
     }
   ]
 }
