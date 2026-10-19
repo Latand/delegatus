@@ -105,26 +105,74 @@ test("repeated searches retain future cached rows while misses are hydrated", as
   }
 });
 
-test("catalog preparation hydrates before the foreground query and serves complete results", async () => {
+test("foreground search runs between publication batches and returns complete scoped matches", async () => {
   const { store } = fixture();
-  const catalog = Array.from({ length: 60 }, (_, n) => row(n));
-  let reads = 0;
-  store.prepare(catalog, { readText: async entry => { reads++; return text(entry); } });
-  const results = await store.search(catalog, "orchard", { readText: async entry => { reads++; return text(entry); } });
-  expect(results).toHaveLength(60);
-  expect(reads).toBe(60);
-  reads = 0;
-  expect(await store.search(catalog, "orchard", { readText: async entry => { reads++; return text(entry); } })).toHaveLength(60);
-  expect(reads).toBe(0);
+  const catalog = Array.from({ length: 48 }, (_, n) => row(n));
+  let firstBatchEntered!: () => void;
+  const firstReady = new Promise<void>(resolve => { firstBatchEntered = resolve; });
+  let releaseFirstBatch!: () => void;
+  const firstHeld = new Promise<void>(resolve => { releaseFirstBatch = resolve; });
+  let secondBatchEntered = false;
+  const preparation = store.prepare(catalog, { readText: async entry => {
+    if (entry === catalog[0]) { firstBatchEntered(); await firstHeld; }
+    if (entry === catalog[24]) secondBatchEntered = true;
+    return text(entry);
+  } });
+  await firstReady;
+  // Admit foreground work before publication can enqueue its next batch.
+  const foreground = store.search([catalog[47]], "orchard", { readText: text });
+  releaseFirstBatch();
+  try {
+    expect(await foreground).toHaveLength(1);
+    expect(secondBatchEntered).toBe(false);
+    await preparation;
+  } finally {
+    releaseFirstBatch();
+    await preparation.catch(() => {});
+  }
+  expect(await store.search(catalog, "orchard", { readText: text })).toHaveLength(48);
 });
 
-test("a failed catalog preparation refuses the foreground query without rehydrating the scope", async () => {
+test("publication queue cancellation and a following scoped search settle without restarting", async () => {
   const { store } = fixture();
-  const catalog = Array.from({ length: 60 }, (_, n) => row(n));
-  await expect(store.prepare(catalog, { readText: async () => { throw new Error("bootstrap refused"); } })).rejects.toThrow("bootstrap refused");
-  let foregroundReads = 0;
-  await expect(store.search(catalog, "orchard", { readText: async entry => { foregroundReads++; return text(entry); } })).rejects.toThrow("bootstrap refused");
-  expect(foregroundReads).toBe(0);
+  const controller = new AbortController();
+  let entered!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const active = store.search([row(1)], "orchard", { signal: controller.signal, readText: async entry => { entered(); await held; return text(entry); } });
+  await ready;
+  const queued = store.search([row(2)], "orchard", { readText: text });
+  const preparation = store.prepare([row(3)], { readText: text });
+  controller.abort();
+  release();
+  try {
+    await expect(active).rejects.toHaveProperty("name", "AbortError");
+    expect(await queued).toHaveLength(1);
+    await preparation;
+    expect(await store.search([row(4)], "orchard", { readText: text })).toHaveLength(1);
+  } finally {
+    release();
+    await Promise.all([active.catch(() => {}), queued.catch(() => {}), preparation.catch(() => {})]);
+  }
+});
+
+test("an unrelated publication read failure leaves warm scopes available and retryable", async () => {
+  const { store } = fixture();
+  const selected = row(1);
+  const unrelated = { ...row(2), project: "other" };
+  await store.search([selected], "orchard", { readText: text });
+  await expect(store.prepare([selected, unrelated], { readText: async entry => {
+    if (entry.path === unrelated.path) throw new Error("unrelated EACCES");
+    return text(entry);
+  } })).rejects.toThrow("conversation search projection preparation failed");
+  const warm = await store.search([selected], "orchard", { readText: async () => { throw new Error("warm scope reopened its transcript"); } });
+  expect(warm).toHaveLength(1);
+  expect(warm[0].title).toBe("Title 1");
+  await store.prepare([selected, unrelated], { readText: text });
+  const retried = await store.search([unrelated], "orchard", { readText: async () => { throw new Error("successful retry was not retained"); } });
+  expect(retried).toHaveLength(1);
+  expect(retried[0].title).toBe("Title 2");
 });
 
 test("failed hydration and cancellation never publish partial text; an identical retry recovers", async () => {

@@ -38,7 +38,7 @@ async function startServer(options: { prepare: boolean; stallMs?: number; state:
   let buffered = "";
   const readyWatchdog = setTimeout(() => child.kill("SIGTERM"), 60_000);
   readyWatchdog.unref();
-  let ready: { origin: string; rows: number; prepared: boolean; preparationMs: number } | undefined;
+  let ready: { origin: string; rows: number; prepared: boolean; preparationStartedAfterListen: boolean } | undefined;
   try {
     while (!ready) {
       const { value, done } = await stdout.read();
@@ -116,6 +116,19 @@ try {
     }
   }
 
+  let preparation: { state: string; startedAt: number | null; finishedAt: number | null; error?: string } | undefined;
+  if (mainServer.preparationStartedAfterListen) {
+    const preparationDeadline = Date.now() + 120_000;
+    do {
+      const response = await fetch(`${mainServer.origin}/__profile`, { signal: AbortSignal.timeout(5_000) });
+      const current = await response.json() as NonNullable<typeof preparation>;
+      preparation = current;
+      if (current.state !== "running") break;
+      await new Promise<void>(resolve => setTimeout(resolve, 50));
+    } while (Date.now() < preparationDeadline);
+    if (preparation?.state !== "complete") throw new Error(`catalog preparation did not complete: ${JSON.stringify(preparation)}`);
+  }
+
   // The server blocks synchronously for 15 seconds. The independent MCP
   // caller must exhaust its 12-second budget before that server resumes.
   const stallState = path.join(state, "profile-stall-server");
@@ -141,7 +154,7 @@ try {
       ms: { p50: percentile(rows.map(row => row.ms), .5), p95: percentile(rows.map(row => row.ms), .95), max: Math.max(...rows.map(row => row.ms)) },
       bytes: successfulBytes.length ? { p50: percentile(successfulBytes, .5), p95: percentile(successfulBytes, .95), max: Math.max(...successfulBytes) } : null };
   });
-  console.log(JSON.stringify({ revision: prepareProjection ? "candidate" : "base", sourceDigests, corpus: 8247, selected, samples, startedAt, finishedAt: new Date().toISOString(), server: { separateProcess: true, preparedBeforeListening: mainServer.prepared, preparationMs: mainServer.preparationMs, loadBefore: mainServer.loadBefore, loadAfter: mainServer.loadAfter }, stallControl: { serverStallMs: 15_000, clientBudgetMs: 12_000, failed: stallFailed, elapsedMs: stalledMs, loadBefore: stallLoadBefore, loadAfter: stallLoadAfter }, cold: observations[0], summary, observations }, null, 2));
+  console.log(JSON.stringify({ revision: prepareProjection ? "candidate" : "base", sourceDigests, corpus: 8247, selected, samples, startedAt, finishedAt: new Date().toISOString(), server: { separateProcess: true, preparationStartedAfterListening: mainServer.preparationStartedAfterListen, preparation, loadBefore: mainServer.loadBefore, loadAfter: mainServer.loadAfter }, stallControl: { serverStallMs: 15_000, clientBudgetMs: 12_000, failed: stallFailed, elapsedMs: stalledMs, loadBefore: stallLoadBefore, loadAfter: stallLoadAfter }, cold: observations[0], summary, observations }, null, 2));
   if (observations.some(row => !row.ok)) process.exitCode = 1;
 } finally {
   await stallServer?.stop();

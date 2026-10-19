@@ -52,7 +52,6 @@ export class ConversationSearchProjection {
   private pending = 0;
   private retiring = false;
   private preparation?: Promise<void>;
-  private preparationFailure?: unknown;
   constructor(private filename: string, private limits = { entries: MAX_ENTRIES, bytes: MAX_BYTES }) {}
 
   search(catalog: readonly Entry[], query: string, options: {
@@ -69,8 +68,6 @@ export class ConversationSearchProjection {
     const result = this.tail.then(() => withViewerOperation("catalog.search", async () => {
       started = true;
       signal.throwIfAborted();
-      if (!options.prepareOnly && this.preparation) await this.preparation;
-      if (!options.prepareOnly && this.preparationFailure) throw this.preparationFailure;
       await this.open(signal);
       this.db!.exec("CREATE TEMP TABLE IF NOT EXISTS search_unvisited(path TEXT PRIMARY KEY)");
       this.db!.exec("DELETE FROM search_unvisited");
@@ -181,20 +178,26 @@ export class ConversationSearchProjection {
     });
   }
 
-  /** Catalog publication owns cold hydration. Foreground searches wait for this
-   * bounded-batch worker, then query the persisted text without opening every
-   * transcript on the request path. */
+  /** Publication hydrates in queue-sized batches. Each batch yields the search
+   * queue before the next is admitted, so foreground reads can make progress
+   * during bootstrap and only hydrate the scope they actually need. */
   prepare(catalog: readonly Entry[], options: {
     projectTitle?: (entry: FileEntry) => void;
     readText?: (entry: Entry) => Promise<ConversationSearchText>;
   } = {}): Promise<void> {
     if (this.retiring) return Promise.reject(new Error("conversation search projection retired"));
     if (this.preparation) return this.preparation;
-    this.preparationFailure = undefined;
-    const job = this.search(catalog, "\u0000", { ...options, prepareOnly: true }).then(() => undefined, error => {
-      this.preparationFailure = error;
-      throw error;
-    });
+    const job = (async () => {
+      const failures: unknown[] = [];
+      for (let offset = 0; offset < catalog.length; offset += BATCH) {
+        try {
+          await this.search(catalog.slice(offset, offset + BATCH), "\u0000", { ...options, prepareOnly: true });
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length) throw new AggregateError(failures, "conversation search projection preparation failed");
+    })();
     this.preparation = job;
     void job.then(
       () => { if (this.preparation === job) this.preparation = undefined; },
