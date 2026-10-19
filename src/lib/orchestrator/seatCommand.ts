@@ -575,7 +575,7 @@ async function activate(
   }, { holder: "orchestrator seat activation", waitMs: dependencies.seatStoreWaitMs ?? SEAT_STORE_WAIT_MS });
   if (refused) return { hold: refused };
   if (completed.kind === "missing") return null;
-  const seat: OrchestratorSeat = await reconcileAuthorityProjections(completed.seat, dependencies);
+  const seat: OrchestratorSeat = await reconcileAuthorityProjections(completed.seat, dependencies, dependencies.seatStoreWaitMs ?? SEAT_STORE_WAIT_MS);
   /* Once per new seat epoch — a fresh seat, an adopted conversation, a
      rotation — whatever produced it; the report's own claim makes a second
      activation of the same epoch a no-op. Never awaited, so the seat command
@@ -593,10 +593,13 @@ async function activate(
 async function reconcileAuthorityProjections(
   seat: OrchestratorSeat,
   dependencies: SeatCommandDependencies,
+  waitMs = SEAT_STORE_WAIT_MS,
 ): Promise<OrchestratorSeat> {
   if (!seat.conversationId) throw new Error("active orchestrator seat is missing its conversation identity");
   const registry = agentRegistry();
-  const deadline = performance.now() + (dependencies.seatStoreWaitMs ?? SEAT_STORE_WAIT_MS);
+  // Completed replays own their identity admission even when request replay is
+  // disabled. New activations pass their configured store deadline explicitly.
+  const deadline = performance.now() + waitMs;
   for (let attempt = 0; attempt < 3; attempt++) {
     const revision = registry.storageDiagnostics().revision;
     // Discovery can take another state lease. Prepare outside both writers,
