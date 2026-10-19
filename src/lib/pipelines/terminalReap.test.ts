@@ -15,7 +15,8 @@ process.env.LLV_STRUCTURED_HOSTS = "0";
 
 const { tickPipelines, adoptAttempt } = await import("./engine");
 const { registerPipelineTick } = await import("./controllerSignal");
-const { loadPipelines, pipelineIdentity, pipelineRevision, savePipelines } = await import("./store");
+const { tickPipelinesController } = await import("./controllerPass");
+const { archiveSettledPipelines, loadPipelines, pipelineIdentity, pipelineRevision, savePipelines } = await import("./store");
 type Pipeline = import("./types").Pipeline;
 type PipelineStageAttempt = import("./types").PipelineStageAttempt;
 type PipelinePorts = import("./engine").PipelinePorts;
@@ -143,6 +144,66 @@ function harness() {
   };
 }
 
+for (const terminal of ["budget-spent", "outside-merge", "closed", "successor"] as const) {
+  test(`${terminal} retirement survives an unstamped attempt and an open turn`, async () => {
+    const h = harness();
+    const record = pipelineRecord({ id: `retire-${terminal}`, state: terminal === "closed" ? "closed" : "completed",
+      attempts: [attempt(1, "conversation_terminal", false)] });
+    if (terminal === "budget-spent") record.stateDetail = "budget spent: last findings handed to the fix stage, not re-reviewed";
+    if (terminal === "successor") record.refreshOf = { pipelineId: "source-lane", base: record.baseRef };
+    if (terminal === "outside-merge") record.merge = {
+      state: "merged", by: "outside", repository: "example/project", prNumber: 1,
+      policyChangedAt: record.createdAt, reviewedHead: record.lastPassedCommit, chain: [record.lastPassedCommit],
+      updates: [], seenChecks: [], head: record.lastPassedCommit, headSeenAt: record.createdAt, lastChecks: [],
+      readAt: record.closedAt, nextReadAt: null, requestedAt: record.createdAt, mergedHead: record.lastPassedCommit,
+      mergeCommit: record.lastPassedCommit, method: "squash", mergedAt: record.closedAt, attempts: 1,
+      reason: null, blockedAt: null, updatedAt: record.closedAt!,
+    };
+    // Remote completion and older writers can leave the last attempt running.
+    // A completed reap must not be written while its turn is still open.
+    savePipelines([record]);
+    h.resident.set("conversation_terminal", true);
+    h.active.set("conversation_terminal", true);
+    await tickPipelinesController([], h.ports);
+    expect(h.stops).toEqual([]);
+    expect(loadPipelines()[0]!.terminalReap?.settledAt ?? null).toBeNull();
+
+    h.active.set("conversation_terminal", false);
+    await tickPipelinesController([], h.ports);
+    expect(h.stops).toEqual(["implement:1:conversation_terminal"]);
+    expect(loadPipelines()[0]!.terminalReap?.settledAttempts).toEqual(["implement:1"]);
+    expect(loadPipelines()[0]!.terminalReap?.settledAt).toBeTruthy();
+  });
+}
+
+test("a superseded unstamped attempt retires while the current attempt retains its host", async () => {
+  const h = harness();
+  const record = pipelineRecord({ id: "retire-superseded", state: "paused",
+    attempts: [attempt(1, "conversation_superseded", false), attempt(2, "conversation_current", false)] });
+  savePipelines([record]);
+  for (const id of ["conversation_superseded", "conversation_current"]) h.resident.set(id, true);
+  h.active.set("conversation_superseded", false);
+  h.active.set("conversation_current", true);
+  await tickPipelinesController([], h.ports);
+  expect(h.stops).toEqual(["implement:1:conversation_superseded"]);
+  expect(h.resident.get("conversation_current")).toBe(true);
+});
+
+test("an old terminal lane remains scheduled and unarchived until its open turn settles", async () => {
+  const h = harness();
+  savePipelines([pipelineRecord({ id: "retire-before-archive", state: "completed",
+    attempts: [attempt(1, "conversation_terminal", true)] })]);
+  h.resident.set("conversation_terminal", true);
+  h.active.set("conversation_terminal", true);
+  await tickPipelinesController([], h.ports);
+  expect(await archiveSettledPipelines(Date.parse("2026-10-19T00:00:00Z"))).toBe(0);
+  expect(loadPipelines()).toHaveLength(1);
+  h.active.set("conversation_terminal", false);
+  await tickPipelinesController([], h.ports);
+  expect(h.stops).toEqual(["implement:1:conversation_terminal"]);
+  expect(await archiveSettledPipelines(Date.parse("2026-10-19T00:00:00Z"))).toBe(1);
+});
+
 test("completion reaps its finished resident builder hosts exactly once", async () => {
   const h = harness();
   savePipelines([pipelineRecord({
@@ -201,6 +262,7 @@ test("the creator, a mid-turn attempt, and a runtime-active session are preserve
   h.resident.set("conversation_creator", true);
   h.resident.set("conversation_midturn", true);
   h.resident.set("conversation_helper", true);
+  h.active.set("conversation_midturn", true);
   h.active.set("conversation_helper", true);
 
   await tickPipelines([], h.ports);
@@ -255,7 +317,7 @@ test("an unconfirmed sibling cannot settle the reap while another attempt still 
   expect(h.stops).toContain("implement:1:conversation_busy");
 });
 
-test("a parked terminal attempt is swept while closed teardown stays the close action's job", async () => {
+test("parked attempts and legacy closed lanes without a close obligation are swept", async () => {
   const h = harness();
   savePipelines([
     pipelineRecord({ id: "reap-closed", state: "closed", attempts: [attempt(1, "conversation_closed", true)] }),
@@ -266,9 +328,9 @@ test("a parked terminal attempt is swept while closed teardown stays the close a
 
   await tickPipelines([], h.ports);
 
-  expect(h.stops).toEqual(["implement:1:conversation_parked"]);
-  expect(h.resident.get("conversation_closed")).toBe(true);
-  expect(loadPipelines().find((pipeline) => pipeline.id === "reap-closed")?.terminalReap).toBeUndefined();
+  expect(h.stops).toEqual(["implement:1:conversation_closed", "implement:1:conversation_parked"]);
+  expect(h.resident.get("conversation_closed")).toBe(false);
+  expect(loadPipelines().find((pipeline) => pipeline.id === "reap-closed")?.terminalReap?.settledAt).toBeTruthy();
   expect(loadPipelines().find((pipeline) => pipeline.id === "reap-parked")?.terminalReap)
     .toMatchObject({ rounds: 1, stopped: 1, settledAttempts: ["implement:1"] });
 });

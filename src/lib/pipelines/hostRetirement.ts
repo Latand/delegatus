@@ -6,6 +6,15 @@ import type { Pipeline, PipelineStageAttempt, PipelineStageHostRef } from "./typ
 
 type RecoveryTarget = { conversationId: string; sessionId: string; agentPath: string | null; engine: RuntimeEngine };
 
+/** Terminal lanes and replaced attempts no longer own future work. Runtime
+    idleness still has to be proved before any recorded host is stopped. */
+export function pipelineAttemptReleased(pipeline: Pipeline, attempt: PipelineStageAttempt, latest: PipelineStageAttempt | undefined): boolean {
+  // An adopted helper keeps its own live-work evidence until reconciliation
+  // settles it. Merely appending one never supersedes the operational stage.
+  return !attempt.historical && (pipeline.state === "completed" || pipeline.state === "closed"
+    || (!!latest && !latest.historical && latest.n !== attempt.n));
+}
+
 /** Fresh pipeline ownership for an engine-issued recovery. A ref never grants
     authority to a source owner, publication, or a different/current attempt. */
 export function providerRecoveryAttempt(
@@ -91,8 +100,9 @@ export function pipelineHostHasLiveWork(
       if (!publishing && attempt === recoveryAttempt) continue;
       // Completion stamps can survive a restart/resume. A running owner still
       // holds the host, even with an older verdict on the same attempt.
-      if (publishing || ["pending", "spawning", "running", "reviewing", "committing"].includes(attempt.state)
-        || !(attempt.verdict || attempt.completedAt)
+      if (publishing || (!pipelineAttemptReleased(pipeline, attempt, run.attempts.at(-1))
+        && (["pending", "spawning", "running", "reviewing", "committing"].includes(attempt.state)
+          || !(attempt.verdict || attempt.completedAt)))
         || (attempt.activation && attempt.activation.phase !== "settled")) return true;
     }
   }

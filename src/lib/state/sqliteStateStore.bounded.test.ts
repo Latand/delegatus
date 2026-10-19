@@ -12,6 +12,48 @@ import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 
 type Row = { key: string; value: number };
 
+test("retirement upgrade re-enrols a terminal host missed by the old projection across a process restart", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-retirement-upgrade-"));
+  const filename = path.join(dir, "state.sqlite");
+  const row = { key: "terminal-lane", state: "completed", terminalReap: { settledAt: "done", settledAttempts: [] },
+    runs: [{ stageId: "build", attempts: [{ n: 1, state: "running", conversationId: "terminal-host", completedAt: null }] }] };
+  const options = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (value: typeof row) => value.key,
+    decode: (raw: unknown) => raw as typeof row, clone: (value: typeof row) => structuredClone(value) };
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "one", loadRecords: () => [row] }]);
+    const db = new Database(filename);
+    try {
+      // Simulate the previously installed protocol, including its false clean
+      // receipt, stale live owner and missing scheduler obligation.
+      const trigger = db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='pipeline_ref_inputs_update_v2'").get();
+      if (trigger) {
+        db.exec("DROP TRIGGER pipeline_ref_inputs_update_v2");
+        db.exec(trigger.sql.replace("pipeline_ref_inputs_update_v2", "pipeline_ref_inputs_update"));
+      }
+      db.exec("UPDATE pipeline_attempt_refs SET terminal=0");
+      db.exec("UPDATE pipeline_owner_refs SET live=1");
+      db.exec("UPDATE state_rows SET controller_active=0");
+      db.exec("DELETE FROM pipeline_tick_work");
+    } finally { db.close(); }
+    const result = spawnSync(process.execPath, ["--eval", `
+      const { SqliteStateCollection } = await import(${JSON.stringify(path.resolve("src/lib/state/sqliteStateStore.ts"))});
+      const store = new SqliteStateCollection(process.env.UPGRADE_DATABASE, {
+        collection: 'pipelines', schemaVersion: 1, busyMessage: 'busy',
+        key: row => row.key, decode: row => row, clone: row => structuredClone(row),
+      });
+      if (store.pipelineOwnerExists([['conversationId','terminal-host']],true)) throw new Error('stale owner retained');
+      if (!store.pipelineOtherTerminalHosts('terminal-lane',[])) throw new Error('missing terminal host');
+      if (!store.pipelineTickWork(0,[]).some(row => row.row_key==='terminal-lane')) throw new Error('missing retirement obligation');
+    `], { env: { ...process.env, UPGRADE_DATABASE: filename }, encoding: "utf8", timeout: 10_000 });
+    expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
+    const upgraded = new Database(filename);
+    try {
+      expect(JSON.parse(upgraded.query<{ value_json: string }, []>("SELECT value_json FROM state_rows").get()!.value_json)).toEqual(row);
+      expect(upgraded.query("SELECT controller_active FROM state_rows").get()).toEqual({ controller_active: 1 });
+    } finally { upgraded.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("controller caches follow decoding authority and refuse writes that race snapshot preparation", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-authority-"));
   const rows = Array.from({ length: 32 }, (_, n) => ({ key: `row-${n}`, value: n }));
@@ -363,7 +405,7 @@ test("a fresh process upgrades the pre-compact reference schema before ordinary 
     const db = new Database(filename);
     // The previous schema has reference tables and the delete sentinel, but
     // maintains references directly from state_rows, without compact inputs.
-    for (const name of ["pipeline_refs_insert", "pipeline_refs_update", "pipeline_ref_inputs_insert", "pipeline_ref_inputs_update"]) db.exec(`DROP TRIGGER ${name}`);
+    for (const name of ["pipeline_refs_insert", "pipeline_refs_update", "pipeline_ref_inputs_insert", "pipeline_ref_inputs_update_v2"]) db.exec(`DROP TRIGGER ${name}`);
     db.exec("DROP TRIGGER pipeline_refs_delete");
     db.exec("DROP TABLE pipeline_ref_inputs");
     db.exec("CREATE TRIGGER pipeline_refs_delete AFTER DELETE ON state_rows WHEN OLD.collection='pipelines' BEGIN DELETE FROM pipeline_attempt_refs WHERE row_key=OLD.row_key; DELETE FROM pipeline_owner_refs WHERE row_key=OLD.row_key; END");

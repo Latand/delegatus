@@ -488,7 +488,7 @@ function openRawDatabase(filename: string): Database {
           db.exec("ALTER TABLE state_collections ADD COLUMN change_floor INTEGER NOT NULL DEFAULT 0");
         }
         installPipelineControllerIndex(db, path.dirname(filename));
-        installPipelineControllerSchedule(db, path.dirname(filename));
+        installPipelineControllerSchedule(db, path.dirname(filename), !pipelineControllerReferencesReady(db, names));
         installPipelineControllerReferences(db, path.dirname(filename));
         installPipelineEvidenceIndex(db, path.dirname(filename));
         db.exec("COMMIT");

@@ -303,6 +303,8 @@ test.each([0, 1000])("the internal phase never builds a full returned snapshot w
     Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
     peer.state = "closed"; peer.closedAt = h.ports.now(); peer.cursor = null; peer.runs = peer.runs.map(run => ({ ...run, attempts: Array.from({ length: 8 }, (_, index) => ({ ...structuredClone(run.attempts[0]!), n: index + 1,
       state: "failed", launchId: null, verdict: { status: "fail" }, completedAt: peer.closedAt, output: "retained evidence ".repeat(256) })) })); peer.delivery = undefined; peer.publication = "internal";
+    peer.terminalReap = { rounds: 1, stopped: 0, lastAt: peer.closedAt!, settledAt: peer.closedAt!,
+      settledAttempts: peer.runs.flatMap(run => run.attempts.map(attempt => `${run.stageId}:${attempt.n}`)) };
     return peer;
   });
   savePipelines([lane, ...peers]);

@@ -7,6 +7,7 @@ import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { blockingHostActivityFlags } from "@/lib/runtime/hostActivityFlags";
 import { terminateStructuredHostTree } from "@/lib/runtime/structuredHostControl";
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 const roots: string[] = [];
@@ -64,10 +65,11 @@ function fixture(engine: "codex" | "claude" = "codex") {
   const state = { activeQueue: queue };
   let pipelineReads = 0;
   const deps = {
-    ...retirement, runtimeIdleKillMatches, sameRecordedProcessIdentity, blockingHostActivityFlags,
+    ...retirement, runtimeIdleKillMatches, sameRecordedProcessIdentity, blockingHostActivityFlags, registryRowsMatching,
     stopped: false, state, queue,
     client: { readSession: async () => session, operationStatus: async () => ({ receipt: { status: "delivering", retirementClaim: claim } }) },
     registry: { readOnlySnapshot: () => snapshot, conversation: () => conversation,
+      deliveryWriteOrBusy: async (_context: unknown, write: () => unknown) => write(),
       terminateInactiveStructuredHost: () => false,
       recordStructuredTerminationSurvivors: (_key: unknown, _ref: unknown, identities: unknown[]) => { entry.structuredTerminationSurvivors = identities; return true; },
       terminateStructuredHost: () => true },
@@ -87,10 +89,44 @@ function fixture(engine: "codex" | "claude" = "codex") {
     refreshCurrentProjection: async () => {},
   };
   const terminate = (recovery = ref) => productionTermination(deps)(conversationId, key, idle, authority, recovery);
+  const retire = () => productionTermination(deps)(conversationId, key, idle, authority);
   const append = (payload: Record<string, unknown>, time = cut + 1) => fs.appendFileSync(transcript, JSON.stringify(record(time, payload)) + "\n");
-  return { pipeline, attempt, entry, snapshot, conversation, session, signals, deps, terminate, append, nativeCut,
+  return { pipeline, attempt, entry, snapshot, conversation, session, signals, deps, terminate, retire, append, nativeCut,
     transcript, setBeforeSignal: (callback: () => void) => { beforeSignal = callback; }, reads: () => pipelineReads };
 }
+
+test.each(["completed", "closed", "superseded"] as const)("the production idle callback releases a %s attempt without completion stamps", async outcome => {
+  const f = fixture();
+  if (outcome === "superseded") f.pipeline.runs[0]!.attempts.push({ ...f.attempt, n: 2, conversationId: "conversation_current",
+    sessionId: "current-session", agentPath: "current-transcript" });
+  else f.pipeline.state = outcome;
+  expect(await f.retire()).toBe(true);
+  expect(f.signals).toEqual([987001, 987002]);
+});
+
+test.each(["turn", "writer", "replacement", "publication"] as const)("released attempts still refuse a changed %s after awaited admission", async change => {
+  const f = fixture();
+  f.pipeline.state = "completed";
+  const status = f.deps.client.operationStatus;
+  f.deps.client.operationStatus = async () => {
+    if (change === "turn") f.entry.structuredHost.activeTurnRef = "new-turn" as never;
+    if (change === "writer") f.entry.claimOwner = "replacement";
+    if (change === "replacement") f.deps.loadPipelinesForRetirement = () => [f.pipeline, { ...f.pipeline, state: "running" }];
+    if (change === "publication") f.pipeline.publicationAdmission = { state: "pending" } as Pipeline["publicationAdmission"];
+    return status();
+  };
+  expect(await f.retire()).toBe(false);
+  expect(f.signals).toEqual([]);
+});
+
+test.each([true, false])("adopted historical work retains custody alongside an operational attempt: %s", async historicalTail => {
+  const f = fixture();
+  const other = { ...f.attempt, n: 2, historical: true, conversationId: "conversation_adopted", sessionId: "adopted-session", agentPath: "adopted-transcript" };
+  f.pipeline.runs[0]!.attempts = historicalTail ? [f.attempt, other] : [other, f.attempt];
+  expect(await f.retire()).toBe(false);
+  expect(pipelineHostHasLiveWork([f.pipeline], { conversationId: other.conversationId, agentPath: other.agentPath, paneId: null })).toBe(true);
+  expect(f.signals).toEqual([]);
+});
 
 test("provider recovery retires its own running cut through the production callback", async () => {
   const f = fixture();

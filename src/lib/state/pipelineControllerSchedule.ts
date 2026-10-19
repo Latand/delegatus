@@ -4,21 +4,22 @@ import { mayRunStateStartupMutation } from "@/lib/stateOwnership";
 
 /** Headers only. Triggers keep old writers and raw SQL in the same queue;
  * acknowledgment is conditional on the revision that was actually observed. */
-export function installPipelineControllerSchedule(db: Database, directory: string): void {
-  if (db.query("SELECT 1 FROM sqlite_master WHERE name='pipeline_tick_delete'").get()) return;
+export function installPipelineControllerSchedule(db: Database, directory: string, refresh = false): void {
+  if (!refresh && db.query("SELECT 1 FROM sqlite_master WHERE name='pipeline_tick_delete'").get()) return;
   if (!mayRunStateStartupMutation(directory)) return;
-  db.exec(`CREATE TABLE pipeline_tick_work (
+  if (refresh) for (const name of ["pipeline_tick_insert", "pipeline_tick_update", "pipeline_tick_delete"]) db.exec(`DROP TRIGGER IF EXISTS ${name}`);
+  db.exec(`CREATE TABLE IF NOT EXISTS pipeline_tick_work (
     row_key TEXT PRIMARY KEY, row_order INTEGER NOT NULL, generation INTEGER NOT NULL,
     dirty INTEGER NOT NULL DEFAULT 1, due_at INTEGER NOT NULL DEFAULT 0, attempt_cursor INTEGER NOT NULL DEFAULT 0
   )`);
-  db.exec("CREATE INDEX pipeline_tick_dirty ON pipeline_tick_work(dirty, row_order, row_key)");
-  db.exec("CREATE INDEX pipeline_tick_due ON pipeline_tick_work(due_at, row_order, row_key)");
-  db.exec("CREATE INDEX pipeline_tick_order ON pipeline_tick_work(row_order, row_key)");
+  db.exec("CREATE INDEX IF NOT EXISTS pipeline_tick_dirty ON pipeline_tick_work(dirty, row_order, row_key)");
+  db.exec("CREATE INDEX IF NOT EXISTS pipeline_tick_due ON pipeline_tick_work(due_at, row_order, row_key)");
+  db.exec("CREATE INDEX IF NOT EXISTS pipeline_tick_order ON pipeline_tick_work(row_order, row_key)");
   db.exec("CREATE INDEX IF NOT EXISTS pipeline_controller_work_key ON pipeline_controller_work(row_key)");
-  db.exec("CREATE TABLE pipeline_tick_cursor (id INTEGER PRIMARY KEY CHECK(id=1), row_order INTEGER NOT NULL, row_key TEXT NOT NULL)");
-  db.exec("INSERT INTO pipeline_tick_cursor VALUES (1,-1,'')");
-  db.exec("CREATE TABLE pipeline_tick_clock (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL)");
-  db.exec("INSERT INTO pipeline_tick_clock SELECT 1,COALESCE(MAX(row_revision),0) FROM state_rows");
+  db.exec("CREATE TABLE IF NOT EXISTS pipeline_tick_cursor (id INTEGER PRIMARY KEY CHECK(id=1), row_order INTEGER NOT NULL, row_key TEXT NOT NULL)");
+  db.exec("INSERT OR IGNORE INTO pipeline_tick_cursor VALUES (1,-1,'')");
+  db.exec("CREATE TABLE IF NOT EXISTS pipeline_tick_clock (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL)");
+  db.exec("INSERT OR IGNORE INTO pipeline_tick_clock SELECT 1,COALESCE(MAX(row_revision),0) FROM state_rows");
   const put = `UPDATE pipeline_tick_clock SET revision=revision+1 WHERE id=1;
     DELETE FROM pipeline_tick_work WHERE row_key=NEW.row_key AND NOT (${pipelineControllerObligationSql("NEW.value_json")});
     INSERT INTO pipeline_tick_work(row_key,row_order,generation) SELECT NEW.row_key,NEW.row_order,(SELECT revision FROM pipeline_tick_clock WHERE id=1) WHERE ${pipelineControllerObligationSql("NEW.value_json")}
@@ -37,7 +38,8 @@ export function installPipelineControllerSchedule(db: Database, directory: strin
     BEGIN DELETE FROM pipeline_tick_work WHERE row_key=OLD.row_key; END`);
   db.exec(`INSERT INTO pipeline_tick_work(row_key,row_order,generation)
     SELECT row_key,row_order,row_revision FROM state_rows r WHERE collection='pipelines'
-      AND (${pipelineControllerObligationSql("r.value_json")})`);
+      AND (${pipelineControllerObligationSql("r.value_json")})
+    ON CONFLICT(row_key) DO UPDATE SET dirty=1,due_at=0`);
 }
 
 export type PipelineTickWork = { row_key: string; row_order: number; generation: number; attempt_cursor: number };

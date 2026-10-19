@@ -32,7 +32,8 @@ export function pipelineControllerObligationSql(value: string): string {
   return `CASE WHEN NOT json_valid(${value}) THEN 1 ELSE (
     json_extract(${value},'$.state') NOT IN ('closed','completed')
     OR json_array_length(${value},'$.unconfirmedHosts')>0
-    OR (json_extract(${value},'$.state')='completed' AND json_extract(${value},'$.terminalReap.settledAt') IS NULL)
+    OR (json_extract(${value},'$.state') IN ('completed','closed') AND json_extract(${value},'$.closeTeardown') IS NULL
+      AND json_extract(${value},'$.terminalReap.settledAt') IS NULL)
     OR (${Object.values(predicates(value)).join(" OR ")})
   ) END`;
 }

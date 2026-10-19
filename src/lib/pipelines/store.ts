@@ -1590,8 +1590,7 @@ export function pipelineRegistryHealth(): RegistryRecordIssue[] {
 function pipelineControllerActive(pipeline: Pipeline): boolean {
   if (pipeline.closeTeardown) return pipeline.closeTeardown.phase !== "settled";
   if (pipeline.activationCloseRequested) return true;
-  if (pipeline.state === "closed") return Boolean(pipeline.unconfirmedHosts?.length);
-  if (pipeline.state === "completed") {
+  if (pipeline.state === "completed" || pipeline.state === "closed") {
     return Boolean(pipeline.unconfirmedHosts?.length) || !pipeline.terminalReap?.settledAt;
   }
   return true;
@@ -2000,6 +1999,9 @@ export function selectArchivedPipelines(select: (pipeline: Pipeline) => boolean,
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
   if (!pipelineActivitySettled(pipeline)) return false;
+  if (pipeline.unconfirmedHosts?.length) return false;
+  if (["completed", "closed"].includes(pipeline.state) && !pipeline.closeTeardown && !pipeline.terminalReap?.settledAt
+    && pipeline.runs.some(run => run.attempts.some(attempt => attempt.conversationId || attempt.agentPath || attempt.paneId))) return false;
   /* Closed records archive on closedAt. A discarded draft now closes like
      anything else (#1274), but records discarded before that fix are hidden
      with no closedAt at all, so their hiddenAt still stands in. Anything still

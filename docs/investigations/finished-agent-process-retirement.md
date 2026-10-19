@@ -1,5 +1,36 @@
 # Finished-agent process retirement
 
+## Terminal-path follow-up, 2026-10-19
+
+The controller previously excluded closed lanes without a close obligation and
+required a verdict or completion timestamp before considering any attempt.
+A completed lane could therefore settle its reap while an unstamped host was
+still running. Superseded operational attempts also retained ownership solely
+because their old attempt state remained running. The TypeScript ownership
+guard and its SQLite projection made the same decision.
+
+Terminal lanes now consider every recorded host. Replaced operational attempts
+release their ownership, while adopted helpers retain their independent work
+evidence. Every automatic stop still requires the runtime's conditional idle
+protocol; an open turn, publication custody, a replacement writer, pending
+work or unreadable evidence keeps the host alive and cleanup pending. Explicit
+close obligations continue to drain their frozen targets. Closed lanes without
+an obligation use the automatic idle reap. Archiving waits for outstanding
+retirement and unconfirmed hosts.
+
+The fenced schema upgrade rebuilds ownership references and scheduler triggers
+and re-enrols outstanding terminal hosts, including a lane with an earlier
+false clean receipt. It preserves authoritative payloads and existing attempt
+receipts. Ordinary ticks keep the existing bounded attempt windows and indexed
+owner reads. This change claims no performance gain.
+
+Regressions exercise budget-exhausted completion, outside merge, completed
+successor lanes, legacy closed lanes, superseded attempts, an open turn becoming
+idle, archive custody, production termination guards and schema recovery in a
+fresh process. The runtime-host process implementation is unchanged.
+
+## Original investigation
+
 Baseline: `1d0eda9302bfa5c1df7e392f6002091ab0c7c7e9` (`origin/main`, fetched
 2026-10-02). Inspection used read-only SQLite connections to the registry and
 pipeline store and a `/proc` parent walk. No existing agent was signalled.

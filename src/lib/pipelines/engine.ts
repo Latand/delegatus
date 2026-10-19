@@ -145,7 +145,7 @@ import { matchesShortId, resolveShortId, shortId } from "@/lib/shortIds";
 import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRuntimeProfile } from "./stageSandbox";
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
-import { pipelineHostHasLiveWork } from "./hostRetirement";
+import { pipelineAttemptReleased, pipelineHostHasLiveWork } from "./hostRetirement";
 import { pipelineRecordRevalidator } from "./revalidation";
 import { controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
@@ -9970,11 +9970,11 @@ const TERMINAL_REAP_MAX_ROUNDS = 5;
  * A stage may finish long before the pipeline: on a pass edge, a bounded repair
  * loop, or a parked decision. Waiting for whole-pipeline completion left each
  * finished host resident. The reap therefore follows attempt evidence through
- * the same identity-verified control path while `closed` stays the explicit
- * close action's job.
+ * the same identity-verified control path. Explicit close obligations retain
+ * their own frozen targets; old closed lanes without one use this idle reap.
  *
- * Only hosts whose attempt finished its turn (a verdict or a completion stamp)
- * are candidates, and the runtime gets the last word: a conversation it
+ * A completed lane or replaced attempt also releases its host even when an
+ * older writer left no completion stamp. The runtime gets the last word: a conversation it
  * reports actively running is preserved, as are the pipeline's creator
  * conversation and transcript. Settled attempt keys make this incremental: a
  * later terminal round opens another bounded batch without re-killing an older
@@ -9982,7 +9982,7 @@ const TERMINAL_REAP_MAX_ROUNDS = 5;
  * ceiling turns a survivor into a visible unconfirmed host.
  */
 async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePorts, pipelines: readonly Pipeline[]): Promise<boolean> {
-  if (!["running", "needs_decision", "needs_review", "paused", "completed"].includes(pipeline.state)) return false;
+  if (!["running", "needs_decision", "needs_review", "paused", "completed", "closed"].includes(pipeline.state)) return false;
   const refs = controllerReferences(pipeline.id);
   const unscopedSettled = refs ? undefined : new Set(pipeline.terminalReap?.settledAttempts ?? []);
   const alreadySettled = (key: string) => controllerSettledAttempt(pipeline,key) ?? unscopedSettled!.has(key);
@@ -9990,13 +9990,15 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
     .map((host) => `${host.stageId}:${host.attempt}`));
   const prior = pipeline.terminalReap;
   const otherCandidates = refs ? await controllerOtherTerminalHosts(pipeline.id, refs.map(ref => ref.position)) : false;
-  const candidates = launchedStageHosts(pipeline, Boolean(refs)).filter(({ target, turnSettled }) => turnSettled
+  const candidates = launchedStageHosts(pipeline, Boolean(refs)).filter(({ target, turnSettled, attempt }) => (turnSettled
+    || ["completed", "closed"].includes(pipeline.state)
+    || pipelineAttemptReleased(pipeline, attempt, pipeline.runs.find(run => run.stageId === target.stageId)?.attempts.at(-1)))
     && !(target.conversationId && target.conversationId === pipeline.srcConversationId)
     && !(target.agentPath && target.agentPath === pipeline.srcPath)
     && !alreadySettled(`${target.stageId}:${target.attempt}`)
     && !unconfirmedAttempts.has(`${target.stageId}:${target.attempt}`));
   if (candidates.length === 0) {
-    if (otherCandidates || pipeline.state !== "completed" || prior?.settledAt) return false;
+    if (otherCandidates || !["completed", "closed"].includes(pipeline.state) || prior?.settledAt) return false;
     const settledAt = ports.now();
     pipeline.terminalReap = prior
       ? { ...prior, lastAt: settledAt, settledAttempts: [...(unscopedSettled ?? new Set(prior.settledAttempts ?? []))], settledAt }
