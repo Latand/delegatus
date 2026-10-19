@@ -18562,6 +18562,77 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
   }, 180_000);
 
+  browserTest("the operator can remove a full unknown legacy field and save a replacement on desktop and phone", async () => {
+    const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "legacy-removal");
+    fs.mkdirSync(out, { recursive: true });
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const at = "2026-10-19T12:00:00.000Z";
+    const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    const initial = {
+      ...defaultSeatTickSettings("atlas"),
+      reason: "u".repeat(500),
+      instructionLines: [{ text: "u".repeat(500), author: null, at: null }],
+      updatedAt: at,
+    };
+    let stored = structuredClone(initial);
+    const answer = () => ({ ...tickAnswer(stored.reason ?? ""), settings: stored,
+      effective: { ...tickAnswer(stored.reason ?? "").effective, reason: stored.reason } });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT") {
+          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-19T12:01:00.000Z", actor: operator });
+          if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
+          stored = result.settings as typeof stored;
+        }
+        return Response.json(answer());
+      },
+      "/api/roles": rolesAnswer,
+    });
+    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
+    fs.mkdirSync(browserHome, { recursive: true });
+    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
+        stored = structuredClone(initial);
+        const label = `${phone ? "phone-390" : "desktop"}-${lang}-${theme}`;
+        const texts = cardTexts(lang);
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-kanban-tab="inbox"]').click();
+            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+            await page.locator("[data-phone-task-tick-open]").click();
+          } else {
+            const fold = page.locator("[data-seat-collapse]");
+            if (await fold.count()) await fold.first().click();
+            await page.locator("[data-open-seat-tick]").click();
+          }
+          const legacyLine = page.locator("[data-seat-tick-instruction-line]");
+          await legacyLine.waitFor();
+          expect(await legacyLine.textContent()).toContain(lang === "en" ? "author unknown" : "автор невідомий");
+          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
+          const removeUnknown = page.locator("[data-seat-tick-clear-unknown]");
+          expect(await removeUnknown.innerText()).toBe(lang === "en" ? "Remove unattributed legacy instructions" : "Видалити старі вказівки без автора");
+          await removeUnknown.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${label}-legacy-removal-control.png`) });
+          await removeUnknown.click();
+          expect(stored.reason).toBeNull();
+          expect(stored.instructionLines).toEqual([]);
+          await page.locator("[data-seat-tick-clear-unknown]").waitFor({ state: "detached" });
+          await page.locator("[data-seat-tick-reason]").fill("New operator instruction.");
+          await page.locator("[data-seat-tick-save]").click();
+          await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
+          expect(stored.reason).toBe("New operator instruction.");
+          expect(stored.instructionLines).toEqual([{ text: "New operator instruction.", author: operator, at: "2026-10-19T12:01:00.000Z" }]);
+          await page.screenshot({ path: path.join(out, `${label}-legacy-cleared-and-replaced.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
+  }, 180_000);
+
   browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
     fs.mkdirSync(SHOTS, { recursive: true });
     const out = path.resolve(".artifacts/seat-tick-instructions");

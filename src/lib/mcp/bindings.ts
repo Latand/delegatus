@@ -4630,11 +4630,15 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   }
 
   const own = callerProject ? canonicalOrchestratorProject(callerProject) : null;
+  // Read designation separately from write authority: a temporarily missing
+  // caller project or manager grant must not turn a known seat's words into
+  // operator instructions.
+  const designatedSeat = orchestratorSeatFor(project).active;
   let settings = current;
   let changed = false;
   let maintenanceNotes: string[] | undefined;
   if (Object.keys(change).length > 0) {
-    const activeSeat = own === project ? orchestratorSeatFor(project).active : null;
+    const activeSeat = own === project ? designatedSeat : null;
     const actor: SeatTickSettingsActor = {
       kind: attribution.kind,
       conversationId: attribution.conversationId,
@@ -4651,9 +4655,22 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     // Instruction authorship is separate from the existing control authority.
     // A temporarily unavailable manager grant cannot make a recorded seat's
     // words operator-authored. The designation still proves its authorship.
-    const instructionActor = attribution.kind === "gateway"
-      && (callerSeat || (activeSeat && activeSeat.conversationId === attribution.conversationId))
-      ? { ...actor, kind: "manager" as const } : actor;
+    let instructionActor = actor;
+    if (attribution.kind === "gateway") {
+      const designatedWriter = designatedSeat?.conversationId === attribution.conversationId ? designatedSeat : null;
+      if (designatedWriter) {
+        instructionActor = { ...actor, kind: "manager", project, seatEpoch: designatedWriter.seatEpoch };
+      } else if (callerSeat?.conversationId === attribution.conversationId) {
+        const writerProject = callerSeat.project ? canonicalOrchestratorProject(callerSeat.project) : null;
+        const callerDesignation = writerProject === project ? designatedSeat : writerProject ? orchestratorSeatFor(writerProject).active : null;
+        instructionActor = {
+          ...actor,
+          kind: "manager",
+          project: writerProject,
+          seatEpoch: callerDesignation?.conversationId === attribution.conversationId ? callerDesignation.seatEpoch : null,
+        };
+      }
+    }
     const context = { at: new Date().toISOString(), actor, instructionActor };
     const applied = dependencies.writeTickSettings || dependencies.readTickSettings
       ? applySeatTickSettingsChange(current, change, context)

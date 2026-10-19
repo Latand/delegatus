@@ -5404,6 +5404,7 @@ export const en = {
   "seatTick.instruction.agent": "Agent session",
   "seatTick.instruction.unknown": "author unknown",
   "seatTick.instruction.dateUnknown": "date unknown",
+  "seatTick.instruction.removeUnknown": "Remove unattributed legacy instructions",
   "seatTick.reasonHint": "The agent receives these instructions on every wake. Edit the operator’s lines here; each author’s lines and write dates appear below. The 500-character limit covers all authors’ lines. A schedule change needs instructions. Schedule resets and expiry keep them.",
   "seatTick.instructionsCharacterCount": "{count} / 500 characters",
   "seatTick.instructionsOverLimit": "Over limit by {over}",

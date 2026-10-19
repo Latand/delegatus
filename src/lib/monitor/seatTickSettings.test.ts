@@ -385,6 +385,28 @@ test("seat edits preserve operator lines verbatim with their original write date
   expect(cleared.reason).toBe(initial.reason);
 });
 
+test("the operator can remove migrated unknown text and save a replacement within the full field limit", () => {
+  const legacy = { ...defaultSeatTickSettings(PROJECT), reason: "u".repeat(500) };
+  const result = applySeatTickSettingsChange(legacy, {
+    reason: "New operator instruction.",
+    clearUnknownInstructions: true,
+  }, { at: AT, actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } });
+  expect(result.ok).toBe(true);
+  expect(settingsOf(result).reason).toBe("New operator instruction.");
+  expect(settingsOf(result).instructionLines).toEqual([
+    { text: "New operator instruction.", author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, at: AT },
+  ]);
+});
+
+test("a seat cannot clear migrated unknown instructions", () => {
+  const legacy = { ...defaultSeatTickSettings(PROJECT), reason: "u".repeat(500) };
+  const result = applySeatTickSettingsChange(legacy, { clearUnknownInstructions: true }, {
+    at: AT, actor: SEAT, instructionActor: SEAT,
+  });
+  expect(result).toEqual({ ok: false, error: "only an operator can remove instructions with unknown authors" });
+  expect(legacy.reason).toBe("u".repeat(500));
+});
+
 
 test("a new seat epoch preserves its predecessor, unchanged dates and the operator's lines", () => {
   const nextAt = "2026-08-29T12:00:00.000Z";

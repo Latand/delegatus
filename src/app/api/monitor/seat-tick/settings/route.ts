@@ -20,13 +20,12 @@ export const dynamic = "force-dynamic";
 /**
  * One project's seat tick, read and changed from the browser (#1681).
  *
- * A thin route over the authoritative module, and deliberately nothing more:
+ * A thin route over the authoritative module:
  * every rule, every refusal's wording, the redaction and the prompt limit are
  * `applySeatTickSettingsChange`'s, exactly as they are for the
- * `seat_tick_settings` tool. There is no second settings model here, and no
- * validation of its own beyond the two things the tool's argument schema
- * covers instead — a project has to be named, and `untilMinutes` has to be a
- * positive number of minutes.
+ * `seat_tick_settings` tool. There is no second settings model here. The
+ * route also owns the UI-only removal action for legacy lines whose author is
+ * unknown, and admits it only for the operator's same-origin browser request.
  *
  * Two properties worth stating:
  *
@@ -128,6 +127,9 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
   if (body.wakeIntervalMinutes !== undefined) change.wakeIntervalMinutes = body.wakeIntervalMinutes as number | null;
   if (body.reason !== undefined) change.reason = body.reason as string | null;
   if (body.monitorPrompt !== undefined) change.monitorPrompt = body.monitorPrompt as string | null;
+  if (body.clearUnknownInstructions !== undefined && typeof body.clearUnknownInstructions !== "boolean") {
+    return NextResponse.json({ error: "clearUnknownInstructions must be a boolean" }, { status: 400 });
+  }
   /* Converted exactly as the tool converts it: an expiry is offered in minutes
      from now, because that is the form the caller decided in. */
   if (body.untilMinutes !== undefined) {
@@ -144,6 +146,12 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
     /* Inside the try: attribution reads the seat file, and an unreadable one
        must answer as a failure rather than as an uncaught throw. */
     const actor = settingsActor(req, project);
+    if (body.clearUnknownInstructions === true) {
+      if (actor.kind !== "gateway" || !operatorBrowserRequest(req) || req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) {
+        return NextResponse.json({ error: "only the operator browser can remove instructions with unknown authors" }, { status: 403 });
+      }
+      change.clearUnknownInstructions = true;
+    }
     if (Object.keys(change).length === 0) {
       return NextResponse.json(seatTickSettingsAnswer(project, false, actor), { headers: NO_STORE });
     }

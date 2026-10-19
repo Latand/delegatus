@@ -596,3 +596,31 @@ test("an active root seat remains the instruction author when manager authority 
   expect(stored.instructionLines![1]!.author).toMatchObject({ kind: "manager", conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
   expect(stored.reason).toBe("Preserve operator instruction.\nSeat note.");
 });
+
+test("the operator browser can clear a full legacy field and save new instructions atomically", async () => {
+  const legacy = { ...readSeatTickSettings(PROJECT, settingsFile), reason: "u".repeat(500), updatedAt: "2026-10-01T12:00:00.000Z" };
+  writeSeatTickSettings(PROJECT, legacy, settingsFile);
+  expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual([
+    { text: "u".repeat(500), author: null, at: null },
+  ]);
+
+  const response = await put({ project: PROJECT, clearUnknownInstructions: true, reason: "New operator instruction." });
+  expect(response.status).toBe(200);
+  const stored = readSeatTickSettings(PROJECT, settingsFile);
+  expect(stored.reason).toBe("New operator instruction.");
+  expect(stored.instructionLines).toEqual([
+    { text: "New operator instruction.", author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, at: stored.updatedAt },
+  ]);
+});
+
+test("a seat request cannot use the operator-only legacy instruction removal", async () => {
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  const legacy = { ...readSeatTickSettings(PROJECT, settingsFile), reason: "u".repeat(500) };
+  writeSeatTickSettings(PROJECT, legacy, settingsFile);
+  setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
+  const response = await put({ project: PROJECT, clearUnknownInstructions: true }, {
+    ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY,
+  });
+  expect(response.status).toBe(403);
+  expect(readSeatTickSettings(PROJECT, settingsFile).reason).toBe("u".repeat(500));
+});

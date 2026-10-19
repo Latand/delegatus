@@ -186,6 +186,8 @@ export interface SeatTickSettingsChange {
   wakeIntervalMinutes?: number | null;
   /** Replace only the server-identified author’s lines; null removes them. */
   reason?: string | null;
+  /** Remove only unattributed legacy lines; route authorization is operator-only. */
+  clearUnknownInstructions?: boolean;
   /** The seat's own additional prompt for its monitor; `null` clears it. */
   monitorPrompt?: string | null;
   /** ISO instant, or `null` for "until someone changes it". */
@@ -497,8 +499,16 @@ export function applySeatTickSettingsChange(
     const effective = effectiveSeatTickSettings(current, Date.parse(context.at), 60 * 60_000);
     if (effective.lapsed) current = seatTickSettingsAfterLapse(current.project, effective);
   }
-  const touched = ["enabled", "wakeIntervalMinutes", "reason", "monitorPrompt", "until", "maintenance", "curation", "autoRotate", "release", "autonomy", "autonomyDecision"].filter((key) => Object.hasOwn(change, key));
+  const touched = ["enabled", "wakeIntervalMinutes", "reason", "clearUnknownInstructions", "monitorPrompt", "until", "maintenance", "curation", "autoRotate", "release", "autonomy", "autonomyDecision"].filter((key) => Object.hasOwn(change, key));
   if (touched.length === 0) return { ok: false, error: "a tick settings change needs at least one field" };
+
+  if (Object.hasOwn(change, "clearUnknownInstructions")) {
+    if (change.clearUnknownInstructions !== true) return { ok: false, error: "clearUnknownInstructions must be true" };
+    const author = context.instructionActor ?? context.actor;
+    if (author.kind !== "gateway") return { ok: false, error: "only an operator can remove instructions with unknown authors" };
+    const kept = seatTickInstructionLines(current).filter(line => line.author !== null && line.author.kind !== "unidentified");
+    current = { ...current, reason: kept.map(line => line.text).join("\n") || null, instructionLines: kept };
+  }
 
   const enabled = Object.hasOwn(change, "enabled") ? change.enabled : current.enabled;
   if (typeof enabled !== "boolean") return { ok: false, error: "enabled must be a boolean" };

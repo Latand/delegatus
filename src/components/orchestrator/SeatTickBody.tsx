@@ -523,6 +523,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
 
   const instructionLines = record ? seatTickInstructionLines(record.settings) : [];
   const protectedLines = instructionLines.filter(line => line.author?.kind !== "gateway");
+  const hasUnknownInstructions = instructionLines.some(line => !line.author || line.author.kind === "unidentified");
   const instructionLength = draft.reason.length + protectedLines.map(line => line.text).join("\n").length
     + (draft.reason && protectedLines.length ? 1 : 0);
   const phone = surface === "mobile";
@@ -703,6 +704,18 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
               </li>
             ))}
           </ul>
+        ) : null}
+
+        {hasUnknownInstructions ? (
+          <button
+            type="button"
+            data-seat-tick-clear-unknown
+            disabled={state.saving}
+            onClick={() => void read.save({ clearUnknownInstructions: true })}
+            className={`inline-flex ${phone ? "min-h-11" : "h-7"} items-center self-start rounded-control px-1 text-ui font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
+          >
+            {t("seatTick.instruction.removeUnknown")}
+          </button>
         ) : null}
 
         {reading.offDefault ? (
