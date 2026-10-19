@@ -4634,6 +4634,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   // caller project or manager grant must not turn a known seat's words into
   // operator instructions.
   const designatedSeat = orchestratorSeatFor(project).active;
+  const writerSeat = own ? orchestratorSeatFor(own).active : designatedSeat;
   let settings = current;
   let changed = false;
   let maintenanceNotes: string[] | undefined;
@@ -4657,18 +4658,9 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     // words operator-authored. The designation still proves its authorship.
     let instructionActor = actor;
     if (attribution.kind === "gateway") {
-      const designatedWriter = designatedSeat?.conversationId === attribution.conversationId ? designatedSeat : null;
+      const designatedWriter = writerSeat?.conversationId === attribution.conversationId ? writerSeat : null;
       if (designatedWriter) {
-        instructionActor = { ...actor, kind: "manager", project, seatEpoch: designatedWriter.seatEpoch };
-      } else if (callerSeat?.conversationId === attribution.conversationId) {
-        const writerProject = callerSeat.project ? canonicalOrchestratorProject(callerSeat.project) : null;
-        const callerDesignation = writerProject === project ? designatedSeat : writerProject ? orchestratorSeatFor(writerProject).active : null;
-        instructionActor = {
-          ...actor,
-          kind: "manager",
-          project: writerProject,
-          seatEpoch: callerDesignation?.conversationId === attribution.conversationId ? callerDesignation.seatEpoch : null,
-        };
+        instructionActor = { ...actor, kind: "manager", project: own, seatEpoch: designatedWriter.seatEpoch };
       }
     }
     const context = { at: new Date().toISOString(), actor, instructionActor };

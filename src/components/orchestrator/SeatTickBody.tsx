@@ -710,8 +710,8 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
           <button
             type="button"
             data-seat-tick-clear-unknown
-            disabled={state.saving}
-            onClick={() => void read.save({ clearUnknownInstructions: true })}
+            disabled={state.saving || !draft.reason.trim()}
+            onClick={() => void read.save({ clearUnknownInstructions: true, reason: draft.reason.trim() })}
             className={`inline-flex ${phone ? "min-h-11" : "h-7"} items-center self-start rounded-control px-1 text-ui font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
           >
             {t("seatTick.instruction.removeUnknown")}

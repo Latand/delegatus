@@ -3197,7 +3197,9 @@ const TICK_REPORT_REMINDER = "Nothing will ask you for reports while the tick is
 
 function tickSettingsBindings(options: {
   callerProject?: string | null;
+  conversationId?: string;
   kind?: "manager" | "agent" | "gateway" | "unidentified";
+  managerGrant?: boolean;
   store?: Map<string, unknown>;
 } = {}) {
   const store = options.store ?? new Map<string, unknown>();
@@ -3206,11 +3208,12 @@ function tickSettingsBindings(options: {
     completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: [
       { project: "another-project", displayName: "Another project", smt: 1, conversations: 1 },
       { project: "fixture-unresolved-seat-instruction-author", displayName: "Unresolved seat fixture", smt: 1, conversations: 1 },
+      ...(options.callerProject ? [{ project: options.callerProject, displayName: options.callerProject, smt: 1, conversations: 1 }] : []),
     ], complete: true } }),
-    callerAttribution: () => ({ kind: options.kind ?? "manager", conversationId: TICK_SEAT, role: "orchestrator" }),
-    authorizedSeats: () => (options.callerProject === null
+    callerAttribution: () => ({ kind: options.kind ?? "manager", conversationId: options.conversationId ?? TICK_SEAT, role: "orchestrator" }),
+    authorizedSeats: () => (options.callerProject === null || options.managerGrant === false
       ? []
-      : [{ conversationId: TICK_SEAT, path: null, project: options.callerProject ?? "viewer" }]),
+      : [{ conversationId: options.conversationId ?? TICK_SEAT, path: null, project: options.callerProject ?? "viewer" }]),
     callerProject: () => Object.hasOwn(options, "callerProject") ? options.callerProject ?? null : "viewer",
     readTickSettings: (project: string) => (store.get(project) as never) ?? {
       project, enabled: true, wakeIntervalMinutes: null, reason: null, monitorPrompt: null, until: null, updatedAt: null, setBy: null,
@@ -3534,6 +3537,37 @@ test("a designated seat keeps instruction authorship when its caller project and
   expect(written.reason).toBe("Operator instruction.\nSeat note.");
   expect(written.instructionLines[0]).toEqual({ text: "Operator instruction.", at: "2026-10-19T12:00:00.000Z", author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } });
   expect(written.instructionLines[1]?.author).toMatchObject({ kind: "manager", conversationId, seatEpoch });
+  expect(result).toMatchObject({ changed: true });
+});
+
+test("a root seat writing another project keeps its own designation when the manager grant is unavailable", async () => {
+  const callerProject = "fixture-cross-project-instruction-writer";
+  const targetProject = "another-project";
+  const conversationId = "conversation_cross_project_instruction_writer";
+  const targetSeat = "conversation_target_project_seat";
+  beginOrchestratorSeatIntent({ project: callerProject, mandate: "own the board", clientRequestId: "tick-cross-writer-seat", mode: "existing", conversationId });
+  completeOrchestratorSeatIntent({ project: callerProject, clientRequestId: "tick-cross-writer-seat", conversationId, path: null });
+  beginOrchestratorSeatIntent({ project: targetProject, mandate: "own the target board", clientRequestId: "tick-cross-target-seat", mode: "existing", conversationId: targetSeat });
+  completeOrchestratorSeatIntent({ project: targetProject, clientRequestId: "tick-cross-target-seat", conversationId: targetSeat, path: null });
+  const seatEpoch = orchestratorSeatFor(callerProject).active?.seatEpoch;
+  expect(seatEpoch).toBeDefined();
+
+  const operatorLine = {
+    text: "Preserve operator wording.", at: "2026-10-19T12:00:00.000Z",
+    author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+  };
+  const store = new Map<string, unknown>([[targetProject, {
+    project: targetProject, enabled: true, wakeIntervalMinutes: null, reason: operatorLine.text,
+    instructionLines: [operatorLine], monitorPrompt: null, until: null, updatedAt: operatorLine.at, setBy: null,
+  }]]);
+  const { bindings } = tickSettingsBindings({ kind: "gateway", conversationId, callerProject, managerGrant: false, store });
+  const result = await bindings.seat_tick_settings({ clientRequestId: "tick-cross-project-seat-note", project: targetProject, reason: "Seat note." });
+
+  const written = store.get(targetProject) as { reason: string; instructionLines: Array<{ text: string; at: string; author: { kind: string; conversationId: string | null; project: string | null; seatEpoch: number | null } }> };
+  expect(written.reason).toBe("Preserve operator wording.\nSeat note.");
+  expect(written.instructionLines[0]).toEqual(operatorLine);
+  expect(written.instructionLines[1]?.author).toMatchObject({ kind: "manager", conversationId, project: callerProject, seatEpoch });
+  expect(written.instructionLines[1]?.author.kind).not.toBe("gateway");
   expect(result).toMatchObject({ changed: true });
 });
 

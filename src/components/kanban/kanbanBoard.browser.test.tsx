@@ -18562,21 +18562,47 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
   }, 180_000);
 
-  browserTest("the operator can remove a full unknown legacy field and save a replacement on desktop and phone", async () => {
+  browserTest("the operator can replace a full unknown legacy field without changing the schedule on desktop and phone", async () => {
     const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "legacy-removal");
     fs.mkdirSync(out, { recursive: true });
     const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
     const at = "2026-10-19T12:00:00.000Z";
     const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
-    const initial = {
-      ...defaultSeatTickSettings("atlas"),
-      reason: "u".repeat(500),
-      instructionLines: [{ text: "u".repeat(500), author: null, at: null }],
-      updatedAt: at,
+    const legacyText = `${"u".repeat(484)}\nKeep seat note.`;
+    const seatLine = {
+      text: "Keep seat note.", author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 6 },
+      at: "2026-10-18T12:00:00.000Z",
     };
+    const scheduleCases = [
+      { label: "disabled", enabled: false, wakeIntervalMinutes: null },
+      { label: "custom-cadence", enabled: true, wakeIntervalMinutes: 30 },
+    ] as const;
+    const makeInitial = (schedule: typeof scheduleCases[number]) => ({
+      ...defaultSeatTickSettings("atlas"),
+      enabled: schedule.enabled,
+      wakeIntervalMinutes: schedule.wakeIntervalMinutes,
+      reason: legacyText,
+      instructionLines: [{ text: legacyText.split("\n")[0]!, author: null, at: null }, seatLine],
+      updatedAt: at,
+    });
+    expect(legacyText.length).toBe(500);
+    const initial = makeInitial(scheduleCases[0]);
     let stored: ReturnType<typeof defaultSeatTickSettings> = structuredClone(initial);
-    const answer = () => ({ ...tickAnswer(stored.reason ?? ""), settings: stored,
-      effective: { ...tickAnswer(stored.reason ?? "").effective, reason: stored.reason } });
+    const answer = () => {
+      const base = tickAnswer(stored.reason ?? "");
+      return {
+        ...base,
+        settings: stored,
+        effective: {
+          ...base.effective,
+          enabled: stored.enabled,
+          wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60,
+          reason: stored.reason,
+          until: stored.until,
+          isDefault: stored.enabled && stored.wakeIntervalMinutes === null,
+        },
+      };
+    };
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/monitor/seat-tick/settings": async (request: Request) => {
         if (request.method === "PUT") {
@@ -18593,9 +18619,9 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
     try {
-      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
-        stored = structuredClone(initial);
-        const label = `${phone ? "phone-390" : "desktop"}-${lang}-${theme}`;
+      for (const schedule of scheduleCases) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
+        stored = structuredClone(makeInitial(schedule));
+        const label = `${phone ? "phone-390" : "desktop"}-${schedule.label}-${lang}-${theme}`;
         const texts = cardTexts(lang);
         const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
         const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
@@ -18610,22 +18636,25 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
             await page.locator("[data-open-seat-tick]").click();
           }
           const legacyLine = page.locator("[data-seat-tick-instruction-line]");
-          await legacyLine.waitFor();
-          expect(await legacyLine.textContent()).toContain(lang === "en" ? "author unknown" : "автор невідомий");
+          await legacyLine.first().waitFor();
+          expect(await legacyLine.first().textContent()).toContain(lang === "en" ? "author unknown" : "автор невідомий");
           expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
           const removeUnknown = page.locator("[data-seat-tick-clear-unknown]");
-          expect(await removeUnknown.innerText()).toBe(lang === "en" ? "Remove unattributed legacy instructions" : "Видалити старі вказівки без автора");
+          expect(await removeUnknown.innerText()).toBe(lang === "en" ? "Replace unattributed legacy instructions" : "Замінити старі вказівки без автора");
+          expect(await removeUnknown.isDisabled()).toBe(true);
           await removeUnknown.scrollIntoViewIfNeeded();
           await page.screenshot({ path: path.join(out, `${label}-legacy-removal-control.png`) });
-          await removeUnknown.click();
-          expect(stored.reason).toBeNull();
-          expect(stored.instructionLines).toEqual([]);
-          await page.locator("[data-seat-tick-clear-unknown]").waitFor({ state: "detached" });
           await page.locator("[data-seat-tick-reason]").fill("New operator instruction.");
-          await page.locator("[data-seat-tick-save]").click();
-          await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
-          expect(stored.reason).toBe("New operator instruction.");
-          expect(stored.instructionLines).toEqual([{ text: "New operator instruction.", author: operator, at: "2026-10-19T12:01:00.000Z" }]);
+          expect(await removeUnknown.isDisabled()).toBe(false);
+          await removeUnknown.click();
+          await page.locator("[data-seat-tick-clear-unknown]").waitFor({ state: "detached" });
+          expect(stored.reason).toBe("Keep seat note.\nNew operator instruction.");
+          expect(stored.instructionLines).toEqual([
+            seatLine,
+            { text: "New operator instruction.", author: operator, at: "2026-10-19T12:01:00.000Z" },
+          ]);
+          expect(stored.enabled).toBe(schedule.enabled);
+          expect(stored.wakeIntervalMinutes).toBe(schedule.wakeIntervalMinutes);
           await page.screenshot({ path: path.join(out, `${label}-legacy-cleared-and-replaced.png`) });
           expect(pageErrors).toEqual([]);
         } finally { await context.close(); }
