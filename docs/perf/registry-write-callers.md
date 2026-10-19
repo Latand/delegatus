@@ -11,9 +11,9 @@ benchmark and child-fixture consumers are explicitly classified below.
 
 | Site | Producer | Consumers and behavior |
 | --- | --- | --- |
-| `registry-lock` | `SqliteAgentRegistryStore.mutate` → `beginMutationWrite` → `noteWriterWait` | `AgentRegistry.mutateStorage` and all mutations below; optimistic acquisition followed by a pessimistic retry |
-| `registry-revision-retry` | `SqliteAgentRegistryStore.mutate` after a lost optimistic revision | The same mutations; rolls back and retries under the writer, with the existing retry ceiling |
-| `registry-lock-async` | `SqliteAgentRegistryStore.withWriter` via `AgentRegistry.deliveryWrite*` | Admitted mutations retain the lock through their synchronous callback and commit, preventing a lost revision |
+| `registry-lock` | `SqliteAgentRegistryStore.mutate` → `beginMutationWrite` → `noteWriterWait` | Legacy synchronous acquisition; optimistic acquisition followed by a pessimistic retry |
+| `registry-revision-retry` | `SqliteAgentRegistryStore.mutate` after a lost optimistic revision | Rolls back and retries under the writer, with the existing retry ceiling. Account-held zero-wait probes report `synchronous: false`. |
+| `registry-lock-async` | `withWriter` / `tryWriter` via `AgentRegistry.deliveryWrite*`, and account-held zero-wait mutation probes | Held-writer callbacks read the admitted revision. Mixed account/state callbacks release the SQLite probe before sibling writes and retry contention outside account custody. Their SQLite busy timeout is zero. |
 
 Direct store mutations outside `AgentRegistry` are synthetic preparation in
 `src/runtime-host/candidatePerformanceRun.ts`, dataset builders, benchmarks and
