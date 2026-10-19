@@ -944,7 +944,12 @@ export async function runClaimedRequest(
                   : "agent_error",
         );
     return await finish(body);
-  } catch {
+  } catch (error) {
+    if (leaseUnavailable || error instanceof ExternalRelayError && error.status === 409 && error.code === "lease_lost") {
+      leaseUnavailable = true;
+      recorder?.finish({ outcome: "lease_lost", answer: null, delivery: null });
+      return null;
+    }
     if (callAbort.signal.aborted) return null;
     if (run) {
       if (!runFinished) run.cancel();

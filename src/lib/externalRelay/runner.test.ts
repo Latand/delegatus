@@ -3708,6 +3708,77 @@ test("typed mentions cross the restricted runner without source rewriting", asyn
   } finally { await server.close(); }
 });
 
+test("inbound lease loss stops the runner without completion or agent launch", async () => {
+  const { richRequest } = await import("./rich.fixture");
+  const request = richRequest(true); request.request_id = "inbound_lease_lost";
+  request.features!.push("requester_context", "relay_media_in");
+  request.input.conversation[0]!.media = [{ ref: "lost_media", kind: "document", availability: "ready", mime_type: "text/plain", byte_size: 5,
+    filename: "input.txt", expires_at: "2099-01-01T00:00:00Z" }];
+  const completions: unknown[] = [];
+  const server = await startTestRelay(req => {
+    if (req.url?.endsWith("/media/lost_media")) return { status: 409, body: { error: { code: "lease_lost", message: "gone" } } };
+    if (req.url?.endsWith("/complete")) completions.push(req);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  const marker = path.join(root, "inbound-agent-launched");
+  const fake = stub(`await Bun.stdin.text(); await Bun.write(${JSON.stringify(marker)}, "launched");`);
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: fake });
+    expect(result).toBeNull();
+    expect(completions).toEqual([]);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(readAnswerRecord(paired.id, "target_1", request.request_id)).toMatchObject({ state: "finished", outcome: "lease_lost", delivery: null });
+  } finally { await server.close(); }
+});
+
+test("lease loss during an active inbound stream stops consumption before agent launch", async () => {
+  const { richRequest } = await import("./rich.fixture");
+  const request = richRequest(true); request.request_id = "inbound_stream_lease_lost";
+  request.features!.push("requester_context", "relay_media_in");
+  request.liveness.heartbeat_interval_s = 2;
+  request.input.conversation[0]!.media = [{ ref: "stream_media", kind: "document", availability: "ready", mime_type: "text/plain", byte_size: 20 * 1024 * 1024,
+    filename: "input.txt", expires_at: "2099-01-01T00:00:00Z" }];
+  let partialWritten!: () => void, lostLease!: () => void;
+  const partial = new Promise<void>(resolve => { partialWritten = resolve; });
+  const heartbeatLost = new Promise<void>(resolve => { lostLease = resolve; });
+  let completions = 0, bytesSent = 0;
+  const nativeServer = http.createServer(async (req, response) => {
+    const bodyChunks: Buffer[] = [];
+    for await (const chunk of req) bodyChunks.push(Buffer.from(chunk));
+    const body = Buffer.concat(bodyChunks).toString("utf8");
+    if (req.url?.endsWith("/heartbeat") && (JSON.parse(body) as { seq: number }).seq > 1) {
+      lostLease(); response.writeHead(409, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { code: "lease_lost", message: "gone" } })); return;
+    }
+    if (req.url?.endsWith("/media/stream_media")) {
+      response.writeHead(200, { "content-type": "text/plain", "content-length": String(20 * 1024 * 1024) });
+      const first = Buffer.alloc(65536, 120); response.write(first); bytesSent += first.length; partialWritten();
+      await heartbeatLost;
+      if (!response.destroyed) response.end(Buffer.alloc(65536, 120));
+      return;
+    }
+    if (req.url?.endsWith("/complete")) completions++;
+    response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ status: "ok" }));
+  });
+  await new Promise<void>(resolve => nativeServer.listen(0, "127.0.0.1", resolve));
+  const address = nativeServer.address(); if (!address || typeof address === "string") throw new Error("missing port");
+  const marker = path.join(root, "inbound-stream-agent-launched");
+  const fake = stub(`await Bun.stdin.text(); await Bun.write(${JSON.stringify(marker)}, "launched");`);
+  try {
+    const running = runClaimedRequest(relay(`http://127.0.0.1:${address.port}/v1`), request, undefined, { command: fake });
+    await partial;
+    const result = await running;
+    expect(result).toBeNull();
+    expect(bytesSent).toBeLessThan(20 * 1024 * 1024);
+    expect(completions).toBe(0);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(readAnswerRecord(relay(`http://127.0.0.1:${address.port}/v1`).id, "target_1", request.request_id)).toMatchObject({ state: "finished", outcome: "lease_lost", delivery: null });
+  } finally {
+    lostLease(); nativeServer.closeAllConnections(); await new Promise<void>(resolve => nativeServer.close(() => resolve()));
+  }
+});
+
 test.each(["codex", "claude"])("inbound originals reach the %s native image input and are removed after the answer", async engine => {
   const { richRequest } = await import("./rich.fixture");
   const sharp = (await import("sharp")).default;

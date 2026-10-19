@@ -89,8 +89,23 @@ function sourceLeaves(text: string) {
         if (c === "|") leaves[base + i] = -1;
       }
 
-      const prefix = /^(?: {0,3}(?:>\s*)+| {0,3}#{1,6}\s+|\s*(?:[-+*]|\d+[.)])\s+)/.exec(line)?.[0];
+      let containerPrefix = "", remaining = line;
+      while (true) {
+        const container = /^(?: {0,3}>[\t ]?| {0,3}(?:[-+*]|\d+[.)])[\t ]+)/.exec(remaining)?.[0];
+        if (!container) break;
+        containerPrefix += container; remaining = remaining.slice(container.length);
+      }
+      const headingMarker = /^ {0,3}#{1,6}(?:[\t ]+|$)/.exec(remaining)?.[0];
+      const headingPrefix = headingMarker ? containerPrefix + headingMarker : undefined;
+      const prefix = headingPrefix ?? /^(?: {0,3}(?:>\s*)+| {0,3}#{1,6}\s+|\s*(?:[-+*]|\d+[.)])\s+)/.exec(line)?.[0];
       if (prefix) leaves.fill(-1, base, base + Array.from(prefix).length);
+      if (headingPrefix) {
+        const closing = /[\t ]+(#{1,6})[\t ]*$/.exec(line);
+        if (closing) {
+          const closingStart = Array.from(line.slice(0, closing.index + closing[0].indexOf(closing[1]!))).length;
+          leaves.fill(-1, base + closingStart, base + closingStart + closing[1]!.length);
+        }
+      }
       for (let i = 0; i < chars.length; i++) {
         if (leaves[base + i]! < 0) leaf++;
         else leaves[base + i] = leaf;

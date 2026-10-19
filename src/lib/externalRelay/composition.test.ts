@@ -27,6 +27,25 @@ test("rich answer preserves typed mentions at original scalar offsets", () => {
   validateAnswerComposition(reply("x ".repeat(16), { mentions: Array.from({ length: 16 }, (_, i) => ({ ...mention, offset: i * 2, length: 1 })) }), r, []);
   validateAnswerComposition(reply("x".repeat(128), { mentions: [{ ...mention, offset: 0, length: 128 }] }), r, []);
 });
+
+test("heading delimiters stay outside mention leaves, including nested block prefixes", () => {
+  const valid = [
+    { text: "# Person ###", offset: 2, length: 6 },
+    { text: "> - ## Person ##", offset: 7, length: 6 },
+    { text: "- > ## Person ###", offset: 7, length: 6 },
+  ];
+  for (const item of valid) {
+    validateAnswerComposition(reply(item.text, { mentions: [{ ...mention, offset: item.offset, length: item.length }] }), request(), []);
+  }
+  for (const item of [
+    { text: "# Person ###", offset: 2, length: 10 },
+    { text: "> - ## Person ##", offset: 7, length: 9 },
+    { text: "- > ## Person ###", offset: 7, length: 10 },
+    { text: "## Person ##", offset: 3, length: 9 },
+  ]) {
+    refuses(() => validateAnswerComposition(reply(item.text, { mentions: [{ ...mention, offset: item.offset, length: item.length }] }), request(), []));
+  }
+});
 test("every malformed mention is refused before completion", () => {
   const cases = [null, {}, [null], [{ ...mention, extra: true }], [{ ...mention, offset: -1 }], [{ ...mention, offset: 0.5 }], [{ ...mention, offset: 31999 }], [{ ...mention, length: 0 }], [{ ...mention, length: 129 }], [{ ...mention, length: 1.5 }], [{ ...mention, author_key: "foreign" }], [{ ...mention, author_key: "123" }], [{ ...mention, author_key: "person_a " }], [mention, mention], [{ ...mention, offset: 9, length: 1 }, mention], Array(17).fill(mention)];
   for (const mentions of cases) refuses(() => checkedAnswerV2(reply(undefined, { mentions }), request(), answerCapabilities(request(), "codex")));

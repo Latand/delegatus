@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import http from "node:http";
 import { once } from "node:events";
+import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -62,6 +63,18 @@ async function fixture(handler: (req: http.IncomingMessage, res: http.ServerResp
     close: async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await fs.rm(directory, { recursive: true, force: true }); } };
 }
 const options = () => ({ signal: new AbortController().signal, deadlineAt: Date.parse("2099-01-01T00:00:00Z"), authorize: () => {} });
+function validPdf() {
+  const parts = ["%PDF-1.4\n"];
+  const offsets = [0];
+  for (const object of [
+    "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+    "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+    "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>\nendobj\n",
+  ]) { offsets.push(Buffer.byteLength(parts.join(""))); parts.push(object); }
+  const xref = Buffer.byteLength(parts.join(""));
+  parts.push(`xref\n0 4\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return Buffer.from(parts.join(""));
+}
 test("original download is authenticated, lease scoped and stored with private generated paths", async () => {
   const r = request(); let calls = 0;
   const f = await fixture((req, res) => {
@@ -82,6 +95,30 @@ test("original download is authenticated, lease scoped and stored with private g
     expect(JSON.stringify(r)).not.toContain(f.directory);
     await result.dispose(); expect(await fs.readdir(f.directory)).toEqual([]);
   } finally { await f.close(); }
+});
+test("PDF structure is validated before admission; malformed and truncated originals are removed", async () => {
+  const valid = validPdf();
+  for (const [bytes, accepted] of [
+    [valid, true],
+    [Buffer.from("%PDF-1.7\n<script>hostile</script>\n%%EOF\n"), false],
+    [valid.subarray(0, valid.length - 40), false],
+  ] as const) {
+    const r = request([ref("media_a", bytes.length)]);
+    r.input.conversation[0]!.media![0]!.mime_type = "application/pdf";
+    r.input.conversation[0]!.media![0]!.filename = "input.pdf";
+    const f = await fixture((_req, res) => {
+      res.writeHead(200, { "content-type": "application/pdf", "content-length": bytes.length }); res.end(bytes);
+    });
+    try {
+      if (accepted) {
+        const result = await prepareInboundMedia(f.relay, r, f.directory, options());
+        expect(result.files).toHaveLength(1); await result.dispose();
+      } else {
+        await expect(prepareInboundMedia(f.relay, r, f.directory, options())).rejects.toMatchObject({ code: "unsupported_media_type", status: 415 });
+        expect(await fs.readdir(f.directory)).toEqual([]);
+      }
+    } finally { await f.close(); }
+  }
 });
 test("stream accepts exact file and total limits without accumulating original buffers", async () => {
   const r = request([ref("media_a", 20 * MiB), ref("media_b", 20 * MiB)]);
@@ -145,6 +182,57 @@ test("hostile responses preserve errors and delete every partial file", async ()
       expect(await fs.readdir(f.directory)).toEqual([]);
     } finally { await f.close(); }
   }
+});
+test.each(["revoked", "aborted"] as const)("%s during an active stream removes the partial file and earlier originals", async mode => {
+  const r = request([ref("media_first", 5), ref("media_second", 20 * MiB)]);
+  const controller = new AbortController();
+  let signalChunk!: () => void, releaseServer!: () => void;
+  const chunkSeen = new Promise<void>(resolve => { signalChunk = resolve; });
+  const allowMore = new Promise<void>(resolve => { releaseServer = resolve; });
+  const auth = { ...options(), signal: controller.signal, authorize: () => {} };
+  let bytesSent = 0, activeChecksAfterRevocation = 0;
+  const f = await fixture(async (req, res) => {
+    const refId = req.url?.split("/").pop();
+    if (refId === "media_first") { res.writeHead(200, { "content-type": "text/plain", "content-length": 5 }); res.end("first"); return; }
+    res.writeHead(200, { "content-type": "text/plain", "content-length": 20 * MiB });
+    const chunk = Buffer.alloc(65536, 120);
+    res.write(chunk); bytesSent += chunk.length;
+    signalChunk();
+    await allowMore;
+    for (let i = 1; i < 320 && !res.destroyed; i++) {
+      const writable = res.write(chunk); bytesSent += chunk.length;
+      if (!writable) await new Promise<void>(resolve => {
+        const done = () => { res.off("drain", done); res.off("close", done); resolve(); };
+        res.once("drain", done); res.once("close", done);
+      });
+    }
+    if (!res.destroyed) res.end();
+  });
+  try {
+    const pending = prepareInboundMedia(f.relay, r, f.directory, auth);
+    await chunkSeen;
+    const mediaDir = path.join(f.directory, (await fs.readdir(f.directory))[0]!);
+    const partialPath = path.join(mediaDir, "1.txt");
+    const watcher = watch(mediaDir);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onChange = async () => {
+          try { if ((await fs.stat(partialPath)).size >= 65536) { watcher.close(); resolve(); } }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") reject(error); }
+        };
+        watcher.on("change", onChange);
+        watcher.on("error", reject);
+        void onChange();
+      });
+    } finally { watcher.close(); }
+    if (mode === "revoked") auth.authorize = () => { activeChecksAfterRevocation++; throw new ExternalRelayError("lease_lost", 409); };
+    else controller.abort(new Error("cancelled"));
+    releaseServer();
+    await expect(pending).rejects.toBeDefined();
+    if (mode === "revoked") expect(activeChecksAfterRevocation).toBeGreaterThan(0);
+    expect(bytesSent).toBeLessThan(20 * MiB);
+    expect(await fs.readdir(f.directory)).toEqual([]);
+  } finally { controller.abort(); releaseServer(); await f.close(); }
 });
 test("service download refusals preserve each authenticated error status and code", async () => {
   for (const [status, code] of [[400, "malformed"], [401, "unauthorized"], [404, "not_found"], [409, "lease_lost"], [413, "too_large"], [415, "unsupported_media_type"], [422, "media_unavailable"], [429, "rate_limited"]] as const) {

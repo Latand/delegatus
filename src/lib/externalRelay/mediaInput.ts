@@ -37,6 +37,60 @@ function contentGuard(mime: string) {
     },
   };
 }
+/** Parse PDFs through bounded file ranges so structural validation never
+ * retains the downloaded document as one buffer. */
+async function validatePdfStructure(filename: string, signal: AbortSignal, authorize: () => void) {
+  const { getDocument, PDFDataRangeTransport } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  signal.throwIfAborted(); authorize();
+  const handle = await fs.promises.open(filename, "r");
+  let fileSize: number;
+  try { signal.throwIfAborted(); authorize(); fileSize = (await handle.stat({ bigint: false })).size; signal.throwIfAborted(); authorize(); }
+  catch (error) { await handle.close(); throw error; }
+  let loadingTask: ReturnType<typeof getDocument> | null = null;
+  let rangeFailure: unknown = null;
+  class FileRangeTransport extends PDFDataRangeTransport {
+    constructor() { super(fileSize, null); }
+    requestDataRange(begin: number, end: number) {
+      void (async () => {
+        try {
+          signal.throwIfAborted(); authorize();
+          const length = end - begin;
+          if (length < 1 || length > 64 * 1024 || begin < 0 || end > fileSize) fail("unsupported_media_type", 415);
+          const bytes = Buffer.allocUnsafe(length);
+          const { bytesRead } = await handle.read(bytes, 0, length, begin);
+          signal.throwIfAborted(); authorize();
+          if (bytesRead !== length) fail("unsupported_media_type", 415);
+          this.onDataRange(begin, bytes);
+        } catch (error) {
+          rangeFailure = error;
+          void loadingTask?.destroy().catch(() => {});
+          try { this.onDataRange(begin, null); } catch { /* The parser may already have stopped. */ }
+        }
+      })();
+    }
+  }
+  const onAbort = () => { void loadingTask?.destroy().catch(() => {}); };
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    signal.throwIfAborted(); authorize();
+    loadingTask = getDocument({ range: new FileRangeTransport(), rangeChunkSize: 64 * 1024,
+      disableStream: true, disableAutoFetch: true, verbosity: 0 });
+    const document = await loadingTask.promise;
+    signal.throwIfAborted(); authorize();
+    if (!Number.isInteger(document.numPages) || document.numPages < 1) fail("unsupported_media_type", 415);
+    await document.getPage(1);
+    signal.throwIfAborted(); authorize();
+  } catch (error) {
+    if (rangeFailure instanceof ExternalRelayError) throw rangeFailure;
+    if (signal.aborted) throw error;
+    if (error instanceof ExternalRelayError) throw error;
+    fail("unsupported_media_type", 415);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    await loadingTask?.destroy().catch(() => {});
+    await handle.close();
+  }
+}
 /** Claude's native image input is a stream-json user message. Spool its
  * base64 representation in chunks; the launcher streams the file to stdin. */
 export async function writeInboundAgentInput(files: readonly InboundFile[], prompt: string, runDir: string, signal: AbortSignal, authorize: () => void) {
@@ -113,6 +167,7 @@ export async function prepareInboundMedia(relay: Pick<PairedRelay, "api_base" | 
             check(); signal.throwIfAborted();
             if (size !== length) fail("malformed", 400);
             content.finish();
+            if (media.mime_type === "application/pdf") await validatePdfStructure(filename, signal, check);
           } finally { await handle.close().catch(() => {}); }
         }, { signal, beforeSend: check });
         check();
