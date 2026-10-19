@@ -1,3 +1,4 @@
+import { isMissingCodexRolloutError } from "./hostEndCause";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -22,7 +23,7 @@ export interface StartupRowRetry {
 }
 
 export function startupRowReason(error: unknown): StartupRowReason {
-  return error instanceof Error && error.message.includes("no rollout found for thread id")
+  return isMissingCodexRolloutError(error)
     ? "missing-rollout" : "adoption-failed";
 }
 

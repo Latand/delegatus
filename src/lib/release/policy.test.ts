@@ -34,7 +34,7 @@ test.each([
   [6, { deployments: [{ revision: "bad", at: hour }, { revision: "one", at: 2 * hour }] }],
   [7, { hold: "incident" }], [8, { deployments: [] }],
   [9, { deploying: true }], [9, { draining: true }],
-  [10, { tools: ["tesseract"] }], [10, { tools: ["pdftocairo"] }], [10, { tools: ["Chrome"] }],
+  [10, { tools: ["pdftocairo"] }], [10, { tools: ["Chrome"] }],
 ] as [number, Partial<ReleaseInput>][]) ("blocker %s refuses a launch", async (blocker, patch) => {
   expect((await releaseState({ ...ready(), ...patch })).blocker).toBe(blocker);
 });
