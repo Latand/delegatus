@@ -1,21 +1,32 @@
+import { declaredIndexes } from "./declaredIndexes";
 import { pipelineControllerObligationSql } from "./pipelineControllerIndex";
 import type { Database } from "bun:sqlite";
 import { mayRunStateStartupMutation } from "@/lib/stateOwnership";
 
+export const pipelineControllerScheduleIndexes = declaredIndexes([
+  "CREATE INDEX IF NOT EXISTS pipeline_tick_dirty ON pipeline_tick_work(dirty, row_order, row_key)",
+  "CREATE INDEX IF NOT EXISTS pipeline_tick_due ON pipeline_tick_work(due_at, row_order, row_key)",
+  "CREATE INDEX IF NOT EXISTS pipeline_tick_order ON pipeline_tick_work(row_order, row_key)",
+  "CREATE INDEX IF NOT EXISTS pipeline_controller_work_key ON pipeline_controller_work(row_key)",
+]);
+
 /** Headers only. Triggers keep old writers and raw SQL in the same queue;
  * acknowledgment is conditional on the revision that was actually observed. */
 export function installPipelineControllerSchedule(db: Database, directory: string, refresh = false): void {
-  if (!refresh && db.query("SELECT 1 FROM sqlite_master WHERE name='pipeline_tick_delete'").get()) return;
+  const objects = new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master").all().map(row => row.name));
+  if (!refresh && objects.has("pipeline_tick_delete")) {
+    if (!pipelineControllerScheduleIndexes.ready(objects) && mayRunStateStartupMutation(directory)) {
+      pipelineControllerScheduleIndexes.install(db, directory);
+    }
+    return;
+  }
   if (!mayRunStateStartupMutation(directory)) return;
   if (refresh) for (const name of ["pipeline_tick_insert", "pipeline_tick_update", "pipeline_tick_delete"]) db.exec(`DROP TRIGGER IF EXISTS ${name}`);
   db.exec(`CREATE TABLE IF NOT EXISTS pipeline_tick_work (
     row_key TEXT PRIMARY KEY, row_order INTEGER NOT NULL, generation INTEGER NOT NULL,
     dirty INTEGER NOT NULL DEFAULT 1, due_at INTEGER NOT NULL DEFAULT 0, attempt_cursor INTEGER NOT NULL DEFAULT 0
   )`);
-  db.exec("CREATE INDEX IF NOT EXISTS pipeline_tick_dirty ON pipeline_tick_work(dirty, row_order, row_key)");
-  db.exec("CREATE INDEX IF NOT EXISTS pipeline_tick_due ON pipeline_tick_work(due_at, row_order, row_key)");
-  db.exec("CREATE INDEX IF NOT EXISTS pipeline_tick_order ON pipeline_tick_work(row_order, row_key)");
-  db.exec("CREATE INDEX IF NOT EXISTS pipeline_controller_work_key ON pipeline_controller_work(row_key)");
+  pipelineControllerScheduleIndexes.install(db, directory);
   db.exec("CREATE TABLE IF NOT EXISTS pipeline_tick_cursor (id INTEGER PRIMARY KEY CHECK(id=1), row_order INTEGER NOT NULL, row_key TEXT NOT NULL)");
   db.exec("INSERT OR IGNORE INTO pipeline_tick_cursor VALUES (1,-1,'')");
   db.exec("CREATE TABLE IF NOT EXISTS pipeline_tick_clock (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL)");

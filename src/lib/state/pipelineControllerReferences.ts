@@ -1,18 +1,29 @@
+import { declaredIndexes } from "./declaredIndexes";
 import type { Database } from "bun:sqlite";
 import { mayRunStateStartupMutation } from "@/lib/stateOwnership";
 
 export type PipelineAttemptReference = { stageId: string; n: number; run: number; attempt: number; position: number; firstHost: number };
 
+const pipelineControllerReferenceIndexes = declaredIndexes([
+  "CREATE INDEX IF NOT EXISTS pipeline_attempt_terminal ON pipeline_attempt_refs(row_key,terminal,firstHost,position)",
+  "CREATE INDEX IF NOT EXISTS pipeline_attempt_current ON pipeline_attempt_refs(row_key,stageId,historical,position DESC)",
+  "CREATE INDEX IF NOT EXISTS pipeline_owner_lookup ON pipeline_owner_refs(kind,identity,live)",
+]);
+
 export function pipelineControllerReferencesReady(db: Database, objects?: ReadonlySet<string>): boolean {
   const names = objects ?? new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master").all().map(row => row.name));
-  return ["pipeline_ref_inputs", "pipeline_attempt_refs", "pipeline_owner_refs", "pipeline_attempt_terminal",
-    "pipeline_attempt_current", "pipeline_owner_lookup", "pipeline_refs_insert", "pipeline_refs_update", "pipeline_refs_delete",
-    "pipeline_ref_inputs_insert", "pipeline_ref_inputs_update_v2"].every(name => names.has(name));
+  return ["pipeline_ref_inputs", "pipeline_attempt_refs", "pipeline_owner_refs", "pipeline_refs_insert", "pipeline_refs_update", "pipeline_refs_delete",
+    "pipeline_ref_inputs_insert", "pipeline_ref_inputs_update_v2"].every(name => names.has(name)) && pipelineControllerReferenceIndexes.ready(names);
 }
 
 /** Write-time projections. Old writers participate through the same row
  * triggers; controller reads never enumerate retained payloads for ownership. */
 export function installPipelineControllerReferences(db: Database, directory: string): void {
+  const objects = new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master").all().map(row => row.name));
+  if (["pipeline_attempt_refs", "pipeline_owner_refs"].every(name => objects.has(name))
+    && !pipelineControllerReferenceIndexes.ready(objects) && mayRunStateStartupMutation(directory)) {
+    pipelineControllerReferenceIndexes.install(db, directory);
+  }
   if (pipelineControllerReferencesReady(db)) return;
   if (!mayRunStateStartupMutation(directory)) return;
   for (const name of ["pipeline_refs_insert", "pipeline_refs_update", "pipeline_refs_delete", "pipeline_ref_inputs_insert", "pipeline_ref_inputs_update", "pipeline_ref_inputs_update_v2"]) db.exec(`DROP TRIGGER IF EXISTS ${name}`);
@@ -22,15 +33,14 @@ export function installPipelineControllerReferences(db: Database, directory: str
     row_key TEXT NOT NULL, position INTEGER NOT NULL, stageId TEXT NOT NULL, n INTEGER NOT NULL,
     run INTEGER NOT NULL, attempt INTEGER NOT NULL, historical INTEGER NOT NULL, terminal INTEGER NOT NULL, firstHost INTEGER NOT NULL,
     PRIMARY KEY(row_key,position))`);
-  db.exec("CREATE INDEX pipeline_attempt_terminal ON pipeline_attempt_refs(row_key,terminal,firstHost,position)");
-  db.exec("CREATE INDEX pipeline_attempt_current ON pipeline_attempt_refs(row_key,stageId,historical,position DESC)");
+
   db.exec(`CREATE TABLE pipeline_owner_refs (
     row_key TEXT NOT NULL, kind TEXT NOT NULL, identity TEXT NOT NULL, live INTEGER NOT NULL,
     PRIMARY KEY(row_key,kind,identity,live))`);
   // Custody tags: 0 inactive, 1 live, 2 source publication, -1 released
   // operational attempt. Publication also keeps a live=1 companion so the
   // preceding release retains it during handover. Only positive tags retain.
-  db.exec("CREATE INDEX pipeline_owner_lookup ON pipeline_owner_refs(kind,identity,live)");
+  pipelineControllerReferenceIndexes.install(db, directory);
   db.exec("UPDATE pipeline_tick_work SET attempt_cursor=0");
   const populate = (source: string, key: string) => {
     const value = "controller_source.payload";

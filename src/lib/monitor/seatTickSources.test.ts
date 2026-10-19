@@ -59,7 +59,7 @@ const { projectForCwd } = await import("@/lib/scanner/describe");
 import type { OriginalSendEvidence, SendReceipt } from "@/lib/runtime/sendSettlement";
 import type { SeatTickJournalReceipt } from "./seatTickSources";
 import type { SeatTickSources } from "./seatTickSources";
-const { DEFAULT_SEAT_TICK_POLICY, seatTickBoardMoved, seatTickDecision, seatTickWakeCommit, seatTickWakeCommitPlan } = await import("./seatTick");
+const { DEFAULT_SEAT_TICK_POLICY, seatTickBoardMoved, seatTickDecision, seatTickReportLines, seatTickWakeCommit, seatTickWakeCommitPlan } = await import("./seatTick");
 const { defaultSeatTickSettings } = await import("./seatTickSettings");
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import type { OpenPullRequest, OpenPullRequestsUnavailable } from "./githubEvidence";
@@ -739,6 +739,7 @@ test("a window that retires nothing while one clause refuses past the threshold 
   expect(sinceCalls).toEqual([NOW - RETIREMENT_STALL_WINDOW_MS]);
   expect(stalled.signals).toEqual([{
     id: "host-retirement-stalled",
+    actionable: false,
     label: "host retirement: nothing retired in 288 sweeps over 24h while process-identity refused 2016 times",
   }]);
 
@@ -763,6 +764,7 @@ test("a window that retires nothing while one clause refuses past the threshold 
     const stuck = await gather({ retirementJournal: () => ({ covered: true, sweeps: retirementSweeps(284, { [clause]: 4 }) }) });
     expect(stuck.signals).toEqual([{
       id: "host-retirement-stalled",
+      actionable: false,
       label: `host retirement: nothing retired in 284 sweeps over 24h while ${clause} refused 1136 times`,
     }]);
   }
@@ -786,6 +788,7 @@ test("a stall on no-active-flags names the flags that refused, most frequent fir
   });
   expect(stalled.signals).toEqual([{
     id: "host-retirement-stalled",
+    actionable: false,
     label: "host retirement: nothing retired in 274 sweeps over 24h while no-active-flags refused 1644 times"
       + " (flags: native-inject 1370, native-queue 1370, native-turn-profile 1370, waitingOnApproval 274)",
   }]);
@@ -2509,28 +2512,135 @@ test("automatic refresh belongs to its seat: parent PR is held and a semantic pa
 });
 
 
-test("a retirement signal names undetermined subjects and puts the seat's own launch first", async () => {
+test("foreign flipping retirement reports never wake an idle project or make its digest due", async () => {
+  const ports = sources({ pipelines: [], tasks: [boardCard({ status: "inbox" })] });
+  const foreign = { id: "fixtureForeign", projectOwnership: { project: "elsewhere" }, generations: [{ launchProfile: { title: "Other agent" } }] };
+  const registry = ports.registry();
+  ports.registry = () => ({ ...registry,
+    conversation: () => foreign,
+    readOnlySnapshot: () => ({ ...registry.readOnlySnapshot(), conversations: { fixtureForeign: foreign } }),
+  }) as never;
+  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() };
+  const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
+  state = { ...state, reportFingerprint: baseline.changeFingerprint.split(".")[0], checkFingerprint: baseline.changeFingerprint.split(".")[0] };
+  for (let check = 0; check < 24; check++) {
+    ports.now = () => NOW + check * 15 * 60_000;
+    ports.retirementReport = () => ({ failed: [], refused: Array.from({ length: 4 + check % 2 }, () => ({
+      key: "codex:foreign", conversationId: "fixtureForeign", clause: "events-flushed", reason: `unreadable at check ${check}`, undetermined: true,
+    })) }) as never;
+    const input = refreshSeatTickInput(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports), ports);
+    const decision = seatTickDecision(input);
+    expect(decision.verdict.kind).not.toBe("wake");
+    expect(input.signals.some(signal => signal.id === "host-retirement")).toBe(false);
+    expect(seatTickBoardMoved(baseline.changeFingerprint, input.changeFingerprint)).toBe(false);
+    state = decision.state;
+  }
+});
+
+test("non-actionable signal churn and machine-wide retirement stalls leave idle checks quiet", async () => {
+  for (const status of [null, "inbox", "blocked"]) {
+    const ports = sources({ pipelines: [], tasks: status ? [boardCard({ status })] : [] });
+    ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+    let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString(), lastProposalAt: new Date(NOW).toISOString() };
+    const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
+    state = { ...state, reportFingerprint: baseline.changeFingerprint.split(".")[0], checkFingerprint: baseline.changeFingerprint.split(".")[0] };
+    for (let check = 0; check < 24; check++) {
+      ports.now = () => NOW + check * 15 * 60_000;
+      ports.memoryProblems = () => [{ id: "memory-problem:informational", actionable: false, label: `host retirement: ${4 + check % 2} undetermined at check ${check}` }];
+      ports.retirementJournal = () => ({ covered: true, sweeps: retirementSweeps(288, { "events-flushed": 4 + check % 2 }) });
+      const input = refreshSeatTickInput(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports), ports);
+      const decision = seatTickDecision(input);
+      expect(decision.verdict.kind).toBe("quiet");
+      expect(seatTickBoardMoved(baseline.changeFingerprint, input.changeFingerprint)).toBe(false);
+      expect(seatTickReportLines(input, decision.state, input.signals.map(signal => ({ kind: "signal", ...signal })), [{ kind: "interval", detail: "interval elapsed" }])).toEqual([]);
+      state = decision.state;
+    }
+  }
+});
+
+test("an own-project lane change wakes and makes a digest due while signal churn alone does neither", async () => {
+  let pipelines: Record<string, unknown>[] = [];
+  const ports = sources({ pipelines: [], tasks: [boardCard({ status: "inbox" })] });
+  ports.pipelines = () => pipelines as never;
+  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  const initial = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() };
+  const baseline = await gatherSeatTickInput(PROJECT, initial, DEFAULT_SEAT_TICK_POLICY, ports);
+  let state: SeatTickProjectState = { ...initial, reportFingerprint: baseline.changeFingerprint.split(".")[0], checkFingerprint: baseline.changeFingerprint.split(".")[0] };
+  ports.memoryProblems = () => [{ id: "memory-problem:informational", actionable: false, label: "host retirement: 4 undetermined" }];
+  pipelines = [lane({ project: "elsewhere", resumedAt: new Date(NOW).toISOString() })];
+  const foreign = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(seatTickBoardMoved(baseline.changeFingerprint, foreign.changeFingerprint)).toBe(false);
+  expect(seatTickDecision(foreign).verdict.kind).toBe("quiet");
+  pipelines = [lane()];
+  const moved = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
+  const decision = seatTickDecision(moved);
+  expect(seatTickBoardMoved(baseline.changeFingerprint, moved.changeFingerprint)).toBe(true);
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") throw new Error("lane movement must wake");
+  expect(decision.verdict.items.some(item => item.kind === "pipeline")).toBe(true);
+  expect(decision.verdict.reportLines?.some(line => line.startsWith("Digest due"))).toBe(true);
+  // A report covering this board followed by informational churn owes no digest,
+  // including during the live lane's normal periodic interval wake.
+  state = { ...decision.state, reportFingerprint: moved.changeFingerprint.split(".")[0] };
+  ports.memoryProblems = () => [{ id: "memory-problem:informational", actionable: false, label: "host retirement: 5 undetermined" }];
+  ports.now = () => NOW + 2 * 60 * 60_000;
+  const unchanged = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(unchanged.verdict.kind).toBe("wake");
+  if (unchanged.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+  expect(unchanged.verdict.reportLines ?? []).toEqual([]);
+  expect(unchanged.verdict.items.some(item => item.id === "memory-problem:informational")).toBe(false);
+});
+
+test("observing an old report without a board baseline cannot invent digest movement", async () => {
+  const ports = sources({});
+  const reportedAt = new Date(NOW - 2 * 60 * 60_000).toISOString();
+  ports.reports = { log: () => [{ id: "fixture-report", project: PROJECT, at: reportedAt, origin: { kind: "manager" } }] as never, enabled: () => true, operatorLocale: () => "en" };
+  const first = seatTickDecision(await gatherSeatTickInput(PROJECT, { ...emptySeatTickState(), seatEpoch: 7 }, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(first.verdict.kind).toBe("wake");
+  if (first.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+  expect(first.verdict.reportLines ?? []).toEqual([]);
+  ports.pipelines = () => [lane({ resumedAt: new Date(NOW).toISOString() })] as never;
+  const moved = seatTickDecision(await gatherSeatTickInput(PROJECT, first.state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(moved.verdict.kind).toBe("wake");
+  if (moved.verdict.kind !== "wake") throw new Error("own lane movement must wake");
+  expect(moved.verdict.reportLines?.some(line => line.startsWith("Digest due"))).toBe(true);
+});
+
+test("retirement refusals and failures disclose only verified project subjects and stay actionable", async () => {
   const ports = sources({ pipelines: [] });
   const conversations = {
-    fixtureForeign: { id: "fixtureForeign", generations: [{ launchProfile: { title: "Other agent" } }] },
-    fixtureOwn: { id: "fixtureOwn", launcher: { conversationId: CONVERSATION, notify: true }, generations: [{ launchProfile: { title: "Lost builder" } }] },
+    fixtureForeign: { id: "fixtureForeign", projectOwnership: { project: "elsewhere" }, launcher: { conversationId: CONVERSATION }, generations: [{ launchProfile: { title: "Other agent" } }] },
+    fixtureUnknown: { id: "fixtureUnknown", launcher: { conversationId: CONVERSATION }, generations: [{ launchProfile: { title: "Unknown project" } }] },
+    fixtureOwn: { id: "fixtureOwn", projectOwnership: { project: PROJECT }, launcher: { conversationId: CONVERSATION, notify: true }, generations: [{ launchProfile: { title: "Lost builder" } }] },
+    fixtureLane: { id: "fixtureLane", projectOwnership: { project: PROJECT }, generations: [{ launchProfile: { title: "Lane worker" } }] },
   };
   const baseRegistry = ports.registry();
-  ports.registry = () => ({ ...baseRegistry, conversation: (id: string) => conversations[id as keyof typeof conversations] ?? baseRegistry.conversation(id as `conversation_${string}`),
-    readOnlySnapshot: () => ({ ...baseRegistry.readOnlySnapshot(), conversations }),
+  ports.registry = () => ({ ...baseRegistry,
+    conversation: (id: string) => conversations[id as keyof typeof conversations] ?? null,
+    readOnlySnapshot: () => { throw new Error("retirement must use keyed subjects"); },
   }) as never;
-  ports.retirementReport = () => ({ failed: [], refused: [
-    { key: "codex:foreign", conversationId: "fixtureForeign", clause: "events-flushed", reason: "ledger unreadable", undetermined: true },
-    { key: "codex:own", conversationId: "fixtureOwn", clause: "turn-settled", reason: "turn unknown", undetermined: true },
-  ] }) as never;
-  const gathered = await gatherSeatTickInput(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() }, DEFAULT_SEAT_TICK_POLICY, ports);
-  const label = gathered.signals.find(s => s.id === "host-retirement")!.label;
-  expect(label).toContain("Lost builder (fixtureOwn) turn-settled: turn unknown (launched by you)");
-  expect(label).toContain("Other agent (fixtureForeign) events-flushed: ledger unreadable");
-  expect(label.indexOf("Lost builder")).toBeLessThan(label.indexOf("Other agent"));
-  const wake = seatTickDecision(gathered).verdict;
-  expect(wake).toMatchObject({ kind: "wake" });
-  expect(wake.kind === "wake" && wake.items.some(item => item.kind === "signal" && item.id === "host-retirement" && item.label.includes("Lost builder"))).toBe(true);
+  const initial = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() };
+  for (const own of ["refused", "failed", "both"] as const) {
+    ports.retirementReport = () => ({ failed: [
+      { key: "codex:foreign", conversationId: "fixtureForeign", error: "foreign failure", remaining: [] },
+      { key: "codex:unknown", conversationId: "fixtureUnknown", error: "unscoped failure", remaining: [] },
+      ...(own !== "refused" ? [{ key: "codex:lane", conversationId: "fixtureLane", error: "termination failed", remaining: [] }] : []),
+    ], refused: [
+      ...["fixtureForeign", "fixtureUnknown", "fixtureMissing", null].map(conversationId => ({ key: "codex:unscoped", conversationId, clause: "events-flushed", reason: "unscoped refusal", undetermined: true })),
+      ...(own !== "failed" ? [{ key: "codex:own", conversationId: "fixtureOwn", clause: "turn-settled", reason: "turn unknown", undetermined: true }] : []),
+    ] }) as never;
+    const gathered = await gatherSeatTickInput(PROJECT, initial, DEFAULT_SEAT_TICK_POLICY, ports);
+    const signal = gathered.signals.find(s => s.id === "host-retirement")!;
+    expect(signal.actionable).toBe(true);
+    expect(signal.label).toContain(`${own === "refused" ? 0 : 1} failed, ${own === "failed" ? 0 : 1} undetermined`);
+    if (own !== "failed") expect(signal.label).toContain("Lost builder (fixtureOwn) turn-settled: turn unknown (launched by you)");
+    if (own !== "refused") expect(signal.label).toContain("Lane worker (fixtureLane) failed: termination failed");
+    for (const excluded of ["Other agent", "fixtureForeign", "fixtureUnknown", "fixtureMissing", "unscoped", "foreign failure"]) expect(signal.label).not.toContain(excluded);
+    const wake = seatTickDecision(gathered).verdict;
+    expect(wake.kind).toBe("wake");
+    expect(wake.kind === "wake" && wake.items.some(item => item.kind === "signal" && item.id === "host-retirement")).toBe(true);
+  }
 });
 
 

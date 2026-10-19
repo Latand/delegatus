@@ -1,3 +1,4 @@
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { blockingWaitRole } from "@/lib/blockingWaits";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -13,7 +14,7 @@ import type { Database as BunDatabase, SQLQueryBindings } from "bun:sqlite";
 import { procBackend } from "@/lib/proc";
 
 import { rememberRecordBytes } from "./registryRecords";
-import { installPipelineControllerSchedule, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
+import { installPipelineControllerSchedule, pipelineControllerScheduleIndexes, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
 import { installPipelineControllerReferences, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
 import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady } from "./pipelineEvidenceIndex";
@@ -471,6 +472,7 @@ function openRawDatabase(filename: string): Database {
         if ([...stateSchemaNames,
           "pipeline_controller_work", "pipeline_controller_work_order", "pipeline_controller_work_insert",
           "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
+          && pipelineControllerScheduleIndexes.ready(names)
           && pipelineControllerReferencesReady(db, names)
           && pipelineEvidenceIndexReady(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
@@ -479,6 +481,7 @@ function openRawDatabase(filename: string): Database {
         // the shared database, so an older or partial schema may only be
         // repaired by the release that currently owns SQLite writes.
         assertSqliteInitializationAuthority(filename);
+        assertStateStartupMutation(path.dirname(filename), "state database schema");
         db.exec("PRAGMA journal_mode = WAL");
         db.exec("PRAGMA auto_vacuum = INCREMENTAL");
         db.exec("BEGIN IMMEDIATE");
@@ -488,7 +491,9 @@ function openRawDatabase(filename: string): Database {
           db.exec("ALTER TABLE state_collections ADD COLUMN change_floor INTEGER NOT NULL DEFAULT 0");
         }
         installPipelineControllerIndex(db, path.dirname(filename));
-        installPipelineControllerSchedule(db, path.dirname(filename), !pipelineControllerReferencesReady(db, names));
+        // Only a policy upgrade resets the scheduler. Missing indexes repair
+        // in place without changing existing queue clocks or cursors.
+        installPipelineControllerSchedule(db, path.dirname(filename), !names.has("pipeline_ref_inputs_update_v2"));
         installPipelineControllerReferences(db, path.dirname(filename));
         installPipelineEvidenceIndex(db, path.dirname(filename));
         db.exec("COMMIT");
