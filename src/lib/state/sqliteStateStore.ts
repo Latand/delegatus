@@ -1467,6 +1467,22 @@ export class SqliteStateCollection<T> {
     `).all(project, findingKey).map(row => row.row_key);
   }
 
+  /** Release an evicted document owner's connection. */
+  close(): void {
+    this.readDb.close();
+    this.localCache = null;
+    this.revisionCache = null;
+  }
+
+  /** Keyset page over a collection's primary key; no unrelated payload reads. */
+  keyPage(after: string, limit: number): T[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 512) throw new Error("invalid state page limit");
+    return this.readDb.query<{ value_json: string }, [string, string, number]>(`
+      SELECT value_json FROM state_rows
+      WHERE collection = ? AND row_key > ? ORDER BY row_key LIMIT ?
+    `).all(this.options.collection, after, limit).map(row => this.decodeRow(row.value_json)).filter((row): row is T => row !== null).map(row => this.options.clone(row));
+  }
+
   get(rowKey: string): T | null {
     const row = this.readDb.query<Pick<CollectionRow, "value_json">, [string, string]>(
       "SELECT value_json FROM state_rows WHERE collection = ? AND row_key = ?",

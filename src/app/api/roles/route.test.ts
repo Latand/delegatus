@@ -1,3 +1,4 @@
+import { hasRoleOverrides, loadRoleOverrides } from "@/lib/roles/store";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,7 +25,7 @@ const put = (body: unknown) => PUT(new NextRequest("http://127.0.0.1/api/roles",
   body: JSON.stringify(body),
 }));
 
-beforeEach(() => fs.rmSync(file, { force: true }));
+beforeEach(() => { fs.rmSync(sandbox, { recursive: true, force: true }); fs.mkdirSync(sandbox, { recursive: true }); });
 
 test("maintainer picker catalogue choices write the shared row and resolve for launches", async () => {
   const { ENGINE_MODELS } = await import("@/lib/agent/models");
@@ -45,7 +46,7 @@ test("maintainer picker catalogue choices write the shared row and resolve for l
       }
     }
   }
-  const before = fs.readFileSync(file, "utf8");
+  const before = JSON.stringify(loadRoleOverrides());
   for (const config of [
     { engine: "codex", model: "gpt-unknown", effort: "high" },
     { engine: "claude", model: "claude-unlisted", effort: "high" },
@@ -54,7 +55,7 @@ test("maintainer picker catalogue choices write the shared row and resolve for l
     { engine: "unknown", model: "auto", effort: "high" },
   ]) {
     expect((await put({ overrides: { maintainer: { config } } })).status).toBe(400);
-    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    expect(JSON.stringify(loadRoleOverrides())).toBe(before);
   }
 });
 
@@ -89,14 +90,14 @@ test("roles route returns all merged role definitions with scaffold previews and
 /* docs/design/model-sizing-tiers.md §5: a reset row is answered until the
    operator writes that row, and §2 R1 is the mapping writer's refusal. */
 test("GET answers the rows a retirement reset, and a write to the row clears it", async () => {
-  const from = { engine: "claude", model: "opus", effort: "xhigh" };
+  const from = { engine: "claude" as const, model: "opus", effort: "xhigh" };
   fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, overrides: {}, retirements: { "2026-09-builder-frontend-opus-xhigh": { at: "2026-09-27T08:00:00.000Z", reset: { row: "builder:frontend", from } } } }));
   const before = await (await GET()).json() as { resets: unknown[] };
   expect(before.resets).toEqual([{ id: "2026-09-builder-frontend-opus-xhigh", row: "builder:frontend", from, at: "2026-09-27T08:00:00.000Z" }]);
   const restored = await put({ overrides: { builder: { variants: { frontend: from } } } });
   expect(restored.status).toBe(200);
   expect((await restored.json() as { resets: unknown[] }).resets).toEqual([]);
-  expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({
+  expect(loadRoleOverrides()).toEqual({
     schemaVersion: 2,
     overrides: { builder: { variants: { frontend: from } } },
     retirements: { "2026-09-builder-frontend-opus-xhigh": { at: "2026-09-27T08:00:00.000Z" } },
@@ -109,7 +110,7 @@ test("PUT refuses Sonnet on the reviewer, the architect and the orchestrator, an
   expect((await refused.json() as { error: string }).error).toBe("reviewer: Sonnet does not run orchestrator, architect or a reviewer above size=trivial, and Haiku runs none of orchestrator, architect, reviewer or verifier; name a large model (Claude Opus or Fable, or a large Codex model) or use the role's row.");
   expect((await put({ overrides: { architect: { config: { engine: "claude", model: "haiku", effort: "high" } } } })).status).toBe(400);
   expect((await put({ overrides: { verifier: { config: { engine: "claude", model: "haiku", effort: "high" } } } })).status).toBe(400);
-  expect(fs.existsSync(file)).toBe(false);
+  expect(hasRoleOverrides()).toBe(false);
 });
 
 /* Visual judgement runs on Claude, never Codex: the row keeps its editable Claude runtime. */
@@ -117,7 +118,7 @@ test("PUT refuses a Codex row for the visual critic and saves an edited Claude o
   const refused = await put({ overrides: { "visual-critic": { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } } } });
   expect(refused.status).toBe(400);
   expect((await refused.json() as { error: string }).error).toBe("visual-critic runs on claude only");
-  expect(fs.existsSync(file)).toBe(false);
+  expect(hasRoleOverrides()).toBe(false);
   expect((await put({ overrides: { "visual-critic": { config: { engine: "claude", model: "fable", effort: "max" } } } })).status).toBe(200);
 });
 
@@ -128,7 +129,7 @@ test("PUT admits Sonnet 5.5 on the verifier and the size=trivial reviewer", asyn
 });
 
 test("GET marks a malformed registry degraded while showing the shipped catalog", async () => {
-  fs.writeFileSync(file, "{");
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 99 }));
   const body = await (await GET()).json() as Catalog & { revision: string; health: { state: string; reason?: string } };
   expect(body.health).toEqual({ state: "degraded", reason: "preset unavailable" });
   expect(body.revision).toMatch(/^roles-1-/);
@@ -145,7 +146,7 @@ test("PUT maps a role and a builder variant, keeps a scaffold override, and answ
   const body = await response.json() as Catalog;
   expect(body.roles.find((role) => role.id === "reviewer")?.config).toEqual({ engine: "claude", model: "opus", effort: "xhigh" });
   expect(body.roles.find((role) => role.id === "builder")?.variants?.["apply-fixes"]).toEqual({ engine: "claude", model: "sonnet", effort: "low" });
-  const stored = JSON.parse(fs.readFileSync(file, "utf8"));
+  const stored = loadRoleOverrides();
   expect(stored).toEqual({
     schemaVersion: 2,
     overrides: {
@@ -158,7 +159,7 @@ test("PUT maps a role and a builder variant, keeps a scaffold override, and answ
      variants is written as schema 1 again. */
   const reset = await put({ overrides: { builder: { variants: { "apply-fixes": null } }, reviewer: { config: null } } });
   expect(reset.status).toBe(200);
-  expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({ schemaVersion: 1, overrides: { reviewer: { promptScaffold: "Custom reviewer scaffold" } } });
+  expect(loadRoleOverrides()).toEqual({ schemaVersion: 1, overrides: { reviewer: { promptScaffold: "Custom reviewer scaffold" } } });
 });
 
 test("PUT refuses a stale catalog revision before it writes a newer mapping", async () => {
@@ -177,7 +178,7 @@ test("PUT refuses a stale catalog revision before it writes a newer mapping", as
   });
   expect(stale.status).toBe(409);
   expect((await stale.json() as { revision: string }).revision).toBe(current.revision);
-  expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({
+  expect(loadRoleOverrides()).toEqual({
     schemaVersion: 2,
     overrides: { builder: { variants: { frontend: { engine: "claude", model: "sonnet", effort: "high" } } } },
   });
@@ -190,7 +191,7 @@ test("PUT refuses a malformed body and an invalid runtime, and changes nothing",
   const invalid = await put({ overrides: { reviewer: { config: { engine: "claude", model: "opus", effort: "ultra" } } } });
   expect(invalid.status).toBe(400);
   expect((await invalid.json() as { error: string }).error).toContain("effort for claude/opus must be one of");
-  expect(fs.existsSync(file)).toBe(false);
+  expect(hasRoleOverrides()).toBe(false);
 });
 
 /* docs/design/agent-prompt-contract.md §2.10 I: the product can put a role's
@@ -214,7 +215,7 @@ test("PUT restores a role's shipped prompt text and refuses to set one", async (
   expect(restored.status).toBe(200);
   const after = await restored.json() as Catalog;
   expect(after.roles.find((role) => role.id === "deployer")!.promptScaffold).toBe(deployer.shipped.promptScaffold!);
-  expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({ schemaVersion: 1, overrides: {
+  expect(loadRoleOverrides()).toEqual({ schemaVersion: 1, overrides: {
     architect: { config: { engine: "claude", model: "fable", effort: "high" } },
   } });
 });
@@ -222,7 +223,7 @@ test("PUT restores a role's shipped prompt text and refuses to set one", async (
 /* A stored fix row is schema 4, so a build that predates the fix rows refuses
    the file instead of dropping the row. */
 test("a stored fix row writes the file at schema 4", async () => {
-  const row = { engine: "claude", model: "opus", effort: "medium" };
+  const row = { engine: "claude" as const, model: "opus", effort: "medium" };
   expect((await put({ overrides: { builder: { variants: { "frontend-fixes": row } } } })).status).toBe(200);
-  expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({ schemaVersion: 4, overrides: { builder: { variants: { "frontend-fixes": row } } } });
+  expect(loadRoleOverrides()).toEqual({ schemaVersion: 4, overrides: { builder: { variants: { "frontend-fixes": row } } } });
 });

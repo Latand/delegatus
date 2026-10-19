@@ -61,11 +61,14 @@ test("the root identity is minted once and is stable across later sessions", () 
   expect(rootIdentity()).toBe(minted);
 });
 
-test("a malformed lineage refuses to read rather than silently minting a new identity", () => {
+test("a torn lineage is preserved with an import gap", () => {
   fs.mkdirSync(path.dirname(rootLineageFile()), { recursive: true });
   fs.writeFileSync(rootLineageFile(), "{ not json", "utf8");
 
-  expect(() => readRootLineage()).toThrow(RootLineageStoreError);
+  expect(readRootLineage()).toBeNull();
+  const preserved = fs.readdirSync(sandbox).find(name => name.startsWith("root-lineage.json.unreadable-"));
+  expect(preserved).toBeDefined();
+  expect(fs.readFileSync(path.join(sandbox, preserved!), "utf8")).toBe("{ not json");
 });
 
 test("a lineage written by an unknown schema is refused", () => {

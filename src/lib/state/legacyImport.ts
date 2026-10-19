@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { assertStateStartupMutation, isOperatorOwnedDirectory, ownsStateStartupMutation } from "@/lib/stateOwnership";
 
-import { FileTransactionBusyError, withFileTransactionSync } from "./fileTransaction";
+import { FileTransactionBusyError, withFileTransactionSync, withFileTransactionAttempt } from "./fileTransaction";
 import { assertStateMutationAllowed, stateMutationRefusal } from "./stateMutationBarrier";
 import { hotStateSqliteWriterReady, hotStateWriterRevision, readHotStateReleaseTarget } from "./hotStateAuthority";
 import {
@@ -26,8 +26,12 @@ export interface LegacyCollectionSpec<P> {
   collection: string;
   schemaVersion: number;
   migrationId: string;
-  /** The legacy file. The database is `state.sqlite` beside it. */
+  /** The legacy file; defaults to the `state.sqlite` beside it. */
   legacyPath: string;
+  /** Nested legacy stores still join the root state database. */
+  databasePath?: string;
+  nonBlockingLock?: boolean;
+  validateLegacyPath?(): void;
   /** Validate parsed JSON. Throwing refuses the import and leaves the file untouched. */
   parse(raw: unknown): P;
   toRows(parsed: P): StateImportRow[];
@@ -121,18 +125,18 @@ export function legacyDatabasePath(legacyPath: string): string {
  * run" and falls back to the legacy file, which is what every reader did
  * before the store existed.
  */
-export function legacyImportAllowed(legacyPath: string): boolean {
+export function legacyImportAllowed(legacyPath: string, databasePath = legacyDatabasePath(legacyPath)): boolean {
   const directory = path.dirname(legacyPath);
   if (stateMutationRefusal(directory) !== null) return false;
   if (!ownsStateStartupMutation() && isOperatorOwnedDirectory(directory)) return false;
-  return hotStateSqliteWriterReady(directory);
+  return hotStateSqliteWriterReady(path.dirname(databasePath));
 }
 
 /** A reconcile renames the legacy file away. Only the activation of a release,
     or an install with no release target, may do that: under a rollback the
     older release is running on that file. */
-export function lazyReconcileAllowed(legacyPath: string): boolean {
-  return readHotStateReleaseTarget(path.dirname(legacyPath)) === null;
+export function lazyReconcileAllowed(legacyPath: string, databasePath = legacyDatabasePath(legacyPath)): boolean {
+  return readHotStateReleaseTarget(path.dirname(databasePath)) === null;
 }
 
 function sha256(bytes: Buffer): string {
@@ -200,7 +204,7 @@ function writeTombstone<P>(spec: LegacyCollectionSpec<P>): void {
   if (!fs.existsSync(readme)) {
     fs.writeFileSync(readme, [
       `${path.basename(spec.legacyPath)} moved into SQLite.`,
-      `It now lives in the "${spec.collection}" collection of ${path.basename(legacyDatabasePath(spec.legacyPath))} in this directory.`,
+      `It now lives in the "${spec.collection}" collection of ${path.relative(spec.legacyPath, spec.databasePath ?? legacyDatabasePath(spec.legacyPath))} (relative to this directory).`,
       "This directory stands in its place so that an older release fails visibly instead of writing a file nothing reads.",
       "",
     ].join("\n"), { mode: 0o600 });
@@ -216,7 +220,7 @@ function retire<P>(spec: LegacyCollectionSpec<P>, mode: "keep" | "delete", hooks
     if (mode === "delete") {
       fs.rmSync(spec.legacyPath, { force: true });
     } else {
-      preservedAs = freeName(`${spec.legacyPath}.imported-${releaseTag(spec.legacyPath) ?? stamp()}`);
+      preservedAs = freeName(`${spec.legacyPath}.imported-${releaseTag(spec.databasePath ?? spec.legacyPath) ?? stamp()}`);
       fs.renameSync(spec.legacyPath, preservedAs);
     }
     fsyncDirectory(path.dirname(spec.legacyPath));
@@ -262,7 +266,7 @@ export function importLegacyCollection<P>(
   options: { reconcile: boolean; hooks?: LegacyImportHooks },
 ): LegacyImportOutcome {
   const hooks = options.hooks ?? {};
-  const database = legacyDatabasePath(spec.legacyPath);
+  const database = (spec.databasePath ?? legacyDatabasePath(spec.legacyPath));
   /* The first-boot import is the state-mutating startup step that #1905 was
      filed for: a lane's `next build` loaded a route module, the module reached
      a store, and this ran against the operator's live account files. Both
@@ -272,8 +276,10 @@ export function importLegacyCollection<P>(
      still being a module load that may never rename live state away. */
   assertStateMutationAllowed(path.dirname(spec.legacyPath));
   assertStateStartupMutation(path.dirname(spec.legacyPath), `${spec.collection} import`);
-  return withFileTransactionSync(spec.legacyPath, `${spec.collection} import is busy`, () => {
+  spec.validateLegacyPath?.();
+  return (spec.nonBlockingLock ? withFileTransactionAttempt : withFileTransactionSync)(spec.legacyPath, `${spec.collection} import is busy`, () => {
     const held = readStateImport(database, spec.collection);
+    spec.validateLegacyPath?.();
     const legacy = readLegacy(spec.legacyPath);
     if (held) return finishImported(spec, held, legacy, options.reconcile, hooks);
 
@@ -312,7 +318,7 @@ export function importLegacyCollection<P>(
       sourceSha256: legacy.kind === "file" ? sha256(legacy.bytes) : null,
       sourceBytes: legacy.kind === "file" ? legacy.bytes.length : 0,
       gap,
-      release: releaseTag(spec.legacyPath),
+      release: releaseTag(spec.databasePath ?? spec.legacyPath),
       ...(hooks.beforeVerify ? { beforeVerify: hooks.beforeVerify } : {}),
     });
     hooks.afterCommit?.();
@@ -352,7 +358,7 @@ function finishImported<P>(
     return { state: "already-imported", record, incident: null };
   }
   if (!reconcile) return { state: "reconcile-deferred", record, incident: null };
-  if (strayImportRecord(spec.legacyPath, record)) {
+  if (strayImportRecord(spec.databasePath ?? spec.legacyPath, record)) {
     return replaceStaleImport(spec, record, legacy.bytes, hooks);
   }
   const digest = sha256(legacy.bytes);
@@ -431,7 +437,7 @@ function replaceStaleImport<P>(
   const body = spec.parse(parsed.value);
   const rows = spec.toRows(body);
   const repaired = spec.repairs?.(body) ?? null;
-  const { record } = reimportStateCollection(legacyDatabasePath(spec.legacyPath), {
+  const { record } = reimportStateCollection((spec.databasePath ?? legacyDatabasePath(spec.legacyPath)), {
     collection: spec.collection,
     schemaVersion: spec.schemaVersion,
     migrationId: spec.migrationId,
@@ -440,7 +446,7 @@ function replaceStaleImport<P>(
     sourceSha256: sha256(bytes),
     sourceBytes: bytes.length,
     gap: null,
-    release: releaseTag(spec.legacyPath),
+    release: releaseTag(spec.databasePath ?? spec.legacyPath),
     ...(hooks.beforeVerify ? { beforeVerify: hooks.beforeVerify } : {}),
   });
   hooks.afterCommit?.();
@@ -507,14 +513,16 @@ function reconcileChangedLegacy<P>(
  * mirror from one the rollback release changed.
  */
 export function writeLegacyRollbackMirror<P>(spec: LegacyCollectionSpec<P>): void {
-  const database = legacyDatabasePath(spec.legacyPath);
+  const database = (spec.databasePath ?? legacyDatabasePath(spec.legacyPath));
   if (!readStateImport(database, spec.collection)) return;
   assertStateMutationAllowed(path.dirname(spec.legacyPath));
-  withFileTransactionSync(spec.legacyPath, `${spec.collection} import is busy`, () => {
+  spec.validateLegacyPath?.();
+  (spec.nonBlockingLock ? withFileTransactionAttempt : withFileTransactionSync)(spec.legacyPath, `${spec.collection} import is busy`, () => {
     /* A writable legacy file outlives a fence that was withdrawn, and an older
        release's MCP process may have written it since. Fold those writes in
        before the new mirror replaces the file. */
     const record = readStateImport(database, spec.collection)!;
+    spec.validateLegacyPath?.();
     const legacy = readLegacy(spec.legacyPath);
     if (legacy.kind === "file") {
       const digest = sha256(legacy.bytes);

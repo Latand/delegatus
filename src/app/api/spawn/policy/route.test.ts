@@ -43,7 +43,8 @@ test("the effective policy defaults to depth 2 and an operator can change it wit
   expect(outOfBounds.status).toBe(400);
   expect(await outOfBounds.json()).toEqual({ error: expect.stringContaining("between 1 and 4") });
   expect(await (await GET()).json()).toEqual({ maxAgentNestingDepth: 3 });
-  fs.rmSync(path.join(sandbox, "spawn-nesting.json"), { force: true });
+  fs.rmSync(sandbox, { recursive: true, force: true });
+  fs.mkdirSync(sandbox, { recursive: true });
 });
 
 test("agent-initiated callers can never raise their own ceiling", async () => {

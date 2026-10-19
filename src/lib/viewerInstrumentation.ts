@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 export { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
@@ -382,7 +383,7 @@ export async function startCurrentReleaseControllers(
      anything from them. A failure leaves the file as it was. */
   try {
     const retirements = await loaders.loadRoleMappingRetirements?.();
-    const outcome = retirements?.applyRoleMappingRetirements() as { state?: string; reset?: string[] } | undefined;
+    const outcome = await waitForStateLock("roles.retirements", () => retirements?.applyRoleMappingRetirements() as { state?: string; reset?: string[] } | undefined);
     if (outcome?.state === "written" && outcome.reset?.length) console.error(`[roles] reset stale mapping rows to their defaults: ${outcome.reset.join(", ")}`);
   } catch (error) {
     console.error("[roles] mapping retirement failed", error instanceof Error ? error.name : "unknown");

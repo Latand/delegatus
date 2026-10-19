@@ -1,7 +1,8 @@
+import { readStateImport } from "@/lib/state/sqliteStateStore";
+import { stateLockAttempt, stateLockDeferral } from "@/lib/state/lockWait";
 import { matchesShortId } from "@/lib/shortIds";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
-import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { effortScale } from "@/lib/agent/efforts";
@@ -9,7 +10,7 @@ import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 
 import { ROLE_DEFAULTS } from "./defaults";
 import { ROLE_VARIANT_DEFAULTS, shippedVariantConfig } from "./paramConfig";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { smallStore } from "@/lib/state/smallStore";
 import { mappingRowRefusal } from "./sizing";
 import { ROLE_IDS, ROLE_VARIANT_IDS, SCHEMA_2_VARIANT_IDS, SCHEMA_3_VARIANT_IDS, type RegistryRoleDefinitions, type RoleConfig, type RoleDefinition, type RoleId, type RoleMappingReset, type RoleMappingRetirementRecord, type RoleOverride, type RoleOverridesFile, type RoleRegistryHealth, type RoleRegistrySnapshot, type RoleVariantId, type VariantRoleId } from "./types";
 
@@ -35,13 +36,6 @@ export class RoleStoreError extends Error {
 
 export const roleOverridesFile = () => statePath("role-presets.json");
 const overridesFile = roleOverridesFile;
-
-export function atomicWriteJson(filePath: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const temp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.tmp`);
-  fs.writeFileSync(temp, JSON.stringify(value, null, 2) + "\n", "utf8");
-  fs.renameSync(temp, filePath);
-}
 
 function isRoleId(value: unknown): value is RoleId {
   return typeof value === "string" && (ROLE_IDS as readonly string[]).includes(value);
@@ -125,20 +119,7 @@ function readRetirements(value: unknown): Record<string, RoleMappingRetirementRe
   return out;
 }
 
-export function loadRoleOverrides(): RoleOverridesFile {
-  let text: string;
-  try {
-    text = fs.readFileSync(overridesFile(), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { schemaVersion: 1, overrides: {} };
-    throw new RoleStoreError(`could not read role override registry: ${overridesFile()}`, { cause: error });
-  }
-  let raw: Partial<RoleOverridesFile>;
-  try {
-    raw = JSON.parse(text) as Partial<RoleOverridesFile>;
-  } catch (error) {
-    throw new RoleStoreError("role override registry contains malformed JSON", { cause: error });
-  }
+function parseRoleOverrides(raw: Partial<RoleOverridesFile>): RoleOverridesFile {
   if (!READABLE_SCHEMA_VERSIONS.includes(raw.schemaVersion)) {
     throw new RoleStoreError(`unsupported role override schema: ${String(raw.schemaVersion)}`);
   }
@@ -152,6 +133,49 @@ export function loadRoleOverrides(): RoleOverridesFile {
   }
   const retirements = readRetirements(raw.retirements);
   return { schemaVersion: schemaVersionFor(overrides), overrides, ...(retirements ? { retirements } : {}) };
+}
+
+const emptyRoleOverrides = (): RoleOverridesFile => ({ schemaVersion: 1, overrides: {} });
+export const rolePresetStore = smallStore<RoleOverridesFile>({
+  collection: "role_presets", empty: emptyRoleOverrides, parse: raw => parseRoleOverrides(raw as Partial<RoleOverridesFile>),
+  toRows: file => [
+    { key: "meta", value: { schemaVersion: file.schemaVersion } },
+    ...Object.entries(file.overrides).map(([key, value]) => ({ key: `role:${key}`, value })),
+    ...Object.entries(file.retirements ?? {}).map(([key, value]) => ({ key: `retirement:${key}`, value })),
+  ],
+  fromRows: rows => parseRoleOverrides({
+    schemaVersion: (rows.find(row => row.key === "meta")?.value as { schemaVersion: RoleOverridesFile["schemaVersion"] } | undefined)?.schemaVersion ?? 1,
+    overrides: Object.fromEntries(rows.filter(row => row.key.startsWith("role:")).map(row => [row.key.slice(5), row.value])),
+    ...(rows.some(row => row.key.startsWith("retirement:")) ? { retirements: Object.fromEntries(rows.filter(row => row.key.startsWith("retirement:")).map(row => [row.key.slice(11), row.value])) } : {}),
+  } as RoleOverridesFile),
+  toFile: file => file,
+  error: (message, cause) => new RoleStoreError(message, { cause }),
+  readLegacy: file => {
+    let raw: Partial<RoleOverridesFile>;
+    try { raw = JSON.parse(fs.readFileSync(file, "utf8")); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyRoleOverrides();
+      throw new RoleStoreError("role override registry contains malformed JSON", { cause: error });
+    }
+    return parseRoleOverrides(raw);
+  },
+});
+
+// One synchronous transaction draft. Nested registry helpers see their own
+// changes; a refusal (including the audit callback) discards the entire draft.
+let roleDraft: { path: string; file: RoleOverridesFile; changed: boolean } | null = null;
+
+export function loadRoleOverrides(): RoleOverridesFile {
+  if (roleDraft && roleDraft.path !== overridesFile()) throw new RoleStoreError("role state directory changed during a transaction");
+  return roleDraft ? structuredClone(roleDraft.file) : rolePresetStore.readExisting(overridesFile());
+}
+
+/** The import tombstone alone does not mean an install saved a mapping. */
+export function hasRoleOverrides(): boolean {
+  const file = overridesFile();
+  const imported = stateLockAttempt("roles.presence", () => readStateImport(statePath("state.sqlite"), "role_presets"));
+  if (imported) return Boolean(imported.sourceSha256) || rolePresetStore.readRow(file, "meta") !== null;
+  return fs.existsSync(file);
 }
 
 function schemaVersionFor(overrides: Partial<Record<RoleId, RoleOverride>>): 1 | 2 | 3 | 4 | 5 {
@@ -176,20 +200,14 @@ export function saveRoleOverrides(
   for (const [id, override] of Object.entries(overrides)) {
     if (!isRoleId(id) || !isOverride(override) || !isCompatibleOverride(id, override)) throw new RoleStoreError(`invalid role override: ${id}`);
   }
-  const journal = retirements ?? storedRetirements();
-  atomicWriteJson(overridesFile(), {
-    schemaVersion: schemaVersionFor(overrides),
-    overrides,
-    ...(journal && Object.keys(journal).length ? { retirements: journal } : {}),
-  });
-}
-
-function storedRetirements(): Record<string, RoleMappingRetirementRecord> | undefined {
-  try {
-    return readRetirements((JSON.parse(fs.readFileSync(overridesFile(), "utf8")) as { retirements?: unknown }).retirements);
-  } catch {
-    return undefined;
-  }
+  const next = (current: RoleOverridesFile): RoleOverridesFile => {
+    const journal = retirements ?? current.retirements;
+    return { schemaVersion: schemaVersionFor(overrides), overrides,
+      ...(journal && Object.keys(journal).length ? { retirements: journal } : {}) };
+  };
+  if (roleDraft && roleDraft.path !== overridesFile()) throw new RoleStoreError("role state directory changed during a transaction");
+  if (roleDraft) { roleDraft.file = next(roleDraft.file); roleDraft.changed = true; }
+  else rolePresetStore.mutate(overridesFile(), current => ({ next: next(current), result: undefined }));
 }
 
 /** The mapping row key a retirement names: `builder`, `builder:frontend`. */
@@ -313,10 +331,17 @@ function patchedRows(patch: Partial<Record<RoleId, RoleMappingPatch>>): Set<stri
 }
 
 /** Every writer of role-presets.json runs its read-modify-write under this
-    process-shared lock, so two Viewer or MCP processes never interleave a read
+    SQLite transaction, so two Viewer or MCP processes never interleave a read
     with the other's write. Not reentrant: do not nest it. */
 export function withRoleRegistryLock<T>(operation: () => T): T {
-  return withFileTransactionSync(overridesFile(), "the role mapping is being written by another process; try again", operation);
+  if (roleDraft) throw new Error("role registry transaction is not reentrant");
+  return rolePresetStore.mutate(overridesFile(), file => {
+    roleDraft = { path: overridesFile(), file, changed: false };
+    try {
+      const result = operation();
+      return { next: roleDraft.changed ? roleDraft.file : undefined, result };
+    } finally { roleDraft = null; }
+  });
 }
 
 function patchAndSave(patch: Partial<Record<RoleId, RoleMappingPatch>>): RoleDefinition[] {
@@ -340,11 +365,9 @@ export type RoleMappingChange =
   | { state: "stale"; current: RoleRegistrySnapshot }
   | { state: "written"; before: RoleRegistrySnapshot; after: RoleRegistrySnapshot; merged: RoleDefinition[] };
 
-/** The revision check, the write and its durable record as one transaction
-    under the registry lock. `record` runs once the file is written and sees the
-    registry as it stood at the moment of the write; when it throws, the file is
-    put back byte for byte and the error is rethrown, so a write is never left
-    standing without its record. */
+/** The revision check and proposed mapping share the SQLite transaction.
+    `record` sees the proposed registry under that transaction; if it refuses,
+    the draft is discarded and no mapping change commits. */
 export function changeRoleMapping(
   patch: Partial<Record<RoleId, RoleMappingPatch>>,
   options: { expectedRevision?: string; record: (before: RoleRegistrySnapshot, after: RoleRegistrySnapshot, merged: RoleDefinition[]) => void },
@@ -352,22 +375,9 @@ export function changeRoleMapping(
   return withRoleRegistryLock(() => {
     const before = loadRoleRegistrySnapshot();
     if (options.expectedRevision !== undefined && !matchesShortId(before.revision, options.expectedRevision)) return { state: "stale", current: before };
-    const file = overridesFile();
-    let previous: Buffer | null = null;
-    try {
-      previous = fs.readFileSync(file);
-    } catch {
-      previous = null;
-    }
     const merged = patchAndSave(patch);
     const after = loadRoleRegistrySnapshot();
-    try {
-      options.record(before, after, merged);
-    } catch (error) {
-      if (previous === null) fs.rmSync(file, { force: true });
-      else fs.writeFileSync(file, previous);
-      throw error;
-    }
+    options.record(before, after, merged);
     return { state: "written", before, after, merged };
   });
 }
@@ -425,6 +435,7 @@ export function loadRoleRegistrySnapshotOrDefaults(): RoleRegistrySnapshot {
   try {
     return loadRoleRegistrySnapshot();
   } catch (error) {
+    if (stateLockDeferral(error)) throw error;
     console.warn("[roles] override registry unreadable; falling back to built-in defaults", error);
     return registrySnapshot({}, { state: "degraded", reason: "preset unavailable" });
   }
