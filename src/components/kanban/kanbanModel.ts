@@ -1,3 +1,5 @@
+import { withFinishedAttention } from "@/lib/attention/finishedAttention";
+import { finishedWorkIndex } from "@/lib/attention/finishedWork";
 import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
 import { reviewerBindingTargetsForRound } from "@/components/flows/flowModel";
 import { conversationIdentity } from "@/lib/accounts/identity";
@@ -574,7 +576,7 @@ function modelIndexes(input: KanbanModelInput) {
   const workingCandidates: number[] = [];
   for (let i = 0; i < (input.files?.length ?? 0); i += 1) {
     const file = input.files![i];
-    if (file.proc !== "killed" && turnIsRunning(file)) workingCandidates.push(i);
+    if (file.proc !== "killed" && turnIsRunning(file, Number.NEGATIVE_INFINITY)) workingCandidates.push(i);
   }
   for (const file of input.files ?? []) {
     knownConversations.add(file.path);
@@ -634,7 +636,7 @@ function modelIndexes(input: KanbanModelInput) {
   const bandTitle = new Map(bands.map((band) => [band.id, band.title] as const));
 
   return { knownConversations, workByIdentity, reviewerWorkAt, tasksById, pipelineById, flowsById, flowsByDeck,
-    pipelineWorkAt, stageByPath, bandTitle, workingCandidates };
+    pipelineWorkAt, stageByPath, bandTitle, workingCandidates, finished: finishedWorkIndex(tasks, pipelines, id => id, input.files) };
 }
 
 /** Static membership survives clock ticks and unrelated transcript payloads. */
@@ -672,14 +674,15 @@ function bandMembership(band: TaskBand, workflow: TaskWorkflow | undefined, seat
   // new row/attention objects just to prove that those fields are unchanged.
   const staticMembers = nodes.every(({ file }) => file && !file.agentActivity
     && file.activity !== "stalled" && !file.bridgeAsk && !file.bridgeAsks?.length
-    && !file.stuckDelivery && !file.memoryKill && !file.attentionDismissal?.cleared);
+    && !file.stuckDelivery && !file.memoryKill && !file.attentionDismissal?.cleared
+    && !(file.proc !== "running" && file.activityReason?.startsWith("structured_spawn_host_gone")));
   return { cardPipelines, nodes, memberNodes, holdsSeat, activePipeline, laneMovedMs, memberClock, staticMembers };
 }
 
 function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanModel {
   const { bands, tasks, pipelines, statusOverrides, cardFilter, reasonFilter, now } = input;
   const { knownConversations, workByIdentity, reviewerWorkAt, tasksById, pipelineById, flowsById, flowsByDeck,
-    pipelineWorkAt, stageByPath, bandTitle, workingCandidates } = cache?.indexes ?? modelIndexes(input);
+    pipelineWorkAt, stageByPath, bandTitle, workingCandidates, finished } = cache?.indexes ?? modelIndexes(input);
   const workingFiles = workingCandidates.map(index => input.files![index]);
   const workingStageConversations = workingStageConversationsOf(stageByPath, workingFiles, now);
   const pipelineSummary = (pipeline: Pipeline) => {
@@ -706,7 +709,7 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanM
     const { cardPipelines, nodes, memberNodes, holdsSeat, activePipeline, laneMovedMs, memberClock, staticMembers } = membership.value;
     const overridden = task ? statusOverrides?.get(task.id) : undefined;
     /* A draft becomes an Assigned task when launched. */
-    const status: TaskStatus = overridden ?? task?.status ?? (!memberNodes.length && band.members.some(member => member.kind === "draft") ? "assigned" : "inbox");
+    const status: TaskStatus = overridden ?? (task ? finished.taskStatus(task) : undefined) ?? (!memberNodes.length && band.members.some(member => member.kind === "draft") ? "assigned" : "inbox");
     const laneWorkedRecently = activePipeline || laneMovedMs >= now * 1000 - DONE_TASK_BOARD_RETENTION_MS;
     // Visibility needs membership and lane facts, all available before card
     // construction. Hidden empty tasks still enter offBoard below, without
@@ -731,13 +734,13 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanM
     }
     const holdTarget = task?.hold?.kind === "task" ? tasksById.get(task.hold.ref ?? "") : undefined;
     let clockKey: unknown = memberClock ? staticMembers ? null : nodes.map(member => {
-      const row = memberOf(member.key, member.file!, stageByPath, now);
+      const row = memberOf(member.key, withFinishedAttention(member.file!, now, finished), stageByPath, now);
       return [row.state, row.activity, row.needsYou, row.need, row.working, row.latest, conversationNeed(member.file!, now)];
     }) : now;
     const previousClock = cache?.previous.get(band.id)?.dependencies[2];
     if (memberClock && structurallyEqual(previousClock, clockKey)) clockKey = previousClock;
     const cacheable = Boolean(task) || memberClock;
-    const dependencies: unknown[] = [task, workflow, clockKey, input.seat, task ? statusOverrides?.get(task.id) : undefined, holdTarget];
+    const dependencies: unknown[] = [task, workflow, clockKey, status, input.seat, task ? statusOverrides?.get(task.id) : undefined, holdTarget];
     if (cache && cacheable) {
       // Resolve the external facts the card reads, including work by historical
       // reviewers outside its visible members and a competing stage owner.
@@ -776,7 +779,7 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanM
     }
     /* A launch placeholder whose launch failed is no conversation: it is
        listed as a failed launch, which opens its launch view with Retry. */
-    const members = memberNodes.map((member) => memberOf(member.key, member.file!, stageByPath, now));
+    const members = memberNodes.map((member) => memberOf(member.key, withFinishedAttention(member.file!, now, finished), stageByPath, now));
     const failedLaunches = nodes.filter((member) => failedLaunchPlaceholder(member.file!)).map((member) => member.file!);
     const mirrors = band.mirrors.filter((mirror) => !seatFile(mirror.file)).map((mirror) => ({
       key: mirror.key,
@@ -931,7 +934,7 @@ function deriveKanbanModel(input: KanbanModelInput, cache?: ModelCache): KanbanM
     const workingSinceMs = working > 0 || inFlight.length > 0
       ? Math.max(0, ...inFlight, ...members.filter((member) => member.working).map((member) => memberStartMs(member.file)))
       : null;
-    const needsYou = reasons.length > 0 || prototypeWaitsOnOperator(task?.prototypeReview);
+    const needsYou = reasons.length > 0 || prototypeWaitsOnOperator(task?.prototypeReview, task);
     const hide: GroupHideState = task
       ? groupHideState(task, { members: members.map((member) => member.file), pipelines: summaries.map((summary) => summary.pipeline), seat: input.seat })
       : { hidden: false, resurfaced: null };

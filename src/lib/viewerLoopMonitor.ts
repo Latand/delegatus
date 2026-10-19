@@ -24,12 +24,12 @@ export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.r
   | "external-relay.owner-history" | "mcp.project-prefix" | "issue-report.resolve" | "self-update.revision-prefix"
   | "relay.owner-continuation.send" | "relay.owner-turn.observe" | "external-relay.chains" | "relay.service-tools" | "relay.tool-index"
   | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
-  | "attention.reconcile" | "temp.sweep" | "forge.auto-merge" | "forge.sweep" | "asks.sweep"
+  | "attention.finished-cleanup" | "attention.finished-cleanup.archive" | "attention.reconcile" | "temp.sweep" | "forge.auto-merge" | "forge.sweep" | "asks.sweep"
   | "hosts.retirement" | "self-update.retention" | "spawn-notice.prune" | "delivery-progress.prune"
   | "resources.read" | "seat.panel" | "attention.read" | "pipelines.revalidate" | "runtime-journal.receipt-sweep"
   | "done.sweep" | "done.media" | "done.frame-source"
   | "seat-tick.prepare" | "seat-tick.liveness" | "seat-tick.children" | "seat-tick.reports" | "seat-tick.worker-asks" | "seat-tick.rule-reports" | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
-  | "codex.protocol-admission"
+  | "codex.protocol-admission" | "mcp.page-cursors"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"
   | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel";
 type Operation = { name: ViewerOperation; start: number; end?: number };

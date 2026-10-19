@@ -25,10 +25,11 @@ import { turnIsRunning } from "./turnDuration";
  * The clock moves in the board model's 15 s steps, so a caller holding a
  * per-second clock and one holding the board's clock read the same answer.
  */
+export { HOSTLESS_WORKING_GRACE_SECONDS } from "./turnDuration";
 export function isWorkingAgent(file: FileEntry, now: number): boolean {
   // Both working and held rows require a running turn whose host is not killed.
   // Most retained history cannot qualify, so it needs no attention/activity projection.
-  if (file.proc === "killed" || !turnIsRunning(file)) return false;
+  if (file.proc === "killed" || file.proc === "done" || !turnIsRunning(file, workingClock(now))) return false;
   if (file.engine === "shell" || isSubagent(file) || file.spawnOrigin === "engine") return false;
   if (file.agentActivity && fileAgentActivity(file, workingClock(now) * 1000).state === "idle") return false;
   const row = mobileRowState(file, workingClock(now));

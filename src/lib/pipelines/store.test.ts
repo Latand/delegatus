@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadArchivedPipelinesForOwnership, archivedPipelinesRevision, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
 import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
@@ -834,17 +834,22 @@ test("settled pipelines archive out of the hot registry and stay readable", asyn
     const running = record("aaaa0004", { state: "running" });
     savePipelines([oldClosed, freshClosed, hiddenDraft, running]);
 
+    const archiveRevision = archivedPipelinesRevision();
     expect(await archiveSettledPipelines(nowMs)).toBe(2);
+    expect(archivedPipelinesRevision()).toBeGreaterThan(archiveRevision);
+    const settledRevision = archivedPipelinesRevision();
     const hotIds = loadPipelines().map((pipeline) => pipeline.id).sort();
     expect(hotIds).toEqual(["aaaa0002", "aaaa0004"]);
     const archivedIds = loadArchivedPipelines().map((pipeline) => pipeline.id).sort();
     expect(archivedIds).toEqual(["aaaa0001", "aaaa0003"]);
+    expect(loadArchivedPipelinesForOwnership(["aaaa0003", "missing", "aaaa0003"]).map(pipeline => pipeline.id)).toEqual(["aaaa0003"]);
 
     /* By-id reads still resolve archived records; re-sweeping is idempotent. */
     expect(findPipelineRecord("aaaa0001")?.task).toBe("task aaaa0001");
     expect(findPipelineRecord("aaaa0004")?.state).toBe("running");
     expect(findPipelineRecord("missing0")).toBeNull();
     expect(await archiveSettledPipelines(nowMs)).toBe(0);
+    expect(archivedPipelinesRevision()).toBe(settledRevision);
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;

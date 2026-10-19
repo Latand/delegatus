@@ -1,3 +1,5 @@
+import { finishedWorkIndex } from "@/lib/attention/finishedWork";
+import { withFinishedAttention } from "@/lib/attention/finishedAttention";
 import type { MobileBoardPipelineRow } from "@/components/mobile/mobileBoardModel";
 import { overviewPipelineRows } from "@/components/mobile/overviewPhone";
 import type { AutoView } from "@/lib/selfUpdate/auto";
@@ -66,7 +68,8 @@ export function buildNeedsYouQueue(
   /** The orchestrators' own open questions, which no task carries. */
   seatDecisions: readonly PrototypeReviewNotice[] = [],
 ): MobileAttentionEntry[] {
-  const queue = buildMobileAttentionQueue(buildAttentionQueue([...files], now), overviewPipelineRows(pipelines, now, closing));
+  const finished = finishedWorkIndex(tasks, pipelines);
+  const queue = buildMobileAttentionQueue(buildAttentionQueue(files.map(file => withFinishedAttention(file, now, finished)), now), overviewPipelineRows(pipelines, now, closing));
   for (const notice of prototypeReviewNotices(tasks, seatDecisions)) queue.push({ kind: "prototype", id: notice.id, notice });
   if (decision) queue.push({ kind: "update", id: `auto-update:${decision.id}`, decision });
   return queue;
