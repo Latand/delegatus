@@ -1,0 +1,2782 @@
+{
+  "case": "T9-check",
+  "baseRevision": "7ac695acc0ce727d40784fe3c7b6b9fdf63e4b7f",
+  "copiedAt": "2026-10-19T00:50:30.341000+00:00",
+  "seedSha256": "d24a82dbe4fe4603aacacc933155d168724070ba3aee4522c00853204a02ab6f",
+  "seedHashMethod": "SHA-256 over sorted relative paths and each file content digest",
+  "collections": [
+    {
+      "name": "pipelines",
+      "rows": 243,
+      "jsonCharacters": 32084865
+    },
+    {
+      "name": "pipelines_archive",
+      "rows": 990,
+      "jsonCharacters": 132652422
+    },
+    {
+      "name": "role_memory",
+      "rows": 4009,
+      "jsonCharacters": 16681356
+    },
+    {
+      "name": "tasks",
+      "rows": 2394,
+      "jsonCharacters": 10893795
+    }
+  ],
+  "fleetObservedAt": "2026-10-19T00:50:16.905Z",
+  "command": "gate-slot.sh bun scripts/probe-seat-tick.ts (six runs per side; --enforce on after)",
+  "before": [
+    {
+      "case": "T9-check",
+      "bun": "1.4.0",
+      "sourceFingerprint": "7982f5c0a16a58587a6ff709a3682647355d42a75036ce7ed44663b207ef91a6",
+      "summaryBytes": 33356772,
+      "copiedStatuses": {
+        "live": 39,
+        "running": 7
+      },
+      "liveAgents": "5",
+      "runningAgents": "3",
+      "replayNow": 1792371456918,
+      "condition": "module imports, inert summary/catalogue decoding and registry scale count precede run 0; task, pipeline and memory lists stay cold; gh and action ports stubbed; transcript evidence suppressed in both processes; copied structured-host-events child ledgers are present in the seed"
+    },
+    {
+      "case": "T9-check",
+      "run": 0,
+      "at": "2026-10-19T01:04:06.146Z",
+      "load": [
+        3.9,
+        5.51,
+        5.41
+      ],
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
+      "sources": {
+        "readState": {
+          "calls": 2,
+          "syncMs": 5.159623000000465,
+          "maxSyncMs": 4.856705000000147,
+          "wallMs": 5.182686000001013,
+          "maxWallMs": 4.878239000000576
+        },
+        "now": {
+          "calls": 8,
+          "syncMs": 0.02151899999807938,
+          "maxSyncMs": 0.006774999999834108,
+          "wallMs": 0.029394999999567517,
+          "maxWallMs": 0.007883000000219909
+        },
+        "seatFor": {
+          "calls": 7,
+          "syncMs": 46.29202499999974,
+          "maxSyncMs": 7.28494899999896,
+          "wallMs": 46.31011599999874,
+          "maxWallMs": 7.286877999998978
+        },
+        "settings": {
+          "calls": 5,
+          "syncMs": 1.559716999999182,
+          "maxSyncMs": 0.408912999999302,
+          "wallMs": 1.5749989999994796,
+          "maxWallMs": 0.4160830000000715
+        },
+        "memoryProblems": {
+          "calls": 3,
+          "syncMs": 421.2087789999996,
+          "maxSyncMs": 271.0906850000001,
+          "wallMs": 421.22296200000073,
+          "maxWallMs": 271.09456000000046
+        },
+        "registry": {
+          "calls": 7,
+          "syncMs": 0.024822999999742024,
+          "maxSyncMs": 0.005798000000140746,
+          "wallMs": 0.036587000001418346,
+          "maxWallMs": 0.010766999999759719
+        },
+        "liveness.conversation": {
+          "calls": 1,
+          "syncMs": 20.21636099999978,
+          "maxSyncMs": 20.21636099999978,
+          "wallMs": 40.050169000000096,
+          "maxWallMs": 40.050169000000096
+        },
+        "pipelines": {
+          "calls": 6,
+          "syncMs": 195.52967199999966,
+          "maxSyncMs": 194.21910900000057,
+          "wallMs": 195.5538940000015,
+          "maxWallMs": 194.22385400000076
+        },
+        "liveness.project": {
+          "calls": 1,
+          "syncMs": 0.8229659999997239,
+          "maxSyncMs": 0.8229659999997239,
+          "wallMs": 422.30946200000017,
+          "maxWallMs": 422.30946200000017
+        },
+        "tasks": {
+          "calls": 3,
+          "syncMs": 278.9319809999988,
+          "maxSyncMs": 170.1209829999998,
+          "wallMs": 278.9410650000018,
+          "maxWallMs": 170.12467600000036
+        },
+        "seatDeployments": {
+          "calls": 1,
+          "syncMs": 0.04744200000004639,
+          "maxSyncMs": 0.04744200000004639,
+          "wallMs": 0.05249600000024657,
+          "maxWallMs": 0.05249600000024657
+        },
+        "maintenanceRuns": {
+          "calls": 1,
+          "syncMs": 8.916968000000452,
+          "maxSyncMs": 8.916968000000452,
+          "wallMs": 8.92179699999997,
+          "maxWallMs": 8.92179699999997
+        },
+        "refreshLifecycle": {
+          "calls": 1,
+          "syncMs": 23.8333990000001,
+          "maxSyncMs": 23.8333990000001,
+          "wallMs": 23.836897000000135,
+          "maxWallMs": 23.836897000000135
+        },
+        "lifecycleJournal": {
+          "calls": 1,
+          "syncMs": 3.7724120000002586,
+          "maxSyncMs": 3.7724120000002586,
+          "wallMs": 3.7753860000002533,
+          "maxWallMs": 3.7753860000002533
+        },
+        "workerAsks": {
+          "calls": 1,
+          "syncMs": 0.09672299999965617,
+          "maxSyncMs": 0.09672299999965617,
+          "wallMs": 5540.060553,
+          "maxWallMs": 5540.060553
+        },
+        "archivedPipelines": {
+          "calls": 1,
+          "syncMs": 747.9633819999999,
+          "maxSyncMs": 747.9633819999999,
+          "wallMs": 747.9696690000001,
+          "maxWallMs": 747.9696690000001
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.04097600000022794,
+          "maxSyncMs": 0.04097600000022794,
+          "wallMs": 0.05216700000164565,
+          "maxWallMs": 0.05216700000164565
+        },
+        "workerCounts": {
+          "calls": 1,
+          "syncMs": 27.338057000000845,
+          "maxSyncMs": 27.338057000000845,
+          "wallMs": 27.341585000000123,
+          "maxWallMs": 27.341585000000123
+        },
+        "latestDeployment": {
+          "calls": 1,
+          "syncMs": 0.1711219999997411,
+          "maxSyncMs": 0.1711219999997411,
+          "wallMs": 0.17456600000150502,
+          "maxWallMs": 0.17456600000150502
+        },
+        "retirementReport": {
+          "calls": 1,
+          "syncMs": 0.03477999999995518,
+          "maxSyncMs": 0.03477999999995518,
+          "wallMs": 0.03526100000090082,
+          "maxWallMs": 0.03526100000090082
+        },
+        "retirementJournal": {
+          "calls": 1,
+          "syncMs": 7.161822000000029,
+          "maxSyncMs": 7.161822000000029,
+          "wallMs": 7.165337000000363,
+          "maxWallMs": 7.165337000000363
+        },
+        "diskPressure": {
+          "calls": 1,
+          "syncMs": 0.09610200000133773,
+          "maxSyncMs": 0.09610200000133773,
+          "wallMs": 288.8085220000012,
+          "maxWallMs": 288.8085220000012
+        },
+        "reports.log": {
+          "calls": 1,
+          "syncMs": 23.23580200000106,
+          "maxSyncMs": 23.23580200000106,
+          "wallMs": 23.240680000000793,
+          "maxWallMs": 23.240680000000793
+        },
+        "recordRuleReports": {
+          "calls": 1,
+          "syncMs": 368.40905700000076,
+          "maxSyncMs": 368.40905700000076,
+          "wallMs": 368.41139699999985,
+          "maxWallMs": 368.41139699999985
+        },
+        "seatTurnOutcome": {
+          "calls": 1,
+          "syncMs": 0.01187700000082259,
+          "maxSyncMs": 0.01187700000082259,
+          "wallMs": 0.020529999999780557,
+          "maxWallMs": 0.020529999999780557
+        },
+        "seatContextUsage": {
+          "calls": 1,
+          "syncMs": 0.00547299999925599,
+          "maxSyncMs": 0.00547299999925599,
+          "wallMs": 0.006570999999894411,
+          "maxWallMs": 0.006570999999894411
+        },
+        "recordDeploySnapshots": {
+          "calls": 1,
+          "syncMs": 0.3195639999994455,
+          "maxSyncMs": 0.3195639999994455,
+          "wallMs": 0.3208410000006552,
+          "maxWallMs": 0.3208410000006552
+        },
+        "writeState": {
+          "calls": 1,
+          "syncMs": 8.094113000001016,
+          "maxSyncMs": 8.094113000001016,
+          "wallMs": 8.095916000000216,
+          "maxWallMs": 8.095916000000216
+        },
+        "appendRecord": {
+          "calls": 1,
+          "syncMs": 1.024342999999135,
+          "maxSyncMs": 1.024342999999135,
+          "wallMs": 1.0255969999998342,
+          "maxWallMs": 1.0255969999998342
+        }
+      },
+      "ms": 9114.224166,
+      "maxGapMs": 1208.9129040000007
+    },
+    {
+      "case": "T9-check",
+      "run": 1,
+      "at": "2026-10-19T01:04:07.561Z",
+      "load": [
+        3.9,
+        5.51,
+        5.41
+      ],
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
+      "sources": {
+        "readState": {
+          "calls": 2,
+          "syncMs": 0.7104970000000321,
+          "maxSyncMs": 0.3875289999996312,
+          "wallMs": 0.7168770000007498,
+          "maxWallMs": 0.39310199999999895
+        },
+        "now": {
+          "calls": 8,
+          "syncMs": 0.011476999998194515,
+          "maxSyncMs": 0.002252000000225962,
+          "wallMs": 0.016485000001921435,
+          "maxWallMs": 0.003985000001193839
+        },
+        "seatFor": {
+          "calls": 7,
+          "syncMs": 51.037271999997756,
+          "maxSyncMs": 9.076041999998779,
+          "wallMs": 51.04693999999654,
+          "maxWallMs": 9.077001999999993
+        },
+        "settings": {
+          "calls": 5,
+          "syncMs": 2.8467410000012023,
+          "maxSyncMs": 1.6592519999994693,
+          "wallMs": 2.851821000002019,
+          "maxWallMs": 1.660143999999491
+        },
+        "memoryProblems": {
+          "calls": 3,
+          "syncMs": 228.15214099999866,
+          "maxSyncMs": 78.23923999999897,
+          "wallMs": 228.15911499999856,
+          "maxWallMs": 78.24172299999918
+        },
+        "registry": {
+          "calls": 7,
+          "syncMs": 0.029780999997456092,
+          "maxSyncMs": 0.008989999998448184,
+          "wallMs": 0.033972999997786246,
+          "maxWallMs": 0.009462999998504529
+        },
+        "liveness.conversation": {
+          "calls": 1,
+          "syncMs": 5.212153999998918,
+          "maxSyncMs": 5.212153999998918,
+          "wallMs": 6.0339939999994385,
+          "maxWallMs": 6.0339939999994385
+        },
+        "pipelines": {
+          "calls": 6,
+          "syncMs": 1.2734869999985676,
+          "maxSyncMs": 0.34060499999941385,
+          "wallMs": 1.2800460000016756,
+          "maxWallMs": 0.3413460000010673
+        },
+        "liveness.project": {
+          "calls": 1,
+          "syncMs": 0.32462200000009034,
+          "maxSyncMs": 0.32462200000009034,
+          "wallMs": 37.33459000000039,
+          "maxWallMs": 37.33459000000039
+        },
+        "tasks": {
+          "calls": 3,
+          "syncMs": 155.3296250000003,
+          "maxSyncMs": 58.17118499999924,
+          "wallMs": 155.33629999999903,
+          "maxWallMs": 58.17401199999949
+        },
+        "seatDeployments": {
+          "calls": 1,
+          "syncMs": 0.017039000000295346,
+          "maxSyncMs": 0.017039000000295346,
+          "wallMs": 0.01876300000003539,
+          "maxWallMs": 0.01876300000003539
+        },
+        "maintenanceRuns": {
+          "calls": 1,
+          "syncMs": 1.962825000000521,
+          "maxSyncMs": 1.962825000000521,
+          "wallMs": 1.9648310000011406,
+          "maxWallMs": 1.9648310000011406
+        },
+        "refreshLifecycle": {
+          "calls": 1,
+          "syncMs": 0.01587699999981851,
+          "maxSyncMs": 0.01587699999981851,
+          "wallMs": 0.01624699999956647,
+          "maxWallMs": 0.01624699999956647
+        },
+        "lifecycleJournal": {
+          "calls": 1,
+          "syncMs": 3.2709350000004633,
+          "maxSyncMs": 3.2709350000004633,
+          "wallMs": 3.293809999999212,
+          "maxWallMs": 3.293809999999212
+        },
+        "workerAsks": {
+          "calls": 1,
+          "syncMs": 0.049517999999807216,
+          "maxSyncMs": 0.049517999999807216,
+          "wallMs": 68.40816300000006,
+          "maxWallMs": 68.40816300000006
+        },
+        "archivedPipelines": {
+          "calls": 1,
+          "syncMs": 0.4495520000000397,
+          "maxSyncMs": 0.4495520000000397,
+          "wallMs": 0.45103999999992084,
+          "maxWallMs": 0.45103999999992084
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.004636000001482898,
+          "maxSyncMs": 0.004636000001482898,
+          "wallMs": 0.01199100000121689,
+          "maxWallMs": 0.01199100000121689
+        },
+        "workerCounts": {
+          "calls": 1,
+          "syncMs": 16.099968999998964,
+          "maxSyncMs": 16.099968999998964,
+          "wallMs": 16.101870999998937,
+          "maxWallMs": 16.101870999998937
+        },
+        "latestDeployment": {
+          "calls": 1,
+          "syncMs": 0.0504560000008496,
+          "maxSyncMs": 0.0504560000008496,
+          "wallMs": 0.05201400000078138,
+          "maxWallMs": 0.05201400000078138
+        },
+        "retirementReport": {
+          "calls": 1,
+          "syncMs": 0.013015000000450527,
+          "maxSyncMs": 0.013015000000450527,
+          "wallMs": 0.013189000001148088,
+          "maxWallMs": 0.013189000001148088
+        },
+        "retirementJournal": {
+          "calls": 1,
+          "syncMs": 4.421189000000595,
+          "maxSyncMs": 4.421189000000595,
+          "wallMs": 4.423307999999452,
+          "maxWallMs": 4.423307999999452
+        },
+        "diskPressure": {
+          "calls": 1,
+          "syncMs": 0.035160999999789055,
+          "maxSyncMs": 0.035160999999789055,
+          "wallMs": 3.631663000000117,
+          "maxWallMs": 3.631663000000117
+        },
+        "reports.log": {
+          "calls": 1,
+          "syncMs": 13.440520000000106,
+          "maxSyncMs": 13.440520000000106,
+          "wallMs": 13.442811999999321,
+          "maxWallMs": 13.442811999999321
+        },
+        "recordRuleReports": {
+          "calls": 1,
+          "syncMs": 243.44107299999996,
+          "maxSyncMs": 243.44107299999996,
+          "wallMs": 243.4431029999996,
+          "maxWallMs": 243.4431029999996
+        },
+        "seatTurnOutcome": {
+          "calls": 1,
+          "syncMs": 0.0030470000001514563,
+          "maxSyncMs": 0.0030470000001514563,
+          "wallMs": 0.009173000000373577,
+          "maxWallMs": 0.009173000000373577
+        },
+        "seatContextUsage": {
+          "calls": 1,
+          "syncMs": 0.0010160000001633307,
+          "maxSyncMs": 0.0010160000001633307,
+          "wallMs": 0.0015129999992495868,
+          "maxWallMs": 0.0015129999992495868
+        },
+        "recordDeploySnapshots": {
+          "calls": 1,
+          "syncMs": 0.16916800000035437,
+          "maxSyncMs": 0.16916800000035437,
+          "wallMs": 0.17067499999939173,
+          "maxWallMs": 0.17067499999939173
+        },
+        "writeState": {
+          "calls": 1,
+          "syncMs": 8.321086999998442,
+          "maxSyncMs": 8.321086999998442,
+          "wallMs": 8.32339299999876,
+          "maxWallMs": 8.32339299999876
+        },
+        "appendRecord": {
+          "calls": 1,
+          "syncMs": 0.5662470000006579,
+          "maxSyncMs": 0.5662470000006579,
+          "wallMs": 0.5671070000007603,
+          "maxWallMs": 0.5671070000007603
+        }
+      },
+      "ms": 1411.2875359999998,
+      "maxGapMs": 703.156078
+    },
+    {
+      "case": "T9-check",
+      "run": 2,
+      "at": "2026-10-19T01:04:08.979Z",
+      "load": [
+        3.9,
+        5.51,
+        5.41
+      ],
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
+      "sources": {
+        "readState": {
+          "calls": 2,
+          "syncMs": 0.793245000000752,
+          "maxSyncMs": 0.39779100000123435,
+          "wallMs": 0.795880000001489,
+          "maxWallMs": 0.3992690000013681
+        },
+        "now": {
+          "calls": 8,
+          "syncMs": 0.01141999999890686,
+          "maxSyncMs": 0.004254999999830034,
+          "wallMs": 0.0137620000023162,
+          "maxWallMs": 0.005069000000730739
+        },
+        "seatFor": {
+          "calls": 7,
+          "syncMs": 45.632471000000805,
+          "maxSyncMs": 6.913441000000603,
+          "wallMs": 45.64102400000229,
+          "maxWallMs": 6.914290000000619
+        },
+        "settings": {
+          "calls": 5,
+          "syncMs": 1.4990470000011555,
+          "maxSyncMs": 0.375597000000198,
+          "wallMs": 1.5033690000000206,
+          "maxWallMs": 0.3766190000005736
+        },
+        "memoryProblems": {
+          "calls": 3,
+          "syncMs": 232.58474999999817,
+          "maxSyncMs": 81.85565199999837,
+          "wallMs": 232.59176300000217,
+          "maxWallMs": 81.85849899999994
+        },
+        "registry": {
+          "calls": 7,
+          "syncMs": 0.019449999996140832,
+          "maxSyncMs": 0.004097999999430613,
+          "wallMs": 0.024597999998150044,
+          "maxWallMs": 0.004822999999305466
+        },
+        "liveness.conversation": {
+          "calls": 1,
+          "syncMs": 4.986598999999842,
+          "maxSyncMs": 4.986598999999842,
+          "wallMs": 5.5489419999994425,
+          "maxWallMs": 5.5489419999994425
+        },
+        "pipelines": {
+          "calls": 6,
+          "syncMs": 1.0956380000006902,
+          "maxSyncMs": 0.2115350000003673,
+          "wallMs": 1.1028490000044258,
+          "maxWallMs": 0.21247399999992922
+        },
+        "liveness.project": {
+          "calls": 1,
+          "syncMs": 0.3950590000004013,
+          "maxSyncMs": 0.3950590000004013,
+          "wallMs": 44.27549999999974,
+          "maxWallMs": 44.27549999999974
+        },
+        "tasks": {
+          "calls": 3,
+          "syncMs": 152.09151999999995,
+          "maxSyncMs": 54.50599500000135,
+          "wallMs": 152.09652300000198,
+          "maxWallMs": 54.50763200000074
+        },
+        "seatDeployments": {
+          "calls": 1,
+          "syncMs": 0.017228000000613974,
+          "maxSyncMs": 0.017228000000613974,
+          "wallMs": 0.018742000000202097,
+          "maxWallMs": 0.018742000000202097
+        },
+        "maintenanceRuns": {
+          "calls": 1,
+          "syncMs": 2.4076659999991534,
+          "maxSyncMs": 2.4076659999991534,
+          "wallMs": 2.4097019999990152,
+          "maxWallMs": 2.4097019999990152
+        },
+        "refreshLifecycle": {
+          "calls": 1,
+          "syncMs": 0.008336000000781496,
+          "maxSyncMs": 0.008336000000781496,
+          "wallMs": 0.035139000001436216,
+          "maxWallMs": 0.035139000001436216
+        },
+        "lifecycleJournal": {
+          "calls": 1,
+          "syncMs": 4.026300999999876,
+          "maxSyncMs": 4.026300999999876,
+          "wallMs": 4.027556999999433,
+          "maxWallMs": 4.027556999999433
+        },
+        "workerAsks": {
+          "calls": 1,
+          "syncMs": 0.03273999999873922,
+          "maxSyncMs": 0.03273999999873922,
+          "wallMs": 69.9423740000002,
+          "maxWallMs": 69.9423740000002
+        },
+        "archivedPipelines": {
+          "calls": 1,
+          "syncMs": 0.3515179999994871,
+          "maxSyncMs": 0.3515179999994871,
+          "wallMs": 0.35330100000101083,
+          "maxWallMs": 0.35330100000101083
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.004661999999370892,
+          "maxSyncMs": 0.004661999999370892,
+          "wallMs": 0.010043999998742947,
+          "maxWallMs": 0.010043999998742947
+        },
+        "workerCounts": {
+          "calls": 1,
+          "syncMs": 18.573136000000886,
+          "maxSyncMs": 18.573136000000886,
+          "wallMs": 18.575286000001142,
+          "maxWallMs": 18.575286000001142
+        },
+        "latestDeployment": {
+          "calls": 1,
+          "syncMs": 0.0474819999999454,
+          "maxSyncMs": 0.0474819999999454,
+          "wallMs": 0.0490669999999227,
+          "maxWallMs": 0.0490669999999227
+        },
+        "retirementReport": {
+          "calls": 1,
+          "syncMs": 0.015043000001242035,
+          "maxSyncMs": 0.015043000001242035,
+          "wallMs": 0.015176000000792556,
+          "maxWallMs": 0.015176000000792556
+        },
+        "retirementJournal": {
+          "calls": 1,
+          "syncMs": 3.9911769999998796,
+          "maxSyncMs": 3.9911769999998796,
+          "wallMs": 3.9921009999998205,
+          "maxWallMs": 3.9921009999998205
+        },
+        "diskPressure": {
+          "calls": 1,
+          "syncMs": 0.029520999998567277,
+          "maxSyncMs": 0.029520999998567277,
+          "wallMs": 0.5732559999996738,
+          "maxWallMs": 0.5732559999996738
+        },
+        "reports.log": {
+          "calls": 1,
+          "syncMs": 10.095419999999649,
+          "maxSyncMs": 10.095419999999649,
+          "wallMs": 10.096621999999115,
+          "maxWallMs": 10.096621999999115
+        },
+        "recordRuleReports": {
+          "calls": 1,
+          "syncMs": 236.89333599999918,
+          "maxSyncMs": 236.89333599999918,
+          "wallMs": 236.89551799999936,
+          "maxWallMs": 236.89551799999936
+        },
+        "seatTurnOutcome": {
+          "calls": 1,
+          "syncMs": 0.0023279999986698385,
+          "maxSyncMs": 0.0023279999986698385,
+          "wallMs": 0.008737999998629675,
+          "maxWallMs": 0.008737999998629675
+        },
+        "seatContextUsage": {
+          "calls": 1,
+          "syncMs": 0.0021190000006754417,
+          "maxSyncMs": 0.0021190000006754417,
+          "wallMs": 0.0027430000009189826,
+          "maxWallMs": 0.0027430000009189826
+        },
+        "recordDeploySnapshots": {
+          "calls": 1,
+          "syncMs": 0.15630199999941397,
+          "maxSyncMs": 0.15630199999941397,
+          "wallMs": 0.15676799999891955,
+          "maxWallMs": 0.15676799999891955
+        },
+        "writeState": {
+          "calls": 1,
+          "syncMs": 7.413067999999839,
+          "maxSyncMs": 7.413067999999839,
+          "wallMs": 7.413364000000001,
+          "maxWallMs": 7.413364000000001
+        },
+        "appendRecord": {
+          "calls": 1,
+          "syncMs": 0.4959240000007412,
+          "maxSyncMs": 0.4959240000007412,
+          "wallMs": 0.4960960000007617,
+          "maxWallMs": 0.4960960000007617
+        }
+      },
+      "ms": 1403.5370059999987,
+      "maxGapMs": 703.0537050000003
+    },
+    {
+      "case": "T9-check",
+      "run": 3,
+      "at": "2026-10-19T01:04:10.379Z",
+      "load": [
+        3.91,
+        5.48,
+        5.41
+      ],
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
+      "sources": {
+        "readState": {
+          "calls": 2,
+          "syncMs": 0.7254080000002432,
+          "maxSyncMs": 0.3904079999992973,
+          "wallMs": 0.7259590000012395,
+          "maxWallMs": 0.39077499999984866
+        },
+        "now": {
+          "calls": 8,
+          "syncMs": 0.009449999999560532,
+          "maxSyncMs": 0.0016130000003613532,
+          "wallMs": 0.010642999999618041,
+          "maxWallMs": 0.001689000000624219
+        },
+        "seatFor": {
+          "calls": 7,
+          "syncMs": 45.73721700000169,
+          "maxSyncMs": 6.819299000002502,
+          "wallMs": 45.74419500000295,
+          "maxWallMs": 6.820640000001731
+        },
+        "settings": {
+          "calls": 5,
+          "syncMs": 1.5465600000006816,
+          "maxSyncMs": 0.35897599999952945,
+          "wallMs": 1.5483520000034332,
+          "maxWallMs": 0.35943699999916134
+        },
+        "memoryProblems": {
+          "calls": 3,
+          "syncMs": 229.65901600000143,
+          "maxSyncMs": 85.92697599999883,
+          "wallMs": 229.66125700000157,
+          "maxWallMs": 85.92773699999998
+        },
+        "registry": {
+          "calls": 7,
+          "syncMs": 0.017080999998142943,
+          "maxSyncMs": 0.004033000001072651,
+          "wallMs": 0.020925000000715954,
+          "maxWallMs": 0.0049360000011802185
+        },
+        "liveness.conversation": {
+          "calls": 1,
+          "syncMs": 5.1613540000016656,
+          "maxSyncMs": 5.1613540000016656,
+          "wallMs": 5.6709090000003926,
+          "maxWallMs": 5.6709090000003926
+        },
+        "pipelines": {
+          "calls": 6,
+          "syncMs": 1.042117999999391,
+          "maxSyncMs": 0.19986399999834248,
+          "wallMs": 1.044172999994771,
+          "maxWallMs": 0.20011499999964144
+        },
+        "liveness.project": {
+          "calls": 1,
+          "syncMs": 0.3053459999991901,
+          "maxSyncMs": 0.3053459999991901,
+          "wallMs": 40.94689300000027,
+          "maxWallMs": 40.94689300000027
+        },
+        "tasks": {
+          "calls": 3,
+          "syncMs": 149.40846000000238,
+          "maxSyncMs": 54.489002000002074,
+          "wallMs": 149.4091780000017,
+          "maxWallMs": 54.489268000001175
+        },
+        "seatDeployments": {
+          "calls": 1,
+          "syncMs": 0.046041999998124084,
+          "maxSyncMs": 0.046041999998124084,
+          "wallMs": 0.04641799999808427,
+          "maxWallMs": 0.04641799999808427
+        },
+        "maintenanceRuns": {
+          "calls": 1,
+          "syncMs": 2.5200240000012855,
+          "maxSyncMs": 2.5200240000012855,
+          "wallMs": 2.52062400000068,
+          "maxWallMs": 2.52062400000068
+        },
+        "refreshLifecycle": {
+          "calls": 1,
+          "syncMs": 0.007881000001361826,
+          "maxSyncMs": 0.007881000001361826,
+          "wallMs": 0.007956000001286156,
+          "maxWallMs": 0.007956000001286156
+        },
+        "lifecycleJournal": {
+          "calls": 1,
+          "syncMs": 3.813812999997026,
+          "maxSyncMs": 3.813812999997026,
+          "wallMs": 3.814130999999179,
+          "maxWallMs": 3.814130999999179
+        },
+        "workerAsks": {
+          "calls": 1,
+          "syncMs": 0.03591700000106357,
+          "maxSyncMs": 0.03591700000106357,
+          "wallMs": 68.30655299999853,
+          "maxWallMs": 68.30655299999853
+        },
+        "archivedPipelines": {
+          "calls": 1,
+          "syncMs": 0.3774389999998675,
+          "maxSyncMs": 0.3774389999998675,
+          "wallMs": 0.37789100000009057,
+          "maxWallMs": 0.37789100000009057
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.004452000001037959,
+          "maxSyncMs": 0.004452000001037959,
+          "wallMs": 0.009545000000798609,
+          "maxWallMs": 0.009545000000798609
+        },
+        "workerCounts": {
+          "calls": 1,
+          "syncMs": 18.65439200000037,
+          "maxSyncMs": 18.65439200000037,
+          "wallMs": 18.654579999998532,
+          "maxWallMs": 18.654579999998532
+        },
+        "latestDeployment": {
+          "calls": 1,
+          "syncMs": 0.04905800000051386,
+          "maxSyncMs": 0.04905800000051386,
+          "wallMs": 0.04980200000136392,
+          "maxWallMs": 0.04980200000136392
+        },
+        "retirementReport": {
+          "calls": 1,
+          "syncMs": 0.013444000000163214,
+          "maxSyncMs": 0.013444000000163214,
+          "wallMs": 0.01350800000000163,
+          "maxWallMs": 0.01350800000000163
+        },
+        "retirementJournal": {
+          "calls": 1,
+          "syncMs": 3.254349999999249,
+          "maxSyncMs": 3.254349999999249,
+          "wallMs": 3.2547410000006494,
+          "maxWallMs": 3.2547410000006494
+        },
+        "diskPressure": {
+          "calls": 1,
+          "syncMs": 0.031289999998989515,
+          "maxSyncMs": 0.031289999998989515,
+          "wallMs": 5.470954000000347,
+          "maxWallMs": 5.470954000000347
+        },
+        "reports.log": {
+          "calls": 1,
+          "syncMs": 8.927679999997054,
+          "maxSyncMs": 8.927679999997054,
+          "wallMs": 8.928231999998388,
+          "maxWallMs": 8.928231999998388
+        },
+        "recordRuleReports": {
+          "calls": 1,
+          "syncMs": 223.34866500000135,
+          "maxSyncMs": 223.34866500000135,
+          "wallMs": 223.34940300000017,
+          "maxWallMs": 223.34940300000017
+        },
+        "seatTurnOutcome": {
+          "calls": 1,
+          "syncMs": 0.0027889999983017333,
+          "maxSyncMs": 0.0027889999983017333,
+          "wallMs": 0.008486999999149702,
+          "maxWallMs": 0.008486999999149702
+        },
+        "seatContextUsage": {
+          "calls": 1,
+          "syncMs": 0.0009690000006230548,
+          "maxSyncMs": 0.0009690000006230548,
+          "wallMs": 0.0011999999987892807,
+          "maxWallMs": 0.0011999999987892807
+        },
+        "recordDeploySnapshots": {
+          "calls": 1,
+          "syncMs": 0.15634100000170292,
+          "maxSyncMs": 0.15634100000170292,
+          "wallMs": 0.1565100000007078,
+          "maxWallMs": 0.1565100000007078
+        },
+        "writeState": {
+          "calls": 1,
+          "syncMs": 8.450025999998616,
+          "maxSyncMs": 8.450025999998616,
+          "wallMs": 8.450422000001709,
+          "maxWallMs": 8.450422000001709
+        },
+        "appendRecord": {
+          "calls": 1,
+          "syncMs": 0.41598700000031386,
+          "maxSyncMs": 0.41598700000031386,
+          "wallMs": 0.4163140000018757,
+          "maxWallMs": 0.4163140000018757
+        }
+      },
+      "ms": 1388.2329150000005,
+      "maxGapMs": 734.536868000001
+    },
+    {
+      "case": "T9-check",
+      "run": 4,
+      "at": "2026-10-19T01:04:11.844Z",
+      "load": [
+        3.91,
+        5.48,
+        5.41
+      ],
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
+      "sources": {
+        "readState": {
+          "calls": 2,
+          "syncMs": 0.9076529999983904,
+          "maxSyncMs": 0.4727920000004815,
+          "wallMs": 0.9085759999979928,
+          "maxWallMs": 0.47317800000018906
+        },
+        "now": {
+          "calls": 8,
+          "syncMs": 0.025427000004128786,
+          "maxSyncMs": 0.013717000001634005,
+          "wallMs": 0.02734500000224216,
+          "maxWallMs": 0.013817000002745772
+        },
+        "seatFor": {
+          "calls": 7,
+          "syncMs": 55.29313600000023,
+          "maxSyncMs": 12.279809999999998,
+          "wallMs": 55.29935600000317,
+          "maxWallMs": 12.280910999998014
+        },
+        "settings": {
+          "calls": 5,
+          "syncMs": 3.82908099999986,
+          "maxSyncMs": 1.4604509999990114,
+          "wallMs": 3.8313799999996263,
+          "maxWallMs": 1.4610020000000077
+        },
+        "memoryProblems": {
+          "calls": 3,
+          "syncMs": 247.79608500000177,
+          "maxSyncMs": 100.36569600000075,
+          "wallMs": 247.7978120000007,
+          "maxWallMs": 100.3663340000021
+        },
+        "registry": {
+          "calls": 7,
+          "syncMs": 0.03331400000388385,
+          "maxSyncMs": 0.014054000002943212,
+          "wallMs": 0.03716300000451156,
+          "maxWallMs": 0.014730000002600718
+        },
+        "liveness.conversation": {
+          "calls": 1,
+          "syncMs": 5.537011000000348,
+          "maxSyncMs": 5.537011000000348,
+          "wallMs": 6.230758000001515,
+          "maxWallMs": 6.230758000001515
+        },
+        "pipelines": {
+          "calls": 6,
+          "syncMs": 1.1190199999982724,
+          "maxSyncMs": 0.2466229999990901,
+          "wallMs": 1.1217869999964023,
+          "maxWallMs": 0.24709300000176881
+        },
+        "liveness.project": {
+          "calls": 1,
+          "syncMs": 0.4188830000020971,
+          "maxSyncMs": 0.4188830000020971,
+          "wallMs": 44.36838799999896,
+          "maxWallMs": 44.36838799999896
+        },
+        "tasks": {
+          "calls": 3,
+          "syncMs": 158.86515099999815,
+          "maxSyncMs": 59.02245699999912,
+          "wallMs": 158.8661379999976,
+          "maxWallMs": 59.02260499999829
+        },
+        "seatDeployments": {
+          "calls": 1,
+          "syncMs": 0.016918999997869832,
+          "maxSyncMs": 0.016918999997869832,
+          "wallMs": 0.017275999998673797,
+          "maxWallMs": 0.017275999998673797
+        },
+        "maintenanceRuns": {
+          "calls": 1,
+          "syncMs": 2.486713000002055,
+          "maxSyncMs": 2.486713000002055,
+          "wallMs": 2.4876060000024154,
+          "maxWallMs": 2.4876060000024154
+        },
+        "refreshLifecycle": {
+          "calls": 1,
+          "syncMs": 0.008079999999608845,
+          "maxSyncMs": 0.008079999999608845,
+          "wallMs": 0.008133999999699881,
+          "maxWallMs": 0.008133999999699881
+        },
+        "lifecycleJournal": {
+          "calls": 1,
+          "syncMs": 4.708007000001089,
+          "maxSyncMs": 4.708007000001089,
+          "wallMs": 4.709106999998767,
+          "maxWallMs": 4.709106999998767
+        },
+        "workerAsks": {
+          "calls": 1,
+          "syncMs": 0.04348699999900418,
+          "maxSyncMs": 0.04348699999900418,
+          "wallMs": 81.46930399999837,
+          "maxWallMs": 81.46930399999837
+        },
+        "archivedPipelines": {
+          "calls": 1,
+          "syncMs": 0.4322700000011537,
+          "maxSyncMs": 0.4322700000011537,
+          "wallMs": 0.432676000000356,
+          "maxWallMs": 0.432676000000356
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.010951000000204658,
+          "maxSyncMs": 0.010951000000204658,
+          "wallMs": 0.016588999998930376,
+          "maxWallMs": 0.016588999998930376
+        },
+        "workerCounts": {
+          "calls": 1,
+          "syncMs": 18.196641000002273,
+          "maxSyncMs": 18.196641000002273,
+          "wallMs": 18.196955999999773,
+          "maxWallMs": 18.196955999999773
+        },
+        "latestDeployment": {
+          "calls": 1,
+          "syncMs": 0.08279699999911827,
+          "maxSyncMs": 0.08279699999911827,
+          "wallMs": 0.08337799999935669,
+          "maxWallMs": 0.08337799999935669
+        },
+        "retirementReport": {
+          "calls": 1,
+          "syncMs": 0.02152600000044913,
+          "maxSyncMs": 0.02152600000044913,
+          "wallMs": 0.021568000000115717,
+          "maxWallMs": 0.021568000000115717
+        },
+        "retirementJournal": {
+          "calls": 1,
+          "syncMs": 4.078621000000567,
+          "maxSyncMs": 4.078621000000567,
+          "wallMs": 4.079127999997581,
+          "maxWallMs": 4.079127999997581
+        },
+        "diskPressure": {
+          "calls": 1,
+          "syncMs": 0.04988999999841326,
+          "maxSyncMs": 0.04988999999841326,
+          "wallMs": 9.635693000000174,
+          "maxWallMs": 9.635693000000174
+        },
+        "reports.log": {
+          "calls": 1,
+          "syncMs": 10.287758999998914,
+          "maxSyncMs": 10.287758999998914,
+          "wallMs": 10.287940999998682,
+          "maxWallMs": 10.287940999998682
+        },
+        "recordRuleReports": {
+          "calls": 1,
+          "syncMs": 213.37402799999836,
+          "maxSyncMs": 213.37402799999836,
+          "wallMs": 213.3744630000001,
+          "maxWallMs": 213.3744630000001
+        },
+        "seatTurnOutcome": {
+          "calls": 1,
+          "syncMs": 0.0019789999969361816,
+          "maxSyncMs": 0.0019789999969361816,
+          "wallMs": 0.005563999999139924,
+          "maxWallMs": 0.005563999999139924
+        },
+        "seatContextUsage": {
+          "calls": 1,
+          "syncMs": 0.0008259999995061662,
+          "maxSyncMs": 0.0008259999995061662,
+          "wallMs": 0.000879999999597203,
+          "maxWallMs": 0.000879999999597203
+        },
+        "recordDeploySnapshots": {
+          "calls": 1,
+          "syncMs": 0.16839900000195485,
+          "maxSyncMs": 0.16839900000195485,
+          "wallMs": 0.16856300000290503,
+          "maxWallMs": 0.16856300000290503
+        },
+        "writeState": {
+          "calls": 1,
+          "syncMs": 7.797738999997819,
+          "maxSyncMs": 7.797738999997819,
+          "wallMs": 7.798095999998623,
+          "maxWallMs": 7.798095999998623
+        },
+        "appendRecord": {
+          "calls": 1,
+          "syncMs": 0.6018719999992754,
+          "maxSyncMs": 0.6018719999992754,
+          "wallMs": 0.602138999998715,
+          "maxWallMs": 0.602138999998715
+        }
+      },
+      "ms": 1454.818475,
+      "maxGapMs": 792.7887620000001
+    },
+    {
+      "case": "T9-check",
+      "run": 5,
+      "at": "2026-10-19T01:04:13.311Z",
+      "load": [
+        3.91,
+        5.48,
+        5.41
+      ],
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
+      "sources": {
+        "readState": {
+          "calls": 2,
+          "syncMs": 0.7413819999965199,
+          "maxSyncMs": 0.3915199999973993,
+          "wallMs": 0.7423339999986638,
+          "maxWallMs": 0.3921439999976428
+        },
+        "now": {
+          "calls": 8,
+          "syncMs": 0.0075750000032712705,
+          "maxSyncMs": 0.0019339999998919666,
+          "wallMs": 0.0087390000007872,
+          "maxWallMs": 0.001997999999730382
+        },
+        "seatFor": {
+          "calls": 7,
+          "syncMs": 45.601825999998255,
+          "maxSyncMs": 7.061860000001616,
+          "wallMs": 45.60626299999785,
+          "maxWallMs": 7.062439000001177
+        },
+        "settings": {
+          "calls": 5,
+          "syncMs": 2.8672499999993306,
+          "maxSyncMs": 1.6470680000020366,
+          "wallMs": 2.8691760000037903,
+          "maxWallMs": 1.6473880000012286
+        },
+        "memoryProblems": {
+          "calls": 3,
+          "syncMs": 230.21053700000266,
+          "maxSyncMs": 79.0244989999992,
+          "wallMs": 230.2127079999991,
+          "maxWallMs": 79.02532299999802
+        },
+        "registry": {
+          "calls": 7,
+          "syncMs": 0.01347900000109803,
+          "maxSyncMs": 0.0028099999981350265,
+          "wallMs": 0.017783999999664957,
+          "maxWallMs": 0.0033059999987017363
+        },
+        "liveness.conversation": {
+          "calls": 1,
+          "syncMs": 4.796688000002177,
+          "maxSyncMs": 4.796688000002177,
+          "wallMs": 5.287172000000282,
+          "maxWallMs": 5.287172000000282
+        },
+        "pipelines": {
+          "calls": 6,
+          "syncMs": 1.3368360000022221,
+          "maxSyncMs": 0.26757500000167056,
+          "wallMs": 1.3394719999996596,
+          "maxWallMs": 0.2677880000010191
+        },
+        "liveness.project": {
+          "calls": 1,
+          "syncMs": 0.28725699999995413,
+          "maxSyncMs": 0.28725699999995413,
+          "wallMs": 39.42412400000103,
+          "maxWallMs": 39.42412400000103
+        },
+        "tasks": {
+          "calls": 3,
+          "syncMs": 159.98116300000038,
+          "maxSyncMs": 55.500238000000536,
+          "wallMs": 159.98268000000098,
+          "maxWallMs": 55.500684000002366
+        },
+        "seatDeployments": {
+          "calls": 1,
+          "syncMs": 0.014772000002267305,
+          "maxSyncMs": 0.014772000002267305,
+          "wallMs": 0.015106000002560904,
+          "maxWallMs": 0.015106000002560904
+        },
+        "maintenanceRuns": {
+          "calls": 1,
+          "syncMs": 2.3244550000017625,
+          "maxSyncMs": 2.3244550000017625,
+          "wallMs": 2.325039999999717,
+          "maxWallMs": 2.325039999999717
+        },
+        "refreshLifecycle": {
+          "calls": 1,
+          "syncMs": 0.008911999997508246,
+          "maxSyncMs": 0.008911999997508246,
+          "wallMs": 0.009058999999979278,
+          "maxWallMs": 0.009058999999979278
+        },
+        "lifecycleJournal": {
+          "calls": 1,
+          "syncMs": 3.9426389999971434,
+          "maxSyncMs": 3.9426389999971434,
+          "wallMs": 3.9430649999994785,
+          "maxWallMs": 3.9430649999994785
+        },
+        "workerAsks": {
+          "calls": 1,
+          "syncMs": 0.047757000000274274,
+          "maxSyncMs": 0.047757000000274274,
+          "wallMs": 74.83660999999847,
+          "maxWallMs": 74.83660999999847
+        },
+        "archivedPipelines": {
+          "calls": 1,
+          "syncMs": 0.4853719999991881,
+          "maxSyncMs": 0.4853719999991881,
+          "wallMs": 0.48600599999917904,
+          "maxWallMs": 0.48600599999917904
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.005231999999523396,
+          "maxSyncMs": 0.005231999999523396,
+          "wallMs": 0.014396999999007676,
+          "maxWallMs": 0.014396999999007676
+        },
+        "workerCounts": {
+          "calls": 1,
+          "syncMs": 21.147605999998632,
+          "maxSyncMs": 21.147605999998632,
+          "wallMs": 21.147992999998678,
+          "maxWallMs": 21.147992999998678
+        },
+        "latestDeployment": {
+          "calls": 1,
+          "syncMs": 0.07073600000148872,
+          "maxSyncMs": 0.07073600000148872,
+          "wallMs": 0.07140699999945355,
+          "maxWallMs": 0.07140699999945355
+        },
+        "retirementReport": {
+          "calls": 1,
+          "syncMs": 0.0235370000009425,
+          "maxSyncMs": 0.0235370000009425,
+          "wallMs": 0.023582000001624692,
+          "maxWallMs": 0.023582000001624692
+        },
+        "retirementJournal": {
+          "calls": 1,
+          "syncMs": 4.556031000000075,
+          "maxSyncMs": 4.556031000000075,
+          "wallMs": 4.556886000002123,
+          "maxWallMs": 4.556886000002123
+        },
+        "diskPressure": {
+          "calls": 1,
+          "syncMs": 0.03368599999885191,
+          "maxSyncMs": 0.03368599999885191,
+          "wallMs": 13.03451800000039,
+          "maxWallMs": 13.03451800000039
+        },
+        "reports.log": {
+          "calls": 1,
+          "syncMs": 10.947035000001051,
+          "maxSyncMs": 10.947035000001051,
+          "wallMs": 10.947370000001683,
+          "maxWallMs": 10.947370000001683
+        },
+        "recordRuleReports": {
+          "calls": 1,
+          "syncMs": 219.50953899999877,
+          "maxSyncMs": 219.50953899999877,
+          "wallMs": 219.51000699999713,
+          "maxWallMs": 219.51000699999713
+        },
+        "seatTurnOutcome": {
+          "calls": 1,
+          "syncMs": 0.001808999997592764,
+          "maxSyncMs": 0.001808999997592764,
+          "wallMs": 0.005508999998710351,
+          "maxWallMs": 0.005508999998710351
+        },
+        "seatContextUsage": {
+          "calls": 1,
+          "syncMs": 0.0007250000016938429,
+          "maxSyncMs": 0.0007250000016938429,
+          "wallMs": 0.000901999999769032,
+          "maxWallMs": 0.000901999999769032
+        },
+        "recordDeploySnapshots": {
+          "calls": 1,
+          "syncMs": 0.15884000000005472,
+          "maxSyncMs": 0.15884000000005472,
+          "wallMs": 0.15900200000032783,
+          "maxWallMs": 0.15900200000032783
+        },
+        "writeState": {
+          "calls": 1,
+          "syncMs": 6.824290000000474,
+          "maxSyncMs": 6.824290000000474,
+          "wallMs": 6.824618999999075,
+          "maxWallMs": 6.824618999999075
+        },
+        "appendRecord": {
+          "calls": 1,
+          "syncMs": 0.4695549999996729,
+          "maxSyncMs": 0.4695549999996729,
+          "wallMs": 0.4697050000031595,
+          "maxWallMs": 0.4697050000031595
+        }
+      },
+      "ms": 1458.5702170000004,
+      "maxGapMs": 804.7644010000004
+    }
+  ],
+  "after": [
+    {
+      "case": "T9-check",
+      "bun": "1.4.0",
+      "sourceFingerprint": "03d734f166c82acfb73b6b5cb04c42b3f7dcbec40987f59189b60e17db10496b",
+      "summaryBytes": 33356772,
+      "copiedStatuses": {
+        "live": 39,
+        "running": 7
+      },
+      "liveAgents": "5",
+      "runningAgents": "3",
+      "replayNow": 1792371456918,
+      "condition": "module imports, inert summary/catalogue decoding and registry scale count precede run 0; task, pipeline and memory lists stay cold; gh and action ports stubbed; transcript evidence suppressed in both processes; copied structured-host-events child ledgers are present in the seed"
+    },
+    {
+      "case": "T9-check",
+      "run": 0,
+      "at": "2026-10-19T01:04:50.320Z",
+      "load": [
+        4.19,
+        5.36,
+        5.37
+      ],
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
+      "sources": {
+        "prepareRead": {
+          "calls": 1,
+          "syncMs": 20.996074000000135,
+          "maxSyncMs": 20.996074000000135,
+          "wallMs": 725.6389669999999,
+          "maxWallMs": 725.6389669999999
+        },
+        "readState": {
+          "calls": 2,
+          "syncMs": 4.5062699999998586,
+          "maxSyncMs": 4.188300999999228,
+          "wallMs": 4.511983000000328,
+          "maxWallMs": 4.1924159999998665
+        },
+        "now": {
+          "calls": 8,
+          "syncMs": 0.022168999996210914,
+          "maxSyncMs": 0.008344999999280844,
+          "wallMs": 0.029678999997486244,
+          "maxWallMs": 0.009638999999879161
+        },
+        "seatFor": {
+          "calls": 7,
+          "syncMs": 44.72512199999983,
+          "maxSyncMs": 7.223778000000493,
+          "wallMs": 44.74340400000074,
+          "maxWallMs": 7.2273629999999685
+        },
+        "settings": {
+          "calls": 5,
+          "syncMs": 1.6743180000012217,
+          "maxSyncMs": 0.4396020000003773,
+          "wallMs": 1.6865149999994173,
+          "maxWallMs": 0.4424380000000383
+        },
+        "memoryProblems": {
+          "calls": 3,
+          "syncMs": 1.6386700000011842,
+          "maxSyncMs": 0.6621589999995194,
+          "wallMs": 1.649768999999651,
+          "maxWallMs": 0.6669919999985723
+        },
+        "registry": {
+          "calls": 7,
+          "syncMs": 0.02256500000385131,
+          "maxSyncMs": 0.00545100000090315,
+          "wallMs": 0.033465000002252054,
+          "maxWallMs": 0.00998500000059721
+        },
+        "liveness.conversation": {
+          "calls": 1,
+          "syncMs": 15.686633000000256,
+          "maxSyncMs": 15.686633000000256,
+          "wallMs": 31.08574800000042,
+          "maxWallMs": 31.08574800000042
+        },
+        "pipelines": {
+          "calls": 6,
+          "syncMs": 1.7269539999979315,
+          "maxSyncMs": 0.3571799999990617,
+          "wallMs": 1.7527039999977205,
+          "maxWallMs": 0.36813099999926635
+        },
+        "liveness.project": {
+          "calls": 1,
+          "syncMs": 0.19263899999987188,
+          "maxSyncMs": 0.19263899999987188,
+          "wallMs": 1228.6731420000006,
+          "maxWallMs": 1228.6731420000006
+        },
+        "tasks": {
+          "calls": 3,
+          "syncMs": 0.654724999998507,
+          "maxSyncMs": 0.2975079999996524,
+          "wallMs": 0.6621639999993931,
+          "maxWallMs": 0.30179800000041723
+        },
+        "seatDeployments": {
+          "calls": 1,
+          "syncMs": 0.04154000000016822,
+          "maxSyncMs": 0.04154000000016822,
+          "wallMs": 0.04425199999968754,
+          "maxWallMs": 0.04425199999968754
+        },
+        "maintenanceRuns": {
+          "calls": 1,
+          "syncMs": 5.007707999999184,
+          "maxSyncMs": 5.007707999999184,
+          "wallMs": 5.010159999999814,
+          "maxWallMs": 5.010159999999814
+        },
+        "refreshLifecycle": {
+          "calls": 1,
+          "syncMs": 23.951554000000215,
+          "maxSyncMs": 23.951554000000215,
+          "wallMs": 23.95519400000012,
+          "maxWallMs": 23.95519400000012
+        },
+        "lifecycleJournal": {
+          "calls": 1,
+          "syncMs": 3.658325000000332,
+          "maxSyncMs": 3.658325000000332,
+          "wallMs": 3.6609770000004573,
+          "maxWallMs": 3.6609770000004573
+        },
+        "workerAsks": {
+          "calls": 1,
+          "syncMs": 0.13445599999977276,
+          "maxSyncMs": 0.13445599999977276,
+          "wallMs": 4496.762841000001,
+          "maxWallMs": 4496.762841000001
+        },
+        "archivedPipelinesAsync": {
+          "calls": 1,
+          "syncMs": 4.709987000000183,
+          "maxSyncMs": 4.709987000000183,
+          "wallMs": 795.265277999999,
+          "maxWallMs": 795.265277999999
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.02983199999835051,
+          "maxSyncMs": 0.02983199999835051,
+          "wallMs": 0.037427999999636086,
+          "maxWallMs": 0.037427999999636086
+        },
+        "workerCounts": {
+          "calls": 1,
+          "syncMs": 30.660346000000573,
+          "maxSyncMs": 30.660346000000573,
+          "wallMs": 30.665250000000015,
+          "maxWallMs": 30.665250000000015
+        },
+        "latestDeployment": {
+          "calls": 1,
+          "syncMs": 0.1958570000006148,
+          "maxSyncMs": 0.1958570000006148,
+          "wallMs": 0.20056900000054156,
+          "maxWallMs": 0.20056900000054156
+        },
+        "retirementReport": {
+          "calls": 1,
+          "syncMs": 0.039034999999785214,
+          "maxSyncMs": 0.039034999999785214,
+          "wallMs": 0.04170200000044133,
+          "maxWallMs": 0.04170200000044133
+        },
+        "retirementJournal": {
+          "calls": 1,
+          "syncMs": 8.258938999999373,
+          "maxSyncMs": 8.258938999999373,
+          "wallMs": 8.264024000000063,
+          "maxWallMs": 8.264024000000063
+        },
+        "diskPressure": {
+          "calls": 1,
+          "syncMs": 0.09466600000087055,
+          "maxSyncMs": 0.09466600000087055,
+          "wallMs": 311.73479100000077,
+          "maxWallMs": 311.73479100000077
+        },
+        "reports.log": {
+          "calls": 1,
+          "syncMs": 0.13361199999962992,
+          "maxSyncMs": 0.13361199999962992,
+          "wallMs": 35.128882999999405,
+          "maxWallMs": 35.128882999999405
+        },
+        "recordRuleReports": {
+          "calls": 1,
+          "syncMs": 0.19566299999860348,
+          "maxSyncMs": 0.19566299999860348,
+          "wallMs": 396.3291199999985,
+          "maxWallMs": 396.3291199999985
+        },
+        "seatTurnOutcome": {
+          "calls": 1,
+          "syncMs": 0.012915999999677297,
+          "maxSyncMs": 0.012915999999677297,
+          "wallMs": 0.01802299999872048,
+          "maxWallMs": 0.01802299999872048
+        },
+        "seatContextUsage": {
+          "calls": 1,
+          "syncMs": 0.005575999999564374,
+          "maxSyncMs": 0.005575999999564374,
+          "wallMs": 0.0063200000004144385,
+          "maxWallMs": 0.0063200000004144385
+        },
+        "recordDeploySnapshots": {
+          "calls": 1,
+          "syncMs": 0.26878799999940384,
+          "maxSyncMs": 0.26878799999940384,
+          "wallMs": 0.26944600000024366,
+          "maxWallMs": 0.26944600000024366
+        },
+        "writeState": {
+          "calls": 1,
+          "syncMs": 7.163629999999102,
+          "maxSyncMs": 7.163629999999102,
+          "wallMs": 7.165289999999004,
+          "maxWallMs": 7.165289999999004
+        },
+        "appendRecord": {
+          "calls": 1,
+          "syncMs": 0.779701000001296,
+          "maxSyncMs": 0.779701000001296,
+          "wallMs": 0.7806250000012369,
+          "maxWallMs": 0.7806250000012369
+        }
+      },
+      "ms": 8410.700862000002,
+      "maxGapMs": 66.68148800000017
+    },
+    {
+      "case": "T9-check",
+      "run": 1,
+      "at": "2026-10-19T01:04:51.113Z",
+      "load": [
+        4.19,
+        5.36,
+        5.37
+      ],
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
+      "sources": {
+        "prepareRead": {
+          "calls": 1,
+          "syncMs": 0.26679999999942083,
+          "maxSyncMs": 0.26679999999942083,
+          "wallMs": 0.677270000000135,
+          "maxWallMs": 0.677270000000135
+        },
+        "readState": {
+          "calls": 2,
+          "syncMs": 0.5870560000003024,
+          "maxSyncMs": 0.29924899999969057,
+          "wallMs": 0.5911840000007942,
+          "maxWallMs": 0.30003600000054576
+        },
+        "now": {
+          "calls": 8,
+          "syncMs": 0.013868999998521758,
+          "maxSyncMs": 0.003031999998711399,
+          "wallMs": 0.019028999995498452,
+          "maxWallMs": 0.004390999998577172
+        },
+        "seatFor": {
+          "calls": 7,
+          "syncMs": 50.72108799999842,
+          "maxSyncMs": 10.215385999999853,
+          "wallMs": 50.73563199999808,
+          "maxWallMs": 10.217377000000852
+        },
+        "settings": {
+          "calls": 5,
+          "syncMs": 1.3416619999989052,
+          "maxSyncMs": 0.3412530000005063,
+          "wallMs": 1.346159999999145,
+          "maxWallMs": 0.34230699999898206
+        },
+        "memoryProblems": {
+          "calls": 3,
+          "syncMs": 1.0422510000007605,
+          "maxSyncMs": 0.3791010000004462,
+          "wallMs": 1.0459429999991698,
+          "maxWallMs": 0.3800580000006448
+        },
+        "registry": {
+          "calls": 7,
+          "syncMs": 0.019034999999348656,
+          "maxSyncMs": 0.004479999999603024,
+          "wallMs": 0.02490399999987858,
+          "maxWallMs": 0.00605600000017148
+        },
+        "liveness.conversation": {
+          "calls": 1,
+          "syncMs": 5.013314999998329,
+          "maxSyncMs": 5.013314999998329,
+          "wallMs": 5.584582999999839,
+          "maxWallMs": 5.584582999999839
+        },
+        "pipelines": {
+          "calls": 6,
+          "syncMs": 1.2533279999988736,
+          "maxSyncMs": 0.2816180000008899,
+          "wallMs": 1.2603469999976369,
+          "maxWallMs": 0.2829380000002857
+        },
+        "liveness.project": {
+          "calls": 1,
+          "syncMs": 0.05746300000100746,
+          "maxSyncMs": 0.05746300000100746,
+          "wallMs": 44.3246790000012,
+          "maxWallMs": 44.3246790000012
+        },
+        "tasks": {
+          "calls": 3,
+          "syncMs": 0.4042069999995874,
+          "maxSyncMs": 0.16424599999845668,
+          "wallMs": 0.4079250000013417,
+          "maxWallMs": 0.16644499999893014
+        },
+        "seatDeployments": {
+          "calls": 1,
+          "syncMs": 0.016474999998536077,
+          "maxSyncMs": 0.016474999998536077,
+          "wallMs": 0.018661000000065542,
+          "maxWallMs": 0.018661000000065542
+        },
+        "maintenanceRuns": {
+          "calls": 1,
+          "syncMs": 2.16588099999899,
+          "maxSyncMs": 2.16588099999899,
+          "wallMs": 2.168558999999732,
+          "maxWallMs": 2.168558999999732
+        },
+        "refreshLifecycle": {
+          "calls": 1,
+          "syncMs": 0.020244999999704305,
+          "maxSyncMs": 0.020244999999704305,
+          "wallMs": 0.020875999998679617,
+          "maxWallMs": 0.020875999998679617
+        },
+        "lifecycleJournal": {
+          "calls": 1,
+          "syncMs": 3.58897799999977,
+          "maxSyncMs": 3.58897799999977,
+          "wallMs": 3.605768999999782,
+          "maxWallMs": 3.605768999999782
+        },
+        "workerAsks": {
+          "calls": 1,
+          "syncMs": 0.049275999999736086,
+          "maxSyncMs": 0.049275999999736086,
+          "wallMs": 131.4376030000003,
+          "maxWallMs": 131.4376030000003
+        },
+        "archivedPipelinesAsync": {
+          "calls": 1,
+          "syncMs": 0.31685599999946135,
+          "maxSyncMs": 0.31685599999946135,
+          "wallMs": 0.4812629999996716,
+          "maxWallMs": 0.4812629999996716
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.002169999999750871,
+          "maxSyncMs": 0.002169999999750871,
+          "wallMs": 0.004839999999603606,
+          "maxWallMs": 0.004839999999603606
+        },
+        "workerCounts": {
+          "calls": 1,
+          "syncMs": 17.89162000000033,
+          "maxSyncMs": 17.89162000000033,
+          "wallMs": 17.893447999998898,
+          "maxWallMs": 17.893447999998898
+        },
+        "latestDeployment": {
+          "calls": 1,
+          "syncMs": 0.04433500000050117,
+          "maxSyncMs": 0.04433500000050117,
+          "wallMs": 0.04593699999895762,
+          "maxWallMs": 0.04593699999895762
+        },
+        "retirementReport": {
+          "calls": 1,
+          "syncMs": 0.015363000000434113,
+          "maxSyncMs": 0.015363000000434113,
+          "wallMs": 0.015505999999732012,
+          "maxWallMs": 0.015505999999732012
+        },
+        "retirementJournal": {
+          "calls": 1,
+          "syncMs": 4.563588999999411,
+          "maxSyncMs": 4.563588999999411,
+          "wallMs": 4.564270000000761,
+          "maxWallMs": 4.564270000000761
+        },
+        "diskPressure": {
+          "calls": 1,
+          "syncMs": 0.0296120000002702,
+          "maxSyncMs": 0.0296120000002702,
+          "wallMs": 0.5811550000016723,
+          "maxWallMs": 0.5811550000016723
+        },
+        "reports.log": {
+          "calls": 1,
+          "syncMs": 0.037403999998787185,
+          "maxSyncMs": 0.037403999998787185,
+          "wallMs": 23.86100599999918,
+          "maxWallMs": 23.86100599999918
+        },
+        "recordRuleReports": {
+          "calls": 1,
+          "syncMs": 0.07117900000048394,
+          "maxSyncMs": 0.07117900000048394,
+          "wallMs": 310.85519899999963,
+          "maxWallMs": 310.85519899999963
+        },
+        "seatTurnOutcome": {
+          "calls": 1,
+          "syncMs": 0.0019799999990937067,
+          "maxSyncMs": 0.0019799999990937067,
+          "wallMs": 0.005499999999301508,
+          "maxWallMs": 0.005499999999301508
+        },
+        "seatContextUsage": {
+          "calls": 1,
+          "syncMs": 0.0015610000009473879,
+          "maxSyncMs": 0.0015610000009473879,
+          "wallMs": 0.002018000001044129,
+          "maxWallMs": 0.002018000001044129
+        },
+        "recordDeploySnapshots": {
+          "calls": 1,
+          "syncMs": 0.20903199999884237,
+          "maxSyncMs": 0.20903199999884237,
+          "wallMs": 0.2101989999991929,
+          "maxWallMs": 0.2101989999991929
+        },
+        "writeState": {
+          "calls": 1,
+          "syncMs": 8.965951999998651,
+          "maxSyncMs": 8.965951999998651,
+          "wallMs": 8.968419999999242,
+          "maxWallMs": 8.968419999999242
+        },
+        "appendRecord": {
+          "calls": 1,
+          "syncMs": 0.5563000000001921,
+          "maxSyncMs": 0.5563000000001921,
+          "wallMs": 0.5576569999993808,
+          "maxWallMs": 0.5576569999993808
+        }
+      },
+      "ms": 791.1617850000002,
+      "maxGapMs": 68.68099299999994
+    },
+    {
+      "case": "T9-check",
+      "run": 2,
+      "at": "2026-10-19T01:04:52.036Z",
+      "load": [
+        4.19,
+        5.36,
+        5.37
+      ],
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
+      "sources": {
+        "prepareRead": {
+          "calls": 1,
+          "syncMs": 0.26884200000131386,
+          "maxSyncMs": 0.26884200000131386,
+          "wallMs": 0.71447100000114,
+          "maxWallMs": 0.71447100000114
+        },
+        "readState": {
+          "calls": 2,
+          "syncMs": 0.7177240000000893,
+          "maxSyncMs": 0.36703900000065914,
+          "wallMs": 0.7206140000016603,
+          "maxWallMs": 0.36832500000127766
+        },
+        "now": {
+          "calls": 8,
+          "syncMs": 0.018740999998044572,
+          "maxSyncMs": 0.005529999998543644,
+          "wallMs": 0.026502000000618864,
+          "maxWallMs": 0.00871000000006461
+        },
+        "seatFor": {
+          "calls": 7,
+          "syncMs": 51.68808799999715,
+          "maxSyncMs": 10.988977999999406,
+          "wallMs": 51.693896000004315,
+          "maxWallMs": 10.989201000000321
+        },
+        "settings": {
+          "calls": 5,
+          "syncMs": 1.4843810000020312,
+          "maxSyncMs": 0.40222800000083225,
+          "wallMs": 1.488976000002367,
+          "maxWallMs": 0.4028950000010809
+        },
+        "memoryProblems": {
+          "calls": 3,
+          "syncMs": 1.363019999998869,
+          "maxSyncMs": 0.606590999999753,
+          "wallMs": 1.366595999999845,
+          "maxWallMs": 0.607557999999699
+        },
+        "registry": {
+          "calls": 7,
+          "syncMs": 0.038453999999546795,
+          "maxSyncMs": 0.011867000001075212,
+          "wallMs": 0.043743000000176835,
+          "maxWallMs": 0.012378999999782536
+        },
+        "liveness.conversation": {
+          "calls": 1,
+          "syncMs": 5.206975999999486,
+          "maxSyncMs": 5.206975999999486,
+          "wallMs": 5.717328000000634,
+          "maxWallMs": 5.717328000000634
+        },
+        "pipelines": {
+          "calls": 6,
+          "syncMs": 1.7581779999982245,
+          "maxSyncMs": 0.3873879999991914,
+          "wallMs": 1.7654849999998987,
+          "maxWallMs": 0.38954499999999825
+        },
+        "liveness.project": {
+          "calls": 1,
+          "syncMs": 0.0798930000000837,
+          "maxSyncMs": 0.0798930000000837,
+          "wallMs": 71.51771000000008,
+          "maxWallMs": 71.51771000000008
+        },
+        "tasks": {
+          "calls": 3,
+          "syncMs": 0.6835950000004232,
+          "maxSyncMs": 0.31755300000077114,
+          "wallMs": 0.6883510000006936,
+          "maxWallMs": 0.3200749999996333
+        },
+        "seatDeployments": {
+          "calls": 1,
+          "syncMs": 0.025880000001052395,
+          "maxSyncMs": 0.025880000001052395,
+          "wallMs": 0.04753600000003644,
+          "maxWallMs": 0.04753600000003644
+        },
+        "maintenanceRuns": {
+          "calls": 1,
+          "syncMs": 2.5557730000000447,
+          "maxSyncMs": 2.5557730000000447,
+          "wallMs": 2.568486000000121,
+          "maxWallMs": 2.568486000000121
+        },
+        "refreshLifecycle": {
+          "calls": 1,
+          "syncMs": 0.1273719999990135,
+          "maxSyncMs": 0.1273719999990135,
+          "wallMs": 0.12891099999978906,
+          "maxWallMs": 0.12891099999978906
+        },
+        "lifecycleJournal": {
+          "calls": 1,
+          "syncMs": 4.384260999999242,
+          "maxSyncMs": 4.384260999999242,
+          "wallMs": 4.38568899999882,
+          "maxWallMs": 4.38568899999882
+        },
+        "workerAsks": {
+          "calls": 1,
+          "syncMs": 0.06646400000136055,
+          "maxSyncMs": 0.06646400000136055,
+          "wallMs": 169.18029600000045,
+          "maxWallMs": 169.18029600000045
+        },
+        "archivedPipelinesAsync": {
+          "calls": 1,
+          "syncMs": 0.4285589999999502,
+          "maxSyncMs": 0.4285589999999502,
+          "wallMs": 0.7714280000000144,
+          "maxWallMs": 0.7714280000000144
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.0067310000013094395,
+          "maxSyncMs": 0.0067310000013094395,
+          "wallMs": 0.011234999999942374,
+          "maxWallMs": 0.011234999999942374
+        },
+        "workerCounts": {
+          "calls": 1,
+          "syncMs": 27.0362499999992,
+          "maxSyncMs": 27.0362499999992,
+          "wallMs": 27.038549999999304,
+          "maxWallMs": 27.038549999999304
+        },
+        "latestDeployment": {
+          "calls": 1,
+          "syncMs": 0.049285999999483465,
+          "maxSyncMs": 0.049285999999483465,
+          "wallMs": 0.05162200000086159,
+          "maxWallMs": 0.05162200000086159
+        },
+        "retirementReport": {
+          "calls": 1,
+          "syncMs": 0.018074999999953434,
+          "maxSyncMs": 0.018074999999953434,
+          "wallMs": 0.018174000000726664,
+          "maxWallMs": 0.018174000000726664
+        },
+        "retirementJournal": {
+          "calls": 1,
+          "syncMs": 4.70756000000074,
+          "maxSyncMs": 4.70756000000074,
+          "wallMs": 4.710021000000779,
+          "maxWallMs": 4.710021000000779
+        },
+        "diskPressure": {
+          "calls": 1,
+          "syncMs": 0.0590040000006411,
+          "maxSyncMs": 0.0590040000006411,
+          "wallMs": 7.482863000001089,
+          "maxWallMs": 7.482863000001089
+        },
+        "reports.log": {
+          "calls": 1,
+          "syncMs": 0.09875199999987672,
+          "maxSyncMs": 0.09875199999987672,
+          "wallMs": 28.254468999999517,
+          "maxWallMs": 28.254468999999517
+        },
+        "recordRuleReports": {
+          "calls": 1,
+          "syncMs": 0.056939000000056694,
+          "maxSyncMs": 0.056939000000056694,
+          "wallMs": 293.4376769999999,
+          "maxWallMs": 293.4376769999999
+        },
+        "seatTurnOutcome": {
+          "calls": 1,
+          "syncMs": 0.002712999999857857,
+          "maxSyncMs": 0.002712999999857857,
+          "wallMs": 0.006213000000570901,
+          "maxWallMs": 0.006213000000570901
+        },
+        "seatContextUsage": {
+          "calls": 1,
+          "syncMs": 0.02322699999967881,
+          "maxSyncMs": 0.02322699999967881,
+          "wallMs": 0.02488199999970675,
+          "maxWallMs": 0.02488199999970675
+        },
+        "recordDeploySnapshots": {
+          "calls": 1,
+          "syncMs": 0.17332099999839556,
+          "maxSyncMs": 0.17332099999839556,
+          "wallMs": 0.17460299999947893,
+          "maxWallMs": 0.17460299999947893
+        },
+        "writeState": {
+          "calls": 1,
+          "syncMs": 11.647495000001072,
+          "maxSyncMs": 11.647495000001072,
+          "wallMs": 11.650229999999283,
+          "maxWallMs": 11.650229999999283
+        },
+        "appendRecord": {
+          "calls": 1,
+          "syncMs": 0.7278710000009596,
+          "maxSyncMs": 0.7278710000009596,
+          "wallMs": 0.7288180000014108,
+          "maxWallMs": 0.7288180000014108
+        }
+      },
+      "ms": 917.4396070000003,
+      "maxGapMs": 67.95596899999873
+    },
+    {
+      "case": "T9-check",
+      "run": 3,
+      "at": "2026-10-19T01:04:52.859Z",
+      "load": [
+        4.19,
+        5.36,
+        5.37
+      ],
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
+      "sources": {
+        "prepareRead": {
+          "calls": 1,
+          "syncMs": 0.5425219999997353,
+          "maxSyncMs": 0.5425219999997353,
+          "wallMs": 1.4583999999995285,
+          "maxWallMs": 1.4583999999995285
+        },
+        "readState": {
+          "calls": 2,
+          "syncMs": 0.9272479999999632,
+          "maxSyncMs": 0.5586230000008072,
+          "wallMs": 0.9281460000001971,
+          "maxWallMs": 0.5591720000011264
+        },
+        "now": {
+          "calls": 8,
+          "syncMs": 0.018182999998316518,
+          "maxSyncMs": 0.0035800000005110633,
+          "wallMs": 0.02669899999818881,
+          "maxWallMs": 0.0053299999999580905
+        },
+        "seatFor": {
+          "calls": 7,
+          "syncMs": 47.30459399999927,
+          "maxSyncMs": 8.26356499999929,
+          "wallMs": 47.30739900000117,
+          "maxWallMs": 8.263868000000002
+        },
+        "settings": {
+          "calls": 5,
+          "syncMs": 1.62335599999642,
+          "maxSyncMs": 0.39872399999876507,
+          "wallMs": 1.6254709999975603,
+          "maxWallMs": 0.39954499999839754
+        },
+        "memoryProblems": {
+          "calls": 3,
+          "syncMs": 1.1918579999983194,
+          "maxSyncMs": 0.43079299999953946,
+          "wallMs": 1.1929559999989579,
+          "maxWallMs": 0.4315709999991668
+        },
+        "registry": {
+          "calls": 7,
+          "syncMs": 0.015334000001530512,
+          "maxSyncMs": 0.0038650000005873153,
+          "wallMs": 0.018751999999949476,
+          "maxWallMs": 0.004399000001285458
+        },
+        "liveness.conversation": {
+          "calls": 1,
+          "syncMs": 5.1322369999998045,
+          "maxSyncMs": 5.1322369999998045,
+          "wallMs": 5.644398000000365,
+          "maxWallMs": 5.644398000000365
+        },
+        "pipelines": {
+          "calls": 6,
+          "syncMs": 1.6474770000004355,
+          "maxSyncMs": 0.4274910000003729,
+          "wallMs": 1.648922999998831,
+          "maxWallMs": 0.42791700000088895
+        },
+        "liveness.project": {
+          "calls": 1,
+          "syncMs": 0.07130400000096415,
+          "maxSyncMs": 0.07130400000096415,
+          "wallMs": 54.93191900000056,
+          "maxWallMs": 54.93191900000056
+        },
+        "tasks": {
+          "calls": 3,
+          "syncMs": 0.4767649999994319,
+          "maxSyncMs": 0.26045200000044133,
+          "wallMs": 0.4781069999989995,
+          "maxWallMs": 0.26109600000017963
+        },
+        "seatDeployments": {
+          "calls": 1,
+          "syncMs": 0.014010999999300111,
+          "maxSyncMs": 0.014010999999300111,
+          "wallMs": 0.014256999998906394,
+          "maxWallMs": 0.014256999998906394
+        },
+        "maintenanceRuns": {
+          "calls": 1,
+          "syncMs": 2.237073000000237,
+          "maxSyncMs": 2.237073000000237,
+          "wallMs": 2.237435999999434,
+          "maxWallMs": 2.237435999999434
+        },
+        "refreshLifecycle": {
+          "calls": 1,
+          "syncMs": 0.01787499999954889,
+          "maxSyncMs": 0.01787499999954889,
+          "wallMs": 0.01915999999982887,
+          "maxWallMs": 0.01915999999982887
+        },
+        "lifecycleJournal": {
+          "calls": 1,
+          "syncMs": 3.8258990000013,
+          "maxSyncMs": 3.8258990000013,
+          "wallMs": 3.8262330000015936,
+          "maxWallMs": 3.8262330000015936
+        },
+        "workerAsks": {
+          "calls": 1,
+          "syncMs": 0.045755999999528285,
+          "maxSyncMs": 0.045755999999528285,
+          "wallMs": 131.82117900000048,
+          "maxWallMs": 131.82117900000048
+        },
+        "archivedPipelinesAsync": {
+          "calls": 1,
+          "syncMs": 0.46010999999998603,
+          "maxSyncMs": 0.46010999999998603,
+          "wallMs": 0.7352339999997639,
+          "maxWallMs": 0.7352339999997639
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.004936999999699765,
+          "maxSyncMs": 0.004936999999699765,
+          "wallMs": 0.008493999999700463,
+          "maxWallMs": 0.008493999999700463
+        },
+        "workerCounts": {
+          "calls": 1,
+          "syncMs": 24.30061999999998,
+          "maxSyncMs": 24.30061999999998,
+          "wallMs": 24.300930999999764,
+          "maxWallMs": 24.300930999999764
+        },
+        "latestDeployment": {
+          "calls": 1,
+          "syncMs": 0.043975000000500586,
+          "maxSyncMs": 0.043975000000500586,
+          "wallMs": 0.04465800000070885,
+          "maxWallMs": 0.04465800000070885
+        },
+        "retirementReport": {
+          "calls": 1,
+          "syncMs": 0.01702800000020943,
+          "maxSyncMs": 0.01702800000020943,
+          "wallMs": 0.018334000000322703,
+          "maxWallMs": 0.018334000000322703
+        },
+        "retirementJournal": {
+          "calls": 1,
+          "syncMs": 3.7108659999994416,
+          "maxSyncMs": 3.7108659999994416,
+          "wallMs": 3.7112429999997403,
+          "maxWallMs": 3.7112429999997403
+        },
+        "diskPressure": {
+          "calls": 1,
+          "syncMs": 0.027865999998539337,
+          "maxSyncMs": 0.027865999998539337,
+          "wallMs": 0.4018610000002809,
+          "maxWallMs": 0.4018610000002809
+        },
+        "reports.log": {
+          "calls": 1,
+          "syncMs": 0.03373300000021118,
+          "maxSyncMs": 0.03373300000021118,
+          "wallMs": 23.520214000000124,
+          "maxWallMs": 23.520214000000124
+        },
+        "recordRuleReports": {
+          "calls": 1,
+          "syncMs": 0.055785000000469154,
+          "maxSyncMs": 0.055785000000469154,
+          "wallMs": 308.48169899999994,
+          "maxWallMs": 308.48169899999994
+        },
+        "seatTurnOutcome": {
+          "calls": 1,
+          "syncMs": 0.0017569999999977881,
+          "maxSyncMs": 0.0017569999999977881,
+          "wallMs": 0.003989000000728993,
+          "maxWallMs": 0.003989000000728993
+        },
+        "seatContextUsage": {
+          "calls": 1,
+          "syncMs": 0.002569000000221422,
+          "maxSyncMs": 0.002569000000221422,
+          "wallMs": 0.0036300000010669464,
+          "maxWallMs": 0.0036300000010669464
+        },
+        "recordDeploySnapshots": {
+          "calls": 1,
+          "syncMs": 0.1432649999987916,
+          "maxSyncMs": 0.1432649999987916,
+          "wallMs": 0.144282999999632,
+          "maxWallMs": 0.144282999999632
+        },
+        "writeState": {
+          "calls": 1,
+          "syncMs": 7.801939000000857,
+          "maxSyncMs": 7.801939000000857,
+          "wallMs": 7.803201000000627,
+          "maxWallMs": 7.803201000000627
+        },
+        "appendRecord": {
+          "calls": 1,
+          "syncMs": 0.5914400000001478,
+          "maxSyncMs": 0.5914400000001478,
+          "wallMs": 0.5919420000009268,
+          "maxWallMs": 0.5919420000009268
+        }
+      },
+      "ms": 820.6813970000003,
+      "maxGapMs": 53.521685999998226
+    },
+    {
+      "case": "T9-check",
+      "run": 4,
+      "at": "2026-10-19T01:04:53.647Z",
+      "load": [
+        4.19,
+        5.36,
+        5.37
+      ],
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
+      "sources": {
+        "prepareRead": {
+          "calls": 1,
+          "syncMs": 0.2402189999993425,
+          "maxSyncMs": 0.2402189999993425,
+          "wallMs": 0.6771259999986796,
+          "maxWallMs": 0.6771259999986796
+        },
+        "readState": {
+          "calls": 2,
+          "syncMs": 0.6320019999984652,
+          "maxSyncMs": 0.32553399999960675,
+          "wallMs": 0.6323179999999411,
+          "maxWallMs": 0.32570599999962724
+        },
+        "now": {
+          "calls": 8,
+          "syncMs": 0.02430599999752303,
+          "maxSyncMs": 0.0061189999996713595,
+          "wallMs": 0.03277699999671313,
+          "maxWallMs": 0.006273999999393709
+        },
+        "seatFor": {
+          "calls": 7,
+          "syncMs": 46.128044000002774,
+          "maxSyncMs": 7.3968150000000605,
+          "wallMs": 46.13122800000019,
+          "maxWallMs": 7.397279999999228
+        },
+        "settings": {
+          "calls": 5,
+          "syncMs": 1.2460030000020197,
+          "maxSyncMs": 0.2864960000006249,
+          "wallMs": 1.2470090000024356,
+          "maxWallMs": 0.2867720000012923
+        },
+        "memoryProblems": {
+          "calls": 3,
+          "syncMs": 1.0794470000000729,
+          "maxSyncMs": 0.41957600000023376,
+          "wallMs": 1.0805019999988872,
+          "maxWallMs": 0.4199689999986731
+        },
+        "registry": {
+          "calls": 7,
+          "syncMs": 0.020376000002215733,
+          "maxSyncMs": 0.0054630000013276,
+          "wallMs": 0.024116000002322835,
+          "maxWallMs": 0.005952999999863096
+        },
+        "liveness.conversation": {
+          "calls": 1,
+          "syncMs": 4.625559999998586,
+          "maxSyncMs": 4.625559999998586,
+          "wallMs": 5.017340999998851,
+          "maxWallMs": 5.017340999998851
+        },
+        "pipelines": {
+          "calls": 6,
+          "syncMs": 1.2563439999958064,
+          "maxSyncMs": 0.26902399999926274,
+          "wallMs": 1.2582369999981893,
+          "maxWallMs": 0.26933199999984936
+        },
+        "liveness.project": {
+          "calls": 1,
+          "syncMs": 0.060077000000092085,
+          "maxSyncMs": 0.060077000000092085,
+          "wallMs": 50.49083700000119,
+          "maxWallMs": 50.49083700000119
+        },
+        "tasks": {
+          "calls": 3,
+          "syncMs": 0.39458700000250246,
+          "maxSyncMs": 0.15462500000103319,
+          "wallMs": 0.39639700000225275,
+          "maxWallMs": 0.15508200000112993
+        },
+        "seatDeployments": {
+          "calls": 1,
+          "syncMs": 0.017506999998659012,
+          "maxSyncMs": 0.017506999998659012,
+          "wallMs": 0.017622999999730382,
+          "maxWallMs": 0.017622999999730382
+        },
+        "maintenanceRuns": {
+          "calls": 1,
+          "syncMs": 1.8900309999989986,
+          "maxSyncMs": 1.8900309999989986,
+          "wallMs": 1.89029599999958,
+          "maxWallMs": 1.89029599999958
+        },
+        "refreshLifecycle": {
+          "calls": 1,
+          "syncMs": 0.019900999999663327,
+          "maxSyncMs": 0.019900999999663327,
+          "wallMs": 0.021106999998664833,
+          "maxWallMs": 0.021106999998664833
+        },
+        "lifecycleJournal": {
+          "calls": 1,
+          "syncMs": 3.72605300000032,
+          "maxSyncMs": 3.72605300000032,
+          "wallMs": 3.726306000000477,
+          "maxWallMs": 3.726306000000477
+        },
+        "workerAsks": {
+          "calls": 1,
+          "syncMs": 0.05589499999950931,
+          "maxSyncMs": 0.05589499999950931,
+          "wallMs": 149.59072000000015,
+          "maxWallMs": 149.59072000000015
+        },
+        "archivedPipelinesAsync": {
+          "calls": 1,
+          "syncMs": 0.22033299999930023,
+          "maxSyncMs": 0.22033299999930023,
+          "wallMs": 0.39501599999857717,
+          "maxWallMs": 0.39501599999857717
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.003462000000581611,
+          "maxSyncMs": 0.003462000000581611,
+          "wallMs": 0.005261000000245986,
+          "maxWallMs": 0.005261000000245986
+        },
+        "workerCounts": {
+          "calls": 1,
+          "syncMs": 20.5914300000004,
+          "maxSyncMs": 20.5914300000004,
+          "wallMs": 20.59180000000015,
+          "maxWallMs": 20.59180000000015
+        },
+        "latestDeployment": {
+          "calls": 1,
+          "syncMs": 0.057560999999623164,
+          "maxSyncMs": 0.057560999999623164,
+          "wallMs": 0.05807400000048801,
+          "maxWallMs": 0.05807400000048801
+        },
+        "retirementReport": {
+          "calls": 1,
+          "syncMs": 0.0183469999992667,
+          "maxSyncMs": 0.0183469999992667,
+          "wallMs": 0.020101999998587416,
+          "maxWallMs": 0.020101999998587416
+        },
+        "retirementJournal": {
+          "calls": 1,
+          "syncMs": 4.05272100000002,
+          "maxSyncMs": 4.05272100000002,
+          "wallMs": 4.053547999999864,
+          "maxWallMs": 4.053547999999864
+        },
+        "diskPressure": {
+          "calls": 1,
+          "syncMs": 0.035047000001213746,
+          "maxSyncMs": 0.035047000001213746,
+          "wallMs": 0.5222050000011222,
+          "maxWallMs": 0.5222050000011222
+        },
+        "reports.log": {
+          "calls": 1,
+          "syncMs": 0.03790900000058173,
+          "maxSyncMs": 0.03790900000058173,
+          "wallMs": 25.77013000000079,
+          "maxWallMs": 25.77013000000079
+        },
+        "recordRuleReports": {
+          "calls": 1,
+          "syncMs": 0.05322400000113703,
+          "maxSyncMs": 0.05322400000113703,
+          "wallMs": 287.26168400000097,
+          "maxWallMs": 287.26168400000097
+        },
+        "seatTurnOutcome": {
+          "calls": 1,
+          "syncMs": 0.0017079999997804407,
+          "maxSyncMs": 0.0017079999997804407,
+          "wallMs": 0.004247000000759726,
+          "maxWallMs": 0.004247000000759726
+        },
+        "seatContextUsage": {
+          "calls": 1,
+          "syncMs": 0.0027079999999841675,
+          "maxSyncMs": 0.0027079999999841675,
+          "wallMs": 0.003674999999930151,
+          "maxWallMs": 0.003674999999930151
+        },
+        "recordDeploySnapshots": {
+          "calls": 1,
+          "syncMs": 0.15649100000155158,
+          "maxSyncMs": 0.15649100000155158,
+          "wallMs": 0.15805700000055367,
+          "maxWallMs": 0.15805700000055367
+        },
+        "writeState": {
+          "calls": 1,
+          "syncMs": 10.03027099999963,
+          "maxSyncMs": 10.03027099999963,
+          "wallMs": 10.032956999999442,
+          "maxWallMs": 10.032956999999442
+        },
+        "appendRecord": {
+          "calls": 1,
+          "syncMs": 0.7056389999997918,
+          "maxSyncMs": 0.7056389999997918,
+          "wallMs": 0.7064749999990454,
+          "maxWallMs": 0.7064749999990454
+        }
+      },
+      "ms": 784.8458739999987,
+      "maxGapMs": 56.635283999999956
+    },
+    {
+      "case": "T9-check",
+      "run": 5,
+      "at": "2026-10-19T01:04:54.454Z",
+      "load": [
+        4.19,
+        5.36,
+        5.37
+      ],
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
+      "sources": {
+        "prepareRead": {
+          "calls": 1,
+          "syncMs": 0.4239660000002914,
+          "maxSyncMs": 0.4239660000002914,
+          "wallMs": 1.1690980000003037,
+          "maxWallMs": 1.1690980000003037
+        },
+        "readState": {
+          "calls": 2,
+          "syncMs": 0.8297770000008313,
+          "maxSyncMs": 0.48519300000043586,
+          "wallMs": 0.8302930000008928,
+          "maxWallMs": 0.48548400000072434
+        },
+        "now": {
+          "calls": 8,
+          "syncMs": 0.019586000002163928,
+          "maxSyncMs": 0.00398499999937485,
+          "wallMs": 0.02748800000154006,
+          "maxWallMs": 0.0062189999989641365
+        },
+        "seatFor": {
+          "calls": 7,
+          "syncMs": 46.849020000001474,
+          "maxSyncMs": 8.601265000001149,
+          "wallMs": 46.853305000002365,
+          "maxWallMs": 8.601644000000306
+        },
+        "settings": {
+          "calls": 5,
+          "syncMs": 1.4259619999993447,
+          "maxSyncMs": 0.385457000000315,
+          "wallMs": 1.4276190000018687,
+          "maxWallMs": 0.3856400000004214
+        },
+        "memoryProblems": {
+          "calls": 3,
+          "syncMs": 1.13676999999916,
+          "maxSyncMs": 0.4547600000005332,
+          "wallMs": 1.1379939999987982,
+          "maxWallMs": 0.45532900000034715
+        },
+        "registry": {
+          "calls": 7,
+          "syncMs": 0.012708999998721993,
+          "maxSyncMs": 0.0023920000003272435,
+          "wallMs": 0.01681000000280619,
+          "maxWallMs": 0.0032410000003437744
+        },
+        "liveness.conversation": {
+          "calls": 1,
+          "syncMs": 4.692955999998958,
+          "maxSyncMs": 4.692955999998958,
+          "wallMs": 5.20167500000025,
+          "maxWallMs": 5.20167500000025
+        },
+        "pipelines": {
+          "calls": 6,
+          "syncMs": 1.2887360000004264,
+          "maxSyncMs": 0.2733810000008816,
+          "wallMs": 1.2902659999981552,
+          "maxWallMs": 0.27371600000151375
+        },
+        "liveness.project": {
+          "calls": 1,
+          "syncMs": 0.05564100000083272,
+          "maxSyncMs": 0.05564100000083272,
+          "wallMs": 52.15100999999959,
+          "maxWallMs": 52.15100999999959
+        },
+        "tasks": {
+          "calls": 3,
+          "syncMs": 0.4234089999990829,
+          "maxSyncMs": 0.1756199999999808,
+          "wallMs": 0.42465200000151526,
+          "maxWallMs": 0.17607000000134576
+        },
+        "seatDeployments": {
+          "calls": 1,
+          "syncMs": 0.014936999999918044,
+          "maxSyncMs": 0.014936999999918044,
+          "wallMs": 0.01524500000050466,
+          "maxWallMs": 0.01524500000050466
+        },
+        "maintenanceRuns": {
+          "calls": 1,
+          "syncMs": 2.305430999998862,
+          "maxSyncMs": 2.305430999998862,
+          "wallMs": 2.305745999999999,
+          "maxWallMs": 2.305745999999999
+        },
+        "refreshLifecycle": {
+          "calls": 1,
+          "syncMs": 0.03429299999879731,
+          "maxSyncMs": 0.03429299999879731,
+          "wallMs": 0.036017999998875894,
+          "maxWallMs": 0.036017999998875894
+        },
+        "lifecycleJournal": {
+          "calls": 1,
+          "syncMs": 3.715488000001642,
+          "maxSyncMs": 3.715488000001642,
+          "wallMs": 3.715793000001213,
+          "maxWallMs": 3.715793000001213
+        },
+        "workerAsks": {
+          "calls": 1,
+          "syncMs": 0.06174599999940256,
+          "maxSyncMs": 0.06174599999940256,
+          "wallMs": 148.4612820000002,
+          "maxWallMs": 148.4612820000002
+        },
+        "archivedPipelinesAsync": {
+          "calls": 1,
+          "syncMs": 0.2709389999999985,
+          "maxSyncMs": 0.2709389999999985,
+          "wallMs": 0.4620629999990342,
+          "maxWallMs": 0.4620629999990342
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.002567999999882886,
+          "maxSyncMs": 0.002567999999882886,
+          "wallMs": 0.004220000000714208,
+          "maxWallMs": 0.004220000000714208
+        },
+        "workerCounts": {
+          "calls": 1,
+          "syncMs": 20.970729999999094,
+          "maxSyncMs": 20.970729999999094,
+          "wallMs": 20.971113999999943,
+          "maxWallMs": 20.971113999999943
+        },
+        "latestDeployment": {
+          "calls": 1,
+          "syncMs": 0.054521999998542015,
+          "maxSyncMs": 0.054521999998542015,
+          "wallMs": 0.055186999999932596,
+          "maxWallMs": 0.055186999999932596
+        },
+        "retirementReport": {
+          "calls": 1,
+          "syncMs": 0.017336000000796048,
+          "maxSyncMs": 0.017336000000796048,
+          "wallMs": 0.01884500000051048,
+          "maxWallMs": 0.01884500000051048
+        },
+        "retirementJournal": {
+          "calls": 1,
+          "syncMs": 4.1219400000009045,
+          "maxSyncMs": 4.1219400000009045,
+          "wallMs": 4.1229070000008505,
+          "maxWallMs": 4.1229070000008505
+        },
+        "diskPressure": {
+          "calls": 1,
+          "syncMs": 0.03388699999959499,
+          "maxSyncMs": 0.03388699999959499,
+          "wallMs": 4.366173999998864,
+          "maxWallMs": 4.366173999998864
+        },
+        "reports.log": {
+          "calls": 1,
+          "syncMs": 0.05273699999997916,
+          "maxSyncMs": 0.05273699999997916,
+          "wallMs": 25.366661000000022,
+          "maxWallMs": 25.366661000000022
+        },
+        "recordRuleReports": {
+          "calls": 1,
+          "syncMs": 0.054720000000088476,
+          "maxSyncMs": 0.054720000000088476,
+          "wallMs": 289.63601599999856,
+          "maxWallMs": 289.63601599999856
+        },
+        "seatTurnOutcome": {
+          "calls": 1,
+          "syncMs": 0.0011840000006486662,
+          "maxSyncMs": 0.0011840000006486662,
+          "wallMs": 0.002868999999918742,
+          "maxWallMs": 0.002868999999918742
+        },
+        "seatContextUsage": {
+          "calls": 1,
+          "syncMs": 0.0029789999971399084,
+          "maxSyncMs": 0.0029789999971399084,
+          "wallMs": 0.0040699999990465585,
+          "maxWallMs": 0.0040699999990465585
+        },
+        "recordDeploySnapshots": {
+          "calls": 1,
+          "syncMs": 0.18601400000261492,
+          "maxSyncMs": 0.18601400000261492,
+          "wallMs": 0.1877070000009553,
+          "maxWallMs": 0.1877070000009553
+        },
+        "writeState": {
+          "calls": 1,
+          "syncMs": 18.22108599999774,
+          "maxSyncMs": 18.22108599999774,
+          "wallMs": 18.22366499999771,
+          "maxWallMs": 18.22366499999771
+        },
+        "appendRecord": {
+          "calls": 1,
+          "syncMs": 0.5021659999983967,
+          "maxSyncMs": 0.5021659999983967,
+          "wallMs": 0.5034339999983786,
+          "maxWallMs": 0.5034339999983786
+        }
+      },
+      "ms": 805.8496780000005,
+      "maxGapMs": 63.35707899999761
+    }
+  ],
+  "fleetCoverage": "agent_fleet project scope: five live agents, three running; copied registry is separately reported; copied catalogue was stale"
+}

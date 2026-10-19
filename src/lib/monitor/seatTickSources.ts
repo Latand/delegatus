@@ -1,3 +1,8 @@
+import { performanceSpans } from "@/lib/performanceSpans";
+import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
+import { deepFreeze } from "@/lib/deepFreeze";
+import { projectAliasResolver } from "@/lib/projects/aliases";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { shortId } from "@/lib/shortIds";
 import { seatTickCatchUp } from "./seatTick";
 import { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
@@ -11,9 +16,7 @@ import { contextReading, readOrchestratorTranscriptFacts } from "@/lib/orchestra
 import type { SeatContextUsage } from "./seatAutoRotation";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
-import { memoryProblemSignals } from "@/lib/memory/roleProblems";
-import { ruleReports } from "./ruleReports";
-import { readAttentionDismissals } from "@/lib/attention/dismissals";
+import { memoryProblemSignals, prepareMemoryProblemRead } from "@/lib/memory/roleProblems";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -39,9 +42,9 @@ import { readAuto, type AutoState } from "@/lib/selfUpdate/auto";
 import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
-import { appendBridgeReports, readBridgeReportLog, scopedReportId } from "@/lib/bridge/store";
+import { scopedReportId } from "@/lib/bridge/store";
 import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
-import type { BridgeReportV1 } from "@/lib/bridge/types";
+import type { SeatTickReportRow } from "./seatTickReports";
 import { operatorLocale } from "@/lib/operator/settings";
 import { bridgeReportsEnabled } from "@/lib/projects/settings";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
@@ -49,9 +52,9 @@ import viewerPackageManifest from "../../../package.json";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/prompt";
 import { canonicalOrchestratorProject, orchestratorSeatEverHeld, orchestratorSeatFor } from "@/lib/orchestrator/seats";
-import { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
+import { activeSeatsByCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { pipelineCompletedUnreviewed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
-import { loadArchivedPipelinesForList, loadPipelinesForList } from "@/lib/pipelines/store";
+import { loadArchivedPipelinesForList, loadArchivedPipelinesForListAsync, loadPipelinesForList, loadPipelinesForListAsync } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types";
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
@@ -75,7 +78,7 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { scanRootEntries } from "@/lib/scanner/roots";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import type { StructuredHostRetirementReport } from "@/lib/runtime/structuredHostRetirement";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasks, loadTasksForList, loadTasksForListAsync } from "@/lib/tasks/store";
 import { telegramPostSignals } from "@/lib/prototypeReview/telegramPostSignals";
 import { loadSeatRounds } from "@/lib/prototypeReview/seatRounds";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -456,8 +459,9 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
 export { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 
 export interface SeatTickSources {
+  prepareRead?: () => Promise<void>;
   memoryProblems?: (project: string, shown: readonly string[], recipient: { conversationId: string; seatEpoch: number } | null) => SeatTickSignalInput[];
-  recordRuleReports?: (project: string, at: string) => void;
+  recordRuleReports?: (project: string, at: string) => void | Promise<void>;
   /** The waits «Waiting for you» routes to this project's seat
       (docs/design/attention-auto-resolve.md), read from the board projection
       the panel itself reads. Absent: none. */
@@ -479,7 +483,8 @@ export interface SeatTickSources {
       subprocess anyway — and it has to be read at all because the obligation a
       finished lane leaves behind outlives the lane's three days of residence. */
   archivedPipelines: () => readonly Pipeline[];
-  tasks: () => BoardTask[];
+  archivedPipelinesAsync?: () => Promise<readonly Pipeline[]>;
+  tasks: () => readonly BoardTask[];
   registry: () => ReturnType<typeof agentRegistry>;
   /** The registry's own activity verdict — `agent_activity`'s answer, which is
       the only thing this module is allowed to call a stall. */
@@ -536,7 +541,7 @@ export interface SeatTickSources {
       language (§5.1). Absent: the check keeps no report ledger, as with bridge
       reports off. */
   reports?: {
-    log: () => readonly BridgeReportV1[];
+    log: (project: string) => readonly SeatTickReportRow[] | Promise<readonly SeatTickReportRow[]>;
     enabled: (project: string) => boolean;
     operatorLocale: () => "en" | "uk" | null;
   };
@@ -636,24 +641,41 @@ export async function settleRecordFromJournal(
   return sendReceiptFor(registry.readOnlySnapshot(), target.operationId);
 }
 
+function seatProjectResolver(): (project: string) => string {
+  const resolve = projectAliasResolver();
+  return project => resolve(project.trim());
+}
+
 export function defaultSeatTickSources(): SeatTickSources {
+  const admission = defaultSeatTickAdmissionSources();
   return {
-    ...defaultSeatTickAdmissionSources(),
+    ...admission,
+    prepareRead: () => withViewerOperation("seat-tick.prepare", () => performanceSpans.wait("seat-tick.prepare", async () => {
+      const rows = await loadPipelinesForListAsync();
+      const prepared = evidenceHashHost.__llvSeatTickPreparedRows ??= new WeakSet<readonly Pipeline[]>();
+      if (!prepared.has(rows)) {
+        await forEachCooperatively(rows, row => { laneEvidenceHash(row); }, { batchSize: 4, timeBudgetMs: 8 });
+        prepared.add(rows);
+      }
+      await loadTasksForListAsync();
+      await prepareMemoryProblemRead();
+    })),
+    liveness: query => query.project ? withViewerOperation("seat-tick.liveness", () => performanceSpans.wait("seat-tick.liveness", async () => {
+      const { runSeatSourceInWorker } = await import("@/lib/scanner/filesResponseWorker");
+      const { completedFileScan, completedFileScanDescriptor } = await import("@/lib/scanner/scanCache");
+      await completedFileScan();
+      const scan = completedFileScanDescriptor();
+      if (!scan) throw new Error("seat liveness inventory is not published yet");
+      const answer = await runSeatSourceInWorker({ type: "seat-liveness", query, scan });
+      const current = completedFileScanDescriptor();
+      if (current?.epoch !== scan.epoch || current.generation !== scan.generation) throw new Error("seat liveness inventory changed");
+      return JSON.parse(answer.body) as AgentLivenessRecord[];
+    })) : admission.liveness(query),
     memoryProblems: memoryProblemSignals,
-    recordRuleReports(project, at) {
-      const seat = orchestratorSeatForCurrentProject(project).active;
-      if (!seat?.conversationId) return;
-      const registry = agentRegistry().readOnlySnapshot();
-      const log = readBridgeReportLog();
-      appendBridgeReports(ruleReports({ project, at, seatConversationId: seat.conversationId, locale: operatorLocale() === "en" ? "en" : "uk",
-        tasks: loadTasks(), pipelines: loadPipelinesForList().map(lane => ({ ...lane, project: canonicalOrchestratorProject(lane.project) })), deliveries: Object.values(registry.heldDeliveries),
-        maintenance: maintenanceRuns(project), dismissals: readAttentionDismissals().records, bridgeLog: { ...log, reports: log.reports.map(row => row.project ? { ...row, project: canonicalOrchestratorProject(row.project) } : row) },
-        deliveryLost: delivery => registry.deliveryOperationOwners[delivery.command.operationId]?.terminalDisposition === "lost",
-        deliveryProject: delivery => {
-          const held = delivery.command.origin?.project ?? registry.conversations[delivery.conversationId]?.projectOwnership?.project;
-          return held ? canonicalOrchestratorProject(held) : null;
-        } }));
-    },
+    recordRuleReports: (project, at) => withViewerOperation("seat-tick.rule-reports", () => performanceSpans.wait("seat-tick.rule-reports", async () => {
+      const { runSeatSourceInWorker } = await import("@/lib/scanner/filesResponseWorker");
+      await runSeatSourceInWorker({ type: "seat-rule-reports", project, at });
+    })),
     seatContextUsage: (conversationId) => {
       const conversation = agentRegistry().conversation(conversationId as never);
       const generation = conversation?.generations.at(-1);
@@ -676,9 +698,10 @@ export function defaultSeatTickSources(): SeatTickSources {
     seatEverHeld: (project) => orchestratorSeatEverHeld(project),
     activeSeats: () => activeSeatsByCurrentProject().map((seat) => seat.project),
     workerCounts: projectWorkerCounts,
-    pipelines: () => loadPipelinesForList(),
+    pipelines: () => deepFreeze(loadPipelinesForList()),
     archivedPipelines: () => loadArchivedPipelinesForList(),
-    tasks: () => loadTasks(),
+    archivedPipelinesAsync: () => withViewerOperation("seat-tick.prepare", loadArchivedPipelinesForListAsync),
+    tasks: () => loadTasksForList(),
     lifecycleJournal: readLifecycleJournal,
     seatDeployments: (conversationId) => seatDeploymentsFor(conversationId),
     deploymentByKey: findSeatDeploymentByKey,
@@ -689,13 +712,10 @@ export function defaultSeatTickSources(): SeatTickSources {
       return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
     },
     retirementJournal: (sinceMs) => readRetirementJournalWindow(statePath("host-retirement-journal.ndjson"), sinceMs),
-    workerAsks: async (project) => {
-      const [{ operatorBoardRepresentation }, { seatAgendaAsks }] = await Promise.all([
-        import("@/app/api/files/operatorProjection"),
-        import("@/lib/attention/seatAgenda"),
-      ]);
-      return seatAgendaAsks(await operatorBoardRepresentation(), Date.now() / 1000, project);
-    },
+    workerAsks: (project) => withViewerOperation("seat-tick.worker-asks", () => performanceSpans.wait("seat-tick.worker-asks", async () => {
+      const { operatorSeatAgenda } = await import("@/app/api/files/operatorProjection");
+      return operatorSeatAgenda(project);
+    })),
     openPullRequests: (options) => openPullRequestsForRepo(options),
     /* One rule for both halves: ask, and act on, the layer that is actually
        holding the payload. A send the runtime host queued belongs to the runtime
@@ -726,7 +746,10 @@ export function defaultSeatTickSources(): SeatTickSources {
       refreshLifecycleJournal({ pipelines: [...pipelines] });
     },
     reports: {
-      log: () => readBridgeReportLog().reports,
+      log: (project) => withViewerOperation("seat-tick.reports", () => performanceSpans.wait("seat-tick.reports", async () => {
+        const { runSeatSourceInWorker } = await import("@/lib/scanner/filesResponseWorker");
+        return JSON.parse((await runSeatSourceInWorker({ type: "seat-reports", project })).body) as SeatTickReportRow[];
+      })),
       enabled: (project) => bridgeReportsEnabled(project),
       operatorLocale: () => operatorLocale(),
     },
@@ -777,14 +800,14 @@ export function viewerOwnProjectKeys(): string[] {
  * The report log as one check reads it (§5.1): the project's manager reports
  * and the ids they discharge.
  */
-function reportsInput(project: string, sources: SeatTickSources): SeatTickReportsInput | undefined {
+async function reportsInput(project: string, sources: SeatTickSources): Promise<SeatTickReportsInput | undefined> {
   const port = sources.reports;
   if (!port) return undefined;
   try {
     /* A row is the project's when its key folds to the project: a seat recorded
        before its folder changed key filed under the old one, and those rows
        still discharge what they covered. */
-    const manager = port.log().filter((report) => !!report.project && report.origin?.kind === "manager"
+    const manager = (await port.log(project)).filter((report) => !!report.project && report.origin?.kind === "manager"
       && (report.project === project || canonicalOrchestratorProject(report.project) === project));
     const filedUnder = [...new Set([project, ...manager.map((report) => report.project!)])];
     const reportedIds = new Set<string>();
@@ -947,6 +970,7 @@ function ownSettledLanes(
   pipelines: readonly Pipeline[],
   catchUp = false,
 ): SeatTickOwnLaneInput[] {
+  const canonicalProject = seatProjectResolver();
   if (!seat) return [];
   /* The HOT store only, and deliberately: a settled lane lives there for three
      days, which is the same window the decision's backlog bound keeps this
@@ -956,7 +980,7 @@ function ownSettledLanes(
      that had already decided to pay for a subprocess. */
   const lanes: SeatTickOwnLaneInput[] = [];
   for (const pipeline of pipelines) {
-    if (canonicalOrchestratorProject(pipeline.project) !== project) continue;
+    if (canonicalProject(pipeline.project) !== project) continue;
     if (pipeline.srcConversationId !== seat.conversationId) continue;
     const settled = laneSettlement(pipeline);
     if (!settled) continue;
@@ -993,9 +1017,10 @@ function retainedLaneAnnouncements(
   now: number,
   backlogAfterMs: number,
 ): string[] {
+  const canonicalProject = seatProjectResolver();
   if (!seat) return [...announced];
   const eligible = new Set(pipelines.filter((pipeline) => {
-    if (canonicalOrchestratorProject(pipeline.project) !== project || pipeline.srcConversationId !== seat.conversationId
+    if (canonicalProject(pipeline.project) !== project || pipeline.srcConversationId !== seat.conversationId
       || pipeline.hiddenAt || pipeline.dismissedAt || pipeline.state === "closed") return false;
     const movedAt = laneMovedAt(pipeline);
     return movedAt !== null && Number.isFinite(Date.parse(movedAt)) && now - Date.parse(movedAt) < backlogAfterMs;
@@ -1114,7 +1139,9 @@ async function laneActivity(
   const byPipeline = new Map<string, SeatTickActivity>();
   let rows: AgentLivenessRecord[];
   try {
+    await yieldToRuntime();
     rows = await sources.liveness({ project, stallAfterMs: policy.stallAfterMs, limit: LIVENESS_LIMIT });
+    await yieldToRuntime();
   } catch {
     return byPipeline;
   }
@@ -1149,7 +1176,9 @@ export async function seatInput(project: string, policy: SeatTickPolicy, sources
   let activity: SeatTickActivity | null = null;
   if (turn === "busy") {
     try {
+      await yieldToRuntime();
       const rows = await sources.liveness({ reconcileStructuredIdle: true, conversationId: seat.conversationId, stallAfterMs: policy.stallAfterMs, limit: 1 });
+      await yieldToRuntime();
       activity = activityOf(rows[0]);
     } catch {
       /* An unanswerable liveness read says nothing. The decision treats an
@@ -1446,9 +1475,10 @@ export function repoDirForProject(
       caller pays for the archive when it has already decided to. */
   archived: readonly Pipeline[] = [],
 ): string | null {
-  const canonical = canonicalOrchestratorProject(project);
+  const canonicalProject = seatProjectResolver();
+  const canonical = canonicalProject(project);
   const named = [...sources.pipelines(), ...archived]
-    .filter((pipeline) => pipeline.repoDir && canonicalOrchestratorProject(pipeline.project) === canonical)
+    .filter((pipeline) => pipeline.repoDir && canonicalProject(pipeline.project) === canonical)
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
   return named[0]?.repoDir ?? null;
 }
@@ -1516,15 +1546,16 @@ function digest(parts: readonly string[]): string {
     nobody to do it. A project with neither is not a project the tick has an
     opinion about. */
 export function seatTickProjects(sources: SeatTickSources): string[] {
+  const canonicalProject = seatProjectResolver();
   const projects = new Set(sources.activeSeats().map(canonicalOrchestratorProject));
   for (const pipeline of sources.pipelines()) {
-    if (isOpen(pipeline) && pipeline.project) projects.add(canonicalOrchestratorProject(pipeline.project));
+    if (isOpen(pipeline) && pipeline.project) projects.add(canonicalProject(pipeline.project));
   }
   const tasks = sources.tasks();
   const linked = tasks.some((task) => task.machine) ? linkedContext() : null;
   for (const task of tasks) {
     if (linked && !runsHere(task, linked)) continue;
-    if ((task.status === "inbox" || task.status === "assigned") && task.project) projects.add(canonicalOrchestratorProject(task.project));
+    if ((task.status === "inbox" || task.status === "assigned") && task.project) projects.add(canonicalProject(task.project));
   }
   return [...projects].sort();
 }
@@ -1550,6 +1581,7 @@ function eventsSince(
   sources: SeatTickSources,
   catchUp = false,
 ): { events: SeatTickEventInput[]; cursor: number } {
+  const canonicalProject = seatProjectResolver();
   const journal = sources.lifecycleJournal();
   /* `lastSeq` is the head the journal maintains; the newest event's seq is the
      same number written a second way, and taking the larger keeps a head that
@@ -1566,7 +1598,7 @@ function eventsSince(
   const page = pageFromEvents(journal, { project, afterSeq: cursor, limit: EVENT_PAGE });
   const merged = new Map(pipelines.filter(lane => lane.merge?.state === "merged").map(lane => [lane.id, lane]));
   return {
-    events: (catchUp ? journal.events.filter(event => event.seq > cursor && event.project !== null && canonicalOrchestratorProject(event.project) === project) : page.events).map((event) => {
+    events: (catchUp ? journal.events.filter(event => event.seq > cursor && event.project !== null && canonicalProject(event.project) === project) : page.events).map((event) => {
       const lane = event.pipelineId ? merged.get(event.pipelineId) : undefined;
       return {
         seq: event.seq,
@@ -1650,6 +1682,7 @@ async function unmergedPullRequests(context: {
   gap: SeatTickSourceGap | null;
   sources: SeatTickSources;
 }): Promise<PullRequestEvidence> {
+  let canonicalProject = seatProjectResolver();
   /* Nothing was asked, so nothing is concluded — and the run of failures is
      left exactly as it stands. A gate is a statement about this check, never
      about whether the source can be read. */
@@ -1692,14 +1725,15 @@ async function unmergedPullRequests(context: {
 
   let archived: readonly Pipeline[];
   try {
-    archived = context.sources.archivedPipelines();
+    archived = await (context.sources.archivedPipelinesAsync ?? context.sources.archivedPipelines)();
   } catch {
     /* Lanes half-read are obligations half-seen, and an obligation that cannot
        be seen is exactly what gets reported as quiet. */
     return failed("lanes-unreadable");
   }
+  canonicalProject = seatProjectResolver();
   const projectLanes = [...context.sources.pipelines(), ...archived]
-    .filter((pipeline) => canonicalOrchestratorProject(pipeline.project) === context.project && !pipeline.hiddenAt);
+    .filter((pipeline) => canonicalProject(pipeline.project) === context.project && !pipeline.hiddenAt);
   const finished = projectLanes.filter(isFinished);
   if (finished.length === 0) return unasked;
   const cwd = repoDirForProject(context.project, context.sources, archived);
@@ -1733,11 +1767,12 @@ async function unmergedPullRequests(context: {
   }
   if (!result.ok) return failed(result.unavailable);
   const open = result.pullRequests;
+  canonicalProject = seatProjectResolver();
   const byBranch = new Map<string, Pipeline[]>();
   for (const pipeline of projectLanes) {
     const delivery = pipeline.delivery?.target;
     const heads = [pipeline.branch];
-    if (delivery?.branch && canonicalOrchestratorProject(delivery.repository) === context.project) {
+    if (delivery?.branch && canonicalProject(delivery.repository) === context.project) {
       heads.push(delivery.branch.replace(/^refs\/heads\//, ""));
     }
     for (const head of heads.filter(Boolean)) {
@@ -1751,7 +1786,7 @@ async function unmergedPullRequests(context: {
   for (const pullRequest of open) {
     const lanes = byBranch.get(pullRequest.headRefName) ?? [];
     const named = (lane: Pipeline) => (lane.delivery?.target.pr === pullRequest.number
-      && canonicalOrchestratorProject(lane.delivery.target.repository) === context.project)
+      && canonicalProject(lane.delivery.target.repository) === context.project)
       || lane.runs.some((run) => run.attempts.some((attempt) => attempt.report?.provenance?.pullRequest?.number === pullRequest.number));
     const openedAt = Date.parse(pullRequest.createdAt);
     /* A later lane reusing this head owns PRs opened after it started, even if
@@ -2167,6 +2202,7 @@ async function childWork(
     const observedRunning = new Set<string>();
     const running = accounting.page("running", RUNNING_PAGE);
     for (const ticket of running) {
+      await yieldToRuntime();
       if (ticket.kind !== "running") continue;
       const child = accounting.get(ticket.target);
       if (!child || child.kind !== "child") throw new Error("missing running child");
@@ -2207,6 +2243,7 @@ async function childWork(
       return Number(ticket.key.slice(ticket.key.lastIndexOf("/") + 1)) <= catchUpPollThrough;
     });
     for (const ticket of pollTickets) {
+      await yieldToRuntime();
       if (bytesLeft <= 0) break;
       if (ticket.kind !== "poll") throw new Error("invalid poll ticket");
       let child = accounting.get(ticket.target);
@@ -2260,6 +2297,7 @@ async function childWork(
       }
     };
     for await (const outcome of ready()) {
+      await yieldToRuntime();
       if (catchingUp && projectedRows >= 40) {
         await new Promise<void>(resolve => setTimeout(resolve, 0));
         pages.clear();
@@ -2314,9 +2352,10 @@ function stageAttemptIdentity(lane: Pipeline): string | null {
  * Liveness belongs to the stage that was observed; a new stage inherits none.
  */
 export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTickSources): SeatTickCheckInput {
+  const canonicalProject = seatProjectResolver();
   const now = sources.now();
   const hotLanes = sources.pipelines();
-  const openLanes = hotLanes.filter((lane) => isOpen(lane) && canonicalOrchestratorProject(lane.project) === input.project);
+  const openLanes = hotLanes.filter((lane) => isOpen(lane) && canonicalProject(lane.project) === input.project);
   const evidence = evidenceFromPipelines(openLanes.map(pipelineSummary));
   const previous = new Map(input.pipelines.map((lane) => [lane.id, lane]));
   const pipelines = openLanes.map((lane, index): SeatTickPipelineInput => ({
@@ -2329,8 +2368,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
       ? previous.get(lane.id)?.stageActivity ?? null : null,
     ...(lane.state === "paused" ? { pausedBy: pausedBy(lane, input.seat) } : {}),
   }));
-  const board = projectTaskPipelineIds(sources.tasks(), [...hotLanes])
-    .filter((task) => canonicalOrchestratorProject(task.project) === input.project);
+  const board = projectTaskPipelineIds(sources.tasks().filter(task => canonicalProject(task.project) === input.project), [...hotLanes]);
   const taskEvidence = evidenceFromTasks(board.map(taskSummary));
   const linked = board.some((task) => task.machine) ? linkedContext() : null;
   const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
@@ -2362,13 +2400,32 @@ export class SeatTickEvidenceRefreshCanceledError extends Error {
 /** The local gates and lane associations under which PR evidence was read.
  * A note edit needs no subprocess; eligibility or lane changes do.
  */
+// Weak keys retain only hashes while the shared frozen row remains reachable.
+// Mutable test/adaptor rows are always rehashed. Every byte still participates.
+const evidenceHashHost = globalThis as typeof globalThis & { __llvSeatTickEvidenceHashes?: WeakMap<Pipeline, string>; __llvSeatTickPreparedRows?: WeakSet<readonly Pipeline[]> };
+function deeplyFrozen(value: unknown): boolean {
+  if (!value || typeof value !== "object") return true;
+  return Object.isFrozen(value) && Object.values(value).every(deeplyFrozen);
+}
+
+function laneEvidenceHash(lane: Pipeline): string {
+  const cache = evidenceHashHost.__llvSeatTickEvidenceHashes ??= new WeakMap<Pipeline, string>();
+  const held = cache.get(lane);
+  if (held) return held;
+  const frozen = deeplyFrozen(lane);
+  const hash = crypto.createHash("sha256").update(JSON.stringify(lane)).digest("hex");
+  if (frozen) cache.set(lane, hash);
+  return hash;
+}
+
 function pullRequestEvidenceKey(input: Pick<SeatTickCheckInput, "project" | "now" | "settings" | "seat" | "state">, sources: SeatTickSources): string {
+  const canonicalProject = seatProjectResolver();
   return crypto.createHash("sha256").update(JSON.stringify([
     input.settings.enabled,
     seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs),
     input.settings.wakeIntervalMs,
     input.seat ? seatTurnProgressing(input.seat) : null,
-    sources.pipelines().filter(lane => canonicalOrchestratorProject(lane.project) === input.project),
+    sources.pipelines().filter(lane => canonicalProject(lane.project) === input.project).map(laneEvidenceHash),
   ])).digest("hex");
 }
 
@@ -2398,14 +2455,16 @@ export async function gatherSeatTickInput(
   policy: SeatTickPolicy,
   sources: SeatTickSources,
 ): Promise<SeatTickCheckInput> {
+  let canonicalProject = seatProjectResolver();
   const now = sources.now();
-  const canonical = canonicalOrchestratorProject(project);
+  const canonical = canonicalProject(project);
   const settings = effectiveSeatTickSettings(sources.settings(canonical), now, SEAT_TICK_WAKE_INTERVAL_MS);
   const seat = await seatInput(canonical, policy, sources);
 
   const catchUp = !!seatTickCatchUp({ state, now, settings, seat });
+  canonicalProject = seatProjectResolver();
   const hotLanes = sources.pipelines();
-  const openLanes = hotLanes.filter((pipeline) => isOpen(pipeline) && canonicalOrchestratorProject(pipeline.project) === canonical);
+  const openLanes = hotLanes.filter((pipeline) => isOpen(pipeline) && canonicalProject(pipeline.project) === canonical);
   const evidence = evidenceFromPipelines(openLanes.map(pipelineSummary));
   const observedStages = new Map(openLanes.map((lane) => {
     const attempt = stageAttempt(lane);
@@ -2426,8 +2485,8 @@ export async function gatherSeatTickInput(
 
   /* Pipeline membership is the read model the board itself uses, so "owned"
      means the same thing here as it does on the card. */
-  const board = projectTaskPipelineIds(sources.tasks(), [...hotLanes])
-    .filter((task) => canonicalOrchestratorProject(task.project) === canonical);
+  canonicalProject = seatProjectResolver();
+  const board = projectTaskPipelineIds(sources.tasks().filter(task => canonicalProject(task.project) === canonical), [...hotLanes]);
   const taskEvidence = evidenceFromTasks(board.map(taskSummary));
   const linked = board.some((task) => task.machine) ? linkedContext() : null;
   const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
@@ -2468,7 +2527,8 @@ export async function gatherSeatTickInput(
     console.error("[seat tick] lifecycle projection failed", error instanceof Error ? error.name : "unknown");
   }
   const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, hotLanes, sources, catchUp);
-  const { children, unavailable: childrenUnavailable, catchUpPending: childrenCatchUpPending } = await childWork(canonical, seat, state, policy, sources);
+  await yieldToRuntime();
+  const { children, unavailable: childrenUnavailable, catchUpPending: childrenCatchUpPending } = await withViewerOperation("seat-tick.children", () => childWork(canonical, seat, state, policy, sources));
   /* An unreadable board costs this check its routed asks, never the check:
      the waits stay routed and the next check reads them again. */
   let workerAsks: readonly SeatTickWorkerAskInput[] = [];
@@ -2484,6 +2544,7 @@ export async function gatherSeatTickInput(
   const childrenGap = !seat ? state.childrenGap
     : childrenUnavailable ? seatTickSourceGapAfterFailure(state.childrenGap, childrenUnavailable, new Date(now).toISOString()) : null;
   const harvestedChildren = state.harvestedChildren;
+  await yieldToRuntime();
   const pullRequestEvidenceKeyAtRead = pullRequestEvidenceKey({ project: canonical, now, settings, seat, state }, sources);
   const { pullRequests, unavailable: pullRequestsUnavailable, gap: pullRequestGap } = await unmergedPullRequests({
     project: canonical,
@@ -2500,6 +2561,7 @@ export async function gatherSeatTickInput(
     sources,
   });
 
+  await yieldToRuntime();
   return {
     project: canonical,
     now,
@@ -2535,8 +2597,8 @@ export async function gatherSeatTickInput(
     state: { ...state, announcedLanes, eventsThrough: cursor, pullRequestGap, childrenGap, harvestedChildren, accounting: state.accounting ? new SeatTickAccounting(state.accounting.filename, canonical).readState().accounting : undefined },
     policy,
     settings,
-    ...(() => {
-      const reports = reportsInput(canonical, sources);
+    ...await (async () => {
+      const reports = await reportsInput(canonical, sources);
       return reports ? { reports } : {};
     })(),
   };

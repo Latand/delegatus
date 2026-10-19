@@ -20,6 +20,7 @@ export const performanceSites = [
   "scanner.ipc-frame", "scanner.ipc-decode", "scanner.publication", "scanner.cache-encode", "scanner.cache-persist",
   "transcript.feed", "transcript.index", "memory.discovery", "memory.refresh",
   "http.render", "privacy.compile", "privacy.match", "privacy.worker",
+  "seat-tick.prepare", "seat-tick.liveness", "seat-tick.worker-asks", "seat-tick.rule-reports", "seat-tick.reports",
   "mcp.caller-enumeration", "liveness.snapshot", "proc.scan", "self-update.bytes",
   "runtime-journal.retention-map",
   "memory.project-view",
