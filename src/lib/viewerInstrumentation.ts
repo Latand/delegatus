@@ -594,19 +594,21 @@ export function runIdentityWaveMigrationWithoutBlockingStartup(
   const initialRetryMs = Math.max(0, options.initialRetryMs ?? 5_000);
   const schedule = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   let attempts = 0;
+  const failed = (error: unknown) => {
+    if (attempts >= maxAttempts) {
+      log("[identity-wave] registry migration failed; retry limit reached", { attempt: attempts, error });
+      return;
+    }
+    const retryInMs = initialRetryMs * (2 ** (attempts - 1));
+    log("[identity-wave] registry migration failed; retry scheduled", { attempt: attempts, retryInMs, error });
+    schedule(attempt, retryInMs).unref?.();
+  };
   const attempt = () => {
     attempts += 1;
     try {
-      run();
-    } catch (error) {
-      if (attempts >= maxAttempts) {
-        log("[identity-wave] registry migration failed; retry limit reached", { attempt: attempts, error });
-        return;
-      }
-      const retryInMs = initialRetryMs * (2 ** (attempts - 1));
-      log("[identity-wave] registry migration failed; retry scheduled", { attempt: attempts, retryInMs, error });
-      schedule(attempt, retryInMs).unref?.();
-    }
+      const result = run();
+      if (result && typeof (result as PromiseLike<unknown>).then === "function") void Promise.resolve(result).catch(failed);
+    } catch (error) { failed(error); }
   };
   attempt();
 }
@@ -991,8 +993,8 @@ export async function registerViewerRuntime(): Promise<void> {
         await recoverClaudeLoginsAtStartup();
       },
       runIdentityMigration: async () => {
-        const { runIdentityWaveMigrationAtStartup } = await import("@/lib/agent/identityWaveStartup");
-        runIdentityWaveMigrationWithoutBlockingStartup(runIdentityWaveMigrationAtStartup);
+        const { runIdentityWaveMigrationAtStartupOffLoop } = await import("@/lib/agent/identityWaveStartup");
+        runIdentityWaveMigrationWithoutBlockingStartup(runIdentityWaveMigrationAtStartupOffLoop);
       },
       startStructuredHosts: structuredHostsEnabled()
         ? () => {

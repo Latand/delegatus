@@ -3324,6 +3324,43 @@ describe("ClaudeStreamBrokerHost", () => {
     await expect(host.release()).resolves.toBeUndefined();
   });
 
+  for (const outcome of ["accepted", "refused", "replaced", "new descendant"] as const) {
+    test(`a promise-based termination capture is awaited and revalidated (${outcome})`, async () => {
+      const ledger = new RecordingDeliveryLedger();
+      const child = new FakeClaude(ledger);
+      let identity = "5150:owned";
+      let extraDescendant = false;
+      const root = { pid: child.pid, startIdentity: identity };
+      const host = await ClaudeStreamBrokerHost.start({
+        cwd: "/repo", deliveryLedger: ledger, eventStore: new MemoryEventStore(),
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+        readTranscript: () => [], spawnProcess: fakeSpawn(child, {}),
+        processIdentity: () => identity, signalProcess: (_pid, signal) => { child.kill(signal); },
+        captureProcessTree: () => ({ identities: extraDescendant ? [root, { pid: 5151, startIdentity: "5151:new" }] : [root], unresolved: [] }),
+      });
+      let enter!: () => void, finish!: (ok: boolean) => void;
+      const entered = new Promise<void>(resolve => { enter = resolve; });
+      const admitted = new Promise<boolean>(resolve => { finish = resolve; });
+      host.setTerminationCapture(() => { enter(); return admitted; });
+      const stopped = host.releaseIfOwned(root);
+      try {
+        await entered;
+        expect(child.signals).toEqual([]);
+        expect(child.stdin.writableEnded).toBe(false);
+        if (outcome === "replaced") identity = "5150:replacement";
+        if (outcome === "new descendant") extraDescendant = true;
+        finish(outcome !== "refused");
+        if (outcome === "accepted") expect(await stopped).toBe(true);
+        else await expect(stopped).rejects.toThrow();
+        expect(child.signals.length > 0).toBe(outcome === "accepted");
+      } finally {
+        identity = "5150:owned";
+        host.setTerminationCapture(null);
+        await host.release();
+      }
+    });
+  }
+
   test("an identity-bound release refuses a recycled child before signalling", async () => {
     const ledger = new RecordingDeliveryLedger();
     const child = new FakeClaude(ledger);
