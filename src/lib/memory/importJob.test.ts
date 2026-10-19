@@ -158,11 +158,11 @@ test("project aliases and asynchronous discovery resolve to one canonical applic
   expect(candidates[0].suggestedScope).toBe("project:project-a");
 });
 
-test("test and build callers cannot fall back to native engine homes", async () => {
+test("test and build callers cannot fall back to native homes or recover without proving source separation", async () => {
   await write(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "importing", importId: "fixture-1", changedAt: at }));
   await expect(runMemoryImportWork({ importId: "fixture-1", previous: null, at })).rejects.toThrow("backup_refused");
   expect(readImportCandidates("fixture-1").candidates).toEqual([]);
-  expect(readMemorySourceFile()).toBeNull();
+  expect(readMemorySourceFile()).toMatchObject({ source: "delegatus", phase: "importing", importId: "fixture-1" });
 });
 
 test.each([null, { schemaVersion: 1 as const, source: "engines" as const, changedAt: at }])("a mismatched copy publishes no candidates and restores the exact prior choice: %j", async previous => {
@@ -360,6 +360,84 @@ test("root index links retain reachability when an earlier alias wins physical-f
   const { candidates } = readImportCandidates("fixture-1");
   expect(candidates).toHaveLength(1);
   expect(candidates[0]).toMatchObject({ body: "Reachable fixture topic.\n", loadedAtStart: true });
+});
+
+test("a generic file alias cannot hide its canonical Claude topic", async () => {
+  const body = "Canonical topic through an alias.\n";
+  await write(path.join(memory(), "topic.md"), body);
+  await fs.symlink(path.join(memory(), "topic.md"), path.join(memory(), "000-alias.txt"));
+
+  const result = await run();
+  const { candidates } = readImportCandidates("fixture-1");
+  expect(candidates).toHaveLength(1);
+  expect(candidates[0]).toMatchObject({ body, occurrences: [{ file: "projects/project-a/memory/topic.md" }] });
+  const manifest = JSON.parse(await fs.readFile(path.join(result.backup, "manifest.json"), "utf8"));
+  expect(manifest.files).toHaveLength(1);
+  expect(manifest.files[0].file).toBe("projects/project-a/memory/topic.md");
+});
+
+test.each(["skills", "rules"])("an earlier directory alias preserves the %s exclusion and one physical backup", async excluded => {
+  const body = `Private ${excluded} fixture instructions.\n`;
+  await write(path.join(memory(), excluded, "instruction.md"), body);
+  await fs.symlink(path.join(memory(), excluded), path.join(memory(), "000-alias"));
+
+  const result = await run();
+  expect(readImportCandidates("fixture-1").candidates).toEqual([]);
+  const manifest = JSON.parse(await fs.readFile(path.join(result.backup, "manifest.json"), "utf8"));
+  expect(manifest.files).toHaveLength(1);
+  expect(manifest.files[0]).toMatchObject({ file: `projects/project-a/memory/${excluded}/instruction.md`, kind: "history" });
+  expect(sha(await fs.readFile(path.join(result.backup, manifest.files[0].copy)))).toBe(sha(Buffer.from(body)));
+});
+
+test.each([null, { schemaVersion: 1 as const, source: "engines" as const, changedAt: at }])("an early database refusal never restores over an overlapping source store: %j", async previous => {
+  const source = memory();
+  const sourceChoice = path.join(source, "memory-source.json");
+  const database = path.join(source, "state.sqlite");
+  await write(sourceChoice, JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "importing", importId: "fixture-1", changedAt: at }));
+  await write(database, "not a private database");
+  await write(path.join(source, "keep.data"), "Keep every source entry.");
+  await fs.chmod(database, 0o644);
+  const names = (await fs.readdir(source)).sort();
+  const before = new Map(await Promise.all(names.map(async name => {
+    const file = path.join(source, name);
+    return [name, { sha256: sha(await fs.readFile(file)), mode: (await fs.stat(file)).mode & 0o777 }] as const;
+  })));
+  process.env.LLV_STATE_DIR = source;
+
+  await expect(runMemoryImportWork({ importId: "fixture-1", previous, roots, at }, { projectForSlug: slug => slug })).rejects.toThrow();
+  expect((await fs.readdir(source)).sort()).toEqual(names);
+  for (const [name, snapshot] of before) {
+    const file = path.join(source, name);
+    expect(sha(await fs.readFile(file))).toBe(snapshot.sha256);
+    expect((await fs.stat(file)).mode & 0o777).toBe(snapshot.mode);
+  }
+});
+
+test("an inventory refusal leaves every engine source byte and permission unchanged", async () => {
+  const outside = path.join(root, "outside.data");
+  const source = memory();
+  const previous = { schemaVersion: 1 as const, source: "engines" as const, changedAt: at };
+  await write(path.join(source, "topic.md"), "Keep topic bytes.\n");
+  await write(outside, "Outside the declared store.");
+  await fs.symlink(outside, path.join(source, "escape.md"));
+  const entries = ["escape.md", "topic.md"];
+  const before = new Map(await Promise.all(entries.map(async name => {
+    const file = path.join(source, name);
+    const stat = await fs.lstat(file);
+    return [name, { link: stat.isSymbolicLink(), target: stat.isSymbolicLink() ? await fs.readlink(file) : null, sha256: stat.isSymbolicLink() ? sha(Buffer.from(await fs.readlink(file))) : sha(await fs.readFile(file)), mode: stat.mode & 0o777 }] as const;
+  })));
+
+  await expect(run("fixture-1", {}, previous)).rejects.toThrow("backup_refused");
+  expect((await fs.readdir(source)).sort()).toEqual(entries);
+  for (const [name, snapshot] of before) {
+    const file = path.join(source, name);
+    const stat = await fs.lstat(file);
+    expect(stat.isSymbolicLink()).toBe(snapshot.link);
+    expect(stat.mode & 0o777).toBe(snapshot.mode);
+    if (snapshot.link && snapshot.target !== null) expect(await fs.readlink(file)).toBe(snapshot.target);
+    else expect(sha(await fs.readFile(file))).toBe(snapshot.sha256);
+  }
+  expect(readMemorySourceFile()).toEqual(previous);
 });
 
 test.each([null, { schemaVersion: 1 as const, source: "engines" as const, changedAt: at }])("a status-write failure still restores the prior memory choice and withholds candidates: %j", async previous => {

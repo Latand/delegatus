@@ -18,6 +18,38 @@ import { guardedContext } from "@/lib/stateOwnership";
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT";
 const within = (root: string, file: string) => { const relative = path.relative(root, file); return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)); };
+async function resolvedDestination(target: string) {
+  let existing = path.resolve(target);
+  const suffix: string[] = [];
+  for (;;) {
+    try { await fs.lstat(existing); break; }
+    catch (error) { if (!missing(error)) throw error; suffix.unshift(path.basename(existing)); existing = path.dirname(existing); }
+  }
+  return path.resolve(await fs.realpath(existing), ...suffix);
+}
+async function sourceStoreRoots(roots: ImportRoots) {
+  const stores: string[] = [];
+  async function add(directory: string) {
+    try {
+      const physical = await fs.realpath(directory);
+      if ((await fs.stat(physical)).isDirectory()) stores.push(physical);
+    } catch (error) { if (!missing(error)) throw error; }
+  }
+  for (const home of roots.claudeHomes) {
+    let projects: string[];
+    try { projects = await fs.readdir(path.join(home, "projects")); }
+    catch (error) { if (missing(error)) continue; throw error; }
+    for (const slug of projects) await add(path.join(home, "projects", slug, "memory"));
+  }
+  for (const home of roots.codexHomes) await add(path.join(home, "memories"));
+  return stores;
+}
+async function sourceStoresAreSeparate(directory: string, roots: ImportRoots) {
+  try {
+    const [state, stores] = await Promise.all([resolvedDestination(directory), sourceStoreRoots(roots)]);
+    return !stores.some(store => within(store, state) || within(state, store));
+  } catch { return false; }
+}
 export class MemoryImportError extends Error {
   constructor(readonly reason: NonNullable<ImportRecord["reason"]>) { super(`memory import: ${reason}`); }
 }
@@ -71,7 +103,8 @@ async function outsideCheckout(directory: string) {
     if (path.dirname(current) === current) break;
   }
 }
-async function rejectPreflight(error: unknown, request: ImportRequest): Promise<never> {
+async function rejectPreflight(error: unknown, request: ImportRequest, roots: ImportRoots): Promise<never> {
+  if (!(await sourceStoresAreSeparate(stateDir(), roots))) throw error;
   try { await restoreMemorySourceAfterImport(request.importId, request.previous); }
   catch (restoreError) {
     const reason = error instanceof MemoryImportError ? error.reason : "backup_refused";
@@ -111,17 +144,18 @@ async function inventory(roots: ImportRoots, projectForSlug: (slug: string) => s
       if (!within(real, physical)) throw new MemoryImportError("backup_refused");
       if (seen.has(physical)) return;
       seen.add(physical);
-      for (const name of (await fs.readdir(current)).sort()) {
-        const source = path.join(current, name), resolved = await fs.realpath(source);
+      for (const name of (await fs.readdir(physical)).sort()) {
+        const entry = path.join(physical, name), resolved = await fs.realpath(entry);
         if (!within(real, resolved)) throw new MemoryImportError("backup_refused");
-        const stat = await fs.stat(source);
-        if (stat.isDirectory()) await walk(source, depth + 1);
+        const stat = await fs.stat(entry);
+        if (stat.isDirectory()) await walk(resolved, depth + 1);
         else if (stat.isFile()) {
-          const relative = path.relative(directory, source);
-          const kind: ImportManifestFile["kind"] = engine === "claude" ? name === "MEMORY.md" ? "claude_index" : name.endsWith(".md") && !["CLAUDE.md", "AGENTS.md", "SKILL.md"].includes(name) && !relative.split(path.sep).some(segment => ["rules", "skills", ".git"].includes(segment)) ? "claude_topic" : "history"
+          const relative = path.relative(real, resolved), canonicalName = path.basename(resolved);
+          const kind: ImportManifestFile["kind"] = engine === "claude" ? canonicalName === "MEMORY.md" ? "claude_index" : canonicalName.endsWith(".md") && !["CLAUDE.md", "AGENTS.md", "SKILL.md"].includes(canonicalName) && !relative.split(path.sep).some(segment => ["rules", "skills", ".git"].includes(segment)) ? "claude_topic" : "history"
             : relative === "memory_summary.md" ? "codex_summary" : "history";
           const loadedAtStart = kind === "codex_summary" || kind === "claude_index" && relative === "MEMORY.md";
           const existing = seenFiles.get(resolved);
+          const source = path.join(directory, relative);
           const current = { source, store: directory, physical: resolved, home, file: path.relative(home, source), engine, kind, size: stat.size, modifiedAt: stat.mtime.toISOString(), project, loadedAtStart };
           if (existing === undefined) {
             seenFiles.set(resolved, files.length);
@@ -134,7 +168,7 @@ async function inventory(roots: ImportRoots, projectForSlug: (slug: string) => s
         } else if (!stat.isDirectory() && !stat.isFile()) throw new MemoryImportError("backup_refused");
       }
     }
-    await walk(directory, 0);
+      await walk(real, 0);
   }
   for (const home of [...roots.claudeHomes].sort()) {
     let slugs: string[];
@@ -151,24 +185,21 @@ export async function runMemoryImportWork(request: ImportRequest, ports: Ports =
   const directory = stateDir();
   const backups = path.join(directory, "backups"), parent = path.join(backups, "engine-memory");
   let files: Awaited<ReturnType<typeof inventory>>["files"], stores: string[];
+  let roots: ImportRoots | undefined;
+  let sourceSeparationProven = false;
   try {
+    roots = request.roots ?? await defaultRoots();
+    sourceSeparationProven = await sourceStoresAreSeparate(directory, roots);
+    if (!sourceSeparationProven) throw new MemoryImportError("backup_refused");
     await outsideCheckout(directory);
     await outsideCheckout(path.join(directory, "state.sqlite"));
     assertPrivateImportDatabaseFiles(path.join(directory, "state.sqlite"));
-    if (!request.roots && guardedContext()) throw new MemoryImportError("backup_refused");
-    const roots = request.roots ?? await defaultRoots();
     ({ files, stores } = await inventory(roots, ports.projectForSlug ?? (await import("@/lib/scanner/describe")).projectForClaudeMemorySlug));
   }
-  catch (error) { return rejectPreflight(error, request); }
-  const resolvedDestination = async (target: string) => {
-    let existing = path.resolve(target);
-    const suffix: string[] = [];
-    for (;;) {
-      try { await fs.lstat(existing); break; }
-      catch (error) { if (!missing(error)) throw error; suffix.unshift(path.basename(existing)); existing = path.dirname(existing); }
-    }
-    return path.resolve(await fs.realpath(existing), ...suffix);
-  };
+  catch (error) {
+    if (roots && await sourceStoresAreSeparate(directory, roots)) return rejectPreflight(error, request, roots);
+    throw error;
+  }
   const transaction = path.join(parent, "import-job");
   const lockPath = `${transaction}.write-lock`;
   const queuePath = `${transaction}.write-locks`;
@@ -184,7 +215,7 @@ export async function runMemoryImportWork(request: ImportRequest, ports: Ports =
   } catch (error) {
     const state = await resolvedDestination(directory);
     if (stores.some(store => within(store, state) || within(state, store))) throw error;
-    return rejectPreflight(error, request);
+    return rejectPreflight(error, request, roots!);
   }
   await privateDirectory(directory);
   await privateDirectory(backups); await privateDirectory(parent); await outsideCheckout(parent);
@@ -257,8 +288,12 @@ export async function runMemoryImportWork(request: ImportRequest, ports: Ports =
     } catch (error) {
       record.state = "failed"; record.reason = error instanceof MemoryImportError ? error.reason : "failed";
       let statusFailure: unknown, restoreFailure: unknown;
+      if (!(await sourceStoresAreSeparate(directory, roots!))) throw error;
       try { await writeImportRows([record]); } catch (caught) { statusFailure = caught; }
-      try { await restoreMemorySourceAfterImport(record.id, record.previous); } catch (caught) { restoreFailure = caught; }
+      try {
+        if (!(await sourceStoresAreSeparate(directory, roots!))) throw new MemoryImportError("backup_refused");
+        await restoreMemorySourceAfterImport(record.id, record.previous);
+      } catch (caught) { restoreFailure = caught; }
       if (statusFailure || restoreFailure) {
         const cause = error instanceof MemoryImportError ? error.reason : "failed";
         throw new MemoryImportRecoveryError(cause, Boolean(statusFailure), Boolean(restoreFailure), [error, ...[statusFailure, restoreFailure].filter(Boolean)]);
