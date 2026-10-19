@@ -4,6 +4,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
 import { parseSnapshotReadRequest, SNAPSHOT_ACTIVITY_FIELDS, SNAPSHOT_OWNER_FIELDS, type RuntimeSnapshotMetadata } from "@/lib/runtime/snapshotReads";
 import { measureBlocking } from "@/lib/blockingWaits";
+import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { SessionHostMetadata, SESSION_HOST_ACTIVE_FROM, SESSION_HOST_INACTIVE_FROM, SESSION_HOST_TERMINAL, SESSION_HOST_EXPIRY } from "./journalSessionMetadata";
 import { NativeQueueJournal } from "./nativeQueueJournal";
@@ -1710,9 +1711,16 @@ export class RuntimeJournal {
   }
 
   /** Atomically bind a matching busy join key to the active deployment. */
-  joinActiveViewerDeployment(input: { idempotencyKey: string; requestedRevision: string; expectedDeploymentId: string }): ViewerDeploymentReceipt | null {
+  async joinActiveViewerDeployment(input: { idempotencyKey: string; requestedRevision: string; expectedDeploymentId: string }): Promise<ViewerDeploymentReceipt | null> {
     this.assertHealthy();
-    this.db.exec("BEGIN IMMEDIATE");
+    await waitForStateLock("runtime.viewer-deployment-join", () => {
+      this.db.exec("PRAGMA busy_timeout = 0");
+      try {
+        stateLockAttempt("runtime.viewer-deployment-join", () => this.db.exec("BEGIN IMMEDIATE"), "viewer deployments");
+      } finally {
+        this.db.exec(`PRAGMA busy_timeout = ${RUNTIME_JOURNAL_BUSY_TIMEOUT_MS}`);
+      }
+    }, { waitMs: RUNTIME_JOURNAL_BUSY_TIMEOUT_MS, subject: "viewer deployments" });
     try {
       const existing = this.db.query<{ deployment_id: string; requested_revision: string; request_hash: string; status_json: string }, [string]>(
         `SELECT requests.deployment_id, requests.requested_revision, requests.request_hash, deployments.status_json

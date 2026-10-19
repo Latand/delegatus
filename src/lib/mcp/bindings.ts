@@ -170,6 +170,8 @@ import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParent
 import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, seatDeploymentForRequestKey, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
+import { checkoutDeploymentByIdempotencyKey } from "@/lib/selfUpdate/deployments";
+import { statePath } from "@/lib/configDir";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
@@ -959,6 +961,7 @@ export interface ViewerMcpDomainDependencies {
       tick can wake that seat when it settles. Optional so partial harnesses
       fall back to the production store. */
   recordSeatDeployment?(record: SeatDeploymentRecord, assertCaller?: () => void): void | Promise<void>;
+  beginSeatDeployment?(record: import("@/lib/orchestrator/seatDeployments").PendingSeatDeployment, assertCaller?: () => void): Promise<void>;
   findDeploymentByIdempotencyKey?: typeof import("@/lib/orchestrator/seatDeployments").findSeatDeploymentByKey;
   /** The account↔project binding store (#1279). Optional so a partial harness
       can exercise the tool with no state directory; production reads and
@@ -1456,6 +1459,11 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
       (conversationId) => managers().some((seat) => seat.conversationId === conversationId),
       (conversationId) => productionDeputyPrincipal(conversationId)?.seatConversationId ?? null,
     );
+  },
+  findDeploymentByIdempotencyKey: async idempotencyKey => {
+    const checkout = checkoutDeploymentByIdempotencyKey(statePath("self-update"), idempotencyKey);
+    if (checkout) return checkout;
+    return (await import("@/lib/orchestrator/seatDeployments")).findSeatDeploymentByKey(idempotencyKey);
   },
   viewerProjects: viewerOwnProjects,
 };
@@ -3601,21 +3609,33 @@ async function deployExactSha(
   const idempotencyKey = requestId(args);
   const pending = { conversationId: seat.conversationId, project: seat.project,
     revision: revision.toLowerCase(), requestedAt: new Date().toISOString(), idempotencyKey };
-  await beginSeatDeployment(pending, assertSeat);
+  try {
+    await (dependencies.beginSeatDeployment ?? beginSeatDeployment)(pending, assertSeat);
+  } catch (error) {
+    if (callContext.priorAttemptUncertain && !(error instanceof McpToolRefusal)) {
+      throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because seat attribution is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    throw error;
+  }
   assertSeat();
   if (callContext.priorAttemptUncertain) {
-    await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
-      dependencies.recordSeatDeployment);
-    const recovered = seatDeploymentForRequestKey(idempotencyKey);
-    if (recovered) {
-      if (recovered.conversationId !== seat.conversationId || recovered.project !== seat.project
-        || !recovered.revision.toLowerCase().startsWith(revision.toLowerCase())) {
-        throw new McpToolRefusal("the deployment request key is attributed to a different seat or revision", {
-          code: "deploy_request_key_conflict", retryable: false,
-        });
+    try {
+      await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
+        dependencies.recordSeatDeployment);
+      const recovered = seatDeploymentForRequestKey(idempotencyKey);
+      if (recovered) {
+        if (recovered.conversationId !== seat.conversationId || recovered.project !== seat.project
+          || !recovered.revision.toLowerCase().startsWith(revision.toLowerCase())) {
+          throw new McpToolRefusal("the deployment request key is attributed to a different seat or revision", {
+            code: "deploy_request_key_conflict", retryable: false,
+          });
+        }
+      } else {
+        throw new McpDeploymentPendingError("the prior deploy request is still being reconciled; no new admission was sent");
       }
-    } else {
-      throw new McpDeploymentPendingError("the prior deploy request is still being reconciled; no new admission was sent");
+    } catch (error) {
+      if (error instanceof McpToolRefusal || error instanceof McpDeploymentPendingError) throw error;
+      throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because its receipt store is unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   let receipt: Record<string, unknown>;
@@ -3636,8 +3656,12 @@ async function deployExactSha(
       await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
       throw error;
     }
-    await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
-      dependencies.recordSeatDeployment);
+    try {
+      await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
+        dependencies.recordSeatDeployment);
+    } catch (recoveryError) {
+      throw new McpDeploymentPendingError(`deployment admission may have completed, and its receipt could not be reconciled: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`);
+    }
     throw new McpDeploymentPendingError(error instanceof Error ? error.message : "Deployment control wait ended");
   }
   const matchingBusy = receipt.state === "busy" && typeof receipt.revision === "string"

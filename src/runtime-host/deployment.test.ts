@@ -6,6 +6,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 
 import type { ViewerDeploymentStatus, ViewerReleaseIdentity } from "@/lib/runtime/contracts";
 import { runtimeHostClient, UnixRuntimeHostClient } from "@/lib/runtime/client";
@@ -121,6 +122,40 @@ test("a matching busy SHA durably binds its join key through settlement and jour
   } finally {
     releaseBuild();
     if (!closed) store.close();
+  }
+});
+
+test("same-SHA join retries a contended journal lock without blocking the host loop", async () => {
+  const file = journalFile("busy-join-lock");
+  const store = new RuntimeJournal(file, { now: () => 1_500 });
+  const adapter = new FakeDeploymentAdapter();
+  const build = Promise.withResolvers<void>();
+  adapter.buildGate = build.promise;
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 12, startIdentity: "12:1" });
+  const peer = new Database(file);
+  try {
+    const first = await coordinator.requestViewerDeployment({ revision: "c".repeat(40), idempotencyKey: "lock-original" });
+    if (first.state !== "accepted") throw new Error("initial deployment was not accepted");
+    peer.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    let loopReleaseRan = false;
+    const joining = coordinator.requestViewerDeployment({ revision: "c".repeat(40), idempotencyKey: "lock-join" });
+    const release = new Promise<void>((resolve, reject) => setImmediate(() => {
+      try { peer.exec("ROLLBACK"); loopReleaseRan = true; resolve(); }
+      catch (error) { reject(error); }
+    }));
+    await release;
+    const joined = await joining;
+    expect(loopReleaseRan).toBe(true);
+    expect(joined).toMatchObject({ state: "accepted", deploymentId: first.deploymentId, replayed: false });
+    expect(store.viewerDeploymentByIdempotencyKey("lock-join")?.deploymentId).toBe(first.deploymentId);
+    expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
+  } finally {
+    try { peer.exec("ROLLBACK"); } catch { /* release callback already closed the transaction */ }
+    peer.close();
+    build.resolve();
+    const active = store.activeViewerDeployment();
+    if (active) await coordinator.waitForDeployment(active.deploymentId);
+    store.close();
   }
 });
 

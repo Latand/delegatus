@@ -3322,6 +3322,8 @@ export function createMcpToolService(
               true, false, { outcome: "unknown", nextAction: "retry-same-key" });
           }
           if (typedTool === "deploy_exact_sha" && error instanceof McpDeploymentPendingError) {
+            /* Leave the claim pending: a same-key replay must run the
+               admission lookup again after its store recovers. */
             return failure(typedTool, requestId, "outcome_unknown",
               `${error.message}; deployment admission may have completed. Read deployment_status and replay only the original clientRequestId to resolve the admitted deployment.`,
               false, false, { outcome: "unknown", nextAction: "deployment_status" });

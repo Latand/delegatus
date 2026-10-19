@@ -103,3 +103,55 @@ test("a lost busy-join reply replays its durable admission before and after sett
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("an attribution failure during uncertain replay stays pending until admission and wake reconcile", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "uncertain-attribution-replay-"));
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 4_000 });
+  const adapter = new FakeDeploymentAdapter();
+  const build = Promise.withResolvers<void>();
+  adapter.buildGate = build.promise;
+  const coordinator = new ViewerDeploymentCoordinator(journal, adapter, { pid: 31, startIdentity: "31:1" });
+  const key = "uncertain-attribution-replay";
+  const args = { revision: SHA, clientRequestId: key };
+  let lookupReady = false;
+  let attributionFails = false;
+  let posts = 0;
+  const dependencies = {
+    ...domain,
+    findDeploymentByIdempotencyKey: async (requestKey: string) => lookupReady
+      ? coordinator.findViewerDeploymentByIdempotencyKey(requestKey) : null,
+    beginSeatDeployment: async (pending: Parameters<typeof beginSeatDeployment>[0], assertCaller?: () => void) => {
+      if (attributionFails) throw new Error("seat attribution store is temporarily unavailable");
+      await beginSeatDeployment(pending, assertCaller);
+    },
+  };
+  const bindings = viewerMcpBindings(undefined, { post: async (_url, body) => {
+    posts++;
+    await coordinator.requestViewerDeployment(body as { revision: string; idempotencyKey: string });
+    throw new Error("response lost after durable admission");
+  } }, dependencies as never);
+  const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
+  const service = createMcpToolService(bindings, store);
+  try {
+    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
+    const admitted = journal.viewerDeploymentByIdempotencyKey(key);
+    expect(admitted?.deploymentId).toBeTruthy();
+    attributionFails = true;
+    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
+    attributionFails = false;
+    lookupReady = true;
+    expect(await service.callTool("deploy_exact_sha", args)).toMatchObject({
+      ok: true, state: "accepted", deploymentId: admitted!.deploymentId, wakeOnSettle: true,
+    });
+    expect(posts).toBe(1);
+    expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
+    expect(seatDeploymentsFor(SEAT).filter(record => record.deploymentId === admitted!.deploymentId)).toHaveLength(1);
+  } finally {
+    build.resolve();
+    const active = journal.activeViewerDeployment();
+    if (active) await coordinator.waitForDeployment(active.deploymentId);
+    store.close();
+    journal.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

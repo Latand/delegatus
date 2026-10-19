@@ -202,7 +202,7 @@ export class ViewerDeploymentCoordinator {
     if (active) {
       const requested = requestedRevision.toLowerCase();
       if (/^[0-9a-f]{7,40}$/.test(requested) && active.revision.toLowerCase().startsWith(requested)) {
-        const joined = this.journal.joinActiveViewerDeployment({
+        const joined = await this.journal.joinActiveViewerDeployment({
           idempotencyKey: request.idempotencyKey,
           requestedRevision,
           expectedDeploymentId: active.deploymentId,
