@@ -64,6 +64,51 @@ const AT = "2026-07-29T00:00:00.000Z";
 const NEW_ID = "conversation_33333333-3333-4333-8333-333333333333";
 const OLD_ID = "conversation_44444444-4444-4444-8444-444444444444";
 
+for (const shared of [false, true]) test(`completed seat replay awaits registry identity publication without blocking the Viewer (shared=${shared})`, async () => {
+  const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const sqliteFilename = path.join(sandbox, shared ? "state.sqlite" : "registry.sqlite");
+  const registry = new AgentRegistry(path.join(sandbox, "registry.json"), undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
+  const transcript = path.join(sandbox, "seat.jsonl");
+  const conversation = registry.ensureConversation("codex", transcript, null);
+  setAgentRegistryForTests(registry);
+  const { deps } = dependencies({
+    conversationTarget: () => ({ kind: "eligible", conversationId: conversation.id, path: transcript, cwd: sandbox, project: "proj-a", engine: "codex" }),
+    stampRegistryIdentity: seat => { registry.stampOrchestratorSeatIdentity(seat); },
+  });
+  const request = { project: "proj-a", mandate: "Own the fixture board", clientRequestId: "registry-seat-replay", conversationId: conversation.id };
+  const holder = registryLockHolder(sqliteFilename);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const identityAdmission = Promise.withResolvers<void>();
+  const accountMutationWrite = registry.accountMutationWrite.bind(registry);
+  registry.accountMutationWrite = async (label, write, guard, options) => {
+    if (label === "registry.seat-identity") identityAdmission.resolve();
+    return accountMutationWrite(label, write, guard, options);
+  };
+  try {
+    expect((await executeOrchestratorSeatRequest(request, deps)).status).toBe(200);
+    await holder.hold();
+    let finished = false;
+    let lastTick = performance.now();
+    let maxLoopGapMs = 0;
+    const sampleLoop = () => {
+      const now = performance.now();
+      maxLoopGapMs = Math.max(maxLoopGapMs, now - lastTick);
+      lastTick = now;
+      if (!finished) timer = setTimeout(sampleLoop, 5);
+    };
+    timer = setTimeout(sampleLoop, 5);
+    const replayWork = executeOrchestratorSeatRequest(request, deps);
+    await identityAdmission.promise;
+    await holder.release();
+    const replay = await replayWork;
+    finished = true;
+    await new Promise(resolve => { timer = setTimeout(resolve, 10); });
+    expect(maxLoopGapMs).toBeLessThan(50);
+    expect(replay.status).toBe(200);
+    expect(registry.conversation(conversation.id)?.agentRole).toBe("orchestrator");
+  } finally { clearTimeout(timer); await holder.close(); registry.close(); }
+});
+
 test("seat activation waits for runtime evidence outside the lease and preserves a racing designation", async () => {
   const { deps, recorded } = dependencies();
   let enter!: () => void, release!: () => void;
@@ -310,6 +355,7 @@ test("spawn mode freezes omitted runtime fields to the resolved orchestrator def
 
 test("a seat designated after the identity wave stamps registry role, membership, and rotation lineage", async () => {
   const registry = new AgentRegistry(path.join(sandbox, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  setAgentRegistryForTests(registry);
   const oldPath = path.join(sandbox, "old.jsonl");
   const newPath = path.join(sandbox, "new.jsonl");
   const oldConversation = registry.ensureConversation("claude", oldPath, null);
@@ -651,6 +697,8 @@ test("adopting a model-less Codex conversation records its engine-specific effec
 test("a replayed adoption keeps its original target during an ABA-shaped retry", async () => {
   let releaseDelivery: () => void = () => {};
   const gate = new Promise<void>((resolve) => { releaseDelivery = resolve; });
+  let entered!: () => void;
+  const bothDeliveries = new Promise<void>(resolve => { entered = resolve; });
   const { deps, recorded } = dependencies({
     conversationTarget: (conversationId) => ({
       kind: "eligible",
@@ -662,6 +710,7 @@ test("a replayed adoption keeps its original target during an ABA-shaped retry",
     }),
     deliver: async (input) => {
       recorded.deliveries.push({ conversationId: input.conversationId, clientMessageId: input.clientMessageId, text: input.text });
+      if (recorded.deliveries.length === 2) entered();
       await gate;
       return { ok: true, outcome: "delivered" };
     },
@@ -679,6 +728,7 @@ test("a replayed adoption keeps its original target during an ABA-shaped retry",
     conversationId: NEW_ID,
   }, deps);
 
+  await bothDeliveries;
   expect(recorded.deliveries.map((delivery) => delivery.conversationId)).toEqual([OLD_ID, OLD_ID]);
   releaseDelivery();
   await Promise.all([first, replay]);
@@ -2475,6 +2525,13 @@ test("a spawn route that answers its own busy store is replayed under the same a
   expect(result.status).toBe(200);
   expect(recorded.spawns.map((body) => body.clientAttemptId)).toEqual(["req_busy_0003", "req_busy_0003"]);
   expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+});
+
+test("a newly activated seat publishes identity when request replay is disabled", async () => {
+  const { deps, recorded } = dependencies({ seatStoreWaitMs: 0 });
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_identity_no_replay"), deps);
+  expect(result.status).toBe(200);
+  expect(recorded.identityStamps).toHaveLength(1);
 });
 
 test("reconcileCompletedSeatReplay waits out a short foreign holder without needing a request replay", async () => {

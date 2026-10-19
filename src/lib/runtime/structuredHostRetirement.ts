@@ -1156,16 +1156,28 @@ export async function runStructuredHostRetirementSweep(
   const memoryOf = dependencies.processMemory ?? ((pids: Iterable<number>) => procBackend.processMemory(pids));
   const ppids = dependencies.ppidMap ?? (() => procBackend.ppidMap());
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
-  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef) => terminateStructuredHostTree(ref, {
+  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef) => {
+    const observed = snapshot().entries[`${ref.engine}:${ref.sessionId}`];
+    return terminateStructuredHostTree(ref, {
     graceMs,
     deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
     persistCapturedTree: identities => ref.sessionId !== null
-      && agentRegistry().recordStructuredTerminationSurvivors(
-        { engine: ref.engine, sessionId: ref.sessionId },
-        { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
-        identities,
-      ),
-  }));
+      && agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-capture" }, () => {
+        if (publicationState() !== "ready") return false;
+        const inputs = retirementInputs(sources, now());
+        const entry = inputs.file.entries[`${ref.engine}:${ref.sessionId}`];
+        if (!entry?.structuredHost?.process || entry.claimOwner !== observed?.claimOwner || entry.claimEpoch !== observed?.claimEpoch
+          || entry.structuredHost.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return false;
+        const subject = retirementSubject(entry, inputs, readers);
+        if (!structuredHostRetirementVerdict(subject, { now: now(), idleMs }).retire) return false;
+        return agentRegistry().recordStructuredTerminationSurvivors(
+          { engine: ref.engine, sessionId: ref.sessionId! },
+          { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
+          identities,
+        );
+      }),
+    });
+  });
   const record = dependencies.record ?? recordRetirementReport;
   const publicationState = dependencies.publicationState ?? structuredDeliveryPublicationState;
 

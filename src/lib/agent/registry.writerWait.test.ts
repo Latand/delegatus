@@ -24,6 +24,119 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-writer-wait-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 beforeEach(() => resetBlockingWaitsForTests(() => {}));
 
+for (const revoked of [false, true]) test(`a mixed account callback retries a rival writer outside custody and repeats its guard (revoked=${revoked})`, async () => {
+  const directory = fs.mkdtempSync(path.join(root, "mixed-writer-"));
+  const filename = path.join(directory, "registry.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new Database(path.join(directory, "registry.sqlite"));
+  let attempts = 0;
+  let current = true;
+  let rivalHeld = false;
+  try {
+    const work = registry.accountMutationWrite("registry.mixed-fixture", () => {
+      attempts++;
+      if (attempts === 1) {
+        peer.exec("BEGIN IMMEDIATE");
+        rivalHeld = true;
+        setImmediate(() => {
+          if (revoked) current = false;
+          peer.exec("ROLLBACK");
+          rivalHeld = false;
+        });
+      }
+      registry.setEngineRouting("codex", "mixed-account");
+    }, () => { if (!current) throw new Error("mixed custody replaced"); }, { releaseBeforeWrite: true });
+    if (revoked) await expect(work).rejects.toThrow("mixed custody replaced");
+    else expect((await work).acquired).toBe(true);
+    expect(attempts).toBe(revoked ? 1 : 2);
+    expect(registry.engineRouting("codex").activeAccountId).toBe(revoked ? null : "mixed-account");
+    expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
+    registry.close();
+    const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+    try { expect(reopened.engineRouting("codex").activeAccountId).toBe(revoked ? null : "mixed-account"); }
+    finally { reopened.close(); }
+  } finally {
+    if (rivalHeld) peer.exec("ROLLBACK");
+    peer.close(); registry.close();
+  }
+});
+
+for (const prepared of [false, true]) test(`an admitted group keeps every mutation under its writer and preserves successful members on failure (prepared=${prepared})`, async () => {
+  const directory = fs.mkdtempSync(path.join(root, "writer-group-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new Database(path.join(directory, "registry.sqlite"));
+  const first = "/sessions/group-first.jsonl";
+  const second = "/sessions/group-second.jsonl";
+  try {
+    registry.readOnlySnapshot();
+    if (prepared) await registry.prepareReadOnlySnapshot();
+    await expect(registry.deliveryWriteBatchOrBusy({ label: "registry.group-fixture" }, () => {
+      const a = registry.ensureConversation("codex", first, null);
+      expect(registry.conversationForPath(first)?.id).toBe(a.id);
+      expect(registry.readOnlySnapshot().conversations[a.id]?.generations[0]?.path).toBe(first);
+      peer.exec("PRAGMA busy_timeout = 0");
+      expect(() => peer.exec("BEGIN IMMEDIATE")).toThrow();
+      registry.ensureConversation("codex", second, null);
+      expect(() => registry.setStructuredHost({ engine: "codex", sessionId: "missing" }, null)).toThrow("missing");
+      throw new Error("later group member refused");
+    })).rejects.toThrow("later group member refused");
+    expect(registry.conversationForPath(first)).not.toBeNull();
+    expect(registry.conversationForPath(second)).not.toBeNull();
+    expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
+    peer.exec("BEGIN IMMEDIATE");
+    peer.exec("ROLLBACK");
+    registry.close();
+    const reopened = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    try {
+      expect(reopened.conversationForPath(first)).not.toBeNull();
+      expect(reopened.conversationForPath(second)).not.toBeNull();
+    } finally { reopened.close(); }
+  } finally { peer.close(); registry.close(); }
+});
+
+test("a failed batch member rolls back its draft and subsequent members still commit", async () => {
+  const f = store("batch-savepoint");
+  try {
+    await f.store.withWriter(() => f.store.withMutationBatch(() => {
+      f.store.mutate(file => { file.engineRouting.codex.activeAccountId = "first"; }, false);
+      expect(() => f.store.mutate(file => {
+        file.engineRouting.codex.activeAccountId = "refused";
+        file.engineRouting.claude.activeAccountId = "refused";
+        throw new Error("batch member refused");
+      }, false)).toThrow("batch member refused");
+      expect(f.store.readOnlySnapshot().file.engineRouting.codex.activeAccountId).toBe("first");
+      expect(f.store.readOnlySnapshot().file.engineRouting.claude.activeAccountId).not.toBe("refused");
+      f.store.mutate(file => { file.engineRouting.claude.activeAccountId = "last"; }, false);
+    }));
+    expect(f.store.snapshot().file.engineRouting).toMatchObject({ codex: { activeAccountId: "first" }, claude: { activeAccountId: "last" } });
+  } finally { f.store.close(); }
+  const reopened = new SqliteAgentRegistryStore(f.filename, { initialSnapshot: () => { throw new Error("already initialized"); }, normalize: normalizeRegistry });
+  try {
+    expect(reopened.snapshot().file.engineRouting).toMatchObject({ codex: { activeAccountId: "first" }, claude: { activeAccountId: "last" } });
+  } finally { reopened.close(); }
+});
+
+test("a refused batch commit discards cached drafts and permits a fresh writer", async () => {
+  const f = store("batch-commit-refusal");
+  const before = structuredClone(f.store.readOnlySnapshot().file.engineRouting);
+  const execute = Database.prototype.exec;
+  let refuse = false;
+  const fault = spyOn(Database.prototype, "exec").mockImplementation(function (this: Database, sql: string) {
+    if (refuse && sql === "COMMIT") { refuse = false; throw new Error("batch commit refused"); }
+    return execute.call(this, sql);
+  });
+  try {
+    await expect(f.store.withWriter(() => f.store.withMutationBatch(() => {
+      f.store.mutate(file => { file.engineRouting.codex.activeAccountId = "discarded"; }, false);
+      expect(f.store.readOnlySnapshot().file.engineRouting.codex.activeAccountId).toBe("discarded");
+      refuse = true;
+    }))).rejects.toThrow("batch commit refused");
+    expect(f.store.readOnlySnapshot().file.engineRouting).toEqual(before);
+    await f.store.withWriter(() => f.store.mutate(file => { file.engineRouting.codex.activeAccountId = "accepted"; }, false));
+    expect(f.store.readOnlySnapshot().file.engineRouting.codex.activeAccountId).toBe("accepted");
+  } finally { fault.mockRestore(); f.store.close(); }
+});
+
 function store(name: string): { store: SqliteAgentRegistryStore; filename: string } {
   const registry = new AgentRegistry(path.join(root, `${name}.json`), undefined, undefined, { sqliteMode: "off" });
   registry.reconcileConversations([{ engine: "codex", path: `/sessions/${name}.jsonl`, accountId: "default",
