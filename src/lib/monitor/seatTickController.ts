@@ -1454,6 +1454,7 @@ async function check(
   appendRecord: typeof appendSeatTickRecord,
 ): Promise<SeatTickRunRecord> {
   const sources = dependencies.sources ?? defaultSeatTickSources();
+  await sources.prepareRead?.();
   const readState = dependencies.readState ?? readSeatTickState;
   const writeState = dependencies.writeState ?? writeSeatTickState;
   const deliver = dependencies.deliver ?? deliverConversationMessage;
@@ -1494,7 +1495,9 @@ async function check(
     let deadHost = false;
     let detail = "host evidence absent";
     try {
+      await yieldToRuntime();
       const rows = await sources.liveness({ conversationId: seat.conversationId, stallAfterMs: policy.stallAfterMs, limit: 1 });
+      await yieldToRuntime();
       const row = rows.find(row => row.conversationId === seat.conversationId);
       deadHost = row?.host?.state === "gone"
         && (row.reason === "host_gone_turn_settled" || row.reason === "host_gone_turn_open");
@@ -1762,7 +1765,7 @@ async function check(
   let input = await refreshSeatTickEvidence(gathered, sources);
   input = { ...input, state: seatTickStateForEpoch(input.state, input.seat?.seatEpoch ?? null) };
   // Outcomes are visible even when the seat needs no wake or operator answer.
-  sources.recordRuleReports?.(input.project, new Date(input.now).toISOString());
+  await sources.recordRuleReports?.(input.project, new Date(input.now).toISOString());
   const authDetail = await recoverSeatAuthentication(input, sources, readState, writeState, ensureCard, dependencies.seatAuth ?? {});
   const autoRotateDetail = await runSeatAutoRotation(input, sources, readState, writeState, ensureCard, deliver, dependencies.seatAutoRotation ?? {});
   let proposalIssues: readonly ProposalIssue[] = [];

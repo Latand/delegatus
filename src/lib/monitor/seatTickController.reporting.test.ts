@@ -1,3 +1,4 @@
+import { OPEN_LANE, OVERDUE } from "./seatTickController.fixture";
 import { describe, expect, test, fs, path, spawn, SANDBOX, RESTORE, SESSIONS, reconcileSeatTick, runSeatTickCheck, startSeatTick, DEFAULT_SEAT_TICK_POLICY, defaultSeatTickSettings, readSeatTickState, writeSeatTickState, FileRuntimeEventStore, statePath, AgentRegistry, setAgentRegistryForTests, emptyLaunchProfile, PROJECT, NOW, MINUTE, pipelineRecord, harness, outstandingWake, childFixture, childRig, ago, agendaOf, idleWakeRig, finishIdleWorker } from "./seatTickController.fixture";
 import type { AgentLivenessRecord } from "./seatTickController.fixture";
 
@@ -844,3 +845,46 @@ test.each(["closed-idle", "newer-turn", "newer-provider", "newer-prompt", "unown
     expect(restarted.sent).toHaveLength(0);
   },
 );
+
+
+test("a seat check awaits report production and retains the same ordered wake", async () => {
+  const baseline = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  const expected = await runSeatTickCheck(PROJECT, baseline.deps);
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  rig.deps.sources!.recordRuleReports = async () => { entered(); await held; };
+  let settled = false;
+  const running = runSeatTickCheck(PROJECT, rig.deps).finally(() => { settled = true; });
+  await ready;
+  expect(settled).toBe(false);
+  expect(rig.sent).toEqual([]);
+  release();
+  const actual = await running;
+  expect({ verdict: actual?.verdict, reasons: actual?.reasons, items: actual?.items, deferred: actual?.deferred })
+    .toEqual({ verdict: expected?.verdict, reasons: expected?.reasons, items: expected?.items, deferred: expected?.deferred });
+  expect(rig.sent.map(row => row.text)).toEqual(baseline.sent.map(row => row.text));
+});
+
+test("an asynchronous report failure leaves the wake unsent and records its cause", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  rig.deps.sources!.recordRuleReports = async () => { throw new Error("report source refused"); };
+  expect(await runSeatTickCheck(PROJECT, rig.deps)).toMatchObject({ verdict: "error", detail: expect.stringContaining("report source refused") });
+  expect(rig.sent).toEqual([]);
+});
+
+
+test("a seat replacement during report production fences the original wake", async () => {
+  const rig = harness({ pipelines: OPEN_LANE, state: OVERDUE });
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  rig.deps.sources!.recordRuleReports = async () => { entered(); await held; };
+  const running = runSeatTickCheck(PROJECT, rig.deps);
+  await ready;
+  rig.seat = { ...rig.seat!, conversationId: "conversation_replacement", seatEpoch: 8 };
+  release();
+  await running;
+  expect(rig.sent).toEqual([]);
+});

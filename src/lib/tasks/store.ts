@@ -616,6 +616,11 @@ const listSnapshots = taskListReaders.snapshots;
  * changes. A row the collection hands out is decoded for its cache alone and a
  * write reads its rows through clones, so freezing the nested values a task
  * shares with its row leaves no writer holding a frozen object. */
+export async function loadTasksForListAsync(filePath = TASKS_FILE): Promise<readonly BoardTask[]> {
+  await taskCollection(filePath, "read")?.loadReadonlyAsync();
+  return loadTasksForList(filePath);
+}
+
 export function loadTasksForList(filePath = TASKS_FILE): readonly BoardTask[] {
   const collection = taskCollection(filePath, "read");
   if (!collection) {

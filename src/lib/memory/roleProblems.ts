@@ -72,13 +72,18 @@ export function readMemoryProblem(project: string, id: string): ProblemInput | n
   return row ? { ...row.problem } : null;
 }
 
+/** Prepare the same read view without a synchronous first-use collection fill. */
+export async function prepareMemoryProblemRead(): Promise<void> {
+  await roleMemoryCollection()?.loadReadonlyAsync();
+}
+
 /** The existing seat agenda supplies delivery proofs, never attempts. Credit
     the original row before its generic agenda version can age out. */
 export function memoryProblemSignals(project: string, shown: readonly string[], recipient: { conversationId: string; seatEpoch: number } | null = null): SeatTickSignalInput[] {
   const collection = roleMemoryCollection();
   if (!collection) return [];
   const canonical = canonicalProject(project);
-  const pending = collection.snapshot().filter(pendingProblem).filter(row => canonicalProject(row.kind === "request" ? row.project : row.source.project) === canonical);
+  const pending = collection.loadReadonly().filter(pendingProblem).filter(row => canonicalProject(row.kind === "request" ? row.project : row.source.project) === canonical);
   const versions = new Set(shown);
   const delivered = pending.filter(row => versions.has(seatTickSignalVersion(problemSignal(row), recipient)));
   if (delivered.length) collection.boundedPatch(4096, tx => {
