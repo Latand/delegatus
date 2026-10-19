@@ -15,7 +15,7 @@ import { accountManager } from "@/lib/accounts/manager";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { launchProfileEngineReadOnly, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
-import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { registryRowsMatching, registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -1764,6 +1764,30 @@ interface PipelineStartupEvidence {
   deferred: ReadonlySet<string>;
 }
 
+export function pipelineStartupMemberships(registry: AgentRegistry) {
+  // Only hosts this pass may adopt need membership evidence. Keyed generation
+  // lookups keep retained conversations and memberships off the retry loop.
+  const snapshot = startupSnapshot(registry);
+  const memberships: RegistryFile["memberships"] = {};
+  for (const entry of registryRowsMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp"])) {
+    if (!startupHostInScope(registry, sessionKeyId(entry.key))) continue;
+    for (const conversation of registryConversationsForEntryKey(snapshot, sessionKeyId(entry.key))) {
+      const canonical = resolveConversationAlias(snapshot, conversation.id);
+      for (const id of conversationIdsResolvingTo(snapshot, canonical)) {
+        if (snapshot.memberships[id]) memberships[id] = snapshot.memberships[id];
+      }
+    }
+  }
+  const resolve = (id: string) => resolveConversationAlias(snapshot, id as ViewerConversationId);
+  const byPipeline = new Map<string, string[]>();
+  for (const [id, entries] of Object.entries(memberships)) for (const entry of entries) {
+    if (entry.kind !== "pipeline") continue;
+    const ids = byPipeline.get(entry.containerId) ?? [];
+    ids.push(id); byPipeline.set(entry.containerId, ids);
+  }
+  return { memberships, resolve, byPipeline };
+}
+
 /** Pipeline attempts and frozen close hosts determine whether startup may create another writer.
     A failed read retains pipeline members without launch or demotion; a
     captured survivor blocks even pending work until its identity is dead. */
@@ -1780,17 +1804,18 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
     console.error("[structured hosts] pipeline registry unreadable; deferring pipeline adoption", {
       error: error instanceof Error ? error.message : String(error),
     });
-    for (const [id, memberships] of Object.entries(startupSnapshot(registry).memberships)) {
-      if (memberships.some((membership) => membership.kind === "pipeline")) {
-        deferred.add(registry.canonicalConversationId(id as ViewerConversationId));
+    const { memberships, resolve } = pipelineStartupMemberships(registry);
+    for (const [id, entries] of Object.entries(memberships)) {
+      if (entries.some((membership) => membership.kind === "pipeline")) {
+        deferred.add(resolve(id));
       }
     }
     return { settled, deferred };
   }
-  const memberships = startupSnapshot(registry).memberships;
+  const { memberships, resolve, byPipeline } = pipelineStartupMemberships(registry);
   for (const [id, entries] of Object.entries(memberships)) {
     if (entries.some((entry) => entry.kind === "pipeline" && preservedIds.has(entry.containerId))) {
-      deferred.add(registry.canonicalConversationId(id as ViewerConversationId));
+      deferred.add(resolve(id));
     }
   }
   for (const pipeline of pipelines) {
@@ -1799,15 +1824,11 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
     // into frozen close custody. Either record fences every pipeline writer.
     // Memberships also retain conversations absent from an older attempt row.
     if (blocked) {
-      for (const [id, entries] of Object.entries(memberships)) {
-        if (entries.some((entry) => entry.kind === "pipeline" && entry.containerId === pipeline.id)) {
-          deferred.add(registry.canonicalConversationId(id as ViewerConversationId));
-        }
-      }
+      for (const id of byPipeline.get(pipeline.id) ?? []) deferred.add(resolve(id));
     }
     for (const attempt of pipeline.attempts) {
       if (!attempt.conversationId?.startsWith("conversation_")) continue;
-      const id = registry.canonicalConversationId(attempt.conversationId as ViewerConversationId);
+      const id = resolve(attempt.conversationId);
       if (SETTLED_STAGE_ATTEMPT_STATES.has(attempt.state)) settled.add(id);
       if (blocked) deferred.add(id);
     }

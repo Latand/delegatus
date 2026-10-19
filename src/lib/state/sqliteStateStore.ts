@@ -931,8 +931,11 @@ export function stateDatabaseSignature(filename: string): string {
   return parts.join("|");
 }
 
-let evidenceVersionReader: { identity: string; db: ReturnType<typeof connectReadonlyDatabase>; generation: number } | undefined;
-let evidenceReaderGeneration = 0;
+type EvidenceVersionReader = { identity: string; db: ReturnType<typeof connectReadonlyDatabase>; generation: number };
+// Retirement witnesses are shared across compiled bundles; their version
+// connection and generation must have the same owner.
+const evidenceOwner = process as typeof process & { __llvStateEvidenceVersion?: { reader?: EvidenceVersionReader; generation: number } };
+const evidenceVersions = evidenceOwner.__llvStateEvidenceVersion ??= { generation: 0 };
 /** A dedicated read-only connection observes every committed write, including
  * writes that bypass collection revisions and change journals. Its generation
  * and inode prevent reuse after replacement or a switch of state directory. */
@@ -943,15 +946,15 @@ export function stateEvidenceVersion(filename: string): string {
     identity = `${filename}:${stat.dev}:${stat.ino}`;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    evidenceVersionReader?.db.close(); evidenceVersionReader = undefined;
+    evidenceVersions.reader?.db.close(); evidenceVersions.reader = undefined;
     return "missing";
   }
-  if (evidenceVersionReader?.identity !== identity) {
-    evidenceVersionReader?.db.close();
-    evidenceVersionReader = undefined;
-    evidenceVersionReader = { identity, db: connectReadonlyDatabase(filename), generation: ++evidenceReaderGeneration };
+  if (evidenceVersions.reader?.identity !== identity) {
+    evidenceVersions.reader?.db.close();
+    evidenceVersions.reader = undefined;
+    evidenceVersions.reader = { identity, db: connectReadonlyDatabase(filename), generation: ++evidenceVersions.generation };
   }
-  const reader = evidenceVersionReader;
+  const reader = evidenceVersions.reader;
   const version = reader.db.query<{ data_version: number }, []>("PRAGMA data_version").get()!.data_version;
   const schema = reader.db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
   return `${reader.generation}:${version}:${schema}`;
@@ -970,7 +973,7 @@ export function pipelineEvidenceRevision(filename: string): string | null {
   } finally { db.close(); }
 }
 
-export type CompactEvidenceCache<T> = { identity: string; rows: Map<string, { revision: number; value: T }> };
+export type CompactEvidenceCache<T> = { identity: string; sourceRevision?: number; rows: Map<string, { revision: number; value: T }> };
 
 /** Revalidate only changed rows, against one consistent snapshot. The caller
  * supplies a compact projection; this cache never retains historical JSON. */
@@ -985,16 +988,30 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
     const identity = `${databaseFileIdentity(filename)}:${schema}`;
     const collections = db.query<{ collection: string }, []>("SELECT collection FROM state_collections WHERE collection IN ('pipelines','pipelines_archive')").all();
     if (collections.length !== 2) return null;
+    const sourceRevision = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get()!.revision;
+    if (prior?.identity === identity && prior.sourceRevision === sourceRevision) return prior;
     const rows = new Map<string, { revision: number; value: T }>();
-    const read = db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM state_rows WHERE collection=? AND row_key=?");
-    const headers = db.query<{ collection: string; row_key: string; revision: number }, []>(`SELECT r.collection,r.row_key,COALESCE(e.revision,-1) AS revision
-      FROM state_rows r LEFT JOIN pipeline_evidence_rows e ON e.collection=r.collection AND e.row_key=r.row_key
-      WHERE r.collection IN ('pipelines','pipelines_archive') ORDER BY r.collection,r.row_order,r.row_key`).iterate();
+    const incremental = prior?.identity === identity && prior.sourceRevision !== undefined && prior.sourceRevision <= sourceRevision;
     let slice = performance.now();
+    const yieldIfNeeded = async () => {
+      await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+      slice = performance.now();
+    };
+    // Readers retain their old snapshot. Copy only compact references, with
+    // timer opportunities; source queries below visit only changed identities.
+    if (incremental) for (const [key, value] of prior.rows) { rows.set(key, value); if (performance.now() - slice >= 4) await yieldIfNeeded(); }
+    const read = db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM state_rows WHERE collection=? AND row_key=?");
+    const headers = incremental
+      ? db.query<{ collection: string; row_key: string; revision: number; present: string | null }, [number]>(`SELECT e.collection,e.row_key,e.revision,r.row_key AS present
+          FROM pipeline_evidence_rows e INDEXED BY pipeline_evidence_changed LEFT JOIN state_rows r
+          ON r.collection=e.collection AND r.row_key=e.row_key
+          WHERE e.revision>? AND e.collection IN ('pipelines','pipelines_archive') ORDER BY e.revision,e.collection,e.row_key`).iterate(prior.sourceRevision!)
+      : db.query<{ collection: string; row_key: string; revision: number; present: string | null }, []>(`SELECT r.collection,r.row_key,COALESCE(e.revision,-1) AS revision,r.row_key AS present
+          FROM state_rows r LEFT JOIN pipeline_evidence_rows e ON e.collection=r.collection AND e.row_key=r.row_key
+          WHERE r.collection IN ('pipelines','pipelines_archive') ORDER BY r.collection,r.row_order,r.row_key`).iterate();
     for (const header of headers) {
       const key = JSON.stringify([header.collection, header.row_key]);
-      const previous = prior?.identity === identity ? prior.rows.get(key) : undefined;
-      if (previous && previous.revision === header.revision) rows.set(key, previous);
+      if (header.present === null) rows.delete(key);
       else {
         const raw = performanceSpans.sync("state.sql-next", () => read.get(header.collection, header.row_key))!.value_json;
         let value: unknown;
@@ -1002,12 +1019,9 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
         catch (error) { throw new Error(`corrupt ${header.collection} SQLite row: ${header.row_key}`, { cause: error }); }
         rows.set(key, { revision: header.revision, value: project(value, header.collection) });
       }
-      if (performance.now() - slice >= 4) {
-        await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
-        slice = performance.now();
-      }
+      if (performance.now() - slice >= 4) await yieldIfNeeded();
     }
-    return { identity, rows };
+    return { identity, rows, sourceRevision };
   } finally { rollbackQuietly(db); db.close(); }
 }
 

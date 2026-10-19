@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { agentRegistry, type AgentHostStatus, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
+import { registryConversationsForEntryKey, registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
@@ -864,7 +865,7 @@ function undeliveredHandoffIndex(
       if (row.engine === "claude" || row.engine === "codex") index.addKey(`${row.engine}:${row.engineSessionId}`);
       else index.addConversation(row.conversationId);
     }
-    for (const delivery of Object.values(file.heldDeliveries ?? {})) {
+    for (const delivery of registryRowsMatching(file, "heldDeliveries", "state", [...UNDELIVERED_HELD_STATES])) {
       if (UNDELIVERED_HELD_STATES.has(delivery.state)) index.addConversation(delivery.conversationId);
     }
     return index;
@@ -877,7 +878,7 @@ function undeliveredHandoffIndex(
     that remains unfinished. */
 function openOperationIndex(file: RegistryFile, nowMs: number): RetirementWorkIndex {
   const index = new RetirementWorkIndex();
-  for (const receipt of Object.values(file.receipts ?? {})) {
+  for (const receipt of registryRowsMatching(file, "receipts", "state", ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"])) {
     if (TERMINAL_RECEIPT_STATES.has(receipt.state)) continue;
     if (receiptAbandoned(receipt.createdAt, nowMs)) continue;
     if (receipt.key !== null) index.addKey(sessionKeyId(receipt.key));
@@ -916,8 +917,12 @@ interface RetirementSources {
 function retirementInputs(sources: RetirementSources, nowMs: number): RetirementInputs {
   const file = sources.snapshot();
   const conversationsBySession = new Map<string, RegistryFile["conversations"][string]>();
-  for (const conversation of Object.values(file.conversations)) {
-    for (const generation of conversation.generations) conversationsBySession.set(generation.id, conversation);
+  for (const entry of retirementCandidates(file)) {
+    const key = sessionKeyId(entry.key);
+    // The indexed selector preserves collection order. The complete reader's
+    // last matching conversation wins, even when generations overlap.
+    const conversation = registryConversationsForEntryKey(file, key).at(-1);
+    if (conversation) conversationsBySession.set(key, conversation);
   }
   return {
     nowMs,
@@ -943,7 +948,7 @@ interface RetirementReaders {
 
 /** Candidate rows: registry-recorded structured hosts only. */
 function retirementCandidates(file: RegistryFile) {
-  return Object.values(file.entries)
+  return registryLivenessRows(file).entries
     .filter((entry) => Boolean(entry.structuredHost?.process)
       && (entry.key.engine === "claude" || entry.key.engine === "codex")
       /* A pane-hosted entry belongs to the tmux lifecycle, not to this one. */
@@ -993,7 +998,7 @@ function retirementSubject(
   const hostProcess = columns.process!;
   const key = entry.key as SessionKey & { engine: "claude" | "codex" };
   const keyId = sessionKeyId(key);
-  const conversation = inputs.conversationsBySession.get(key.sessionId) ?? null;
+  const conversation = inputs.conversationsBySession.get(keyId) ?? null;
   const conversationId = conversation?.id ?? null;
   const memberships = conversation ? inputs.file.memberships[conversation.id] ?? [] : [];
   const pipeline = memberships.find((membership) => membership.kind === "pipeline") ?? null;
