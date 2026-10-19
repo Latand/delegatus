@@ -188,6 +188,8 @@ export interface SeatTickSettingsChange {
   reason?: string | null;
   /** Remove only unattributed legacy lines; route authorization is operator-only. */
   clearUnknownInstructions?: boolean;
+  /** Replace all non-operator lines together with a required operator replacement. */
+  replaceOtherInstructions?: boolean;
   /** The seat's own additional prompt for its monitor; `null` clears it. */
   monitorPrompt?: string | null;
   /** ISO instant, or `null` for "until someone changes it". */
@@ -499,7 +501,7 @@ export function applySeatTickSettingsChange(
     const effective = effectiveSeatTickSettings(current, Date.parse(context.at), 60 * 60_000);
     if (effective.lapsed) current = seatTickSettingsAfterLapse(current.project, effective);
   }
-  const touched = ["enabled", "wakeIntervalMinutes", "reason", "clearUnknownInstructions", "monitorPrompt", "until", "maintenance", "curation", "autoRotate", "release", "autonomy", "autonomyDecision"].filter((key) => Object.hasOwn(change, key));
+  const touched = ["enabled", "wakeIntervalMinutes", "reason", "clearUnknownInstructions", "replaceOtherInstructions", "monitorPrompt", "until", "maintenance", "curation", "autoRotate", "release", "autonomy", "autonomyDecision"].filter((key) => Object.hasOwn(change, key));
   if (touched.length === 0) return { ok: false, error: "a tick settings change needs at least one field" };
 
   if (Object.hasOwn(change, "clearUnknownInstructions")) {
@@ -507,6 +509,16 @@ export function applySeatTickSettingsChange(
     const author = context.instructionActor ?? context.actor;
     if (author.kind !== "gateway") return { ok: false, error: "only an operator can remove instructions with unknown authors" };
     const kept = seatTickInstructionLines(current).filter(line => line.author !== null && line.author.kind !== "unidentified");
+    current = { ...current, reason: kept.map(line => line.text).join("\n") || null, instructionLines: kept };
+  }
+  if (Object.hasOwn(change, "replaceOtherInstructions")) {
+    if (change.replaceOtherInstructions !== true) return { ok: false, error: "replaceOtherInstructions must be true" };
+    const author = context.instructionActor ?? context.actor;
+    if (author.kind !== "gateway") return { ok: false, error: "only an operator can replace other authors’ instructions" };
+    if (typeof change.reason !== "string" || !change.reason.trim()) {
+      return { ok: false, error: "an operator replacement is required when replacing other authors’ instructions" };
+    }
+    const kept = seatTickInstructionLines(current).filter(line => line.author?.kind === "gateway");
     current = { ...current, reason: kept.map(line => line.text).join("\n") || null, instructionLines: kept };
   }
 

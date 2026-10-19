@@ -624,3 +624,22 @@ test("a seat request cannot use the operator-only legacy instruction removal", a
   expect(response.status).toBe(403);
   expect(readSeatTickSettings(PROJECT, settingsFile).reason).toBe("u".repeat(500));
 });
+
+test("only the operator browser can replace seat instructions", async () => {
+  setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  const settings = { ...readSeatTickSettings(PROJECT, settingsFile), reason: "Seat note.", instructionLines: [{ text: "Seat note.", author: { kind: "manager" as const, conversationId: SEAT_CONVERSATION, project: PROJECT, seatEpoch: 12 }, at: "2026-10-01T12:00:00.000Z" }] };
+  writeSeatTickSettings(PROJECT, settings, settingsFile);
+  setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
+  const refused = await put({ project: PROJECT, replaceOtherInstructions: true, reason: "Attempted replacement." }, {
+    ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY,
+  });
+  expect(refused.status).toBe(403);
+  expect(readSeatTickSettings(PROJECT, settingsFile).reason).toBe("Seat note.");
+
+  const accepted = await put({ project: PROJECT, replaceOtherInstructions: true, reason: "Operator replacement." });
+  expect(accepted.status).toBe(200);
+  expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual([
+    { text: "Operator replacement.", author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, at: readSeatTickSettings(PROJECT, settingsFile).updatedAt },
+  ]);
+});

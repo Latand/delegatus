@@ -170,7 +170,7 @@ import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParent
 import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
-import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -4634,7 +4634,9 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   // caller project or manager grant must not turn a known seat's words into
   // operator instructions.
   const designatedSeat = orchestratorSeatFor(project).active;
-  const writerSeat = own ? orchestratorSeatFor(own).active : designatedSeat;
+  const writerSeat = attribution.conversationId
+    ? orchestratorSeatIdentityForConversation(attribution.conversationId)
+    : null;
   let settings = current;
   let changed = false;
   let maintenanceNotes: string[] | undefined;
@@ -4658,9 +4660,9 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     // words operator-authored. The designation still proves its authorship.
     let instructionActor = actor;
     if (attribution.kind === "gateway") {
-      const designatedWriter = writerSeat?.conversationId === attribution.conversationId ? writerSeat : null;
+      const designatedWriter = writerSeat;
       if (designatedWriter) {
-        instructionActor = { ...actor, kind: "manager", project: own, seatEpoch: designatedWriter.seatEpoch };
+        instructionActor = { ...actor, kind: "manager", project: canonicalOrchestratorProject(designatedWriter.project), seatEpoch: designatedWriter.seatEpoch };
       } else if (callerSeat?.conversationId === attribution.conversationId) {
         const authorizedProject = callerSeat.project ? canonicalOrchestratorProject(callerSeat.project) : own;
         instructionActor = { ...actor, kind: "manager", project: authorizedProject, seatEpoch: null };

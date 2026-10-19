@@ -5311,6 +5311,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "seatTick.instruction.unknown": "автор невідомий",
   "seatTick.instruction.dateUnknown": "дата невідома",
   "seatTick.instruction.removeUnknown": "Замінити старі вказівки без автора",
+  "seatTick.instruction.replaceOther": "Замінити нотатки агента на вказівки оператора",
   "seatTick.reasonHint": "Агент отримує ці вказівки на кожне пробудження. Тут редагуються рядки оператора; нижче — усі рядки з авторами й датами запису. Ліміт 500 символів охоплює рядки всіх авторів. Для зміни розкладу потрібні вказівки. Скидання розкладу та завершення строку дії зберігають їх.",
   "seatTick.instructionsCharacterCount": "{count} / 500 символів",
   "seatTick.instructionsOverLimit": "Ліміт перевищено на {over}",

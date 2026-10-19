@@ -1301,6 +1301,20 @@ export function activeOrchestratorSeats(): OrchestratorSeat[] {
   return Object.values(readOrchestratorSeatFile().seats);
 }
 
+/** The durable designation that identifies a writer, regardless of the
+    project the writer is editing or whether its seat has since been revoked. */
+export function orchestratorSeatIdentityForConversation(conversationId: string): { project: string; seatEpoch: number } | null {
+  const file = readOrchestratorSeatFile();
+  const active = Object.values(file.seats).filter((seat) => seat.conversationId === conversationId);
+  const historical = active.length === 0
+    ? file.revocations.filter((seat) => seat.conversationId === conversationId)
+    : [];
+  const candidates = active.length > 0 ? active : historical;
+  candidates.sort((left, right) => right.seatEpoch - left.seatEpoch || left.project.localeCompare(right.project));
+  const match = candidates[0];
+  return match ? { project: canonicalOrchestratorProject(match.project), seatEpoch: match.seatEpoch } : null;
+}
+
 /**
  * Every active seat, or null when the durable store could not be established.
  *

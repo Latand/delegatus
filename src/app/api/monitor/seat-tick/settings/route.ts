@@ -130,6 +130,9 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
   if (body.clearUnknownInstructions !== undefined && typeof body.clearUnknownInstructions !== "boolean") {
     return NextResponse.json({ error: "clearUnknownInstructions must be a boolean" }, { status: 400 });
   }
+  if (body.replaceOtherInstructions !== undefined && typeof body.replaceOtherInstructions !== "boolean") {
+    return NextResponse.json({ error: "replaceOtherInstructions must be a boolean" }, { status: 400 });
+  }
   /* Converted exactly as the tool converts it: an expiry is offered in minutes
      from now, because that is the form the caller decided in. */
   if (body.untilMinutes !== undefined) {
@@ -151,6 +154,12 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
         return NextResponse.json({ error: "only the operator browser can remove instructions with unknown authors" }, { status: 403 });
       }
       change.clearUnknownInstructions = true;
+    }
+    if (body.replaceOtherInstructions === true) {
+      if (actor.kind !== "gateway" || !operatorBrowserRequest(req) || req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) {
+        return NextResponse.json({ error: "only the operator browser can replace other authors’ instructions" }, { status: 403 });
+      }
+      change.replaceOtherInstructions = true;
     }
     if (Object.keys(change).length === 0) {
       return NextResponse.json(seatTickSettingsAnswer(project, false, actor), { headers: NO_STORE });

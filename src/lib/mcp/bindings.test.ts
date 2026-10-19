@@ -1,4 +1,4 @@
-import { afterAll, afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, setSystemTime, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -31,7 +31,7 @@ import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { listRoles } from "@/lib/roles/registry";
 import type { RoleDefinition } from "@/lib/roles/types";
-import { beginOrchestratorSeatIntent, canonicalOrchestratorProject, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, canonicalOrchestratorProject, completeOrchestratorSeatIntent, orchestratorRevocations, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -110,6 +110,7 @@ test("leave_lesson accepts a designated root seat and refuses unseated gateway a
 });
 
 afterEach(() => {
+  setSystemTime();
   setAgentRegistryForTests(null);
   resetTeamStoreForTests();
   if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -3519,6 +3520,7 @@ test("seat_tick_settings is callable by a session that holds no seat at all", as
 });
 
 test("a designated seat keeps instruction authorship when its caller project and manager authority are unavailable", async () => {
+  setSystemTime(new Date("2026-10-19T12:00:00.000Z"));
   const project = "fixture-unresolved-seat-instruction-author";
   const conversationId = TICK_SEAT;
   const clientRequestId = "tick-unresolved-author-seat";
@@ -3541,6 +3543,7 @@ test("a designated seat keeps instruction authorship when its caller project and
 });
 
 test("a root seat writing another project keeps its own designation when the manager grant is unavailable", async () => {
+  setSystemTime(new Date("2026-10-19T12:00:00.000Z"));
   const callerProject = "fixture-cross-project-instruction-writer";
   const targetProject = "another-project";
   const conversationId = "conversation_cross_project_instruction_writer";
@@ -3569,6 +3572,67 @@ test("a root seat writing another project keeps its own designation when the man
   expect(written.instructionLines[1]?.author).toMatchObject({ kind: "manager", conversationId, project: callerProject, seatEpoch });
   expect(written.instructionLines[1]?.author.kind).not.toBe("gateway");
   expect(result).toMatchObject({ changed: true });
+});
+
+test("a root seat keeps instruction authorship when its project cannot be resolved", async () => {
+  setSystemTime(new Date("2026-10-19T12:00:00.000Z"));
+  const callerProject = "fixture-unresolved-cross-project-writer";
+  const targetProject = "fixture-unresolved-cross-project-target";
+  const conversationId = "conversation_unresolved_cross_project_writer";
+  beginOrchestratorSeatIntent({ project: callerProject, mandate: "own the board", clientRequestId: "tick-unresolved-cross-writer-seat", mode: "existing", conversationId });
+  completeOrchestratorSeatIntent({ project: callerProject, clientRequestId: "tick-unresolved-cross-writer-seat", conversationId, path: null });
+  beginOrchestratorSeatIntent({ project: targetProject, mandate: "own the target board", clientRequestId: "tick-unresolved-cross-target-seat", mode: "existing", conversationId: "conversation_unresolved_cross_target" });
+  completeOrchestratorSeatIntent({ project: targetProject, clientRequestId: "tick-unresolved-cross-target-seat", conversationId: "conversation_unresolved_cross_target", path: null });
+  const seatEpoch = orchestratorSeatFor(callerProject).active?.seatEpoch;
+  const operatorLine = {
+    text: "Preserve operator wording.", at: "2026-10-19T12:00:00.000Z",
+    author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+  };
+  const store = new Map<string, unknown>([[targetProject, {
+    project: targetProject, enabled: true, wakeIntervalMinutes: null, reason: operatorLine.text,
+    instructionLines: [operatorLine], monitorPrompt: null, until: null, updatedAt: operatorLine.at, setBy: null,
+  }]]);
+  const { bindings } = tickSettingsBindings({ kind: "gateway", conversationId, callerProject: null, managerGrant: false, store });
+  await bindings.seat_tick_settings({ clientRequestId: "tick-unresolved-cross-project-seat-note", project: targetProject, reason: "Seat note." });
+
+  const written = store.get(targetProject) as { reason: string; instructionLines: Array<{ text: string; at: string; author: { kind: string; conversationId: string | null; project: string | null; seatEpoch: number | null } }> };
+  expect(written.reason).toBe("Preserve operator wording.\nSeat note.");
+  expect(written.instructionLines[0]).toEqual(operatorLine);
+  expect(written.instructionLines[1]?.author).toMatchObject({ kind: "manager", conversationId, project: callerProject, seatEpoch });
+  expect(written.instructionLines[1]?.author.kind).not.toBe("gateway");
+});
+
+test("a revoked root seat retains its historical instruction authorship without a manager grant", async () => {
+  setSystemTime(new Date("2026-10-19T12:00:00.000Z"));
+  const callerProject = "fixture-revoked-cross-project-writer";
+  const targetProject = "fixture-revoked-cross-project-target";
+  const conversationId = "conversation_revoked_cross_project_writer";
+  beginOrchestratorSeatIntent({ project: callerProject, mandate: "own the board", clientRequestId: "tick-revoked-cross-writer-seat", mode: "existing", conversationId });
+  completeOrchestratorSeatIntent({ project: callerProject, clientRequestId: "tick-revoked-cross-writer-seat", conversationId, path: null });
+  const seatEpoch = orchestratorSeatFor(callerProject).active?.seatEpoch;
+  const successor = "conversation_revoked_cross_project_successor";
+  beginOrchestratorSeatIntent({ project: callerProject, mandate: "own the board", clientRequestId: "tick-revoked-cross-successor", mode: "existing", conversationId: successor });
+  completeOrchestratorSeatIntent({ project: callerProject, clientRequestId: "tick-revoked-cross-successor", conversationId: successor, path: null });
+  expect(orchestratorRevocations()).toContainEqual(expect.objectContaining({ project: callerProject, conversationId, seatEpoch }));
+  beginOrchestratorSeatIntent({ project: targetProject, mandate: "own the target board", clientRequestId: "tick-revoked-cross-target-seat", mode: "existing", conversationId: "conversation_revoked_cross_target" });
+  completeOrchestratorSeatIntent({ project: targetProject, clientRequestId: "tick-revoked-cross-target-seat", conversationId: "conversation_revoked_cross_target", path: null });
+
+  const operatorLine = {
+    text: "Preserve operator wording.", at: "2026-10-19T12:00:00.000Z",
+    author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+  };
+  const store = new Map<string, unknown>([[targetProject, {
+    project: targetProject, enabled: true, wakeIntervalMinutes: null, reason: operatorLine.text,
+    instructionLines: [operatorLine], monitorPrompt: null, until: null, updatedAt: operatorLine.at, setBy: null,
+  }]]);
+  const { bindings } = tickSettingsBindings({ kind: "gateway", conversationId, callerProject: null, managerGrant: false, store });
+  await bindings.seat_tick_settings({ clientRequestId: "tick-revoked-cross-project-seat-note", project: targetProject, reason: "Historical seat note." });
+
+  const written = store.get(targetProject) as { reason: string; instructionLines: Array<{ text: string; at: string; author: { kind: string; conversationId: string | null; project: string | null; seatEpoch: number | null } }> };
+  expect(written.reason).toBe("Preserve operator wording.\nHistorical seat note.");
+  expect(written.instructionLines[0]).toEqual(operatorLine);
+  expect(written.instructionLines[1]?.author).toMatchObject({ kind: "manager", conversationId, project: callerProject, seatEpoch });
+  expect(written.instructionLines[1]?.author.kind).not.toBe("gateway");
 });
 
 test("send_message reports acceptance as unsettled, and message_receipt answers what became of it", async () => {

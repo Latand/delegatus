@@ -524,6 +524,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
   const instructionLines = record ? seatTickInstructionLines(record.settings) : [];
   const protectedLines = instructionLines.filter(line => line.author?.kind !== "gateway");
   const hasUnknownInstructions = instructionLines.some(line => !line.author || line.author.kind === "unidentified");
+  const hasSeatInstructions = protectedLines.some(line => line.author?.kind === "manager" || line.author?.kind === "agent");
   const instructionLength = draft.reason.length + protectedLines.map(line => line.text).join("\n").length
     + (draft.reason && protectedLines.length ? 1 : 0);
   const phone = surface === "mobile";
@@ -715,6 +716,18 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
             className={`inline-flex ${phone ? "min-h-11" : "h-7"} items-center self-start rounded-control px-1 text-ui font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
           >
             {t("seatTick.instruction.removeUnknown")}
+          </button>
+        ) : null}
+
+        {hasSeatInstructions ? (
+          <button
+            type="button"
+            data-seat-tick-replace-other
+            disabled={state.saving || !draft.reason.trim()}
+            onClick={() => void read.save({ replaceOtherInstructions: true, reason: draft.reason.trim() })}
+            className={`inline-flex ${phone ? "min-h-11" : "h-7"} items-center self-start rounded-control px-1 text-ui font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50`}
+          >
+            {t("seatTick.instruction.replaceOther")}
           </button>
         ) : null}
 

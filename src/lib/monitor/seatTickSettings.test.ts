@@ -33,6 +33,7 @@ const PROJECT = "viewer";
 const HOUR_MS = 60 * 60_000;
 const NOW = Date.parse("2026-08-28T12:00:00.000Z");
 const AT = new Date(NOW).toISOString();
+const NEXT_AT = new Date(NOW + 60_000).toISOString();
 const SEAT: SeatTickSettingsActor = {
   kind: "manager",
   conversationId: ["conversation", "0f4c21b7729fbc9e"].join("_"),
@@ -405,6 +406,29 @@ test("a seat cannot clear migrated unknown instructions", () => {
   });
   expect(result).toEqual({ ok: false, error: "only an operator can remove instructions with unknown authors" });
   expect(legacy.reason).toBe("u".repeat(500));
+});
+
+test("the operator can replace full seat-authored instructions without changing the schedule", () => {
+  const operator: SeatTickSettingsActor = { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
+  const seat: SeatTickSettingsActor = { kind: "manager", conversationId: "seat-full-field", project: PROJECT, seatEpoch: 4 };
+  const current = {
+    ...defaultSeatTickSettings(PROJECT), enabled: false, wakeIntervalMinutes: 30,
+    reason: "s".repeat(500), instructionLines: [{ text: "s".repeat(500), author: seat, at: AT }],
+  };
+  const result = applySeatTickSettingsChange(current, { replaceOtherInstructions: true, reason: "Replacement from operator." }, { at: NEXT_AT, actor: operator });
+  expect(result.ok).toBe(true);
+  expect(settingsOf(result)).toMatchObject({
+    enabled: false, wakeIntervalMinutes: 30, reason: "Replacement from operator.",
+    instructionLines: [{ text: "Replacement from operator.", author: operator, at: NEXT_AT }],
+  });
+});
+
+test("replacing other instructions requires an operator and a non-empty replacement", () => {
+  const seat: SeatTickSettingsActor = { kind: "manager", conversationId: "seat-full-field", project: PROJECT, seatEpoch: 4 };
+  const current = { ...defaultSeatTickSettings(PROJECT), reason: "Seat note.", instructionLines: [{ text: "Seat note.", author: seat, at: AT }] };
+  expect(applySeatTickSettingsChange(current, { replaceOtherInstructions: true, reason: "Replacement." }, { at: NEXT_AT, actor: seat })).toEqual({ ok: false, error: "only an operator can replace other authors’ instructions" });
+  expect(applySeatTickSettingsChange(current, { replaceOtherInstructions: true }, { at: NEXT_AT, actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } })).toEqual({ ok: false, error: "an operator replacement is required when replacing other authors’ instructions" });
+  expect(current.reason).toBe("Seat note.");
 });
 
 

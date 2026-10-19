@@ -18662,6 +18662,85 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
   }, 180_000);
 
+  browserTest("the operator can replace a full seat note without changing the schedule on desktop and phone", async () => {
+    const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "full-seat-note-replacement");
+    fs.mkdirSync(out, { recursive: true });
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const at = "2026-10-19T12:00:00.000Z";
+    const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    const seatLine = {
+      text: "s".repeat(500), author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 6 }, at,
+    };
+    const scheduleCases = [
+      { label: "disabled", enabled: false, wakeIntervalMinutes: null },
+      { label: "custom-cadence", enabled: true, wakeIntervalMinutes: 30 },
+    ] as const;
+    const makeInitial = (schedule: typeof scheduleCases[number]) => ({
+      ...defaultSeatTickSettings("atlas"), enabled: schedule.enabled, wakeIntervalMinutes: schedule.wakeIntervalMinutes,
+      reason: seatLine.text, instructionLines: [seatLine], updatedAt: at,
+    });
+    let stored: ReturnType<typeof defaultSeatTickSettings> = structuredClone(makeInitial(scheduleCases[0]));
+    const answer = () => {
+      const base = tickAnswer(stored.reason ?? "");
+      return {
+        ...base, settings: stored,
+        effective: { ...base.effective, enabled: stored.enabled, wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60,
+          reason: stored.reason, until: stored.until, isDefault: stored.enabled && stored.wakeIntervalMinutes === null },
+      };
+    };
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT") {
+          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-19T12:01:00.000Z", actor: operator });
+          if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
+          stored = result.settings as typeof stored;
+        }
+        return Response.json(answer());
+      },
+      "/api/roles": rolesAnswer,
+    });
+    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
+    fs.mkdirSync(browserHome, { recursive: true });
+    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
+    try {
+      for (const schedule of scheduleCases) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
+        stored = structuredClone(makeInitial(schedule));
+        const label = `${phone ? "phone-390" : "desktop"}-${schedule.label}-${lang}-${theme}`;
+        const texts = cardTexts(lang);
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-kanban-tab="inbox"]').click();
+            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+            await page.locator("[data-phone-task-tick-open]").click();
+          } else {
+            const fold = page.locator("[data-seat-collapse]");
+            if (await fold.count()) await fold.first().click();
+            await page.locator("[data-open-seat-tick]").click();
+          }
+          await page.locator("[data-seat-tick-instruction-line]").first().waitFor();
+          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
+          const replaceOther = page.locator("[data-seat-tick-replace-other]");
+          expect(await replaceOther.innerText()).toBe(lang === "en" ? "Replace seat notes with operator instructions" : "Замінити нотатки агента на вказівки оператора");
+          expect(await replaceOther.isDisabled()).toBe(true);
+          await page.locator("[data-seat-tick-reason]").fill("Operator replacement.");
+          await replaceOther.click();
+          await page.locator("[data-seat-tick-replace-other]").waitFor({ state: "detached" });
+          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("Operator replacement.");
+          expect(stored.reason).toBe("Operator replacement.");
+          expect(stored.instructionLines).toEqual([{ text: "Operator replacement.", author: operator, at: "2026-10-19T12:01:00.000Z" }]);
+          expect(stored.enabled).toBe(schedule.enabled);
+          expect(stored.wakeIntervalMinutes).toBe(schedule.wakeIntervalMinutes);
+          expect(await page.locator("[data-seat-tick-instruction-line]").count()).toBe(1);
+          await page.screenshot({ path: path.join(out, `${label}-replacement.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
+  }, 180_000);
+
   browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
     fs.mkdirSync(SHOTS, { recursive: true });
     const out = path.resolve(".artifacts/seat-tick-instructions");
