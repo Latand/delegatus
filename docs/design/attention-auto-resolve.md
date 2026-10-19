@@ -209,3 +209,5 @@ These are reversible additions to projections and local attention state. No hard
 The originating request requires automatic resolution of agent-answerable work and an understandable residual list. Exact cleanup addresses the three obsolete asks; seat routing addresses the deployer question; actual settled stage text/options address the bare diagnose label. Review/check/build failures remain visible to their automation owner, and only an escalated or reserved choice reaches the operator. «Готово» remains in the same panel with its chosen counters.
 
 All seven acceptance items have a source classification, implementation obligation or verification case above. This architect stage has no unresolved rule requiring an operator choice. Verdict: **pass** for the design contract; implementation acceptance remains to be demonstrated by the following stages.
+
+The terminal-container rule is specified in [Finished work and attention](finished-work-attention.md). It withdraws dead conversations’ dated asks raised before completion and returns unfinished work whose lanes all ended to Inbox.
