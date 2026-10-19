@@ -62,11 +62,9 @@ export class SqliteHandoffQueueStore implements HandoffQueueStore {
       return db;
     });
     this.db.exec("BEGIN IMMEDIATE");
-    let legacyRows = false;
     try {
       const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(handoff_rows)").all();
       if (!columns.some((column) => column.name === "conversation_id")) {
-        legacyRows = true;
         this.db.exec("ALTER TABLE handoff_rows ADD COLUMN conversation_id TEXT");
       }
       this.db.exec("COMMIT");
@@ -74,7 +72,11 @@ export class SqliteHandoffQueueStore implements HandoffQueueStore {
       this.db.exec("ROLLBACK");
       throw error;
     }
-    if (legacyRows) this.migrateActiveRows();
+    // The column ALTER is committed separately from the data migration so an
+    // interrupted startup can resume from the durable NULL marker.
+    if (this.db.query("SELECT 1 FROM handoff_rows WHERE conversation_id IS NULL LIMIT 1").get()) {
+      this.migrateActiveRows();
+    }
     try { handoffIndexes.install(this.db, path.dirname(filename)); }
     catch (error) { this.db.close(); throw error; }
     try { fs.chmodSync(filename, 0o600); } catch { /* best effort */ }

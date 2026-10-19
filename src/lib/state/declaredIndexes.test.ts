@@ -8,6 +8,7 @@ import { initializeStateCollections } from "./sqliteStateStore";
 import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import { normalizeRegistry } from "@/lib/agent/registry";
 import { installHistoryProjection } from "./historyProjection";
+import { StateStartupMutationRefused } from "@/lib/stateOwnership";
 
 type Index = { name: string; sql: string };
 function indexes(filename: string): Index[] {
@@ -109,6 +110,55 @@ test("registry reopens with every declared index and preserves all table data", 
       expect(data(filename), `${index.name} must not rewrite tables`).toBe(before);
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test.skipIf(process.platform !== "linux")("repeated refused registry initialization closes every SQLite handle", () => {
+  const sandbox = ownershipSandbox();
+  const directory = path.join(sandbox.home, ".config", "delegatus", "state");
+  fs.mkdirSync(directory, { recursive: true });
+  const filename = path.join(directory, "registry.sqlite");
+  const previous = {
+    state: process.env.LLV_STATE_DIR,
+    owner: process.env.LLV_STATE_OWNER,
+    temp: process.env.TMPDIR,
+    node: process.env.NODE_ENV,
+  };
+  const testEnvironment = process.env as Record<string, string | undefined>;
+  process.env.TMPDIR = sandbox.environment().TMPDIR;
+  testEnvironment.NODE_ENV = "production";
+  process.env.LLV_STATE_DIR = directory;
+  const descriptorsForRegistry = () => fs.readdirSync("/proc/self/fd").filter(fd => {
+    try { return fs.readlinkSync(`/proc/self/fd/${fd}`) === filename; } catch { return false; }
+  }).length;
+  try {
+    process.env.LLV_STATE_OWNER = "viewer";
+    const store = new SqliteAgentRegistryStore(filename, {
+      initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }), normalize: normalizeRegistry,
+    });
+    store.close();
+    const db = new Database(filename);
+    try { db.exec("DROP INDEX registry_rows_collection_order"); } finally { db.close(); }
+    const before = descriptorsForRegistry();
+    const dataBefore = data(filename);
+
+    process.env.LLV_STATE_OWNER = "mcp";
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      expect(() => new SqliteAgentRegistryStore(filename, {
+        initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }),
+        normalize: normalizeRegistry,
+        allowArchiveMigration: false,
+      })).toThrow(StateStartupMutationRefused);
+    }
+    expect(descriptorsForRegistry()).toBe(before);
+    expect(indexes(filename).some(index => index.name === "registry_rows_collection_order")).toBe(false);
+    expect(data(filename)).toBe(dataBefore);
+  } finally {
+    if (previous.state === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous.state;
+    if (previous.owner === undefined) delete process.env.LLV_STATE_OWNER; else process.env.LLV_STATE_OWNER = previous.owner;
+    if (previous.temp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previous.temp;
+    if (previous.node === undefined) delete testEnvironment.NODE_ENV; else testEnvironment.NODE_ENV = previous.node;
+    sandbox.release();
+  }
 });
 
 

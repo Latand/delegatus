@@ -1005,8 +1005,9 @@ export class SqliteAgentRegistryStore {
        replaced is reopened, never written through the moved handle. */
     this.db = openCurrentDatabase(filename, () => {
       const db = observeSqlite(new Database(filename, { create: true, strict: true }), "registry");
-      db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;");
-      db.exec(`
+      try {
+        db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;");
+        db.exec(`
         CREATE TABLE IF NOT EXISTS registry_meta (
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL
@@ -1018,11 +1019,11 @@ export class SqliteAgentRegistryStore {
           row_order INTEGER NOT NULL,
           PRIMARY KEY(collection, row_key)
         );
-      `);
-      // A restored pre-upgrade database can arrive under a held connection.
-      // Install the journal on each connection, including one opened after a
-      // file replacement, before any mutation can use it.
-      db.exec(`
+        `);
+        // A restored pre-upgrade database can arrive under a held connection.
+        // Install the journal on each connection, including one opened after a
+        // file replacement, before any mutation can use it.
+        db.exec(`
         CREATE TABLE IF NOT EXISTS registry_grant_changes (
           seq INTEGER PRIMARY KEY AUTOINCREMENT,
           collection TEXT NOT NULL,
@@ -1040,13 +1041,18 @@ export class SqliteAgentRegistryStore {
           WHEN OLD.collection IN ('entries', 'receipts', 'conversations', 'lineageEdges') BEGIN
           INSERT INTO registry_grant_changes(collection, row_key) VALUES (OLD.collection, OLD.row_key);
         END;
-      `);
-      if (options.allowArchiveMigration !== false) {
-        assertStateStartupMutation(path.dirname(filename),"agent registry archive schema");
-        db.transaction(() => installRegistryArchive(db)).immediate();
+        `);
+        if (options.allowArchiveMigration !== false) {
+          assertStateStartupMutation(path.dirname(filename),"agent registry archive schema");
+          db.transaction(() => installRegistryArchive(db)).immediate();
+        }
+        return db;
+      } catch (error) {
+        try { db.close(); } catch { /* preserve the initialization failure */ }
+        throw error;
       }
-      return db;
     }, { reopened: (db, previous) => this.onDatabaseReopened(db, previous) });
+    try {
     this.grantJournalReady = true;
     this.changesReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
     this.recordsSource = this.changesReady ? "registry_records" : "registry_rows";
@@ -1230,6 +1236,10 @@ export class SqliteAgentRegistryStore {
     }
     registryFailureRepairIndexes.install(this.db, path.dirname(filename));
     if (this.changesReady) this.refreshColdKeys();
+    } catch (error) {
+      try { this.db.close(); } catch { /* preserve the initialization failure */ }
+      throw error;
+    }
   }
 
   /** Only the legacy root-role fallback needs a cross-conversation ordering.

@@ -74,6 +74,43 @@ test("SQLite store survives a container replace and preserves an idempotent repl
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
+test("resumes a handoff migration interrupted after adding conversation_id", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-handoff-migration-resume-"));
+  const filename = path.join(directory, "handoff-queue.sqlite");
+  try {
+    const seed = new Database(filename, { create: true });
+    try {
+      seed.exec(`CREATE TABLE handoff_rows (
+        operation_id TEXT PRIMARY KEY, row_order INTEGER NOT NULL, value_json TEXT NOT NULL
+      );
+      CREATE TABLE handoff_history (
+        operation_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, row_order INTEGER NOT NULL, value_json TEXT NOT NULL
+      );
+      CREATE TABLE handoff_draining_generations (generation TEXT PRIMARY KEY, row_order INTEGER NOT NULL);`);
+      const first = storedRow(rowInput({ operationId: "handoff_legacy_first" }));
+      const last = storedRow(rowInput({ operationId: "handoff_legacy_last" }), { status: "draining" });
+      seed.query("INSERT INTO handoff_rows VALUES (?, ?, ?)").run(first.operationId, 0, JSON.stringify(first));
+      seed.query("INSERT INTO handoff_rows VALUES (?, ?, ?)").run(last.operationId, 1, JSON.stringify(last));
+      // Reproduce the durable checkpoint between the old schema ALTER and row migration.
+      seed.exec("ALTER TABLE handoff_rows ADD COLUMN conversation_id TEXT");
+    } finally { seed.close(); }
+
+    const resumed = new SqliteHandoffQueueStore(filename);
+    try {
+      expect(resumed.load().map(row => row.operationId)).toEqual(["handoff_legacy_last"]);
+      expect(resumed.load()[0]?.status).toBe("draining");
+      expect(resumed.loadHistory().map(row => row.operationId)).toEqual(["handoff_legacy_first"]);
+      expect(resumed.loadDrainingGenerations()).toEqual(["gen-blue"]);
+      const db = new Database(filename);
+      try {
+        expect(db.query("SELECT operation_id, conversation_id FROM handoff_rows").all()).toEqual([
+          { operation_id: "handoff_legacy_last", conversation_id: "conversation_root" },
+        ]);
+      } finally { db.close(); }
+    } finally { resumed["db"].close(); }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("SQLite serializes independent candidate claims without losing a concurrent delivery", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-handoff-queue-cas-"));
   const filename = path.join(directory, "handoff-queue.sqlite");
