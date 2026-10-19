@@ -4,11 +4,88 @@ import path from "node:path";
 import os from "node:os";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { retainReleases, type RetentionInputs, type RetentionPorts } from "./retention";
-import { removeTreeViaTrash, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
+import { finishTreeTrash, removeTreeViaTrash, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 import type { LauncherRecord } from "./launcher";
 import { runGit } from "./git";
+import { RetentionWorker } from "./retentionWorker";
 
 const DAY = 86_400_000;
+const LOOP_PROBE_INTERVAL_MS = 10;
+const LOOP_PROBE_SOURCE = `
+  const { performance } = require("node:perf_hooks");
+  const startedAt = performance.now();
+  process.stdin.setEncoding("utf8");
+  let input = "";
+  process.stdin.on("data", chunk => {
+    input += chunk;
+    for (let end; (end = input.indexOf("\\n")) !== -1;) {
+      const line = input.slice(0, end); input = input.slice(end + 1);
+      const message = JSON.parse(line);
+      if (message.type === "finish") {
+        process.stdout.write(JSON.stringify({ type: "result", elapsedMs: performance.now() - startedAt }) + "\\n");
+        process.exit(0);
+      }
+    }
+  });
+  setInterval(() => {
+    process.stdout.write(JSON.stringify({ type: "probe" }) + "\\n");
+  }, ${LOOP_PROBE_INTERVAL_MS});
+`;
+function assertLoopStallDetected(measurement: { maxBlockedMs: number }) {
+  expect(measurement.maxBlockedMs).toBeGreaterThan(50);
+}
+function startLoopProbe() {
+  const child = spawn(process.execPath, ["-e", LOOP_PROBE_SOURCE], { stdio: ["pipe", "pipe", "inherit"] });
+  children.push(child);
+  let output = "";
+  let settled = false;
+  let lastProbeAt: number | undefined;
+  let maxBlockedMs = 0;
+  let samples = 0;
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  let resolveResult!: (result: { maxBlockedMs: number; samples: number; elapsedMs: number }) => void;
+  let rejectResult!: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+  const result = new Promise<{ maxBlockedMs: number; samples: number; elapsedMs: number }>((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", chunk => {
+    output += chunk;
+    for (let end; (end = output.indexOf("\n")) !== -1;) {
+      const line = output.slice(0, end); output = output.slice(end + 1);
+      const message = JSON.parse(line);
+      if (message.type === "probe") {
+        const at = performance.now();
+        if (lastProbeAt !== undefined) maxBlockedMs = Math.max(maxBlockedMs, at - lastProbeAt - LOOP_PROBE_INTERVAL_MS);
+        lastProbeAt = at;
+        samples++;
+        resolveReady();
+      } else if (message.type === "result") {
+        settled = true;
+        resolveResult({ ...message, maxBlockedMs, samples });
+      }
+    }
+  });
+  child.once("error", error => { rejectReady(error); if (!settled) rejectResult(error); });
+  child.once("exit", (code, signal) => {
+    if (code !== 0 || signal) {
+      const error = new Error(`loop probe exited before a verdict (${signal ?? code})`);
+      rejectReady(error);
+      if (!settled) rejectResult(error);
+    }
+  });
+  return {
+    child,
+    ready,
+    result,
+    finish: async () => { child.stdin.write(JSON.stringify({ type: "finish" }) + "\n"); return result; },
+    stop: async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = new Promise<void>(resolve => child.once("exit", () => resolve())); child.kill("SIGKILL"); await exited;
+      }
+    },
+  };
+}
 const roots: string[] = [];
 const children: ChildProcess[] = [];
 afterEach(async () => {
@@ -23,7 +100,7 @@ function fixture(count = 8) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "llv-retention-test-"))); roots.push(root);
   const releases = path.join(root, "releases"); fs.mkdirSync(releases);
   const dirs: string[] = []; const shas: string[] = [];
-  const now = Date.now() + 5 * DAY;
+  const now = Date.UTC(2030, 0, 1);
   for (let i = 0; i < count; i++) {
     const sha = (i + 1).toString(16).padStart(12, "0") + "a".repeat(28); shas.push(sha);
     const dir = path.join(releases, sha.slice(0, 12)); dirs.push(dir);
@@ -56,6 +133,68 @@ function fixture(count = 8) {
   return { root, dirs, shas, record, inputs, ports, commands, locked, now, run: () => retainReleases(record, inputs, ports) };
 }
 const exists = fs.existsSync;
+
+test("keep decisions over 87 releases use one inventory; destructive steps use fresh helper scans", async () => {
+  const h = fixture(87);
+  h.inputs.inFlight = [...h.dirs];
+  let scans = 0;
+  h.ports.scan = () => { scans++; return EMPTY; };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.removed).toEqual([]);
+  expect(report.kept.map(row => row.dir)).toEqual(h.dirs);
+  expect(scans).toBe(1);
+});
+
+test("the loop probe rejects observer loss after its readiness handshake", async () => {
+  const probe = startLoopProbe();
+  try {
+    await probe.ready;
+    probe.child.kill("SIGKILL");
+    await expect(probe.result).rejects.toThrow("loop probe exited before a verdict");
+  } finally {
+    await probe.stop();
+  }
+});
+
+test("a separately sampled 120 ms loop stall exceeds the 50 ms budget", async () => {
+  const probe = startLoopProbe();
+  try {
+    await probe.ready;
+    await new Promise(resolve => setTimeout(resolve, 25));
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120);
+    const measured = await probe.finish();
+    expect(measured.samples).toBeGreaterThan(0);
+    assertLoopStallDetected(measured);
+    expect(() => assertLoopStallDetected({ maxBlockedMs: 0 })).toThrow();
+  } finally {
+    await probe.stop();
+  }
+});
+
+test("the loop stays within 50 ms while counting 87 retained release trees", async () => {
+  const h = fixture(87);
+  h.inputs.inFlight = [...h.dirs];
+  for (const dir of h.dirs) {
+    const tree = path.join(dir, "node_modules/fixture");
+    fs.mkdirSync(tree);
+    for (let i = 0; i < 128; i++) fs.writeFileSync(path.join(tree, `${i}.js`), "fixture");
+  }
+  const probe = startLoopProbe();
+  try {
+    await probe.ready;
+    const report = await h.run();
+    const measurement = await probe.finish();
+    expect(report.errors).toEqual([]);
+    expect(report.kept).toHaveLength(87);
+    expect(report.kept.every(row => row.bytes > 0)).toBeTrue();
+    console.info("[retention fixture]", JSON.stringify({ releases: 87, maxBlockedMs: measurement.maxBlockedMs, samples: measurement.samples, elapsedMs: measurement.elapsedMs }));
+    expect(measurement.maxBlockedMs).toBeLessThanOrEqual(50);
+    expect(measurement.samples).toBeGreaterThan(0);
+  } finally {
+    await probe.stop();
+  }
+}, 30_000);
 
 test("the first pass removes every unprotected old release and reclaims retained caches", async () => {
   const h = fixture(); const report = await h.run();
@@ -103,6 +242,78 @@ test("the process scan is read again before each removal", async () => {
   expect(exists(h.dirs[1]!)).toBeTrue();
   expect(report.removed.some(row => row.dir === h.dirs[1])).toBeFalse();
 });
+
+test("a real process started during the final Git check protects its release", async () => {
+  const h = fixture(4);
+  h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  h.ports.scan = scanProcesses;
+  const run = h.ports.git!;
+  const target = h.dirs[1]!;
+  let refChecks = 0;
+  let started = false;
+  h.ports.git = async (args, cwd) => {
+    const result = await run(args, cwd);
+    if (args[0] === "for-each-ref" && args[2] === h.shas[1] && ++refChecks === 2) {
+      const child = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
+        cwd: target, env: { PATH: process.env.PATH, NODE_ENV: "test", HOME: process.env.HOME,
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR,
+          LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL },
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      children.push(child);
+      await new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        child.stdout!.once("data", () => resolve());
+        child.once("exit", () => reject(new Error("holder exited before retention finished")));
+      });
+      started = true;
+    }
+    return result;
+  };
+  const report = await h.run();
+  expect(started).toBeTrue();
+  expect(report.errors).toEqual([]);
+  expect(exists(target)).toBeTrue();
+  expect(report.removed.some(row => row.dir === target)).toBeFalse();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: target, reason: "changed" }));
+}, 30_000);
+
+test("a process acquired after an earlier removal still protects a later release in the same pass", async () => {
+  const h = fixture(5);
+  h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  h.ports.scan = scanProcesses;
+  const run = h.ports.git!;
+  const first = h.dirs[1]!;
+  const target = h.dirs[2]!;
+  let started = false;
+  h.ports.git = async (args, cwd) => {
+    const result = await run(args, cwd);
+    if (args[0] === "worktree" && args[1] === "remove" && args.at(-1) === first) {
+      const child = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
+        cwd: target, env: { PATH: process.env.PATH, NODE_ENV: "test", HOME: process.env.HOME,
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR,
+          LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL },
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      children.push(child);
+      await new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        child.stdout!.once("data", () => resolve());
+        child.once("exit", () => reject(new Error("holder exited before retention finished")));
+      });
+      started = true;
+    }
+    return result;
+  };
+  const report = await h.run();
+  expect(started).toBeTrue();
+  expect(report.errors).toEqual([]);
+  expect(report.removed.some(row => row.dir === first)).toBeTrue();
+  expect(exists(target)).toBeTrue();
+  expect(report.removed.some(row => row.dir === target)).toBeFalse();
+  expect(children.at(-1)!.exitCode).toBeNull();
+  expect(children.at(-1)!.signalCode).toBeNull();
+}, 30_000);
 
 test("recent and newest-K releases are kept; K follows LLV_SELF_UPDATE_KEEP_RELEASES", async () => {
   const h = fixture(); h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
@@ -538,3 +749,189 @@ test("a mount appearing above webpack during the HEAD read keeps the cache", asy
   h.ports.mountPoints = dir => mounted && dir === h.dirs[0] ? [path.join(dir, ".next")] : [];
   await h.run(); expect(exists(path.join(h.dirs[0]!, ".next/cache/webpack/cache"))).toBeTrue();
 });
+
+// Fail before any mutation: an uncertain inspection must stop the whole pass.
+test.each(["scan-error", "scan-partial", "bytes-error", "helper-timeout"])("retention fails closed on %s", async failure => {
+  const h = fixture();
+  h.ports.scan = undefined;
+  Object.assign(h.ports, { inspection: {
+    scan: async () => {
+      if (failure === "scan-error") throw new Error("scan unavailable");
+      if (failure === "scan-partial") return { ...EMPTY, complete: false };
+      return { ...EMPTY, complete: true };
+    },
+    bytes: async () => { throw new Error(failure === "helper-timeout" ? "helper deadline" : "bytes unavailable"); },
+    close: async () => {},
+  } });
+  const report = await h.run();
+  expect(report.errors.length).toBeGreaterThan(0);
+  expect(report.removed).toEqual([]);
+  expect(report.reclaimedCacheBytes).toBe(0);
+  for (const dir of h.dirs) expect(exists(dir)).toBeTrue();
+});
+
+test("a failed fresh safety scan aborts remaining candidates", async () => {
+  const h = fixture(); let scans = 0;
+  h.ports.scan = () => { if (++scans > 1) throw new Error("safety scan failed"); return EMPTY; };
+  const report = await h.run();
+  expect(report.errors.length).toBeGreaterThan(0);
+  expect(scans).toBe(2);
+  expect(report.removed).toEqual([]);
+  for (const dir of h.dirs) expect(exists(dir)).toBeTrue();
+});
+
+test.each(["exit", "hang", "malformed", "truncated", "oversize", "partial", "wrong-kind"])("a real %s helper removes nothing and leaves no helper behind", async failure => {
+  const h = fixture(); h.ports.scan = undefined;
+  const worker = new RetentionWorker({ executable: process.execPath, entry: path.join(import.meta.dir, "retention.fixture.ts"), args: [h.root, failure] }, 2_000);
+  h.ports.inspection = worker;
+  try {
+    await worker.bytes(h.root); // ready, then fail the inventory request
+    const pid = Number(fs.readFileSync(path.join(h.root, "helper-pid"), "utf8"));
+    const report = await h.run();
+    expect(report.errors.length).toBeGreaterThan(0); expect(report.removed).toEqual([]);
+    expect(report.reclaimedCacheBytes).toBe(0);
+    for (const dir of h.dirs) expect(exists(dir)).toBeTrue();
+    expect(() => process.kill(pid, 0)).toThrow();
+  } finally { await worker.close(); }
+}, 15_000);
+
+test.each(["hold", "throw", "write", "allow"])("trash removal awaits its safety observation and revalidates: %s", async outcome => {
+  const h = fixture(); const target = path.join(h.root, "disposable"); fs.mkdirSync(target); fs.writeFileSync(path.join(target, "file"), "original");
+  const journal = path.join(h.root, "trash.json"); let resume!: () => void; let entered!: (trash: string) => void;
+  const ready = new Promise<string>(resolve => { entered = resolve; });
+  const proceed = new Promise<void>(resolve => { resume = resolve; });
+  const removal = removeTreeViaTrash(target, { journal, held: async trash => {
+    entered(trash); await proceed;
+    if (outcome === "throw") throw new Error("inspection unavailable");
+    return outcome === "hold";
+  } });
+  const trash = await ready;
+  if (outcome === "write") fs.writeFileSync(path.join(trash, "late"), "preserve");
+  resume();
+  if (outcome === "throw") await expect(removal).rejects.toThrow("inspection unavailable");
+  else expect(await removal).toBe(outcome === "allow");
+  expect(exists(target)).toBe(outcome !== "allow");
+  if (outcome === "write") expect(fs.readFileSync(path.join(target, "late"), "utf8")).toBe("preserve");
+});
+
+test.each(["hold", "throw", "write", "allow"])("trash replay awaits its safety observation and revalidates: %s", async outcome => {
+  const h = fixture(); const target = path.join(h.root, "disposable"); fs.mkdirSync(target); fs.writeFileSync(path.join(target, "file"), "original");
+  const journal = path.join(h.root, "trash.json");
+  await expect(removeTreeViaTrash(target, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
+  let resume!: () => void; let entered!: (trash: string) => void;
+  const ready = new Promise<string>(resolve => { entered = resolve; }); const proceed = new Promise<void>(resolve => { resume = resolve; });
+  const replay = finishTreeTrash(journal, async trash => {
+    entered(trash); await proceed;
+    if (outcome === "throw") throw new Error("inspection unavailable");
+    return outcome === "hold";
+  });
+  const trash = await ready;
+  if (outcome === "write") fs.writeFileSync(path.join(trash, "late"), "preserve");
+  resume();
+  if (outcome === "throw") await expect(replay).rejects.toThrow("inspection unavailable");
+  else expect(await replay).toBe(outcome === "allow");
+  expect(exists(trash)).toBe(outcome !== "allow");
+  if (outcome === "write") expect(fs.readFileSync(path.join(trash, "late"), "utf8")).toBe("preserve");
+});
+
+test.each(["throw", "partial"])("a %s safety scan after package rename restores the release and aborts the pass", async failure => {
+  const h = fixture(0); h.record.checkout = null; h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  const dirs = Array.from({ length: 4 }, (_, i) => path.join(h.record.releasesDir, `npm-3.0.${i}`));
+  for (const dir of dirs) { fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, "package.json"), "{}"); fs.utimesSync(dir, 1, 1); fs.utimesSync(path.join(dir, "package.json"), 1, 1); }
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: dirs[0] }));
+  let failed = false;
+  h.ports.scan = () => {
+    if (fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))) {
+      failed = true;
+      if (failure === "throw") throw new Error("safety scan unavailable after rename");
+      return { ...EMPTY, complete: false };
+    }
+    return EMPTY;
+  };
+  const report = await h.run();
+  expect(failed).toBeTrue(); expect(report.errors.length).toBeGreaterThan(0); expect(report.removed).toEqual([]);
+  for (const dir of dirs) expect(fs.readFileSync(path.join(dir, "package.json"), "utf8")).toBe("{}");
+  expect(fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+});
+
+test.each(["active", "rollback", "serving", "in-flight"])("fresh %s authority is read after awaiting the helper safety scan", async protection => {
+  const h = fixture(4); const target = h.dirs[1]!;
+  h.inputs.inFlight = [h.dirs[0]!]; h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" }; h.ports.scan = undefined;
+  h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs });
+  let scans = 0; let acquired = false;
+  h.ports.inspection = {
+    scan: async () => {
+      await Promise.resolve();
+      if (++scans === 2) {
+        acquired = true;
+        if (protection === "active") fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: target }));
+        if (protection === "rollback") h.inputs.rollbackPointers = [JSON.stringify({ dir: target })];
+        if (protection === "serving") h.record.web.revision = h.shas[1]!;
+        if (protection === "in-flight") h.inputs.inFlight = [h.dirs[0]!, target];
+      }
+      return { ...EMPTY, complete: true };
+    }, bytes: async () => 0, close: async () => {},
+  };
+  const report = await h.run();
+  expect(acquired).toBeTrue(); expect(report.errors).toEqual([]); expect(exists(target)).toBeTrue();
+  expect(report.removed.some(row => row.dir === target)).toBeFalse();
+});
+
+test.skipIf(process.platform !== "linux")("the leased helper rescans before later removals after an earlier release disappears", async () => {
+  const h = fixture(5); const target = h.dirs[2]!; h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  h.ports.scan = undefined; h.inputs.inFlight = [h.dirs[0]!];
+  const proc = path.join(h.root, "proc"); fs.mkdirSync(path.join(proc, "self/ns"), { recursive: true });
+  fs.symlinkSync("mnt:[fixture]", path.join(proc, "self/ns/mnt"));
+  const worker = new RetentionWorker({ executable: process.execPath, entry: path.join(import.meta.dir, "retention.fixture.ts"), args: [h.root, "inspect"] });
+  h.ports.inspection = worker;
+  const run = h.ports.git!; let acquired = false;
+  h.ports.git = async (args, cwd) => {
+    const result = await run(args, cwd);
+    if (args[0] === "worktree" && args[1] === "remove" && args.at(-1) === h.dirs[1]) {
+      acquired = true;
+      const base = path.join(proc, "123"); fs.mkdirSync(path.join(base, "ns"), { recursive: true }); fs.mkdirSync(path.join(base, "fd"));
+      fs.symlinkSync("mnt:[fixture]", path.join(base, "ns/mnt"));
+      fs.writeFileSync(path.join(base, "stat"), "123 (fixture) S " + "0 ".repeat(20));
+      for (const link of ["cwd", "root", "exe"]) fs.symlinkSync(target, path.join(base, link));
+      for (const file of ["cmdline", "environ", "maps"]) fs.writeFileSync(path.join(base, file), "");
+    }
+    return result;
+  };
+  try {
+    await worker.bytes(h.root);
+    const report = await h.run();
+    expect(acquired).toBeTrue(); expect(report.errors).toEqual([]);
+    expect(report.removed.some(row => row.dir === h.dirs[1])).toBeTrue();
+    expect(report.removed.some(row => row.dir === target)).toBeFalse(); expect(exists(target)).toBeTrue();
+    expect(fs.readFileSync(path.join(h.root, "requests"), "utf8").split("\n").filter(kind => kind === "scan").length).toBeGreaterThan(2);
+    const pid = Number(fs.readFileSync(path.join(h.root, "helper-pid"), "utf8")); expect(() => process.kill(pid, 0)).toThrow();
+  } finally { await worker.close(); }
+}, 30_000);
+
+test("an inspection failure after a completed removal stops all remaining destructive work", async () => {
+  const h = fixture(5); h.inputs.inFlight = [h.dirs[0]!]; h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  const run = h.ports.git!; let removed = false;
+  h.ports.scan = () => { if (removed) throw new Error("later safety scan unavailable"); return EMPTY; };
+  h.ports.git = async (args, cwd) => {
+    const result = await run(args, cwd);
+    if (args[0] === "worktree" && args[1] === "remove") removed = true;
+    return result;
+  };
+  const report = await h.run();
+  expect(report.errors.length).toBeGreaterThan(0);
+  expect(report.removed.map(row => row.dir)).toEqual([h.dirs[1]!]);
+  for (const dir of [h.dirs[0]!, ...h.dirs.slice(2)]) expect(exists(dir)).toBeTrue();
+});
+
+test.skipIf(process.platform !== "linux")("87 keep decisions request exactly one inventory from the leased helper", async () => {
+  const h = fixture(87); h.inputs.inFlight = [...h.dirs]; h.ports.scan = undefined;
+  const proc = path.join(h.root, "proc"); fs.mkdirSync(path.join(proc, "self/ns"), { recursive: true }); fs.symlinkSync("mnt:[fixture]", path.join(proc, "self/ns/mnt"));
+  const worker = new RetentionWorker({ executable: process.execPath, entry: path.join(import.meta.dir, "retention.fixture.ts"), args: [h.root, "inspect"] }); h.ports.inspection = worker;
+  try {
+    await worker.bytes(h.root);
+    const report = await h.run();
+    expect(report.errors).toEqual([]); expect(report.removed).toEqual([]); expect(report.kept.map(row => row.dir)).toEqual(h.dirs);
+    expect(fs.readFileSync(path.join(h.root, "requests"), "utf8").split("\n").filter(kind => kind === "scan")).toHaveLength(1);
+    const pid = Number(fs.readFileSync(path.join(h.root, "helper-pid"), "utf8")); expect(() => process.kill(pid, 0)).toThrow();
+  } finally { await worker.close(); }
+}, 30_000);

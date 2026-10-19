@@ -155,6 +155,7 @@ function readAdapterPhase(filename: string, action: AdapterAction): string | nul
 }
 
 function signalProcessGroup(pid: number, signal: NodeJS.Signals): void {
+  // eslint-disable-next-line no-restricted-syntax -- Legacy runtime-host serving timeout/recovery path signals the owned adapter process group.
   const group = spawnSync("/bin/kill", [`-${signal.replace("SIG", "")}`, "--", `-${pid}`], { stdio: "ignore" });
   if (group.status === 0) return;
   try { process.kill(pid, signal); } catch { /* process exited */ }

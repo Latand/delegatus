@@ -1461,7 +1461,9 @@ export class SqliteAgentRegistryStore {
 
   private loadSnapshot(useRowCache: boolean): StampedSnapshot {
     this.onSnapshotLoad?.();
-    this.db.exec("BEGIN");
+    // A full read before a mutation borrows the admitted writer transaction.
+    const ownsTransaction = !this.writerHeld;
+    if (ownsTransaction) this.db.exec("BEGIN");
     try {
       if (this.changesReady) this.refreshColdKeys();
       const hot = useRowCache && this.coldKeys.size > 0;
@@ -1469,10 +1471,10 @@ export class SqliteAgentRegistryStore {
       const stamp = this.storeStamp();
       const remembered = useRowCache ? this.rememberReadOnly({ ...snapshot,stamp },true,hot) : { ...snapshot,stamp };
       if (useRowCache) this.snapshotChangeId = this.changeId();
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return remembered;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      if (ownsTransaction) { try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ } }
       throw error;
     }
   }
@@ -1819,12 +1821,13 @@ export class SqliteAgentRegistryStore {
   private refreshSnapshot(): StampedSnapshot | null {
     const previous = this.readOnlyCache;
     if (!previous || !this.changesReady) return null;
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.writerHeld;
+    if (ownsTransaction) this.db.exec("BEGIN");
     try {
       const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
       if (first > this.snapshotChangeId + 1 || this.changeId() < this.snapshotChangeId
         || (first === 0 && this.storeStamp() !== previous.stamp)) {
-        this.db.exec("COMMIT");
+        if (ownsTransaction) this.db.exec("COMMIT");
         return null;
       }
       const changes = this.db.query<{ collection: string; row_key: string }, [number]>(
@@ -1981,10 +1984,10 @@ export class SqliteAgentRegistryStore {
       const ownersUnchanged = archiveUnchanged && !changes.some(change => change.collection === "deliveryOperationOwners");
       const remembered = this.rememberReadOnly({ file,revision,stamp },false,false,{ archiveUnchanged,ownersUnchanged });
       this.snapshotChangeId = this.changeId();
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return remembered;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* closed */ }
+      if (ownsTransaction) { try { this.db.exec("ROLLBACK"); } catch { /* closed */ } }
       throw error;
     }
   }

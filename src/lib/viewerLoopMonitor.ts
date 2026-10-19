@@ -13,7 +13,7 @@ export type ViewerOperation = "temp.sweep" | "resources.read" | "worktrees.sweep
   | "tasks.system-run" | "telegram.report-task-settle" | "memory.curation-cleanup"
   | "delivery.inbox-batch"
   | "http.render" | "links.task-export" | "role-memory.view"
-  | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
+  | "registry.write" | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "pipelines.evidence" | "pipelines.get" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"

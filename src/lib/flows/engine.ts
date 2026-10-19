@@ -921,7 +921,7 @@ async function launchReviewer(
     }
     return;
   }
-  const spawnCapability = agentRegistry().rotateSpawnCapabilityForReceipt(reservation.receipt.launchId);
+  const spawnCapability = (await agentRegistry().deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForReceipt" }, agentRegistry().rotateSpawnCapabilityForReceipt.bind(agentRegistry(), reservation.receipt.launchId)));
   const launched = await startHeadlessReview(
     flow.id,
     round.n,
@@ -1839,7 +1839,7 @@ export async function tickFlows(entries: FileEntry[]): Promise<TickResult> {
        (#2020). Once per process: nothing writes the old shape any more. */
     try {
       const persistedFlows = loadFlows();
-      agentRegistry().repairHostlessSpawnMarkers((launchId) => headlessReviewerMayRun(persistedFlows, launchId));
+      (await agentRegistry().deliveryWriteOrBusy({ label: "registry.repairHostlessSpawnMarkers" }, agentRegistry().repairHostlessSpawnMarkers.bind(agentRegistry(), (launchId) => headlessReviewerMayRun(persistedFlows, launchId))));
       store.__llvHostlessReviewerMarkersRepaired = true;
     } catch (error) {
       console.error("[flows] hostless reviewer marker repair failed", error);

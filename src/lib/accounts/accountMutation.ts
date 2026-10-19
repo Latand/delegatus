@@ -305,6 +305,7 @@ function acquire(holder: string, waitMs: number): AcquiredLock {
       if (acquired) return attachLocalRelease(acquired, release);
       const remaining = deadline - performance.now();
       if (remaining <= 0) throw new AccountMutationBusyError();
+      // eslint-disable-next-line no-restricted-syntax -- Legacy synchronous account-mutation admission while serving; async callers use acquireAsync.
       Atomics.wait(syncSleeper, 0, 0, Math.min(2, remaining));
     }
   } catch (error) {

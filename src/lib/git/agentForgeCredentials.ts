@@ -164,6 +164,7 @@ function toolsInLoginShell(shell: string, env: Record<string, string>): ShellPro
   const key = [shell, env.PATH, env.HOME].join("\0");
   const kept = shellProbes.get(key);
   if (kept && Date.now() - kept.at < SHELL_PROBE_KEPT_MS) return kept.found;
+  // eslint-disable-next-line no-restricted-syntax -- Legacy cached login-shell tool lookup during serving agent credential setup.
   const result = spawnSync(shell, ["-lc", SHIMMED.map((tool) => `printf '\\n${shellProbeMark(tool)}%s\\n' "$(command -v ${tool})"`).join("; ")], {
     env: env as NodeJS.ProcessEnv, encoding: "utf8", timeout: SHELL_PROBE_MS, stdio: ["ignore", "pipe", "ignore"],
   });

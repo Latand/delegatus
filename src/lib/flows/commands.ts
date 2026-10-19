@@ -227,7 +227,7 @@ export async function createFlowFromRequest(
   if (!resolvedPath) return { error: "implementer transcript is unknown", status: 404 };
   const owner = durableConversation
     ?? registry.conversationForPath(resolvedPath)
-    ?? registry.ensureConversation(roles.implementer.engine, resolvedPath, null);
+    ?? (await registry.deliveryWriteOrBusy({ label: "registry.ensureConversation" }, registry.ensureConversation.bind(registry, roles.implementer.engine, resolvedPath, null)));
   if (owner.engine !== roles.implementer.engine) {
     return { error: "implementer engine does not match its durable conversation", status: 400 };
   }
@@ -286,10 +286,10 @@ export async function createFlowFromRequest(
       && current.closedAt === null && current.state !== "closed")) {
       return { error: "implementer already has an active flow", status: 409 };
     }
-    registry.rememberMembership(owner.id, {
+    (await registry.deliveryWriteOrBusy({ label: "registry.rememberMembership" }, registry.rememberMembership.bind(registry, owner.id, {
       kind: "flow", containerId: flow.id, role: "implementer", slot: "implementer",
       stageId: null, stageOrder: 0, round: null, parentConversationId: null,
-    });
+    })));
     flows.push(flow);
     await persist();
     return { flow };

@@ -3,17 +3,79 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
+import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import { registryLockHolder } from "@/lib/agent/registryLockHolderFixture";
+import { migrationDeliveryFixture } from "@/test-helpers/migrationDelivery";
 import type { RuntimeHostClient } from "./client";
 import {
   bindStructuredDeliveryQueue,
   publishStructuredHostProjection,
+  terminateStructuredDeliveryHost,
 } from "./structuredDeliveryController";
+
+for (const qualified of [false, true]) test(`${qualified ? "qualified" : "unqualified"} termination preserves a replacement host claimed during writer admission`, async () => {
+  const f = migrationDeliveryFixture();
+  const registeredHost = qualified ? Object.assign(f.host, { releaseIfOwned: async () => true }) : f.host;
+  const holder = registryLockHolder(path.join(f.root, "registry.sqlite"));
+  const originalWithWriter = SqliteAgentRegistryStore.prototype.withWriter;
+  let observedWait!: () => void;
+  const waiting = new Promise<void>(resolve => { observedWait = resolve; });
+  const withWriter = spyOn(SqliteAgentRegistryStore.prototype, "withWriter").mockImplementation((async function (
+    this: SqliteAgentRegistryStore, ...args: Parameters<SqliteAgentRegistryStore["withWriter"]>
+  ) {
+    if (this.filename === holder.sqliteFilename) observedWait();
+    return originalWithWriter.apply(this, args);
+  }) as typeof originalWithWriter);
+  const originalDeliveryWrite = f.registry.deliveryWriteOrBusy.bind(f.registry);
+  let replacementPublished = false;
+  const admission = spyOn(f.registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, write) => {
+    if (correlation.label !== "registry.terminateStructuredHost") return originalDeliveryWrite(correlation, write);
+    return originalDeliveryWrite(correlation, () => {
+      const current = f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]!;
+      f.registry.upsert({ ...current, status: "live", claimEpoch: 2, claimOwner: "replacement-owner",
+        structuredHost: { ...current.structuredHost!, endpoint: "replacement", writerClaimEpoch: 2 } });
+      replacementPublished = true;
+      return write();
+    });
+  });
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host: registeredHost }], { registry: f.registry, client: f.client,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    await holder.hold();
+    const termination = terminateStructuredDeliveryHost(f.key, qualified ? { pid: process.pid + 100_000, startIdentity: "expected-old-host" } : undefined);
+    await waiting;
+    await holder.release();
+    expect(await termination).toBe(true);
+    expect(replacementPublished).toBe(true);
+    expect(f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]).toMatchObject({
+      status: "live", claimEpoch: 2, claimOwner: "replacement-owner",
+      structuredHost: { endpoint: "replacement", writerClaimEpoch: 2 },
+    });
+  } finally {
+    admission.mockRestore();
+    withWriter.mockRestore();
+    await holder.close();
+    await f.cleanup();
+  }
+});
+
+test("unqualified termination still retires its captured host row", async () => {
+  const f = migrationDeliveryFixture();
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host: f.host }], { registry: f.registry, client: f.client,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    expect(await terminateStructuredDeliveryHost(f.key)).toBe(true);
+    expect(f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]).toMatchObject({
+      status: "dead", claimOwner: null, structuredHost: null,
+    });
+  } finally { await f.cleanup(); }
+});
 
 test("structured host projection publishes a files revision for connected viewers", async () => {
   let filesRevision = 14;

@@ -216,7 +216,7 @@ Each row names one candidate. Columns:
 | ID | Call site | Trigger, frequency | Journal label | Scale here | Status | Measure |
 | --- | --- | --- | --- | --- | --- | --- |
 | T1 | `src/lib/pipelines/worktreeSweep.ts:1609` start, `:822` `sweepMergedWorktreesWithRoots` (sync tree walks, `inspectTree`, mount points, `/proc` scans through `tempSweep.ts:124`/`:219`), `:1549` archived pipelines | 10 min after Viewer start (`:136`), then 1 h after the previous pass ends | none at base (`worktrees.sweep` in the lane); profiler frames | 932 trees, 7 repositories, 935 archived pipelines | covered-by-lane `1eb0ab07` | M1, M2, M3 |
-| T2 | `src/lib/tempSweep.ts:831` start, `:794` `runTempSweep`, `:807` `scanProcesses()` (`:124`, sync `readdirSync`/`readFileSync` of `fd`, `cmdline`, `maps`, `environ`), `:357`/`:438` sync tree walks, `:780` worktree list | 5 min after Viewer start (`:59`), then 1 h after the previous pass ends | none; completion line `[temp sweep] removed …` | 291 processes, 6,686 fds, 7.5 MB of `maps`+`environ`; 3 roots, 112 held entries in the last report | open (outside `1eb0ab07`, which leaves `tempSweep.ts` alone) | M1, M2, M3, M4 |
+| T2 | `src/lib/tempSweep.ts:831` start, `:794` `runTempSweep`, `:807` `scanProcesses()` (`:124`, sync `readdirSync`/`readFileSync` of `fd`, `cmdline`, `maps`, `environ`), `:357`/`:438` sync tree walks, `:780` worktree list; the Viewer timer requests this pass from the leased helper | 5 min after Viewer start (`:59`), then 1 h after the previous pass ends | none; completion line `[temp sweep] removed …` | 291 processes, 6,686 fds, 7.5 MB of `maps`+`environ`; 3 roots, 112 held entries in the last report | prior fix L6: process scan and sweep work run in the helper | M1, M2, M3, M4 |
 | T3 | `src/lib/pipelines/controller.ts:325` `sweepSettledArchive` → `src/lib/pipelines/store.ts:1981` `archiveSettledPipelines` | at most hourly (`controller.ts:91`), from the controller cycle | `pipelines.controller-read` (`store.ts:1985`); `[flow pipeline controller] archived N …` | 266 hot / 935 archived pipelines | open | M1, M2, M3 |
 | T4 | `src/lib/pipelines/controller.ts:285` → `src/lib/forge/autoMerge.ts:1012` `scheduleAutoMerge` → `:697` `sweepAutoMerge` (`loadPipelines()` at `:699`, more per lane at `:486`-`:786`), `:917` `sweepTaskFinishes` (`loadPipelines()` at `:919`); one log line per completed lane per pass (`:702`-`:734`) | every controller cycle, debounced to 15 s (`:47`); the journal shows a median of 28 s between passes | none; `pipeline.copy` site during the clones; `[auto merge]` lines | each `loadPipelines()` clones 266 records / 33.5 MB; up to 84 log lines per pass | open | M1, M2, M3, M4 (D3) |
 | T5 | `src/lib/pipelines/controller.ts:278` → `src/lib/forge/sweep.ts:294` `scheduleForgeSweep` (`loadPipelines()` at `:101`, `loadTasks()` at `:107`, then `gh`) | every controller cycle, debounced to 30 s (`:21`); live/idle forge intervals 3/30 min | none; `pipeline.copy` during the clone | as T4 plus 2,436 tasks | open | M2, M3, M4 (D1, D3) |
@@ -283,7 +283,7 @@ its presence in a gap proves no CPU use by itself.
 | --- | --- | --- | --- | --- | --- | --- |
 | H1 | shared MCP endpoint: `src/app/api/mcp/route.ts:10` → `src/lib/mcp/http.ts` → bindings in `src/lib/mcp/bindings.ts` (for example `curate_rules` at `:7919`). The HTTP transport is the default for structured launches that carry a spawn capability (`src/lib/agent/spawnPolicy.ts:168-191`). On it, every tool runs inside the Viewer, on a server object and transport built per request (`src/lib/mcp/http.ts:254-256`), except `list_tasks`, `get_task`, `create_task` and `update_task`, which go to the `mcp-tasks` helper (`http.ts:240-244`, `src/lib/mcp/taskChannel.ts:7`). Stdio MCP servers run the same service (`src/lib/mcp/server.ts:4898` → `:4791`) in their own process, write the same receipt store (`:4848`) and send their stderr to their agent. A launch gets the HTTP transport only with a spawn capability and, while the Viewer has an access token, a gateway file that trusts the local entry (`src/lib/agent/spawnPolicy.ts:181-213`); at 17:2xZ every one of the 13 agents under the Viewer, this stage's own among them, had a stdio server child. The tool policy resolves the caller three times for every mutating tool (`src/lib/mcp/bindings.ts:7344`, `:7348`, `:7352`), each resolution starting with `hostedConversationsFromSnapshot` (`src/lib/attention/callerAuthority.ts:75`). `[mcp slow]` is written at `src/lib/mcp/server.ts:3383` | every tool call of every structured agent on the HTTP transport | `mcp.receipts`, `mcp.tasks.executor`, `mcp.project-prefix`; no per-tool operation label; `[mcp slow] tool=… bindingMs=…` for calls of at least 2 s (the line has no process field; on the service journal it comes from the Viewer, or from the `mcp-tasks` helper for the four task tools: at 17:2xZ the processes whose stderr was the Viewer's were its account-migration, worktree-sweep and task-tool helpers, by `/proc/<pid>/fd/2`) | 12 live structured agents; 83,112 receipts from every MCP server process | open | M1, M2, M3, M4 |
 | H2 | board poll: `src/app/api/files/operatorProjection.ts:595-608` `GET` (`files.get`), storage health at `:697` (`files.health`); projection in the `files-response-worker`; main-thread delta, clone and encode | every 10 s per visible tab, 30 s hidden (`src/hooks/useFiles.ts:31`, `:44`) | `files.get`, `files.health`; sites `files.scan`, `files.delta`, `files.clone`, `files.encode`, `files.worker` | 35.2 MB summary body | prior fixes (`board-poll-payload.md`, `cold-board-start.md`); open residual | M2, M4 |
-| H3 | resources: `src/app/api/resources/route.ts` → `src/lib/resources.ts:2661-2671`: `src/lib/resourceViewerTree.ts:217-224` walks the Viewer's process tree through sync `/proc` reads, then `src/lib/state/diskPressure.ts:250` `readDiskPressure` (30 s cache, `:36`): `scanProcesses()` at `:285`, `loadPipelinesForList`, the sweep report, then `statSync` plus `statfsSync` per root (`:60-62`) for every worktree root (`diskVolumes`, `:110`) and a SHA-256 per temp view | every 30 s per open tab (`src/components/ResourcesFooter.tsx:17`), the MCP `resources` tool, and T9 | none | 932 worktree roots; the T2 `/proc` scale | open | M2, M3, M4 |
+| H3 | resources: `src/app/api/resources/route.ts` → `src/lib/resources.ts:2661-2671`: `src/lib/resourceViewerTree.ts:217-224` walks the Viewer's process tree through sync `/proc` reads on the serving path. `src/lib/state/diskPressure.ts:250` `readDiskPressure` (30 s cache, `:36`) delegates ordinary reads to the leased helper; `readDiskPressureInHelper` (`:251`, `:286`) runs `scanProcesses()`, `loadPipelinesForList`, the sweep report, then `statSync` plus `statfsSync` per root (`:60-62`) for every worktree root (`diskVolumes`, `:110`) and a SHA-256 per temp view. Calls with injected ports are the direct test seam; MCP's read-only path returns before scanning (`:266`) | every 30 s per open tab (`src/components/ResourcesFooter.tsx:17`), the MCP `resources` tool, and T9 | none | 932 worktree roots; the T2 `/proc` scale | helper work covered by L6; serving process-tree `/proc` reads remain a follow-up candidate | M2, M3, M4 |
 | H4 | needs-you read: `src/lib/attention/needsYouRead.ts:262-267` (the 35.2 MB summary parse of T7, then tasks, pipelines, dismissals, bridge log, registry snapshot) | the needs-you API and tool, the board report run (`src/lib/orchestrator/boardReportRun.ts:387`), seat checks | none | as T7 | open | M2, M4 (T7 case) |
 | H5 | seat panel: `src/app/api/orchestrator/seat/route.ts:124` loads all tasks whenever the project has a seat | every 6 s per tab showing a seat (`src/components/orchestrator/useOrchestratorSeat.ts:14`) | none | 2,436 tasks | open | M4 (D1) |
 | H6 | other UI polls, server cost per request unmeasured: decisions every 3 s (`/api/projects/decisions`), delivery progress 3 s (`/api/runtime/delivery-progress`), log bus 1.2 s (`/api/logs`), self-update feed 1 s while shown, host targets 5 s, timeline 7 s, board state 10 s, runtime snapshot fallback 10 s, report log 10 s, telegram reports 20 s, done items 30 s, bot 30 s, task album 45 s, limits 60 s, seat-tick settings 60 s | cadences from the constants under `src/components` and `src/hooks` | `http.render` only | one view session recorded in `view-presence.json` at read time | open | M4, M7 |
@@ -2414,11 +2414,13 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
 ### L6. Temp sweep and disk-pressure scans leave the loop
 
 - **Evidence.** Measured rank 9; H3 in the duty table.
-- **Change.** `runTempSweep` (`src/lib/tempSweep.ts:794`) runs in the leased
-  `worktree-sweep` helper that #3052 added, under its lease, deadline and
-  bounded reply. The disk-pressure reader (`src/lib/state/diskPressure.ts:285`
-  at `a25592be`) takes the process scan from the helper's latest result within
-  its 30 s cache, and the per-root `statSync`/`statfsSync` move with it.
+- **Change.** `runTempSweep` (`src/lib/tempSweep.ts:794`) and
+  `readDiskPressureInHelper` (`src/lib/state/diskPressure.ts:251`) run in the
+  leased `worktree-sweep` helper that #3052 added, under its lease, deadline
+  and bounded reply. The disk-pressure helper owns its process scan, 30 s
+  cache and per-root `statSync`/`statfsSync`; ordinary `readDiskPressure`
+  calls (`:354-357`) delegate to it. Direct calls with injected ports are a
+  test seam, and the MCP read-only path returns before scanning (`:266`).
 - **Acceptance.** No `scanProcesses()` call on a Viewer timer or request path;
   a fixture pass over the measured shape (about 340 processes, 44,000 path
   references) keeps the Viewer loop within 50 ms; a resources request spends
@@ -2485,13 +2487,90 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
 
 - **Evidence.** Suspect 1.
 - **Change.** `retainReleases` (`src/lib/selfUpdate/retention.ts:63`) scans
-  `/proc` once per pass (it now calls `scan()` per candidate at `:160`, 87
-  kept releases here) and runs `bytesOf` (`:32`, called at `:164`) in a helper.
+  `/proc` once per pass; the pre-L10 path called `scan()` per candidate (88
+  inventories for 87 kept releases) and counted `bytesOf` on the Viewer loop.
+  The candidate path now runs `bytesOf` in a helper.
 - **Acceptance.** A fixture of 87 release directories triggers one scan per
   pass and keeps the Viewer loop within 50 ms during the pass.
+  The focused 10 ms probe compares main-loop turns with an independent worker
+  heartbeat to distinguish loop blockage from process-wide scheduling pauses.
 - **Before/after.** `T19` extended to a full pass over copies of retained
   releases (read-only); production: the `self-update.retention` label and
   `self-update.bytes` spans after an apply.
+
+
+#### L10 implementation and replay
+
+Keep decisions share one process inventory for the entire pass. Production
+collects that inventory in a leased helper as well, so the Viewer does not
+walk `/proc`. Every destructive step still gets a fresh helper safety scan,
+including checks after awaited Git commands and trash renames. These safety
+scans are additional to the single keep inventory and run at the guards for
+attempted destructive steps. Serving revisions, rollback targets, active
+pointers, in-flight builds, process holders and the existing Git and mount
+checks retain their protection.
+
+The helper counts allocated bytes without following symlinks or counting
+multiply linked files. An unreadable tree, an incomplete byte walk, an
+unreadable process, malformed or partial replies, helper exit and
+request timeout refuse cleanup. An inspection refusal aborts the remaining
+pass. A refusal after a trash rename restores the original path; interrupted
+removals keep their durable recovery journal. The helper has one outstanding
+request, a bounded reply and a 60-second request deadline. The pass closes its
+recorded lease and waits for the guardian and its process group to end.
+`self-update.retention` remains the Viewer operation label;
+`self-update.bytes` records the asynchronous measurement waits in the Viewer
+and the synchronous byte walks in the helper.
+
+The T19 replay driver is `scripts/measure-release-retention.ts`. It requires
+exactly 87 already-copied release directories below its isolated `TMPDIR`,
+with write permissions removed. It refuses Git writes and verifies an
+inventory digest before and after the pass. Every copied release is in
+flight, so the replay measures a full keep pass without exercising removal.
+Both sides validate the entire inventory before timing, warming filesystem
+metadata equally. The same legacy process collector is injected on both sides
+to measure whole passes even when the stricter production scanner refuses
+unreadable proc entries. Success and refusal of the production scanner are tested separately.
+This replay measures the byte-helper and inventory-reuse changes; it does not
+measure production safety scans during removals.
+
+Use the same immutable seed and Bun for six alternating before/after pairs.
+Immediately before each sample, read the scoped `agent_fleet` summary and pass
+its `observedAt`, `agents.live` and `agents.running` values to the replay driver;
+the emitted sample keeps those workload counts beside its timing and load.
+Export the base and candidate source into scratch, copy this driver to the
+base export, and run each invocation through the admitted gate from its own
+export with isolated HOME, XDG_CONFIG_HOME and LLV_STATE_DIR, a stage-owned
+TMPDIR containing the seed, and a closed Viewer control URL:
+
+```sh
+bun scripts/measure-release-retention.ts "$TMPDIR/retained-releases" "$OUT" "$SOURCE_REVISION" "$AGENT_FLEET_OBSERVED_AT" "$LIVE_AGENTS" "$RUNNING_AGENTS"
+```
+
+The JSON output records the source tree digest and per-file fingerprints,
+measurement driver digest, seed digest, visited entry count, process scan
+count, full-pass duration, 10 ms timer gaps, retained allocation counts, load
+averages, CPU pressure, and cgroup CPU/memory limits and counters. The replay
+record is `evidence/release-retention-replay.json`.
+
+Six alternating pairs under Bun 1.4.0 visited 3,982,014 entries across the
+same 87 read-only release copies and returned identical keep reasons and
+91,987,001,344 allocated bytes. The shared gate bounded CPU to three cores;
+load averages, CPU pressure, and cgroup counters accompany every sample.
+
+| Full keep pass | Before | After |
+| --- | ---: | ---: |
+| Process inventories | 88 | 1 |
+| Median duration | 11,906.6 ms | 7,452.2 ms |
+| Duration range | 11,109.7–13,076.6 ms | 6,938.0–7,796.7 ms |
+| Median maximum 10 ms timer gap | 11,907.0 ms | 80.0 ms |
+| Maximum timer-gap range | 11,110.0–13,080.0 ms | 65.1–91.0 ms |
+
+The remaining replay gap includes the injected synchronous legacy collector.
+Production moves that inventory to the helper too. The separate 87-release
+fixture enforces the 50 ms loop bound during byte measurement.
+Production timing remains a post-deploy observation through the labels above;
+this stage deploys nothing.
 
 ## Regression guards
 

@@ -235,6 +235,7 @@ export function withFileLock<T>(file: string, action: () => T): T {
         }
       }
       if (Date.now() >= deadline) throw new Error("relay store is busy");
+      // eslint-disable-next-line no-restricted-syntax -- Legacy relay-store write lock during serving relay mutations.
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
   }

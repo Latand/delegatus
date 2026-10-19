@@ -96,6 +96,7 @@ export function stateLockAttempt<T>(callSite: string, operation: () => T, subjec
               record(wait, "waiting", true);
             }
             const before = performance.now();
+            // eslint-disable-next-line no-restricted-syntax -- Standalone MCP synchronous contract only; Viewer and runtime host defer to async admission.
             performanceSpans.sync("state.write-wait", () => Atomics.wait(cell, 0, 0, Math.min(5, wait.deadline - performance.now())));
             wait.synchronousSleepMs = (wait.synchronousSleepMs ?? 0) + performance.now() - before;
           } finally { wait.maxSliceMs = Math.max(wait.maxSliceMs, performance.now() - slice); }

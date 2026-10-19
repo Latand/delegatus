@@ -859,6 +859,7 @@ function linuxProcessGroupId(pid: number): number | null {
 }
 
 function portableProcessGroupId(pid: number): number | null {
+  // eslint-disable-next-line no-restricted-syntax -- Legacy non-Linux process-group lookup during serving worker cleanup.
   const result = spawnSync("ps", ["-p", String(pid), "-o", "pgid="], {
     encoding: "utf8",
     timeout: 1_000,
@@ -885,6 +886,7 @@ function linuxProcessGroupMembers(groupId: number): number[] {
 }
 
 function portableProcessGroupMembers(groupId: number): number[] {
+  // eslint-disable-next-line no-restricted-syntax -- Legacy non-Linux process-group enumeration during serving worker cleanup.
   const result = spawnSync("ps", ["-axo", "pid=,pgid="], {
     encoding: "utf8",
     timeout: 1_000,
@@ -935,6 +937,7 @@ function linuxWorkerNamespaceMembers(owner: string): number[] | null {
 
 function portableWorkerNamespaceMembers(owner: string): number[] | null {
   const marker = `${RESOURCE_WORKER_OWNER_ENV}=${owner}`;
+  // eslint-disable-next-line no-restricted-syntax -- Legacy non-Linux worker-namespace enumeration during serving cleanup.
   const result = spawnSync("ps", ["eww", "-axo", "pid=,command="], {
     encoding: "utf8",
     timeout: 1_000,

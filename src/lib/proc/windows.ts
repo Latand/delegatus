@@ -87,6 +87,7 @@ export interface WindowsSnapshotCommandResult {
 }
 
 function runSnapshotCommand(timeoutMs: number): WindowsSnapshotCommandResult {
+  // eslint-disable-next-line no-restricted-syntax -- Legacy Windows process snapshot backend used by serving liveness and ownership checks.
   const result = spawnSync(
     "powershell.exe",
     ["-NoProfile", "-NonInteractive", "-EncodedCommand", encodedPowerShellCommand(WINDOWS_PROCESS_SNAPSHOT_SCRIPT)],

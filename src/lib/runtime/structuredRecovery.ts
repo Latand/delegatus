@@ -117,6 +117,8 @@ export interface StructuredRecoveryDependencies {
     operationId: string;
     revision: number;
     owns: () => Promise<boolean>;
+    /** Synchronous durable recheck for destructive writes after admission. */
+    assertCurrent?: () => void;
     releaseHost: (key: SessionKey) => Promise<boolean>;
     /** Throws when the operation's owner no longer allows the account the
         successor host would start on. A recorded account resumes through
@@ -429,9 +431,22 @@ async function recoverCandidate(
         ...liveHostResult(current),
         ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}),
       };
-      await ownership.releaseHost(current.key);
+      const releasedKey = current.key;
+      const releasedEntry = registry.readOnlySnapshot().entries[sessionKeyId(releasedKey)];
+      const releasedCustody = releasedEntry ? {
+        claimEpoch: releasedEntry.claimEpoch,
+        claimOwner: releasedEntry.claimOwner,
+        writerClaimEpoch: releasedEntry.structuredHost?.writerClaimEpoch ?? null,
+        process: releasedEntry.structuredHost?.process ?? null,
+      } : null;
+      await ownership.releaseHost(releasedKey);
       await assertOwnership();
-      registry.terminateStructuredHost(current.key);
+      await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
+        request.authorityGuard?.();
+        ownership.assertCurrent?.();
+        assertPipelineTurnAllowed(candidate.conversationId, registry);
+        return registry.terminateStructuredHost(releasedKey, undefined, [], releasedCustody);
+      });
       await assertOwnership();
       current = candidateFor(registry, request, true, park);
       if (!current) return null;
@@ -596,8 +611,20 @@ async function recoverCandidate(
       await assertAccountAuthorized();
     } catch (error) {
       if (ownsSuccessor()) {
+        const successorEntry = registry.readOnlySnapshot().entries[sessionKeyId(current.key)];
+        const successorCustody = successorEntry ? {
+          claimEpoch: successorEntry.claimEpoch,
+          claimOwner: successorEntry.claimOwner,
+          writerClaimEpoch: successorEntry.structuredHost?.writerClaimEpoch ?? null,
+          process: successorEntry.structuredHost?.process ?? null,
+        } : null;
         await ownership?.releaseHost(current.key);
-        if (ownsSuccessor()) registry.terminateStructuredHost(current.key);
+        await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
+          request.authorityGuard?.();
+          ownership?.assertCurrent?.();
+          assertPipelineTurnAllowed(current!.conversationId, registry);
+          if (ownsSuccessor()) registry.terminateStructuredHost(current!.key, undefined, [], successorCustody);
+        });
       }
       throw error;
     }

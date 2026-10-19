@@ -4,6 +4,8 @@ import { advanceConversationMigration } from "@/lib/accounts/migration/coordinat
 import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, REGISTRY_WRITER_BUSY, type AgentRegistry, type RegistryConversation } from "@/lib/agent/registry";
+import { sessionKeyId } from "@/lib/agent/sessionKey";
+import type { ProcessIdentity } from "@/lib/processIdentity";
 import type { SessionKey } from "@/lib/agent/sessionKey";
 
 import type { PipelineSwitchFence } from "@/lib/pipelines/runtimeSwitchFence";
@@ -34,6 +36,52 @@ const settledElsewhere = (error: unknown) => error instanceof StructuredReconfig
     the switch listed (docs/design/delivery-progress-and-drain.md, C3). */
 const registryBusy = (error: unknown) => error instanceof Error && error.message === REGISTRY_WRITER_BUSY;
 const SETTLE_WRITE_ATTEMPTS = 6;
+
+type ReleasedHostCustody = {
+  claimEpoch: number;
+  claimOwner: string | null;
+  process: ProcessIdentity | null;
+  writerClaimEpoch: number | null;
+};
+
+function captureReleasedHostCustody(registry: AgentRegistry, key: SessionKey): ReleasedHostCustody | null {
+  const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+  if (!entry) return null;
+  return {
+    claimEpoch: entry.claimEpoch,
+    claimOwner: entry.claimOwner,
+    process: entry.structuredHost?.process ?? null,
+    writerClaimEpoch: entry.structuredHost?.writerClaimEpoch ?? null,
+  };
+}
+
+function sameProcess(left: ProcessIdentity | null, right: ProcessIdentity | null): boolean {
+  return left === null || right === null
+    ? left === right
+    : left.pid === right.pid
+      && left.startIdentity === right.startIdentity
+      && left.bootEpoch === right.bootEpoch;
+}
+
+async function terminateReleasedHost(
+  registry: AgentRegistry,
+  key: SessionKey,
+  conversationId: ViewerConversationId,
+  custody: ReleasedHostCustody | null,
+  stillOwned: (conversation: RegistryConversation | undefined) => boolean,
+): Promise<void> {
+  await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
+    const conversation = registry.conversation(conversationId) ?? undefined;
+    if (!stillOwned(conversation) || !custody) return false;
+    const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    if (!entry
+      || entry.claimEpoch !== custody.claimEpoch
+      || entry.claimOwner !== custody.claimOwner
+      || (entry.structuredHost?.writerClaimEpoch ?? null) !== custody.writerClaimEpoch
+      || !sameProcess(entry.structuredHost?.process ?? null, custody.process)) return false;
+    return registry.terminateStructuredHost(key, custody.process ?? undefined, [], custody);
+  });
+}
 
 async function releaseStructuredHost(key: SessionKey): Promise<boolean> {
   const { releaseStructuredDeliveryHost } = await import("./structuredDeliveryController");
@@ -180,6 +228,12 @@ export async function applyStructuredReconfigure(
     operationId: effect.operationId,
     revision: effect.eventSeq,
     owns: () => ownsDurableReconfigure(status),
+    assertCurrent: () => {
+      const owner = registry.conversation(conversationId)?.reconfigure;
+      if (owner?.operationId !== effect.operationId || owner.revision !== effect.eventSeq || owner.status !== status) {
+        throw new StructuredReconfigureSupersededError();
+      }
+    },
     releaseHost: release,
     /* The project may drop an account while a host is being released: every
        recovery this operation asks for, the restorations after a failure
@@ -217,9 +271,13 @@ export async function applyStructuredReconfigure(
       throw new Error("committed structured successor is unavailable for profile restoration");
     }
     const successorKey = { engine: latest.engine, sessionId: successor.id } as const;
+    const custody = captureReleasedHostCustody(registry, successorKey);
     await release(successorKey);
     if (!await ownsDurableReconfigure("failed")) throw new StructuredReconfigureSupersededError();
-    registry.terminateStructuredHost(successorKey);
+    await terminateReleasedHost(registry, successorKey, conversationId, custody, (current) =>
+      current?.reconfigure?.operationId === effect.operationId
+      && current.reconfigure.revision === effect.eventSeq
+      && current.reconfigure.status === "failed");
     if (!await ownsDurableReconfigure("failed")) throw new StructuredReconfigureSupersededError();
     const restored = await recover({ path: successor.path, conversationId }, {
       registry,
@@ -236,13 +294,21 @@ export async function applyStructuredReconfigure(
       const predecessor = conversation.generations.at(-2);
       if (predecessor) {
         const predecessorKey = { engine: conversation.engine, sessionId: predecessor.id } as const;
+        const predecessorCustody = captureReleasedHostCustody(registry, predecessorKey);
         await release(predecessorKey);
-        registry.terminateStructuredHost(predecessorKey);
+        await terminateReleasedHost(registry, predecessorKey, conversationId, predecessorCustody, (current) =>
+          current?.reconfigure?.operationId === effect.operationId
+          && current.reconfigure.revision === effect.eventSeq
+          && current.reconfigure.status === "applying");
       }
       if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
+      const custody = captureReleasedHostCustody(registry, key);
       await release(key);
       if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
-      registry.terminateStructuredHost(key);
+      await terminateReleasedHost(registry, key, conversationId, custody, (current) =>
+        current?.reconfigure?.operationId === effect.operationId
+        && current.reconfigure.revision === effect.eventSeq
+        && current.reconfigure.status === "applying");
       if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
       const recovered = await recover({ path: generation.path, conversationId }, {
         registry,
@@ -305,10 +371,15 @@ export async function applyStructuredReconfigure(
     const cleanupCommittedPredecessorAfterSupersedence = async (): Promise<void> => {
       const successor = committedSuccessorAfterCapturedPredecessor();
       if (!successor) return;
+      const custody = captureReleasedHostCustody(registry, key);
       await release(key);
       const confirmed = committedSuccessorAfterCapturedPredecessor();
       if (!confirmed || confirmed.id !== successor.id || confirmed.path !== successor.path) return;
-      registry.terminateStructuredHost(key);
+      await terminateReleasedHost(registry, key, conversationId, custody, (current) => {
+        const migrated = current?.migration?.phase === "committed"
+          && current.generations.some(generation => generation.id === confirmed.id && generation.path === confirmed.path);
+        return Boolean(migrated);
+      });
     };
     let committedSuccessorId: string | null = null;
     try {
@@ -335,8 +406,12 @@ export async function applyStructuredReconfigure(
         return "pending";
       }
       committedSuccessorId = current.id;
+      const custody = captureReleasedHostCustody(registry, key);
       await release(key);
-      registry.terminateStructuredHost(key);
+      await terminateReleasedHost(registry, key, conversationId, custody, (latest) =>
+        latest?.reconfigure?.operationId === effect.operationId
+        && latest.reconfigure.revision === effect.eventSeq
+        && latest.reconfigure.status === "applying");
       await settle("applied");
       return "applied";
     } catch (error) {
@@ -353,9 +428,13 @@ export async function applyStructuredReconfigure(
 
   try {
     if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
+    const custody = captureReleasedHostCustody(registry, key);
     await release(key);
     if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
-    registry.terminateStructuredHost(key);
+    await terminateReleasedHost(registry, key, conversationId, custody, (current) =>
+      current?.reconfigure?.operationId === effect.operationId
+      && current.reconfigure.revision === effect.eventSeq
+      && current.reconfigure.status === "applying");
     if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
     const recovered = await recover({ path: generation.path, conversationId }, {
       registry,

@@ -247,6 +247,7 @@ const LOCK_STALE_MS = 10_000;
 const LOCK_WAIT_MS = 5_000;
 
 function sleep(ms: number): void {
+  // eslint-disable-next-line no-restricted-syntax -- Legacy cross-process title write lock on serving title updates.
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 

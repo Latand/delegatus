@@ -292,6 +292,7 @@ function normalizedMcpServers(value: readonly string[] | undefined): string[] {
 function configuredCodexMcpServers(home: string, cwd: string): string[] {
   const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: home };
   delete env.LLV_TOKEN;
+  // eslint-disable-next-line no-restricted-syntax -- Legacy terminal-launch MCP discovery invoked by serving launch controls.
   const listed = spawnSync(process.env.LLV_CODEX_BINARY ?? resolveBinary("codex"), ["-c", "features.plugins=false", "mcp", "list", "--json"], {
     cwd,
     env,
