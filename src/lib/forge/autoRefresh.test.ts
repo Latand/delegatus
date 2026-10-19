@@ -446,7 +446,7 @@ test("a failed successor check never merges red", async () => {
   h.prs.get(11)!.checks = [red("ci")];
   await h.run(6 * 60_000);
   expect(h.merge("refresh-1")).toMatchObject({ state: "blocked", reason: 'check "ci" failed' });
-  expect(h.merge("finished")?.state).toBe("refreshing");
+  expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: 'check "ci" failed' });
   expect(h.writes).toHaveLength(0);
 });
 
@@ -496,7 +496,7 @@ test("a persisted refreshing reservation survives store reload, and malformed me
   savePipelines([value]);
   expect(loadPipelines()[0]!.merge!.refresh).toEqual(value.merge.refresh);
   expect(loadPipelines()[0]!.refreshOf).toEqual(value.refreshOf);
-  for (const bad of [{ base: "wrong" }, { attempt: -1 }, { digest: "wrong" }, { pipelineId: 7 }]) {
+  for (const bad of [{ base: "wrong" }, { baseBranch: "" }, { baseBranch: 7 }, { attempt: -1 }, { digest: "wrong" }, { pipelineId: 7 }]) {
     const invalid = structuredClone(value);
     Object.assign(invalid.merge!.refresh!, bad);
     expect(() => savePipelines([invalid])).toThrow("malformed pipeline record");
@@ -555,4 +555,83 @@ test("an old stopped conflict starts no refresh until an explicit retry", async 
   await h.sweep();
   expect(h.creates).toHaveLength(1);
   expect((h.creates[0]!.options as RefreshOptions).creationRequest.key).toBe("auto-refresh:finished:1");
+});
+
+
+test("a completed refresh advances its parent's check state before merging", async () => {
+  const h = harness({ lanes: [finished()], prs: [conflicting()] });
+  await h.sweep();
+  const successor = h.pipeline("refresh-1");
+  successor.state = "completed";
+  successor.delivery!.active = false;
+  successor.lastPassedCommit = "b".repeat(40);
+  Object.assign(h.prs.get(11)!, { head: successor.lastPassedCommit, mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" });
+  await h.sweep();
+  await h.sweep();
+  expect(h.merge("finished")?.state).toBe("waiting-checks");
+  expect(h.writes).toHaveLength(0);
+  await h.run(6 * 60_000);
+  expect(h.merge("finished")).toMatchObject({ state: "merged", mergedHead: successor.lastPassedCommit });
+  expect(h.merges()).toHaveLength(1);
+});
+
+
+test.each(["main", "release/stable"])("a PR successor refreshes from forge base %s instead of its delivery branch", async base => {
+  const value = finished();
+  value.baseBranch = "topic";
+  const h = harness({ lanes: [value], prs: [{ ...conflicting(), base }] });
+  await h.sweep();
+  const request = h.creates[0]!.request as CreatePipelineRequest;
+  expect(request.baseBranch).toBe(base);
+  expect(request.stages[0]!.prompt).toContain(`Merge current origin/${base} into`);
+  expect(request.stages[0]!.prompt).not.toContain("origin/topic into");
+});
+
+
+test("a legacy reservation replays with the forge base after a failed creation", async () => {
+  const value = finished();
+  value.baseBranch = "topic";
+  const h = harness({ lanes: [value], prs: [{ ...conflicting(), base: "release/stable" }] });
+  h.setCreateMode("throw");
+  await h.sweep();
+  delete h.pipeline("finished").merge!.refresh!.baseBranch;
+  h.setCreateMode("ok");
+  await h.sweep();
+  expect((h.creates.at(-1)!.request as CreatePipelineRequest).baseBranch).toBe("release/stable");
+  expect(h.creates[1]!.options).toEqual(h.creates[0]!.options);
+});
+
+
+test("a missing forge base uses the repository default branch", async () => {
+  const value = finished(); value.baseBranch = "topic";
+  const h = harness({ lanes: [value], prs: [{ ...conflicting(), base: "" }] });
+  const run = h.ports.run;
+  h.ports.run = async args => args[0] === "repo" && args.includes("defaultBranchRef") ? "trunk" : run(args);
+  await h.sweep();
+  expect((h.creates[0]!.request as CreatePipelineRequest).baseBranch).toBe("trunk");
+});
+
+test("an inconsistent forge base equal to the delivery branch starts no self-merge", async () => {
+  const h = harness({ lanes: [finished()], prs: [{ ...conflicting(), base: "topic" }] });
+  await h.sweep();
+  expect(h.creates).toHaveLength(0);
+  expect(h.writes).toHaveLength(0);
+});
+
+
+test("progress observed before write admission cannot advance a reopened successor", async () => {
+  const h = harness({ lanes: [finished()], prs: [conflicting()] });
+  await h.sweep();
+  h.pipeline("refresh-1").state = "completed";
+  h.pipeline("refresh-1").delivery!.active = false;
+  Object.assign(h.prs.get(11)!, { mergeStateStatus: "CLEAN", mergeable: "MERGEABLE" });
+  await h.sweep();
+  const mutate = h.ports.mutate;
+  h.ports.mutate = async (id, change) => {
+    if (id === "finished") h.pipeline("refresh-1").state = "running";
+    return mutate(id, change);
+  };
+  await h.sweep();
+  expect(h.merge("finished")?.state).toBe("refreshing");
+  expect(h.writes).toHaveLength(0);
 });
