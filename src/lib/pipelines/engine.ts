@@ -134,7 +134,7 @@ import { resolveStageTestGuidance } from "./testGuidance";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
-import { withoutStoredLessonsAsync } from "@/lib/memory/privacy";
+import { RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
@@ -680,7 +680,7 @@ async function spawnPipelineAgent(
 ): Promise<PipelineStageSpawn> {
   /* The message carries the stage prompt, with any quoted private rule
      withheld. The engine renders its selector into its instruction channel. */
-  const message = await withoutStoredLessonsAsync(input.prompt);
+  // Filter after the reservation and Git setup, immediately before dispatch.
   /* #1279's seam. An unbound project takes the same branch it always took —
      the active account — so nothing changes for a project nobody configured.
      A bound one draws from its allowed set only: a stage naming an account
@@ -838,14 +838,19 @@ async function spawnPipelineAgent(
     throw new Error(unavailable);
   }
   let guardedAccount: typeof account;
+  let message: string;
   try {
     const guard = await performanceSpans.wait("pipeline.git-guard-prepare", () =>
       prepareStageGitGuard(begun.receipt.launchId, input.cwd, realExec, new Date().toISOString()));
     guardedAccount = { ...account, env: { ...account.env, ...guard } };
     // The same reservation callback rechecks durable activation after setup
     // yielded. A pause or ownership change still prevents native dispatch.
-    await onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
-      accountId: begun.receipt.accountId ?? account.accountId });
+    message = await withCurrentRoleMemory(async () => {
+      const filtered = await withoutStoredLessonsAsync(input.prompt);
+      await onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
+        accountId: begun.receipt.accountId ?? account.accountId });
+      return filtered;
+    });
   } catch (error) {
     await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, "stage Git guard preparation or activation recheck failed before dispatch");
     throw error;
@@ -6552,6 +6557,33 @@ async function spawnRunStage(
       || pipeline.stateDetail?.startsWith("stage spawn deferred: ")) pipeline.stateDetail = null;
   } catch (error) {
     if (error instanceof ActivationSuperseded) throw error;
+    if (error instanceof RoleMemoryChanged) {
+      // No message was sent. Retire only our affirmatively failed, unstarted
+      // reservation; uncertain delivery continues through ordinary recovery.
+      if (attempt.launchId) {
+        const receipt = ports.spawnReceipt(attempt.launchId);
+        if (!receipt || receipt.state !== "failed" || receipt.staged || receipt.transcript
+          || receipt.conversationId !== attempt.conversationId
+          || await ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`) !== "claimed") throw error;
+        const current = ports.spawnReceipt(receipt.launchId);
+        if (!current || current.state !== "failed" || current.staged || current.transcript
+          || current.launchId !== receipt.launchId || current.error !== receipt.error
+          || current.conversationId !== attempt.conversationId) throw error;
+        attempt.retiredLaunches = [...attempt.retiredLaunches ?? [], {
+          launchId: receipt.launchId, conversationId: receipt.conversationId, error: error.message, retiredAt: ports.now(),
+        }].slice(-RETIRED_LAUNCH_LIMIT);
+        attempt.launchId = null;
+        attempt.conversationId = null;
+      }
+      attempt.state = "pending";
+      attempt.error = null;
+      if (attempt.activation) attempt.activation.phase = "settled";
+      setCursorState(pipeline, stage.id, "pending");
+      pipeline.stateDetail = "stage spawn deferred: role memory is changing; retrying automatically";
+      await persist();
+      ports.scheduleTick?.(250);
+      return;
+    }
     if (error instanceof PipelineAdmissionHeld) {
       if (attempt.activation) throw error;
       // The legacy executor also waits at account admission. Its last call
