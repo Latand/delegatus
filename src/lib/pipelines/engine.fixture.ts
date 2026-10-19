@@ -37,12 +37,12 @@ const engineModule = await import("./engine");
 // PR delivery regressions use a GitHub target and execute the real helper.
 const pullRequestModule = await import("./stagePullRequest");
 const realEnsureStagePullRequest = pullRequestModule.ensureStagePullRequest;
-const fixturePullRequests = spyOn(pullRequestModule, "ensureStagePullRequest").mockImplementation(async (pipeline, attempt, exec, acceptedHead) => {
+const fixturePullRequests = spyOn(pullRequestModule, "ensureStagePullRequest").mockImplementation(async (pipeline, attempt, exec, acceptedHead, timing) => {
   if (pipeline.delivery && /^(?:\/|file:|git@example\.invalid:)/.test(pipeline.delivery.target.remote)) {
     pipeline.delivery.target.pr ??= 17;
     return { ok: true };
   }
-  return realEnsureStagePullRequest(pipeline, attempt, exec, acceptedHead);
+  return realEnsureStagePullRequest(pipeline, attempt, exec, acceptedHead, timing);
 });
 afterAll(() => fixturePullRequests.mockRestore());
 const { IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail } = engineModule;
