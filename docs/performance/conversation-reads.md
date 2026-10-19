@@ -7,7 +7,7 @@ Related: #1546, #1444, parent #1432. Base: `e74649a0dc7b56f7048a663d705477f6326e
 - Reviewer resolution builds weakly held identity and membership indexes per immutable file revision. It preserves historical retries, first-match ordering, current-generation selection, archived fallbacks and cross-project membership. Switchboard uses stable empty events, separate structural memoization and an inactive overlay projection; CornerStatus keeps its own live data.
 - The dashboard and Kanban share the same complete layout. The worker strip still uses that layout, including historical reviewer decks.
 - Speech selection and redaction run once per contiguous answer per feed revision. The cache is local to the conversation/feed and only retains redacted results. Streamed content, engine or conversation changes produce a new resolver. Code-only answers are cached too.
-- Catalog search applies registry project ownership before opening transcript heads. Stable scoped projections survive keystrokes; file size, modification time, engine, discovery and ownership revisions invalidate the relevant cache. Every page retains the current title/identity overlay. Cursor continuation reuses its frozen search ordering.
+- Catalog search applies registry project ownership before opening transcript heads. The persisted text projection described below validates file size, modification time, engine, kind and source title. Every page retains the current title/identity overlay. Cursor continuation reuses its frozen search ordering.
 - Browser runtime snapshots opt into voice-body summaries. Every session, pending voice/response ID, receipt and lineage field remains. A voice call hydrates its own bodies before starting; an active call pauses queued output during an uncertain read and retries. Stop during hydration cannot start a later call. Full legacy snapshots remain available; older hosts safely answer the full representation. Full and summary cache entries stay separate, and targeted reads are not retained.
 - Browser files reads omit execution input/output and flow specification bodies unused by the board. Full flow/pipeline routes retain them. Visible descriptions, editable prompts, historical records and recovery handles remain complete. Full and summary ETags are isolated.
 - Cards sort within their existing columns by the latest observed agent execution among linked workers. A bounded existing transcript-tail parse supplies assistant/reasoning/tool timestamps. User messages, renames, polling, focus, task edits and wall-clock guesses do not advance this value. Unknown/no-work cards sort last; IDs break ties. Sorting changes no stored placement or task status. The existing idle divider only surrounds a trailing idle suffix, so it cannot override chronological order.
@@ -62,3 +62,98 @@ A bounded read-only projection comparison found the existing files representatio
 ## Integration review
 
 Open work requiring an explicit combined review includes #1677 (dashboard, files and catalog routes), #1667/#1689 (dashboard, composer, runtime contracts/model/journal), #1670 (layout dependency), #1714 (pipeline types) and #1652 (composer recovery). No changes from those branches were adopted. Review both the actual-work sort and speech cache, as well as summary compatibility and original receipt recovery. Root owns merge/deployment and production qualification after review and green gates.
+
+
+## Catalog MCP read budget, 2026-10-19
+
+The production observation on `9e77bba6` required a fix: 11 calls per variant
+across more than 15 minutes, 27 open lanes (9 running overall, 6 in the project),
+and 24 CPUs. MCP search succeeded 6/11 times; p50/p95/max were
+5.019/12.433/12.433 seconds against a 12-second read budget with five-second
+attempts. HTTP search succeeded 7/11 times. Default HTTP and MCP lists both
+succeeded 11/11 times. The relayed production table, every load sample and the
+local comparison are retained in
+[the measurement record](../../evidence/conversation-search-projection.json).
+
+The old request path copied the catalog before taking its project slice, so
+its short-lived projection could not reuse array identity. Above its
+2,048-entry text cache, each query reopened the remaining transcript heads.
+The replacement in `src/lib/scanner/conversationSearchProjection.ts` retains
+validated text in `conversation-search-v1.sqlite`. It reads at most 24 narrow
+identity records per batch, asynchronously hydrates changed heads, and matches
+normalized title/prompt/project text inside SQLite. Prompt text stays out of
+JavaScript on a warm query. Only matching entries reach cursor pagination and
+page-sized filesystem stats.
+
+The cache retains up to 50,000 entries and 512 MiB of accounted payload, evicting
+the oldest hydration records. The database file has a 262,144-page ceiling (1 GiB with 4 KiB pages);
+SQLite also owns its WAL and shared-memory companions. A batch matches before
+eviction, so exceeding a cache limit keeps results complete. One global owner
+per state directory serializes up to 64 admitted searches. A queued request
+can cancel before dispatch; active cancellation closes its reads before
+returning. The complete search, including queue time, has an 11-second local
+deadline; writer admission has a four-second maximum within that deadline.
+SQLite's busy timeout is zero and admission uses `waitForStateLock`. Work is
+attributed as `catalog.search` in the loop monitor.
+
+The new schema has one producer, the search projection owned by the Viewer.
+Earlier releases never write it. Discovery and the file-scanner worker remain
+the producers of catalog membership; registry ownership scopes it before any
+text read, and deputy exclusions run before search and on returned pages.
+Registry launch titles and alias-aware title overrides feed one pinned title
+projector per request. Another Viewer generation can share the cache: the
+matching statement rechecks row identity after hydration/admission, retrying a
+replaced batch. Persistent metadata counters and eviction triggers commit with
+the rows. Startup validates the artifact's version, columns, counters and
+schema objects before reuse. Existing HTTP/MCP schemas, final title/identity
+and lineage overlays, and frozen cursor continuations are preserved.
+
+The same revised `scripts/profile-catalog-search.ts` ran against the base and
+candidate exports, one at a time through the gate. Both used the same 8,247
+files, 6,000 selected rows, 50,016-character prompts, fresh private state and
+the same 300% CPU quota. The listener bound port 0. MCP calls used
+`productionViewerControlDependencies(true)` with the real attempt/recovery
+budgets and body parsing. All four variants succeeded 11/11 on both revisions.
+MCP's byte budget returned 35 default rows on both revisions; HTTP returned 50.
+
+| Local variant | Base p50/p95/max, seconds | Candidate p50/p95/max, seconds | Bytes p50/p95/max, both |
+| --- | --- | --- | --- |
+| MCP search, including cold creation | 3.081/3.406/3.406 | 0.153/4.377/4.377 | 2036/2036/2036 |
+| HTTP search, after the MCP query | 3.138/3.574/3.574 | 0.150/0.196/0.196 | 2675/2675/2675 |
+| MCP default | 0.031/0.040/0.040 | 0.034/0.049/0.049 | 11666/11666/11666 |
+| HTTP default | 0.026/0.031/0.031 | 0.031/0.045/0.045 | 25926/25926/25926 |
+
+The first MCP search took 3.218 seconds on the base and 4.377 seconds while
+creating the candidate's persistent cache. Candidate warm MCP searches
+(samples 2–11) had a 0.228-second maximum. Cold creation therefore increases
+the full-sample p95 in this local comparison; both candidate search p95 values
+remain below six seconds. Load1 ranged 9.74–11.03 on the base and 13.52–14.17
+on the candidate. Background activity was uncontrolled, so this comparison
+does not isolate a precise speedup ratio. Production after deployment still
+needs its own observation.
+
+Reproduce with two source exports sharing the dependency lockfile and corpus.
+Use private HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR; keep the home and
+config below TMPDIR. Run the current driver against each export:
+
+```sh
+bash scripts/gate-slot.sh bun scripts/profile-catalog-search.ts <export> "$TMPDIR/catalog-corpus" 6000 11
+```
+
+The driver writes its complete JSON record to stdout and per-call observations
+to stderr. It uses private state by default; an optional fifth argument reuses
+a private projection across process restarts. Percentiles use nearest rank
+and include cold calls and time-to-error; payload statistics use successful
+JSON only. The artifact records source digests for the candidate's measured
+code and driver.
+
+The route regression is red on the base and green on the candidate: after a
+2,051-row search, a retained transcript head is made unreadable while the
+published catalog remains unchanged. The old cache reopens it; the new cache
+answers from validated text. Explicit projection tests also cover same-size
+rewrites, engine/kind/title changes, title overrides, project moves, removed
+membership, both cache limits, Unicode terms, hydration failure, queued and
+active cancellation, async SQLite admission, concurrent generation replacement,
+failed initialization, unknown schemas, and real-process restart with retained
+text and an enforced entry ceiling. Query-plan assertions cover singleton and
+multi-value path binds, including duplicates, and the eviction index.
