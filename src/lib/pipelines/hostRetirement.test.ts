@@ -130,6 +130,17 @@ test.each([true, false])("adopted historical work retains custody alongside an o
   expect(f.signals).toEqual([]);
 });
 
+test.each([false, true])("a finished parent releases successor-source custody except publication: %s", async publishing => {
+  const f = fixture();
+  f.pipeline.state = "completed";
+  const successor: Pipeline = { ...f.pipeline, id: "successor", state: "paused", runs: [],
+    srcConversationId: f.attempt.conversationId, srcPath: f.transcript };
+  if (publishing) successor.publicationAdmission = { state: "pending" } as Pipeline["publicationAdmission"];
+  f.deps.loadPipelinesForRetirement = () => [f.pipeline, successor];
+  expect(await f.retire()).toBe(!publishing);
+  expect(f.signals).toEqual(publishing ? [] : [987001, 987002]);
+});
+
 test("provider recovery retires its own running cut through the production callback", async () => {
   const f = fixture();
   expect(pipelineHostHasLiveWork([f.pipeline], { conversationId: f.attempt.conversationId, agentPath: f.transcript, paneId: null, launchId: null })).toBe(true);

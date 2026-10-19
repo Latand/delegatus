@@ -193,6 +193,23 @@ test("a superseded unstamped attempt retires while the current attempt retains i
   expect(h.resident.get("conversation_current")).toBe(true);
 });
 
+test("an open successor does not retain its finished creator's host", async () => {
+  const h = harness();
+  const parent = pipelineRecord({ id: "retire-successor-creator", state: "completed",
+    attempts: [attempt(1, "conversation_finished_creator", true)] });
+  const successor = pipelineRecord({ id: "open-successor", state: "paused", attempts: [] });
+  successor.srcConversationId = "conversation_finished_creator";
+  successor.srcPath = parent.runs[0]!.attempts[0]!.agentPath;
+  successor.refreshOf = { pipelineId: parent.id, base: parent.baseRef };
+  savePipelines([parent, successor]);
+  h.resident.set("conversation_finished_creator", true);
+  h.active.set("conversation_finished_creator", false);
+  await tickPipelinesController([], h.ports);
+  expect(h.stops).toEqual(["implement:1:conversation_finished_creator"]);
+  expect(loadPipelines().find(lane => lane.id === parent.id)!.terminalReap?.settledAt).toBeTruthy();
+  expect(loadPipelines().find(lane => lane.id === successor.id)!.state).toBe("paused");
+});
+
 test("an old terminal lane remains scheduled and unarchived until its open turn settles", async () => {
   const h = harness();
   savePipelines([pipelineRecord({ id: "retire-before-archive", state: "completed",

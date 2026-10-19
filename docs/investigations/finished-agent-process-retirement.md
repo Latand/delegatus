@@ -9,6 +9,13 @@ still running. Superseded operational attempts also retained ownership solely
 because their old attempt state remained running. The TypeScript ownership
 guard and its SQLite projection made the same decision.
 
+An open successor also retained its creator through source ownership after
+that creator's operational attempt had been released. A released parent now
+ends that source-only obligation. A live attempt, publication, seat or runtime
+turn still protects the shared host. The indexed guard distinguishes released
+attempts from inactive history and source publication; peer writes update that
+evidence atomically with their pipeline row.
+
 Terminal lanes now consider every recorded host. Replaced operational attempts
 release their ownership, while adopted helpers retain their independent work
 evidence. Every automatic stop still requires the runtime's conditional idle

@@ -15,6 +15,21 @@ export function pipelineAttemptReleased(pipeline: Pipeline, attempt: PipelineSta
     || (!!latest && !latest.historical && latest.n !== attempt.n));
 }
 
+function publicationHasCustody(pipeline: Pipeline): boolean {
+  const publication = pipeline.delivery?.operation;
+  const result = publication?.result;
+  return (publication !== undefined && (publication.state !== "settled" || !result
+      || (result.ok !== true && result.ok !== false)
+      || (result.ok === false && typeof result.error !== "string")
+      || (result.ok === true && (typeof result.sha !== "string"
+        || !["published", "unavailable"].includes(result.remote)
+        || (result.uncertain !== undefined && result.uncertain !== false)))
+      || (publication.executor !== undefined && publication.executor.finished !== true)))
+      || pipeline.publicationAdmission?.state === "pending"
+      || pipeline.remoteAction?.state === "pending"
+      || pipeline.cursor?.state === "committing";
+}
+
 /** Fresh pipeline ownership for an engine-issued recovery. A ref never grants
     authority to a source owner, publication, or a different/current attempt. */
 export function providerRecoveryAttempt(
@@ -74,21 +89,25 @@ export function pipelineHostHasLiveWork(
   const sameConversation = (id: string | null) => !!id && !!target.conversationId
     && resolveConversation(id) === resolveConversation(target.conversationId);
   const samePath = (value: string | null) => !!value && !!target.agentPath && value === target.agentPath;
+  // Creating a successor does not keep a finished stage resident. Its live
+  // runtime turn, accepted work, publication and any operational owner still
+  // protect it independently. Proof is re-read on every actuation boundary.
+  let releasedConversation = false, releasedPath = false;
   for (const pipeline of pipelines) {
-    const publication = pipeline.delivery?.operation;
-    const result = publication?.result;
-    const publishing = (publication !== undefined && (publication.state !== "settled" || !result
-      || (result.ok !== true && result.ok !== false)
-      || (result.ok === false && typeof result.error !== "string")
-      || (result.ok === true && (typeof result.sha !== "string"
-        || !["published", "unavailable"].includes(result.remote)
-        || (result.uncertain !== undefined && result.uncertain !== false)))
-      || (publication.executor !== undefined && publication.executor.finished !== true)))
-      || pipeline.publicationAdmission?.state === "pending"
-      || pipeline.remoteAction?.state === "pending"
-      || pipeline.cursor?.state === "committing";
-    if ((sameConversation(pipeline.srcConversationId) || samePath(pipeline.srcPath))
-      && (publishing || !["completed", "closed"].includes(pipeline.state))) return true;
+    if (publicationHasCustody(pipeline)) continue;
+    for (const run of pipeline.runs) for (const attempt of run.attempts) {
+      if (!pipelineAttemptReleased(pipeline, attempt, run.attempts.at(-1))
+        || attempt.activation && attempt.activation.phase !== "settled") continue;
+      releasedConversation ||= sameConversation(attempt.conversationId);
+      releasedPath ||= samePath(attempt.agentPath);
+    }
+  }
+  for (const pipeline of pipelines) {
+    const publishing = publicationHasCustody(pipeline);
+    const sourceConversation = sameConversation(pipeline.srcConversationId), sourcePath = samePath(pipeline.srcPath);
+    if ((publishing && (sourceConversation || sourcePath))
+      || (!["completed", "closed"].includes(pipeline.state)
+        && ((sourceConversation && !releasedConversation) || (sourcePath && !releasedPath)))) return true;
     for (const run of pipeline.runs) for (const attempt of run.attempts) {
       const matches = sameConversation(attempt.conversationId) || samePath(attempt.agentPath)
         || (!!target.paneId && attempt.paneId === target.paneId)

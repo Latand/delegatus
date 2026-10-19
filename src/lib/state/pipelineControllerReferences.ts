@@ -27,6 +27,8 @@ export function installPipelineControllerReferences(db: Database, directory: str
   db.exec(`CREATE TABLE pipeline_owner_refs (
     row_key TEXT NOT NULL, kind TEXT NOT NULL, identity TEXT NOT NULL, live INTEGER NOT NULL,
     PRIMARY KEY(row_key,kind,identity,live))`);
+  // Custody tags: 0 inactive, 1 live, 2 source publication, -1 released
+  // operational attempt. Only a positive tag can independently retain a host.
   db.exec("CREATE INDEX pipeline_owner_lookup ON pipeline_owner_refs(kind,identity,live)");
   db.exec("UPDATE pipeline_tick_work SET attempt_cursor=0");
   const populate = (source: string, key: string) => {
@@ -36,7 +38,9 @@ export function installPipelineControllerReferences(db: Database, directory: str
     const hostValue = "(CASE WHEN h.type='object' THEN h.value ELSE '{}' END)";
     const cte = `WITH controller_source AS MATERIALIZED (SELECT jsonb(${source}) AS payload),
       controller_runs AS MATERIALIZED (SELECT r.key,
-        jsonb_object('stageId',json_extract(r.value,'$.stageId')) AS metadata,
+        jsonb_object('stageId',json_extract(r.value,'$.stageId'),
+          'attemptCount',json_array_length(r.value,'$.attempts'),
+          'tailHistorical',COALESCE(json_extract(r.value,'$.attempts[#-1].historical'),0)) AS metadata,
         jsonb_extract(r.value,'$.attempts') AS attempts FROM controller_source,json_each(payload,'$.runs') r),
       controller_attempts AS MATERIALIZED (SELECT r.key AS run,a.key,jsonb(a.value) AS payload
         FROM controller_runs r,json_each(r.attempts) a),
@@ -46,8 +50,8 @@ export function installPipelineControllerReferences(db: Database, directory: str
     const field = (name: string) => `json_extract(${value},'$.${name}')`;
     const released = `(COALESCE(json_extract(${attemptValue},'$.historical'),0)=0
       AND (${field("state")} IN ('completed','closed') OR (
-        COALESCE(json_extract(r.attempts,'$[#-1].historical'),0)=0
-        AND CAST(a.key AS INTEGER)<json_array_length(r.attempts)-1)))`;
+        json_extract(${runValue},'$.tailHistorical')=0
+        AND CAST(a.key AS INTEGER)<json_extract(${runValue},'$.attemptCount')-1)))`;
     const op = field("delivery.operation");
     // Same fail-closed publication custody as pipelineHostHasLiveWork.
     const publishing = `((${op} IS NOT NULL AND (
@@ -85,12 +89,15 @@ export function installPipelineControllerReferences(db: Database, directory: str
         SELECT ${key},281474976710656+${index}*4294967296+CAST(h.key AS INTEGER),json_extract(${hostValue},'$.stageId'),json_extract(${hostValue},'$.attempt'),-1,-1,1,0,0
         FROM controller_source, json_each(CASE WHEN json_type(${value},'$.${field}')='array' THEN jsonb_extract(${value},'$.${field}') ELSE '[]' END) h WHERE json_type(${hostValue},'$.stageId')='text' AND json_type(${hostValue},'$.attempt') IN ('integer','real')`).join("\n")};
       INSERT INTO pipeline_owner_refs ${cte}
-        SELECT ${key},ids.key,ids.value,COALESCE((${publishing}) OR ${field("state")} NOT IN ('completed','closed'),0)
+        SELECT ${key},ids.key,ids.value,CASE WHEN (${publishing}) THEN 2
+          WHEN ${field("state")} NOT IN ('completed','closed') THEN 1 ELSE 0 END
         FROM controller_source, ${identities(value,["srcConversationId","srcPath"])} WHERE ids.value IS NOT NULL AND ids.value!=''
       UNION ALL
-        SELECT ${key},ids.key,ids.value,COALESCE((${publishing}) OR (NOT ${released} AND (json_extract(${attemptValue},'$.state') IN ('pending','spawning','running','reviewing','committing')
-          OR (json_extract(${attemptValue},'$.verdict') IS NULL AND COALESCE(json_extract(${attemptValue},'$.completedAt'),'')='')))
-          OR (json_extract(${attemptValue},'$.activation') IS NOT NULL AND json_extract(${attemptValue},'$.activation.phase') IS NOT 'settled'),0)
+        SELECT ${key},ids.key,ids.value,CASE WHEN (${publishing})
+          OR (json_extract(${attemptValue},'$.activation') IS NOT NULL AND json_extract(${attemptValue},'$.activation.phase') IS NOT 'settled') THEN 1
+          WHEN ${released} THEN -1
+          WHEN json_extract(${attemptValue},'$.state') IN ('pending','spawning','running','reviewing','committing')
+            OR (json_extract(${attemptValue},'$.verdict') IS NULL AND COALESCE(json_extract(${attemptValue},'$.completedAt'),'')='') THEN 1 ELSE 0 END
         ${attempts}, ${identities(attemptValue,["conversationId","agentPath","paneId","launchId","sessionId"])} WHERE ids.value IS NOT NULL AND ids.value!=''
       UNION ALL
         SELECT ${key},'flow',json_extract(${attemptValue},'$.flowId'),0 ${attempts} WHERE json_extract(${attemptValue},'$.flowId') IS NOT NULL ON CONFLICT DO NOTHING;`;

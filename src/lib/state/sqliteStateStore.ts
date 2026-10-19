@@ -1331,8 +1331,16 @@ export class SqliteStateCollection<T> {
   }
 
   pipelineOwnerExists(identities: readonly [string, string][], live: boolean): boolean {
-    return identities.some(([kind, identity]) => Boolean(sharedStateReadonlyDatabase(this.filename).query(`SELECT 1 FROM pipeline_owner_refs
-      WHERE kind=? AND identity=? ${live ? "AND live=1" : ""} LIMIT 1`).get(kind,identity)));
+    return identities.some(([kind, identity]) => {
+      const source = live ? kind === "srcConversationId" ? "conversationId" : kind === "srcPath" ? "agentPath" : null : null;
+      // Source publication (2) retains custody. A released operational attempt
+      // (-1) ends an idle creator's obligation to stay beside its successor.
+      const released = source ? `AND (live=2 OR NOT EXISTS (SELECT 1 FROM pipeline_owner_refs
+        WHERE kind=? AND identity=? AND live=-1))` : "";
+      return Boolean(sharedStateReadonlyDatabase(this.filename).query(`SELECT 1 FROM pipeline_owner_refs
+        WHERE kind=? AND identity=? ${live ? "AND live>0" : ""} ${released} LIMIT 1`)
+        .get(kind, identity, ...(source ? [source, identity] : [])));
+    });
   }
 
   pipelineTickReady(now: number, excluded: readonly string[]): boolean {

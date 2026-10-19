@@ -12,6 +12,48 @@ import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 
 type Row = { key: string; value: number };
 
+test.each([0, 512])("indexed successor-source custody follows released parents, publication and peer replacement (%s retained owners)", history => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-successor-owner-"));
+  const filename = path.join(dir, "state.sqlite");
+  type Owner = { key: string; state: string; runs: unknown[]; [field: string]: unknown };
+  const parent: Owner = { key: "parent", state: "completed", runs: [{ stageId: "build", attempts: [
+    { n: 1, state: "running", conversationId: "parent-host", agentPath: "parent-transcript" },
+  ] }] };
+  const successor: Owner = { key: "successor", state: "paused", srcConversationId: "parent-host", srcPath: "parent-transcript", runs: [] };
+  let decodes = 0;
+  const options = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (row: Owner) => row.key,
+    decode: (raw: unknown) => { decodes++; return raw as Owner; }, clone: (row: Owner) => structuredClone(row) };
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "one", loadRecords: () => [
+      ...Array.from({ length: history }, (_, n): Owner => ({ key: `retained-${n}`, state: "paused", runs: [],
+        srcConversationId: `unrelated-${n}`, srcPath: `unrelated-transcript-${n}` })), parent, successor,
+    ] }]);
+    const store = new SqliteStateCollection(filename, options), peer = new Database(filename);
+    try {
+      const identities: [string, string][] = [["srcConversationId", "parent-host"], ["srcPath", "parent-transcript"]];
+      const before = decodes;
+      expect(store.pipelineOwnerExists(identities, true)).toBe(false);
+      expect(store.pipelineOwnerExists([...identities, ...identities], true)).toBe(false);
+      const plan = peer.query<{ detail: string }, [string, string, string, string]>(`EXPLAIN QUERY PLAN SELECT 1 FROM pipeline_owner_refs
+        WHERE kind=? AND identity=? AND live>0 AND (live=2 OR NOT EXISTS (SELECT 1 FROM pipeline_owner_refs
+          WHERE kind=? AND identity=? AND live=-1)) LIMIT 1`).all("srcConversationId", "parent-host", "conversationId", "parent-host");
+      expect(plan.filter(row => row.detail.includes("pipeline_owner_lookup"))).toHaveLength(2);
+      expect(plan.some(row => row.detail.includes("SCAN pipeline_owner_refs"))).toBe(false);
+      peer.exec("UPDATE state_rows SET value_json=json_set(value_json,'$.publicationAdmission.state','pending') WHERE row_key='successor'");
+      expect(store.pipelineOwnerExists(identities, true)).toBe(true);
+      peer.exec("UPDATE state_rows SET value_json=json_remove(value_json,'$.publicationAdmission') WHERE row_key='successor'");
+      expect(store.pipelineOwnerExists(identities, true)).toBe(false);
+      peer.exec("UPDATE state_rows SET value_json=json_set(value_json,'$.state','running') WHERE row_key='parent'");
+      expect(store.pipelineOwnerExists(identities, true)).toBe(true);
+      peer.exec("UPDATE state_rows SET value_json=json_set(value_json,'$.state','completed') WHERE row_key='parent'");
+      expect(store.pipelineOwnerExists(identities, true)).toBe(false);
+      peer.exec("DELETE FROM state_rows WHERE row_key='parent'");
+      expect(store.pipelineOwnerExists(identities, true)).toBe(true);
+      expect(decodes).toBe(before);
+    } finally { peer.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("retirement upgrade re-enrols a terminal host missed by the old projection across a process restart", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-retirement-upgrade-"));
   const filename = path.join(dir, "state.sqlite");
