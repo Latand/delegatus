@@ -67,13 +67,25 @@ function sourceLeaves(text: string) {
     }
   }
   const images: { id: string; line: number }[] = [];
-  let leaf = 1, base = 0, fence: string | null = null, listContext = false;
+  let leaf = 1, base = 0, fence: string | null = null;
+  let listContentIndent: number | null = null, quoteListContentIndent: number | null = null;
   const lines = text.split("\n");
   for (let lineNo = 0; lineNo < lines.length; lineNo++) {
     const line = lines[lineNo]!, chars = Array.from(line);
     const marker = /^(?:\s{0,3}>\s*)*(?:\s*(?:[-+*]|\d+[.)])\s+)?\s*(`{3,}|~{3,})/.exec(line)?.[1];
-    const nestedList = listContext && /^(?: {4,}|\t+)(?:[-+*]|\d+[.)])[\t ]+/.test(line);
-    const indented = /^(?: {4}|\t)/.test(line) && !nestedList;
+    const quote = /^(?: {0,3}>[\t ]?)+/.exec(line)?.[0] ?? "";
+    const quoteContent = line.slice(quote.length);
+    const quoteIndent = quote.length > 0;
+    const quoteList = /^(?:[-+*]|\d+[.)])[\t ]+/.exec(quoteContent)?.[0];
+    const listMarker = /^(?: {0,3})(?:[-+*]|\d+[.)])[\t ]+/.exec(line)?.[0];
+    const listIndent = listMarker ? listItemContentIndent(listMarker) : null;
+    const activeIndent = quoteIndent ? quoteListContentIndent : listContentIndent;
+    const nestedList = activeIndent !== null && /^(?: {1,}|\t+)(?:[-+*]|\d+[.)])[\t ]+/.test(quoteIndent ? quoteContent : line);
+    const continuationIndent = indentColumns(quoteIndent ? quoteContent : line);
+    const continuation = activeIndent !== null && !listMarker && !quoteList
+      && (quoteIndent || !quote.length)
+      && continuationIndent >= activeIndent && continuationIndent < activeIndent + 4;
+    const indented = /^(?: {4}|\t)/.test(quoteContent) && !nestedList && !continuation;
     const isCode = !!fence || !!marker || indented;
     if (indented && !fence && !marker && /!\[.*\]\(attachment:/.test(line)) invalid();
     if (fence) { if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null; }
@@ -118,13 +130,30 @@ function sourceLeaves(text: string) {
       const syntax = chars.map((c, i) => inert[i] ? " " : c).join("");
       if (/<\/?tg-slideshow\b/i.test(syntax)) invalid();
     }
-    const listLine = /^(?: {0,3}>[\t ]?)*\s*(?:[-+*]|\d+[.)])[\t ]+/.test(line);
-    if (!line.trim()) listContext = false;
-    else if (listLine || nestedList) listContext = true;
-    else if (!/^(?: {0,3}>[\t ]?)/.test(line)) listContext = false;
+    if (!line.trim()) { listContentIndent = null; quoteListContentIndent = null; }
+    else if (listMarker) { listContentIndent = listIndent; quoteListContentIndent = null; }
+    else if (quoteList) { quoteListContentIndent = Array.from(quote).length + Array.from(quoteList).length; listContentIndent = null; }
+    else if (!quoteIndent && !continuation && !nestedList) listContentIndent = null;
     base += chars.length + 1; leaf++;
   }
   return { points, leaves, images, lines };
+}
+
+function indentColumns(value: string) {
+  let columns = 0;
+  for (const char of value) {
+    if (char === " ") columns++;
+    else if (char === "\t") columns += 4 - columns % 4;
+    else break;
+  }
+  return columns;
+}
+
+function listItemContentIndent(marker: string) {
+  const leading = marker.match(/^[\t ]*/)?.[0] ?? "";
+  const itemMarker = marker.slice(leading.length).match(/^\S+/)?.[0] ?? "";
+  const padding = marker.slice(leading.length + itemMarker.length);
+  return indentColumns(leading) + Array.from(itemMarker).length + Math.min(4, Math.max(1, indentColumns(padding)));
 }
 
 export function checkedMentions(value: unknown, text: string, format: string, request: ExternalRelayRequest): RelayMention[] {

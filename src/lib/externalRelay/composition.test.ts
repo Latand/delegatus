@@ -60,6 +60,8 @@ test("mentions cannot cross Markdown container and closing syntax", () => {
   const nestedQuoteList = "> - Outer\n>     - Person";
   validateAnswerComposition(reply(nestedQuoteList, { mentions: [{ ...mention, offset: 18, length: 6 }] }), request(), []);
   refuses(() => validateAnswerComposition(reply("    Person", { mentions: [{ ...mention, offset: 4, length: 6 }] }), request(), []));
+  refuses(() => validateAnswerComposition(reply(">     Person", { mentions: [{ ...mention, offset: 6, length: 6 }] }), request(), []));
+  validateAnswerComposition(reply("- Intro\n    Person", { mentions: [{ ...mention, offset: 12, length: 6 }] }), request(), []);
 });
 test("every malformed mention is refused before completion", () => {
   const cases = [null, {}, [null], [{ ...mention, extra: true }], [{ ...mention, offset: -1 }], [{ ...mention, offset: 0.5 }], [{ ...mention, offset: 31999 }], [{ ...mention, length: 0 }], [{ ...mention, length: 129 }], [{ ...mention, length: 1.5 }], [{ ...mention, author_key: "foreign" }], [{ ...mention, author_key: "123" }], [{ ...mention, author_key: "person_a " }], [mention, mention], [{ ...mention, offset: 9, length: 1 }, mention], Array(17).fill(mention)];

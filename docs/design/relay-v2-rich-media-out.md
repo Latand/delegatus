@@ -47,8 +47,11 @@ and compaction remain outside this amendment.
   streaming; cancellation, interruption and authorization loss discard partial
   files. Transfers run under the lesser of 30 seconds and the request deadline,
   with a labelled Viewer span and fresh authority checks after awaits.
-  PDF structure is parsed in the owned worker, capped at 20 MiB input and
-  128 MiB old-generation heap, and forcibly terminated after five seconds.
+  PDF structure is parsed in an owned Bun process inside a transient systemd
+  scope, capped at 20 MiB input and 256 MiB total memory with swap disabled,
+  and forcibly terminated after five seconds. The process boundary keeps a
+  parser memory failure from exhausting the Viewer; systems without the Linux
+  user systemd memory controller fail PDF validation closed.
   HTML tags are rejected by the streaming text guard across chunk boundaries.
   Original bytes remain untrusted; document extraction is supplied by the
   service and validated locally, with no local execution or extraction call.

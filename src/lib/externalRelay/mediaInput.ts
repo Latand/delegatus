@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { Transform } from "node:stream";
-import { Worker, threadId } from "node:worker_threads";
 import { pipeline } from "node:stream/promises";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ExternalRelayError, relayDownloadMedia } from "./client";
@@ -15,7 +16,8 @@ export type InboundFile = { ref: string; path: string; kind: "photo" | "document
 /** A bounded decoder examines text chunks without retaining document bodies. */
 function contentGuard(mime: string) {
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  let prefix: Buffer = Buffer.alloc(0), tail: Buffer = Buffer.alloc(0), overlap = "";
+  let prefix: Buffer = Buffer.alloc(0), tail: Buffer = Buffer.alloc(0);
+  let markupState: "text" | "lt" | "slash" | "tag-name" = "text";
   const textType = mime.startsWith("text/") || mime === "application/json";
   return {
     add(chunk: Buffer) {
@@ -24,9 +26,22 @@ function contentGuard(mime: string) {
       if (textType) {
         let decoded: string;
         try { decoded = decoder.decode(chunk, { stream: true }); } catch { return fail("unsupported_media_type", 415); }
-        const scan = overlap + decoded;
-        if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(scan) || /<\/?[a-z][a-z0-9:-]*(?:[\t\r\n />])|<\?|<!/i.test(scan)) fail("unsupported_media_type", 415);
-        overlap = scan.slice(-64);
+        if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(decoded)) fail("unsupported_media_type", 415);
+        for (const character of decoded) {
+          if (markupState === "tag-name") {
+            if (/[a-z0-9:-]/i.test(character)) continue;
+            if (/[\t\r\n />]/.test(character)) fail("unsupported_media_type", 415);
+            markupState = character === "<" ? "lt" : "text";
+          } else if (markupState === "lt") {
+            if (character === "?" || character === "!") fail("unsupported_media_type", 415);
+            if (character === "/") { markupState = "slash"; continue; }
+            if (/[a-z]/i.test(character)) { markupState = "tag-name"; continue; }
+            markupState = character === "<" ? "lt" : "text";
+          } else if (markupState === "slash") {
+            if (/[a-z]/i.test(character)) { markupState = "tag-name"; continue; }
+            markupState = character === "<" ? "lt" : "text";
+          } else if (character === "<") markupState = "lt";
+        }
       }
     },
     finish() {
@@ -38,40 +53,66 @@ function contentGuard(mime: string) {
     },
   };
 }
-/** Parsing runs in an owned worker with a byte cap, heap cap and hard deadline. */
+/** PDF parsing runs in a memory-limited, owned process with a hard deadline. */
 export async function validatePdfStructure(filename: string, signal: AbortSignal, authorize: () => void,
-  runtime: { timeoutMs?: number; workerStarted?: (workerThreadId: number) => void } = {}) {
+  runtime: { timeoutMs?: number; workerStarted?: (workerPid: number) => void; workerEntry?: string; memoryLimitMb?: number } = {}) {
   signal.throwIfAborted(); authorize();
-  const workerPath = [path.join(process.cwd(), ".next/server/relay-pdf-validation-worker.js"),
+  const workerPath = runtime.workerEntry ?? [path.join(process.cwd(), ".next/server/relay-pdf-validation-worker.js"),
     path.join(process.cwd(), "src/lib/externalRelay/pdfValidation.worker.ts")].find(candidate => fs.existsSync(candidate));
   if (!workerPath) return fail("unsupported_media_type", 415);
-  const worker = new Worker(workerPath, { workerData: { filename, maxBytes: 20 * MiB }, resourceLimits: { maxOldGenerationSizeMb: 128 } });
+  const unit = `delegatus-relay-pdf-${randomUUID()}.scope`;
+  const memoryLimitMb = runtime.memoryLimitMb ?? 256;
+  const worker = spawn("systemd-run", ["--user", "--scope", "--quiet", "--collect", `--unit=${unit}`,
+    `--property=MemoryMax=${memoryLimitMb}M`, "--property=MemorySwapMax=0", process.execPath, workerPath, filename, String(20 * MiB)],
+  { stdio: ["ignore", "pipe", "ignore"] });
   const timeoutMs = runtime.timeoutMs ?? 5_000;
   return await new Promise<number>((resolve, reject) => {
-    let settled = false;
-    const timer = setTimeout(() => finish(new Error("PDF validation deadline exceeded")), timeoutMs);
-    const finish = (error?: Error, workerThreadId?: number) => {
+    let settled = false, started = false, result: boolean | null = null, workerPid: number | undefined;
+    let output = "", closeResolve!: (code: number | null) => void;
+    const closed = new Promise<number | null>(resolveClose => { closeResolve = resolveClose; });
+    const terminate = () => new Promise<void>(resolveKill => {
+      const killer = spawn("systemctl", ["--user", "kill", "--kill-whom=all", "--signal=SIGKILL", unit],
+        { stdio: "ignore" });
+      killer.once("error", () => { worker.kill("SIGKILL"); resolveKill(); });
+      killer.once("close", () => { worker.kill("SIGKILL"); resolveKill(); });
+    });
+    const finish = async (error?: Error) => {
       if (settled) return; settled = true; clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
-      void worker.terminate().catch(() => undefined).then(() => error ? reject(error) : resolve(workerThreadId!));
+      if (error) await terminate();
+      const code = await closed;
+      if (error || result !== true || code !== 0 || !workerPid) reject(error ?? new Error("PDF structural validation failed"));
+      else resolve(workerPid);
     };
-    const onAbort = () => finish(signal.reason instanceof Error ? signal.reason : new DOMException("PDF validation cancelled", "AbortError"));
+    const timer = setTimeout(() => { void finish(new Error("PDF validation deadline exceeded")); }, timeoutMs);
+    const onAbort = () => { void finish(signal.reason instanceof Error ? signal.reason : new DOMException("PDF validation cancelled", "AbortError")); };
     signal.addEventListener("abort", onAbort, { once: true });
-    worker.on("message", (message: { type?: string; ok?: boolean; workerThreadId?: number }) => {
-      if (message?.type === "started" && message.workerThreadId !== threadId) {
-        try { signal.throwIfAborted(); authorize(); runtime.workerStarted?.(message.workerThreadId!); }
-        catch (error) { finish(error as Error); }
-        return;
+    worker.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString("utf8");
+      if (output.length > 16_384) { void finish(new Error("PDF validation worker output exceeded limit")); return; }
+      let end: number;
+      while ((end = output.indexOf("\n")) !== -1) {
+        const line = output.slice(0, end); output = output.slice(end + 1);
+        let message: { type?: string; ok?: boolean; workerPid?: number };
+        try { message = JSON.parse(line); } catch { void finish(new Error("PDF validation worker returned malformed output")); return; }
+        const pid = message.workerPid;
+        if (message.type === "started" && typeof pid === "number" && Number.isInteger(pid) && !started) {
+          started = true; workerPid = pid;
+          try { signal.throwIfAborted(); authorize(); runtime.workerStarted?.(pid); }
+          catch (error) { void finish(error as Error); return; }
+        } else if (typeof message.ok === "boolean") {
+          try { signal.throwIfAborted(); authorize(); }
+          catch (error) { void finish(error as Error); return; }
+          result = message.ok;
+          if (!message.ok) void finish(new Error("PDF structural validation failed"));
+        } else { void finish(new Error("PDF validation worker returned malformed output")); return; }
       }
-      if (!message?.ok || !Number.isInteger(message.workerThreadId) || message.workerThreadId === threadId) {
-        finish(new Error("PDF structural validation failed")); return;
-      }
-      try { signal.throwIfAborted(); authorize(); }
-      catch (error) { finish(error as Error); return; }
-      finish(undefined, message.workerThreadId);
     });
-    worker.once("error", error => finish(error instanceof Error ? error : new Error(String(error))));
-    worker.once("exit", code => { if (!settled) finish(new Error(`PDF validation worker exited (${code})`)); });
+    worker.once("error", error => { closeResolve(null); void finish(error instanceof Error ? error : new Error(String(error))); });
+    worker.once("close", code => {
+      closeResolve(code);
+      if (!settled) void finish(result === true && code === 0 ? undefined : new Error(`PDF validation process exited (${code})`));
+    });
     if (signal.aborted) onAbort();
   });
 }
@@ -109,7 +150,7 @@ export async function writeInboundAgentInput(files: readonly InboundFile[], prom
   });
 }
 export async function prepareInboundMedia(relay: Pick<PairedRelay, "api_base" | "credential">, request: MediaRequest, runDir: string,
-  options: { signal: AbortSignal; deadlineAt: number; authorize: () => void; now?: () => number }) {
+  options: { signal: AbortSignal; deadlineAt: number; authorize: () => void; now?: () => number; pdfValidation?: { workerEntry?: string; memoryLimitMb?: number } }) {
   return withViewerOperation("relay.media-input", async () => {
     const now = options.now ?? Date.now;
     const check = () => { options.signal.throwIfAborted(); options.authorize(); if (now() >= options.deadlineAt) fail("lease_lost", 409); };
@@ -152,7 +193,7 @@ export async function prepareInboundMedia(relay: Pick<PairedRelay, "api_base" | 
             if (size !== length) fail("malformed", 400);
             content.finish();
             if (media.mime_type === "application/pdf") {
-              try { await validatePdfStructure(filename, signal, check); }
+              try { await validatePdfStructure(filename, signal, check, options.pdfValidation); }
               catch (error) { if (signal.aborted) throw error; if (error instanceof ExternalRelayError) throw error; fail("unsupported_media_type", 415); }
             }
           } finally { await handle.close().catch(() => {}); }

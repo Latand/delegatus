@@ -5,7 +5,6 @@ import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { threadId } from "node:worker_threads";
 import { prepareInboundMedia, validateMediaInput, validatePdfStructure, writeInboundAgentInput } from "./mediaInput";
 import { requestSchema, type ExternalRelayRequest } from "./protocol";
 import { richRequest } from "./rich.fixture";
@@ -121,20 +120,39 @@ test("PDF structure is validated before admission; malformed and truncated origi
     } finally { await f.close(); }
   }
 });
-test("PDF parsing runs on an owned worker and abort terminates it after its start handshake", async () => {
+test("PDF parsing runs in an owned bounded process and abort terminates it after its start handshake", async () => {
   const f = await fs.mkdtemp(path.join(os.tmpdir(), "relay-pdf-worker-"));
   const filename = path.join(f, "valid.pdf"); await fs.writeFile(filename, validPdf());
   try {
     const workerThreadId = await validatePdfStructure(filename, new AbortController().signal, () => {});
-    expect(workerThreadId).not.toBe(threadId);
+    expect(workerThreadId).not.toBe(process.pid);
     const controller = new AbortController(); let started: number | undefined;
     const pending = validatePdfStructure(filename, controller.signal, () => {}, {
       timeoutMs: 2_000,
       workerStarted: workerId => { started = workerId; controller.abort(new DOMException("fixture cancellation", "AbortError")); },
     });
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    expect(started).toBeTypeOf("number"); expect(started).not.toBe(threadId);
+    expect(started).toBeTypeOf("number"); expect(started).not.toBe(process.pid);
   } finally { await fs.rm(f, { recursive: true, force: true }); }
+});
+test("PDF memory exhaustion kills only the bounded parser process and removes all originals", async () => {
+  if (process.platform !== "linux") return;
+  const r = request([ref("media_first", 5), ref("media_bomb", validPdf().length)]);
+  r.input.conversation[0]!.media![1]!.mime_type = "application/pdf";
+  r.input.conversation[0]!.media![1]!.filename = "input.pdf";
+  const f = await fixture((req, res) => {
+    const bytes = req.url?.endsWith("media_first") ? Buffer.from("first") : validPdf();
+    res.writeHead(200, { "content-type": req.url?.endsWith("media_first") ? "text/plain" : "application/pdf", "content-length": bytes.length });
+    res.end(bytes);
+  });
+  const parentPid = process.pid;
+  try {
+    await expect(prepareInboundMedia(f.relay, r, f.directory, {
+      ...options(), pdfValidation: { workerEntry: path.join(import.meta.dir, "pdfMemoryBomb.fixture.ts"), memoryLimitMb: 96 },
+    })).rejects.toMatchObject({ code: "unsupported_media_type", status: 415 });
+    expect(process.pid).toBe(parentPid);
+    expect(await fs.readdir(f.directory)).toEqual([]);
+  } finally { await f.close(); }
 });
 test("stream accepts exact file and total limits without accumulating original buffers", async () => {
   const r = request([ref("media_a", 20 * MiB), ref("media_b", 20 * MiB)]);
@@ -214,6 +232,38 @@ test("HTML tags beyond the common tag set are refused across stream chunk bounda
       expect(await fs.readdir(f.directory)).toEqual([]);
     } finally { await f.close(); }
   }
+});
+test("unfinished long HTML tag names remain rejected across a confirmed file-write boundary", async () => {
+  const prefix = `<x-${"a".repeat(100)}`;
+  const r = request([ref("media_first", 2), ref("media_a", Buffer.byteLength(prefix) + 5)]);
+  let allowClose!: () => void;
+  const closeAllowed = new Promise<void>(resolve => { allowClose = resolve; });
+  let prefixSent!: () => void;
+  const prefixReady = new Promise<void>(resolve => { prefixSent = resolve; });
+  const f = await fixture(async (req, res) => {
+    if (req.url?.endsWith("media_first")) { res.writeHead(200, { "content-type": "text/plain", "content-length": 2 }); res.end("ok"); return; }
+    res.writeHead(200, { "content-type": "text/plain", "content-length": Buffer.byteLength(prefix) + 5 });
+    res.write(prefix); prefixSent(); await closeAllowed; res.end(">body");
+  });
+  try {
+    const pending = prepareInboundMedia(f.relay, r, f.directory, options());
+    await prefixReady;
+    const mediaDir = path.join(f.directory, (await fs.readdir(f.directory))[0]!);
+    const partialPath = path.join(mediaDir, "1.txt");
+    const watcher = watch(mediaDir);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onChange = async () => {
+          try { if ((await fs.stat(partialPath)).size >= Buffer.byteLength(prefix)) { watcher.close(); resolve(); } }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") reject(error); }
+        };
+        watcher.on("change", onChange); watcher.on("error", reject); void onChange();
+      });
+    } finally { watcher.close(); }
+    allowClose();
+    await expect(pending).rejects.toMatchObject({ code: "unsupported_media_type", status: 415 });
+    expect(await fs.readdir(f.directory)).toEqual([]);
+  } finally { allowClose(); await f.close(); }
 });
 test("ordinary inbound text formats remain accepted", async () => {
   for (const [mime, body] of [["text/plain", "hello"], ["text/markdown", "# heading"], ["text/csv", "a,b\n1,2"], ["application/json", "{\"ok\":true}"]] as const) {

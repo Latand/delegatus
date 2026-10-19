@@ -2,8 +2,12 @@ import fs from "node:fs/promises";
 import { parentPort, threadId, workerData } from "node:worker_threads";
 
 type Job = { filename: string; maxBytes: number };
-const job = workerData as Job;
-parentPort?.postMessage({ type: "started", workerThreadId: threadId });
+const job = (workerData ?? { filename: process.argv[2], maxBytes: Number(process.argv[3]) }) as Job;
+const publish = (message: object) => {
+  if (parentPort) parentPort.postMessage({ ...message, workerThreadId: threadId });
+  else process.stdout.write(`${JSON.stringify({ ...message, workerPid: process.pid })}\n`);
+};
+publish({ type: "started" });
 try {
   const stat = await fs.stat(job.filename);
   if (!stat.isFile() || stat.size > job.maxBytes) throw new Error("PDF size limit exceeded");
@@ -16,7 +20,7 @@ try {
     if (!Number.isInteger(document.numPages) || document.numPages < 1) throw new Error("PDF has no pages");
     await document.getPage(1);
   } finally { await loading.destroy().catch(() => {}); }
-  parentPort?.postMessage({ ok: true, workerThreadId: threadId });
+  publish({ ok: true });
 } catch {
-  parentPort?.postMessage({ ok: false, workerThreadId: threadId });
+  publish({ ok: false });
 }
