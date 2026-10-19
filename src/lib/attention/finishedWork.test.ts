@@ -5,6 +5,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { attentionSystemClears, type ReconcileFacts } from "./reconcile";
 import { finishedWorkIndex } from "./finishedWork";
+import { withFinishedAttention } from "./finishedAttention";
 
 const now = Date.parse("2026-10-19T06:00:00Z") / 1000;
 const at = "2026-10-12T06:00:00Z";
@@ -38,6 +39,7 @@ test("live, newer, undated, active and unreadable owners preserve their asks", (
     expect(attentionSystemClears([entry], now, facts([task], lanes))).toEqual([]);
   }
   expect(attentionSystemClears([entry], now, facts([task], [lane, { ...lane, id: "active", state: "running" }]))).toEqual([]);
+  expect(attentionSystemClears([entry], now, { ...facts([task], [lane]), tasks: undefined, pipelines: undefined })).toEqual([]);
 });
 
 test("old dead-host stage decisions expire with their lane; deliveries and later decisions remain", () => {
@@ -86,6 +88,39 @@ test("task decision forms raised before completion expire; newer forms and owed 
   expect(buildNeedsYouQueue([], [], now, [], null, [{ ...done, prototypeReview: { ...summary, createdAt: "unknown" } }])).toHaveLength(1);
   const undelivered = { ...done, prototypeReview: { ...summary, waitingReviewId: null, undelivered: [{ reviewId: "review", title: "Pick an option", at }] } };
   expect(buildNeedsYouQueue([], [], now, [], null, [undelivered])).toHaveLength(1);
+});
+
+test("a done task cannot withdraw a stage ask while another owner is active or unreadable", () => {
+  const done = { ...task, status: "done", doneAt: finishedAt } as BoardTask;
+  const active = { ...lane, state: "running", closedAt: null, runs: [{ stageId: "review", attempts: [{
+    n: 1, state: "running", startedAt: at, completedAt: null, conversationId: entry.conversationId, agentPath: entry.path,
+  }] }] } as unknown as Pipeline;
+  const member = { kind: "pipeline" as const, containerId: active.id, stageId: "review", stageOrder: 0, role: "reviewer", slot: "review", round: null,
+    parentConversationId: null };
+  const activeEntry = { ...entry, durableLineage: { kind: "spawn", role: "reviewer", parentConversationId: null, reviewsConversationId: null, memberships: [member] } } as FileEntry;
+  expect(attentionSystemClears([activeEntry], now, facts([done], [active]))).toEqual([]);
+  expect(buildNeedsYouQueue([activeEntry], [active], now, [], null, [done])).toHaveLength(1);
+  const otherConversationLane = { ...active, runs: [{ stageId: "review", attempts: [{ n: 1, state: "running", startedAt: at,
+    completedAt: null, conversationId: "conversation_other", agentPath: "/fixture/other.jsonl" }] }] } as unknown as Pipeline;
+  expect(attentionSystemClears([entry], now, facts([done], [otherConversationLane]))).toEqual([]);
+  const inconsistentTerminal = { ...active, state: "completed", closedAt: finishedAt } as Pipeline;
+  expect(attentionSystemClears([activeEntry], now, facts([done], [inconsistentTerminal]))).toEqual([]);
+
+  const unreadable = { ...activeEntry, durableLineage: { ...activeEntry.durableLineage!, memberships: [{ ...member, containerId: "missing-lane" }] } };
+  expect(attentionSystemClears([unreadable], now, facts([done], [lane]))).toEqual([]);
+  expect(buildNeedsYouQueue([unreadable], [lane], now, [], null, [done])).toHaveLength(1);
+});
+
+test("an existing container-finished dismissal survives missing ownership facts and clears on confirmed reopening", () => {
+  const marked = { ...entry, attentionDismissal: { at: finishedAt,
+    by: { kind: "system", rule: "container-finished" }, reasonId: `${entry.path}:permission:approval`,
+  } } as FileEntry;
+  const unknown = finishedWorkIndex([], []);
+  expect(withFinishedAttention(marked, now, unknown).attentionDismissal).toEqual(marked.attentionDismissal);
+  const incomplete = finishedWorkIndex([task], [{ ...lane, closedAt: null, runs: [] }]);
+  expect(withFinishedAttention(marked, now, incomplete).attentionDismissal).toEqual(marked.attentionDismissal);
+  const reopened = finishedWorkIndex([task], [{ ...lane, state: "running", closedAt: null, runs: [] }]);
+  expect(withFinishedAttention(marked, now, reopened).attentionDismissal).toBeUndefined();
 });
 
 

@@ -16,8 +16,10 @@ export function conversationHasHost(file: FileEntry): boolean {
   return file.proc === "running" || file.activity === "live" && file.proc !== "killed" && file.proc !== "done";
 }
 
+export type ConversationFinishState = { kind: "finished"; at: number } | { kind: "active" } | { kind: "unknown" };
+
 /** Build once per changed board input, with lookups bounded by its memberships. */
-export function finishedWorkIndex(tasks: readonly BoardTask[], pipelines: readonly Pipeline[], canonical = (id: string) => id, files: readonly FileEntry[] = []) {
+export function finishedWorkIndex(tasks: readonly BoardTask[], pipelines: readonly Pipeline[], canonical = (id: string) => id, files: readonly FileEntry[] = [], ownershipFactsComplete = true) {
   const filesByKey = new Map<string, FileEntry>();
   for (const file of files) {
     filesByKey.set(file.path, file);
@@ -62,29 +64,42 @@ export function finishedWorkIndex(tasks: readonly BoardTask[], pipelines: readon
       if (task.assignments.some(assignment => assignment.state !== "failed" && Date.parse(assignment.at) > at)) return task.status;
       return "inbox";
   };
+  const conversationFinishState = (file: FileEntry): ConversationFinishState => {
+    const id = file.conversationId ? canonical(file.conversationId) : file.path;
+    const owningTasks = [...new Set([...(owners.get(id) ?? []), ...(owners.get(file.path) ?? [])])];
+    const owningLanes = new Set([...(conversations.get(id) ?? []), ...(conversations.get(file.path) ?? [])]);
+    for (const task of owningTasks) for (const lane of taskLanes.get(task.id) ?? []) owningLanes.add(lane);
+    let unknownOwner = false;
+    for (const member of file.durableLineage?.memberships ?? []) {
+      if (member.kind !== "pipeline") continue;
+      const lane = lanes.get(member.containerId);
+      if (!lane) { unknownOwner = true; continue; }
+      owningLanes.add(lane);
+    }
+    const hasRunningAttempt = [...owningLanes].some(lane => lane.runs.some(run => run.attempts.some(attempt =>
+      attempt.state === "running" && ((attempt.conversationId && canonical(attempt.conversationId) === id) || attempt.agentPath === file.path))));
+    if (hasRunningAttempt || [...owningLanes].some(lane => lane.state !== "completed" && lane.state !== "closed")) return { kind: "active" };
+    if ([...owningLanes].some(lane => laneTimes.get(lane.id) === null)) return { kind: "unknown" };
+    if (unknownOwner) return { kind: "unknown" };
+    if (!ownershipFactsComplete) return { kind: "unknown" };
+    if (owningTasks.some(task => task.status !== "done" && ![...owningLanes].some(lane => lane.taskIds?.includes(task.id)))) {
+      return { kind: "unknown" };
+    }
+    const times = [
+      ...owningTasks.filter(task => task.status === "done").map(task => Date.parse(task.doneAt ?? task.updatedAt)),
+      ...[...owningLanes].map(lane => laneTimes.get(lane.id) ?? Number.NaN),
+    ];
+    return times.length && times.every(Number.isFinite)
+      ? { kind: "finished", at: Math.max(...times) }
+      : { kind: "unknown" };
+  };
   return {
     /** Unknown or conflicting owners prove nothing; every known owner must
      * have finished. A newer ask belongs to the resumed conversation. */
+    conversationFinishState,
     conversationFinishedAt(file: FileEntry): number | null {
-      const id = file.conversationId ? canonical(file.conversationId) : file.path;
-      const owningTasks = [...new Set([...(owners.get(id) ?? []), ...(owners.get(file.path) ?? [])])];
-      const owningLanes = new Set([...(conversations.get(id) ?? []), ...(conversations.get(file.path) ?? [])]);
-      if (owningTasks.length && owningTasks.every(task => task.status === "done")) {
-        const times = owningTasks.map(task => Date.parse(task.doneAt ?? task.updatedAt));
-        return times.every(Number.isFinite) ? Math.max(...times) : null;
-      }
-      for (const member of file.durableLineage?.memberships ?? []) {
-        if (member.kind !== "pipeline") continue;
-        const lane = lanes.get(member.containerId);
-        if (!lane) return null;
-        owningLanes.add(lane);
-      }
-      if (owningLanes.size) {
-        if (owningTasks.some(task => task.status !== "done" && ![...owningLanes].some(lane => lane.taskIds?.includes(task.id)))) return null;
-        const times = [...owningLanes].map(lane => laneTimes.get(lane.id) ?? null);
-        return times.every((time): time is number => time !== null) ? Math.max(...times) : null;
-      }
-      return null;
+      const state = conversationFinishState(file);
+      return state.kind === "finished" ? state.at : null;
     },
     /** A lane ending does not declare its task finished. Unfinished work
      * returns to Inbox, unless another lane or a later admission owns it. */

@@ -86,7 +86,7 @@ export function attentionSystemClears(files: readonly FileEntry[], now: number, 
   const finished = finishedWorkIndex(facts.tasks ?? [], facts.pipelines ?? [...new Set(files.flatMap(file => (file.durableLineage?.memberships ?? []).flatMap(member => {
     const lane = member.kind === "pipeline" ? facts.pipeline(member.containerId) : null;
     return lane ? [lane] : [];
-  })))], facts.canonicalConversationId);
+  })))], facts.canonicalConversationId, [], facts.tasks !== undefined && facts.pipelines !== undefined);
   for (const file of files) {
     if (file.supersededBy || file.migratedTo) continue;
     const reason = attentionReason(file, now);

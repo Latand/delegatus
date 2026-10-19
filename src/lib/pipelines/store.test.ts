@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadArchivedPipelinesForOwnership, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
 import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
@@ -839,6 +839,7 @@ test("settled pipelines archive out of the hot registry and stay readable", asyn
     expect(hotIds).toEqual(["aaaa0002", "aaaa0004"]);
     const archivedIds = loadArchivedPipelines().map((pipeline) => pipeline.id).sort();
     expect(archivedIds).toEqual(["aaaa0001", "aaaa0003"]);
+    expect(loadArchivedPipelinesForOwnership(["aaaa0003", "missing", "aaaa0003"]).map(pipeline => pipeline.id)).toEqual(["aaaa0003"]);
 
     /* By-id reads still resolve archived records; re-sweeping is idempotent. */
     expect(findPipelineRecord("aaaa0001")?.task).toBe("task aaaa0001");

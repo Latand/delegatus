@@ -810,6 +810,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      condition) — that must degrade to "pipelines unavailable", never take
      the whole files poll down with it. */
   let pipelines: Pipeline[] = [];
+  let terminalPipelines: Pipeline[] = [];
+  let terminalOwnershipComplete = true;
   let pipelinesError: string | undefined;
   try {
     /* A GET never takes the pipeline lock and never persists (issue #798).
@@ -823,7 +825,29 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
       pinnedPaths: visibilityPinnedPaths,
       memberships: registrySnapshot.memberships,
     });
+    terminalPipelines = loaded;
+    try {
+      const archivedOwnerIds = new Set<string>();
+      for (const file of files) {
+        for (const membership of file.durableLineage?.memberships ?? []) {
+          if (membership.kind === "pipeline") archivedOwnerIds.add(membership.containerId);
+        }
+        const conversationId = file.conversationId?.startsWith("conversation_")
+          ? conversationLookup.canonicalConversationId(file.conversationId as `conversation_${string}`)
+          : null;
+        for (const membership of conversationId ? registrySnapshot.memberships[conversationId] ?? [] : []) {
+          if (membership.kind === "pipeline") archivedOwnerIds.add(membership.containerId);
+        }
+      }
+      const activeIds = new Set(loaded.map(pipeline => pipeline.id));
+      const archivedIds = [...archivedOwnerIds].filter(id => !activeIds.has(id));
+      terminalPipelines = [...loaded, ...routeDependencies.loadArchivedPipelinesForOwnership(archivedIds)];
+    } catch (error) {
+      terminalOwnershipComplete = false;
+      console.error("[files] archived pipeline ownership unreadable; finished attention is unverified", error);
+    }
   } catch (error) {
+    terminalOwnershipComplete = false;
     pipelinesError = error instanceof Error ? error.message : "pipeline registry unreadable";
     console.error("[files] pipelines store unreadable; serving without pipelines", error);
   }
@@ -927,7 +951,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      classifier recorded for each conversation. */
   overlayOperatorAsks(projected.files);
   markTiming("files-operator-asks");
-  const finished = finishedWorkIndex(boardTasks, pipelines, seatIdentityResolver(conversationLookup.canonicalConversationId));
+  const finished = finishedWorkIndex(boardTasks, terminalPipelines, seatIdentityResolver(conversationLookup.canonicalConversationId), [], terminalOwnershipComplete);
   projected.files = projected.files.map(file => withFinishedAttention(file, Date.now() / 1000, finished));
   markTiming("files-finished-attention");
   /* Who answers each wait (docs/design/attention-auto-resolve.md): a worker's

@@ -111,12 +111,14 @@ beforeEach(() => {
   tmuxHealth = { status: "healthy" };
   flowsStore = () => [];
   pipelinesStore = () => [];
+  archivedOwnershipStore = () => [];
   pipelineVisibility = () => [];
   setFileScanRunnerForTests(filesRouteScanRunner);
   setFileCatalogMembershipProbeForTests(async () => null);
   setFilesResponseDependenciesForTests({
     loadFlows: () => flowsStore() as never,
     loadPipelinesForProjection: () => pipelinesStore() as never,
+    loadArchivedPipelinesForOwnership: (ids) => archivedOwnershipStore(ids),
     filterPipelinesForFileScan: (pipelines: readonly Pipeline[]) => pipelineVisibility([...pipelines]) as Pipeline[],
     /* Frozen as production hands it out: the shared task list. A files read
        that wrote into one of these would throw in every case below. */
@@ -192,6 +194,7 @@ const filesRouteScanRunner: NonNullable<Parameters<typeof setFileScanRunnerForTe
   return { files, projectCatalog: scannedProjectCatalog, ...(pinOverlayPaths ? { pinOverlayPaths } : {}), complete: complete ?? true };
 };
 let pipelinesStore: () => unknown[] = () => [];
+let archivedOwnershipStore: (ids: readonly string[]) => Pipeline[] = () => [];
 let flowsStore: () => unknown[] = () => [];
 let pipelineVisibility: (pipelines: unknown[]) => unknown[] = () => [];
 let boardTasksStore: () => unknown[] = () => [];
@@ -4188,6 +4191,58 @@ test("files reconciles the frozen shared task list by copying the task it change
     expect(Object.isFrozen(stored[0])).toBe(true);
     expect(stored[0]!.assignments[0]!.state).toBe("spawning");
   } finally {
+    boardTasksStore = () => [];
+  }
+});
+
+test("files attention projection retains closed and archived ownership across repeated reads", async () => {
+  const asked = { ...file("/sessions/finished-lane.jsonl"), conversationId: "conversation_finished_lane", proc: "killed",
+    pendingPermission: { id: "permission-1", since: "2026-10-12T06:00:00Z", tool: "Bash", command: "make" } } as FileEntry;
+  const terminal = (id: string): Pipeline => ({ id, project: "repo", taskIds: ["task-finished"], state: id === "archived-lane" ? "closed" : "completed",
+    closedAt: "2026-10-12T07:00:00Z", runs: [{ stageId: "review", attempts: [{ n: 1, state: "passed", startedAt: "2026-10-12T06:00:00Z",
+      completedAt: "2026-10-12T07:00:00Z", conversationId: asked.conversationId, agentPath: asked.path }] }], stages: [] } as unknown as Pipeline);
+  const archived = terminal("archived-lane");
+  let archivedForPass: Pipeline[] = [];
+  const archivedQueries: string[][] = [];
+  pipelinesStore = () => archivedForPass.length ? [] : [terminal("closed-lane")];
+  pipelineVisibility = () => [];
+  boardTasksStore = () => [{ id: "task-finished", project: "repo", text: "Finished", status: "inbox", placement: "unplaced",
+    assignments: [{ path: asked.path, conversationId: asked.conversationId, at: "2026-10-12T06:00:00Z", state: "linked" }],
+    createdAt: "2026-10-12T06:00:00Z", updatedAt: "2026-10-12T06:00:00Z" }];
+  archivedOwnershipStore = ids => { archivedQueries.push([...ids]); return archivedForPass; };
+  try {
+    for (let pass = 0; pass < 2; pass += 1) {
+      archivedForPass = pass === 1 ? [archived] : [];
+      asked.durableLineage = { kind: "spawn", role: "reviewer", parentConversationId: null, reviewsConversationId: null,
+        memberships: [{ kind: "pipeline", containerId: pass === 0 ? "closed-lane" : "archived-lane", stageId: "review", stageOrder: 0,
+          role: "reviewer", slot: "review", round: null, parentConversationId: null }] };
+      const response = await buildFilesResponse(new Request("http://127.0.0.1/api/files"), {
+        listFilesWithProjectCatalog: async () => ({ files: [{ ...asked }], projectCatalog: [], complete: true }),
+      });
+      const body = await response.json() as { files: FileEntry[]; pipelines: Pipeline[]; tasks: Array<{ id: string; status: string }> };
+      const projected = body.files.find((entry) => entry.conversationId === asked.conversationId)!;
+      expect(body.pipelines).toEqual([]);
+      expect(projected.pendingPermission?.id).toBe("permission-1");
+      expect([projected.proc, projected.activity]).toEqual(["killed", "recent"]);
+      const { attentionReason } = await import("@/components/attention");
+      expect(attentionReason(projected, Date.parse("2026-10-19T06:00:00Z") / 1000)?.kind).toBe("permission");
+      const { finishedWorkIndex } = await import("@/lib/attention/finishedWork");
+      expect(projected.durableLineage?.memberships.map(member => member.containerId)).toEqual([pass === 0 ? "closed-lane" : "archived-lane"]);
+      expect(body.tasks.map(task => [task.id, task.status])).toEqual([["task-finished", "inbox"]]);
+      const ownership = finishedWorkIndex(body.tasks as never, pass === 0 ? [terminal("closed-lane")] : [archived]);
+      const { withFinishedAttention } = await import("@/lib/attention/finishedAttention");
+      expect(withFinishedAttention(projected, Date.parse("2026-10-19T06:00:00Z") / 1000, ownership).attentionDismissal?.by)
+        .toEqual({ kind: "system", rule: "container-finished" });
+      expect(projected.attentionDismissal?.by).toEqual({ kind: "system", rule: "container-finished" });
+      const { buildNeedsYouQueue } = await import("@/components/attention/attentionQueue");
+      expect(buildNeedsYouQueue(body.files, body.pipelines, Date.parse("2026-10-19T06:00:00Z") / 1000, [], null, body.tasks as never)).toHaveLength(0);
+    }
+    expect(archivedQueries[0]).not.toContain("closed-lane");
+    expect(archivedQueries[1]).toContain("archived-lane");
+  } finally {
+    pipelinesStore = () => [];
+    archivedOwnershipStore = () => [];
+    pipelineVisibility = () => [];
     boardTasksStore = () => [];
   }
 });
