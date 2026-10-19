@@ -189,6 +189,44 @@ for (const shared of [false, true]) test(`account selection keeps catalog and ro
   } finally { f.registry.close(); }
 });
 
+for (const family of ["flow", "resume"] as const) for (const phase of ["reservation", "task", "recorded"] as const) {
+  test(`${family} revocation after ${phase} admission durably retires its unactuated receipt`, async () => {
+    const f = fixture(); f.seed();
+    let revoked = false;
+    const current = () => {
+      const receipt = Object.values(f.registry.snapshot().receipts)[0];
+      if (!receipt) return true;
+      const taskAdmitted = loadTasks().some(task => task.assignments.some(row => row.launchId === receipt.launchId));
+      if (phase === "reservation" || (phase === "task" && taskAdmitted) || (phase === "recorded" && receipt.membershipAdmitted === true)) revoked = true;
+      return !revoked;
+    };
+    try {
+      if (family === "resume") {
+        const entry = { engine: "codex", path: f.artifactPath } as FileEntry;
+        const spec = { engine: "codex", cwd: "/repo", windowName: "Resume" } as Parameters<typeof beginRegistryResumeOffLoop>[1];
+        await expect(beginRegistryResumeOffLoop(entry, spec, () => {
+          if (!current()) throw new Error("resume authority replaced");
+        }, f.registry)).rejects.toThrow("resume authority replaced");
+      } else {
+        const flow = { id: `phase-${phase}`, project: "fixture", cwd: "/repo", implementerPath: f.artifactPath,
+          implementerConversationId: f.registry.conversationForPath(f.artifactPath)!.id,
+          roles: { reviewer: { engine: "codex", model: null, effort: "high" } }, rounds: [] } as unknown as Flow;
+        const round = newRound(flow, "button", null); round.reviewerBindingId = "phase-reviewer-binding";
+        expect(await reserveReviewerSpawnOffLoop(flow, round, flow.roles.reviewer, null, f.registry, current)).toBeNull();
+        expect(round.launchId).toBeNull();
+      }
+      expect(revoked).toBe(true);
+      const receipt = Object.values(f.registry.snapshot().receipts)[0]!;
+      expect(receipt.state).toBe("failed");
+      expect(receipt.admissionOwner).toBeNull();
+      f.registry.close();
+      const reopened = new AgentRegistry(path.join(f.root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+      try { expect(reopened.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId]?.state).toBe("failed"); }
+      finally { reopened.close(); }
+    } finally { f.registry.close(); }
+  });
+}
+
 test("actual launch account reconciliation waits and rereads the materialized receipt", async () => {
   const f = fixture();
   const begun = f.registry.beginSpawnRequest({ engine: "codex", cwd: "/repo", launchProfile: f.profile });
