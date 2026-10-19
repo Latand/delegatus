@@ -277,7 +277,8 @@ test("owed outcomes survive a rotation and a tick switched off", () => {
 const OPEN: SeatTickPipelineInput[] = [{ id: "pipeline_open", title: "open lane", state: "active", updatedAt: iso(T0), stageActivity: null, stageId: "build" }];
 
 test("an interval wake asks for a digest when the board moved and nothing was reported for an interval", () => {
-  const decision = seatTickDecision(input({ pipelines: OPEN, reports: reports({ lastReportAt: iso(T0 - 90 * MINUTE) }) }));
+  const state = { ...emptySeatTickState(), seatEpoch: 7, checkFingerprint: "earlier-board", reportFingerprint: "earlier-board" };
+  const decision = seatTickDecision(input({ pipelines: OPEN, state, reports: reports({ lastReportAt: iso(T0 - 90 * MINUTE) }) }));
   expect(wakeOf(decision).reportLines).toEqual([
     "Digest due, in Ukrainian: no report since 10:30 UTC and the board moved. File one status report (key digest:2026-09-25T12:00) with the whole state: in progress, next, needs a decision.",
   ]);
