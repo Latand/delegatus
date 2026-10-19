@@ -1,7 +1,7 @@
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
-import { detachCodexHostForViewerRestart } from "./registry";
+import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { creditGuardBlock } from "@/lib/accounts/creditGuard";
 import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountCreditGuard";
@@ -1912,6 +1912,7 @@ export async function bindStructuredDeliveryQueue(
       await detachRegistration(id, registered);
     } finally {
       await registered.host.release();
+      await flushStructuredHostPersistence(registered.host);
     }
     return true;
   };
@@ -2276,7 +2277,11 @@ export async function releaseStructuredDeliveryHost(key: SessionKey): Promise<bo
   // runtime projection whose outage prevented publication in the first place.
   unpublishedLaunchHosts.delete(id);
   const release = Promise.resolve().then(async () => {
-    try { await pending.release(); return true; }
+    try {
+      await pending.release();
+      await flushStructuredHostPersistence(pending.host);
+      return true;
+    }
     catch (error) {
       if (!unpublishedLaunchHosts.has(id)) unpublishedLaunchHosts.set(id, pending);
       throw error;

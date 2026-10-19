@@ -29,6 +29,7 @@ import {
   adoptCodexRegistryHosts,
   codexBootAdoptionRetired,
   detachCodexHostForViewerRestart,
+  flushStructuredHostPersistence,
   demoteSkippedStructuredRegistryHosts,
   reconcileDeadStructuredRegistryHostsOffLoop,
   type AdoptedClaudeHost,
@@ -181,7 +182,10 @@ async function revalidateRetainedStartupHosts(
   await forEachStartupBatch(retained, async (item) => {
     if (!startupHostInScope(registry, sessionKeyId(item.key))
       || retainedStartupHostIsCurrent(snapshot, item, retainedTerminalHostKeys)) current.push(item);
-    else await item.host.release();
+    else {
+      await item.host.release();
+      await flushStructuredHostPersistence(item.host);
+    }
   });
   return current;
 }
@@ -2994,6 +2998,7 @@ export async function releaseUnpublishedStartupHostsForDemotion(
       throw error;
     }
     await host.release();
+    await flushStructuredHostPersistence(host);
     released.add(sessionKeyId(key));
   }));
   /* A released handle is gone for good: no later pass in this process may

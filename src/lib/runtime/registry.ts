@@ -164,6 +164,17 @@ function sameMaterialHostState(left: HostState, right: HostState): boolean {
 
 export type StructuredHostPersistenceStop = (() => Promise<void>) & { flush(): Promise<void> };
 
+const persistenceGlobal = globalThis as typeof globalThis & {
+  __delegatusHostPersistence?: WeakMap<object, StructuredHostPersistenceStop>;
+};
+const hostPersistence = persistenceGlobal.__delegatusHostPersistence ??= new WeakMap<object, StructuredHostPersistenceStop>();
+
+/** Release acknowledgements include every checkpoint the host already emitted.
+ * Weak keys follow host lifetime; compiled Viewer bundles share this owner. */
+export async function flushStructuredHostPersistence(host: object): Promise<void> {
+  await hostPersistence.get(host)?.flush();
+}
+
 async function bindStructuredHostPersistence(
   registry: AgentRegistry,
   key: SessionKey,
@@ -418,7 +429,9 @@ async function bindStructuredHostPersistence(
     }).catch(() => {});
   });
   if (stopped) unsubscribe();
-  return Object.assign(stop, { flush: () => enqueue(persistPending) });
+  const binding = Object.assign(stop, { flush: () => enqueue(persistPending) });
+  hostPersistence.set(host, binding);
+  return binding;
 }
 
 /** Ends what a host stop captured on its own row, once the host's child is

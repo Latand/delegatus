@@ -18,7 +18,8 @@ import type { RuntimeHostClient } from "./client";
 import type { HostState, RuntimeEvent } from "./engineHost";
 import { durableRuntimeEventTailSeq, FileRuntimeEventStore, readHostTurnRecord } from "./eventStore";
 import { createFakeDeliveryLedger, FakeEngineHost, type FakeDeliveryLedger } from "./fixtures/fakeEngineHost";
-import type { StructuredHostAdoptionFilter } from "./registry";
+import { bindClaudeHostPersistence, type StructuredHostAdoptionFilter } from "./registry";
+import type { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
 import { interruptionObligationDirectory, interruptionObligationStore } from "./interruptionObligations";
 import { INTERRUPTED_CODEX_CONTINUATION_TEXT } from "./recoveryNotices";
 import { recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError } from "./structuredRecovery";
@@ -32,6 +33,7 @@ import {
   bindStructuredDeliveryQueue,
   recordDemotionInterruption,
   releaseStructuredDeliveryHostsForDemotion,
+  releaseStructuredDeliveryHost,
 } from "./structuredDeliveryController";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 
@@ -3132,4 +3134,57 @@ test.each(["agent", "stage"] as const)("a live pending import cannot hide a comp
       await importer.exited;
     }
   });
+});
+
+
+test("published release awaits the terminal registry checkpoint before acknowledging", async () => {
+  const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const filename = path.join(directory, "terminal-checkpoint.json");
+  const registry = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+  const key = { engine: "claude" as const, sessionId: cutSessionId(70) };
+  const state: HostState = { status: "idle", sessionKey: key.sessionId, endpoint: "stdio:checkpoint", pid: 2_000_001_170,
+    processStartIdentity: "checkpoint-process", eventCursor: 1, protocolVersion: "test", activeTurnRef: null,
+    pendingAttention: [], activeFlags: [], account: null };
+  registry.upsert({ key, artifactPath: path.join(directory, `${key.sessionId}.jsonl`), cwd: directory, accountId: null,
+    status: "idle", host: null, claimOwner: "checkpoint-owner", claimEpoch: 1, pendingAction: null,
+    structuredHost: { kind: "claude-broker", endpoint: state.endpoint, process: { pid: state.pid!, startIdentity: state.processStartIdentity },
+      eventCursor: 1, protocolVersion: "test", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  const holder = registryLockHolder(path.join(directory, "terminal-checkpoint.sqlite"));
+  let listener: ((state: HostState) => void) | null = null;
+  let enter!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const host = Object.assign(new FakeEngineHost(createFakeDeliveryLedger(), state), {
+    setWriterFence: () => {},
+    onStateChange: (next: (state: HostState) => void) => { listener = next; return () => { listener = null; }; },
+    release: async () => {
+      await holder.hold(180);
+      listener?.({ ...state, status: "unhosted", pid: null, endpoint: "stdio:released", eventCursor: 2 });
+      enter();
+    },
+  });
+  const journal = new RuntimeJournal(path.join(directory, "checkpoint-runtime.sqlite"), { structuredHosts: true });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const stop = await bindClaudeHostPersistence(registry, key, host as unknown as ClaudeStreamBrokerHost, "checkpoint-owner", 1);
+    await bindStructuredDeliveryQueue([{ key, host }], { registry, client: journalClient(journal) });
+    let finished = false;
+    const work = releaseStructuredDeliveryHost(key).finally(() => { finished = true; });
+    await entered;
+    const start = performance.now();
+    const tick = new Promise<{ elapsed: number; pending: boolean }>(resolve => {
+      timer = setTimeout(() => resolve({ elapsed: performance.now() - start, pending: !finished }), 10);
+    });
+    expect(await work).toBe(true);
+    const sample = await tick;
+    expect(sample.pending).toBe(true);
+    expect(sample.elapsed).toBeLessThan(50);
+    expect(registry.readOnlySnapshot().entries[`claude:${key.sessionId}`]).toMatchObject({ status: "unhosted", claimOwner: null,
+      structuredHost: { process: null, eventCursor: 2 } });
+    await stop();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    registry.close();
+    const reopened = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+    try { expect(reopened.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.claimOwner).toBeNull(); }
+    finally { reopened.close(); }
+  } finally { clearTimeout(timer); await holder.close(); journal.close(); registry.close(); }
 });

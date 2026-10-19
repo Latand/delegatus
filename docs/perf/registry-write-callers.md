@@ -133,7 +133,7 @@ standalone synchronous exports remain for isolated fixtures.
 
 | Family | Serving admission and validation after waiting |
 | --- | --- |
-| Host checkpoints | `bindStructuredHostPersistence`: ordered initial, material, cursor and terminal writes use `registry.host-checkpoint`; the atomic mutator compares claim owner and epoch. Cursor-only changes coalesce. The returned stop can be awaited and `flush()` acknowledges queued checkpoints. |
+| Host checkpoints | `bindStructuredHostPersistence`: ordered initial, material, cursor and terminal writes use `registry.host-checkpoint`; the atomic mutator compares claim owner and epoch. Cursor-only changes coalesce. The returned stop can be awaited and `flush()` acknowledges queued checkpoints. A shared weak map binds each host to that flush; published and unpublished release paths await it before acknowledging demotion. |
 | Host stop capture | The Claude capture listener accepts a promise. The engine awaits capture before closing stdin or signalling, then rechecks the release fence. Registry capture rereads the recorded root inside admission. |
 | Host demotion and dead rows | Startup demotion admits `mutation()` before it runs, repeating release authority and the evidence stamp. The reaper and recovery use the admitted dead-host helpers; captured process/claim custody is compared again on current rows, one row per admission. |
 | Host termination | Operator API, idle retirement, controller and orphan capture/withdraw/settle callbacks use async admission. Root identity, current authorization and captured custody remain checked at the mutation. |
