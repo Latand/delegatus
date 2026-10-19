@@ -8,7 +8,7 @@ import { AgentRegistry, type AgentRegistryEntry, type StructuredHostColumns } fr
 import type { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
 import type { CodexAppServerHost } from "./codexAppServerHost";
 import type { HostState } from "./engineHost";
-import { bindClaudeHostPersistence, bindCodexHostPersistence, DEFAULT_CURSOR_DEBOUNCE_MS } from "./registry";
+import { bindClaudeHostPersistence, bindCodexHostPersistence, DEFAULT_CURSOR_DEBOUNCE_MS, type StructuredHostPersistenceStop } from "./registry";
 import { beginLegacySpawnReceiptFixture } from "@/lib/agent/registryTestFixtures";
 
 const KEY = { engine: "codex" as const, sessionId: "coalesced-host" };
@@ -31,6 +31,22 @@ function hostState(overrides: Partial<HostState> = {}): HostState {
 }
 
 class RecordingRegistry {
+  private nextWrite: { enter(): void; released: Promise<void> } | null = null;
+  pauseNextWrite() {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const released = new Promise<void>(resolve => { release = resolve; });
+    this.nextWrite = { enter, released };
+    return { entered, release };
+  }
+  async deliveryWriteOrBusy<T>(_correlation: unknown, write: () => T): Promise<T> {
+    const gate = this.nextWrite;
+    this.nextWrite = null;
+    if (gate) { gate.enter(); await gate.released; }
+    return write();
+  }
+
   readonly writes: Array<{ columns: StructuredHostColumns; status: string; releaseClaim: boolean }> = [];
   readonly releases: number[] = [];
   acceptWrites = true;
@@ -81,7 +97,7 @@ type Binder = (
   registry: AgentRegistry,
   host: RecordingHost,
   options?: { cursorDebounceMs: number },
-) => Promise<() => void>;
+) => Promise<StructuredHostPersistenceStop>;
 
 const binders: Array<[string, Binder]> = [
   ["Codex", (registry, host, options) => bindCodexHostPersistence(
@@ -103,6 +119,36 @@ const binders: Array<[string, Binder]> = [
     options,
   )],
 ];
+
+for (const [engine, bind] of binders) for (const older of ["material", "cursor"] as const) {
+  test(`${engine} a held ${older} checkpoint does not revive state superseded during admission`, async () => {
+    const registry = new RecordingRegistry();
+    const host = new RecordingHost();
+    const stop = await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: older === "cursor" ? 1 : 10_000 });
+    const gate = registry.pauseNextWrite();
+    registry.acceptWrites = false;
+    registry.heldByTermination = true;
+    try {
+      host.emit(older === "cursor" ? { eventCursor: 1 } : { eventCursor: 1, status: "active", activeTurnRef: "turn-1" });
+      await gate.entered;
+      host.emit({ eventCursor: 2, status: "attention", pendingAttention: ["newest-approval"] });
+      gate.release();
+      // The admitted jobs have no I/O after this barrier is released. Drain
+      // their microtasks before allowing the retained checkpoint to commit.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      registry.acceptWrites = true;
+      registry.heldByTermination = false;
+      await stop.flush();
+      expect(registry.writes.at(-1)?.columns).toMatchObject({ eventCursor: 2, pendingAttention: ["newest-approval"] });
+      expect(host.releaseCalls).toBe(0);
+    } finally {
+      gate.release();
+      registry.acceptWrites = true;
+      registry.heldByTermination = false;
+      await stop();
+    }
+  });
+}
 
 test("production cursor checkpoints stay bounded to two writes per minute", () => {
   expect(DEFAULT_CURSOR_DEBOUNCE_MS).toBe(30_000);
@@ -126,7 +172,7 @@ for (const [engine, bind] of binders) {
       await Bun.sleep(35);
       expect(lanes.reduce((sum, lane) => sum + lane.registry.writes.length, 0)).toBe(20);
       expect(lanes.every((lane) => lane.registry.writes.at(-1)?.columns.eventCursor === 100)).toBeTrue();
-      for (const lane of lanes) lane.stop();
+      for (const lane of lanes) await lane.stop();
     });
 
     test("coalesces cursor-only events into one trailing registry mutation", async () => {
@@ -140,28 +186,32 @@ for (const [engine, bind] of binders) {
       await Bun.sleep(35);
       expect(registry.writes).toHaveLength(2);
       expect(registry.writes.at(-1)?.columns.eventCursor).toBe(20);
-      stop();
+      await stop();
     });
 
     test("persists material and terminal changes immediately with the latest cursor", async () => {
       const registry = new RecordingRegistry();
       const host = new RecordingHost();
-      await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 100 });
+      const stop = await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 100 });
 
       host.emit({ eventCursor: 1 });
       host.emit({ eventCursor: 2, status: "active", activeTurnRef: "turn-1" });
+      await stop.flush();
       expect(registry.writes).toHaveLength(2);
+      await stop.flush();
       expect(registry.writes.at(-1)).toMatchObject({
         columns: { eventCursor: 2, activeTurnRef: "turn-1" },
         status: "live",
       });
 
       host.emit({ eventCursor: 3, status: "attention", pendingAttention: ["approval-1"] });
+      await stop.flush();
       expect(registry.writes.at(-1)).toMatchObject({
         columns: { eventCursor: 3, pendingAttention: ["approval-1"] },
         status: "live",
       });
       host.emit({ eventCursor: 4, status: "active", pendingAttention: [], activeFlags: ["waiting"] });
+      await stop.flush();
       expect(registry.writes.at(-1)).toMatchObject({
         columns: { eventCursor: 4, activeFlags: ["waiting"] },
         status: "live",
@@ -177,13 +227,16 @@ for (const [engine, bind] of binders) {
         processStartIdentity: "4242:100",
         activeTurnRef: null,
       });
+      await stop.flush();
       expect(registry.writes).toHaveLength(5);
+      await stop.flush();
       expect(registry.writes.at(-1)).toMatchObject({
         columns: { eventCursor: 6, process: null },
         status: "unhosted",
         releaseClaim: true,
       });
       await Bun.sleep(120);
+      await stop.flush();
       expect(registry.writes).toHaveLength(5);
     });
 
@@ -194,7 +247,7 @@ for (const [engine, bind] of binders) {
 
       host.emit({ eventCursor: 8 });
       host.emit({ eventCursor: 9 });
-      stop();
+      await stop();
 
       expect(registry.writes.map((write) => write.columns.eventCursor)).toEqual([0, 9]);
       expect(registry.releases).toEqual([7]);
@@ -205,7 +258,7 @@ for (const [engine, bind] of binders) {
     test("releases the host when a trailing write loses its claim", async () => {
       const registry = new RecordingRegistry();
       const host = new RecordingHost();
-      await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 10 });
+      const stop = await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 10 });
 
       registry.acceptWrites = false;
       host.emit({ eventCursor: 1 });
@@ -236,22 +289,24 @@ for (const [engine, bind] of binders) {
       registry.acceptWrites = true;
       registry.heldByTermination = false;
       await Bun.sleep(25);
+      await stop.flush();
       expect(registry.writes.at(-1)).toMatchObject({ columns: { eventCursor: 2, activeTurnRef: "turn-1" }, status: "live" });
       expect(host.releaseCalls).toBe(0);
-      stop();
+      await stop();
       expect(registry.releases).toEqual([7]);
     });
 
     test("a terminal write refused under a captured tree still ends the binding", async () => {
       const registry = new RecordingRegistry();
       const host = new RecordingHost();
-      await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 10 });
+      const stop = await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 10 });
 
       registry.acceptWrites = false;
       registry.heldByTermination = true;
       host.emit({ eventCursor: 3, status: "unhosted", endpoint: "stdio:released", pid: null, processStartIdentity: null });
 
       // The guard keeps the row's process and survivors; the writer gives up its claim as before.
+      await stop.flush();
       expect(registry.writes.at(-1)).toMatchObject({ status: "unhosted", releaseClaim: true });
       expect(registry.releases).toEqual([7]);
       expect(host.releaseCalls).toBe(1);
@@ -324,6 +379,7 @@ test("production-sized ten-lane persistence coalesces cursors and orders materia
     pendingAttention: [],
   });
 
+  await Promise.all(lanes.map(lane => lane.stop.flush()));
   expect(registry.storageDiagnostics().revision! - revisionBeforeEvents).toBe(40);
   for (const lane of lanes) {
     expect(registry.snapshot().entries[`${lane.key.engine}:${lane.key.sessionId}`]).toMatchObject({
@@ -331,7 +387,7 @@ test("production-sized ten-lane persistence coalesces cursors and orders materia
       claimOwner: null,
       structuredHost: { eventCursor: 103, activeTurnRef: null, pendingAttention: [] },
     });
-    lane.stop();
+    await lane.stop();
   }
 }, 30_000);
 
@@ -342,10 +398,12 @@ for (const [engine, bind] of binders) test(`${engine} persists memory kills imme
   const memory: NonNullable<HostState["memory"]> = { mechanism: "scope", unit: "delegatus-agent-test-row.scope", limitBytes: 15 * 2 ** 30, kills: 1,
     lastKill: { at: new Date().toISOString(), limitBytes: 15 * 2 ** 30, limit: "agent", fatal: false, process: null } };
   host.emit({ memory });
+  await stop.flush();
   expect(registry.writes.at(-1)?.columns.memory?.kills).toBe(1);
   host.emit({ status: "dead", memory: { ...memory, lastKill: { ...memory.lastKill!, fatal: true } } });
+  await stop.flush();
   expect(registry.writes.at(-1)?.columns.memory?.lastKill?.fatal).toBe(true);
-  stop();
+  await stop();
 });
 
 test("memory evidence round-trips through the durable registry and malformed shapes are dropped", () => {
@@ -385,4 +443,33 @@ test("durable registry hydration drops malformed memory timestamps and preserves
       expect(hydrated.entries[`${sibling.engine}:${sibling.sessionId}`]!.status).toBe("idle");
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// This case also runs, unchanged, on the pre-admission implementation as the red control.
+test("a child-held writer leaves the initial host checkpoint loop below 50 ms", async () => {
+  const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "host-checkpoint-measurement-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), () => false, undefined, { sqliteMode: "sqlite" });
+  const state = hostState();
+  registry.upsert({ key: KEY, artifactPath: "/sessions/checkpoint.jsonl", cwd: "/repo", accountId: null,
+    status: "idle", host: null, claimEpoch: 1, claimOwner: "checkpoint-owner", pendingAction: null,
+    structuredHost: { kind: "codex-app-server", endpoint: state.endpoint,
+      process: { pid: state.pid!, startIdentity: state.processStartIdentity }, eventCursor: 0,
+      protocolVersion: "1", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  const holder = registryLockHolder(path.join(directory, "registry.sqlite"));
+  let pulse: ReturnType<typeof setInterval> | undefined;
+  try {
+    await holder.hold(180);
+    const start = performance.now();
+    let last = start;
+    let maxGap = 0;
+    pulse = setInterval(() => { const at = performance.now(); maxGap = Math.max(maxGap, at - last); last = at; }, 5);
+    const stop = await bindCodexHostPersistence(registry, KEY, new RecordingHost() as unknown as CodexAppServerHost, "checkpoint-owner", 1);
+    await new Promise<void>(resolve => setTimeout(resolve, 5));
+    maxGap = Math.max(maxGap, performance.now() - last);
+    clearInterval(pulse);
+    await stop();
+    console.info(`[host checkpoint measurement] hold=180 ms maxGap=${maxGap.toFixed(2)} ms`);
+    expect(maxGap).toBeLessThan(50);
+  } finally { clearInterval(pulse); await holder.close(); registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });

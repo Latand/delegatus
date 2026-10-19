@@ -111,3 +111,10 @@ export function resolveSpawnLineageParent(
 ): ResolvedSpawnParent | null {
   return resolveSpawnLineage(body, registry).parent;
 }
+
+/** Resolve lineage only after the writer is held, including transcript and role checks. */
+export async function resolveSpawnLineageOffLoop(
+  body: Parameters<typeof resolveSpawnLineage>[0], registry = agentRegistry(),
+): Promise<ResolvedSpawnLineage> {
+  return registry.deliveryWriteBatchOrBusy({ label: "registry.spawn-lineage" }, () => resolveSpawnLineage(body, registry));
+}

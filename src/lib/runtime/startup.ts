@@ -29,8 +29,9 @@ import {
   adoptCodexRegistryHosts,
   codexBootAdoptionRetired,
   detachCodexHostForViewerRestart,
+  flushStructuredHostPersistence,
   demoteSkippedStructuredRegistryHosts,
-  reconcileDeadStructuredRegistryHosts,
+  reconcileDeadStructuredRegistryHostsOffLoop,
   type AdoptedClaudeHost,
   type AdoptedCodexHost,
   type StructuredHostAdoptionFilter,
@@ -181,7 +182,10 @@ async function revalidateRetainedStartupHosts(
   await forEachStartupBatch(retained, async (item) => {
     if (!startupHostInScope(registry, sessionKeyId(item.key))
       || retainedStartupHostIsCurrent(snapshot, item, retainedTerminalHostKeys)) current.push(item);
-    else await item.host.release();
+    else {
+      await item.host.release();
+      await flushStructuredHostPersistence(item.host);
+    }
   });
   return current;
 }
@@ -2200,12 +2204,12 @@ async function adoptStructuredHostsPass(
     /* Pending work makes a terminal conversation adoption-eligible. Clear any
        provably dead wrapper before that decision so its stale writer fence
        cannot block the startup recovery path. */
-    reconcileDeadStructuredRegistryHosts(registry, (entry) => orchestratorHostKeys.has(sessionKeyId(entry.key))
+    await reconcileDeadStructuredRegistryHostsOffLoop(registry, (entry) => orchestratorHostKeys.has(sessionKeyId(entry.key))
       || interruptionHostKeys.has(sessionKeyId(entry.key))
       || (resumeDeferred !== null && !resumeDeferred.has(sessionKeyId(entry.key)))
       || deferredHostKeys.has(sessionKeyId(entry.key))
       || delayedRows.has(sessionKeyId(entry.key))
-      || evidenceMoved(entry));
+      || evidenceMoved(entry), assertActive);
     const signals = await structuredStartupSignals(
       registry,
       client,
@@ -2532,7 +2536,12 @@ async function adoptStructuredHostsPass(
           skippedHostKeys.add(sessionKeyId(entry.key));
           return;
         }
-        return mutation();
+        return registry.deliveryWriteOrBusy({ label: "registry.startup-demote" }, () => {
+          assertActive();
+          const latest = startupSnapshot(registry).entries[sessionKeyId(entry.key)];
+          if (!latest || evidenceMoved(latest)) return undefined;
+          return mutation();
+        });
       }, "reconciling structured hosts"));
     const publicationSnapshot = startupSnapshot(registry);
     orchestratorHostKeys = currentOrchestratorRestartRecoveryHostKeys(
@@ -3019,6 +3028,7 @@ export async function releaseUnpublishedStartupHostsForDemotion(
       throw error;
     }
     await host.release();
+    await flushStructuredHostPersistence(host);
     released.add(sessionKeyId(key));
   }));
   /* A released handle is gone for good: no later pass in this process may

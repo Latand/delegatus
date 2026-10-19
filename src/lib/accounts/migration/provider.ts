@@ -263,16 +263,21 @@ function assertProviderLockOwned(filename: string, token: string): void {
  * (`restore`); a later launch's identity remains intact. A conversation the
  * registry cannot find gets none, and its launch keeps the stdio server.
  */
-function successorCapability(input: StructuredHostPublicationInput): { capability: string | null; restore: () => void } {
+export async function successorCapability(input: StructuredHostPublicationInput, engine: "claude" | "codex"): Promise<{ capability: string | null; restore: () => Promise<void> }> {
   const minted = input.conversationId
-    ? input.registry.stageSpawnCapabilityForConversation(input.conversationId, input.receipt.operationId)
+    ? await input.registry.deliveryWriteOrBusy({ label: "registry.successor-capability", operationId: input.receipt.operationId }, () => {
+      const refused = successorRefusal(input, engine, input.registry.readOnlySnapshot());
+      if (refused) throw new Error(refused.error);
+      return input.registry.stageSpawnCapabilityForConversation(input.conversationId!, input.receipt.operationId);
+    })
     : null;
   let restored = false;
   return {
     capability: minted?.capability ?? null,
-    restore: () => {
+    restore: async () => {
       if (!minted || restored) return;
-      input.registry.discardSpawnCapabilityForOperation(input.receipt.operationId, minted.digest);
+      await input.registry.deliveryWriteOrBusy({ label: "registry.successor-capability-restore", operationId: input.receipt.operationId }, () =>
+        input.registry.discardSpawnCapabilityForOperation(input.receipt.operationId, minted.digest));
       restored = true;
     },
   };
@@ -367,10 +372,10 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
   let host: CodexAppServerHost | null = null;
   let stopPersistence = () => {};
   let unregister = async () => {};
-  let identity: ReturnType<typeof successorCapability> | null = null;
+  let identity: Awaited<ReturnType<typeof successorCapability>> | null = null;
   let access: ReturnType<typeof materializeStructuredHostAccess>;
   try {
-    identity = successorCapability(input);
+    identity = await successorCapability(input, "codex");
     access = materializeStructuredHostAccess(
       structuredHostAccessPolicy(input.profile),
       input.target.env,
@@ -380,7 +385,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     /* Nothing was started: release the claim and discard the pending identity,
        as on the Claude path, where this step also sits inside the try. */
     (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, input.registry.releaseStructuredHostClaim.bind(input.registry, key, claimed.claimOwner, claimed.claimEpoch)));
-    identity?.restore();
+    await identity?.restore();
     throw error;
   }
   try {
@@ -428,24 +433,24 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
         "dead",
       );
       await host.release();
-      stopPersistence();
-      identity?.restore();
+      await stopPersistence();
+      await identity?.restore();
       throw error;
     }
     await unregister();
     if (host) await host.release();
     else access.cleanup();
-    stopPersistence();
+    await stopPersistence();
     (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, input.registry.releaseStructuredHostClaim.bind(input.registry, key, claimed.claimOwner, claimed.claimEpoch)));
-    identity?.restore();
+    await identity?.restore();
     throw error;
   }
   const publishedHost = host;
   return async () => {
     await unregister();
     await publishedHost.release();
-    stopPersistence();
-    identity?.restore();
+    await stopPersistence();
+    await identity?.restore();
   };
 }
 
@@ -521,7 +526,7 @@ async function publishClaudeSuccessorHost(
   let stopPersistence = () => {};
   let unregister = async () => {};
   let access: ReturnType<typeof materializeStructuredHostAccess> | null = null;
-  let identity: ReturnType<typeof successorCapability> | null = null;
+  let identity: Awaited<ReturnType<typeof successorCapability>> | null = null;
   try {
     if (input.receipt.host.kind !== "claude-fork") {
       const tmuxHost = claudeTmuxHostFromReceipt(input.receipt);
@@ -535,7 +540,7 @@ async function publishClaudeSuccessorHost(
       (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, input.registry.releaseStructuredHostClaim.bind(input.registry, key, claimed.claimOwner, claimed.claimEpoch)));
       return async () => {};
     }
-    identity = successorCapability(input);
+    identity = await successorCapability(input, "claude");
     access = materializeStructuredHostAccess(
       structuredHostAccessPolicy(input.profile),
       input.target.env,
@@ -595,16 +600,16 @@ async function publishClaudeSuccessorHost(
         "dead",
       );
       await host.release();
-      stopPersistence();
-      identity?.restore();
+      await stopPersistence();
+      await identity?.restore();
       throw error;
     }
     await unregister();
     if (host) await host.release();
     else access?.cleanup();
-    stopPersistence();
+    await stopPersistence();
     (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredHostClaim" }, input.registry.releaseStructuredHostClaim.bind(input.registry, key, claimed.claimOwner, claimed.claimEpoch)));
-    identity?.restore();
+    await identity?.restore();
     throw error;
   }
   const publishedHost = host;
@@ -612,8 +617,8 @@ async function publishClaudeSuccessorHost(
   return async () => {
     await unregister();
     await publishedHost.release();
-    stopPersistence();
-    publishedIdentity?.restore();
+    await stopPersistence();
+    await publishedIdentity?.restore();
   };
 }
 
