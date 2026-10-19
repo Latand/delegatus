@@ -184,3 +184,17 @@ test.each([403, 503])("a definite HTTP refusal and an uncertain server failure k
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test.each(["write-refused", "seat-revoked"])("an admitted deployment remains accepted after attribution fails: %s", async cause => {
+  let designated = true;
+  const bindings = viewerMcpBindings(undefined, { post: async () => {
+    if (cause === "seat-revoked") designated = false;
+    return { state: "accepted", deploymentId: `admitted-${cause}`, revision: SHA };
+  } }, {
+    ...domain,
+    authorizedSeats: () => designated ? domain.authorizedSeats() : [],
+    recordSeatDeployment: async () => { throw new Error("fixture attribution write refused"); },
+  } as never);
+  expect(await bindings.deploy_exact_sha({ revision: SHA, clientRequestId: `admitted-${cause}` }))
+    .toMatchObject({ state: "accepted", deploymentId: `admitted-${cause}`, wakeOnSettle: false });
+});

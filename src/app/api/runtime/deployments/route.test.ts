@@ -11,7 +11,7 @@ import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { productionDeps, setSelfUpdateServiceForTests } from "@/lib/selfUpdate/instance";
 import { SelfUpdateService } from "@/lib/selfUpdate/service";
 import { POST } from "./route";
-import { beginSeatDeployment, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
+import { beginSeatDeployment, seatDeploymentsFile, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 
 /**
  * The HTTP deploy door, at parity with the MCP binding and the raw socket
@@ -93,6 +93,16 @@ test("HTTP admission cannot invent a seat or attach a different busy SHA", async
   setDeploymentRuntimeForTests(async () => ({ state: "busy", deploymentId: "other-deployment", revision: "b".repeat(40) }));
   expect((await POST(deployRequest({ revision: SHA, idempotencyKey: "different-sha-busy" }))).status).toBe(409);
   expect(seatDeploymentsFor("waiting-seat")).toEqual([]);
+});
+
+test("an attribution write failure preserves the admitted HTTP response", async () => {
+  const queuePath = `${seatDeploymentsFile()}.write-locks`;
+  fs.mkdirSync(path.dirname(queuePath), { recursive: true });
+  fs.writeFileSync(queuePath, "fixture prevents attribution lock admission");
+  const response = await POST(deployRequest({ revision: SHA, idempotencyKey: "attribution-unavailable" }));
+  expect(response.status).toBe(202);
+  expect(await response.json()).toMatchObject({ state: "accepted", deploymentId: "deployment_1" });
+  expect(requested).toEqual([{ revision: SHA, idempotencyKey: "attribution-unavailable" }]);
 });
 
 test("a well-formed exact-SHA request is forwarded to host admission as-is", async () => {
