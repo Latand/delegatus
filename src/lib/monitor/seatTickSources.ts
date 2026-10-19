@@ -1113,7 +1113,7 @@ function pauseInputs(pipelines: readonly Pipeline[], seat: SeatTickSeatInput | n
           try { observations.set(condition.engine, sources.registry().quotaObservations(condition.engine)); }
           catch { observations.set(condition.engine, []); }
         }
-        const observation = observations.get(condition.engine)?.find(row => row.accountId === condition.accountId);
+        const observation = observations.get(condition.engine)?.find(row => row.engine === condition.engine && row.accountId === condition.accountId);
         const window = observation?.limits?.[condition.window];
         pauseConditionMet = liveFreshObservation(observation, now) && !!window
           && Number.isFinite(window.usedPercent) && window.usedPercent >= 0 && window.usedPercent < condition.belowPercent;

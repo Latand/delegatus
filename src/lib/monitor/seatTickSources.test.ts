@@ -340,6 +340,9 @@ test("pause account conditions use fresh cached quota once per engine and refres
   observation.observedAt = new Date(NOW).toISOString();
   observation.limits.weekly.usedPercent = 80;
   expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
+  observation.limits.weekly.usedPercent = 79;
+  observation.engine = "claude";
+  expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
   ports.registry = () => ({ ...registry, quotaObservations: () => { throw new Error("cached quota unavailable"); } }) as never;
   expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
 });
