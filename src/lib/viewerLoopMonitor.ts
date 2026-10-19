@@ -27,10 +27,11 @@ export type ViewerOperation = "temp.sweep" | "resources.read" | "worktrees.sweep
   | "hosts.retirement" | "self-update.retention" | "spawn-notice.prune" | "delivery-progress.prune"
   | "resources.read" | "seat.panel" | "attention.read" | "pipelines.revalidate" | "runtime-journal.receipt-sweep"
   | "done.sweep" | "done.media" | "done.frame-source"
-  | "seat-tick.prepare" | "seat-tick.pause-conditions" | "seat-tick.liveness" | "seat-tick.children" | "seat-tick.reports" | "seat-tick.worker-asks" | "seat-tick.rule-reports" | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
+  | "seat-tick.prepare" | "seat-tick.liveness" | "seat-tick.children" | "seat-tick.reports" | "seat-tick.worker-asks" | "seat-tick.rule-reports" | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
   | "codex.protocol-admission"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"
-  | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel";
+  | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel"
+  | "seat-tick.pause-conditions";
 type Operation = { name: ViewerOperation; start: number; end?: number };
 const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 
