@@ -1090,6 +1090,9 @@ for db in state.sqlite agent-registry.sqlite mcp-receipts.sqlite memory-index.sq
     "$PROD/$db" "$P/state/$db"
 done
 install -m 600 "$PROD/runtime-events-$INSTALL.sqlite.key" "$P/state/"   # the journal refuses to open without its key; never print it
+if [ -d "$PROD/structured-host-events" ]; then
+  cp -a "$PROD/structured-host-events" "$P/state/"
+fi
 for f in board-summary-bootstrap.bin lifecycle-journal.json orchestrator-seats.json worktree-sweep-report.json \
          operator-asks.json view-presence.json host-retirement-journal.ndjson project-catalog.json self-update/history.jsonl \
          project-aliases.json project-remotes.json worktree-map.json; do

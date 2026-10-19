@@ -178,6 +178,12 @@ if (process.env.PROBE_SEAT_WORKER === "1") {
         await heartbeat; recording = true;
         const started = performance.now();
         const result = await probe.run(index);
+        if (!result || result.verdict === "error") {
+          throw new Error(`T9-check run ${index} did not complete successfully: ${result?.detail ?? "no result"}`);
+        }
+        if ((result.verdict !== "wake" && result.verdict !== "proactive") || result.reasons.length === 0 || result.items === 0) {
+          throw new Error(`T9-check run ${index} did not exercise an eligible wake decision`);
+        }
         const ms = performance.now() - started;
         await new Promise<void>(resolve => { sampled = resolve; });
         console.log(JSON.stringify({ ...result, ms, maxGapMs }));

@@ -662,7 +662,8 @@ export function defaultSeatTickSources(): SeatTickSources {
     })),
     liveness: query => query.project ? withViewerOperation("seat-tick.liveness", () => performanceSpans.wait("seat-tick.liveness", async () => {
       const { runSeatSourceInWorker } = await import("@/lib/scanner/filesResponseWorker");
-      const { completedFileScanDescriptor } = await import("@/lib/scanner/scanCache");
+      const { completedFileScan, completedFileScanDescriptor } = await import("@/lib/scanner/scanCache");
+      await completedFileScan();
       const scan = completedFileScanDescriptor();
       if (!scan) throw new Error("seat liveness inventory is not published yet");
       const answer = await runSeatSourceInWorker({ type: "seat-liveness", query, scan });

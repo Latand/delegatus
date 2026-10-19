@@ -1,77 +1,77 @@
 # Seat check L8 replay
 
-The complete copied-state check passes the 100 ms loop bound and the 50 ms synchronous-source bound in all six after runs. Raw per-source calls, synchronous entry times, awaited wall times, load averages and timestamps are in `evidence/perf/seat-tick-check.json`.
+The complete copied-state check reached the same eligible wake decision in all six runs on both revisions. Every after run passes the 100 ms loop bound and the 50 ms synchronous-source bound. The full per-source timings, awaited wall times, load averages, outcomes and timestamps are in `evidence/perf/seat-tick-check.json`.
 
 ## Conditions
 
-`scripts/probe-seat-tick.ts` implements the M4 T9-check adapter. Both sides used Bun 1.4.0 and the same immutable seed restored to the same private path. The base was `7ac695acc0ce`; source fingerprints identify each measured tree. The seed was copied at 2026-10-18T23:49:48.556286+00:00. No controller ran against live state.
+The M4 T9-check adapter in `scripts/probe-seat-tick.ts` ran under Bun 1.4.0 through `gate-slot.sh`. Base `7ac695acc0ce727d40784fe3c7b6b9fdf63e4b7f` and the final source tree used one immutable seed, restored to each isolated copy. The seed was copied at 2026-10-19T00:50:30.341000+00:00; its tree digest is recorded in the JSON artifact. Fingerprints identify each measured source tree.
 
-There were 243 hot pipelines (30,598,219 JSON characters), 990 archived pipelines (118,732,125), 2,494 tasks (9,939,576), 4,003 role-memory rows (16,649,217), and a 33,193,663-byte summary. The observed fleet was five live agents, three running; copied registry statuses separately reported 39 live/idle and nine live. The fleet observation marked its catalogue stale. Per-run load averages accompany every sample.
+The copy held 243 hot pipelines (32,084,865 JSON characters), 990 archived pipelines (132,652,422), 2,394 tasks (10,893,795), 4,009 role-memory rows (16,681,356), and a 33,356,772-byte summary. Copied registry statuses showed 39 live/idle and seven running entries. The observed project fleet was five live agents and three running at 2026-10-19T00:50:16.905Z. Load averages accompany every sample.
 
-HOME, XDG_CONFIG_HOME, TMPDIR, CODEX_HOME and LLV_STATE_DIR were private. The control URL used a verified closed loopback port. NODE_ENV=test prevents an imported inbox from resolving outside the sandbox. gh and dispatch effects were stubbed; transcript evidence was suppressed in parent and worker. Date.now was fixed at the seed timestamp; performance timers remained real. Module imports, inert summary/catalogue decoding and the registry scale count precede run 0. Task, pipeline and memory lists start cold.
+HOME, XDG_CONFIG_HOME, TMPDIR, CODEX_HOME and LLV_STATE_DIR were private to each copy. The adapter verified the control port was closed. `NODE_ENV=test` kept inbox resolution in the sandbox. GitHub and action effects were stubbed; transcript evidence was suppressed in both processes. Child event ledgers were included in the copied seed. `Date.now` used the same copied-state timestamp for both sides; performance timers remained real. Imports, inert summary/catalogue decoding and the registry scale count preceded run 0. Task, pipeline and memory lists remained cold until the check.
 
-The copied state conservatively returns an error because child-ledger evidence was omitted. Both sides produce the same ledger-gap failure code, error verdict, empty reasons and zero items on every run. This measures the complete check through that evidence gap; deterministic controller tests cover wake content and dispatch. It makes no production overlap-per-hour claim.
+Each run returned `wake`, reason `lane-event`, and three items on both revisions. Before-side runs measured baseline cost without enforcing the candidate bounds. The after command used `--enforce`, which rejects a missing result, an error verdict, an ineligible wake, a loop gap above 100 ms or a synchronous source above 50 ms.
 
 ## Complete check
 
-All values are milliseconds. Wall time includes asynchronous work; loop interval is the largest interval observed by the 1 ms timer, including the final continuation.
+All values are milliseconds. Wall time includes asynchronous work. Loop interval is the largest interval observed by the 1 ms timer, including the final continuation.
 
 | Run | Before wall | After wall | Before loop | After loop | Before largest sync entry | After largest sync entry |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0 | 7236.15 | 8193.05 | 751.48 | 67.36 | 341.75 | 35.48 |
-| 1 | 1206.01 | 1015.75 | 594.34 | 62.65 | 212.73 | 22.55 |
-| 2 | 1191.15 | 947.99 | 580.29 | 57.63 | 217.65 | 30.88 |
-| 3 | 1187.71 | 985.08 | 585.57 | 51.61 | 213.73 | 21.70 |
-| 4 | 1284.20 | 801.63 | 641.37 | 42.95 | 219.73 | 20.51 |
-| 5 | 1237.73 | 818.11 | 606.66 | 47.49 | 213.11 | 19.85 |
+| 0 | 8,978.17 | 8,122.11 | 1,251.56 | 80.12 | 771.10 | 34.60 |
+| 1 | 1,397.85 | 794.98 | 721.75 | 48.95 | 239.54 | 18.65 |
+| 2 | 1,629.16 | 752.32 | 763.91 | 49.64 | 331.12 | 17.90 |
+| 3 | 1,883.78 | 748.24 | 1,121.69 | 48.55 | 219.06 | 18.28 |
+| 4 | 1,389.55 | 731.71 | 719.73 | 52.82 | 215.21 | 18.76 |
+| 5 | 1,373.43 | 751.38 | 723.46 | 65.21 | 221.75 | 16.55 |
 
 ## Sources
 
-Maximum synchronous entry per source across the six runs. Async continuations are additionally bounded by the complete-check loop measurement. A dash means the source did not exist or its branch was gated out. All six individual samples and awaited times remain in the JSON artifact.
+Maximum synchronous entry per source across the six runs. Async waits are also covered by the complete-check loop measurement. `archivedPipelinesAsync` is the after-side cooperative reader corresponding to the before-side `archivedPipelines` source. All individual samples and awaited times remain in the JSON artifact.
 
 | Source | Before ms | After ms |
 | --- | ---: | ---: |
-| `appendRecord` | 0.866 | 1.327 |
-| `diskPressure` | 0.086 | 0.123 |
-| `latestDeployment` | 0.179 | 0.196 |
-| `lifecycleJournal` | 3.742 | 5.295 |
-| `liveness.conversation` | 15.501 | 12.103 |
-| `liveness.project` | 0.673 | 0.149 |
-| `maintenanceRuns` | 3.563 | 4.554 |
-| `memoryProblems` | 121.232 | 0.912 |
-| `now` | 0.006 | 0.007 |
-| `pipelines` | 95.644 | 0.564 |
-| `prepareRead` | — | 9.889 |
-| `readState` | 3.955 | 3.844 |
-| `recordDeploySnapshots` | 0.274 | 0.388 |
-| `recordRuleReports` | 341.747 | 0.169 |
-| `refreshLifecycle` | 14.705 | 16.182 |
-| `registry` | 0.006 | 0.017 |
-| `reports.log` | 21.316 | 0.210 |
-| `retirementJournal` | 5.087 | 5.670 |
-| `retirementReport` | 0.036 | 0.038 |
-| `seatContextUsage` | 0.004 | 0.012 |
-| `seatDeployments` | 0.049 | 0.045 |
-| `seatFor` | 16.152 | 13.947 |
-| `seatTurnOutcome` | 0.012 | 0.037 |
-| `settings` | 0.519 | 0.692 |
-| `tasks` | 94.029 | 0.699 |
-| `workerAsks` | 0.097 | 0.123 |
-| `workerCounts` | 21.231 | 35.476 |
-| `writeState` | 6.995 | 12.857 |
+| `appendRecord` | 0.800 | 0.858 |
+| `archivedPipelines` / `archivedPipelinesAsync` | 771.103 | 5.286 |
+| `diskPressure` | 0.087 | 0.089 |
+| `latestDeployment` | 0.172 | 0.161 |
+| `lifecycleJournal` | 5.564 | 3.620 |
+| `liveness.conversation` | 19.187 | 20.945 |
+| `liveness.project` | 1.241 | 0.167 |
+| `maintenanceRuns` | 4.963 | 5.566 |
+| `memoryProblems` | 277.083 | 0.508 |
+| `now` | 0.009 | 0.008 |
+| `openPullRequests` | 0.028 | 0.019 |
+| `pipelines` | 244.791 | 0.399 |
+| `prepareRead` | — | 23.639 |
+| `readState` | 4.631 | 3.585 |
+| `recordDeploySnapshots` | 0.267 | 0.470 |
+| `recordRuleReports` | 346.138 | 0.148 |
+| `refreshLifecycle` | 27.500 | 24.538 |
+| `registry` | 0.010 | 0.009 |
+| `reports.log` | 21.356 | 0.134 |
+| `retirementJournal` | 9.617 | 9.621 |
+| `retirementReport` | 0.037 | 0.030 |
+| `seatContextUsage` | 0.006 | 0.019 |
+| `seatDeployments` | 0.061 | 0.042 |
+| `seatFor` | 11.183 | 12.461 |
+| `seatTurnOutcome` | 0.013 | 0.014 |
+| `settings` | 1.603 | 0.374 |
+| `tasks` | 156.491 | 0.350 |
+| `workerAsks` | 0.106 | 0.106 |
+| `workerCounts` | 33.594 | 34.598 |
+| `writeState` | 9.664 | 8.126 |
 
 ## Changes and contracts
 
 Seat startup fills shared task, pipeline and role-memory readers cooperatively. Tasks use the normalized read-only list; immutable pipeline bodies receive weak-keyed fingerprints, so unchanged evidence does not reserialize retained history. Alias and linked-machine context is captured once per synchronous pass. Task membership filtering precedes pipeline correlation.
 
-The existing response worker reduces the exact operator summary to worker asks, reads report coverage and produces rule reports. Project liveness consumes the Viewer-certified persisted scan generation; generation changes refuse the result. Targeted conversation liveness retains its existing authority path. Queue and execution share one deadline; expired queued work never dispatches. Existing worker ownership, retirement and cleanup remain responsible for its process. The report helper in `src/lib/monitor/seatTickReports.ts` keeps controller imports outside the worker and resolves the channel cursor before the report transaction, including on a cold worker. New waits carry seat-tick operation and performance-phase labels.
-
-The lifecycle journal peaked at 5.30 ms after the change and is unchanged. Archived pipelines were gated out of this replay; their cold reader now uses the same cooperative shared-list preparation, with existing selection and ordering.
+The existing response worker reduces the exact operator summary to worker asks, reads report coverage and produces rule reports. Before sending project liveness to that worker, the Viewer now awaits `completedFileScan()`, preserving cold-start scan admission and observed catalogue refresh. The worker consumes the resulting Viewer-certified persisted generation; a generation change during its await refuses the result. Targeted conversation liveness retains its authority path. Queue and execution share one deadline; expired queued work never dispatches. Existing worker ownership, retirement and cleanup remain responsible for its process. The report helper in `src/lib/monitor/seatTickReports.ts` keeps controller imports outside the worker and resolves the channel cursor before the report transaction, including on a cold worker. New waits carry seat-tick operation and performance-phase labels.
 
 No schema or persisted write format changed. Shared-reader producers are SqliteStateCollection cache publication and its existing revision/context validation; consumers include task list normalization, pipeline list membership/projections, seat gathering/evidence and memory-problem selection. Mutations retain keyed writers. Rule-report production still uses ruleReports and appendBridgeReports; coverage keeps the original manager/project filter, row order, default locale and owed-at semantics. Operator board callers still receive their original parsed representation; only seat agenda reduction consumes its raw body in the worker.
 
 ## Verification
 
-History-flat and wake-equivalence tests were written before the implementation. The original source copied 22 rows at the smaller history and 202 at tenfold history; the replacement decodes and copies zero warm task/pipeline rows. Existing wake reasons, items and order remain covered. Additional tests cover immutable evidence replacement, cold-read refusal/retry, peer writes, worker restart, malformed input, queue expiry and scan-generation races.
+The history-flat test shows row decoding and copying stay at zero after warming, with tenfold unrelated task and pipeline history. Existing wake reasons, items and ordering remain covered. The new project-liveness regression verifies cold completion and a new generation on consecutive calls; the existing generation-replacement test still refuses stale worker results.
 
-Focused command: `bun test src/lib/monitor/seatTickSources.test.ts src/lib/state/sqliteStateStore.readCache.test.ts src/lib/scanner/filesResponseWorker.test.ts` — 153 pass, zero failures. These commands run through the gate-slot wrapper with isolated roots. The isolated production build and compiled worker checks pass: ordered asks, malformed input, outside-directory refusals, certified liveness, durable reports and restart deduplication. The same build on the base also passes. Final typecheck, touched-tests comparison and publication-gate results are recorded in the stage report.
+Focused checks and the touched-tests comparator are run by explicit path through the gate-slot wrapper, with isolated roots. Typecheck, privacy publication, lint, scoped Linux checks and the pre-push comparator are recorded in the stage report. The replay evidence shows the eligible successful wake path with effects stubbed; the after source stays under both specified timing bounds.

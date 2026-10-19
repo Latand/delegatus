@@ -2629,3 +2629,31 @@ test("project liveness rejects a replaced inventory after the worker await and l
     expect(calls).toBe(2);
   } finally { release(); reading.mockRestore(); descriptors.mockRestore(); }
 });
+
+test("project liveness completes and refreshes catalogue discovery before using the worker", async () => {
+  const { spyOn } = await import("bun:test");
+  const scan = await import("@/lib/scanner/scanCache");
+  const worker = await import("@/lib/scanner/filesResponseWorker");
+  const { defaultSeatTickSources } = await import("./seatTickSources");
+  let descriptor: NonNullable<ReturnType<typeof scan.completedFileScanDescriptor>> | null = null;
+  let refreshes = 0;
+  const complete = spyOn(scan, "completedFileScan").mockImplementation(async () => {
+    refreshes++;
+    descriptor = { epoch: "catalogue", generation: refreshes, snapshotFile: statePath(`inventory-${refreshes}.json`) };
+    return {} as never;
+  });
+  const current = spyOn(scan, "completedFileScanDescriptor").mockImplementation(() => descriptor);
+  const read = spyOn(worker, "runSeatSourceInWorker").mockImplementation(async request => {
+    expect(request).toMatchObject({ type: "seat-liveness", scan: { epoch: "catalogue", generation: refreshes } });
+    return { body: "[]" } as never;
+  });
+  try {
+    const source = defaultSeatTickSources();
+    const query = { project: PROJECT, stallAfterMs: 60_000, limit: 20, reconcileStructuredIdle: false } as const;
+    await expect(source.liveness(query)).resolves.toEqual([]);
+    await expect(source.liveness(query)).resolves.toEqual([]);
+    expect(refreshes).toBe(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(2);
+  } finally { read.mockRestore(); current.mockRestore(); complete.mockRestore(); }
+});

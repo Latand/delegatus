@@ -1,2589 +1,2782 @@
 {
   "case": "T9-check",
   "baseRevision": "7ac695acc0ce727d40784fe3c7b6b9fdf63e4b7f",
-  "copiedAt": "2026-10-18T23:49:48.556286+00:00",
-  "seedSha256": "c266833c426ee8be4ba17ca0e48b12970f25329139e76b58e8e3eb6047a6709c",
+  "copiedAt": "2026-10-19T00:50:30.341000+00:00",
+  "seedSha256": "d24a82dbe4fe4603aacacc933155d168724070ba3aee4522c00853204a02ab6f",
+  "seedHashMethod": "SHA-256 over sorted relative paths and each file content digest",
   "collections": [
     {
       "name": "pipelines",
       "rows": 243,
-      "jsonCharacters": 30598219
+      "jsonCharacters": 32084865
     },
     {
       "name": "pipelines_archive",
       "rows": 990,
-      "jsonCharacters": 118732125
+      "jsonCharacters": 132652422
     },
     {
       "name": "role_memory",
-      "rows": 4003,
-      "jsonCharacters": 16649217
+      "rows": 4009,
+      "jsonCharacters": 16681356
     },
     {
       "name": "tasks",
-      "rows": 2494,
-      "jsonCharacters": 9939576
+      "rows": 2394,
+      "jsonCharacters": 10893795
     }
   ],
-  "fleetObservedAt": "2026-10-19T00:29:06.474Z",
-  "command": "bun scripts/probe-seat-tick.ts T9-check (after adds --enforce)",
+  "fleetObservedAt": "2026-10-19T00:50:16.905Z",
+  "command": "gate-slot.sh bun scripts/probe-seat-tick.ts (six runs per side; --enforce on after)",
   "before": [
     {
       "case": "T9-check",
       "bun": "1.4.0",
-      "sourceFingerprint": "a0c37b25f96438cc0673a5a4ece7fd459e307efcbadcfe44b6d55c025dafc831",
-      "summaryBytes": 33193663,
+      "sourceFingerprint": "4bff95693cb2dd94bc6cf5a28454146881c8944795065df367053fdfa4542a5f",
+      "summaryBytes": 33356772,
       "copiedStatuses": {
         "live": 39,
-        "running": 9
+        "running": 7
       },
       "liveAgents": "5",
       "runningAgents": "3",
-      "replayNow": 1792367388556,
-      "condition": "module imports, inert summary/catalogue decoding and registry scale count precede run 0; task, pipeline and memory lists stay cold; gh and action ports stubbed; transcript evidence suppressed in both processes"
+      "replayNow": 1792371030341,
+      "condition": "module imports, inert summary/catalogue decoding and registry scale count precede run 0; task, pipeline and memory lists stay cold; gh and action ports stubbed; transcript evidence suppressed in both processes; copied structured-host-events child ledgers are present in the seed"
     },
     {
       "case": "T9-check",
       "run": 0,
-      "at": "2026-10-19T00:29:44.792Z",
+      "at": "2026-10-19T00:56:14.181Z",
       "load": [
-        3.16,
-        3.55,
-        3.81
+        6.57,
+        5.23,
+        5.08
       ],
-      "verdict": "error",
-      "reasons": [],
-      "items": 0,
-      "failureCode": "ledger-gap",
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
       "sources": {
         "readState": {
           "calls": 2,
-          "syncMs": 4.203858000000082,
-          "maxSyncMs": 3.954715999999962,
-          "wallMs": 4.222423000000163,
-          "maxWallMs": 3.972153000000162
+          "syncMs": 4.943959999999606,
+          "maxSyncMs": 4.631406999999854,
+          "wallMs": 4.96614800000043,
+          "maxWallMs": 4.652337999999872
         },
         "now": {
-          "calls": 5,
-          "syncMs": 0.013550000000350337,
-          "maxSyncMs": 0.006044999999858192,
-          "wallMs": 0.018374000000903834,
-          "maxWallMs": 0.007216999999855034
+          "calls": 8,
+          "syncMs": 0.02466900000035821,
+          "maxSyncMs": 0.009218999999575317,
+          "wallMs": 0.03713499999594205,
+          "maxWallMs": 0.010421999999380205
         },
         "seatFor": {
-          "calls": 5,
-          "syncMs": 30.45853500000112,
-          "maxSyncMs": 6.56291500000043,
-          "wallMs": 30.467936000002055,
-          "maxWallMs": 6.56626099999994
+          "calls": 7,
+          "syncMs": 46.68962300000203,
+          "maxSyncMs": 6.837894999999662,
+          "wallMs": 46.71166100000028,
+          "maxWallMs": 6.842375000000175
         },
         "settings": {
           "calls": 5,
-          "syncMs": 1.5926340000000891,
-          "maxSyncMs": 0.4995910000002368,
-          "wallMs": 1.6021240000004582,
-          "maxWallMs": 0.5017950000001292
+          "syncMs": 1.5346410000001924,
+          "maxSyncMs": 0.3556459999999788,
+          "wallMs": 1.547088000000258,
+          "maxWallMs": 0.3581610000001092
         },
         "memoryProblems": {
           "calls": 3,
-          "syncMs": 263.2131489999997,
-          "maxSyncMs": 121.23165500000005,
-          "wallMs": 263.23056599999995,
-          "maxWallMs": 121.23546899999997
+          "syncMs": 431.2127530000016,
+          "maxSyncMs": 277.08327400000053,
+          "wallMs": 431.22840799999994,
+          "maxWallMs": 277.0873419999998
         },
         "registry": {
-          "calls": 4,
-          "syncMs": 0.018519999998488856,
-          "maxSyncMs": 0.006167999999888707,
-          "wallMs": 0.030521999998882166,
-          "maxWallMs": 0.010871999998926185
+          "calls": 7,
+          "syncMs": 0.024513000000297325,
+          "maxSyncMs": 0.006589999999960128,
+          "wallMs": 0.03635299999950803,
+          "maxWallMs": 0.010949999999866122
         },
         "liveness.conversation": {
           "calls": 1,
-          "syncMs": 15.500594000000092,
-          "maxSyncMs": 15.500594000000092,
-          "wallMs": 39.49183999999991,
-          "maxWallMs": 39.49183999999991
+          "syncMs": 19.187368000000788,
+          "maxSyncMs": 19.187368000000788,
+          "wallMs": 36.50376200000028,
+          "maxWallMs": 36.50376200000028
         },
         "pipelines": {
-          "calls": 4,
-          "syncMs": 96.28823599999942,
-          "maxSyncMs": 95.64419799999996,
-          "wallMs": 96.30187099999989,
-          "maxWallMs": 95.64689699999985
+          "calls": 6,
+          "syncMs": 246.03150500000174,
+          "maxSyncMs": 244.79082300000027,
+          "wallMs": 246.05407699999978,
+          "maxWallMs": 244.79744699999992
         },
         "liveness.project": {
           "calls": 1,
-          "syncMs": 0.6732669999998961,
-          "maxSyncMs": 0.6732669999998961,
-          "wallMs": 332.89253699999995,
-          "maxWallMs": 332.89253699999995
+          "syncMs": 1.2409699999998338,
+          "maxSyncMs": 1.2409699999998338,
+          "wallMs": 432.1457419999997,
+          "maxWallMs": 432.1457419999997
         },
         "tasks": {
           "calls": 3,
-          "syncMs": 188.62783899999977,
-          "maxSyncMs": 94.0292159999999,
-          "wallMs": 188.64080599999966,
-          "maxWallMs": 94.03411299999993
+          "syncMs": 258.8732999999984,
+          "maxSyncMs": 156.49119100000007,
+          "wallMs": 258.8818479999982,
+          "maxWallMs": 156.49464399999943
         },
         "seatDeployments": {
           "calls": 1,
-          "syncMs": 0.04912699999999859,
-          "maxSyncMs": 0.04912699999999859,
-          "wallMs": 0.05187599999999293,
-          "maxWallMs": 0.05187599999999293
+          "syncMs": 0.06118199999946228,
+          "maxSyncMs": 0.06118199999946228,
+          "wallMs": 0.06617699999969773,
+          "maxWallMs": 0.06617699999969773
         },
         "maintenanceRuns": {
           "calls": 1,
-          "syncMs": 3.5630310000001373,
-          "maxSyncMs": 3.5630310000001373,
-          "wallMs": 3.5657400000000052,
-          "maxWallMs": 3.5657400000000052
+          "syncMs": 4.963192000000163,
+          "maxSyncMs": 4.963192000000163,
+          "wallMs": 4.967771000000539,
+          "maxWallMs": 4.967771000000539
         },
         "refreshLifecycle": {
           "calls": 1,
-          "syncMs": 14.705237000000125,
-          "maxSyncMs": 14.705237000000125,
-          "wallMs": 14.707566000000043,
-          "maxWallMs": 14.707566000000043
+          "syncMs": 27.50031200000012,
+          "maxSyncMs": 27.50031200000012,
+          "wallMs": 27.509062999999514,
+          "maxWallMs": 27.509062999999514
         },
         "lifecycleJournal": {
           "calls": 1,
-          "syncMs": 3.7417900000000373,
-          "maxSyncMs": 3.7417900000000373,
-          "wallMs": 3.743688999999904,
-          "maxWallMs": 3.743688999999904
+          "syncMs": 4.2505559999999605,
+          "maxSyncMs": 4.2505559999999605,
+          "wallMs": 4.254298000000745,
+          "maxWallMs": 4.254298000000745
         },
         "workerAsks": {
           "calls": 1,
-          "syncMs": 0.09691699999984849,
-          "maxSyncMs": 0.09691699999984849,
-          "wallMs": 5010.9366979999995,
-          "maxWallMs": 5010.9366979999995
+          "syncMs": 0.10572299999967072,
+          "maxSyncMs": 0.10572299999967072,
+          "wallMs": 5327.685113,
+          "maxWallMs": 5327.685113
+        },
+        "archivedPipelines": {
+          "calls": 1,
+          "syncMs": 771.1033380000008,
+          "maxSyncMs": 771.1033380000008,
+          "wallMs": 771.1110660000013,
+          "maxWallMs": 771.1110660000013
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.027989000000161468,
+          "maxSyncMs": 0.027989000000161468,
+          "wallMs": 0.040651000001162174,
+          "maxWallMs": 0.040651000001162174
         },
         "workerCounts": {
           "calls": 1,
-          "syncMs": 21.23070700000062,
-          "maxSyncMs": 21.23070700000062,
-          "wallMs": 21.233619000000544,
-          "maxWallMs": 21.233619000000544
+          "syncMs": 33.593909999999596,
+          "maxSyncMs": 33.593909999999596,
+          "wallMs": 33.59690799999953,
+          "maxWallMs": 33.59690799999953
         },
         "latestDeployment": {
           "calls": 1,
-          "syncMs": 0.17860100000052626,
-          "maxSyncMs": 0.17860100000052626,
-          "wallMs": 0.1817270000001372,
-          "maxWallMs": 0.1817270000001372
+          "syncMs": 0.17167700000027253,
+          "maxSyncMs": 0.17167700000027253,
+          "wallMs": 0.17476900000110618,
+          "maxWallMs": 0.17476900000110618
         },
         "retirementReport": {
           "calls": 1,
-          "syncMs": 0.036353999999846565,
-          "maxSyncMs": 0.036353999999846565,
-          "wallMs": 0.03695499999957974,
-          "maxWallMs": 0.03695499999957974
+          "syncMs": 0.03700299999945855,
+          "maxSyncMs": 0.03700299999945855,
+          "wallMs": 0.03755099999943923,
+          "maxWallMs": 0.03755099999943923
         },
         "retirementJournal": {
           "calls": 1,
-          "syncMs": 5.086561000000074,
-          "maxSyncMs": 5.086561000000074,
-          "wallMs": 5.089471000000231,
-          "maxWallMs": 5.089471000000231
+          "syncMs": 9.616820999999618,
+          "maxSyncMs": 9.616820999999618,
+          "wallMs": 9.621721999999863,
+          "maxWallMs": 9.621721999999863
         },
         "diskPressure": {
           "calls": 1,
-          "syncMs": 0.08629800000016985,
-          "maxSyncMs": 0.08629800000016985,
-          "wallMs": 323.3321500000002,
-          "maxWallMs": 323.3321500000002
+          "syncMs": 0.08737099999962084,
+          "maxSyncMs": 0.08737099999962084,
+          "wallMs": 281.36805899999854,
+          "maxWallMs": 281.36805899999854
         },
         "reports.log": {
           "calls": 1,
-          "syncMs": 21.31602500000008,
-          "maxSyncMs": 21.31602500000008,
-          "wallMs": 21.329283000000032,
-          "maxWallMs": 21.329283000000032
+          "syncMs": 20.947589999999764,
+          "maxSyncMs": 20.947589999999764,
+          "wallMs": 20.951269999999568,
+          "maxWallMs": 20.951269999999568
         },
         "recordRuleReports": {
           "calls": 1,
-          "syncMs": 341.7473430000009,
-          "maxSyncMs": 341.7473430000009,
-          "wallMs": 341.74868400000014,
-          "maxWallMs": 341.74868400000014
+          "syncMs": 346.1382059999996,
+          "maxSyncMs": 346.1382059999996,
+          "wallMs": 346.14002900000014,
+          "maxWallMs": 346.14002900000014
         },
         "seatTurnOutcome": {
           "calls": 1,
-          "syncMs": 0.011678000000756583,
-          "maxSyncMs": 0.011678000000756583,
-          "wallMs": 0.019424000000071828,
-          "maxWallMs": 0.019424000000071828
+          "syncMs": 0.012791000001016073,
+          "maxSyncMs": 0.012791000001016073,
+          "wallMs": 0.02152600000044913,
+          "maxWallMs": 0.02152600000044913
         },
         "seatContextUsage": {
           "calls": 1,
-          "syncMs": 0.004109999999855063,
-          "maxSyncMs": 0.004109999999855063,
-          "wallMs": 0.004632000000128755,
-          "maxWallMs": 0.004632000000128755
+          "syncMs": 0.00551400000040303,
+          "maxSyncMs": 0.00551400000040303,
+          "wallMs": 0.0061589999986608746,
+          "maxWallMs": 0.0061589999986608746
         },
         "recordDeploySnapshots": {
           "calls": 1,
-          "syncMs": 0.27398600000014994,
-          "maxSyncMs": 0.27398600000014994,
-          "wallMs": 0.2745940000004339,
-          "maxWallMs": 0.2745940000004339
+          "syncMs": 0.2667799999999261,
+          "maxSyncMs": 0.2667799999999261,
+          "wallMs": 0.2676550000014686,
+          "maxWallMs": 0.2676550000014686
         },
         "writeState": {
           "calls": 1,
-          "syncMs": 6.458555999999589,
-          "maxSyncMs": 6.458555999999589,
-          "wallMs": 6.459849999999278,
-          "maxWallMs": 6.459849999999278
+          "syncMs": 6.875920000000406,
+          "maxSyncMs": 6.875920000000406,
+          "wallMs": 6.876979000000574,
+          "maxWallMs": 6.876979000000574
         },
         "appendRecord": {
           "calls": 1,
-          "syncMs": 0.8288379999994504,
-          "maxSyncMs": 0.8288379999994504,
-          "wallMs": 0.8294170000008307,
-          "maxWallMs": 0.8294170000008307
+          "syncMs": 0.799565999999686,
+          "maxSyncMs": 0.799565999999686,
+          "wallMs": 0.8001829999993788,
+          "maxWallMs": 0.8001829999993788
         }
       },
-      "ms": 7236.152223,
-      "maxGapMs": 751.4845459999999
+      "ms": 8978.164811,
+      "maxGapMs": 1251.5604170000006
     },
     {
       "case": "T9-check",
       "run": 1,
-      "at": "2026-10-19T00:29:46.001Z",
+      "at": "2026-10-19T00:56:15.580Z",
       "load": [
-        2.98,
-        3.51,
-        3.8
+        6.77,
+        5.29,
+        5.1
       ],
-      "verdict": "error",
-      "reasons": [],
-      "items": 0,
-      "failureCode": "ledger-gap",
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
       "sources": {
         "readState": {
           "calls": 2,
-          "syncMs": 0.7404390000010608,
-          "maxSyncMs": 0.4625210000012885,
-          "wallMs": 0.7480290000003151,
-          "maxWallMs": 0.469466000000466
+          "syncMs": 0.6957520000014483,
+          "maxSyncMs": 0.37592700000095647,
+          "wallMs": 0.70170600000165,
+          "maxWallMs": 0.38102100000105565
         },
         "now": {
-          "calls": 5,
-          "syncMs": 0.004904999999780557,
-          "maxSyncMs": 0.0015860000003158348,
-          "wallMs": 0.006067000000257394,
-          "maxWallMs": 0.0018540000000939472
+          "calls": 8,
+          "syncMs": 0.011389999997845734,
+          "maxSyncMs": 0.0019159999992552912,
+          "wallMs": 0.015567999998893356,
+          "maxWallMs": 0.003244999999878928
         },
         "seatFor": {
-          "calls": 5,
-          "syncMs": 32.23641900000257,
-          "maxSyncMs": 9.567790000000969,
-          "wallMs": 32.24065600000358,
-          "maxWallMs": 9.568990000001577
+          "calls": 7,
+          "syncMs": 48.176423000000796,
+          "maxSyncMs": 9.27043699999922,
+          "wallMs": 48.18578600000001,
+          "maxWallMs": 9.271565999999439
         },
         "settings": {
           "calls": 5,
-          "syncMs": 1.28155500000139,
-          "maxSyncMs": 0.3247009999995498,
-          "wallMs": 1.285438000000795,
-          "maxWallMs": 0.32560000000012224
+          "syncMs": 2.6924920000019483,
+          "maxSyncMs": 1.6028340000011667,
+          "wallMs": 2.69794599999841,
+          "maxWallMs": 1.6041320000003907
         },
         "memoryProblems": {
           "calls": 3,
-          "syncMs": 213.09946000000127,
-          "maxSyncMs": 72.27127199999995,
-          "wallMs": 213.10586800000056,
-          "maxWallMs": 72.27344599999924
+          "syncMs": 223.26245099999687,
+          "maxSyncMs": 77.46756499999901,
+          "wallMs": 223.27014399999825,
+          "maxWallMs": 77.47035999999935
         },
         "registry": {
-          "calls": 4,
-          "syncMs": 0.007430999998177867,
-          "maxSyncMs": 0.003081999999267282,
-          "wallMs": 0.009020000003147288,
-          "maxWallMs": 0.0034040000009554205
+          "calls": 7,
+          "syncMs": 0.027550000000701402,
+          "maxSyncMs": 0.010281000000759377,
+          "wallMs": 0.03217100000256323,
+          "maxWallMs": 0.01090199999998731
         },
         "liveness.conversation": {
           "calls": 1,
-          "syncMs": 4.413307000000714,
-          "maxSyncMs": 4.413307000000714,
-          "wallMs": 5.029219000000012,
-          "maxWallMs": 5.029219000000012
+          "syncMs": 5.401534000000538,
+          "maxSyncMs": 5.401534000000538,
+          "wallMs": 6.064840000000913,
+          "maxWallMs": 6.064840000000913
         },
         "pipelines": {
-          "calls": 4,
-          "syncMs": 0.6087490000008984,
-          "maxSyncMs": 0.16527400000086345,
-          "wallMs": 0.6129780000010214,
-          "maxWallMs": 0.16669400000137102
+          "calls": 6,
+          "syncMs": 0.9790479999956005,
+          "maxSyncMs": 0.17622399999891059,
+          "wallMs": 0.9871939999993629,
+          "maxWallMs": 0.1777509999992617
         },
         "liveness.project": {
           "calls": 1,
-          "syncMs": 0.302479999998468,
-          "maxSyncMs": 0.302479999998468,
-          "wallMs": 34.217500999999174,
-          "maxWallMs": 34.217500999999174
+          "syncMs": 0.35113599999931466,
+          "maxSyncMs": 0.35113599999931466,
+          "wallMs": 35.94692500000019,
+          "maxWallMs": 35.94692500000019
         },
         "tasks": {
           "calls": 3,
-          "syncMs": 139.5314269999999,
-          "maxSyncMs": 47.508474999998725,
-          "wallMs": 139.53670700000112,
-          "maxWallMs": 47.51020299999982
+          "syncMs": 145.32127000000037,
+          "maxSyncMs": 50.981538,
+          "wallMs": 145.3262620000005,
+          "maxWallMs": 50.98351300000104
         },
         "seatDeployments": {
           "calls": 1,
-          "syncMs": 0.016047999999500462,
-          "maxSyncMs": 0.016047999999500462,
-          "wallMs": 0.017731999998432002,
-          "maxWallMs": 0.017731999998432002
+          "syncMs": 0.019548999998733052,
+          "maxSyncMs": 0.019548999998733052,
+          "wallMs": 0.02160099999855447,
+          "maxWallMs": 0.02160099999855447
         },
         "maintenanceRuns": {
           "calls": 1,
-          "syncMs": 2.0248570000003383,
-          "maxSyncMs": 2.0248570000003383,
-          "wallMs": 2.027172000000064,
-          "maxWallMs": 2.027172000000064
+          "syncMs": 2.2084759999997914,
+          "maxSyncMs": 2.2084759999997914,
+          "wallMs": 2.210277000000133,
+          "maxWallMs": 2.210277000000133
         },
         "refreshLifecycle": {
           "calls": 1,
-          "syncMs": 0.012746999998853425,
-          "maxSyncMs": 0.012746999998853425,
-          "wallMs": 0.013157999999748426,
-          "maxWallMs": 0.013157999999748426
+          "syncMs": 0.017277000000831322,
+          "maxSyncMs": 0.017277000000831322,
+          "wallMs": 0.017947000000276603,
+          "maxWallMs": 0.017947000000276603
         },
         "lifecycleJournal": {
           "calls": 1,
-          "syncMs": 3.320780999998533,
-          "maxSyncMs": 3.320780999998533,
-          "wallMs": 3.3359979999986535,
-          "maxWallMs": 3.3359979999986535
+          "syncMs": 3.4560179999989487,
+          "maxSyncMs": 3.4560179999989487,
+          "wallMs": 3.4739300000001094,
+          "maxWallMs": 3.4739300000001094
         },
         "workerAsks": {
           "calls": 1,
-          "syncMs": 0.04419700000107696,
-          "maxSyncMs": 0.04419700000107696,
-          "wallMs": 65.54618400000072,
-          "maxWallMs": 65.54618400000072
+          "syncMs": 0.04211399999985588,
+          "maxSyncMs": 0.04211399999985588,
+          "wallMs": 70.97255000000041,
+          "maxWallMs": 70.97255000000041
+        },
+        "archivedPipelines": {
+          "calls": 1,
+          "syncMs": 0.4304420000007667,
+          "maxSyncMs": 0.4304420000007667,
+          "wallMs": 0.4322790000005625,
+          "maxWallMs": 0.4322790000005625
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.004068000000188476,
+          "maxSyncMs": 0.004068000000188476,
+          "wallMs": 0.011281000000963104,
+          "maxWallMs": 0.011281000000963104
         },
         "workerCounts": {
           "calls": 1,
-          "syncMs": 17.114924999999857,
-          "maxSyncMs": 17.114924999999857,
-          "wallMs": 17.11626400000023,
-          "maxWallMs": 17.11626400000023
+          "syncMs": 18.521253999999317,
+          "maxSyncMs": 18.521253999999317,
+          "wallMs": 18.52285699999993,
+          "maxWallMs": 18.52285699999993
         },
         "latestDeployment": {
           "calls": 1,
-          "syncMs": 0.04290299999956915,
-          "maxSyncMs": 0.04290299999956915,
-          "wallMs": 0.044594999999389984,
-          "maxWallMs": 0.044594999999389984
+          "syncMs": 0.041916000000128406,
+          "maxSyncMs": 0.041916000000128406,
+          "wallMs": 0.04390599999896949,
+          "maxWallMs": 0.04390599999896949
         },
         "retirementReport": {
           "calls": 1,
-          "syncMs": 0.016993999999613152,
-          "maxSyncMs": 0.016993999999613152,
-          "wallMs": 0.017121000000770437,
-          "maxWallMs": 0.017121000000770437
+          "syncMs": 0.01762799999960407,
+          "maxSyncMs": 0.01762799999960407,
+          "wallMs": 0.017773999999917578,
+          "maxWallMs": 0.017773999999917578
         },
         "retirementJournal": {
           "calls": 1,
-          "syncMs": 4.505852000000232,
-          "maxSyncMs": 4.505852000000232,
-          "wallMs": 4.5067180000005465,
-          "maxWallMs": 4.5067180000005465
+          "syncMs": 4.581036999999924,
+          "maxSyncMs": 4.581036999999924,
+          "wallMs": 4.581613000000289,
+          "maxWallMs": 4.581613000000289
         },
         "diskPressure": {
           "calls": 1,
-          "syncMs": 0.029878999999709777,
-          "maxSyncMs": 0.029878999999709777,
-          "wallMs": 2.000394000000597,
-          "maxWallMs": 2.000394000000597
+          "syncMs": 0.03194500000063272,
+          "maxSyncMs": 0.03194500000063272,
+          "wallMs": 9.676757999999609,
+          "maxWallMs": 9.676757999999609
         },
         "reports.log": {
           "calls": 1,
-          "syncMs": 8.78967399999965,
-          "maxSyncMs": 8.78967399999965,
-          "wallMs": 8.790603000001283,
-          "maxWallMs": 8.790603000001283
+          "syncMs": 10.310672999999952,
+          "maxSyncMs": 10.310672999999952,
+          "wallMs": 10.312017000000196,
+          "maxWallMs": 10.312017000000196
         },
         "recordRuleReports": {
           "calls": 1,
-          "syncMs": 212.73375099999976,
-          "maxSyncMs": 212.73375099999976,
-          "wallMs": 212.73527400000057,
-          "maxWallMs": 212.73527400000057
+          "syncMs": 239.5345039999993,
+          "maxSyncMs": 239.5345039999993,
+          "wallMs": 239.53638200000023,
+          "maxWallMs": 239.53638200000023
         },
         "seatTurnOutcome": {
           "calls": 1,
-          "syncMs": 0.0020480000002862653,
-          "maxSyncMs": 0.0020480000002862653,
-          "wallMs": 0.00603899999987334,
-          "maxWallMs": 0.00603899999987334
+          "syncMs": 0.002011000000493368,
+          "maxSyncMs": 0.002011000000493368,
+          "wallMs": 0.007110000000466243,
+          "maxWallMs": 0.007110000000466243
         },
         "seatContextUsage": {
           "calls": 1,
-          "syncMs": 0.0008479999996779952,
-          "maxSyncMs": 0.0008479999996779952,
-          "wallMs": 0.0014240000000427244,
-          "maxWallMs": 0.0014240000000427244
+          "syncMs": 0.0015079999993758975,
+          "maxSyncMs": 0.0015079999993758975,
+          "wallMs": 0.002013999999689986,
+          "maxWallMs": 0.002013999999689986
         },
         "recordDeploySnapshots": {
           "calls": 1,
-          "syncMs": 0.12754000000131782,
-          "maxSyncMs": 0.12754000000131782,
-          "wallMs": 0.12800200000128825,
-          "maxWallMs": 0.12800200000128825
+          "syncMs": 0.14446000000134518,
+          "maxSyncMs": 0.14446000000134518,
+          "wallMs": 0.14543400000002293,
+          "maxWallMs": 0.14543400000002293
         },
         "writeState": {
           "calls": 1,
-          "syncMs": 6.815950000000157,
-          "maxSyncMs": 6.815950000000157,
-          "wallMs": 6.816855000000942,
-          "maxWallMs": 6.816855000000942
+          "syncMs": 7.720767000000706,
+          "maxSyncMs": 7.720767000000706,
+          "wallMs": 7.722304999999324,
+          "maxWallMs": 7.722304999999324
         },
         "appendRecord": {
           "calls": 1,
-          "syncMs": 0.578018999998676,
-          "maxSyncMs": 0.578018999998676,
-          "wallMs": 0.5785309999992023,
-          "maxWallMs": 0.5785309999992023
+          "syncMs": 0.4152930000000197,
+          "maxSyncMs": 0.4152930000000197,
+          "wallMs": 0.4159959999997227,
+          "maxWallMs": 0.4159959999997227
         }
       },
-      "ms": 1206.0070119999982,
-      "maxGapMs": 594.3387650000004
+      "ms": 1397.8524899999993,
+      "maxGapMs": 721.7521099999994
     },
     {
       "case": "T9-check",
       "run": 2,
-      "at": "2026-10-19T00:29:47.203Z",
+      "at": "2026-10-19T00:56:17.222Z",
       "load": [
-        2.98,
-        3.51,
-        3.8
+        6.77,
+        5.29,
+        5.1
       ],
-      "verdict": "error",
-      "reasons": [],
-      "items": 0,
-      "failureCode": "ledger-gap",
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
       "sources": {
         "readState": {
           "calls": 2,
-          "syncMs": 0.5548170000001846,
-          "maxSyncMs": 0.3140000000003056,
-          "wallMs": 0.5574940000005881,
-          "maxWallMs": 0.3160750000006374
+          "syncMs": 0.7051459999984218,
+          "maxSyncMs": 0.36954399999922316,
+          "wallMs": 0.708558999998786,
+          "maxWallMs": 0.37118699999882665
         },
         "now": {
-          "calls": 5,
-          "syncMs": 0.004629999999451684,
-          "maxSyncMs": 0.001269000000320375,
-          "wallMs": 0.005866999998033862,
-          "maxWallMs": 0.0015860000003158348
+          "calls": 8,
+          "syncMs": 0.01304099999833852,
+          "maxSyncMs": 0.00324200000068231,
+          "wallMs": 0.01621299999897019,
+          "maxWallMs": 0.005118999999467633
         },
         "seatFor": {
-          "calls": 5,
-          "syncMs": 29.467995000000883,
-          "maxSyncMs": 6.240298000000621,
-          "wallMs": 29.477395000001707,
-          "maxWallMs": 6.240938000000824
+          "calls": 7,
+          "syncMs": 56.68659600000137,
+          "maxSyncMs": 11.003247000000556,
+          "wallMs": 56.69279600000118,
+          "maxWallMs": 11.003867999999784
         },
         "settings": {
           "calls": 5,
-          "syncMs": 1.1320430000014312,
-          "maxSyncMs": 0.27058600000054867,
-          "wallMs": 1.1359670000038022,
-          "maxWallMs": 0.2717350000002625
+          "syncMs": 1.46117200000117,
+          "maxSyncMs": 0.41188400000100955,
+          "wallMs": 1.4672030000001541,
+          "maxWallMs": 0.4143450000010489
         },
         "memoryProblems": {
           "calls": 3,
-          "syncMs": 212.95185400000082,
-          "maxSyncMs": 71.525450000001,
-          "wallMs": 212.9577270000009,
-          "maxWallMs": 71.52776600000107
+          "syncMs": 252.48088199999984,
+          "maxSyncMs": 87.79939999999988,
+          "wallMs": 252.4887859999999,
+          "maxWallMs": 87.80177199999889
         },
         "registry": {
-          "calls": 4,
-          "syncMs": 0.012006999999357504,
-          "maxSyncMs": 0.004666000000725035,
-          "wallMs": 0.014473999999609077,
-          "maxWallMs": 0.005060000001321896
+          "calls": 7,
+          "syncMs": 0.022427000003517605,
+          "maxSyncMs": 0.004784000000654487,
+          "wallMs": 0.027571999999054242,
+          "maxWallMs": 0.00587199999972654
         },
         "liveness.conversation": {
           "calls": 1,
-          "syncMs": 4.0159700000003795,
-          "maxSyncMs": 4.0159700000003795,
-          "wallMs": 4.468512000001283,
-          "maxWallMs": 4.468512000001283
+          "syncMs": 4.443658000000141,
+          "maxSyncMs": 4.443658000000141,
+          "wallMs": 4.880439999998998,
+          "maxWallMs": 4.880439999998998
         },
         "pipelines": {
-          "calls": 4,
-          "syncMs": 0.6654209999996965,
-          "maxSyncMs": 0.19448600000032457,
-          "wallMs": 0.6689430000005814,
-          "maxWallMs": 0.1952049999999872
+          "calls": 6,
+          "syncMs": 1.3745280000002822,
+          "maxSyncMs": 0.32429899999988265,
+          "wallMs": 1.3850950000014564,
+          "maxWallMs": 0.32798100000036357
         },
         "liveness.project": {
           "calls": 1,
-          "syncMs": 0.2914700000001176,
-          "maxSyncMs": 0.2914700000001176,
-          "wallMs": 33.94924499999979,
-          "maxWallMs": 33.94924499999979
+          "syncMs": 0.324877999999444,
+          "maxSyncMs": 0.324877999999444,
+          "wallMs": 40.978328999999576,
+          "maxWallMs": 40.978328999999576
         },
         "tasks": {
           "calls": 3,
-          "syncMs": 141.70098300000063,
-          "maxSyncMs": 48.22982000000047,
-          "wallMs": 141.70774800000254,
-          "maxWallMs": 48.23291700000118
+          "syncMs": 174.16112800000155,
+          "maxSyncMs": 66.78666599999997,
+          "wallMs": 174.16709400000036,
+          "maxWallMs": 66.78937799999949
         },
         "seatDeployments": {
           "calls": 1,
-          "syncMs": 0.015597999999954482,
-          "maxSyncMs": 0.015597999999954482,
-          "wallMs": 0.016582000000198605,
-          "maxWallMs": 0.016582000000198605
+          "syncMs": 0.017099000000598608,
+          "maxSyncMs": 0.017099000000598608,
+          "wallMs": 0.019210000000384753,
+          "maxWallMs": 0.019210000000384753
         },
         "maintenanceRuns": {
           "calls": 1,
-          "syncMs": 1.8904449999990902,
-          "maxSyncMs": 1.8904449999990902,
-          "wallMs": 1.8917069999988598,
-          "maxWallMs": 1.8917069999988598
+          "syncMs": 2.186789999999746,
+          "maxSyncMs": 2.186789999999746,
+          "wallMs": 2.188442999999097,
+          "maxWallMs": 2.188442999999097
         },
         "refreshLifecycle": {
           "calls": 1,
-          "syncMs": 0.005527999999685562,
-          "maxSyncMs": 0.005527999999685562,
-          "wallMs": 0.0059600000004138565,
-          "maxWallMs": 0.0059600000004138565
+          "syncMs": 0.007328000001507462,
+          "maxSyncMs": 0.007328000001507462,
+          "wallMs": 0.02908700000079989,
+          "maxWallMs": 0.02908700000079989
         },
         "lifecycleJournal": {
           "calls": 1,
-          "syncMs": 3.5289229999998497,
-          "maxSyncMs": 3.5289229999998497,
-          "wallMs": 3.529566999999588,
-          "maxWallMs": 3.529566999999588
+          "syncMs": 4.494024999999965,
+          "maxSyncMs": 4.494024999999965,
+          "wallMs": 4.494878999999855,
+          "maxWallMs": 4.494878999999855
         },
         "workerAsks": {
           "calls": 1,
-          "syncMs": 0.0283899999994901,
-          "maxSyncMs": 0.0283899999994901,
-          "wallMs": 59.34780399999909,
-          "maxWallMs": 59.34780399999909
+          "syncMs": 0.04219499999999243,
+          "maxSyncMs": 0.04219499999999243,
+          "wallMs": 66.98665500000061,
+          "maxWallMs": 66.98665500000061
+        },
+        "archivedPipelines": {
+          "calls": 1,
+          "syncMs": 0.4192330000005313,
+          "maxSyncMs": 0.4192330000005313,
+          "wallMs": 0.42151299999932235,
+          "maxWallMs": 0.42151299999932235
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.0041049999999813735,
+          "maxSyncMs": 0.0041049999999813735,
+          "wallMs": 0.009695999999166816,
+          "maxWallMs": 0.009695999999166816
         },
         "workerCounts": {
           "calls": 1,
-          "syncMs": 15.588542999999845,
-          "maxSyncMs": 15.588542999999845,
-          "wallMs": 15.590071000000535,
-          "maxWallMs": 15.590071000000535
+          "syncMs": 20.2978779999994,
+          "maxSyncMs": 20.2978779999994,
+          "wallMs": 20.299213000000236,
+          "maxWallMs": 20.299213000000236
         },
         "latestDeployment": {
           "calls": 1,
-          "syncMs": 0.046786999999312684,
-          "maxSyncMs": 0.046786999999312684,
-          "wallMs": 0.048444000000017695,
-          "maxWallMs": 0.048444000000017695
+          "syncMs": 0.06007399999907648,
+          "maxSyncMs": 0.06007399999907648,
+          "wallMs": 0.06251899999915622,
+          "maxWallMs": 0.06251899999915622
         },
         "retirementReport": {
           "calls": 1,
-          "syncMs": 0.014794000000620144,
-          "maxSyncMs": 0.014794000000620144,
-          "wallMs": 0.014983000000938773,
-          "maxWallMs": 0.014983000000938773
+          "syncMs": 0.01424600000063947,
+          "maxSyncMs": 0.01424600000063947,
+          "wallMs": 0.014408999999432126,
+          "maxWallMs": 0.014408999999432126
         },
         "retirementJournal": {
           "calls": 1,
-          "syncMs": 3.7197660000001633,
-          "maxSyncMs": 3.7197660000001633,
-          "wallMs": 3.7209769999990385,
-          "maxWallMs": 3.7209769999990385
+          "syncMs": 4.401640000000043,
+          "maxSyncMs": 4.401640000000043,
+          "wallMs": 4.402506000000358,
+          "maxWallMs": 4.402506000000358
         },
         "diskPressure": {
           "calls": 1,
-          "syncMs": 0.028949999999895226,
-          "maxSyncMs": 0.028949999999895226,
-          "wallMs": 2.138503000000128,
-          "maxWallMs": 2.138503000000128
+          "syncMs": 0.029819000001225504,
+          "maxSyncMs": 0.029819000001225504,
+          "wallMs": 0.7440870000009454,
+          "maxWallMs": 0.7440870000009454
         },
         "reports.log": {
           "calls": 1,
-          "syncMs": 8.674509999998918,
-          "maxSyncMs": 8.674509999998918,
-          "wallMs": 8.675613999999769,
-          "maxWallMs": 8.675613999999769
+          "syncMs": 21.355852000000596,
+          "maxSyncMs": 21.355852000000596,
+          "wallMs": 21.35804200000166,
+          "maxWallMs": 21.35804200000166
         },
         "recordRuleReports": {
           "calls": 1,
-          "syncMs": 217.6549729999988,
-          "maxSyncMs": 217.6549729999988,
-          "wallMs": 217.65659699999924,
-          "maxWallMs": 217.65659699999924
+          "syncMs": 331.12078400000064,
+          "maxSyncMs": 331.12078400000064,
+          "wallMs": 331.12428700000055,
+          "maxWallMs": 331.12428700000055
         },
         "seatTurnOutcome": {
           "calls": 1,
-          "syncMs": 0.0019390000015846454,
-          "maxSyncMs": 0.0019390000015846454,
-          "wallMs": 0.006100000000515138,
-          "maxWallMs": 0.006100000000515138
+          "syncMs": 0.004227999999784515,
+          "maxSyncMs": 0.004227999999784515,
+          "wallMs": 0.012634000000616652,
+          "maxWallMs": 0.012634000000616652
         },
         "seatContextUsage": {
           "calls": 1,
-          "syncMs": 0.0007640000003448222,
-          "maxSyncMs": 0.0007640000003448222,
-          "wallMs": 0.0015839999996387633,
-          "maxWallMs": 0.0015839999996387633
+          "syncMs": 0.002892000000429107,
+          "maxSyncMs": 0.002892000000429107,
+          "wallMs": 0.002996999999595573,
+          "maxWallMs": 0.002996999999595573
         },
         "recordDeploySnapshots": {
           "calls": 1,
-          "syncMs": 0.154355000000578,
-          "maxSyncMs": 0.154355000000578,
-          "wallMs": 0.1550200000001496,
-          "maxWallMs": 0.1550200000001496
+          "syncMs": 0.17471699999987322,
+          "maxSyncMs": 0.17471699999987322,
+          "wallMs": 0.1749259999996866,
+          "maxWallMs": 0.1749259999996866
         },
         "writeState": {
           "calls": 1,
-          "syncMs": 6.4795369999992545,
-          "maxSyncMs": 6.4795369999992545,
-          "wallMs": 6.480353999999352,
-          "maxWallMs": 6.480353999999352
+          "syncMs": 9.663609000001088,
+          "maxSyncMs": 9.663609000001088,
+          "wallMs": 9.664576000001034,
+          "maxWallMs": 9.664576000001034
         },
         "appendRecord": {
           "calls": 1,
-          "syncMs": 0.3779020000001765,
-          "maxSyncMs": 0.3779020000001765,
-          "wallMs": 0.3783029999995051,
-          "maxWallMs": 0.3783029999995051
+          "syncMs": 0.771894000001339,
+          "maxSyncMs": 0.771894000001339,
+          "wallMs": 0.7722709999998187,
+          "maxWallMs": 0.7722709999998187
         }
       },
-      "ms": 1191.1530789999997,
-      "maxGapMs": 580.2884009999998
+      "ms": 1629.162280999999,
+      "maxGapMs": 763.9070050000009
     },
     {
       "case": "T9-check",
       "run": 3,
-      "at": "2026-10-19T00:29:48.402Z",
+      "at": "2026-10-19T00:56:19.118Z",
       "load": [
-        2.98,
-        3.51,
-        3.8
+        6.77,
+        5.29,
+        5.1
       ],
-      "verdict": "error",
-      "reasons": [],
-      "items": 0,
-      "failureCode": "ledger-gap",
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
       "sources": {
         "readState": {
           "calls": 2,
-          "syncMs": 0.5316640000000916,
-          "maxSyncMs": 0.3062790000003588,
-          "wallMs": 0.5331229999992502,
-          "maxWallMs": 0.3073359999998502
+          "syncMs": 1.2273499999992055,
+          "maxSyncMs": 0.7106409999996686,
+          "wallMs": 1.2285250000004453,
+          "maxWallMs": 0.711514000000534
         },
         "now": {
-          "calls": 5,
-          "syncMs": 0.0057940000006055925,
-          "maxSyncMs": 0.0020269999986339826,
-          "wallMs": 0.006484999999884167,
-          "maxWallMs": 0.0020999999997002305
+          "calls": 8,
+          "syncMs": 0.01271900000028836,
+          "maxSyncMs": 0.0034140000025217887,
+          "wallMs": 0.013980000003357418,
+          "maxWallMs": 0.0039010000000416767
         },
         "seatFor": {
-          "calls": 5,
-          "syncMs": 28.587358000000677,
-          "maxSyncMs": 6.128022000000783,
-          "wallMs": 28.58916400000271,
-          "maxWallMs": 6.12837700000091
+          "calls": 7,
+          "syncMs": 50.235647000004974,
+          "maxSyncMs": 11.183498000000327,
+          "wallMs": 50.23839700000826,
+          "maxWallMs": 11.183684999999969
         },
         "settings": {
           "calls": 5,
-          "syncMs": 1.1163260000012087,
-          "maxSyncMs": 0.2668499999999767,
-          "wallMs": 1.118252999998731,
-          "maxWallMs": 0.2669609999993554
+          "syncMs": 1.908023999996658,
+          "maxSyncMs": 0.5088360000008834,
+          "wallMs": 1.9101149999969493,
+          "maxWallMs": 0.5093990000004851
         },
         "memoryProblems": {
           "calls": 3,
-          "syncMs": 212.3669119999995,
-          "maxSyncMs": 71.645219,
-          "wallMs": 212.37005599999793,
-          "maxWallMs": 71.64685599999939
+          "syncMs": 328.0318049999969,
+          "maxSyncMs": 133.07072899999912,
+          "wallMs": 328.0333989999981,
+          "maxWallMs": 133.07140699999945
         },
         "registry": {
-          "calls": 4,
-          "syncMs": 0.007240999997520703,
-          "maxSyncMs": 0.0023559999990538927,
-          "wallMs": 0.009313999998994404,
-          "maxWallMs": 0.002856999999494292
+          "calls": 7,
+          "syncMs": 0.015711000001829234,
+          "maxSyncMs": 0.004824999999982538,
+          "wallMs": 0.019243000007918454,
+          "maxWallMs": 0.005368000000089523
         },
         "liveness.conversation": {
           "calls": 1,
-          "syncMs": 4.233753999998953,
-          "maxSyncMs": 4.233753999998953,
-          "wallMs": 4.720847000000504,
-          "maxWallMs": 4.720847000000504
+          "syncMs": 7.353816999999253,
+          "maxSyncMs": 7.353816999999253,
+          "wallMs": 8.137941999999384,
+          "maxWallMs": 8.137941999999384
         },
         "pipelines": {
-          "calls": 4,
-          "syncMs": 0.687142999999196,
-          "maxSyncMs": 0.19755400000030932,
-          "wallMs": 0.6882590000004711,
-          "maxWallMs": 0.1978930000004766
+          "calls": 6,
+          "syncMs": 1.766527000005226,
+          "maxSyncMs": 0.5030729999998584,
+          "wallMs": 1.7686690000045928,
+          "maxWallMs": 0.5040780000017548
         },
         "liveness.project": {
           "calls": 1,
-          "syncMs": 0.2508559999987483,
-          "maxSyncMs": 0.2508559999987483,
-          "wallMs": 34.145252999998775,
-          "maxWallMs": 34.145252999998775
+          "syncMs": 0.48324700000011944,
+          "maxSyncMs": 0.48324700000011944,
+          "wallMs": 59.95476400000007,
+          "maxWallMs": 59.95476400000007
         },
         "tasks": {
           "calls": 3,
-          "syncMs": 142.10926699999982,
-          "maxSyncMs": 49.46695399999953,
-          "wallMs": 142.11162299999887,
-          "maxWallMs": 49.468565999999555
+          "syncMs": 203.43176200000016,
+          "maxSyncMs": 71.28318999999829,
+          "wallMs": 203.43224399999963,
+          "maxWallMs": 71.28332999999839
         },
         "seatDeployments": {
           "calls": 1,
-          "syncMs": 0.013831999998728861,
-          "maxSyncMs": 0.013831999998728861,
-          "wallMs": 0.014701999998578685,
-          "maxWallMs": 0.014701999998578685
+          "syncMs": 0.0327640000032261,
+          "maxSyncMs": 0.0327640000032261,
+          "wallMs": 0.03335200000219629,
+          "maxWallMs": 0.03335200000219629
         },
         "maintenanceRuns": {
           "calls": 1,
-          "syncMs": 1.985565000000861,
-          "maxSyncMs": 1.985565000000861,
-          "wallMs": 1.9864760000000388,
-          "maxWallMs": 1.9864760000000388
+          "syncMs": 3.9098919999996724,
+          "maxSyncMs": 3.9098919999996724,
+          "wallMs": 3.9109649999991234,
+          "maxWallMs": 3.9109649999991234
         },
         "refreshLifecycle": {
           "calls": 1,
-          "syncMs": 0.005611999999018735,
-          "maxSyncMs": 0.005611999999018735,
-          "wallMs": 0.005728999998609652,
-          "maxWallMs": 0.005728999998609652
+          "syncMs": 0.009794999998121057,
+          "maxSyncMs": 0.009794999998121057,
+          "wallMs": 0.010080999996716855,
+          "maxWallMs": 0.010080999996716855
         },
         "lifecycleJournal": {
           "calls": 1,
-          "syncMs": 3.3195510000005015,
-          "maxSyncMs": 3.3195510000005015,
-          "wallMs": 3.3197980000004463,
-          "maxWallMs": 3.3197980000004463
+          "syncMs": 5.564351000000897,
+          "maxSyncMs": 5.564351000000897,
+          "wallMs": 5.564484999998967,
+          "maxWallMs": 5.564484999998967
         },
         "workerAsks": {
           "calls": 1,
-          "syncMs": 0.03705999999874621,
-          "maxSyncMs": 0.03705999999874621,
-          "wallMs": 60.167075999999724,
-          "maxWallMs": 60.167075999999724
+          "syncMs": 0.05296499999894877,
+          "maxSyncMs": 0.05296499999894877,
+          "wallMs": 91.07608199999959,
+          "maxWallMs": 91.07608199999959
+        },
+        "archivedPipelines": {
+          "calls": 1,
+          "syncMs": 0.8051510000004782,
+          "maxSyncMs": 0.8051510000004782,
+          "wallMs": 0.8058190000010654,
+          "maxWallMs": 0.8058190000010654
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.004407999997056322,
+          "maxSyncMs": 0.004407999997056322,
+          "wallMs": 0.00817299999835086,
+          "maxWallMs": 0.00817299999835086
         },
         "workerCounts": {
           "calls": 1,
-          "syncMs": 16.73456400000032,
-          "maxSyncMs": 16.73456400000032,
-          "wallMs": 16.73480700000073,
-          "maxWallMs": 16.73480700000073
+          "syncMs": 25.689217999999528,
+          "maxSyncMs": 25.689217999999528,
+          "wallMs": 25.68938899999921,
+          "maxWallMs": 25.68938899999921
         },
         "latestDeployment": {
           "calls": 1,
-          "syncMs": 0.04608099999859405,
-          "maxSyncMs": 0.04608099999859405,
-          "wallMs": 0.04675099999985832,
-          "maxWallMs": 0.04675099999985832
+          "syncMs": 0.10670200000095065,
+          "maxSyncMs": 0.10670200000095065,
+          "wallMs": 0.10739100000137114,
+          "maxWallMs": 0.10739100000137114
         },
         "retirementReport": {
           "calls": 1,
-          "syncMs": 0.01246299999911571,
-          "maxSyncMs": 0.01246299999911571,
-          "wallMs": 0.012512999999671592,
-          "maxWallMs": 0.012512999999671592
+          "syncMs": 0.036351000002468936,
+          "maxSyncMs": 0.036351000002468936,
+          "wallMs": 0.03649500000028638,
+          "maxWallMs": 0.03649500000028638
         },
         "retirementJournal": {
           "calls": 1,
-          "syncMs": 3.857330999999249,
-          "maxSyncMs": 3.857330999999249,
-          "wallMs": 3.8578510000006645,
-          "maxWallMs": 3.8578510000006645
+          "syncMs": 7.4834330000012415,
+          "maxSyncMs": 7.4834330000012415,
+          "wallMs": 7.484383999999409,
+          "maxWallMs": 7.484383999999409
         },
         "diskPressure": {
           "calls": 1,
-          "syncMs": 0.029103000000759494,
-          "maxSyncMs": 0.029103000000759494,
-          "wallMs": 2.286511000000246,
-          "maxWallMs": 2.286511000000246
+          "syncMs": 0.03868200000215438,
+          "maxSyncMs": 0.03868200000215438,
+          "wallMs": 9.828091999999742,
+          "maxWallMs": 9.828091999999742
         },
         "reports.log": {
           "calls": 1,
-          "syncMs": 8.677440999999817,
-          "maxSyncMs": 8.677440999999817,
-          "wallMs": 8.677770999998756,
-          "maxWallMs": 8.677770999998756
+          "syncMs": 10.420322999998461,
+          "maxSyncMs": 10.420322999998461,
+          "wallMs": 10.420857000000979,
+          "maxWallMs": 10.420857000000979
         },
         "recordRuleReports": {
           "calls": 1,
-          "syncMs": 213.7341379999998,
-          "maxSyncMs": 213.7341379999998,
-          "wallMs": 213.73452899999938,
-          "maxWallMs": 213.73452899999938
+          "syncMs": 219.0589230000005,
+          "maxSyncMs": 219.0589230000005,
+          "wallMs": 219.05933800000275,
+          "maxWallMs": 219.05933800000275
         },
         "seatTurnOutcome": {
           "calls": 1,
-          "syncMs": 0.002028999999311054,
-          "maxSyncMs": 0.002028999999311054,
-          "wallMs": 0.005277999998725136,
-          "maxWallMs": 0.005277999998725136
+          "syncMs": 0.00238800000079209,
+          "maxSyncMs": 0.00238800000079209,
+          "wallMs": 0.005432000001746928,
+          "maxWallMs": 0.005432000001746928
         },
         "seatContextUsage": {
           "calls": 1,
-          "syncMs": 0.00047200000153679866,
-          "maxSyncMs": 0.00047200000153679866,
-          "wallMs": 0.0006530000009661308,
-          "maxWallMs": 0.0006530000009661308
+          "syncMs": 0.0007740000000922009,
+          "maxSyncMs": 0.0007740000000922009,
+          "wallMs": 0.0008850000012898818,
+          "maxWallMs": 0.0008850000012898818
         },
         "recordDeploySnapshots": {
           "calls": 1,
-          "syncMs": 0.12410300000010466,
-          "maxSyncMs": 0.12410300000010466,
-          "wallMs": 0.12420400000155496,
-          "maxWallMs": 0.12420400000155496
+          "syncMs": 0.15738199999759672,
+          "maxSyncMs": 0.15738199999759672,
+          "wallMs": 0.15749599999981,
+          "maxWallMs": 0.15749599999981
         },
         "writeState": {
           "calls": 1,
-          "syncMs": 6.269199000000299,
-          "maxSyncMs": 6.269199000000299,
-          "wallMs": 6.269432999999481,
-          "maxWallMs": 6.269432999999481
+          "syncMs": 7.016598999998678,
+          "maxSyncMs": 7.016598999998678,
+          "wallMs": 7.016862999997102,
+          "maxWallMs": 7.016862999997102
         },
         "appendRecord": {
           "calls": 1,
-          "syncMs": 0.5029660000000149,
-          "maxSyncMs": 0.5029660000000149,
-          "wallMs": 0.5033250000014959,
-          "maxWallMs": 0.5033250000014959
+          "syncMs": 0.404911000001448,
+          "maxSyncMs": 0.404911000001448,
+          "wallMs": 0.4051020000006247,
+          "maxWallMs": 0.4051020000006247
         }
       },
-      "ms": 1187.7074830000001,
-      "maxGapMs": 585.5680000000011
+      "ms": 1883.7749160000021,
+      "maxGapMs": 1121.685180999999
     },
     {
       "case": "T9-check",
       "run": 4,
-      "at": "2026-10-19T00:29:49.698Z",
+      "at": "2026-10-19T00:56:20.522Z",
       "load": [
-        2.98,
-        3.51,
-        3.8
+        6.55,
+        5.27,
+        5.09
       ],
-      "verdict": "error",
-      "reasons": [],
-      "items": 0,
-      "failureCode": "ledger-gap",
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
       "sources": {
         "readState": {
           "calls": 2,
-          "syncMs": 0.9163119999975606,
-          "maxSyncMs": 0.5804799999987154,
-          "wallMs": 0.9170729999987088,
-          "maxWallMs": 0.5810529999998835
+          "syncMs": 1.557611000003817,
+          "maxSyncMs": 1.1618750000016007,
+          "wallMs": 1.5581050000037067,
+          "maxWallMs": 1.1620580000017071
         },
         "now": {
-          "calls": 5,
-          "syncMs": 0.00503000000026077,
-          "maxSyncMs": 0.001419000000169035,
-          "wallMs": 0.0057459999989077915,
-          "maxWallMs": 0.0017079999997804407
+          "calls": 8,
+          "syncMs": 0.015008000005764188,
+          "maxSyncMs": 0.0062010000001464505,
+          "wallMs": 0.015731999999843538,
+          "maxWallMs": 0.006288000000495231
         },
         "seatFor": {
-          "calls": 5,
-          "syncMs": 40.34145199999875,
-          "maxSyncMs": 16.152495000000272,
-          "wallMs": 40.34349399999883,
-          "maxWallMs": 16.152908000000025
+          "calls": 7,
+          "syncMs": 47.70035299999654,
+          "maxSyncMs": 10.288951999998972,
+          "wallMs": 47.70320000000356,
+          "maxWallMs": 10.289286999999604
         },
         "settings": {
           "calls": 5,
-          "syncMs": 1.3098020000052202,
-          "maxSyncMs": 0.31517300000086834,
-          "wallMs": 1.3106630000020232,
-          "maxWallMs": 0.3153290000009292
+          "syncMs": 1.3370020000002114,
+          "maxSyncMs": 0.31265799999891897,
+          "wallMs": 1.3379779999959283,
+          "maxWallMs": 0.3127459999996063
         },
         "memoryProblems": {
           "calls": 3,
-          "syncMs": 232.54194500000085,
-          "maxSyncMs": 84.11438199999975,
-          "wallMs": 232.54295000000093,
-          "maxWallMs": 84.11453400000028
+          "syncMs": 247.40566699999908,
+          "maxSyncMs": 93.78189700000075,
+          "wallMs": 247.40743400000065,
+          "maxWallMs": 93.7823129999997
         },
         "registry": {
-          "calls": 4,
-          "syncMs": 0.00811500000054366,
-          "maxSyncMs": 0.0028650000003835885,
-          "wallMs": 0.010358000001360779,
-          "maxWallMs": 0.0037210000009508803
+          "calls": 7,
+          "syncMs": 0.019811000001936918,
+          "maxSyncMs": 0.007592000001750421,
+          "wallMs": 0.022864999999001157,
+          "maxWallMs": 0.008135000000038417
         },
         "liveness.conversation": {
           "calls": 1,
-          "syncMs": 4.04482999999891,
-          "maxSyncMs": 4.04482999999891,
-          "wallMs": 4.457918000000063,
-          "maxWallMs": 4.457918000000063
+          "syncMs": 4.371879999998782,
+          "maxSyncMs": 4.371879999998782,
+          "wallMs": 4.8168860000005225,
+          "maxWallMs": 4.8168860000005225
         },
         "pipelines": {
-          "calls": 4,
-          "syncMs": 0.6607940000012604,
-          "maxSyncMs": 0.1874390000011772,
-          "wallMs": 0.6614370000006602,
-          "maxWallMs": 0.18762100000094506
+          "calls": 6,
+          "syncMs": 1.2139770000030694,
+          "maxSyncMs": 0.2941080000018701,
+          "wallMs": 1.2154910000026575,
+          "maxWallMs": 0.2942860000002838
         },
         "liveness.project": {
           "calls": 1,
-          "syncMs": 0.25221400000009453,
-          "maxSyncMs": 0.25221400000009453,
-          "wallMs": 33.78397500000028,
-          "maxWallMs": 33.78397500000028
+          "syncMs": 0.3222779999996419,
+          "maxSyncMs": 0.3222779999996419,
+          "wallMs": 37.35128099999929,
+          "maxWallMs": 37.35128099999929
         },
         "tasks": {
           "calls": 3,
-          "syncMs": 148.80939899999794,
-          "maxSyncMs": 50.466136999999435,
-          "wallMs": 148.8104289999992,
-          "maxWallMs": 50.46660399999928
+          "syncMs": 155.24965400000656,
+          "maxSyncMs": 52.54882600000201,
+          "wallMs": 155.2505250000031,
+          "maxWallMs": 52.54901199999949
         },
         "seatDeployments": {
           "calls": 1,
-          "syncMs": 0.014447000001382548,
-          "maxSyncMs": 0.014447000001382548,
-          "wallMs": 0.014721999999892432,
-          "maxWallMs": 0.014721999999892432
+          "syncMs": 0.014314000000013039,
+          "maxSyncMs": 0.014314000000013039,
+          "wallMs": 0.014579000002413522,
+          "maxWallMs": 0.014579000002413522
         },
         "maintenanceRuns": {
           "calls": 1,
-          "syncMs": 1.9582439999994676,
-          "maxSyncMs": 1.9582439999994676,
-          "wallMs": 1.9587780000001658,
-          "maxWallMs": 1.9587780000001658
+          "syncMs": 2.080902999998216,
+          "maxSyncMs": 2.080902999998216,
+          "wallMs": 2.081183999998757,
+          "maxWallMs": 2.081183999998757
         },
         "refreshLifecycle": {
           "calls": 1,
-          "syncMs": 0.005348000000594766,
-          "maxSyncMs": 0.005348000000594766,
-          "wallMs": 0.005467000000862754,
-          "maxWallMs": 0.005467000000862754
+          "syncMs": 0.005408999997598585,
+          "maxSyncMs": 0.005408999997598585,
+          "wallMs": 0.005461999997351086,
+          "maxWallMs": 0.005461999997351086
         },
         "lifecycleJournal": {
           "calls": 1,
-          "syncMs": 3.13138600000093,
-          "maxSyncMs": 3.13138600000093,
-          "wallMs": 3.131589000000531,
-          "maxWallMs": 3.131589000000531
+          "syncMs": 2.951026999999158,
+          "maxSyncMs": 2.951026999999158,
+          "wallMs": 2.951419999997597,
+          "maxWallMs": 2.951419999997597
         },
         "workerAsks": {
           "calls": 1,
-          "syncMs": 0.03140300000086427,
-          "maxSyncMs": 0.03140300000086427,
-          "wallMs": 70.61347800000112,
-          "maxWallMs": 70.61347800000112
+          "syncMs": 0.030651000000943895,
+          "maxSyncMs": 0.030651000000943895,
+          "wallMs": 71.81342199999926,
+          "maxWallMs": 71.81342199999926
+        },
+        "archivedPipelines": {
+          "calls": 1,
+          "syncMs": 0.4311009999983071,
+          "maxSyncMs": 0.4311009999983071,
+          "wallMs": 0.4313869999969029,
+          "maxWallMs": 0.4313869999969029
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.010637999999744352,
+          "maxSyncMs": 0.010637999999744352,
+          "wallMs": 0.016608999998425134,
+          "maxWallMs": 0.016608999998425134
         },
         "workerCounts": {
           "calls": 1,
-          "syncMs": 18.791377999999895,
-          "maxSyncMs": 18.791377999999895,
-          "wallMs": 18.791731999999683,
-          "maxWallMs": 18.791731999999683
+          "syncMs": 17.51158099999884,
+          "maxSyncMs": 17.51158099999884,
+          "wallMs": 17.511726999997336,
+          "maxWallMs": 17.511726999997336
         },
         "latestDeployment": {
           "calls": 1,
-          "syncMs": 0.044347999999445165,
-          "maxSyncMs": 0.044347999999445165,
-          "wallMs": 0.04486899999938032,
-          "maxWallMs": 0.04486899999938032
+          "syncMs": 0.07277799999792478,
+          "maxSyncMs": 0.07277799999792478,
+          "wallMs": 0.07302199999685399,
+          "maxWallMs": 0.07302199999685399
         },
         "retirementReport": {
           "calls": 1,
-          "syncMs": 0.014133000000583706,
-          "maxSyncMs": 0.014133000000583706,
-          "wallMs": 0.014186000000336207,
-          "maxWallMs": 0.014186000000336207
+          "syncMs": 0.017436000001907814,
+          "maxSyncMs": 0.017436000001907814,
+          "wallMs": 0.017503999999462394,
+          "maxWallMs": 0.017503999999462394
         },
         "retirementJournal": {
           "calls": 1,
-          "syncMs": 4.191085000000385,
-          "maxSyncMs": 4.191085000000385,
-          "wallMs": 4.191547000000355,
-          "maxWallMs": 4.191547000000355
+          "syncMs": 3.8802560000003723,
+          "maxSyncMs": 3.8802560000003723,
+          "wallMs": 3.8805329999995593,
+          "maxWallMs": 3.8805329999995593
         },
         "diskPressure": {
           "calls": 1,
-          "syncMs": 0.028328999998848303,
-          "maxSyncMs": 0.028328999998848303,
-          "wallMs": 8.8436559999991,
-          "maxWallMs": 8.8436559999991
+          "syncMs": 0.03676899999845773,
+          "maxSyncMs": 0.03676899999845773,
+          "wallMs": 5.87792399999671,
+          "maxWallMs": 5.87792399999671
         },
         "reports.log": {
           "calls": 1,
-          "syncMs": 9.47627199999988,
-          "maxSyncMs": 9.47627199999988,
-          "wallMs": 9.476716000001034,
-          "maxWallMs": 9.476716000001034
+          "syncMs": 14.633006000000023,
+          "maxSyncMs": 14.633006000000023,
+          "wallMs": 14.63344700000016,
+          "maxWallMs": 14.63344700000016
         },
         "recordRuleReports": {
           "calls": 1,
-          "syncMs": 219.7327519999999,
-          "maxSyncMs": 219.7327519999999,
-          "wallMs": 219.73349400000006,
-          "maxWallMs": 219.73349400000006
+          "syncMs": 215.20533799999976,
+          "maxSyncMs": 215.20533799999976,
+          "wallMs": 215.20585199999914,
+          "maxWallMs": 215.20585199999914
         },
         "seatTurnOutcome": {
           "calls": 1,
-          "syncMs": 0.002019999999902211,
-          "maxSyncMs": 0.002019999999902211,
-          "wallMs": 0.005173999999897205,
-          "maxWallMs": 0.005173999999897205
+          "syncMs": 0.003541999998560641,
+          "maxSyncMs": 0.003541999998560641,
+          "wallMs": 0.008362000000488479,
+          "maxWallMs": 0.008362000000488479
         },
         "seatContextUsage": {
           "calls": 1,
-          "syncMs": 0.0005830000009154901,
-          "maxSyncMs": 0.0005830000009154901,
-          "wallMs": 0.0006480000010924414,
-          "maxWallMs": 0.0006480000010924414
+          "syncMs": 0.0013760000001639128,
+          "maxSyncMs": 0.0013760000001639128,
+          "wallMs": 0.0015020000028016511,
+          "maxWallMs": 0.0015020000028016511
         },
         "recordDeploySnapshots": {
           "calls": 1,
-          "syncMs": 0.14222799999879499,
-          "maxSyncMs": 0.14222799999879499,
-          "wallMs": 0.14272600000003877,
-          "maxWallMs": 0.14272600000003877
+          "syncMs": 0.16034600000057253,
+          "maxSyncMs": 0.16034600000057253,
+          "wallMs": 0.16069900000002235,
+          "maxWallMs": 0.16069900000002235
         },
         "writeState": {
           "calls": 1,
-          "syncMs": 6.994829999999638,
-          "maxSyncMs": 6.994829999999638,
-          "wallMs": 6.995667000001049,
-          "maxWallMs": 6.995667000001049
+          "syncMs": 6.833614999999554,
+          "maxSyncMs": 6.833614999999554,
+          "wallMs": 6.833854000000429,
+          "maxWallMs": 6.833854000000429
         },
         "appendRecord": {
           "calls": 1,
-          "syncMs": 0.8661130000000412,
-          "maxSyncMs": 0.8661130000000412,
-          "wallMs": 0.8664389999994455,
-          "maxWallMs": 0.8664389999994455
+          "syncMs": 0.38918000000194297,
+          "maxSyncMs": 0.38918000000194297,
+          "wallMs": 0.38932000000204425,
+          "maxWallMs": 0.38932000000204425
         }
       },
-      "ms": 1284.1953279999998,
-      "maxGapMs": 641.3682669999998
+      "ms": 1389.5534550000011,
+      "maxGapMs": 719.7340459999978
     },
     {
       "case": "T9-check",
       "run": 5,
-      "at": "2026-10-19T00:29:50.947Z",
+      "at": "2026-10-19T00:56:21.908Z",
       "load": [
-        2.99,
-        3.5,
-        3.79
+        6.55,
+        5.27,
+        5.09
       ],
-      "verdict": "error",
-      "reasons": [],
-      "items": 0,
-      "failureCode": "ledger-gap",
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
       "sources": {
         "readState": {
           "calls": 2,
-          "syncMs": 1.098509000001286,
-          "maxSyncMs": 0.5900860000001558,
-          "wallMs": 1.0993450000005396,
-          "maxWallMs": 0.5904559999999037
+          "syncMs": 0.6803920000020298,
+          "maxSyncMs": 0.3513090000014927,
+          "wallMs": 0.6815800000003946,
+          "maxWallMs": 0.3521409999993921
         },
         "now": {
-          "calls": 5,
-          "syncMs": 0.006090000000767759,
-          "maxSyncMs": 0.0019109999993816018,
-          "wallMs": 0.006423999999242369,
-          "maxWallMs": 0.001969999999346328
+          "calls": 8,
+          "syncMs": 0.008225999994465383,
+          "maxSyncMs": 0.0019309999988763593,
+          "wallMs": 0.008859999994456302,
+          "maxWallMs": 0.002069999998639105
         },
         "seatFor": {
-          "calls": 5,
-          "syncMs": 32.95223900000019,
-          "maxSyncMs": 9.02504300000146,
-          "wallMs": 32.955120000000534,
-          "maxWallMs": 9.026482000001124
+          "calls": 7,
+          "syncMs": 43.48569899999711,
+          "maxSyncMs": 6.847569999998086,
+          "wallMs": 43.489060999992944,
+          "maxWallMs": 6.8482549999971525
         },
         "settings": {
           "calls": 5,
-          "syncMs": 1.558167000001049,
-          "maxSyncMs": 0.5185619999992923,
-          "wallMs": 1.5601739999965503,
-          "maxWallMs": 0.5189969999992172
+          "syncMs": 1.292247999997926,
+          "maxSyncMs": 0.3608349999994971,
+          "wallMs": 1.2933410000005097,
+          "maxWallMs": 0.36113400000249385
         },
         "memoryProblems": {
           "calls": 3,
-          "syncMs": 229.36101400000007,
-          "maxSyncMs": 82.0920129999995,
-          "wallMs": 229.3617379999996,
-          "maxWallMs": 82.09214299999985
+          "syncMs": 223.97094399999696,
+          "maxSyncMs": 75.13809899999978,
+          "wallMs": 223.9723809999996,
+          "maxWallMs": 75.13855200000035
         },
         "registry": {
-          "calls": 4,
-          "syncMs": 0.008209999996324768,
-          "maxSyncMs": 0.0027629999985947507,
-          "wallMs": 0.010279999998601852,
-          "maxWallMs": 0.003396000000066124
+          "calls": 7,
+          "syncMs": 0.012272000003576977,
+          "maxSyncMs": 0.00231300000086776,
+          "wallMs": 0.015415999998367624,
+          "maxWallMs": 0.0027300000001559965
         },
         "liveness.conversation": {
           "calls": 1,
-          "syncMs": 4.255449999998746,
-          "maxSyncMs": 4.255449999998746,
-          "wallMs": 4.632621999999174,
-          "maxWallMs": 4.632621999999174
+          "syncMs": 4.298918000000413,
+          "maxSyncMs": 4.298918000000413,
+          "wallMs": 4.7028319999990345,
+          "maxWallMs": 4.7028319999990345
         },
         "pipelines": {
-          "calls": 4,
-          "syncMs": 0.6475140000038664,
-          "maxSyncMs": 0.1869620000015857,
-          "wallMs": 0.6485000000011496,
-          "maxWallMs": 0.18733500000053027
+          "calls": 6,
+          "syncMs": 1.10390400000324,
+          "maxSyncMs": 0.2568870000031893,
+          "wallMs": 1.1061010000048555,
+          "maxWallMs": 0.257210000003397
         },
         "liveness.project": {
           "calls": 1,
-          "syncMs": 0.2712649999994028,
-          "maxSyncMs": 0.2712649999994028,
-          "wallMs": 34.55635500000062,
-          "maxWallMs": 34.55635500000062
+          "syncMs": 0.24880299999858835,
+          "maxSyncMs": 0.24880299999858835,
+          "wallMs": 35.93888700000025,
+          "maxWallMs": 35.93888700000025
         },
         "tasks": {
           "calls": 3,
-          "syncMs": 143.8830280000002,
-          "maxSyncMs": 50.30789899999945,
-          "wallMs": 143.8842710000008,
-          "maxWallMs": 50.30849599999965
+          "syncMs": 152.58893900000112,
+          "maxSyncMs": 52.118209000000206,
+          "wallMs": 152.58941700000287,
+          "maxWallMs": 52.11841199999981
         },
         "seatDeployments": {
           "calls": 1,
-          "syncMs": 0.015380000000732252,
-          "maxSyncMs": 0.015380000000732252,
-          "wallMs": 0.01579900000069756,
-          "maxWallMs": 0.01579900000069756
+          "syncMs": 0.015639000001101522,
+          "maxSyncMs": 0.015639000001101522,
+          "wallMs": 0.015945999999530613,
+          "maxWallMs": 0.015945999999530613
         },
         "maintenanceRuns": {
           "calls": 1,
-          "syncMs": 1.8995529999992868,
-          "maxSyncMs": 1.8995529999992868,
-          "wallMs": 1.8997610000005807,
-          "maxWallMs": 1.8997610000005807
+          "syncMs": 2.1549139999988256,
+          "maxSyncMs": 2.1549139999988256,
+          "wallMs": 2.155237999999372,
+          "maxWallMs": 2.155237999999372
         },
         "refreshLifecycle": {
           "calls": 1,
-          "syncMs": 0.0058429999990039505,
-          "maxSyncMs": 0.0058429999990039505,
-          "wallMs": 0.005927999998675659,
-          "maxWallMs": 0.005927999998675659
+          "syncMs": 0.006778999999369262,
+          "maxSyncMs": 0.006778999999369262,
+          "wallMs": 0.006836000000475906,
+          "maxWallMs": 0.006836000000475906
         },
         "lifecycleJournal": {
           "calls": 1,
-          "syncMs": 3.4697509999987233,
-          "maxSyncMs": 3.4697509999987233,
-          "wallMs": 3.469971999998961,
-          "maxWallMs": 3.469971999998961
+          "syncMs": 3.5557929999995395,
+          "maxSyncMs": 3.5557929999995395,
+          "wallMs": 3.556066999997711,
+          "maxWallMs": 3.556066999997711
         },
         "workerAsks": {
           "calls": 1,
-          "syncMs": 0.028480999999374035,
-          "maxSyncMs": 0.028480999999374035,
-          "wallMs": 64.06089599999905,
-          "maxWallMs": 64.06089599999905
+          "syncMs": 0.03448500000013155,
+          "maxSyncMs": 0.03448500000013155,
+          "wallMs": 71.80462299999999,
+          "maxWallMs": 71.80462299999999
+        },
+        "archivedPipelines": {
+          "calls": 1,
+          "syncMs": 0.37912000000142143,
+          "maxSyncMs": 0.37912000000142143,
+          "wallMs": 0.3793230000010226,
+          "maxWallMs": 0.3793230000010226
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.0041049999999813735,
+          "maxSyncMs": 0.0041049999999813735,
+          "wallMs": 0.007698000001255423,
+          "maxWallMs": 0.007698000001255423
         },
         "workerCounts": {
           "calls": 1,
-          "syncMs": 16.958776999999827,
-          "maxSyncMs": 16.958776999999827,
-          "wallMs": 16.95909700000084,
-          "maxWallMs": 16.95909700000084
+          "syncMs": 17.285595999997895,
+          "maxSyncMs": 17.285595999997895,
+          "wallMs": 17.28584299999784,
+          "maxWallMs": 17.28584299999784
         },
         "latestDeployment": {
           "calls": 1,
-          "syncMs": 0.044289999999818974,
-          "maxSyncMs": 0.044289999999818974,
-          "wallMs": 0.04472200000054727,
-          "maxWallMs": 0.04472200000054727
+          "syncMs": 0.047744999999849824,
+          "maxSyncMs": 0.047744999999849824,
+          "wallMs": 0.048059000000648666,
+          "maxWallMs": 0.048059000000648666
         },
         "retirementReport": {
           "calls": 1,
-          "syncMs": 0.01417799999944691,
-          "maxSyncMs": 0.01417799999944691,
-          "wallMs": 0.014215999999578344,
-          "maxWallMs": 0.014215999999578344
+          "syncMs": 0.013803999998344807,
+          "maxSyncMs": 0.013803999998344807,
+          "wallMs": 0.013854999997420236,
+          "maxWallMs": 0.013854999997420236
         },
         "retirementJournal": {
           "calls": 1,
-          "syncMs": 4.007556000000477,
-          "maxSyncMs": 4.007556000000477,
-          "wallMs": 4.007905000000392,
-          "maxWallMs": 4.007905000000392
+          "syncMs": 3.7731969999986177,
+          "maxSyncMs": 3.7731969999986177,
+          "wallMs": 3.7737709999964864,
+          "maxWallMs": 3.7737709999964864
         },
         "diskPressure": {
           "calls": 1,
-          "syncMs": 0.029668999999557855,
-          "maxSyncMs": 0.029668999999557855,
-          "wallMs": 2.8369349999993574,
-          "maxWallMs": 2.8369349999993574
+          "syncMs": 0.028300000001763692,
+          "maxSyncMs": 0.028300000001763692,
+          "wallMs": 3.6501620000017283,
+          "maxWallMs": 3.6501620000017283
         },
         "reports.log": {
           "calls": 1,
-          "syncMs": 9.05586299999959,
-          "maxSyncMs": 9.05586299999959,
-          "wallMs": 9.056271999999808,
-          "maxWallMs": 9.056271999999808
+          "syncMs": 10.157497000000149,
+          "maxSyncMs": 10.157497000000149,
+          "wallMs": 10.158087000003434,
+          "maxWallMs": 10.158087000003434
         },
         "recordRuleReports": {
           "calls": 1,
-          "syncMs": 213.1131609999993,
-          "maxSyncMs": 213.1131609999993,
-          "wallMs": 213.1136379999989,
-          "maxWallMs": 213.1136379999989
+          "syncMs": 221.74488700000074,
+          "maxSyncMs": 221.74488700000074,
+          "wallMs": 221.7454800000014,
+          "maxWallMs": 221.7454800000014
         },
         "seatTurnOutcome": {
           "calls": 1,
-          "syncMs": 0.002184000000852393,
-          "maxSyncMs": 0.002184000000852393,
-          "wallMs": 0.005715999999665655,
-          "maxWallMs": 0.005715999999665655
+          "syncMs": 0.0021250000027066562,
+          "maxSyncMs": 0.0021250000027066562,
+          "wallMs": 0.0076240000016696285,
+          "maxWallMs": 0.0076240000016696285
         },
         "seatContextUsage": {
           "calls": 1,
-          "syncMs": 0.0006130000001576263,
-          "maxSyncMs": 0.0006130000001576263,
-          "wallMs": 0.0007299999997485429,
-          "maxWallMs": 0.0007299999997485429
+          "syncMs": 0.001140999997005565,
+          "maxSyncMs": 0.001140999997005565,
+          "wallMs": 0.0013659999967785552,
+          "maxWallMs": 0.0013659999967785552
         },
         "recordDeploySnapshots": {
           "calls": 1,
-          "syncMs": 0.1282019999998738,
-          "maxSyncMs": 0.1282019999998738,
-          "wallMs": 0.12835999999879277,
-          "maxWallMs": 0.12835999999879277
+          "syncMs": 0.146521999999095,
+          "maxSyncMs": 0.146521999999095,
+          "wallMs": 0.14674599999852944,
+          "maxWallMs": 0.14674599999852944
         },
         "writeState": {
           "calls": 1,
-          "syncMs": 6.502988000000187,
-          "maxSyncMs": 6.502988000000187,
-          "wallMs": 6.503251000000091,
-          "maxWallMs": 6.503251000000091
+          "syncMs": 6.877370000001974,
+          "maxSyncMs": 6.877370000001974,
+          "wallMs": 6.877635000000737,
+          "maxWallMs": 6.877635000000737
         },
         "appendRecord": {
           "calls": 1,
-          "syncMs": 0.5202069999995729,
-          "maxSyncMs": 0.5202069999995729,
-          "wallMs": 0.5204039999989618,
-          "maxWallMs": 0.5204039999989618
+          "syncMs": 0.6094469999989087,
+          "maxSyncMs": 0.6094469999989087,
+          "wallMs": 0.6096890000007988,
+          "maxWallMs": 0.6096890000007988
         }
       },
-      "ms": 1237.7324899999985,
-      "maxGapMs": 606.6588550000015
+      "ms": 1373.4339690000015,
+      "maxGapMs": 723.4613270000009
     }
   ],
   "after": [
     {
       "case": "T9-check",
       "bun": "1.4.0",
-      "sourceFingerprint": "72885eb3ed274c1570a976023dba2db1248abcf8dca4eefd76c54d877771a70a",
-      "summaryBytes": 33193663,
+      "sourceFingerprint": "af6e1f4ec228c8140ef54bc9d83c1fa35fa05f51d43baa4b4c055487d9536892",
+      "summaryBytes": 33356772,
       "copiedStatuses": {
         "live": 39,
-        "running": 9
+        "running": 7
       },
       "liveAgents": "5",
       "runningAgents": "3",
-      "replayNow": 1792367388556,
-      "condition": "module imports, inert summary/catalogue decoding and registry scale count precede run 0; task, pipeline and memory lists stay cold; gh and action ports stubbed; transcript evidence suppressed in both processes"
+      "replayNow": 1792371030341,
+      "condition": "module imports, inert summary/catalogue decoding and registry scale count precede run 0; task, pipeline and memory lists stay cold; gh and action ports stubbed; transcript evidence suppressed in both processes; copied structured-host-events child ledgers are present in the seed"
     },
     {
       "case": "T9-check",
       "run": 0,
-      "at": "2026-10-19T00:31:09.568Z",
+      "at": "2026-10-19T00:57:06.235Z",
       "load": [
-        3.32,
-        3.4,
-        3.73
+        5.74,
+        5.23,
+        5.09
       ],
-      "verdict": "error",
-      "reasons": [],
-      "items": 0,
-      "failureCode": "ledger-gap",
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
       "sources": {
         "prepareRead": {
           "calls": 1,
-          "syncMs": 9.88944400000014,
-          "maxSyncMs": 9.88944400000014,
-          "wallMs": 351.21971400000007,
-          "maxWallMs": 351.21971400000007
+          "syncMs": 23.638738000000103,
+          "maxSyncMs": 23.638738000000103,
+          "wallMs": 661.5321510000003,
+          "maxWallMs": 661.5321510000003
         },
         "readState": {
           "calls": 2,
-          "syncMs": 4.216955000000098,
-          "maxSyncMs": 3.8443529999999555,
-          "wallMs": 4.221837999999934,
-          "maxWallMs": 3.8473719999999503
+          "syncMs": 3.8412090000001626,
+          "maxSyncMs": 3.5850209999998697,
+          "wallMs": 3.8450980000006894,
+          "maxWallMs": 3.587529000000359
         },
         "now": {
-          "calls": 5,
-          "syncMs": 0.01673199999981989,
-          "maxSyncMs": 0.007112999999890235,
-          "wallMs": 0.02945699999918361,
-          "maxWallMs": 0.01350800000000163
+          "calls": 8,
+          "syncMs": 0.023779000001013628,
+          "maxSyncMs": 0.007649000000128581,
+          "wallMs": 0.03157700000338082,
+          "maxWallMs": 0.008920999999645574
         },
         "seatFor": {
-          "calls": 5,
-          "syncMs": 36.31855000000019,
-          "maxSyncMs": 11.227221999999529,
-          "wallMs": 36.335169999998016,
-          "maxWallMs": 11.232183000000077
+          "calls": 7,
+          "syncMs": 56.30024300000059,
+          "maxSyncMs": 12.460872999999992,
+          "wallMs": 56.335550000000694,
+          "maxWallMs": 12.463995000000068
         },
         "settings": {
           "calls": 5,
-          "syncMs": 1.6078469999993104,
-          "maxSyncMs": 0.4756170000000566,
-          "wallMs": 1.6199580000009064,
-          "maxWallMs": 0.47849500000029366
+          "syncMs": 1.552787999999964,
+          "maxSyncMs": 0.3741599999993923,
+          "wallMs": 1.562512999998944,
+          "maxWallMs": 0.3763089999993099
         },
         "memoryProblems": {
           "calls": 3,
-          "syncMs": 1.3054059999990386,
-          "maxSyncMs": 0.5112960000001294,
-          "wallMs": 1.3144449999995231,
-          "maxWallMs": 0.5131710000000567
+          "syncMs": 1.3516660000013871,
+          "maxSyncMs": 0.5084830000014335,
+          "wallMs": 1.3610210000015286,
+          "maxWallMs": 0.5127910000010161
         },
         "registry": {
-          "calls": 4,
-          "syncMs": 0.025090999998838015,
-          "maxSyncMs": 0.014276999998401152,
-          "wallMs": 0.040198999998665386,
-          "maxWallMs": 0.02389999999832071
+          "calls": 7,
+          "syncMs": 0.024606999999377877,
+          "maxSyncMs": 0.009230999999999767,
+          "wallMs": 0.0429149999999936,
+          "maxWallMs": 0.020087000000785338
         },
         "liveness.conversation": {
           "calls": 1,
-          "syncMs": 12.10294900000008,
-          "maxSyncMs": 12.10294900000008,
-          "wallMs": 27.598101000000042,
-          "maxWallMs": 27.598101000000042
+          "syncMs": 20.944594000000507,
+          "maxSyncMs": 20.944594000000507,
+          "wallMs": 67.26893200000086,
+          "maxWallMs": 67.26893200000086
         },
         "pipelines": {
-          "calls": 4,
-          "syncMs": 1.3295330000021295,
-          "maxSyncMs": 0.5636150000009366,
-          "wallMs": 1.3440390000016578,
-          "maxWallMs": 0.5701619999999821
+          "calls": 6,
+          "syncMs": 1.667504000000008,
+          "maxSyncMs": 0.34303800000088813,
+          "wallMs": 1.6907669999982318,
+          "maxWallMs": 0.34722599999986414
         },
         "liveness.project": {
           "calls": 1,
-          "syncMs": 0.14943800000014562,
-          "maxSyncMs": 0.14943800000014562,
-          "wallMs": 1292.8867850000001,
-          "maxWallMs": 1292.8867850000001
+          "syncMs": 0.16717500000049768,
+          "maxSyncMs": 0.16717500000049768,
+          "wallMs": 1187.125376,
+          "maxWallMs": 1187.125376
         },
         "tasks": {
           "calls": 3,
-          "syncMs": 1.1948669999987942,
-          "maxSyncMs": 0.6991860000002816,
-          "wallMs": 1.2103739999997742,
-          "maxWallMs": 0.7081339999999727
+          "syncMs": 0.687380999997913,
+          "maxSyncMs": 0.34957500000018626,
+          "wallMs": 0.6953880000000936,
+          "maxWallMs": 0.3547180000005028
         },
         "seatDeployments": {
           "calls": 1,
-          "syncMs": 0.04510200000004261,
-          "maxSyncMs": 0.04510200000004261,
-          "wallMs": 0.048080999999911,
-          "maxWallMs": 0.048080999999911
+          "syncMs": 0.04243300000052841,
+          "maxSyncMs": 0.04243300000052841,
+          "wallMs": 0.04512400000021444,
+          "maxWallMs": 0.04512400000021444
         },
         "maintenanceRuns": {
           "calls": 1,
-          "syncMs": 4.554307999999764,
-          "maxSyncMs": 4.554307999999764,
-          "wallMs": 4.558563999999933,
-          "maxWallMs": 4.558563999999933
+          "syncMs": 5.5661840000002485,
+          "maxSyncMs": 5.5661840000002485,
+          "wallMs": 5.569212000000334,
+          "maxWallMs": 5.569212000000334
         },
         "refreshLifecycle": {
           "calls": 1,
-          "syncMs": 16.18166199999996,
-          "maxSyncMs": 16.18166199999996,
-          "wallMs": 16.184849000000213,
-          "maxWallMs": 16.184849000000213
+          "syncMs": 24.537897999999586,
+          "maxSyncMs": 24.537897999999586,
+          "wallMs": 24.540788000000248,
+          "maxWallMs": 24.540788000000248
         },
         "lifecycleJournal": {
           "calls": 1,
-          "syncMs": 4.17800299999999,
-          "maxSyncMs": 4.17800299999999,
-          "wallMs": 4.1815749999996115,
-          "maxWallMs": 4.1815749999996115
+          "syncMs": 3.405865000000631,
+          "maxSyncMs": 3.405865000000631,
+          "wallMs": 3.4088070000007065,
+          "maxWallMs": 3.4088070000007065
         },
         "workerAsks": {
           "calls": 1,
-          "syncMs": 0.12274000000024898,
-          "maxSyncMs": 0.12274000000024898,
-          "wallMs": 5238.579185,
-          "maxWallMs": 5238.579185
+          "syncMs": 0.1057810000002064,
+          "maxSyncMs": 0.1057810000002064,
+          "wallMs": 4291.0908420000005,
+          "maxWallMs": 4291.0908420000005
+        },
+        "archivedPipelinesAsync": {
+          "calls": 1,
+          "syncMs": 5.2863799999995535,
+          "maxSyncMs": 5.2863799999995535,
+          "wallMs": 772.8649559999994,
+          "maxWallMs": 772.8649559999994
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.01902900000095542,
+          "maxSyncMs": 0.01902900000095542,
+          "wallMs": 0.023986000000149943,
+          "maxWallMs": 0.023986000000149943
         },
         "workerCounts": {
           "calls": 1,
-          "syncMs": 35.47649199999978,
-          "maxSyncMs": 35.47649199999978,
-          "wallMs": 35.48101099999985,
-          "maxWallMs": 35.48101099999985
+          "syncMs": 34.59829499999978,
+          "maxSyncMs": 34.59829499999978,
+          "wallMs": 34.60146999999961,
+          "maxWallMs": 34.60146999999961
         },
         "latestDeployment": {
           "calls": 1,
-          "syncMs": 0.1956979999995383,
-          "maxSyncMs": 0.1956979999995383,
-          "wallMs": 0.199228999999832,
-          "maxWallMs": 0.199228999999832
+          "syncMs": 0.16135299999950803,
+          "maxSyncMs": 0.16135299999950803,
+          "wallMs": 0.16400500000054308,
+          "maxWallMs": 0.16400500000054308
         },
         "retirementReport": {
           "calls": 1,
-          "syncMs": 0.037704000000303495,
-          "maxSyncMs": 0.037704000000303495,
-          "wallMs": 0.03821099999913713,
-          "maxWallMs": 0.03821099999913713
+          "syncMs": 0.030302999999548774,
+          "maxSyncMs": 0.030302999999548774,
+          "wallMs": 0.032042000000728876,
+          "maxWallMs": 0.032042000000728876
         },
         "retirementJournal": {
           "calls": 1,
-          "syncMs": 5.591405000001032,
-          "maxSyncMs": 5.591405000001032,
-          "wallMs": 5.594861999999921,
-          "maxWallMs": 5.594861999999921
+          "syncMs": 9.620888000001287,
+          "maxSyncMs": 9.620888000001287,
+          "wallMs": 9.624219999999696,
+          "maxWallMs": 9.624219999999696
         },
         "diskPressure": {
           "calls": 1,
-          "syncMs": 0.12256499999966763,
-          "maxSyncMs": 0.12256499999966763,
-          "wallMs": 410.0217329999996,
-          "maxWallMs": 410.0217329999996
+          "syncMs": 0.08858000000145694,
+          "maxSyncMs": 0.08858000000145694,
+          "wallMs": 275.7899660000003,
+          "maxWallMs": 275.7899660000003
         },
         "reports.log": {
           "calls": 1,
-          "syncMs": 0.21008699999947567,
-          "maxSyncMs": 0.21008699999947567,
-          "wallMs": 28.134044999998878,
-          "maxWallMs": 28.134044999998878
+          "syncMs": 0.13399099999878672,
+          "maxSyncMs": 0.13399099999878672,
+          "wallMs": 27.544443999999203,
+          "maxWallMs": 27.544443999999203
         },
         "recordRuleReports": {
           "calls": 1,
-          "syncMs": 0.16868500000055064,
-          "maxSyncMs": 0.16868500000055064,
-          "wallMs": 465.41961900000024,
-          "maxWallMs": 465.41961900000024
+          "syncMs": 0.14803200000096695,
+          "maxSyncMs": 0.14803200000096695,
+          "wallMs": 425.61071900000024,
+          "maxWallMs": 425.61071900000024
         },
         "seatTurnOutcome": {
           "calls": 1,
-          "syncMs": 0.03679999999985739,
-          "maxSyncMs": 0.03679999999985739,
-          "wallMs": 0.04824899999948684,
-          "maxWallMs": 0.04824899999948684
+          "syncMs": 0.013860000000931905,
+          "maxSyncMs": 0.013860000000931905,
+          "wallMs": 0.0195400000011432,
+          "maxWallMs": 0.0195400000011432
         },
         "seatContextUsage": {
           "calls": 1,
-          "syncMs": 0.01205400000071677,
-          "maxSyncMs": 0.01205400000071677,
-          "wallMs": 0.014612000000852277,
-          "maxWallMs": 0.014612000000852277
+          "syncMs": 0.011109999999462161,
+          "maxSyncMs": 0.011109999999462161,
+          "wallMs": 0.012788000000000466,
+          "maxWallMs": 0.012788000000000466
         },
         "recordDeploySnapshots": {
           "calls": 1,
-          "syncMs": 0.31829300000026706,
-          "maxSyncMs": 0.31829300000026706,
-          "wallMs": 0.3195450000002893,
-          "maxWallMs": 0.3195450000002893
+          "syncMs": 0.4702799999995477,
+          "maxSyncMs": 0.4702799999995477,
+          "wallMs": 0.4713289999999688,
+          "maxWallMs": 0.4713289999999688
         },
         "writeState": {
           "calls": 1,
-          "syncMs": 12.550513999998657,
-          "maxSyncMs": 12.550513999998657,
-          "wallMs": 12.55330899999899,
-          "maxWallMs": 12.55330899999899
+          "syncMs": 8.1257689999984,
+          "maxSyncMs": 8.1257689999984,
+          "wallMs": 8.127395999999862,
+          "maxWallMs": 8.127395999999862
         },
         "appendRecord": {
           "calls": 1,
-          "syncMs": 1.3268709999993007,
-          "maxSyncMs": 1.3268709999993007,
-          "wallMs": 1.3288869999996678,
-          "maxWallMs": 1.3288869999996678
+          "syncMs": 0.8578899999993155,
+          "maxSyncMs": 0.8578899999993155,
+          "wallMs": 0.8588490000001912,
+          "maxWallMs": 0.8588490000001912
         }
       },
-      "ms": 8193.049126000002,
-      "maxGapMs": 67.3557699999983
+      "ms": 8122.106199000001,
+      "maxGapMs": 80.11601700000028
     },
     {
       "case": "T9-check",
       "run": 1,
-      "at": "2026-10-19T00:31:10.594Z",
+      "at": "2026-10-19T00:57:07.032Z",
       "load": [
-        4.1,
-        3.56,
-        3.78
+        5.74,
+        5.23,
+        5.09
       ],
-      "verdict": "error",
-      "reasons": [],
-      "items": 0,
-      "failureCode": "ledger-gap",
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
       "sources": {
         "prepareRead": {
           "calls": 1,
-          "syncMs": 0.6698789999991277,
-          "maxSyncMs": 0.6698789999991277,
-          "wallMs": 1.6697409999997035,
-          "maxWallMs": 1.6697409999997035
+          "syncMs": 0.30708099999901606,
+          "maxSyncMs": 0.30708099999901606,
+          "wallMs": 0.772621000000072,
+          "maxWallMs": 0.772621000000072
         },
         "readState": {
           "calls": 2,
-          "syncMs": 0.8896339999992051,
-          "maxSyncMs": 0.5287339999995311,
-          "wallMs": 0.8986769999992248,
-          "maxWallMs": 0.5368259999995644
+          "syncMs": 0.6706529999992199,
+          "maxSyncMs": 0.34221099999922444,
+          "wallMs": 0.6772760000003473,
+          "maxWallMs": 0.34303600000021106
         },
         "now": {
-          "calls": 5,
-          "syncMs": 0.014682000000902917,
-          "maxSyncMs": 0.006312999999863678,
-          "wallMs": 0.0169000000005326,
-          "maxWallMs": 0.006671000001006178
+          "calls": 8,
+          "syncMs": 0.0107159999988653,
+          "maxSyncMs": 0.002781999999569962,
+          "wallMs": 0.014256000000386848,
+          "maxWallMs": 0.0036390000004757894
         },
         "seatFor": {
-          "calls": 5,
-          "syncMs": 40.793620999997074,
-          "maxSyncMs": 11.323773999998593,
-          "wallMs": 40.8038329999963,
-          "maxWallMs": 11.325331999998525
+          "calls": 7,
+          "syncMs": 44.778697000003376,
+          "maxSyncMs": 7.243991999999707,
+          "wallMs": 44.78965000000062,
+          "maxWallMs": 7.24572900000021
         },
         "settings": {
           "calls": 5,
-          "syncMs": 1.9908030000024155,
-          "maxSyncMs": 0.6186580000012327,
-          "wallMs": 1.9964799999997922,
-          "maxWallMs": 0.6199209999995219
+          "syncMs": 1.4161799999983486,
+          "maxSyncMs": 0.3649939999995695,
+          "wallMs": 1.4210369999964314,
+          "maxWallMs": 0.36581200000000536
         },
         "memoryProblems": {
           "calls": 3,
-          "syncMs": 1.6205769999996846,
-          "maxSyncMs": 0.6633440000005066,
-          "wallMs": 1.6270800000002055,
-          "maxWallMs": 0.6671900000001187
+          "syncMs": 1.0726900000026944,
+          "maxSyncMs": 0.3899830000009388,
+          "wallMs": 1.0769370000016352,
+          "maxWallMs": 0.3909670000011829
         },
         "registry": {
-          "calls": 4,
-          "syncMs": 0.01409800000146788,
-          "maxSyncMs": 0.004833000000871834,
-          "wallMs": 0.018493000001399196,
-          "maxWallMs": 0.007757000001220149
+          "calls": 7,
+          "syncMs": 0.01302899999973306,
+          "maxSyncMs": 0.0028839999995398102,
+          "wallMs": 0.01659800000015821,
+          "maxWallMs": 0.003554999999323627
         },
         "liveness.conversation": {
           "calls": 1,
-          "syncMs": 6.895825999999943,
-          "maxSyncMs": 6.895825999999943,
-          "wallMs": 7.690743000001021,
-          "maxWallMs": 7.690743000001021
+          "syncMs": 6.316780999999537,
+          "maxSyncMs": 6.316780999999537,
+          "wallMs": 6.993078999999852,
+          "maxWallMs": 6.993078999999852
         },
         "pipelines": {
-          "calls": 4,
-          "syncMs": 1.4322869999978138,
-          "maxSyncMs": 0.4684959999995044,
-          "wallMs": 1.4409469999991416,
-          "maxWallMs": 0.4701329999988957
+          "calls": 6,
+          "syncMs": 1.6718180000007123,
+          "maxSyncMs": 0.392957000000024,
+          "wallMs": 1.68000000000211,
+          "maxWallMs": 0.39440900000045076
         },
         "liveness.project": {
           "calls": 1,
-          "syncMs": 0.1107159999992291,
-          "maxSyncMs": 0.1107159999992291,
-          "wallMs": 60.46127699999852,
-          "maxWallMs": 60.46127699999852
+          "syncMs": 0.06552600000031816,
+          "maxSyncMs": 0.06552600000031816,
+          "wallMs": 60.807151000000886,
+          "maxWallMs": 60.807151000000886
         },
         "tasks": {
           "calls": 3,
-          "syncMs": 0.5319430000017746,
-          "maxSyncMs": 0.193451000001005,
-          "wallMs": 0.5360900000014226,
-          "maxWallMs": 0.19461200000114331
+          "syncMs": 0.5166260000005423,
+          "maxSyncMs": 0.206253000000288,
+          "wallMs": 0.521547999998802,
+          "maxWallMs": 0.20756900000014866
         },
         "seatDeployments": {
           "calls": 1,
-          "syncMs": 0.025277999999161693,
-          "maxSyncMs": 0.025277999999161693,
-          "wallMs": 0.02764999999999418,
-          "maxWallMs": 0.02764999999999418
+          "syncMs": 0.01606999999967229,
+          "maxSyncMs": 0.01606999999967229,
+          "wallMs": 0.018035999999483465,
+          "maxWallMs": 0.018035999999483465
         },
         "maintenanceRuns": {
           "calls": 1,
-          "syncMs": 2.676149999999325,
-          "maxSyncMs": 2.676149999999325,
-          "wallMs": 2.679082999999082,
-          "maxWallMs": 2.679082999999082
+          "syncMs": 2.120692999998937,
+          "maxSyncMs": 2.120692999998937,
+          "wallMs": 2.1223969999991823,
+          "maxWallMs": 2.1223969999991823
         },
         "refreshLifecycle": {
           "calls": 1,
-          "syncMs": 0.04131500000039523,
-          "maxSyncMs": 0.04131500000039523,
-          "wallMs": 0.04208900000048743,
-          "maxWallMs": 0.04208900000048743
+          "syncMs": 0.018100999999660417,
+          "maxSyncMs": 0.018100999999660417,
+          "wallMs": 0.01865899999938847,
+          "maxWallMs": 0.01865899999938847
         },
         "lifecycleJournal": {
           "calls": 1,
-          "syncMs": 4.346723000000566,
-          "maxSyncMs": 4.346723000000566,
-          "wallMs": 4.3659869999992225,
-          "maxWallMs": 4.3659869999992225
+          "syncMs": 3.3190599999998085,
+          "maxSyncMs": 3.3190599999998085,
+          "wallMs": 3.3365060000014637,
+          "maxWallMs": 3.3365060000014637
         },
         "workerAsks": {
           "calls": 1,
-          "syncMs": 0.0583360000000539,
-          "maxSyncMs": 0.0583360000000539,
-          "wallMs": 150.71235200000046,
-          "maxWallMs": 150.71235200000046
+          "syncMs": 0.03718500000104541,
+          "maxSyncMs": 0.03718500000104541,
+          "wallMs": 134.27171400000043,
+          "maxWallMs": 134.27171400000043
+        },
+        "archivedPipelinesAsync": {
+          "calls": 1,
+          "syncMs": 0.2993480000004638,
+          "maxSyncMs": 0.2993480000004638,
+          "wallMs": 0.4604589999999007,
+          "maxWallMs": 0.4604589999999007
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.0036170000003039604,
+          "maxSyncMs": 0.0036170000003039604,
+          "wallMs": 0.007196000000476488,
+          "maxWallMs": 0.007196000000476488
         },
         "workerCounts": {
           "calls": 1,
-          "syncMs": 22.551805000000968,
-          "maxSyncMs": 22.551805000000968,
-          "wallMs": 22.55493800000113,
-          "maxWallMs": 22.55493800000113
+          "syncMs": 18.651182000001427,
+          "maxSyncMs": 18.651182000001427,
+          "wallMs": 18.652506000000358,
+          "maxWallMs": 18.652506000000358
         },
         "latestDeployment": {
           "calls": 1,
-          "syncMs": 0.060737000001608976,
-          "maxSyncMs": 0.060737000001608976,
-          "wallMs": 0.06386999999995169,
-          "maxWallMs": 0.06386999999995169
+          "syncMs": 0.0466839999990043,
+          "maxSyncMs": 0.0466839999990043,
+          "wallMs": 0.04823399999986577,
+          "maxWallMs": 0.04823399999986577
         },
         "retirementReport": {
           "calls": 1,
-          "syncMs": 0.02262900000096124,
-          "maxSyncMs": 0.02262900000096124,
-          "wallMs": 0.02280400000017835,
-          "maxWallMs": 0.02280400000017835
+          "syncMs": 0.018653000000995235,
+          "maxSyncMs": 0.018653000000995235,
+          "wallMs": 0.018783000001349137,
+          "maxWallMs": 0.018783000001349137
         },
         "retirementJournal": {
           "calls": 1,
-          "syncMs": 5.669509999999718,
-          "maxSyncMs": 5.669509999999718,
-          "wallMs": 5.671878000001016,
-          "maxWallMs": 5.671878000001016
+          "syncMs": 3.905774000000747,
+          "maxSyncMs": 3.905774000000747,
+          "wallMs": 3.9067379999996774,
+          "maxWallMs": 3.9067379999996774
         },
         "diskPressure": {
           "calls": 1,
-          "syncMs": 0.04366500000105589,
-          "maxSyncMs": 0.04366500000105589,
-          "wallMs": 0.8190050000011979,
-          "maxWallMs": 0.8190050000011979
+          "syncMs": 0.02867799999876297,
+          "maxSyncMs": 0.02867799999876297,
+          "wallMs": 0.6976429999995162,
+          "maxWallMs": 0.6976429999995162
         },
         "reports.log": {
           "calls": 1,
-          "syncMs": 0.06038799999987532,
-          "maxSyncMs": 0.06038799999987532,
-          "wallMs": 26.103393999999753,
-          "maxWallMs": 26.103393999999753
+          "syncMs": 0.06368800000018382,
+          "maxSyncMs": 0.06368800000018382,
+          "wallMs": 36.92933400000038,
+          "maxWallMs": 36.92933400000038
         },
         "recordRuleReports": {
           "calls": 1,
-          "syncMs": 0.07973099999981059,
-          "maxSyncMs": 0.07973099999981059,
-          "wallMs": 445.19164399999863,
-          "maxWallMs": 445.19164399999863
+          "syncMs": 0.044819999999162974,
+          "maxSyncMs": 0.044819999999162974,
+          "wallMs": 282.6844970000002,
+          "maxWallMs": 282.6844970000002
         },
         "seatTurnOutcome": {
           "calls": 1,
-          "syncMs": 0.0024419999990641372,
-          "maxSyncMs": 0.0024419999990641372,
-          "wallMs": 0.007793999999194057,
-          "maxWallMs": 0.007793999999194057
+          "syncMs": 0.0021589999996649567,
+          "maxSyncMs": 0.0021589999996649567,
+          "wallMs": 0.005310999998982879,
+          "maxWallMs": 0.005310999998982879
         },
         "seatContextUsage": {
           "calls": 1,
-          "syncMs": 0.001711000000796048,
-          "maxSyncMs": 0.001711000000796048,
-          "wallMs": 0.002159000001483946,
-          "maxWallMs": 0.002159000001483946
+          "syncMs": 0.0012260000003152527,
+          "maxSyncMs": 0.0012260000003152527,
+          "wallMs": 0.0017880000013974495,
+          "maxWallMs": 0.0017880000013974495
         },
         "recordDeploySnapshots": {
           "calls": 1,
-          "syncMs": 0.2715729999999894,
-          "maxSyncMs": 0.2715729999999894,
-          "wallMs": 0.27262599999994563,
-          "maxWallMs": 0.27262599999994563
+          "syncMs": 0.1542440000011993,
+          "maxSyncMs": 0.1542440000011993,
+          "wallMs": 0.15548300000045856,
+          "maxWallMs": 0.15548300000045856
         },
         "writeState": {
           "calls": 1,
-          "syncMs": 12.857187999999951,
-          "maxSyncMs": 12.857187999999951,
-          "wallMs": 12.863225999999486,
-          "maxWallMs": 12.863225999999486
+          "syncMs": 6.584580999999162,
+          "maxSyncMs": 6.584580999999162,
+          "wallMs": 6.585392999999385,
+          "maxWallMs": 6.585392999999385
         },
         "appendRecord": {
           "calls": 1,
-          "syncMs": 0.69814100000076,
-          "maxSyncMs": 0.69814100000076,
-          "wallMs": 0.6994960000010906,
-          "maxWallMs": 0.6994960000010906
+          "syncMs": 0.3865609999993467,
+          "maxSyncMs": 0.3865609999993467,
+          "wallMs": 0.3874409999989439,
+          "maxWallMs": 0.3874409999989439
         }
       },
-      "ms": 1015.7454429999998,
-      "maxGapMs": 62.6531329999998
+      "ms": 794.9806399999998,
+      "maxGapMs": 48.95416799999839
     },
     {
       "case": "T9-check",
       "run": 2,
-      "at": "2026-10-19T00:31:11.544Z",
+      "at": "2026-10-19T00:57:07.785Z",
       "load": [
-        4.1,
-        3.56,
-        3.78
+        5.74,
+        5.23,
+        5.09
       ],
-      "verdict": "error",
-      "reasons": [],
-      "items": 0,
-      "failureCode": "ledger-gap",
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
       "sources": {
         "prepareRead": {
           "calls": 1,
-          "syncMs": 0.5501819999990403,
-          "maxSyncMs": 0.5501819999990403,
-          "wallMs": 1.3829279999990831,
-          "maxWallMs": 1.3829279999990831
+          "syncMs": 0.19201199999952223,
+          "maxSyncMs": 0.19201199999952223,
+          "wallMs": 0.5504500000006374,
+          "maxWallMs": 0.5504500000006374
         },
         "readState": {
           "calls": 2,
-          "syncMs": 1.0581480000000738,
-          "maxSyncMs": 0.6934209999999439,
-          "wallMs": 1.0608089999986987,
-          "maxWallMs": 0.6950710000000981
+          "syncMs": 0.46391599999878963,
+          "maxSyncMs": 0.2381310000000667,
+          "wallMs": 0.4649389999995037,
+          "maxWallMs": 0.2386210000004212
         },
         "now": {
-          "calls": 5,
-          "syncMs": 0.012785000000803848,
-          "maxSyncMs": 0.004734000000098604,
-          "wallMs": 0.015908999997918727,
-          "maxWallMs": 0.00670699999864155
+          "calls": 8,
+          "syncMs": 0.014715999999680207,
+          "maxSyncMs": 0.0038669999994453974,
+          "wallMs": 0.020146000002569053,
+          "maxWallMs": 0.005902000000787666
         },
         "seatFor": {
-          "calls": 5,
-          "syncMs": 40.93022299999757,
-          "maxSyncMs": 10.327154999999038,
-          "wallMs": 40.947017999997115,
-          "maxWallMs": 10.330125000000407
+          "calls": 7,
+          "syncMs": 42.68258600000081,
+          "maxSyncMs": 6.463796999998522,
+          "wallMs": 42.68551999999909,
+          "maxWallMs": 6.463981999999305
         },
         "settings": {
           "calls": 5,
-          "syncMs": 1.6960409999974217,
-          "maxSyncMs": 0.3902509999988979,
-          "wallMs": 1.7032610000005661,
-          "maxWallMs": 0.39091199999893433
+          "syncMs": 1.1427440000006754,
+          "maxSyncMs": 0.2933310000007623,
+          "wallMs": 1.1457959999988816,
+          "maxWallMs": 0.2942110000003595
         },
         "memoryProblems": {
           "calls": 3,
-          "syncMs": 1.4281800000026124,
-          "maxSyncMs": 0.5589470000013534,
-          "wallMs": 1.433390000001964,
-          "maxWallMs": 0.5615730000008625
+          "syncMs": 1.0526699999991251,
+          "maxSyncMs": 0.386834999999337,
+          "wallMs": 1.0553110000000743,
+          "maxWallMs": 0.3882549999998446
         },
         "registry": {
-          "calls": 4,
-          "syncMs": 0.02422399999886693,
-          "maxSyncMs": 0.01724400000057358,
-          "wallMs": 0.02806600000076287,
-          "maxWallMs": 0.01902700000027835
+          "calls": 7,
+          "syncMs": 0.024212000003899448,
+          "maxSyncMs": 0.008584000001064851,
+          "wallMs": 0.02802700000211189,
+          "maxWallMs": 0.008997000000817934
         },
         "liveness.conversation": {
           "calls": 1,
-          "syncMs": 6.2685939999992115,
-          "maxSyncMs": 6.2685939999992115,
-          "wallMs": 6.910656000000017,
-          "maxWallMs": 6.910656000000017
+          "syncMs": 4.676321000000826,
+          "maxSyncMs": 4.676321000000826,
+          "wallMs": 5.054573999999775,
+          "maxWallMs": 5.054573999999775
         },
         "pipelines": {
-          "calls": 4,
-          "syncMs": 1.2442639999990206,
-          "maxSyncMs": 0.46067199999924924,
-          "wallMs": 1.257196999998996,
-          "maxWallMs": 0.46411799999987124
+          "calls": 6,
+          "syncMs": 1.3519129999967845,
+          "maxSyncMs": 0.3991699999987759,
+          "wallMs": 1.3566199999968376,
+          "maxWallMs": 0.4007759999985865
         },
         "liveness.project": {
           "calls": 1,
-          "syncMs": 0.06134900000142807,
-          "maxSyncMs": 0.06134900000142807,
-          "wallMs": 44.62934600000153,
-          "maxWallMs": 44.62934600000153
+          "syncMs": 0.04772500000035507,
+          "maxSyncMs": 0.04772500000035507,
+          "wallMs": 44.65453199999865,
+          "maxWallMs": 44.65453199999865
         },
         "tasks": {
           "calls": 3,
-          "syncMs": 0.7963120000003983,
-          "maxSyncMs": 0.295947000000524,
-          "wallMs": 0.8035899999995308,
-          "maxWallMs": 0.2979699999996228
+          "syncMs": 0.35496799999964423,
+          "maxSyncMs": 0.12447199999951408,
+          "wallMs": 0.3576939999984461,
+          "maxWallMs": 0.12547999999878812
         },
         "seatDeployments": {
           "calls": 1,
-          "syncMs": 0.01640399999996589,
-          "maxSyncMs": 0.01640399999996589,
-          "wallMs": 0.017603000000235625,
-          "maxWallMs": 0.017603000000235625
+          "syncMs": 0.018137000000933767,
+          "maxSyncMs": 0.018137000000933767,
+          "wallMs": 0.029770000001008157,
+          "maxWallMs": 0.029770000001008157
         },
         "maintenanceRuns": {
           "calls": 1,
-          "syncMs": 2.785038000001805,
-          "maxSyncMs": 2.785038000001805,
-          "wallMs": 2.787960000001476,
-          "maxWallMs": 2.787960000001476
+          "syncMs": 1.9875609999999142,
+          "maxSyncMs": 1.9875609999999142,
+          "wallMs": 1.9958179999994172,
+          "maxWallMs": 1.9958179999994172
         },
         "refreshLifecycle": {
           "calls": 1,
-          "syncMs": 0.03986600000098406,
-          "maxSyncMs": 0.03986600000098406,
-          "wallMs": 0.04141499999968801,
-          "maxWallMs": 0.04141499999968801
+          "syncMs": 0.018420999998852494,
+          "maxSyncMs": 0.018420999998852494,
+          "wallMs": 0.018931999999040272,
+          "maxWallMs": 0.018931999999040272
         },
         "lifecycleJournal": {
           "calls": 1,
-          "syncMs": 3.862186999998812,
-          "maxSyncMs": 3.862186999998812,
-          "wallMs": 3.864276999998765,
-          "maxWallMs": 3.864276999998765
+          "syncMs": 3.532972000000882,
+          "maxSyncMs": 3.532972000000882,
+          "wallMs": 3.533809000000474,
+          "maxWallMs": 3.533809000000474
         },
         "workerAsks": {
           "calls": 1,
-          "syncMs": 0.09146699999837438,
-          "maxSyncMs": 0.09146699999837438,
-          "wallMs": 188.33643999999913,
-          "maxWallMs": 188.33643999999913
+          "syncMs": 0.07027800000105344,
+          "maxSyncMs": 0.07027800000105344,
+          "wallMs": 127.49916099999973,
+          "maxWallMs": 127.49916099999973
+        },
+        "archivedPipelinesAsync": {
+          "calls": 1,
+          "syncMs": 0.40901599999961036,
+          "maxSyncMs": 0.40901599999961036,
+          "wallMs": 0.6909479999994801,
+          "maxWallMs": 0.6909479999994801
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.0022129999997559935,
+          "maxSyncMs": 0.0022129999997559935,
+          "wallMs": 0.004374999998617568,
+          "maxWallMs": 0.004374999998617568
         },
         "workerCounts": {
           "calls": 1,
-          "syncMs": 30.88304799999969,
-          "maxSyncMs": 30.88304799999969,
-          "wallMs": 30.886161999998876,
-          "maxWallMs": 30.886161999998876
+          "syncMs": 17.895215000000462,
+          "maxSyncMs": 17.895215000000462,
+          "wallMs": 17.89644099999896,
+          "maxWallMs": 17.89644099999896
         },
         "latestDeployment": {
           "calls": 1,
-          "syncMs": 0.06910900000002584,
-          "maxSyncMs": 0.06910900000002584,
-          "wallMs": 0.07190200000150071,
-          "maxWallMs": 0.07190200000150071
+          "syncMs": 0.044141999998828396,
+          "maxSyncMs": 0.044141999998828396,
+          "wallMs": 0.04563199999938661,
+          "maxWallMs": 0.04563199999938661
         },
         "retirementReport": {
           "calls": 1,
-          "syncMs": 0.018819999999323045,
-          "maxSyncMs": 0.018819999999323045,
-          "wallMs": 0.018952999998873565,
-          "maxWallMs": 0.018952999998873565
+          "syncMs": 0.015483999999560183,
+          "maxSyncMs": 0.015483999999560183,
+          "wallMs": 0.015577000000121188,
+          "maxWallMs": 0.015577000000121188
         },
         "retirementJournal": {
           "calls": 1,
-          "syncMs": 5.2607090000001335,
-          "maxSyncMs": 5.2607090000001335,
-          "wallMs": 5.262382999999318,
-          "maxWallMs": 5.262382999999318
+          "syncMs": 3.960006000001158,
+          "maxSyncMs": 3.960006000001158,
+          "wallMs": 3.960698000000775,
+          "maxWallMs": 3.960698000000775
         },
         "diskPressure": {
           "calls": 1,
-          "syncMs": 0.033429000000978704,
-          "maxSyncMs": 0.033429000000978704,
-          "wallMs": 2.429611000001387,
-          "maxWallMs": 2.429611000001387
+          "syncMs": 0.02485999999953492,
+          "maxSyncMs": 0.02485999999953492,
+          "wallMs": 1.760269000000335,
+          "maxWallMs": 1.760269000000335
         },
         "reports.log": {
           "calls": 1,
-          "syncMs": 0.06852000000071712,
-          "maxSyncMs": 0.06852000000071712,
-          "wallMs": 28.916552999999112,
-          "maxWallMs": 28.916552999999112
+          "syncMs": 0.03827900000032969,
+          "maxSyncMs": 0.03827900000032969,
+          "wallMs": 25.254876000000877,
+          "maxWallMs": 25.254876000000877
         },
         "recordRuleReports": {
           "calls": 1,
-          "syncMs": 0.06804899999951886,
-          "maxSyncMs": 0.06804899999951886,
-          "wallMs": 331.0590009999996,
-          "maxWallMs": 331.0590009999996
+          "syncMs": 0.052281000000220956,
+          "maxSyncMs": 0.052281000000220956,
+          "wallMs": 293.4637700000003,
+          "maxWallMs": 293.4637700000003
         },
         "seatTurnOutcome": {
           "calls": 1,
-          "syncMs": 0.0022879999996803235,
-          "maxSyncMs": 0.0022879999996803235,
-          "wallMs": 0.006693999999697553,
-          "maxWallMs": 0.006693999999697553
+          "syncMs": 0.0022539999990840442,
+          "maxSyncMs": 0.0022539999990840442,
+          "wallMs": 0.0036509999990812503,
+          "maxWallMs": 0.0036509999990812503
         },
         "seatContextUsage": {
           "calls": 1,
-          "syncMs": 0.002409000000625383,
-          "maxSyncMs": 0.002409000000625383,
-          "wallMs": 0.003396000000066124,
-          "maxWallMs": 0.003396000000066124
+          "syncMs": 0.018849000000045635,
+          "maxSyncMs": 0.018849000000045635,
+          "wallMs": 0.019868000001224573,
+          "maxWallMs": 0.019868000001224573
         },
         "recordDeploySnapshots": {
           "calls": 1,
-          "syncMs": 0.3876250000012078,
-          "maxSyncMs": 0.3876250000012078,
-          "wallMs": 0.38914500000100816,
-          "maxWallMs": 0.38914500000100816
+          "syncMs": 0.14059900000029302,
+          "maxSyncMs": 0.14059900000029302,
+          "wallMs": 0.14162100000066857,
+          "maxWallMs": 0.14162100000066857
         },
         "writeState": {
           "calls": 1,
-          "syncMs": 9.51481799999965,
-          "maxSyncMs": 9.51481799999965,
-          "wallMs": 9.516742999998314,
-          "maxWallMs": 9.516742999998314
+          "syncMs": 7.079190000000381,
+          "maxSyncMs": 7.079190000000381,
+          "wallMs": 7.080369000001156,
+          "maxWallMs": 7.080369000001156
         },
         "appendRecord": {
           "calls": 1,
-          "syncMs": 0.7947480000002543,
-          "maxSyncMs": 0.7947480000002543,
-          "wallMs": 0.7966780000006111,
-          "maxWallMs": 0.7966780000006111
+          "syncMs": 0.4252460000006977,
+          "maxSyncMs": 0.4252460000006977,
+          "wallMs": 0.42605399999956717,
+          "maxWallMs": 0.42605399999956717
         }
       },
-      "ms": 947.990522,
-      "maxGapMs": 57.63394700000026
+      "ms": 752.3241660000003,
+      "maxGapMs": 49.642455999999584
     },
     {
       "case": "T9-check",
       "run": 3,
-      "at": "2026-10-19T00:31:12.530Z",
+      "at": "2026-10-19T00:57:08.536Z",
       "load": [
-        4.1,
-        3.56,
-        3.78
+        5.74,
+        5.23,
+        5.09
       ],
-      "verdict": "error",
-      "reasons": [],
-      "items": 0,
-      "failureCode": "ledger-gap",
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
       "sources": {
         "prepareRead": {
           "calls": 1,
-          "syncMs": 0.5264360000001034,
-          "maxSyncMs": 0.5264360000001034,
-          "wallMs": 1.400933000000805,
-          "maxWallMs": 1.400933000000805
+          "syncMs": 0.26691200000095705,
+          "maxSyncMs": 0.26691200000095705,
+          "wallMs": 0.706558000001678,
+          "maxWallMs": 0.706558000001678
         },
         "readState": {
           "calls": 2,
-          "syncMs": 0.854724000000715,
-          "maxSyncMs": 0.5075730000007752,
-          "wallMs": 0.8571479999991425,
-          "maxWallMs": 0.5089339999994991
+          "syncMs": 0.5023459999993065,
+          "maxSyncMs": 0.269600999999966,
+          "wallMs": 0.5025900000000547,
+          "maxWallMs": 0.26972100000057253
         },
         "now": {
-          "calls": 5,
-          "syncMs": 0.009856000000581844,
-          "maxSyncMs": 0.0032170000013138633,
-          "wallMs": 0.011005000000295695,
-          "maxWallMs": 0.0032690000007278286
+          "calls": 8,
+          "syncMs": 0.013710000002902234,
+          "maxSyncMs": 0.0029419999991660006,
+          "wallMs": 0.01932900000065274,
+          "maxWallMs": 0.004254999999830034
         },
         "seatFor": {
-          "calls": 5,
-          "syncMs": 49.28291399999762,
-          "maxSyncMs": 13.947065000000293,
-          "wallMs": 49.28802799999903,
-          "maxWallMs": 13.947330000000875
+          "calls": 7,
+          "syncMs": 43.084601999998995,
+          "maxSyncMs": 6.973992999999609,
+          "wallMs": 43.08659799999805,
+          "maxWallMs": 6.974237999998877
         },
         "settings": {
           "calls": 5,
-          "syncMs": 1.8664560000015626,
-          "maxSyncMs": 0.5295489999989513,
-          "wallMs": 1.869661000002452,
-          "maxWallMs": 0.5297580000005837
+          "syncMs": 1.1405980000035925,
+          "maxSyncMs": 0.25147500000093714,
+          "wallMs": 1.14200300000266,
+          "maxWallMs": 0.2517870000010589
         },
         "memoryProblems": {
           "calls": 3,
-          "syncMs": 1.2668519999988348,
-          "maxSyncMs": 0.5416430000004766,
-          "wallMs": 1.2682939999958762,
-          "maxWallMs": 0.5420519999988755
+          "syncMs": 1.0312079999985144,
+          "maxSyncMs": 0.3732739999995829,
+          "wallMs": 1.0318099999967671,
+          "maxWallMs": 0.3734329999988404
         },
         "registry": {
-          "calls": 4,
-          "syncMs": 0.0224209999996674,
-          "maxSyncMs": 0.009529999999358552,
-          "wallMs": 0.026278999999703956,
-          "maxWallMs": 0.01041599999916798
+          "calls": 7,
+          "syncMs": 0.010627999999996973,
+          "maxSyncMs": 0.0022879999996803235,
+          "wallMs": 0.013422999998510932,
+          "maxWallMs": 0.002868999999918742
         },
         "liveness.conversation": {
           "calls": 1,
-          "syncMs": 6.7718540000005305,
-          "maxSyncMs": 6.7718540000005305,
-          "wallMs": 7.305560999999216,
-          "maxWallMs": 7.305560999999216
+          "syncMs": 5.116164999999455,
+          "maxSyncMs": 5.116164999999455,
+          "wallMs": 5.514031000000614,
+          "maxWallMs": 5.514031000000614
         },
         "pipelines": {
-          "calls": 4,
-          "syncMs": 1.094639000000825,
-          "maxSyncMs": 0.3154070000000502,
-          "wallMs": 1.097059999998237,
-          "maxWallMs": 0.31591999999909604
+          "calls": 6,
+          "syncMs": 1.1651330000022426,
+          "maxSyncMs": 0.23979099999996834,
+          "wallMs": 1.166151000001264,
+          "maxWallMs": 0.2399489999988873
         },
         "liveness.project": {
           "calls": 1,
-          "syncMs": 0.1029450000005454,
-          "maxSyncMs": 0.1029450000005454,
-          "wallMs": 45.3647660000006,
-          "maxWallMs": 45.3647660000006
+          "syncMs": 0.04741199999989476,
+          "maxSyncMs": 0.04741199999989476,
+          "wallMs": 46.66007900000113,
+          "maxWallMs": 46.66007900000113
         },
         "tasks": {
           "calls": 3,
-          "syncMs": 0.5255379999998695,
-          "maxSyncMs": 0.1999629999991157,
-          "wallMs": 0.5272009999989677,
-          "maxWallMs": 0.20057699999961187
+          "syncMs": 0.4048160000002099,
+          "maxSyncMs": 0.1897259999987,
+          "wallMs": 0.4057989999982965,
+          "maxWallMs": 0.19010699999853387
         },
         "seatDeployments": {
           "calls": 1,
-          "syncMs": 0.01677700000072946,
-          "maxSyncMs": 0.01677700000072946,
-          "wallMs": 0.01715900000090187,
-          "maxWallMs": 0.01715900000090187
+          "syncMs": 0.012289999998756684,
+          "maxSyncMs": 0.012289999998756684,
+          "wallMs": 0.012458999999580556,
+          "maxWallMs": 0.012458999999580556
         },
         "maintenanceRuns": {
           "calls": 1,
-          "syncMs": 2.7931309999985388,
-          "maxSyncMs": 2.7931309999985388,
-          "wallMs": 2.7936769999996613,
-          "maxWallMs": 2.7936769999996613
+          "syncMs": 1.9995589999998629,
+          "maxSyncMs": 1.9995589999998629,
+          "wallMs": 1.9998080000004848,
+          "maxWallMs": 1.9998080000004848
         },
         "refreshLifecycle": {
           "calls": 1,
-          "syncMs": 0.030038999999305815,
-          "maxSyncMs": 0.030038999999305815,
-          "wallMs": 0.030106000000159838,
-          "maxWallMs": 0.030106000000159838
+          "syncMs": 0.01899799999955576,
+          "maxSyncMs": 0.01899799999955576,
+          "wallMs": 0.020097000000532717,
+          "maxWallMs": 0.020097000000532717
         },
         "lifecycleJournal": {
           "calls": 1,
-          "syncMs": 5.295293999999558,
-          "maxSyncMs": 5.295293999999558,
-          "wallMs": 5.296132999999827,
-          "maxWallMs": 5.296132999999827
+          "syncMs": 2.8454130000009172,
+          "maxSyncMs": 2.8454130000009172,
+          "wallMs": 2.845664000000397,
+          "maxWallMs": 2.845664000000397
         },
         "workerAsks": {
           "calls": 1,
-          "syncMs": 0.08426499999950465,
-          "maxSyncMs": 0.08426499999950465,
-          "wallMs": 175.65428699999939,
-          "maxWallMs": 175.65428699999939
+          "syncMs": 0.03644200000053388,
+          "maxSyncMs": 0.03644200000053388,
+          "wallMs": 133.46542000000045,
+          "maxWallMs": 133.46542000000045
+        },
+        "archivedPipelinesAsync": {
+          "calls": 1,
+          "syncMs": 0.2392310000013822,
+          "maxSyncMs": 0.2392310000013822,
+          "wallMs": 0.42141300000002957,
+          "maxWallMs": 0.42141300000002957
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.0020939999994880054,
+          "maxSyncMs": 0.0020939999994880054,
+          "wallMs": 0.0032910000008996576,
+          "maxWallMs": 0.0032910000008996576
         },
         "workerCounts": {
           "calls": 1,
-          "syncMs": 21.696067000000767,
-          "maxSyncMs": 21.696067000000767,
-          "wallMs": 21.696500000000015,
-          "maxWallMs": 21.696500000000015
+          "syncMs": 18.276332999999795,
+          "maxSyncMs": 18.276332999999795,
+          "wallMs": 18.276615999999194,
+          "maxWallMs": 18.276615999999194
         },
         "latestDeployment": {
           "calls": 1,
-          "syncMs": 0.06758400000035181,
-          "maxSyncMs": 0.06758400000035181,
-          "wallMs": 0.06860799999958545,
-          "maxWallMs": 0.06860799999958545
+          "syncMs": 0.04223199999978533,
+          "maxSyncMs": 0.04223199999978533,
+          "wallMs": 0.04248300000108429,
+          "maxWallMs": 0.04248300000108429
         },
         "retirementReport": {
           "calls": 1,
-          "syncMs": 0.023600999998961925,
-          "maxSyncMs": 0.023600999998961925,
-          "wallMs": 0.023655999999391497,
-          "maxWallMs": 0.023655999999391497
+          "syncMs": 0.014769000001251698,
+          "maxSyncMs": 0.014769000001251698,
+          "wallMs": 0.01571700000022247,
+          "maxWallMs": 0.01571700000022247
         },
         "retirementJournal": {
           "calls": 1,
-          "syncMs": 4.930390999999872,
-          "maxSyncMs": 4.930390999999872,
-          "wallMs": 4.9313509999992675,
-          "maxWallMs": 4.9313509999992675
+          "syncMs": 4.862982000000557,
+          "maxSyncMs": 4.862982000000557,
+          "wallMs": 4.86312800000087,
+          "maxWallMs": 4.86312800000087
         },
         "diskPressure": {
           "calls": 1,
-          "syncMs": 0.04038599999876169,
-          "maxSyncMs": 0.04038599999876169,
-          "wallMs": 0.7300169999998616,
-          "maxWallMs": 0.7300169999998616
+          "syncMs": 0.025809000000663218,
+          "maxSyncMs": 0.025809000000663218,
+          "wallMs": 0.4587600000013481,
+          "maxWallMs": 0.4587600000013481
         },
         "reports.log": {
           "calls": 1,
-          "syncMs": 0.04974899999979243,
-          "maxSyncMs": 0.04974899999979243,
-          "wallMs": 35.68817300000046,
-          "maxWallMs": 35.68817300000046
+          "syncMs": 0.03666800000064541,
+          "maxSyncMs": 0.03666800000064541,
+          "wallMs": 24.71148600000015,
+          "maxWallMs": 24.71148600000015
         },
         "recordRuleReports": {
           "calls": 1,
-          "syncMs": 0.05648999999903026,
-          "maxSyncMs": 0.05648999999903026,
-          "wallMs": 377.3409439999996,
-          "maxWallMs": 377.3409439999996
+          "syncMs": 0.041850999999951455,
+          "maxSyncMs": 0.041850999999951455,
+          "wallMs": 269.9938569999995,
+          "maxWallMs": 269.9938569999995
         },
         "seatTurnOutcome": {
           "calls": 1,
-          "syncMs": 0.0030750000005355105,
-          "maxSyncMs": 0.0030750000005355105,
-          "wallMs": 0.008539000000382657,
-          "maxWallMs": 0.008539000000382657
+          "syncMs": 0.0012289999995118706,
+          "maxSyncMs": 0.0012289999995118706,
+          "wallMs": 0.0022449999996752013,
+          "maxWallMs": 0.0022449999996752013
         },
         "seatContextUsage": {
           "calls": 1,
-          "syncMs": 0.0013899999994464451,
-          "maxSyncMs": 0.0013899999994464451,
-          "wallMs": 0.0014559999999619322,
-          "maxWallMs": 0.0014559999999619322
+          "syncMs": 0.0019290000000182772,
+          "maxSyncMs": 0.0019290000000182772,
+          "wallMs": 0.002741000000241911,
+          "maxWallMs": 0.002741000000241911
         },
         "recordDeploySnapshots": {
           "calls": 1,
-          "syncMs": 0.1487489999999525,
-          "maxSyncMs": 0.1487489999999525,
-          "wallMs": 0.14897500000006403,
-          "maxWallMs": 0.14897500000006403
+          "syncMs": 0.13374499999918044,
+          "maxSyncMs": 0.13374499999918044,
+          "wallMs": 0.13505400000030932,
+          "maxWallMs": 0.13505400000030932
         },
         "writeState": {
           "calls": 1,
-          "syncMs": 7.187577999999121,
-          "maxSyncMs": 7.187577999999121,
-          "wallMs": 7.18787699999848,
-          "maxWallMs": 7.18787699999848
+          "syncMs": 6.8761130000002595,
+          "maxSyncMs": 6.8761130000002595,
+          "wallMs": 6.876924000000145,
+          "maxWallMs": 6.876924000000145
         },
         "appendRecord": {
           "calls": 1,
-          "syncMs": 0.4132310000004509,
-          "maxSyncMs": 0.4132310000004509,
-          "wallMs": 0.4134360000007291,
-          "maxWallMs": 0.4134360000007291
+          "syncMs": 0.5044250000009924,
+          "maxSyncMs": 0.5044250000009924,
+          "wallMs": 0.5053840000000491,
+          "maxWallMs": 0.5053840000000491
         }
       },
-      "ms": 985.0838019999992,
-      "maxGapMs": 51.6147830000009
+      "ms": 748.2411460000003,
+      "maxGapMs": 48.54703999999947
     },
     {
       "case": "T9-check",
       "run": 4,
-      "at": "2026-10-19T00:31:13.336Z",
+      "at": "2026-10-19T00:57:09.271Z",
       "load": [
-        4.1,
-        3.56,
-        3.78
+        5.74,
+        5.23,
+        5.09
       ],
-      "verdict": "error",
-      "reasons": [],
-      "items": 0,
-      "failureCode": "ledger-gap",
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
       "sources": {
         "prepareRead": {
           "calls": 1,
-          "syncMs": 0.2727279999999155,
-          "maxSyncMs": 0.2727279999999155,
-          "wallMs": 0.6684560000012425,
-          "maxWallMs": 0.6684560000012425
+          "syncMs": 0.2804599999999482,
+          "maxSyncMs": 0.2804599999999482,
+          "wallMs": 0.7367379999996047,
+          "maxWallMs": 0.7367379999996047
         },
         "readState": {
           "calls": 2,
-          "syncMs": 0.6623780000008992,
-          "maxSyncMs": 0.34551900000042224,
-          "wallMs": 0.6627900000003137,
-          "maxWallMs": 0.345699000001332
+          "syncMs": 0.6106500000023516,
+          "maxSyncMs": 0.3107850000014878,
+          "wallMs": 0.610899999999674,
+          "maxWallMs": 0.3109150000000227
         },
         "now": {
-          "calls": 5,
-          "syncMs": 0.0067690000014408724,
-          "maxSyncMs": 0.0024880000000848668,
-          "wallMs": 0.0071600000010221265,
-          "maxWallMs": 0.0026520000010350486
+          "calls": 8,
+          "syncMs": 0.024937000001955312,
+          "maxSyncMs": 0.007739000000583474,
+          "wallMs": 0.03136300000187475,
+          "maxWallMs": 0.007910000000265427
         },
         "seatFor": {
-          "calls": 5,
-          "syncMs": 31.9899540000024,
-          "maxSyncMs": 7.112179000001561,
-          "wallMs": 31.995151000002807,
-          "maxWallMs": 7.113925000001473
+          "calls": 7,
+          "syncMs": 46.48650400000042,
+          "maxSyncMs": 8.7633679999999,
+          "wallMs": 46.488572000000204,
+          "maxWallMs": 8.763684000001376
         },
         "settings": {
           "calls": 5,
-          "syncMs": 1.304984999998851,
-          "maxSyncMs": 0.32383799999843177,
-          "wallMs": 1.3061969999998837,
-          "maxWallMs": 0.32417999999961467
+          "syncMs": 1.1471629999996367,
+          "maxSyncMs": 0.2568269999992481,
+          "wallMs": 1.1484919999984413,
+          "maxWallMs": 0.25719000000026426
         },
         "memoryProblems": {
           "calls": 3,
-          "syncMs": 1.0697130000007746,
-          "maxSyncMs": 0.4171460000015941,
-          "wallMs": 1.0705090000010387,
-          "maxWallMs": 0.4176150000002963
+          "syncMs": 0.9892879999988509,
+          "maxSyncMs": 0.3954570000005333,
+          "wallMs": 0.9900150000012218,
+          "maxWallMs": 0.39570500000081665
         },
         "registry": {
-          "calls": 4,
-          "syncMs": 0.010027999998783343,
-          "maxSyncMs": 0.003297999999631429,
-          "wallMs": 0.01245300000118732,
-          "maxWallMs": 0.003889999999955762
+          "calls": 7,
+          "syncMs": 0.013801999999486725,
+          "maxSyncMs": 0.004023999999844818,
+          "wallMs": 0.017238000002180343,
+          "maxWallMs": 0.004601000000548083
         },
         "liveness.conversation": {
           "calls": 1,
-          "syncMs": 5.538854999998875,
-          "maxSyncMs": 5.538854999998875,
-          "wallMs": 5.945883999998841,
-          "maxWallMs": 5.945883999998841
+          "syncMs": 5.021790000000692,
+          "maxSyncMs": 5.021790000000692,
+          "wallMs": 5.373709000001327,
+          "maxWallMs": 5.373709000001327
         },
         "pipelines": {
-          "calls": 4,
-          "syncMs": 0.9519770000006247,
-          "maxSyncMs": 0.28292099999998754,
-          "wallMs": 0.9532769999968878,
-          "maxWallMs": 0.28324999999858846
+          "calls": 6,
+          "syncMs": 1.4956010000005335,
+          "maxSyncMs": 0.3932679999998072,
+          "wallMs": 1.496846000001824,
+          "maxWallMs": 0.39340400000037334
         },
         "liveness.project": {
           "calls": 1,
-          "syncMs": 0.07612200000039593,
-          "maxSyncMs": 0.07612200000039593,
-          "wallMs": 47.25325200000043,
-          "maxWallMs": 47.25325200000043
+          "syncMs": 0.04450100000030943,
+          "maxSyncMs": 0.04450100000030943,
+          "wallMs": 42.338918999999805,
+          "maxWallMs": 42.338918999999805
         },
         "tasks": {
           "calls": 3,
-          "syncMs": 0.38843399999859685,
-          "maxSyncMs": 0.13852399999996123,
-          "wallMs": 0.3897179999985383,
-          "maxWallMs": 0.13897499999984575
+          "syncMs": 0.3836879999998928,
+          "maxSyncMs": 0.1485419999989972,
+          "wallMs": 0.3847510000014154,
+          "maxWallMs": 0.1489819999987958
         },
         "seatDeployments": {
           "calls": 1,
-          "syncMs": 0.012678999999479856,
-          "maxSyncMs": 0.012678999999479856,
-          "wallMs": 0.012866000000940403,
-          "maxWallMs": 0.012866000000940403
+          "syncMs": 0.013719999999011634,
+          "maxSyncMs": 0.013719999999011634,
+          "wallMs": 0.013875999999072519,
+          "maxWallMs": 0.013875999999072519
         },
         "maintenanceRuns": {
           "calls": 1,
-          "syncMs": 2.4818000000013853,
-          "maxSyncMs": 2.4818000000013853,
-          "wallMs": 2.4821000000010827,
-          "maxWallMs": 2.4821000000010827
+          "syncMs": 2.0598430000009103,
+          "maxSyncMs": 2.0598430000009103,
+          "wallMs": 2.0599700000002485,
+          "maxWallMs": 2.0599700000002485
         },
         "refreshLifecycle": {
           "calls": 1,
-          "syncMs": 0.042497000000366825,
-          "maxSyncMs": 0.042497000000366825,
-          "wallMs": 0.04289500000049884,
-          "maxWallMs": 0.04289500000049884
+          "syncMs": 0.021005000000513974,
+          "maxSyncMs": 0.021005000000513974,
+          "wallMs": 0.022060000001147273,
+          "maxWallMs": 0.022060000001147273
         },
         "lifecycleJournal": {
           "calls": 1,
-          "syncMs": 4.294905999999173,
-          "maxSyncMs": 4.294905999999173,
-          "wallMs": 4.295400999999401,
-          "maxWallMs": 4.295400999999401
+          "syncMs": 3.613319000000047,
+          "maxSyncMs": 3.613319000000047,
+          "wallMs": 3.6135470000008354,
+          "maxWallMs": 3.6135470000008354
         },
         "workerAsks": {
           "calls": 1,
-          "syncMs": 0.04804299999887007,
-          "maxSyncMs": 0.04804299999887007,
-          "wallMs": 151.71882299999925,
-          "maxWallMs": 151.71882299999925
+          "syncMs": 0.043110999999044,
+          "maxSyncMs": 0.043110999999044,
+          "wallMs": 133.85411100000056,
+          "maxWallMs": 133.85411100000056
+        },
+        "archivedPipelinesAsync": {
+          "calls": 1,
+          "syncMs": 0.2987759999996342,
+          "maxSyncMs": 0.2987759999996342,
+          "wallMs": 0.526133999999729,
+          "maxWallMs": 0.526133999999729
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.0027019999997719424,
+          "maxSyncMs": 0.0027019999997719424,
+          "wallMs": 0.004603999999744701,
+          "maxWallMs": 0.004603999999744701
         },
         "workerCounts": {
           "calls": 1,
-          "syncMs": 20.506013000000166,
-          "maxSyncMs": 20.506013000000166,
-          "wallMs": 20.506516999999803,
-          "maxWallMs": 20.506516999999803
+          "syncMs": 18.759140999998635,
+          "maxSyncMs": 18.759140999998635,
+          "wallMs": 18.759540999999444,
+          "maxWallMs": 18.759540999999444
         },
         "latestDeployment": {
           "calls": 1,
-          "syncMs": 0.04289000000062515,
-          "maxSyncMs": 0.04289000000062515,
-          "wallMs": 0.04339799999979732,
-          "maxWallMs": 0.04339799999979732
+          "syncMs": 0.052475000000413274,
+          "maxSyncMs": 0.052475000000413274,
+          "wallMs": 0.05280800000036834,
+          "maxWallMs": 0.05280800000036834
         },
         "retirementReport": {
           "calls": 1,
-          "syncMs": 0.01563699999860546,
-          "maxSyncMs": 0.01563699999860546,
-          "wallMs": 0.01569999999992433,
-          "maxWallMs": 0.01569999999992433
+          "syncMs": 0.015389000000141095,
+          "maxSyncMs": 0.015389000000141095,
+          "wallMs": 0.01652500000091095,
+          "maxWallMs": 0.01652500000091095
         },
         "retirementJournal": {
           "calls": 1,
-          "syncMs": 4.510741000000053,
-          "maxSyncMs": 4.510741000000053,
-          "wallMs": 4.511371999999028,
-          "maxWallMs": 4.511371999999028
+          "syncMs": 3.830257999999958,
+          "maxSyncMs": 3.830257999999958,
+          "wallMs": 3.830722999999125,
+          "maxWallMs": 3.830722999999125
         },
         "diskPressure": {
           "calls": 1,
-          "syncMs": 0.02781200000026729,
-          "maxSyncMs": 0.02781200000026729,
-          "wallMs": 1.7134050000004208,
-          "maxWallMs": 1.7134050000004208
+          "syncMs": 0.021884999998292187,
+          "maxSyncMs": 0.021884999998292187,
+          "wallMs": 0.39333799999985786,
+          "maxWallMs": 0.39333799999985786
         },
         "reports.log": {
           "calls": 1,
-          "syncMs": 0.04508200000054785,
-          "maxSyncMs": 0.04508200000054785,
-          "wallMs": 24.21114800000032,
-          "maxWallMs": 24.21114800000032
+          "syncMs": 0.035006000000066706,
+          "maxSyncMs": 0.035006000000066706,
+          "wallMs": 22.834293000001708,
+          "maxWallMs": 22.834293000001708
         },
         "recordRuleReports": {
           "calls": 1,
-          "syncMs": 0.08107100000052014,
-          "maxSyncMs": 0.08107100000052014,
-          "wallMs": 314.8564060000008,
-          "maxWallMs": 314.8564060000008
+          "syncMs": 0.04231999999865366,
+          "maxSyncMs": 0.04231999999865366,
+          "wallMs": 273.47008599999936,
+          "maxWallMs": 273.47008599999936
         },
         "seatTurnOutcome": {
           "calls": 1,
-          "syncMs": 0.0018110000000888249,
-          "maxSyncMs": 0.0018110000000888249,
-          "wallMs": 0.0034599999999045394,
-          "maxWallMs": 0.0034599999999045394
+          "syncMs": 0.0012719999995169928,
+          "maxSyncMs": 0.0012719999995169928,
+          "wallMs": 0.003947999999581953,
+          "maxWallMs": 0.003947999999581953
         },
         "seatContextUsage": {
           "calls": 1,
-          "syncMs": 0.0006089999988034833,
-          "maxSyncMs": 0.0006089999988034833,
-          "wallMs": 0.0007100000002537854,
-          "maxWallMs": 0.0007100000002537854
+          "syncMs": 0.0019749999992200173,
+          "maxSyncMs": 0.0019749999992200173,
+          "wallMs": 0.0028459999994083773,
+          "maxWallMs": 0.0028459999994083773
         },
         "recordDeploySnapshots": {
           "calls": 1,
-          "syncMs": 0.16065999999955238,
-          "maxSyncMs": 0.16065999999955238,
-          "wallMs": 0.16087200000038138,
-          "maxWallMs": 0.16087200000038138
+          "syncMs": 0.12991599999986647,
+          "maxSyncMs": 0.12991599999986647,
+          "wallMs": 0.1309369999999035,
+          "maxWallMs": 0.1309369999999035
         },
         "writeState": {
           "calls": 1,
-          "syncMs": 7.0012729999998555,
-          "maxSyncMs": 7.0012729999998555,
-          "wallMs": 7.001725000000079,
-          "maxWallMs": 7.001725000000079
+          "syncMs": 6.5919859999994515,
+          "maxSyncMs": 6.5919859999994515,
+          "wallMs": 6.592973000000711,
+          "maxWallMs": 6.592973000000711
         },
         "appendRecord": {
           "calls": 1,
-          "syncMs": 0.42066200000044773,
-          "maxSyncMs": 0.42066200000044773,
-          "wallMs": 0.42116899999928137,
-          "maxWallMs": 0.42116899999928137
+          "syncMs": 0.37229300000035437,
+          "maxSyncMs": 0.37229300000035437,
+          "wallMs": 0.3729139999995823,
+          "maxWallMs": 0.3729139999995823
         }
       },
-      "ms": 801.6268220000002,
-      "maxGapMs": 42.94994299999962
+      "ms": 731.714288000001,
+      "maxGapMs": 52.81990600000063
     },
     {
       "case": "T9-check",
       "run": 5,
-      "at": "2026-10-19T00:31:14.157Z",
+      "at": "2026-10-19T00:57:10.026Z",
       "load": [
-        4.1,
-        3.56,
-        3.78
+        5.74,
+        5.23,
+        5.09
       ],
-      "verdict": "error",
-      "reasons": [],
-      "items": 0,
-      "failureCode": "ledger-gap",
+      "verdict": "wake",
+      "reasons": [
+        "lane-event"
+      ],
+      "items": 3,
+      "failureCode": null,
       "sources": {
         "prepareRead": {
           "calls": 1,
-          "syncMs": 0.280931999999666,
-          "maxSyncMs": 0.280931999999666,
-          "wallMs": 0.7281010000006063,
-          "maxWallMs": 0.7281010000006063
+          "syncMs": 0.2040629999992234,
+          "maxSyncMs": 0.2040629999992234,
+          "wallMs": 0.5496709999988525,
+          "maxWallMs": 0.5496709999988525
         },
         "readState": {
           "calls": 2,
-          "syncMs": 0.9529999999995198,
-          "maxSyncMs": 0.6004229999998643,
-          "wallMs": 0.9540949999991426,
-          "maxWallMs": 0.601011999999173
+          "syncMs": 0.46372300000075484,
+          "maxSyncMs": 0.23994200000015553,
+          "wallMs": 0.4639580000002752,
+          "maxWallMs": 0.24004799999966053
         },
         "now": {
-          "calls": 5,
-          "syncMs": 0.00851199999669916,
-          "maxSyncMs": 0.002908999998908257,
-          "wallMs": 0.008899999997083796,
-          "maxWallMs": 0.0029959999992570374
+          "calls": 8,
+          "syncMs": 0.01310199999534234,
+          "maxSyncMs": 0.0029509999985748436,
+          "wallMs": 0.018461999998180545,
+          "maxWallMs": 0.0043839999998454005
         },
         "seatFor": {
-          "calls": 5,
-          "syncMs": 34.00409999999829,
-          "maxSyncMs": 8.624920999998722,
-          "wallMs": 34.0073999999986,
-          "maxWallMs": 8.625379999999495
+          "calls": 7,
+          "syncMs": 54.32801099999597,
+          "maxSyncMs": 10.53351499999917,
+          "wallMs": 54.332806000000346,
+          "maxWallMs": 10.534797000000253
         },
         "settings": {
           "calls": 5,
-          "syncMs": 1.919002000000546,
-          "maxSyncMs": 0.6919350000007398,
-          "wallMs": 1.920733000002656,
-          "maxWallMs": 0.6925780000001396
+          "syncMs": 1.152669999999489,
+          "maxSyncMs": 0.2803299999995943,
+          "wallMs": 1.1538109999983135,
+          "maxWallMs": 0.2808079999995243
         },
         "memoryProblems": {
           "calls": 3,
-          "syncMs": 1.9719330000007176,
-          "maxSyncMs": 0.911511000000246,
-          "wallMs": 1.973229999999603,
-          "maxWallMs": 0.9122129999996105
+          "syncMs": 1.1233259999989968,
+          "maxSyncMs": 0.48824899999999616,
+          "wallMs": 1.1241900000004534,
+          "maxWallMs": 0.4885450000001583
         },
         "registry": {
-          "calls": 4,
-          "syncMs": 0.010658999997758656,
-          "maxSyncMs": 0.004256999998688116,
-          "wallMs": 0.0134619999989809,
-          "maxWallMs": 0.005191999998714891
+          "calls": 7,
+          "syncMs": 0.01160399999753281,
+          "maxSyncMs": 0.0034940000005008187,
+          "wallMs": 0.01476600000023609,
+          "maxWallMs": 0.004349000000729575
         },
         "liveness.conversation": {
           "calls": 1,
-          "syncMs": 4.742717999999513,
-          "maxSyncMs": 4.742717999999513,
-          "wallMs": 5.2679430000007414,
-          "maxWallMs": 5.2679430000007414
+          "syncMs": 4.2340039999999135,
+          "maxSyncMs": 4.2340039999999135,
+          "wallMs": 4.630664999998771,
+          "maxWallMs": 4.630664999998771
         },
         "pipelines": {
-          "calls": 4,
-          "syncMs": 0.9812909999964177,
-          "maxSyncMs": 0.3259679999991931,
-          "wallMs": 0.9825679999994463,
-          "maxWallMs": 0.3263909999986936
+          "calls": 6,
+          "syncMs": 1.1104689999992843,
+          "maxSyncMs": 0.2199609999988752,
+          "wallMs": 1.1117190000004484,
+          "maxWallMs": 0.22012899999936053
         },
         "liveness.project": {
           "calls": 1,
-          "syncMs": 0.05840699999862409,
-          "maxSyncMs": 0.05840699999862409,
-          "wallMs": 43.34504299999935,
-          "maxWallMs": 43.34504299999935
+          "syncMs": 0.03924100000040198,
+          "maxSyncMs": 0.03924100000040198,
+          "wallMs": 51.336435999999594,
+          "maxWallMs": 51.336435999999594
         },
         "tasks": {
           "calls": 3,
-          "syncMs": 0.3864919999996346,
-          "maxSyncMs": 0.1698020000003453,
-          "wallMs": 0.38791800000035437,
-          "maxWallMs": 0.17038200000024517
+          "syncMs": 0.3714540000000852,
+          "maxSyncMs": 0.13991800000076182,
+          "wallMs": 0.3729110000003857,
+          "maxWallMs": 0.14032100000076753
         },
         "seatDeployments": {
           "calls": 1,
-          "syncMs": 0.014306999999462278,
-          "maxSyncMs": 0.014306999999462278,
-          "wallMs": 0.01448299999901792,
-          "maxWallMs": 0.01448299999901792
+          "syncMs": 0.01681099999950675,
+          "maxSyncMs": 0.01681099999950675,
+          "wallMs": 0.017014999999446445,
+          "maxWallMs": 0.017014999999446445
         },
         "maintenanceRuns": {
           "calls": 1,
-          "syncMs": 2.177584000000934,
-          "maxSyncMs": 2.177584000000934,
-          "wallMs": 2.1779520000000048,
-          "maxWallMs": 2.1779520000000048
+          "syncMs": 2.0181009999996604,
+          "maxSyncMs": 2.0181009999996604,
+          "wallMs": 2.018330999999307,
+          "maxWallMs": 2.018330999999307
         },
         "refreshLifecycle": {
           "calls": 1,
-          "syncMs": 0.021292999999786844,
-          "maxSyncMs": 0.021292999999786844,
-          "wallMs": 0.02135199999975157,
-          "maxWallMs": 0.02135199999975157
+          "syncMs": 0.01988100000016857,
+          "maxSyncMs": 0.01988100000016857,
+          "wallMs": 0.02109999999993306,
+          "maxWallMs": 0.02109999999993306
         },
         "lifecycleJournal": {
           "calls": 1,
-          "syncMs": 3.4302240000015445,
-          "maxSyncMs": 3.4302240000015445,
-          "wallMs": 3.430608000000575,
-          "maxWallMs": 3.430608000000575
+          "syncMs": 3.6195370000004914,
+          "maxSyncMs": 3.6195370000004914,
+          "wallMs": 3.619813000001159,
+          "maxWallMs": 3.619813000001159
         },
         "workerAsks": {
           "calls": 1,
-          "syncMs": 0.0646149999993213,
-          "maxSyncMs": 0.0646149999993213,
-          "wallMs": 162.41618500000004,
-          "maxWallMs": 162.41618500000004
+          "syncMs": 0.04047499999978754,
+          "maxSyncMs": 0.04047499999978754,
+          "wallMs": 123.44436099999984,
+          "maxWallMs": 123.44436099999984
+        },
+        "archivedPipelinesAsync": {
+          "calls": 1,
+          "syncMs": 0.19654799999989336,
+          "maxSyncMs": 0.19654799999989336,
+          "wallMs": 0.355518000000302,
+          "maxWallMs": 0.355518000000302
+        },
+        "openPullRequests": {
+          "calls": 1,
+          "syncMs": 0.003013999999893713,
+          "maxSyncMs": 0.003013999999893713,
+          "wallMs": 0.004232999999658205,
+          "maxWallMs": 0.004232999999658205
         },
         "workerCounts": {
           "calls": 1,
-          "syncMs": 19.84514599999966,
-          "maxSyncMs": 19.84514599999966,
-          "wallMs": 19.845531000000847,
-          "maxWallMs": 19.845531000000847
+          "syncMs": 16.55257899999924,
+          "maxSyncMs": 16.55257899999924,
+          "wallMs": 16.552725999999893,
+          "maxWallMs": 16.552725999999893
         },
         "latestDeployment": {
           "calls": 1,
-          "syncMs": 0.10461299999951734,
-          "maxSyncMs": 0.10461299999951734,
-          "wallMs": 0.10574500000075204,
-          "maxWallMs": 0.10574500000075204
+          "syncMs": 0.04624599999988277,
+          "maxSyncMs": 0.04624599999988277,
+          "wallMs": 0.04664800000136893,
+          "maxWallMs": 0.04664800000136893
         },
         "retirementReport": {
           "calls": 1,
-          "syncMs": 0.03587899999911315,
-          "maxSyncMs": 0.03587899999911315,
-          "wallMs": 0.0359599999992497,
-          "maxWallMs": 0.0359599999992497
+          "syncMs": 0.016090999999505584,
+          "maxSyncMs": 0.016090999999505584,
+          "wallMs": 0.017530999999507912,
+          "maxWallMs": 0.017530999999507912
         },
         "retirementJournal": {
           "calls": 1,
-          "syncMs": 5.314721000000645,
-          "maxSyncMs": 5.314721000000645,
-          "wallMs": 5.315802999999505,
-          "maxWallMs": 5.315802999999505
+          "syncMs": 3.548203000000285,
+          "maxSyncMs": 3.548203000000285,
+          "wallMs": 3.5486309999996593,
+          "maxWallMs": 3.5486309999996593
         },
         "diskPressure": {
           "calls": 1,
-          "syncMs": 0.04048099999999977,
-          "maxSyncMs": 0.04048099999999977,
-          "wallMs": 0.7892599999995582,
-          "maxWallMs": 0.7892599999995582
+          "syncMs": 0.026334999998653075,
+          "maxSyncMs": 0.026334999998653075,
+          "wallMs": 1.8643489999994927,
+          "maxWallMs": 1.8643489999994927
         },
         "reports.log": {
           "calls": 1,
-          "syncMs": 0.07725200000095356,
-          "maxSyncMs": 0.07725200000095356,
-          "wallMs": 27.322126999999455,
-          "maxWallMs": 27.322126999999455
+          "syncMs": 0.03714399999989837,
+          "maxSyncMs": 0.03714399999989837,
+          "wallMs": 19.731348999999682,
+          "maxWallMs": 19.731348999999682
         },
         "recordRuleReports": {
           "calls": 1,
-          "syncMs": 0.05030599999918195,
-          "maxSyncMs": 0.05030599999918195,
-          "wallMs": 284.10399999999936,
-          "maxWallMs": 284.10399999999936
+          "syncMs": 0.04212499999994179,
+          "maxSyncMs": 0.04212499999994179,
+          "wallMs": 281.2111819999991,
+          "maxWallMs": 281.2111819999991
         },
         "seatTurnOutcome": {
           "calls": 1,
-          "syncMs": 0.0016309999991790392,
-          "maxSyncMs": 0.0016309999991790392,
-          "wallMs": 0.0038819999990664655,
-          "maxWallMs": 0.0038819999990664655
+          "syncMs": 0.002533999999286607,
+          "maxSyncMs": 0.002533999999286607,
+          "wallMs": 0.0054669999990437645,
+          "maxWallMs": 0.0054669999990437645
         },
         "seatContextUsage": {
           "calls": 1,
-          "syncMs": 0.0008589999997639097,
-          "maxSyncMs": 0.0008589999997639097,
-          "wallMs": 0.0009939999999915017,
-          "maxWallMs": 0.0009939999999915017
+          "syncMs": 0.00403099999857659,
+          "maxSyncMs": 0.00403099999857659,
+          "wallMs": 0.005935999999564956,
+          "maxWallMs": 0.005935999999564956
         },
         "recordDeploySnapshots": {
           "calls": 1,
-          "syncMs": 0.13528500000029453,
-          "maxSyncMs": 0.13528500000029453,
-          "wallMs": 0.1353720000006433,
-          "maxWallMs": 0.1353720000006433
+          "syncMs": 0.24998599999889848,
+          "maxSyncMs": 0.24998599999889848,
+          "wallMs": 0.2518239999990328,
+          "maxWallMs": 0.2518239999990328
         },
         "writeState": {
           "calls": 1,
-          "syncMs": 6.366630000000441,
-          "maxSyncMs": 6.366630000000441,
-          "wallMs": 6.3669150000005175,
-          "maxWallMs": 6.3669150000005175
+          "syncMs": 6.612522999999783,
+          "maxSyncMs": 6.612522999999783,
+          "wallMs": 6.613793999998961,
+          "maxWallMs": 6.613793999998961
         },
         "appendRecord": {
           "calls": 1,
-          "syncMs": 0.4064720000005764,
-          "maxSyncMs": 0.4064720000005764,
-          "wallMs": 0.4067589999995107,
-          "maxWallMs": 0.4067589999995107
+          "syncMs": 0.4559589999989839,
+          "maxSyncMs": 0.4559589999989839,
+          "wallMs": 0.4567449999995006,
+          "maxWallMs": 0.4567449999995006
         }
       },
-      "ms": 818.1147360000014,
-      "maxGapMs": 47.487050999998246
+      "ms": 751.3836250000004,
+      "maxGapMs": 65.2070079999994
     }
   ],
-  "fleetCoverage": "catalog stale at observation; counts reported by agent_fleet"
+  "fleetCoverage": "agent_fleet project scope: five live agents, three running; copied registry is separately reported; copied catalogue was stale"
 }
