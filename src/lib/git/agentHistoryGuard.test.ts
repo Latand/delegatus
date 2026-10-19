@@ -526,6 +526,57 @@ if [ -f reject-push ]; then echo 'repository publication refused' >&2; exit 7; f
     } finally { f.close(); }
   });
 
+test("a retained pre-fix guard path routes pushes to the repository hook once", () => {
+  const f = fixture();
+  try {
+    const origin = path.join(f.root, "origin.git");
+    f.ok(["init", "--bare", origin]);
+    f.ok(["remote", "add", "origin", origin]);
+    const currentGuard = f.env.LLV_AGENT_GIT_GUARD_DIR!;
+    const cacheRoot = path.dirname(path.dirname(currentGuard));
+    const oldDirectory = path.join(cacheRoot, "guard-legacy", "0123456789abcdef01234567");
+    fs.mkdirSync(oldDirectory, { recursive: true });
+    const currentBody = fs.readFileSync(path.join(currentGuard, "pre-push"), "utf8");
+    const legacyBody = currentBody.replace(
+      /# A repository may have persisted the launch override[\s\S]*?export LLV_AGENT_GIT_CHAINED_HOOK="\$chain_target"\n/,
+      "",
+    );
+    expect(legacyBody).not.toBe(currentBody);
+    fs.writeFileSync(path.join(oldDirectory, "pre-push"), legacyBody.replace("set -eu", `set -eu
+printf 'legacy\\n' >> legacy-entries`), { mode: 0o700 });
+    const liveGuard = path.join(currentGuard, "pre-push");
+    fs.writeFileSync(liveGuard, currentBody.replace("set -eu", `set -eu
+printf 'current\\n' >> current-entries`), { mode: 0o700 });
+    const hooks = path.join(f.root, ".githooks");
+    fs.mkdirSync(hooks);
+    fs.writeFileSync(path.join(hooks, "pre-push"), `#!/bin/sh
+cat > hook-input
+printf 'called\\n' >> hook-calls
+if [ -f reject-push ]; then echo 'repository publication refused' >&2; exit 7; fi
+`, { mode: 0o700 });
+    f.ok(["config", "core.hooksPath", oldDirectory]);
+    const head = f.ok(["rev-parse", "HEAD"]);
+    for (const refused of [false, true]) {
+      if (refused) fs.writeFileSync(path.join(f.root, "reject-push"), "");
+      for (const file of ["legacy-entries", "current-entries", "hook-calls"]) {
+        fs.rmSync(path.join(f.root, file), { force: true });
+      }
+      const ref = `refs/heads/${refused ? "refused" : "accepted"}`;
+      const result = f.run(["push", "origin", `HEAD:${ref}`]);
+      if (refused) {
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stderr.toString()).toContain("repository publication refused");
+      } else expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(fs.readFileSync(path.join(f.root, "current-entries"), "utf8")).toBe("current\n");
+      expect(fs.existsSync(path.join(f.root, "legacy-entries"))).toBe(false);
+      expect(fs.readFileSync(path.join(f.root, "hook-calls"), "utf8")).toBe("called\n");
+      expect(fs.readFileSync(path.join(f.root, "hook-input"), "utf8")).toBe(
+        `HEAD ${head} ${ref} ${"0".repeat(40)}\n`,
+      );
+    }
+  } finally { f.close(); }
+});
+
 
 test.each(["missing", "self symlink"])("a self-configured guard tolerates a %s fallback", (kind) => {
   const f = fixture();

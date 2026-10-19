@@ -130,6 +130,18 @@ target="$original/$hook"
 # A repository may have persisted the launch override, including through a
 # symlink or a parent worktree's config. Keep its checked-in hooks reachable.
 if [ "$target" -ef "$0" ]; then target=".githooks/$hook"; fi
+# A previous launch may have persisted an older generated directory. Its
+# digest differs from this launch's directory, and its hook predates the chain
+# marker, so forwarding to it would recursively execute that saved hook.
+if [ -n "\${LLV_AGENT_GIT_GUARD_DIR:-}" ]; then
+  current_guard=$(CDPATH= cd -P "$LLV_AGENT_GIT_GUARD_DIR" 2>/dev/null && pwd -P) || current_guard=
+  current_root=\${current_guard%/*/*}
+  target_directory=$(CDPATH= cd -P "\${target%/*}" 2>/dev/null && pwd -P) || target_directory=
+  resolved_target=$target_directory/\${target##*/}
+  case "$resolved_target" in
+    "$current_root"/guard-*/????????????????????????/"$hook") target=".githooks/$hook" ;;
+  esac
+fi
 [ -x "$target" ] || exit 0
 [ ! "$target" -ef "$0" ] || exit 0
 # A repository wrapper can invoke this guard again. Apply the guard above on
