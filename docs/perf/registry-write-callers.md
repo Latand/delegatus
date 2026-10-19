@@ -133,7 +133,7 @@ standalone synchronous exports remain for isolated fixtures.
 
 | Family | Serving admission and validation after waiting |
 | --- | --- |
-| Host checkpoints | `bindStructuredHostPersistence`: ordered initial, material, cursor and terminal writes use `registry.host-checkpoint`; the atomic mutator compares claim owner and epoch. Cursor-only changes coalesce. The returned stop can be awaited and `flush()` acknowledges queued checkpoints. A shared weak map binds each host to that flush; published and unpublished release paths await it before acknowledging demotion. |
+| Host checkpoints | `bindStructuredHostPersistence`: ordered initial, material, cursor and terminal writes use `registry.host-checkpoint`; the atomic mutator compares claim owner and epoch. Cursor-only changes coalesce. The returned stop can be awaited and `flush()` acknowledges queued checkpoints. A shared weak map binds each host to that flush; published and unpublished release paths await it before acknowledging demotion. Codex also receives the same flush through `setPersistenceFlush`, so direct and repeated `release()` calls await their checkpoint after transport cleanup. Unbound hosts have no flush callback; the other engines retain their existing controller flush. |
 | Host stop capture | The Claude capture listener accepts a promise. The engine awaits capture before closing stdin or signalling, then rechecks the release fence. Registry capture rereads the recorded root inside admission. |
 | Host demotion and dead rows | Startup demotion admits `mutation()` before it runs, repeating release authority and the evidence stamp. The reaper and recovery use the admitted dead-host helpers; captured process/claim custody is compared again on current rows, one row per admission. |
 | Host termination | Operator API, idle retirement, controller and orphan capture/withdraw/settle callbacks use async admission. Root identity, current authorization and captured custody remain checked at the mutation. |
@@ -156,6 +156,37 @@ No startup-only exception is claimed: deferred startup, demotion and migration
 retries can run after requests are accepted. Registry construction/open is outside
 this change and remains owned by the signal-sandbox lane. Benchmark, dataset,
 capture and child-fixture processes listed above keep their synchronous API.
+
+### Codex release regression reproduction
+
+On 2026-10-19, the complete native CI command was run on the pinned PR head
+and its merge base with `origin/main`, under the Dockerfile's Bun 1.4.0 pin:
+
+| Revision | Codex fixture | Native verifier exit | Boot re-host test |
+| --- | --- | --- | --- |
+| `ba1f7cfb` (pinned head) | 0.154.0 | 1 | failed after `host.release()` |
+| `ba1f7cfb` (pinned head) | 0.159.0 | 1 | failed after `host.release()` |
+| `5b2a6333` (merge base) | 0.154.0 | 0 | passed |
+| `5b2a6333` (merge base) | 0.159.0 | 0 | passed |
+
+The workflow is `.github/workflows/bun-runtime.yml`, job
+`native-codex-runtime`. Install each fixture with
+`npm install --prefix "$fixture" --no-save --ignore-scripts @openai/codex@<version>`,
+then run `bun scripts/verify-native-codex-runtime.ts <absolute-fixture-executable>`
+through the project's gate-slot wrapper. Head and base used separate source
+exports; each observation used private HOME, XDG_CONFIG_HOME, TMPDIR, CODEX_HOME and LLV_STATE_DIR,
+with `LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1`; the verifier also creates its own
+isolated test environment. Dependency manifests matched across the two revisions.
+
+Both head failures left the registry row live and its claim owned after the
+transport had ended. The existing boot re-host test remains unchanged. Added
+cases in `src/lib/runtime/codexAppServerHost.test.ts` hold a real SQLite writer
+through the terminal-state notification and check that first and repeated release
+acknowledgements stay pending while the event loop progresses. After admission,
+a newly opened registry must see the unhosted row and released claim. The same
+checks cover a shutdown event-log write failure. The fix retains the existing
+async writer admission, deadlines and checkpoint correlation labels; it claims
+no performance gain.
 
 ## Production caller attribution
 

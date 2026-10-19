@@ -129,6 +129,7 @@ interface ObservableStructuredHost {
   health(): Promise<HostState>;
   release(): Promise<void>;
   setWriterFence(check: () => boolean): void;
+  setPersistenceFlush?(flush: () => Promise<void>): void;
   onStateChange(listener: (state: HostState) => void): () => void;
   setTerminationCapture?(listener: ((root: number, tree: readonly ProcessIdentity[]) => boolean | Promise<boolean>) | null): void;
 }
@@ -434,6 +435,7 @@ async function bindStructuredHostPersistence(
   if (stopped) unsubscribe();
   const binding = Object.assign(stop, { flush: () => enqueue(persistPending) });
   hostPersistence.set(host, binding);
+  host.setPersistenceFlush?.(binding.flush);
   return binding;
 }
 
