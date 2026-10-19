@@ -21,6 +21,7 @@ import { executeOrchestratorSeatRequest, productionSeatCommandDependencies, type
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { setBridgeReports } from "@/lib/projects/settings";
 import { readDeputies } from "@/lib/orchestrator/deputies";
+import { CODEX_TOKEN_COUNT } from "@/lib/orchestrator/codexUsage.fixture";
 import { setDeputyRootResolverForTests } from "@/lib/orchestrator/deputyAsker";
 
 import { viewerMcpBindings, viewerMcpRecoverableTools, productionViewerControlDependencies, type ViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
@@ -1000,6 +1001,21 @@ test("MCP advice uses only fresh context with native boundaries and runtime wind
   }
   expect(posts).toEqual([]);
   expect(JSON.stringify(orchestratorSeatFor("proj-a"))).toBe(before);
+});
+
+test("get_orchestrator reports the Codex provider context total with cached input counted once", async () => {
+  const transcript = path.join(sandbox, "codex-context.jsonl");
+  fs.writeFileSync(transcript, JSON.stringify(CODEX_TOKEN_COUNT) + "\n");
+  const conversation = testRegistry.ensureConversation("codex", transcript, null);
+  seatActive("proj-a", conversation.id, transcript);
+  const { control, posts } = controlStub();
+  const body = await bindingsWith(control).get_orchestrator({ clientRequestId: "get-codex-context", project: "proj-a" });
+  expect(body).toMatchObject({ health: { context: { tokens: 106_380, limit: 475_000, percent: 22, estimated: false } } });
+  const { defaultSeatTickSources } = await import("../monitor/seatTickSources");
+  expect(defaultSeatTickSources().seatContextUsage!(conversation.id)).toMatchObject({
+    engine: "codex", tokens: 106_380, windowTokens: 475_000, estimated: false,
+  });
+  expect(posts).toEqual([]);
 });
 
 test("Codex native compactions are informational even with fresh runtime capacity", async () => {
