@@ -206,7 +206,7 @@ const request: CreatePipelineRequest = {
   finishesTask: finished.finishesTaskIds ?? false,
   spec: refreshSpec(finished, pr, base, baseSha, head),
   repoDir: finished.repoDir,
-  baseBranch: finished.baseBranch || "main",
+  baseBranch: base,
   delivery: { branch: finished.delivery.target.branch, remote: finished.delivery.target.remote, pr },
   publication: "remote-branch",
   autoStart: true,
