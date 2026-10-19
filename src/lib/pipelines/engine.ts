@@ -134,6 +134,7 @@ import { resolveStageTestGuidance } from "./testGuidance";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
+import { storedLessonRevision } from "@/lib/memory/roleStore";
 import { RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
@@ -299,7 +300,10 @@ export interface PipelinePorts {
         gate): its launch profile carries the mark, so the shared-memory hook
         and the engine's own memory stay off for it on every resume too. */
     cleanMemory?: boolean;
-  }, onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>): Promise<PipelineStageSpawn>;
+  }, onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>,
+    /** Recompose private file handoffs from original inputs if memory changed.
+        This callback belongs to one call and is never persisted. */
+    preparePrompt?: () => Promise<string>): Promise<PipelineStageSpawn>;
   spawnReceipt(launchId: string): PipelineSpawnReceipt | null;
   /** Fresh keyed state at an asynchronous retry boundary. */
   spawnReceiptState?(launchId: string): PipelineSpawnReceipt["state"] | null;
@@ -677,6 +681,7 @@ async function parentIdentity(parentPath: string | null): Promise<{
 async function spawnPipelineAgent(
   input: Parameters<PipelinePorts["spawnAgent"]>[0],
   onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>,
+  preparePrompt?: () => Promise<string>,
 ): Promise<PipelineStageSpawn> {
   /* The message carries the stage prompt, with any quoted private rule
      withheld. The engine renders its selector into its instruction channel. */
@@ -846,7 +851,7 @@ async function spawnPipelineAgent(
     // The same reservation callback rechecks durable activation after setup
     // yielded. A pause or ownership change still prevents native dispatch.
     message = await withCurrentRoleMemory(async () => {
-      const filtered = await withoutStoredLessonsAsync(input.prompt);
+      const filtered = await withoutStoredLessonsAsync(preparePrompt ? await preparePrompt() : input.prompt);
       await onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
         accountId: begun.receipt.accountId ?? account.accountId });
       return filtered;
@@ -1550,14 +1555,14 @@ export function defaultPipelinePorts(
     },
     accountLabel: (engine, accountId) => (engine === "claude" ? listClaudeAccounts() : listCodexAccounts())
       .find((candidate) => candidate.id === accountId)?.label ?? accountId,
-    spawnAgent: async (input, onReserved) => {
+    spawnAgent: async (input, onReserved, preparePrompt) => {
       /* Invalidated on BOTH paths (#1750): a spawn that throws is exactly when
          the receipt it just failed has to be readable, and a projection
          captured before the launch was reserved answers `null` for it. Six
          production lanes parked on a transient runtime-host failure whose
          retry the engine could not reach for want of that one read. */
       try {
-        return await spawnPipelineAgent(input, onReserved);
+        return await spawnPipelineAgent(input, onReserved, preparePrompt);
       } finally {
         invalidateRegistryProjection();
       }
@@ -6345,9 +6350,15 @@ async function spawnRunStage(
     /* Carry the text-free role-memory selector through every spawn. Clean
        stages carry only their clean mark. */
     const memory = stageMemoryForLaunch(pipeline, stage, attempt.effectiveRole.roleId ?? null);
+    const bound = attemptStage(stage, attempt);
+    const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
+    const reserve = Buffer.byteLength(restartStagePrompt("", attempt), "utf8");
+    let inputRevision: string | null = null;
+    const preparePrompt = async () => {
+      if (inputRevision !== null && storedLessonRevision() === inputRevision) return spawnInput.prompt;
+      return restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, ports.exec, reserve), attempt);
+    };
     if (attempt.activation?.prepareInput || prepareInput) {
-      const bound = attemptStage(stage, attempt);
-      const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
       if (restartStagePrompt(renderStagePrompt(pipeline, bound, attempt.effectiveRole, previousOutput, effectiveWorkerLimit(pipeline.project).value, resolveStageTestGuidance()), attempt) !== spawnInput.prompt) throw new ActivationSuperseded();
       const expected = JSON.stringify(pipeline);
       const abort = new AbortController();
@@ -6361,7 +6372,7 @@ async function spawnRunStage(
         return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal });
       };
       try {
-        const reserve = Buffer.byteLength(restartStagePrompt("", attempt), "utf8");
+        inputRevision = storedLessonRevision();
         const prompt = restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, exec, reserve), attempt);
         revalidate();
         if (abort.signal.aborted) throw new ActivationSuperseded();
@@ -6427,7 +6438,7 @@ async function spawnRunStage(
              recorded before the agent is actuated. */
           adoptPipelineFallbackTask(pipeline, tasksForBinding());
           await persist();
-        });
+        }, preparePrompt);
         break;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -6901,9 +6912,9 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
       const outside: PipelinePorts = { ...ports,
         exec: async (...args) => { await dispatchCheckpoint(); return await ports.exec(...args); },
         stopStageAgent: async (...args) => { await dispatchCheckpoint(); return await ports.stopStageAgent(...args); },
-        spawnAgent: async (input, onReserved) => {
+        spawnAgent: async (input, onReserved, preparePrompt) => {
           await dispatchCheckpoint();
-          return await ports.spawnAgent(input, async reservation => { await onReserved?.(reservation); await dispatchCheckpoint(); });
+          return await ports.spawnAgent(input, async reservation => { await onReserved?.(reservation); await dispatchCheckpoint(); }, preparePrompt);
         },
         ...(ports.recoverStagedLaunch ? { recoverStagedLaunch: async (launchId: string, eligible: () => boolean) => {
           await dispatchCheckpoint();

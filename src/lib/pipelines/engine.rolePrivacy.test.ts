@@ -64,12 +64,24 @@ test.each([
 }, 30_000);
 
 
-test.each(["reclassify", "churn", "corrupt", "pause"] as const)("admission rechecks privacy and activation before dispatch: %s", async mode => {
+test.each(["reclassify", "file-reclassify", "churn", "corrupt", "pause"] as const)("admission rechecks privacy and activation before dispatch: %s", async mode => {
   savePipelines([]);
   write(oldRule);
   const h = harness();
-  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: `Build. ${newRule}`, next: null }] as never);
+  let preparePrompt: (() => Promise<string>) | undefined;
+  const recordSpawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = (input, reserved, prepare) => {
+    preparePrompt = prepare;
+    return recordSpawn(input, reserved);
+  };
+  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: `Build. ${newRule}`, next: null }] as never, { repoDir: path.join(process.env.LLV_STATE_DIR!, "admission-repo") });
+  if (mode === "file-reclassify") {
+    const lane = loadPipelines()[0]!;
+    lane.spec = `${newRule}. ` + "Context ".repeat(5_000);
+    savePipelines([lane]);
+  }
   await tickPipelines([], h.ports);
+  fs.mkdirSync(loadPipelines()[0]!.worktreeDir!, { recursive: true });
   await tickPipelines([], h.ports);
   const input = h.spawnInputs[0]!;
   expect(input.prompt).toContain(newRule);
@@ -102,17 +114,22 @@ test.each(["reclassify", "churn", "corrupt", "pause"] as const)("admission reche
       if (reservations < 2) return;
       if (mode === "pause") throw new Error("activation superseded in fixture");
       if (mode === "churn") write(`${newRule} revision ${reservations}`);
-      if (mode === "reclassify" && reservations === 2) write(newRule);
+      if ((mode === "reclassify" || mode === "file-reclassify") && reservations === 2) write(newRule);
       if (mode === "corrupt") {
         roleMemoryCollection(true)!.boundedPatch(1, tx => tx.put({ kind: "rule", id: 7, rule: newRule } as never));
       }
-    });
-    if (mode === "reclassify") {
+    }, preparePrompt);
+    if (mode === "reclassify" || mode === "file-reclassify") {
       await launch;
       expect(reservations).toBe(3);
       expect(sent).toHaveLength(1);
       expect(sent[0]).not.toContain(newRule);
       expect(sent[0]).toContain("[learned rule]");
+      if (mode === "file-reclassify") {
+        const file = sent[0]!.match(/Full (?:stage prompt|specification) file: (.+)\n/)?.[1];
+        expect(file).toBeDefined();
+        expect(fs.readFileSync(file!, "utf8").includes(newRule)).toBe(false);
+      }
     } else {
       await expect(launch).rejects.toThrow(mode === "churn" ? "retrying before dispatch" : mode === "pause" ? "activation superseded" : "role memory could not be read");
       expect(sent).toHaveLength(0);
