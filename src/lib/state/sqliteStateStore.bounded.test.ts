@@ -26,7 +26,7 @@ test.each([0, 512])("indexed successor-source custody follows released parents, 
   try {
     initializeStateCollections(filename, [{ ...options, migrationId: "one", loadRecords: () => [
       ...Array.from({ length: history }, (_, n): Owner => ({ key: `retained-${n}`, state: "paused", runs: [],
-        srcConversationId: `unrelated-${n}`, srcPath: `unrelated-transcript-${n}` })), parent, successor,
+        srcConversationId: "parent-host", srcPath: "parent-transcript" })), parent, successor,
     ] }]);
     const store = new SqliteStateCollection(filename, options), peer = new Database(filename);
     try {
@@ -35,12 +35,17 @@ test.each([0, 512])("indexed successor-source custody follows released parents, 
       expect(store.pipelineOwnerExists(identities, true)).toBe(false);
       expect(store.pipelineOwnerExists([...identities, ...identities], true)).toBe(false);
       const plan = peer.query<{ detail: string }, [string, string, string, string]>(`EXPLAIN QUERY PLAN SELECT 1 FROM pipeline_owner_refs
-        WHERE kind=? AND identity=? AND live>0 AND (live=2 OR NOT EXISTS (SELECT 1 FROM pipeline_owner_refs
-          WHERE kind=? AND identity=? AND live=-1)) LIMIT 1`).all("srcConversationId", "parent-host", "conversationId", "parent-host");
+        WHERE kind=? AND identity=? AND live>0 AND live=CASE WHEN EXISTS (SELECT 1 FROM pipeline_owner_refs
+          WHERE kind=? AND identity=? AND live=-1) THEN 2 ELSE 1 END LIMIT 1`).all("srcConversationId", "parent-host", "conversationId", "parent-host");
       expect(plan.filter(row => row.detail.includes("pipeline_owner_lookup"))).toHaveLength(2);
+      expect(plan.filter(row => row.detail.includes("pipeline_owner_lookup")).every(row => row.detail.includes("live=?"))).toBe(true);
       expect(plan.some(row => row.detail.includes("SCAN pipeline_owner_refs"))).toBe(false);
       peer.exec("UPDATE state_rows SET value_json=json_set(value_json,'$.publicationAdmission.state','pending') WHERE row_key='successor'");
       expect(store.pipelineOwnerExists(identities, true)).toBe(true);
+      // The preceding release's reader only recognizes live=1. Publication
+      // must retain custody through that reader during a release handover too.
+      for (const [kind, identity] of identities) expect(peer.query(`SELECT 1 FROM pipeline_owner_refs
+        WHERE kind=? AND identity=? AND live=1 LIMIT 1`).get(kind, identity)).toBeTruthy();
       peer.exec("UPDATE state_rows SET value_json=json_remove(value_json,'$.publicationAdmission') WHERE row_key='successor'");
       expect(store.pipelineOwnerExists(identities, true)).toBe(false);
       peer.exec("UPDATE state_rows SET value_json=json_set(value_json,'$.state','running') WHERE row_key='parent'");

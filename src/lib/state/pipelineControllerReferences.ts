@@ -28,7 +28,8 @@ export function installPipelineControllerReferences(db: Database, directory: str
     row_key TEXT NOT NULL, kind TEXT NOT NULL, identity TEXT NOT NULL, live INTEGER NOT NULL,
     PRIMARY KEY(row_key,kind,identity,live))`);
   // Custody tags: 0 inactive, 1 live, 2 source publication, -1 released
-  // operational attempt. Only a positive tag can independently retain a host.
+  // operational attempt. Publication also keeps a live=1 companion so the
+  // preceding release retains it during handover. Only positive tags retain.
   db.exec("CREATE INDEX pipeline_owner_lookup ON pipeline_owner_refs(kind,identity,live)");
   db.exec("UPDATE pipeline_tick_work SET attempt_cursor=0");
   const populate = (source: string, key: string) => {
@@ -84,7 +85,7 @@ export function installPipelineControllerReferences(db: Database, directory: str
           COALESCE(json_extract(${attemptValue},'$.conversationId'),'')||'|'||COALESCE(json_extract(${attemptValue},'$.agentPath'),'')||'|'||COALESCE(json_extract(${attemptValue},'$.paneId'),'') AS hostIdentity
         ${attempts} WHERE json_type(${runValue},'$.stageId')='text' AND json_type(${attemptValue},'$.n') IN ('integer','real'))
         SELECT ${key},position,stageId,n,run,attempt,historical,terminal,
-          CASE WHEN ROW_NUMBER() OVER (PARTITION BY hostIdentity ORDER BY position)=1 AND hostIdentity!='||' THEN 1 ELSE 0 END FROM refs
+          CASE WHEN ROW_NUMBER() OVER (PARTITION BY hostIdentity ORDER BY terminal DESC,position)=1 AND hostIdentity!='||' THEN 1 ELSE 0 END FROM refs
       ${["unconfirmedHosts","closeReport.unconfirmed","closeReport.pending"].map((field,index) => `UNION ALL
         SELECT ${key},281474976710656+${index}*4294967296+CAST(h.key AS INTEGER),json_extract(${hostValue},'$.stageId'),json_extract(${hostValue},'$.attempt'),-1,-1,1,0,0
         FROM controller_source, json_each(CASE WHEN json_type(${value},'$.${field}')='array' THEN jsonb_extract(${value},'$.${field}') ELSE '[]' END) h WHERE json_type(${hostValue},'$.stageId')='text' AND json_type(${hostValue},'$.attempt') IN ('integer','real')`).join("\n")};
@@ -92,6 +93,10 @@ export function installPipelineControllerReferences(db: Database, directory: str
         SELECT ${key},ids.key,ids.value,CASE WHEN (${publishing}) THEN 2
           WHEN ${field("state")} NOT IN ('completed','closed') THEN 1 ELSE 0 END
         FROM controller_source, ${identities(value,["srcConversationId","srcPath"])} WHERE ids.value IS NOT NULL AND ids.value!=''
+      UNION ALL
+        SELECT ${key},ids.key,ids.value,1
+        FROM controller_source, ${identities(value,["srcConversationId","srcPath"])}
+        WHERE (${publishing}) AND ids.value IS NOT NULL AND ids.value!=''
       UNION ALL
         SELECT ${key},ids.key,ids.value,CASE WHEN (${publishing})
           OR (json_extract(${attemptValue},'$.activation') IS NOT NULL AND json_extract(${attemptValue},'$.activation.phase') IS NOT 'settled') THEN 1

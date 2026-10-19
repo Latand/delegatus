@@ -210,6 +210,25 @@ test("an open successor does not retain its finished creator's host", async () =
   expect(loadPipelines().find(lane => lane.id === successor.id)!.state).toBe("paused");
 });
 
+test.each([false, true])("a later attempt reusing a previously reaped host retains its cleanup duty (scheduled: %s)", async scheduled => {
+  const h = harness();
+  const previous = attempt(1, "conversation_reused", true), latest = attempt(2, "conversation_reused", true);
+  latest.launchId = "launch-resumed-host";
+  const record = pipelineRecord({ id: "retire-reused-host", state: "completed", attempts: [previous, latest] });
+  record.terminalReap = { rounds: 0, stopped: 1, lastAt: record.createdAt, settledAt: null, settledAttempts: ["implement:1"] };
+  savePipelines([record]);
+  h.resident.set("conversation_reused", true);
+  h.active.set("conversation_reused", true);
+  const tick = () => scheduled ? tickPipelinesController([], h.ports) : tickPipelines([], h.ports);
+  await tick();
+  expect(h.stops).toEqual([]);
+  expect(loadPipelines()[0]!.terminalReap?.settledAt).toBeNull();
+  h.active.set("conversation_reused", false);
+  await tick();
+  expect(h.stops).toEqual(["implement:2:conversation_reused"]);
+  expect(loadPipelines()[0]!.terminalReap?.settledAttempts).toEqual(["implement:1", "implement:2"]);
+});
+
 test("an old terminal lane remains scheduled and unarchived until its open turn settles", async () => {
   const h = harness();
   savePipelines([pipelineRecord({ id: "retire-before-archive", state: "completed",

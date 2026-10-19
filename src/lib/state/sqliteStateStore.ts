@@ -1335,8 +1335,8 @@ export class SqliteStateCollection<T> {
       const source = live ? kind === "srcConversationId" ? "conversationId" : kind === "srcPath" ? "agentPath" : null : null;
       // Source publication (2) retains custody. A released operational attempt
       // (-1) ends an idle creator's obligation to stay beside its successor.
-      const released = source ? `AND (live=2 OR NOT EXISTS (SELECT 1 FROM pipeline_owner_refs
-        WHERE kind=? AND identity=? AND live=-1))` : "";
+      const released = source ? `AND live=CASE WHEN EXISTS (SELECT 1 FROM pipeline_owner_refs
+        WHERE kind=? AND identity=? AND live=-1) THEN 2 ELSE 1 END` : "";
       return Boolean(sharedStateReadonlyDatabase(this.filename).query(`SELECT 1 FROM pipeline_owner_refs
         WHERE kind=? AND identity=? ${live ? "AND live>0" : ""} ${released} LIMIT 1`)
         .get(kind, identity, ...(source ? [source, identity] : [])));

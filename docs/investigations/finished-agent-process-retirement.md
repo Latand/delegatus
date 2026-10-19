@@ -14,7 +14,12 @@ that creator's operational attempt had been released. A released parent now
 ends that source-only obligation. A live attempt, publication, seat or runtime
 turn still protects the shared host. The indexed guard distinguishes released
 attempts from inactive history and source publication; peer writes update that
-evidence atomically with their pipeline row.
+evidence atomically with their pipeline row. Publication keeps a compatibility
+reference for the preceding release's live-owner predicate during handover.
+
+Host deduplication also starts with outstanding attempts. A later attempt that
+reuses a previously reaped conversation keeps its own cleanup duty; its earlier
+receipt cannot hide the newly resident host from the controller window.
 
 Terminal lanes now consider every recorded host. Replaced operational attempts
 release their ownership, while adopted helpers retain their independent work
