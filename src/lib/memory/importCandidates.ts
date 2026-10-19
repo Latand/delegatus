@@ -4,6 +4,15 @@ import { parseMemory } from "./parsers";
 
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const unknown: ImportWriter = { kind: "unknown", roleId: null };
+export function importOccurrenceId(file: Pick<ImportManifestFile, "engine" | "home" | "file" | "sha256" | "kind">, anchor?: string) {
+  return `o_${hash(`${file.engine}\0${file.home}\0${file.file}\0${file.sha256}${file.kind === "codex_summary" ? `\0${anchor ?? ""}` : ""}`).slice(0, 16)}`;
+}
+export function importOccurrenceIds(file: ImportManifestFile, text: string) {
+  if (file.kind === "claude_topic") return [importOccurrenceId(file)];
+  if (file.kind === "codex_summary") return [...new Set(parseMemory({ engine: "codex", path: file.file, sourceKind: "codex_summary" }, text)
+    .map(bullet => importOccurrenceId(file, bullet.anchor)))];
+  return [];
+}
 export function topicMetadata(text: string) {
   const front = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
   const field = (key: string) => new RegExp(`^${key}:\\s*([^\\r\\n]+)$`, "m").exec(front?.[1] ?? "")?.[1]?.trim().replace(/^["']|["']$/g, "");
@@ -36,7 +45,7 @@ export class ImportCandidates {
 
   add(file: ImportManifestFile, text: string, writer = unknown) {
     const topic = topicMetadata(text);
-    const occurrenceId = (anchor?: string) => `o_${hash(`${file.engine}\0${file.home}\0${file.file}\0${file.sha256}${file.kind === "codex_summary" ? `\0${anchor ?? ""}` : ""}`).slice(0, 16)}`;
+    const occurrenceId = (anchor?: string) => importOccurrenceId(file, anchor);
     const occurrence: ImportOccurrence = { id: occurrenceId(), file: file.file, sha256: file.sha256,
       type: file.engine === "codex" ? "summary" : topic.type, writtenAt: topic.modified && Number.isFinite(Date.parse(topic.modified)) ? topic.modified : file.modifiedAt, writer, project: file.project };
     if (file.kind === "claude_topic") this.group(file, occurrence, "topic", topic.title ?? file.file.split(/[\\/]/).at(-1)!, text, topic.normalized);

@@ -4,6 +4,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
 import { parseSnapshotReadRequest, SNAPSHOT_ACTIVITY_FIELDS, SNAPSHOT_OWNER_FIELDS, type RuntimeSnapshotMetadata } from "@/lib/runtime/snapshotReads";
 import { measureBlocking } from "@/lib/blockingWaits";
+import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { SessionHostMetadata, SESSION_HOST_ACTIVE_FROM, SESSION_HOST_INACTIVE_FROM, SESSION_HOST_TERMINAL, SESSION_HOST_EXPIRY } from "./journalSessionMetadata";
 import { NativeQueueJournal } from "./nativeQueueJournal";
@@ -516,7 +517,13 @@ export class RuntimeJournal {
           request_hash TEXT NOT NULL, status_json TEXT NOT NULL,
           active INTEGER NOT NULL, updated_at INTEGER NOT NULL
         )`,
+        `CREATE TABLE IF NOT EXISTS viewer_deployment_requests (
+          idempotency_key TEXT PRIMARY KEY, deployment_id TEXT NOT NULL,
+          requested_revision TEXT NOT NULL, request_hash TEXT NOT NULL
+        )`,
       ]) this.db.exec(statement);
+      this.db.exec(`INSERT OR IGNORE INTO viewer_deployment_requests(idempotency_key, deployment_id, requested_revision, request_hash)
+        SELECT idempotency_key, deployment_id, json_extract(status_json, '$.requestedRevision'), request_hash FROM viewer_deployments`);
       journalDeploymentIndexes.install(this.db, dirname(filename));
       this.migrateOperationIdempotencyScope();
       this.migrateOperationOrphanedSince();
@@ -1604,7 +1611,10 @@ export class RuntimeJournal {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const existing = this.db.query<{ deployment_id: string; request_hash: string; status_json: string }, [string]>(
-        "SELECT deployment_id, request_hash, status_json FROM viewer_deployments WHERE idempotency_key = ?",
+        `SELECT requests.deployment_id, requests.request_hash, deployments.status_json
+          FROM viewer_deployment_requests requests
+          JOIN viewer_deployments deployments USING (deployment_id)
+          WHERE requests.idempotency_key = ?`,
       ).get(input.idempotencyKey);
       if (existing) {
         if (existing.request_hash !== requestHash) throw new RuntimeIdempotencyConflictError("idempotency key already belongs to another deployment");
@@ -1639,6 +1649,8 @@ export class RuntimeJournal {
       };
       this.db.query("INSERT INTO viewer_deployments(deployment_id, idempotency_key, request_hash, status_json, active, updated_at) VALUES (?, ?, ?, ?, 1, ?)")
         .run(deploymentId, input.idempotencyKey, requestHash, stableJson(status), now);
+      this.db.query("INSERT INTO viewer_deployment_requests(idempotency_key, deployment_id, requested_revision, request_hash) VALUES (?, ?, ?, ?)")
+        .run(input.idempotencyKey, deploymentId, input.requestedRevision, requestHash);
       this.appendInTransaction(normalizeRuntimeEventInput({
         scope: { type: "deployment", id: deploymentId },
         kind: "deployment.state",
@@ -1691,8 +1703,67 @@ export class RuntimeJournal {
   }
 
   viewerDeploymentByIdempotencyKey(idempotencyKey: string): ViewerDeploymentStatus | null {
-    const row = this.db.query<{ status_json: string }, [string]>("SELECT status_json FROM viewer_deployments WHERE idempotency_key = ?").get(idempotencyKey);
-    return row ? JSON.parse(row.status_json) as ViewerDeploymentStatus : null;
+    const row = this.db.query<{ status_json: string; requested_revision: string }, [string]>(`SELECT deployments.status_json, requests.requested_revision
+      FROM viewer_deployment_requests requests JOIN viewer_deployments deployments USING (deployment_id)
+      WHERE requests.idempotency_key = ?`).get(idempotencyKey);
+    return row ? { ...JSON.parse(row.status_json) as ViewerDeploymentStatus,
+      idempotencyKey, requestedRevision: row.requested_revision } : null;
+  }
+
+  /** Atomically bind a matching busy join key to the active deployment. */
+  async joinActiveViewerDeployment(input: { idempotencyKey: string; requestedRevision: string; expectedDeploymentId: string }): Promise<ViewerDeploymentReceipt | null> {
+    this.assertHealthy();
+    await waitForStateLock("runtime.viewer-deployment-join", () => {
+      this.db.exec("PRAGMA busy_timeout = 0");
+      try {
+        stateLockAttempt("runtime.viewer-deployment-join", () => this.db.exec("BEGIN IMMEDIATE"), "viewer deployments");
+      } finally {
+        this.db.exec(`PRAGMA busy_timeout = ${RUNTIME_JOURNAL_BUSY_TIMEOUT_MS}`);
+      }
+    }, { waitMs: RUNTIME_JOURNAL_BUSY_TIMEOUT_MS, subject: "viewer deployments" });
+    try {
+      const existing = this.db.query<{ deployment_id: string; requested_revision: string; request_hash: string; status_json: string }, [string]>(
+        `SELECT requests.deployment_id, requests.requested_revision, requests.request_hash, deployments.status_json
+          FROM viewer_deployment_requests requests
+          JOIN viewer_deployments deployments USING (deployment_id)
+          WHERE requests.idempotency_key = ?`,
+      ).get(input.idempotencyKey);
+      if (existing) {
+        if (existing.requested_revision !== input.requestedRevision) throw new RuntimeIdempotencyConflictError("idempotency key already belongs to another deployment");
+        const status = JSON.parse(existing.status_json) as ViewerDeploymentStatus;
+        this.db.exec("COMMIT");
+        return { state: "accepted", deploymentId: status.deploymentId, revision: status.revision, replayed: true };
+      }
+      const active = this.db.query<{ deployment_id: string; status_json: string }, []>(
+        "SELECT deployment_id, status_json FROM viewer_deployments WHERE active = 1",
+      ).get();
+      const target = active?.deployment_id === input.expectedDeploymentId
+        ? active
+        : this.db.query<{ deployment_id: string; status_json: string }, [string]>(
+          "SELECT deployment_id, status_json FROM viewer_deployments WHERE deployment_id = ?",
+        ).get(input.expectedDeploymentId);
+      if (!target || active && active.deployment_id !== target.deployment_id) {
+        this.db.exec("COMMIT");
+        return null;
+      }
+      const status = JSON.parse(target.status_json) as ViewerDeploymentStatus;
+      const requested = input.requestedRevision.toLowerCase();
+      if (!/^[0-9a-f]{7,40}$/.test(requested) || !status.revision.toLowerCase().startsWith(requested)) {
+        this.db.exec("COMMIT");
+        return null;
+      }
+      const resolvedRequestHash = createHash("sha256").update(stableJson({
+        requestedRevision: input.requestedRevision,
+        revision: status.revision,
+      })).digest("hex");
+      this.db.query("INSERT INTO viewer_deployment_requests(idempotency_key, deployment_id, requested_revision, request_hash) VALUES (?, ?, ?, ?)")
+        .run(input.idempotencyKey, target.deployment_id, input.requestedRevision, resolvedRequestHash);
+      this.db.exec("COMMIT");
+      return { state: "accepted", deploymentId: status.deploymentId, revision: status.revision, replayed: false };
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw error;
+    }
   }
 
   latestViewerDeploymentForRevision(revision: string): ViewerDeploymentStatus | null {

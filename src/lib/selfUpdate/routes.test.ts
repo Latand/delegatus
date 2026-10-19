@@ -16,6 +16,7 @@ import type { ViewerDeploymentPhase, ViewerDeploymentRequest, ViewerDeploymentSt
 import { requestViewerDeployment, setDeploymentRuntimeForTests } from "@/lib/runtime/deploymentRuntime";
 
 import { installAction, launcherService, runInstallAction, unitRunsLauncher } from "./actions";
+import { checkoutDeployments, saveCheckoutDeployment } from "./deployments";
 import { initialAuto, writeAuto } from "./auto";
 import { GreenReader, type GreenVerdict } from "./green";
 import { buildEnv } from "./env";
@@ -280,7 +281,7 @@ describe("managed install: an update is one Viewer deployment", () => {
       terminal: phase === "succeeded" || phase === "rolled-back" || phase === "failed",
       candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
       health: [], error, owner: { pid: 1, startIdentity: null },
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), revisionNumber: 1,
+      createdAt: "2026-10-19T12:00:00.000Z", updatedAt: "2026-10-19T12:00:00.000Z", revisionNumber: 1,
     };
   }
 
@@ -995,9 +996,24 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
     expect((await snapshot()).action).toEqual({ id: "restart-service", button: true, unit });
     await until(next => next.check.state !== "checking");
-    const receipt = await h.service.deployRevision({ revision: tipSha, idempotencyKey: `proven-unit-${proof.replace(" ", "-")}` });
-    expect(receipt).toMatchObject({ state: "accepted", revision: tipSha });
-    h.releaseBuild?.();
+    const deploymentId = `existing-${proof.replace(" ", "-")}`;
+    saveCheckoutDeployment(h.deps.dir, {
+      deploymentId, idempotencyKey: "original-deploy", requestedRevision: tipSha, revision: tipSha,
+      phase: "building", terminal: false, candidate: null, previous: null,
+      mcpRuntime: { candidate: null, previous: null, publications: [], health: [] }, health: [], error: null,
+      owner: { pid: record.launcher.pid, startIdentity: record.launcher.startIdentity },
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), revisionNumber: 1,
+    });
+    const joinKey = `same-sha-join-${proof.replace(" ", "-")}`;
+    expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: joinKey }))
+      .toMatchObject({ state: "accepted", deploymentId, revision: tipSha, replayed: false });
+    expect(await h.service.deployRevision({ revision: "b".repeat(40), idempotencyKey: `different-sha-${proof.replace(" ", "-")}` }))
+      .toMatchObject({ state: "busy", deploymentId });
+    const joined = checkoutDeployments(h.deps.dir).find(row => row.deploymentId === deploymentId)!;
+    expect(joined.idempotencyKeys).toContain(joinKey);
+    saveCheckoutDeployment(h.deps.dir, { ...joined, phase: "succeeded", terminal: true });
+    expect(await h.service.deployRevision({ revision: tipSha, idempotencyKey: joinKey }))
+      .toMatchObject({ state: "accepted", deploymentId, replayed: true });
   });
 
   test.each(["accepted", "refused", "overlap"])("legacy service with an existing built pointer handles %s handoff without an apply intent", async outcome => {

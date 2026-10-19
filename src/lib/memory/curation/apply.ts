@@ -1,3 +1,7 @@
+import { candidateState, candidateById } from "../importCuration";
+import { importCollection, readImportRecord } from "../importStore";
+import { prepareImportEdits } from "./importApply";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
 import { ROLE_IDS } from "@/lib/roles/types";
@@ -8,7 +12,7 @@ import { assertGenericRule, problemInput } from "../roleProblems";
 import { canonicalScope, joinMovedScopes, newRuleId, refreshLessonKnownValues, roleMemoryCollection, RoleMemoryRefusal, versionedRule, rulePrivacyHints } from "../roleStore";
 import { scopeKind, scopeProject, scopeRole, isCrossProjectRoleScope } from "../roleScopes";
 import { lessonText, lessonTextLength, ROLE_MEMORY_BOUND, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type CuratorReason, type RoleMemoryRule, type RoleMemoryRow, type RoleMemoryScopeRow, type ProblemInput } from "../roleTypes";
-import { patchPass, readPass, readPassAuthority, passIsLive, type CuratorPass } from "./store";
+import { patchPass, readPass, readPassAuthority, passIsLive, curationCollection, type CuratorPass } from "./store";
 
 export interface CurationApply {
   scopes: { scope: string; revision: number; order: string[] }[];
@@ -17,6 +21,9 @@ export interface CurationApply {
   move?: { id: string; to: string; note?: string }[];
   split?: { id: string; parts: { to: string; rule: string; why?: string }[]; note: string }[];
   archive?: { id: string; reason: CuratorReason; against?: string; where?: string; note: string }[];
+  adopt?: { candidate: string; occurrences: string[]; parts: { to: string; rule: string; why: string }[]; note: string }[];
+  drop?: { candidate: string; occurrences: string[]; reason: CuratorReason; where?: string; note: string; forRoom?: boolean }[];
+  defer?: { candidate: string; occurrences: string[] }[];
   restore?: string[];
   problem?: (ProblemInput & { id: string; note: string })[];
 }
@@ -48,13 +55,24 @@ function evidence(repo: string | null, where: string | undefined) {
 }
 
 /** The partition, all text and every level boundary are checked before any row is committed. */
-export function applyCuration(pass: CuratorPass, input: CurationApply, now = new Date().toISOString()) {
+export function applyCuration(pass: CuratorPass, input: CurationApply, now = new Date().toISOString(), options: { refreshKnownValues?: boolean } = {}) {
   const fresh = readPassAuthority(pass.id);
   if (!fresh || !passIsLive(fresh)) refuse("CURATE_ENDED", "this curator pass has ended");
   joinMovedScopes(now);
   const allowedScopes = new Set(fresh.scopes.map(canonicalScope));
   if (!input.scopes?.length || input.scopes.length > 64) refuse("CURATE_INVALID", "name 1–64 scopes");
-  const result = roleMemoryCollection(true)!.boundedPatch(4096, tx => {
+  const held = roleMemoryCollection(true)!;
+  const imports = fresh.importBatch ? importCollection(true)! : undefined;
+  let result!: { placeholders: Record<string, string>; counts: CuratorPass["counts"] };
+  withViewerOperation("memory.import.curation", () => held.patchSync(() => {
+    const records = new Map<string, RoleMemoryRow>();
+    let remaining = 4096;
+    const consume = () => { if (--remaining < 0) refuse("CURATE_BOUND", "curation row budget exceeded"); };
+    const tx = {
+      get: (key: string) => { consume(); return records.get(key) ?? held.get(key); },
+      put: (row: RoleMemoryRow) => { consume(); records.set(row.kind === "rule" ? `r:${row.id}` : row.kind === "scope" ? `s:${row.scope}` : `q:${row.pipelineId}:${row.stageId}:${row.attempt}`, row); },
+    };
+
     if (!passIsLive(readPassAuthority(pass.id))) refuse("CURATE_ENDED", "this curator pass has ended");
     const previousAt = Math.max(0, ...[...allowedScopes].flatMap(scope => { const row = tx.get(`s:${scope}`); return row?.kind === "scope" ? row.history.filter(h => h.pass === pass.id).map(h => Date.parse(h.at)) : []; }));
     now = new Date(Math.max(Date.parse(now), previousAt + 1)).toISOString();
@@ -89,6 +107,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       if (protectedOperation && rule.keptByOperatorAt) refuse("CURATE_KEPT", "the operator returned this rule; keep it whole and active");
       dispositions.add(id); touched.add(id); return work.get(id)!;
     };
+    const importRows = prepareImportEdits(fresh, input, now, { work, created, placeholders, get: tx.get, target, text, note, evidence: where => evidence(pass.repoDir, where) });
     for (const id of input.restore ?? []) {
       if (work.has(id)) refuse("CURATE_PARTITION", "restore ids must be distinct archived rules");
       const row = tx.get(`r:${id}`);
@@ -122,6 +141,10 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
         }
       });
     }
+    for (const item of input.split ?? []) {
+      const row = work.get(item.id)!;
+      work.set(item.id, { ...row, splitChildren: [...row.splitChildren ?? [], ...item.parts.slice(1).map((_, index) => placeholders[`split:${item.id}:${index + 1}`])] });
+    }
     const mergedTargets = new Set<string>();
     for (const item of input.merge ?? []) {
       const into = work.get(item.into) ?? refuse("CURATE_INVALID", "merge target is not active in this call"); note(item.note);
@@ -146,6 +169,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       work.set(item.id, { ...rule, state: "archived", reason: item.reason, note: item.note, where: item.where, against: item.against });
     }
     for (const item of input.problem ?? []) {
+      if (fresh.importBatch?.candidates.includes(item.id)) continue;
       const rule = dispose(item.id, true);
       if (moved.has(item.id) || mergedTargets.has(item.id) || (input.rewrite ?? []).some(edit => edit.id === item.id)) refuse("CURATE_PARTITION", "problem needs one source disposition");
       work.set(item.id, { ...rule, state: "archived", reason: "problem", problem: problemInput(item), problemEpisode: `${pass.id}:${now}`, problemDeliveredAt: undefined, note: note(item.note), where: undefined, against: undefined });
@@ -193,38 +217,42 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
         split: (input.split ?? []).filter(s => get(s.id).scope === scope).map(s => ({ id: s.id, parts: [s.id, ...s.parts.slice(1).map((_, index) => placeholders[`split:${s.id}:${index + 1}`])] })),
         merged: (input.merge ?? []).flatMap(m => m.from.map(from => ({ from, into: m.into }))), archived: [...(input.archive ?? []).map(a => a.id), ...(input.problem ?? []).map(p => p.id)], restored: input.restore ?? [] }] });
     }
-    return { placeholders, counts };
-  });
+    result = { placeholders, counts };
+    const record = fresh.importBatch ? readImportRecord(fresh.importBatch.importId) : null;
+    return { records: [...records.values()], ...(imports ? { companion: { records: [...importRows, ...(record && importRows.length ? [{ ...record, curationDirty: true }] : [])] } } : {}) };
+  }, { companion: imports }));
   // History is authoritative if the separate counts update is interrupted.
   const latest = readPass(pass.id);
   if (latest) patchPass(pass.id, { counts: latest.counts });
-  refreshLessonKnownValues();
+  if (options.refreshKnownValues !== false) refreshLessonKnownValues();
   return result;
 }
 
 /** Reverse each call, skipping rules with a later writer. History is never removed. */
-export function revertCuratorPass(id: string, now = new Date().toISOString()) {
+export function revertCuratorPass(id: string, now = new Date().toISOString(), options: { refreshKnownValues?: boolean } = {}) {
   const pass = readPass(id);
   if (!pass || passIsLive(pass)) refuse("CURATE_LIVE", "only a completed curator pass can be undone");
-  if (pass.revertedAt) return { skipped: pass.skipped ?? [] };
+  if (pass.revertedAt) return { skipped: pass.skipped ?? [], ...importUndoSummary(pass) };
   joinMovedScopes(now);
   const held = roleMemoryCollection(true)!;
   let result: { skipped: string[] } = { skipped: [] };
   // A pass can contain many individually bounded calls. Prepare its whole undo
   // under the collection lease, then persist every changed row atomically.
   held.patchSync(() => {
-    const snapshot = held.snapshot();
+    const snapshot = [...new Set(pass.scopes.map(canonicalScope))].flatMap(scope => {
+      const row = held.get(`s:${scope}`); return row?.kind === "scope" ? [row] : [];
+    });
     const allHistories = snapshot.flatMap(row => row.kind === "scope" ? row.history.filter(h => h.pass === id).map(h => ({ scope: row.scope, history: h })) : []);
     const histories = allHistories.filter(h => !h.history.revertedAt).sort((a, b) => b.history.at.localeCompare(a.history.at));
     if (!histories.length) {
       result = { skipped: [...new Set(allHistories.flatMap(h => h.history.undoSkipped ?? []))] };
-      return { records: [] };
+      return { records: [], companion: { records: [{ ...pass, revertedAt: now, skipped: result.skipped }] } };
     }
     const key = (row: RoleMemoryRow) => row.kind === "rule" ? `r:${row.id}` : row.kind === "scope" ? `s:${row.scope}` : `q:${row.pipelineId}:${row.stageId}:${row.attempt}`;
-    const rows = new Map(snapshot.map(row => [key(row), row]));
+    const rows = new Map<string, RoleMemoryRow | null>(snapshot.map(row => [key(row), row]));
     const changed = new Map<string, RoleMemoryRow>();
     const tx = {
-      get: (key: string) => rows.get(key) ?? null,
+      get: (key: string) => { if (!rows.has(key)) rows.set(key, held.get(key)); return rows.get(key) ?? null; },
       put: (row: RoleMemoryRow) => { rows.set(key(row), row); changed.set(key(row), row); },
     };
     const last = new Map<string, string>();
@@ -275,7 +303,22 @@ export function revertCuratorPass(id: string, now = new Date().toISOString()) {
       tx.put({ ...row, active });
     }
     result = { skipped: [...last.keys()].filter(rule => !eligible.has(rule)) };
-    return { records: [...changed.values()] };
+    return { records: [...changed.values()], companion: { records: [{ ...pass, revertedAt: now, skipped: result.skipped }] } };
+  }, { companion: curationCollection(true)! });
+  patchPass(id, { revertedAt: now, skipped: result.skipped });
+  if (options.refreshKnownValues !== false) refreshLessonKnownValues();
+  return { ...result, ...importUndoSummary(pass) };
+}
+
+/** The operator gets ids and counts; candidate bodies remain curator-only. */
+function importUndoSummary(pass: CuratorPass) {
+  if (!pass.importBatch) return {};
+  const candidates = pass.importBatch.candidates.flatMap(id => {
+    const row = candidateById(pass.importBatch!.importId, id);
+    if (!row) return [];
+    const current = candidateState(row);
+    return [{ candidate: id, state: current.state, surviving: current.ruleIds }];
   });
-  patchPass(id, { revertedAt: now, skipped: result.skipped }); refreshLessonKnownValues(); return result;
+  const kept = new Set(candidates.flatMap(row => row.surviving)).size;
+  return { importUndo: { state: kept ? "partly undone" as const : "undone" as const, kept, candidates } };
 }

@@ -12,6 +12,8 @@ export interface ImportRequest {
   /** Explicit roots are for fixture homes and operator tools; the job discovers managed homes otherwise. */
   roots?: ImportRoots;
   at?: string;
+  advance?: boolean;
+  rescan?: boolean;
 }
 export type ImportWriter = { kind: "seat" | "stage" | "operator" | "unknown"; roleId: string | null };
 export interface ImportOccurrence {
@@ -38,10 +40,13 @@ export interface ImportCandidate {
   anchor: string;
   loadedAtStart: boolean;
   suggestedScope: string;
+  curationProject?: string;
   title: string;
   body: string;
   readBy?: string[];
-  dispositions: { at: string; pass: string; kind: "adopt" | "drop"; ruleIds: string[]; reason?: CuratorReason; note: string; occurrences: string[] }[];
+  /** Durable pass-level acknowledgement that these occurrences were explicitly deferred. */
+  deferred?: { pass: string; occurrences: string[] }[];
+  dispositions: { at: string; pass: string; kind: "adopt" | "drop"; ruleIds: string[]; reason?: CuratorReason; note: string; occurrences: string[]; forRoom?: boolean }[];
 }
 export interface ImportRecord {
   kind: "import";
@@ -54,6 +59,18 @@ export interface ImportRecord {
   candidates: number;
   parts: number;
   /** Fixed diagnostic codes never echo private paths or note text. */
+  curationDirty?: boolean;
+  observedMemoryRevision?: string;
+  progress?: { files: number; parts: number; pendingFiles: number; pendingParts: number; pendingLoadedParts: number; adopted: number; dropped: number };
+  roots?: ImportRoots;
+  hostProject?: string;
+  flippedAt?: string;
+  drainedAt?: string;
+  legacyGenerations?: string[];
+  remainingGenerations?: string[];
+  lastScanAt?: string;
+  /** Durable trigger, evaluated once each project finishes its initial import. */
+  raisedOrchestratorProjects?: string[];
   reason?: "integrity" | "backup_refused" | "source_changed" | "interrupted" | "failed";
 }
 export interface ImportManifestFile {
@@ -67,6 +84,8 @@ export interface ImportManifestFile {
   home: string;
   project: string | null;
   loadedAtStart: boolean;
+  /** Candidate rows for this verified copy have committed to the import collection. */
+  candidatesComplete?: boolean;
 }
 export interface ImportManifest {
   schemaVersion: 1;

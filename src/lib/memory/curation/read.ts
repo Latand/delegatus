@@ -1,10 +1,12 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { readImportBatch } from "../importCuration";
 import { pipelineSelectionSource } from "@/lib/pipelines/store";
 import { readHistoryProjection, historyAttemptCounts } from "@/lib/state/historyProjection";
 import { listRoles, roleScaffoldBody, roleFenceBlock } from "@/lib/roles/registry";
 import { defaultRoleParameterValue } from "@/lib/roles/parameters";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { canonicalScope, projectViewAsync, RoleMemoryRefusal } from "../roleStore";
-import { isCrossProjectRoleScope, scopeRole } from "../roleScopes";
+import { isCrossProjectRoleScope, scopeRole, scopeProject } from "../roleScopes";
 import { scopeChars } from "../roleConsolidate";
 import { ROLE_MEMORY_BOUND } from "../roleTypes";
 import { otherProjectRoleRules, roleScopeReadMetadata } from "../roleViewSource";
@@ -12,14 +14,21 @@ import type { CuratorPass } from "./store";
 
 const PAGE_BYTES = 24_000;
 /** Local evidence stays local; cursors are bound to the scope's revision. */
+export function readCuration(pass: CuratorPass, scope?: undefined, cursor?: string, now?: number): Promise<Extract<Awaited<ReturnType<typeof readRuleCuration>>, { scopes: unknown }>>;
+export function readCuration(pass: CuratorPass, scope: "imports", cursor?: string, now?: number): Promise<{ pass: string; candidates: Awaited<ReturnType<typeof readImportBatch>> }>;
+export function readCuration(pass: CuratorPass, scope?: string, cursor?: string, now?: number): ReturnType<typeof readRuleCuration>;
 export async function readCuration(pass: CuratorPass, scope?: string, cursor?: string, now = Date.now()) {
+  if (scope === "imports") return { pass: pass.id, candidates: await withViewerOperation("memory.import.curation", () => readImportBatch(pass)) };
+  return readRuleCuration(pass, scope, cursor, now);
+}
+async function readRuleCuration(pass: CuratorPass, scope?: string, cursor?: string, now = Date.now()) {
   if (scope && !pass.scopes.some(key => canonicalScope(key) === canonicalScope(scope))) throw new RoleMemoryRefusal("CURATE_SCOPE", "scope does not belong to this pass");
-  const project = canonicalProject(pass.project);
+  const project = canonicalProject(scope && scopeProject(canonicalScope(scope)) || pass.project);
   if (scope) pipelineSelectionSource();
   const attempts = scope ? await readHistoryProjection(db => historyAttemptCounts(db, project, now), { collections: ["pipelines","pipelines_archive"] }) : {};
   const scopes = [...new Set(pass.scopes.map(canonicalScope))];
   const view = await projectViewAsync(project, now);
-  if (!scope) return { pass: pass.id, scopes: scopes.map(key => {
+  if (!scope) return { pass: pass.id, ...(pass.importBatch ? { import: { candidates: pass.importBatch.candidates.length, scope: "imports" } } : {}), scopes: scopes.map(key => {
     const held = view.scopes.find(s => s.scope === key);
     return { scope: key, revision: held?.revision ?? 0, chars: held?.chars ?? 0, bound: ROLE_MEMORY_BOUND, active: held?.active.length ?? 0, left: held?.left.length ?? 0 };
   }) };

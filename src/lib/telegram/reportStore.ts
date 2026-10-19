@@ -1,3 +1,5 @@
+import { validateTelegramLegacyStore } from "./storeMigration";
+import { smallStore } from "@/lib/state/smallStore";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -39,9 +41,10 @@ import { atomicSecretWrite, ensureTelegramStateDir, readSafeJson, readSafeText, 
  *    file type but not by mode (an agent's umask is not ours to dictate); the
  *    Viewer ingests it into `report-<runId>.md` and unlinks it immediately.
  *
- * The whole file is small and rewritten atomically, and every mutation is a
- * synchronous read-modify-write with no await in between, so two concurrent
- * callers in this single-threaded server cannot interleave.
+ * Settings, cursor, active run and retry share a SQLite metadata row; bounded
+ * history has one row per run with its display position. A mutation is one
+ * SQLite transaction across Viewer processes. The legacy JSON is imported at
+ * activation and mirrored for rollback; report artifacts remain files.
  */
 
 const REPORTS_FILE = "reports.json";
@@ -247,15 +250,7 @@ function sanitizeRetry(value: unknown): TelegramReportRetry | null {
   return { runId, trigger: row.trigger === "manual" ? "manual" : "scheduled", armedAt };
 }
 
-export function readTelegramReports(): TelegramReportsFile {
-  let parsed: unknown = null;
-  try {
-    parsed = readSafeJson(reportsPath());
-  } catch {
-    /* A tampered or unreadable reports file is not a credential: the feature
-       falls back to defaults rather than taking the whole panel down. */
-    return { ...EMPTY, settings: { ...EMPTY.settings }, cursor: { ...EMPTY.cursor }, retry: null, history: [] };
-  }
+function parseReports(parsed: unknown): TelegramReportsFile {
   if (!parsed || typeof parsed !== "object") {
     return { ...EMPTY, settings: { ...EMPTY.settings }, cursor: { ...EMPTY.cursor }, retry: null, history: [] };
   }
@@ -291,25 +286,38 @@ export function readTelegramReports(): TelegramReportsFile {
   };
 }
 
-function writeTelegramReports(file: TelegramReportsFile): void {
-  atomicSecretWrite(reportsPath(), JSON.stringify(file));
+const emptyReports = (): TelegramReportsFile => parseReports(null);
+export const telegramReportStore = smallStore<TelegramReportsFile>({
+  collection: "telegram_reports", databasePath: file => path.join(path.dirname(path.dirname(file)), "state.sqlite"),
+  validateLegacyPath: validateTelegramLegacyStore,
+  empty: emptyReports, parse: parseReports,
+  toRows: file => [
+    { key: "meta", value: { ...file, history: [] } },
+    ...file.history.map((row, position) => ({ key: `run:${row.id}`, value: { position, row } })),
+  ],
+  fromRows: rows => parseReports({
+    ...(rows.find(row => row.key === "meta")?.value as TelegramReportsFile ?? emptyReports()),
+    history: rows.filter(row => row.key.startsWith("run:")).map(row => row.value as { position: number; row: TelegramReportRow }).sort((a, b) => a.position - b.position || a.row.id.localeCompare(b.row.id)).map(value => value.row),
+  }),
+  toFile: file => file,
+  readLegacy: file => { try { return parseReports(readSafeJson(file)); } catch { return emptyReports(); } },
+});
+
+export function readTelegramReports(): TelegramReportsFile {
+  return telegramReportStore.read(reportsPath());
 }
 
-/**
- * The single mutation path. Synchronous read → mutate → write, so a caller
- * never holds a stale copy across an await, and history is trimmed (with the
- * evicted rows' texts) on every write.
- */
-export function updateTelegramReports(
-  mutate: (file: TelegramReportsFile) => void,
-): TelegramReportsFile {
-  const file = readTelegramReports();
-  mutate(file);
-  const kept = file.history.slice(0, TELEGRAM_REPORT_HISTORY_LIMIT);
-  for (const evicted of file.history.slice(TELEGRAM_REPORT_HISTORY_LIMIT)) deleteReportArtifacts(evicted.id);
-  file.history = kept;
-  writeTelegramReports(file);
-  return file;
+/** Persist the outcome before deleting any evicted artifacts. */
+export function updateTelegramReports(mutate: (file: TelegramReportsFile) => void): TelegramReportsFile {
+  const evicted: string[] = [];
+  const result = telegramReportStore.mutate(reportsPath(), file => {
+    mutate(file);
+    evicted.push(...file.history.slice(TELEGRAM_REPORT_HISTORY_LIMIT).map(row => row.id));
+    file.history = file.history.slice(0, TELEGRAM_REPORT_HISTORY_LIMIT);
+    return { next: file, result: file };
+  });
+  for (const id of evicted) deleteReportArtifacts(id);
+  return result;
 }
 
 export function saveReportText(runId: string, report: string): void {
@@ -377,10 +385,9 @@ export function deleteReportArtifacts(runId: string): void {
 /** Telegram logout / local deletion removes the report corpus with the
     credential — the reports are readings of that account. */
 export function clearTelegramReports(): void {
-  const file = readTelegramReports();
+  const file = telegramReportStore.mutate(reportsPath(), current => ({ next: emptyReports(), result: current }));
   for (const row of file.history) deleteReportArtifacts(row.id);
   if (file.active) deleteReportArtifacts(file.active.runId);
-  try { removeSafeFile(reportsPath()); } catch { /* best effort */ }
   try {
     const workspace = statePath("telegram", "report-workspace");
     fs.rmSync(workspace, { recursive: true, force: true });

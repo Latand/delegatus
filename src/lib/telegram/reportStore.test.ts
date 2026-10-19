@@ -70,7 +70,7 @@ test("settings, cursor and history survive a restart, and the file is owner-only
   expect(reread.cursor.unreportedUntilAt).toBe("2026-08-21T07:00:00.000Z");
   expect(reread.history.map((item) => item.id)).toEqual(["report-fixture-0001"]);
 
-  const stat = fs.statSync(path.join(SANDBOX, "state", "telegram", "reports.json"));
+  const stat = fs.statSync(path.join(SANDBOX, "state", "state.sqlite"));
   expect(stat.mode & 0o077).toBe(0);
 });
 

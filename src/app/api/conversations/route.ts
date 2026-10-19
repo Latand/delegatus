@@ -1,11 +1,11 @@
 import { scopeConversationCatalog, catalogEntryToFileEntry, conversationCatalogReady, conversationCatalogSnapshot, ExpiredConversationCatalogCursorError, loadConversationCatalogPage } from "@/lib/scanner/conversationCatalog";
-import { indexConversationCatalog, pruneConversationSearchCache } from "@/lib/scanner/conversationSearchIndex";
+import { conversationSearchProjection } from "@/lib/scanner/conversationSearchProjection";
 import { searchTextForTranscript } from "@/lib/scanner/describe";
 import { refreshConversationCatalog } from "@/lib/scanner/discover";
 import { refreshFileCatalogMembership } from "@/lib/scanner/scanCache";
 import { overlayConversationLineage } from "@/lib/agent/lineageMarkers";
 import { deputyConversationRefs } from "@/lib/orchestrator/deputies";
-import { overlaySessionProjects, overlaySessionTitles, overlaySessionTitlesYielding, sessionProjectProjection } from "@/lib/session/titleProjection";
+import { overlaySessionProjects, overlaySessionTitles, searchSessionTitleProjector, sessionProjectProjection } from "@/lib/session/titleProjection";
 import { cleanTitle } from "@/lib/title";
 
 export const runtime = "nodejs";
@@ -56,18 +56,13 @@ export async function GET(request: Request): Promise<Response> {
       overlaySessionTitles(page.items);
     } else if (query) {
       const scoped = scopeConversationCatalog(source, sessionProjectProjection().projectByPath, options.project);
-      // Prune against the complete catalog, never a project subset. Otherwise
-      // alternating projects evicts each other's retained transcript heads.
-      pruneConversationSearchCache(new Set(source.map((entry) => entry.path)));
-      const indexed = await indexConversationCatalog(scoped, { signal: request.signal, prune: false });
-      const displayed = indexed.map(catalogEntryToFileEntry);
-      await overlaySessionTitlesYielding(displayed, 48, undefined, false);
-      const displayedByPath = new Map(displayed.map((entry) => [entry.path, entry]));
-      const projected = indexed.map((entry) => {
-        const display = displayedByPath.get(entry.path);
-        return display ? { ...entry, title: display.title, project: display.project } : entry;
+      const projected = await conversationSearchProjection().search(scoped, query, {
+        signal: request.signal,
+        projectTitle: searchSessionTitleProjector(),
       });
-      page = await loadConversationCatalogPage(projected, options);
+      // Text stays in SQLite; only matching entries reach the sort and the
+      // existing frozen cursor pages.
+      page = await loadConversationCatalogPage(projected, { ...options, query: undefined });
       // The bounded final page re-runs the registry overlay: search projection
       // above carried only title/project, so without this the query branch
       // ships conversationId: null for registry-owned rows (#1040 review).

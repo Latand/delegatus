@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { stateLockAttempt } from "./lockWait";
 import { FileTransactionBusyError } from "./fileTransaction";
 import {
@@ -16,8 +17,8 @@ import { readStateImport, SqliteStateCollection, type StateImportRecord, type St
 
 /**
  * A small operator-facing store whose legacy form is one JSON document, moved
- * into `state.sqlite` as keyed rows (#1870 slice 5,
- * docs/design/state-sqlite-migration.md §2.1 rows 6–8).
+ * into `state.sqlite` as keyed rows (#1870 slices 5 and 5b;
+ * docs/design/state-sqlite-migration.md §2.1 rows 6–11).
  *
  * The store keeps its document shape and every rule it enforces on it; this
  * module only swaps where the document lives. `toRows` splits a document into
@@ -40,6 +41,10 @@ export interface DocumentRow {
 
 export interface LegacyDocumentOptions<D> {
   collection: string;
+  databasePath?(filePath: string): string;
+  nonBlockingLock?: boolean;
+  validateLegacyPath?(filePath: string): void;
+  maxOpenCollections?: number;
   migrationId: string;
   busyMessage: string;
   /** Validate a parsed legacy file. Throwing refuses the import and leaves the
@@ -81,11 +86,14 @@ export function setLegacyDocumentWriteHookForTests(hook: ((collection: string) =
   writeHookForTests = hook;
 }
 
-const stores = new Set<{ collections: Map<string, unknown> }>();
+const stores = new Set<{ collections: Map<string, SqliteStateCollection<DocumentRow>> }>();
 
 /** Test seam: forget every open collection, the way a restarted process would. */
 export function resetLegacyDocumentStoresForTests(): void {
-  for (const store of stores) store.collections.clear();
+  for (const store of stores) {
+    for (const collection of store.collections.values()) collection.close();
+    store.collections.clear();
+  }
 }
 
 export class LegacyDocumentStore<D> {
@@ -95,6 +103,45 @@ export class LegacyDocumentStore<D> {
     stores.add(this);
   }
 
+  private databasePath(filePath: string): string {
+    return this.options.databasePath?.(filePath) ?? legacyDatabasePath(filePath);
+  }
+
+  /** Read the committed import if present, otherwise the legacy document.
+      Decoders already inside another SQLite transaction use this path: they
+      must never start a first-boot import through a second writer. */
+  readExisting(filePath: string): D {
+    return this.guard(() => {
+      const database = this.databasePath(filePath);
+      return this.readMarker(database)
+        ? this.options.fromRows(this.open(database).snapshot())
+        : this.options.readLegacy(filePath);
+    });
+  }
+
+  /** Narrow reads and writes for stores whose unrelated rows may grow. */
+  readRow(filePath: string, key: string): DocumentRow | null {
+    return this.guard(() => {
+      const collection = this.collection(filePath, "read");
+      return collection ? collection.get(key) : this.options.toRows(this.options.readLegacy(filePath)).find(row => row.key === key) ?? null;
+    });
+  }
+
+  readPage(filePath: string, after: string, limit: number): DocumentRow[] {
+    return this.guard(() => {
+      const collection = this.collection(filePath, "read");
+      return collection ? collection.keyPage(after, limit)
+        : this.options.toRows(this.options.readLegacy(filePath)).filter(row => row.key > after).sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0).slice(0, limit);
+    });
+  }
+
+  patchRows<R>(filePath: string, budget: number, operation: (tx: import("./sqliteStateStore").StateBoundedTransaction<DocumentRow>) => R): R {
+    return this.guard(() => {
+      writeHookForTests?.(this.options.collection);
+      return this.collection(filePath, "write")!.boundedPatch(budget, operation);
+    });
+  }
+
   /** The store's legacy import spec, for the import driver and its tests. */
   legacyCollection(filePath: string): LegacyCollectionSpec<D> {
     return {
@@ -102,13 +149,16 @@ export class LegacyDocumentStore<D> {
       schemaVersion: 1,
       migrationId: this.options.migrationId,
       legacyPath: filePath,
+      databasePath: this.databasePath(filePath),
+      nonBlockingLock: this.options.nonBlockingLock,
+      validateLegacyPath: () => this.options.validateLegacyPath?.(filePath),
       parse: (raw) => this.options.parse(raw),
       toRows: (document): StateImportRow[] => this.options.toRows(document)
         .map((row) => ({ key: row.key, value: row, controllerActive: true })),
       reconcile: (document, baseline, reconcileOptions) => this.merge(filePath, document, baseline, reconcileOptions),
       mirrorBody: () => {
         let mirror: { body: unknown; revision: number } | null = null;
-        this.open(legacyDatabasePath(filePath)).checkpointMirror((rows, revision) => {
+        this.open(this.databasePath(filePath)).checkpointMirror((rows, revision) => {
           mirror = { body: this.options.toFile(this.options.fromRows(rows)), revision };
         });
         return mirror!;
@@ -119,12 +169,12 @@ export class LegacyDocumentStore<D> {
   /** Import the legacy file now. The Viewer's activation calls this with
       `reconcile: true`; tests drive the crash seams through `hooks`. */
   importLegacy(filePath: string, options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true }): LegacyImportOutcome {
-    return importLegacyCollection(this.legacyCollection(filePath), options);
+    return this.guard(() => importLegacyCollection(this.legacyCollection(filePath), options));
   }
 
   /** Write the legacy file from SQLite for a rollback release that predates the move. */
   checkpointRollbackMirror(filePath: string): void {
-    writeLegacyRollbackMirror(this.legacyCollection(filePath));
+    this.guard(() => writeLegacyRollbackMirror(this.legacyCollection(filePath)));
   }
 
   /** The committed document. Before the import may run (an unpromoted
@@ -159,6 +209,12 @@ export class LegacyDocumentStore<D> {
     });
   }
 
+  /** Remove every row from a document collection. Used by owners whose legacy
+      contract distinguishes an absent document from a saved empty one. */
+  clear(filePath: string): void {
+    this.guard(() => this.collection(filePath, "write")!.replaceSync([]));
+  }
+
   /** The rows to write for `next` over `committed`: changed rows, deleted
       keys, and the changed rows that move behind rows they used to precede
       (a set replaced for its conversation becomes the newest). */
@@ -189,9 +245,10 @@ export class LegacyDocumentStore<D> {
    * comes back at roll-forward. A store whose older writers do carry a marker
    * through their writes needs a merge of its own.
    */
-  private merge(filePath: string, document: D, baseline: StateImportRecord, options: { fenceOwner: boolean }): LegacyReconcileSummary {
-    const collection = this.open(legacyDatabasePath(filePath));
+  private merge(filePath: string, document: D, baseline: StateImportRecord, options: { fenceOwner: boolean; consumedSha256?: string }): LegacyReconcileSummary {
+    const collection = this.open(this.databasePath(filePath));
     const since = legacyBaselineRevision(baseline);
+    const consumedSha256 = options.consumedSha256;
     const summary: LegacyReconcileSummary = { added: 0, replaced: 0, removed: 0, kept: 0, keys: [], conflicts: [], spared: [] };
     collection.patchSync(() => {
       const current = new Map(collection.snapshot().map((row) => [row.key, row] as const));
@@ -227,13 +284,20 @@ export class LegacyDocumentStore<D> {
       }
       for (const key of current.keys()) if (!incomingKeys.has(key)) summary.spared.push(key);
       return { records };
-    }, { fenceOwner: options.fenceOwner });
+    }, {
+      fenceOwner: options.fenceOwner,
+      ...(consumedSha256 ? { afterPersist: (db) => {
+        const result = db.query("UPDATE state_imports SET reconciled_sha256 = ? WHERE collection = ?")
+          .run(consumedSha256, this.options.collection);
+        if (result.changes !== 1) throw new Error(`missing import evidence for ${this.options.collection} reconciliation`);
+      } } : {}),
+    });
     return summary;
   }
 
   private guard<R>(operation: () => R): R {
     try {
-      return operation();
+      return withViewerOperation("state.document", operation);
     } catch (error) {
       if (error instanceof FileTransactionBusyError) throw error;
       if (isBusyError(error)) throw new FileTransactionBusyError(this.options.busyMessage);
@@ -256,8 +320,15 @@ export class LegacyDocumentStore<D> {
       decode: (value) => isDocumentRow(value) ? value : null,
       clone: (row) => structuredClone(row),
       strictDecode: true,
+      readCacheKey: "legacy-document-v1",
       decodeError: (error) => this.options.error(`invalid ${this.options.collection} row`, error),
     });
+    const max = this.options.maxOpenCollections;
+    if (max !== undefined && this.collections.size >= max) {
+      const oldest = this.collections.keys().next().value!;
+      this.collections.get(oldest)!.close();
+      this.collections.delete(oldest);
+    }
     this.collections.set(database, collection);
     return collection;
   }
@@ -265,14 +336,16 @@ export class LegacyDocumentStore<D> {
   /** The collection for `filePath`, importing the legacy file on first use.
       Null only for a read before the import may run. */
   private collection(filePath: string, purpose: "read" | "write"): SqliteStateCollection<DocumentRow> | null {
-    const database = legacyDatabasePath(filePath);
-    if (this.collections.has(database)) return this.collections.get(database)!;
+    const database = this.databasePath(filePath);
+    if (this.collections.has(database) && this.readMarker(database)) return this.collections.get(database)!;
+    this.collections.get(database)?.close();
+    this.collections.delete(database);
     if (!this.readMarker(database)) {
-      if (!legacyImportAllowed(filePath)) {
+      if (!legacyImportAllowed(filePath, database)) {
         if (purpose === "read") return null;
         throw new FileTransactionBusyError(`${this.options.collection} state is waiting for release promotion`);
       }
-      this.importLegacy(filePath, { reconcile: lazyReconcileAllowed(filePath) });
+      this.importLegacy(filePath, { reconcile: lazyReconcileAllowed(filePath, database) });
     }
     return this.open(database);
   }

@@ -14,6 +14,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 const evaluation = process.env.LLV_CURATOR_EVAL === "1" ? test : test.skip;
 evaluation("real curator classifies the twelve level and currency cases in an isolated store", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-curator-eval-"));
+  const { candidateById, candidateState } = await importStateTools();
   const oldState = process.env.LLV_STATE_DIR;
   const repo = path.join(root, "repository"), home = path.join(root, "codex"), state = path.join(root, "state");
   fs.mkdirSync(repo); fs.mkdirSync(home); fs.mkdirSync(state);
@@ -61,6 +62,19 @@ evaluation("real curator classifies the twelve level and currency cases in an is
     pipeline.runs = pipeline.stages.map(stage => ({ stageId: stage.id, attempts: [{ n: 1, state: "passed", effectiveRole: stage.effectiveRole, launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null, startedAt: stamp, completedAt: stamp, input: "Fixture orchard work", activatedBy: null, output: "Fixture finished", verdict: { status: "pass" }, error: null }] }));
     pipeline.state = "closed"; pipeline.cursor = null; pipeline.closedAt = stamp;
     savePipelines([pipeline]);
+    const importCases = [
+      ["seat", "Inspect the board before assigning another worker.", roleScope(project, "orchestrator")],
+      ["preference", "Keep replies concise and use the language of the operator's latest message.", "machine"],
+      ["narration", "The last task updated an orchard label and attached a screenshot.", projectKey],
+      ["defect", "The orchard exporter is broken: it writes a header without the required units.", projectKey],
+    ] as const;
+    const imported = importCases.map(([kind, body, suggestedScope], index) => {
+      const row = importCandidate(100 + index, { body, suggestedScope });
+      row.occurrences[0].project = project;
+      if (kind === "seat") row.occurrences[0].writer = { kind: "seat", roleId: "orchestrator" };
+      return row;
+    });
+    await seedImport(imported, project);
     const pass = claimPass({ project, repoDir: repo, now: Date.now() })!;
     // Read-only engine; only its isolated MCP server writes the fixture memory.
     const authHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
@@ -94,7 +108,13 @@ evaluation("real curator classifies the twelve level and currency cases in an is
     expect(fs.existsSync(path.join(state, "eval-tool-started"))).toBe(true);
     const row = (key: string) => roleMemoryCollection()!.get(`r:${ids[key]}`) as RoleMemoryRule;
     const mixedParts = roleMemoryCollection()!.snapshot().filter((r): r is RoleMemoryRule => r.kind === "rule" && r.state === "active" && (r.id === ids.mixed || r.splitFrom === ids.mixed));
+    const importedState = (index: number) => candidateState(candidateById(IMPORT_ID, imported[index].id)!);
+    const importedRules = (index: number) => importedState(index).ruleIds.map(id => roleMemoryCollection()!.get(`r:${id}`) as RoleMemoryRule);
     const results = {
+      importSeat: importedState(0).state === "adopted" && importedRules(0).every(row => row.scope === roleScope(project, "orchestrator") || row.scope === "role:*:orchestrator"),
+      importPreference: importedState(1).state === "adopted" && importedRules(1).every(row => row.scope === "machine"),
+      importNarration: candidateById(IMPORT_ID, imported[2].id)!.dispositions.some(d => d.kind === "drop" && d.reason === "task-specific"),
+      importDefect: candidateById(IMPORT_ID, imported[3].id)!.dispositions.some(d => d.reason === "problem"),
       task: row("task").reason === "task-specific", reader: row("reader").reason === "no-reader",
       builder: row("builder").scope === builder && row("builder").state === "active",
       project: row("project").scope === projectKey && row("project").state === "active",
@@ -117,3 +137,44 @@ evaluation("real curator classifies the twelve level and currency cases in an is
     fs.rmSync(root, { recursive: true, force: true });
   }
 }, 15 * 60_000);
+
+// These deterministic import contracts run without an engine replay. The
+// opt-in model evaluation above remains a separate, explicitly requested run.
+import { importCandidate, seedImport, IMPORT_AT, IMPORT_ID } from "../fixtures/import";
+import { applyCuration } from "./apply";
+import { readCuration } from "./read";
+const importStateTools = () => import("../importCuration");
+
+test.each(["seat", "preference", "narration", "defect"] as const)("import curator case: %s", async kind => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "curator-import-eval-"));
+  const previous = process.env.LLV_STATE_DIR; process.env.LLV_STATE_DIR = root;
+  const project = "import-fixture", orchestrator = roleScope(project, "orchestrator");
+  const candidate = importCandidate(1, { suggestedScope: kind === "seat" ? orchestrator : `project:${project}`,
+    body: kind === "seat" ? "Inspect the board before assigning another worker."
+      : kind === "preference" ? "Keep replies concise and use the language of the operator's latest message."
+      : kind === "narration" ? "The last task updated an orchard label and attached a screenshot."
+      : "The label exporter is broken: it writes a header without the required units." });
+  if (kind === "seat") candidate.occurrences[0].writer = { kind: "seat", roleId: "orchestrator" };
+  try {
+    const { candidateById, candidateState } = await importStateTools();
+    await seedImport([candidate]);
+    const pass = claimPass({ project, repoDir: null, now: Date.parse(IMPORT_AT) })!;
+    await readCuration(pass, "imports");
+    const occurrences = candidate.occurrences.map(o => o.id);
+    const target = kind === "seat" ? orchestrator : "machine";
+    const adoption = { candidate: candidate.id, occurrences, parts: [{ to: target, rule: candidate.body, why: "The imported note describes a recurring preference for these readers." }], note: "Keep the narrowest level whose readers act on it." };
+    const result = applyCuration(pass, { scopes: [{ scope: kind === "defect" ? candidate.suggestedScope : target, revision: 0, order: kind === "seat" || kind === "preference" ? [`adopt:${candidate.id}:0`] : [] }],
+      ...(kind === "seat" || kind === "preference" ? { adopt: [adoption] } : kind === "narration" ? { drop: [{ candidate: candidate.id, occurrences, reason: "task-specific", note: "This is a narration of a finished task." }] } : { problem: [{ id: candidate.id, statement: "The label exporter omits the units.", evidence: "The fixture export has a header without units.", note: "The original project seat should assess this defect." }] }) }, IMPORT_AT);
+    const current = candidateById(IMPORT_ID, candidate.id)!;
+    expect(candidateState(current).state).toBe(kind === "seat" || kind === "preference" ? "adopted" : "dropped");
+    if (kind === "seat" || kind === "preference") {
+      const row = roleMemoryCollection()!.get(`r:${result.placeholders[`adopt:${candidate.id}:0`]}`) as RoleMemoryRule;
+      expect(row.scope).toBe(target); expect(row.curatedAt).toBe(IMPORT_AT);
+    } else if (kind === "narration") expect(current.dispositions[0].reason).toBe("task-specific");
+    else {
+      expect(current.dispositions[0].reason).toBe("problem");
+      const { memoryProblemSignals } = await import("../roleProblems");
+      expect(memoryProblemSignals(project, [])).toHaveLength(1);
+    }
+  } finally { if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous; fs.rmSync(root, { recursive: true, force: true }); }
+});

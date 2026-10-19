@@ -1165,6 +1165,11 @@ function conversationTextFromLines(lines: string[], engine: TranscriptEngine): C
   return { title, firstPrompt };
 }
 
+/** Parse the same bounded head for asynchronous catalog hydration. */
+export function conversationSearchText(head: string, engine: TranscriptEngine): ConversationSearchText {
+  return conversationTextFromLines(head.split("\n").slice(0, 151), engine);
+}
+
 interface MetadataReadResult<T> {
   value: T;
   complete: boolean;
@@ -1284,7 +1289,7 @@ function scanJsonlTitle(pathname: string, st: fs.Stats, engine: TranscriptEngine
 export function searchTextForTranscript(pathname: string, size: number, engine: TranscriptEngine): ConversationSearchText {
   const head = readSearchHead(pathname, size);
   if (!head) return { title: null, firstPrompt: null };
-  return conversationTextFromLines(head.text.split("\n").slice(0, 151), engine);
+  return conversationSearchText(head.text, engine);
 }
 
 function deriveTranscriptMetadata(

@@ -1,3 +1,4 @@
+import { memoryImportDrainSignal } from "./importStatus";
 import { createHash } from "node:crypto";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { seatTickSignalVersion } from "@/lib/monitor/seatTick";
@@ -81,7 +82,7 @@ export async function prepareMemoryProblemRead(): Promise<void> {
     the original row before its generic agenda version can age out. */
 export function memoryProblemSignals(project: string, shown: readonly string[], recipient: { conversationId: string; seatEpoch: number } | null = null): SeatTickSignalInput[] {
   const collection = roleMemoryCollection();
-  if (!collection) return [];
+  if (!collection) return memoryImportDrainSignal(project);
   const canonical = canonicalProject(project);
   const pending = collection.loadReadonly().filter(pendingProblem).filter(row => canonicalProject(row.kind === "request" ? row.project : row.source.project) === canonical);
   const versions = new Set(shown);
@@ -93,5 +94,5 @@ export function memoryProblemSignals(project: string, shown: readonly string[], 
     }
   });
   const credited = new Set(delivered.map(problemKey));
-  return pending.filter(row => !credited.has(problemKey(row))).map(problemSignal);
+  return [...pending.filter(row => !credited.has(problemKey(row))).map(problemSignal), ...memoryImportDrainSignal(project)];
 }

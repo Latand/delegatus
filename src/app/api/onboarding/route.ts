@@ -1,8 +1,6 @@
-import fs from "node:fs";
-
 import { NextRequest, NextResponse } from "next/server";
 
-import { statePath } from "@/lib/configDir";
+import { hasRoleOverrides } from "@/lib/roles/store";
 import { applyOnboardingPatch, parseOnboardingPatch, readOnboardingMarker, resolveOnboardingMarker, writeOnboardingMarker } from "@/lib/onboarding/marker";
 import { DEFAULT_SEAT_TICK_POLICY, seatTickPolicy } from "@/lib/monitor/seatTick";
 import { readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
@@ -19,7 +17,7 @@ function existingInstall(): boolean {
   if (Object.keys(seats.seats).length || Object.keys(seats.pending).length || seats.revocations.length) return true;
   if (loadPipelines().length) return true;
   if (loadTasks().length) return true;
-  return fs.existsSync(statePath("role-presets.json"));
+  return hasRoleOverrides();
 }
 
 /** The setup guide's marker; `marker: null` means it was never decided and the
