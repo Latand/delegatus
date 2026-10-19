@@ -4661,6 +4661,9 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
       const designatedWriter = writerSeat?.conversationId === attribution.conversationId ? writerSeat : null;
       if (designatedWriter) {
         instructionActor = { ...actor, kind: "manager", project: own, seatEpoch: designatedWriter.seatEpoch };
+      } else if (callerSeat?.conversationId === attribution.conversationId) {
+        const authorizedProject = callerSeat.project ? canonicalOrchestratorProject(callerSeat.project) : own;
+        instructionActor = { ...actor, kind: "manager", project: authorizedProject, seatEpoch: null };
       }
     }
     const context = { at: new Date().toISOString(), actor, instructionActor };
