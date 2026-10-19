@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +11,7 @@ import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { productionDeps, setSelfUpdateServiceForTests } from "@/lib/selfUpdate/instance";
 import { SelfUpdateService } from "@/lib/selfUpdate/service";
 import { POST } from "./route";
+import { beginSeatDeployment, seatDeploymentsFile, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 
 /**
  * The HTTP deploy door, at parity with the MCP binding and the raw socket
@@ -65,6 +66,64 @@ function deployRequest(body: unknown): NextRequest {
     body: JSON.stringify(body),
   });
 }
+
+describe.serial("HTTP deployment route", () => {
+test("admission records the pending seat before a lost HTTP reply, including checkout installs", async () => {
+  for (const mode of ["managed", "checkout"] as const) {
+    const key = `lost-${mode}`;
+    await beginSeatDeployment({ conversationId: `seat-${mode}`, project: "viewer", revision: SHA,
+      requestedAt: "2026-10-19T12:00:00Z", idempotencyKey: key });
+    const service = new SelfUpdateService({ ...productionDeps(), mode: async () => ({ mode, record: null, reason: null }) });
+    if (mode === "checkout") service.deployRevision = async () => ({
+      state: "accepted", deploymentId: "checkout-admitted", revision: SHA, replayed: false,
+    });
+    setSelfUpdateServiceForTests(service);
+    // The handler finishes after the caller gives up; nobody consumes its reply.
+    await POST(deployRequest({ revision: SHA, idempotencyKey: key }));
+    expect(seatDeploymentsFor(`seat-${mode}`)).toMatchObject([{
+      deploymentId: mode === "managed" ? "deployment_1" : "checkout-admitted", idempotencyKey: key,
+    }]);
+  }
+});
+
+test("a same-SHA busy HTTP join durably binds its own key to the admitted deployment", async () => {
+  const seat = "joining-seat";
+  await beginSeatDeployment({ conversationId: seat, project: "viewer", revision: SHA,
+    requestedAt: "2026-10-19T12:00:00Z", idempotencyKey: "joining-original-key" });
+  await POST(deployRequest({ revision: SHA, idempotencyKey: "joining-original-key" }));
+  const original = seatDeploymentsFor(seat).find(record => record.deploymentId === "deployment_1");
+  expect(original?.idempotencyKey).toBe("joining-original-key");
+
+  await beginSeatDeployment({ conversationId: seat, project: "viewer", revision: SHA,
+    requestedAt: "2026-10-19T12:01:00Z", idempotencyKey: "joining-busy-key" });
+  setDeploymentRuntimeForTests(async () => ({ state: "busy", deploymentId: "deployment_1", revision: SHA }));
+  const response = await POST(deployRequest({ revision: SHA, idempotencyKey: "joining-busy-key" }));
+  expect(response.status).toBe(409);
+  expect(seatDeploymentsFor(seat).find(record => record.deploymentId === "deployment_1")?.idempotencyKeys)
+    .toContain("joining-busy-key");
+  expect(seatDeploymentsFor(seat).find(record => record.deploymentId === "deployment_1"))
+    .toMatchObject({ idempotencyKeys: ["joining-original-key", "joining-busy-key"] });
+});
+
+test("HTTP admission cannot invent a seat or attach a different busy SHA", async () => {
+  await POST(deployRequest({ revision: SHA, idempotencyKey: "no-pending-seat", conversationId: "forged-seat" }));
+  expect(seatDeploymentsFor("forged-seat")).toEqual([]);
+  await beginSeatDeployment({ conversationId: "waiting-seat", project: "viewer", revision: SHA,
+    requestedAt: "2026-10-19T12:00:00Z", idempotencyKey: "different-sha-busy" });
+  setDeploymentRuntimeForTests(async () => ({ state: "busy", deploymentId: "other-deployment", revision: "b".repeat(40) }));
+  expect((await POST(deployRequest({ revision: SHA, idempotencyKey: "different-sha-busy" }))).status).toBe(409);
+  expect(seatDeploymentsFor("waiting-seat")).toEqual([]);
+});
+
+test("an attribution write failure preserves the admitted HTTP response", async () => {
+  const queuePath = `${seatDeploymentsFile()}.write-locks`;
+  fs.mkdirSync(path.dirname(queuePath), { recursive: true });
+  fs.writeFileSync(queuePath, "fixture prevents attribution lock admission");
+  const response = await POST(deployRequest({ revision: SHA, idempotencyKey: "attribution-unavailable" }));
+  expect(response.status).toBe(202);
+  expect(await response.json()).toMatchObject({ state: "accepted", deploymentId: "deployment_1" });
+  expect(requested).toEqual([{ revision: SHA, idempotencyKey: "attribution-unavailable" }]);
+});
 
 test("a well-formed exact-SHA request is forwarded to host admission as-is", async () => {
   const response = await POST(deployRequest({ revision: SHA, idempotencyKey: "k1" }));
@@ -156,4 +215,5 @@ test("the deployment endpoint reserves the disabled message for explicit rollbac
     error: "runtime host socket is unavailable",
     code: RUNTIME_PLANE_ABSENT,
   });
+});
 });

@@ -72,7 +72,7 @@ test.each(["completed", "open", "split-open"] as const)("native tail without ope
   const deploymentId = `native-tail-${scenario}`;
   // This durable attribution is what deploy_exact_sha persists before returning
   // wakeOnSettle:true. A replacement tick reads it after succession.
-  recordSeatDeployment({ conversationId: f.seat.conversationId, deploymentId, project: f.project, revision: "a".repeat(40), requestedAt: at });
+  await recordSeatDeployment({ conversationId: f.seat.conversationId, deploymentId, project: f.project, revision: "a".repeat(40), requestedAt: at });
   const rig = childRig(f, { now: NOW,
     deployments: { [deploymentId]: { phase: "succeeded", terminal: true, revision: "a".repeat(40) } } });
   rig.deps.sources!.seatDeployments = seatDeploymentsFor;

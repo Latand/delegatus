@@ -1,6 +1,7 @@
 import { selfUpdateService } from "@/lib/selfUpdate/instance";
 import { checkoutDeployments } from "@/lib/selfUpdate/deployments";
 import { statePath } from "@/lib/configDir";
+import { recordSeatDeploymentAdmission } from "@/lib/orchestrator/seatDeployments";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -158,9 +159,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const decision = await service.decide();
     if (decision.mode !== "managed") {
       const receipt = await service.deployRevision({ ...target, idempotencyKey: body.idempotencyKey });
+      await recordSeatDeploymentAdmission(body.idempotencyKey, receipt).catch(error => {
+        console.error("[deploy admission] could not record the seat wake", error);
+      });
       return NextResponse.json(receipt, { status: receipt.state === "accepted" ? 202 : 409 });
     }
     const receipt = await requestViewerDeployment({ ...target, idempotencyKey: body.idempotencyKey });
+    await recordSeatDeploymentAdmission(body.idempotencyKey, receipt).catch(error => {
+      console.error("[deploy admission] could not record the seat wake", error);
+    });
     return NextResponse.json(receipt, { status: receipt.state === "busy" ? 409 : 202 });
   } catch (error) {
     if (error instanceof DeploymentRuntimeUnavailableError) {

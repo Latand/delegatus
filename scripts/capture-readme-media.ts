@@ -27,6 +27,9 @@
  * the text it must and must not show.
  *
  * Flags: --serve keeps the server up for inspection instead of capturing.
+ * --seed-only checks the complete seed without a build or browser.
+ * --check-layout checks every frame in the built Viewer without vector/OCR work
+ * or changing repository media; PNGs and bounds stay in its private capture root.
  * Requirements: a completed `bun run build`, Chrome (CHROME_BIN, default
  * /usr/bin/google-chrome-stable) and poppler's `pdftocairo`.
  */
@@ -60,6 +63,8 @@ export type ReadmeShot = {
   viewport: { width: number; height: number };
   /** Text that must be on the frame, so a silent empty state fails. */
   requiredText: string[];
+  /** Subjects that must fit whole, including inside any clipping ancestors. */
+  subjects: string[];
   /** Text that must not be on it: retired vocabulary, broken states. */
   absentText?: string[];
   /** In-page preparation after the target opened. */
@@ -142,6 +147,7 @@ async function alignReadersToMessages(page: Page, scope: string): Promise<void> 
 export const SHOTS: ReadmeShot[] = [
   {
     id: "board",
+    subjects: ['.column[data-status="assigned"] .card', '.column[data-status="blocked"] .card'],
     target: { kind: "project", project: "harbor-api" },
     /* The shortest screen the desktop board draws at: below 600 px the phone
        layout takes over. */
@@ -155,6 +161,7 @@ export const SHOTS: ReadmeShot[] = [
   },
   {
     id: "orchestrator",
+    subjects: ["[data-orchestrator-panel]", '[data-decision-card="open"]', "[data-decision-send]"],
     target: { kind: "project", project: "harbor-api" },
     /* Below 800 px the seat folds its Reports log away; at this height the
        whole three-question form, each question's «Already decided» row, its
@@ -180,6 +187,7 @@ export const SHOTS: ReadmeShot[] = [
   },
   {
     id: "conversation",
+    subjects: [".reader.conv"],
     target: { kind: "conversation", key: "refunds-builder" },
     viewport: { width: 1440, height: 1080 },
     requiredText: ["Idempotency-Key", "4 pass", "UPDATE"],
@@ -194,6 +202,7 @@ export const SHOTS: ReadmeShot[] = [
   },
   {
     id: "pipeline",
+    subjects: ["[data-stages-sheet]"],
     target: { kind: "project", project: "harbor-api" },
     /* Each stage column keeps its agent's head on one line and the tail of
        its conversation whole. */
@@ -216,6 +225,7 @@ export const SHOTS: ReadmeShot[] = [
   },
   {
     id: "card-menu",
+    subjects: ['[role="menu"]'],
     target: { kind: "project", project: "harbor-api" },
     viewport: WIDE,
     requiredText: ["Idempotent refunds", "Inbox", "Done", "Top of the Inbox", "Appearance", "Pipeline actions", "keeps working"],
@@ -234,6 +244,7 @@ export const SHOTS: ReadmeShot[] = [
   },
   {
     id: "accounts",
+    subjects: ['[role="dialog"][aria-label="Claude accounts"]'],
     target: { kind: "project", project: "harbor-api" },
     viewport: DESKTOP,
     requiredText: ["Claude accounts", "Work", "Main", "Opus"],
@@ -248,6 +259,7 @@ export const SHOTS: ReadmeShot[] = [
   },
   {
     id: "phone-conversation",
+    subjects: ['li:has-text("bun test src/refunds")'],
     target: { kind: "conversation", key: "refunds-builder" },
     viewport: PHONE,
     requiredText: ["Idempotency-Key", "4 pass"],
@@ -262,6 +274,7 @@ export const SHOTS: ReadmeShot[] = [
   },
   {
     id: "phone-board",
+    subjects: ["[data-phone-kanban-tabs]", '[data-phone-kanban-column="assigned"] [data-phone-card]'],
     target: { kind: "project", project: "harbor-api" },
     viewport: PHONE,
     requiredText: ["Inbox", "In progress", "Waiting", "Done", "Back off webhook retries", "Idempotent refunds"],
@@ -296,6 +309,7 @@ export function buildCaptureEnvironment(root: string, source = process.env): Nod
     XDG_CACHE_HOME: path.join(root, "cache"),
     XDG_RUNTIME_DIR: path.join(root, "runtime"),
     LLV_STATE_OWNER: "viewer",
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
     LLV_STATE_DIR: state,
     LLV_CLAUDE_HOME: path.join(home, ".claude"),
     LLV_CODEX_HOME: path.join(home, ".codex"),
@@ -331,7 +345,10 @@ async function materialize(env: NodeJS.ProcessEnv, now: number) {
   const layout = seedDemoHome(env.HOME!, env.LLV_STATE_DIR!, now);
   /* The account modules resolve their directories from this process's
      environment, so point it at the demo home before loading them. */
-  for (const key of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_CLAUDE_HOME", "LLV_CODEX_HOME", "TMPDIR"] as const) process.env[key] = env[key];
+  for (const key of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_CLAUDE_HOME", "LLV_CODEX_HOME"] as const) process.env[key] = env[key];
+  // Keep the entire invented home under this process's temp exemption, even
+  // when the caller's scratch root sits inside the installation's state tree.
+  process.env.TMPDIR = path.dirname(env.TMPDIR!);
   await seedDemoAccounts(env.HOME!, now);
   await seedDemoOrchestrator(layout);
   return layout;
@@ -755,18 +772,23 @@ function forbiddenHostText(): string[] {
 
 async function main(): Promise<void> {
   const repoRoot = path.resolve(import.meta.dir, "..");
+  const checkOnly = process.argv.includes("--seed-only") || process.argv.includes("--check-layout");
   /* A fresh directory this run owns; nothing that existed before is cleared. */
   const captureRoot = createCaptureDirectory({
     envName: "LLV_README_CAPTURE_ROOT",
     prefix: "llv-readme",
     raw: process.env.LLV_README_CAPTURE_ROOT,
     repoRoot,
-    tempRoot: SCRATCH_ROOT,
+    tempRoot: checkOnly ? os.tmpdir() : SCRATCH_ROOT,
   });
   process.stdout.write(`capture root ${captureRoot}\n`);
   const env = buildCaptureEnvironment(captureRoot);
-  const now = Date.now();
+  const now = process.argv.includes("--seed-only") ? Date.parse("2026-10-19T12:00:00Z") : Date.now();
   const layout = await materialize(env, now);
+  if (process.argv.includes("--seed-only")) {
+    process.stdout.write("README seed completed\n");
+    return;
+  }
   /* With no runtime plane in the capture, the scanner decides whether the
      seat's conversation is hosted, and it calls a transcript running only
      while a process holds it open for writing. This process holds the
@@ -826,17 +848,57 @@ async function openTarget(page: Page, baseUrl: string, target: Target, layout: L
   await page.goto(`${baseUrl}/#f=${encodeURIComponent(file.path)}`, { waitUntil: "networkidle" });
 }
 
+/** Use the same prepared page and crop as the README capture. Never scroll a
+ * subject into view: that would repair the frame the check is meant to judge. */
+export async function assertFrameLayout(page: Page, shot: ReadmeShot, crop: CropRect | null = null) {
+  if (!shot.subjects.length) throw new Error(`${shot.id}: no defining subjects`);
+  const frame = crop ?? { x: 0, y: 0, ...shot.viewport };
+  const bounds = [];
+  for (const selector of shot.subjects) {
+    const subject = page.locator(selector).first();
+    await subject.waitFor({ state: "visible" });
+    const geometry = await subject.evaluate((element) => {
+      const rect = (node: Element) => {
+        const box = node.getBoundingClientRect();
+        return { x: box.x, y: box.y, width: box.width, height: box.height };
+      };
+      const clips = [];
+      for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent);
+        if (/(auto|scroll|hidden|clip)/.test(style.overflowX + style.overflowY)) {
+          clips.push({ ...rect(parent), clipX: /(auto|scroll|hidden|clip)/.test(style.overflowX), clipY: /(auto|scroll|hidden|clip)/.test(style.overflowY) });
+        }
+      }
+      return { box: rect(element), clips };
+    });
+    const { box } = geometry;
+    const inside = (clip: CropRect, clipX = true, clipY = true) =>
+      (!clipX || (box.x >= clip.x - 1 && box.x + box.width <= clip.x + clip.width + 1))
+      && (!clipY || (box.y >= clip.y - 1 && box.y + box.height <= clip.y + clip.height + 1));
+    if (!inside({ x: 0, y: 0, ...shot.viewport }) || !inside(frame)
+      || geometry.clips.some(clip => !inside(clip, clip.clipX, clip.clipY))) {
+      throw new Error(`${shot.id}: ${selector} clipped in ${shot.viewport.width}x${shot.viewport.height}: ${JSON.stringify({ ...geometry, frame })}`);
+    }
+    bounds.push({ selector, ...geometry });
+  }
+  return bounds;
+}
+
 async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, captureRoot: string): Promise<void> {
   const { chromium } = await import("playwright-core");
   const browser = await chromium.launch({
     executablePath: process.env.CHROME_BIN ?? "/usr/bin/google-chrome-stable",
     args: ["--font-render-hinting=none", "--force-color-profile=srgb"],
+    ignoreDefaultArgs: ["--hide-scrollbars"],
+    env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR },
   });
   const forbidden = forbiddenHostText();
   const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length).split(",");
+  const checkLayout = process.argv.includes("--check-layout");
+  const evidenceDir = checkLayout ? path.join(captureRoot, "layout") : EVIDENCE_DIR;
   const manifest: unknown[] = [];
   try {
-    fs.mkdirSync(EVIDENCE_DIR, { recursive: true });
+    fs.mkdirSync(evidenceDir, { recursive: true });
     for (const shot of SHOTS) {
       if (only && !only.includes(shot.id)) continue;
       /* Reduced motion: a running stage keeps its halo and drops the pulse,
@@ -868,16 +930,27 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
       for (const required of shot.requiredText) {
         if (!text.includes(required)) throw new Error(`${shot.id}: missing text ${JSON.stringify(required)}`);
       }
-      for (const absent of [...(shot.absentText ?? []), ...forbidden]) {
+      for (const absent of [...(shot.absentText ?? []), ...(checkLayout ? [] : forbidden)]) {
         if (text.includes(absent)) throw new Error(`${shot.id}: frame shows ${JSON.stringify(absent)}`);
       }
 
-      const textFindings = [...sensitiveClasses(text)];
+      // Geometry checks run under arbitrary private scratch paths, which can
+      // appear in a stage reader. Publication privacy belongs to full capture.
+      const textFindings = checkLayout ? [] : [...sensitiveClasses(text)];
       if (textFindings.length) throw new Error(`${shot.id}: the gate classifies the frame text as ${textFindings.join(", ")}`);
 
       const crop = shot.crop ? snapCrop(await shot.crop(page), shot.viewport) : null;
       const size = crop ? { width: crop.width, height: crop.height } : shot.viewport;
-      const png = path.join(EVIDENCE_DIR, `${shot.id}.png`);
+      const png = path.join(evidenceDir, `${shot.id}.png`);
+      if (checkLayout) {
+        // Keep the failed frame too, so CI explains the geometry refusal.
+        await page.screenshot({ path: png });
+        const bounds = await assertFrameLayout(page, shot, crop);
+        fs.writeFileSync(path.join(evidenceDir, `${shot.id}.json`), `${JSON.stringify(bounds, null, 2)}\n`);
+        await context.close();
+        process.stdout.write(`layout passed ${shot.id}\n`);
+        continue;
+      }
       const frame = await page.screenshot({ path: png, ...(crop ? { clip: crop } : {}) });
       /* A browser raster never carries provenance, so those two classes are
          expected here; anything else the gate finds in the pixels is not.
@@ -974,7 +1047,7 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
   } finally {
     await browser.close();
   }
-  if (!only) {
+  if (!only && !checkLayout) {
     const driver = fs.readFileSync(path.join(repoRoot, "scripts/capture-readme-media.ts"));
     const seed = fs.readFileSync(path.join(repoRoot, "scripts/readme-demo-state.ts"));
     fs.writeFileSync(
