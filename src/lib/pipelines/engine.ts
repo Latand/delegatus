@@ -4085,8 +4085,10 @@ function passedStagePublicationPark(pipeline: Pipeline, attempt: PipelineStageAt
 /** Custody can refuse a pass before its head is accepted or completedAt is
  * recorded. A guarded answer may retire that attempt for a fresh repair. */
 function passedStageCustodyPark(pipeline: Pipeline, attempt: PipelineStageAttempt | null): boolean {
+  const detail = pipeline.stateDetail;
   return pipeline.cursor?.state === "committing" && attempt?.state === "needs_decision"
-    && attempt.verdict?.status === "pass" && pipeline.stateDetail?.startsWith("settling the stage push:") === true;
+    && attempt.verdict?.status === "pass" && (detail?.startsWith("settling the stage push:") === true
+      || detail?.startsWith("stage push refused:") === true);
 }
 
 function awaitingPassedPublication(pipeline: Pipeline): boolean {

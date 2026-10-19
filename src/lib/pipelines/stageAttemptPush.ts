@@ -271,13 +271,11 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
         return refuse("the recorded push candidate was not confirmed on the delivery remote");
       }
     }
-    // Accepted history remains authoritative across attempts, including when
-    // a repair merges it back into a rejected rewrite. The actual delivery tip
-    // is also an existing prefix when the launch already started on it. A tip
-    // imported after launch still needs creation proof below.
+    // Only accepted or durably published history, or a delivery tip whose
+    // commits are independently verified, may bypass repeated receipt checks.
     const publishedPrefix = tip && (await exec("git", ["merge-base", "--is-ancestor", tip, start.head], pipeline.worktreeDir)).code === 0 ? tip : null;
-    const historyPrefixes = [...new Set([pipeline.lastPassedCommit, publishedPrefix]
-      .filter((sha): sha is string => typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha)))];
+    const historyPrefixes = new Set([pipeline.lastPassedCommit, pipeline.publishedCommit]
+      .filter((sha): sha is string => typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha)));
     let nativeCreated: Set<string> | undefined;
     const nativeCreation = async (sha: string): Promise<boolean> => {
       // Every existing start receipt, including a versionless one, requires
@@ -353,7 +351,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       // Bound each read, not the number of commits a real stage may create.
       for (let offset = 0; ; offset += 128) {
         const log = await exec("git", ["rev-list", "--topo-order", "--max-count=128", `--skip=${offset}`, `${suffixAnchor}..${target}`,
-          ...historyPrefixes.map(sha => `^${sha}`)], pipeline.worktreeDir);
+          ...[...historyPrefixes].map(sha => `^${sha}`)], pipeline.worktreeDir);
         if (log.code !== 0) return `commit ${target} has unreadable ancestry`;
         const commits = log.stdout.trim().split("\n").filter(Boolean);
         if (offset === 0 && !commits.length) {
@@ -387,6 +385,11 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       }
       return null;
     };
+    if (publishedPrefix) {
+      const error = await verifiedSuffix(publishedPrefix);
+      if (error) return refuse(error);
+      historyPrefixes.add(publishedPrefix);
+    }
     if (repair || directories.length > 1) {
       // Replacements retain the head they were launched on, even when a
       // rewritten commit has a new receipt under the replacement's identity.
@@ -414,20 +417,20 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       // A remote behind the attempt's start is normal before publication. The
       // lane's own ancestry cannot prove an imported remote commit belongs to
       // this attempt.
-      if (publishedPrefix) {
-        const error = await verifiedSuffix(head);
-        if (error) return refuse(error);
-        if (await remoteHead() !== tip) return refuse("the remote tip raced the attempt proof");
-        const current = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
-        if (current.code !== 0 || current.stdout.trim() !== head) return refuse("the lane head raced the attempt proof");
-        return null;
-      }
       // A push can bypass pre-push (and legacy launches had no hook). Matching
       // tips still need creation proof for every commit before adoption.
       const error = await verifiedSuffix(tip);
       if (error) return refuse(error);
     }
     if (pushed !== null && pushed !== `${ref}\n${expectedUrl}\n`) return refuse("the push receipt names another delivery target");
+    if (publishedPrefix) {
+      const error = await verifiedSuffix(head);
+      if (error) return refuse(error);
+      if (await remoteHead() !== tip) return refuse("the remote tip raced the attempt proof");
+      const current = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+      if (current.code !== 0 || current.stdout.trim() !== head) return refuse("the lane head raced the attempt proof");
+      return null;
+    }
     if (head !== start.head && head !== tip) {
       if ((await exec("git", ["merge-base", "--is-ancestor", tip, head], pipeline.worktreeDir)).code !== 0)
         return refuse(`commit ${head} moved away from the proved remote tip ${tip}`);

@@ -192,6 +192,51 @@ test.each([
   } finally { f.close(); }
 });
 
+for (const proof of ["proved", "unrecorded", "hooks-off", "foreign"] as const) {
+  test(`a replacement validates the already-published ${proof} prefix against attempt custody`, async () => {
+    const f = await fixture();
+    try {
+      let prefix: string;
+      if (proof === "foreign") {
+        const foreign = path.join(f.root, "published-foreign-prefix");
+        await f.git(f.lane(), "worktree", "add", "--detach", foreign, "HEAD");
+        await f.git(foreign, "commit", "--allow-empty", "-m", "published foreign prefix");
+        prefix = await f.git(foreign, "rev-parse", "HEAD");
+        await f.git(f.lane(), "merge", "--ff-only", prefix);
+      } else if (proof === "hooks-off") {
+        const made = await f.execute("git", ["-c", "core.hooksPath=", "commit", "--allow-empty", "-m", "published hooks-off prefix"], f.lane());
+        expect(made.code, made.stderr).toBe(0);
+        prefix = await f.git(f.lane(), "rev-parse", "HEAD");
+      } else prefix = await f.commit(`published ${proof} prefix`);
+
+      const old = current().runs[0]!.attempts[0]!;
+      if (proof === "unrecorded") fs.unlinkSync(path.join(stageGitReceiptDirectory(old.launchId!), "commits", prefix));
+      if (proof === "proved") await f.agentGit(f.lane(), "push", "origin", `HEAD:${current().delivery!.target.branch}`);
+      else {
+        const pushed = await f.execute("git", ["-c", "core.hooksPath=", "push", "origin", `HEAD:${current().delivery!.target.branch}`], f.lane());
+        expect(pushed.code, pushed.stderr).toBe(0);
+      }
+      expect(await f.git(f.remote, "rev-parse", current().delivery!.target.branch)).toBe(prefix);
+
+      f.h.durableTurns.set(old.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(old.startedAt!) + 1 });
+      f.h.advanceWallClock(600_000);
+      f.h.ports.conversationTurnInterrupted = async () => "dead";
+      await tickPipelines([entry(old.agentPath!)], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      expect(current().runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "host-lost" });
+      const head = await f.commit("replacement suffix after published prefix");
+      await f.finish(2);
+      if (proof === "proved") {
+        expect(current()).toMatchObject({ lastPassedCommit: head, publishedCommit: head, cursor: { stageId: "review", state: "pending" } });
+      } else {
+        expect(current().state).toBe("needs_decision");
+        expect(current().stateDetail).toContain(prefix);
+        expect(current().publishedCommit).toBeNull();
+      }
+    } finally { f.close(); }
+  });
+}
+
 test("a passed replacement's custody refusal can be answered without resetting its checkout", async () => {
   const f = await fixture();
   try {

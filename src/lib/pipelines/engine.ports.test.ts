@@ -1,7 +1,8 @@
 import { assertCpuReadGuardSurvivesSpyRestoration, startAutoAndSettle } from "./engineEnvironment.fixture";
-import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, accountManager, realExec, engineModule, defaultPipelinePorts, pipelineClaudePermissionMode, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, tickFlow, saveFlows, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, successorOnPullRequestBranch, create, publishHarness, PUBLISH_STAGES } from "./engine.fixture";
+import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, accountManager, realExec, engineModule, defaultPipelinePorts, pipelineClaudePermissionMode, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, tickFlow, saveFlows, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, pipelineRevision, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, successorOnPullRequestBranch, create, publishHarness, PUBLISH_STAGES } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, PipelinePorts } from "./engine.fixture";
 import { shortId } from "@/lib/shortIds";
+import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 
 
 test("default pane liveness keeps failed or unreadable tmux observations alive", async () => {
@@ -2378,6 +2379,21 @@ test("attempt Git custody refuses an unproved detached push and fails the stage 
     expect(failed.stateDetail).toContain("stage push refused");
     expect(failed.lastPassedCommit).toBe(f.base);
     expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.base);
+    const parked = loadPipelines().find(pipeline => pipeline.id === f.id)!;
+    f.h.setConversationActive(true);
+    const active = await engineModule.patchPipeline(f.id, { action: "resolve-decision", clientRequestId: "native-custody-active-producer",
+      answer: "Repair the missing creation evidence and rerun the stage.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(active.status).toBe(409);
+    expect(loadPipelines().find(pipeline => pipeline.id === f.id)!.runs[0]!.attempts).toHaveLength(1);
+    f.h.setConversationActive(false);
+    const resumed = await engineModule.patchPipeline(f.id, { action: "resolve-decision", clientRequestId: "native-custody-repair",
+      answer: "Repair the missing creation evidence and rerun the stage.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(resumed.error).toBeUndefined();
+    expect(loadPipelines().find(pipeline => pipeline.id === f.id)!.runs[0]!.attempts).toHaveLength(2);
+    expect(loadPipelines().find(pipeline => pipeline.id === f.id)!.lastPassedCommit).toBe(f.base);
+    expect(loadPipelines().find(pipeline => pipeline.id === f.id)!.publishedCommit).toBeNull();
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 

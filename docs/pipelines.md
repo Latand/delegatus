@@ -235,12 +235,12 @@ worktrees. A fresh publication decision can carry the accepted producer's proof
 the same way. Each launch's start must name this worktree; a new starting head,
 shared Git identity or caller-supplied reflog text grants no creation proof.
 
-The lane's accepted head is a custody boundary across attempts: its ancestors
-need no new creation receipts when a later repair restores that history. The
-actual delivery tip is another verified prefix when it is already an ancestor
-of the launch's starting head. Settlement rechecks that tip before accepting
-the prefix. Commits imported after launch and new suffix commits still need
-creation proof; a tracking ref alone cannot authorize them.
+The lane's accepted head (`lastPassedCommit` or durable `publishedCommit`) is a
+custody boundary across attempts: its ancestors need no new creation receipts
+when a later repair restores that history. A delivery tip that predates launch
+has no proof on its own; settlement checks it against that accepted boundary,
+predecessor attempt receipts or the verified base. New suffix commits still
+need creation proof, and a tracking ref alone cannot authorize them.
 The ordinary committer fences the head captured before custody verification,
 so a later foreign tip cannot enter through the handoff after proof checking.
 
