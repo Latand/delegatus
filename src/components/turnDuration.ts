@@ -37,11 +37,20 @@ export function clockDuration(seconds: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
+/** A missing host's cached live row has one minute to refresh. Unknown
+ * process state without explicit host-gone evidence is left unchanged. */
+export const HOSTLESS_WORKING_GRACE_SECONDS = 60;
+export function hostGoneWorkExpired(file: Partial<Pick<FileEntry, "proc" | "activityReason" | "mtime">>, now: number): boolean {
+  return file.proc !== "running" && !!file.activityReason?.startsWith("structured_spawn_host_gone")
+    && typeof file.mtime === "number" && now - file.mtime >= HOSTLESS_WORKING_GRACE_SECONDS;
+}
+
 /** Whether the card's current turn is open and the agent is live — the exact
     condition the pinned working spinner paints from. Anything that states
     something about that turn (the strip's interrupt note) reads it from here, so
     the two can never end up asserting opposite things about the same turn. */
-export function turnIsRunning(file: Pick<FileEntry, "lastTurn" | "activity"> & Partial<Pick<FileEntry, "proc" | "authoritativeTurn" | "activityReason">>): boolean {
+export function turnIsRunning(file: Pick<FileEntry, "lastTurn" | "activity"> & Partial<Pick<FileEntry, "proc" | "authoritativeTurn" | "activityReason" | "mtime">>, now = Date.now() / 1000): boolean {
+  if (file.proc === "killed" || file.proc === "done" || hostGoneWorkExpired(file, now)) return false;
   const live = file.activity === "live" && (!file.lastTurn || file.lastTurn.endedAt === null);
   /* A running host whose open turn went quiet is still that turn: its activity
      reads «stalled», not «live», and the activity facts say how long it stood. */
@@ -92,12 +101,12 @@ export function workedDurationCaption(durationMs: number, locale: Locale = getLo
     otherwise callers fall back to their own "…ago" label and, for a finished
     turn, the run length is parked in the tooltip («останній прогін: 12 хв»). */
 export function recencyTurnInfo(
-  file: Pick<FileEntry, "lastTurn" | "activity">,
+  file: Parameters<typeof turnIsRunning>[0],
   now = Date.now(),
   locale: Locale = getLocale(),
 ): { running: string | null; idleTitle: string | null } {
   const turn = file.lastTurn;
-  if (turn && turn.endedAt === null && file.activity === "live") {
+  if (turn && turn.endedAt === null && file.activity === "live" && turnIsRunning(file, now / 1000)) {
     const elapsed = Math.max(0, (now - turn.startedAt) / 1000);
     return { running: translate(locale, "turn.running", { d: humanizeDuration(elapsed, locale) }), idleTitle: null };
   }

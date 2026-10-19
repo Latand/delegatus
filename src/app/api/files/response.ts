@@ -1,3 +1,5 @@
+import { finishedWorkIndex } from "@/lib/attention/finishedWork";
+import { withFinishedAttention } from "@/lib/attention/finishedAttention";
 import { stateWriteHealth } from "@/lib/state/diskFull";
 import { filesReadSummary } from "@/lib/filesReadSummary";
 import { withPrototypeReviewSummaries, withoutPrototypeReviews, prototypeReviewNotices, seatDecisionNotices } from "@/lib/prototypeReview/read";
@@ -808,6 +810,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      condition) — that must degrade to "pipelines unavailable", never take
      the whole files poll down with it. */
   let pipelines: Pipeline[] = [];
+  let terminalPipelines: Pipeline[] = [];
+  let terminalOwnershipComplete = true;
   let pipelinesError: string | undefined;
   try {
     /* A GET never takes the pipeline lock and never persists (issue #798).
@@ -821,7 +825,29 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
       pinnedPaths: visibilityPinnedPaths,
       memberships: registrySnapshot.memberships,
     });
+    terminalPipelines = loaded;
+    try {
+      const archivedOwnerIds = new Set<string>();
+      for (const file of files) {
+        for (const membership of file.durableLineage?.memberships ?? []) {
+          if (membership.kind === "pipeline") archivedOwnerIds.add(membership.containerId);
+        }
+        const conversationId = file.conversationId?.startsWith("conversation_")
+          ? conversationLookup.canonicalConversationId(file.conversationId as `conversation_${string}`)
+          : null;
+        for (const membership of conversationId ? registrySnapshot.memberships[conversationId] ?? [] : []) {
+          if (membership.kind === "pipeline") archivedOwnerIds.add(membership.containerId);
+        }
+      }
+      const activeIds = new Set(loaded.map(pipeline => pipeline.id));
+      const archivedIds = [...archivedOwnerIds].filter(id => !activeIds.has(id));
+      terminalPipelines = [...loaded, ...routeDependencies.loadArchivedPipelinesForOwnership(archivedIds)];
+    } catch (error) {
+      terminalOwnershipComplete = false;
+      console.error("[files] archived pipeline ownership unreadable; finished attention is unverified", error);
+    }
   } catch (error) {
+    terminalOwnershipComplete = false;
     pipelinesError = error instanceof Error ? error.message : "pipeline registry unreadable";
     console.error("[files] pipelines store unreadable; serving without pipelines", error);
   }
@@ -896,7 +922,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   projected.flows = projected.flows.map((flow) => ({ ...flow, project: remapProject(flow.project) }));
   pipelines = pipelines.map((pipeline) => ({ ...pipeline, project: remapProject(pipeline.project) }));
   workflows = workflows.map((workflow) => ({ ...workflow, project: remapProject(workflow.project) }));
-  const boardTasks = tasks.tasks.map((task) => ({ ...task, project: remapProject(task.project) }));
+  let boardTasks = tasks.tasks.map((task) => ({ ...task, project: remapProject(task.project) }));
   const projectNames = new Map(effectiveProjectCatalog.map((entry) => [entry.project, entry.displayName] as const));
   for (const file of projected.files) {
     file.projectName = projectNames.get(file.project) ?? file.projectName;
@@ -925,6 +951,13 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      classifier recorded for each conversation. */
   overlayOperatorAsks(projected.files);
   markTiming("files-operator-asks");
+  const finished = finishedWorkIndex(boardTasks, terminalPipelines, seatIdentityResolver(conversationLookup.canonicalConversationId), [], terminalOwnershipComplete);
+  /* The task column receives the same terminal ownership projection as the
+     conversation card. Visible pipelines may omit a closed or archived owner,
+     so leaving this derivation to the client would keep the task assigned. */
+  boardTasks = boardTasks.map(task => ({ ...task, status: finished.taskStatus(task) }));
+  projected.files = projected.files.map(file => withFinishedAttention(file, Date.now() / 1000, finished));
+  markTiming("files-finished-attention");
   /* Who answers each wait (docs/design/attention-auto-resolve.md): a worker's
      ask, a parked lane and a stopped merge go to the project's designated seat
      first, and the operator's list keeps what is theirs. Read after every

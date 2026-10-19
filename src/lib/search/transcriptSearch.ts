@@ -1,3 +1,4 @@
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite } from "@/lib/sqliteReadAttribution";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -233,8 +234,6 @@ function migrateSearchSchema(db: Database): void {
         INSERT INTO transcript_messages SELECT * FROM transcript_messages_previous;
         DROP TABLE transcript_messages_previous;
         DROP TABLE transcript_files_previous;
-        CREATE INDEX IF NOT EXISTS transcript_messages_path
-          ON transcript_messages(transcript_path, message_index);
         UPDATE transcript_messages
           SET sort_timestamp = COALESCE(timestamp,
             (SELECT mtime_ms / 1000.0 FROM transcript_files WHERE path = transcript_path))
@@ -258,6 +257,26 @@ function migrateSearchSchema(db: Database): void {
   }
 }
 
+const transcriptPathIndex = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS transcript_messages_path
+        ON transcript_messages(transcript_path, message_index)`,
+]);
+
+const transcriptHitIndex = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS transcript_messages_search_hit
+        ON transcript_messages(id, speaker, body_hash, sort_timestamp, transcript_path)`,
+]);
+
+const transcriptTimeIndex = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS transcript_messages_time
+        ON transcript_messages(sort_timestamp, speaker, transcript_path, timestamp)`,
+]);
+
+const transcriptBodyHashIndex = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS transcript_messages_body_hash
+        ON transcript_messages(speaker, body_hash)`,
+]);
+
 function openWriterDatabase(): Database {
   const filename = statePath("transcript-search.sqlite");
   fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
@@ -265,6 +284,10 @@ function openWriterDatabase(): Database {
   const db = observeSqlite(new Database(filename, { create: true, strict: true }), "transcript-search");
   try {
     db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;");
+    transcriptPathIndex.assertRepairAuthority(db, path.dirname(filename));
+    transcriptHitIndex.assertRepairAuthority(db, path.dirname(filename));
+    transcriptTimeIndex.assertRepairAuthority(db, path.dirname(filename));
+    transcriptBodyHashIndex.assertRepairAuthority(db, path.dirname(filename));
     db.exec(`
       CREATE TABLE IF NOT EXISTS transcript_files (
         path TEXT PRIMARY KEY,
@@ -288,24 +311,21 @@ function openWriterDatabase(): Database {
         UNIQUE(transcript_path, message_index),
         FOREIGN KEY(transcript_path) REFERENCES transcript_files(path) ON DELETE CASCADE
       );
-      CREATE INDEX IF NOT EXISTS transcript_messages_path
-        ON transcript_messages(transcript_path, message_index);
       CREATE VIRTUAL TABLE IF NOT EXISTS transcript_messages_fts USING fts5(
         body,
         tokenize = "unicode61 remove_diacritics 0 tokenchars '#_'"
       );
     `);
     migrateSearchSchema(db);
+    transcriptPathIndex.install(db, path.dirname(filename));
     if (db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM transcript_messages").get()!.n === 0) {
       /* Empty fresh indexes are cheap to create before the first indexing pass. */
       db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS transcript_messages_vocab
           USING fts5vocab(transcript_messages_fts, row);
-        CREATE INDEX IF NOT EXISTS transcript_messages_search_hit
-          ON transcript_messages(id, speaker, body_hash, sort_timestamp, transcript_path);
-        CREATE INDEX IF NOT EXISTS transcript_messages_time
-          ON transcript_messages(sort_timestamp, speaker, transcript_path, timestamp);
       `);
+      transcriptHitIndex.install(db, path.dirname(filename));
+      transcriptTimeIndex.install(db, path.dirname(filename));
     }
     secureDatabaseFiles(filename);
     return db;
@@ -327,13 +347,10 @@ export function prepareTranscriptSearchIndexInBackground(): void {
       SET sort_timestamp = COALESCE(timestamp,
         (SELECT mtime_ms / 1000.0 FROM transcript_files WHERE path = transcript_path))
       WHERE sort_timestamp IS NULL;
-      CREATE INDEX IF NOT EXISTS transcript_messages_search_hit
-        ON transcript_messages(id, speaker, body_hash, sort_timestamp, transcript_path);
-      CREATE INDEX IF NOT EXISTS transcript_messages_time
-        ON transcript_messages(sort_timestamp, speaker, transcript_path, timestamp);
-      CREATE INDEX IF NOT EXISTS transcript_messages_body_hash
-        ON transcript_messages(speaker, body_hash);
     `);
+    transcriptHitIndex.install(db, path.dirname(filename));
+    transcriptTimeIndex.install(db, path.dirname(filename));
+    transcriptBodyHashIndex.install(db, path.dirname(filename));
     secureDatabaseFiles(filename);
   } finally {
     db.close();

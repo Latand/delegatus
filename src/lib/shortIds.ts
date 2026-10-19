@@ -37,7 +37,8 @@ export function shortenHashesInText(text: string): string {
   return text.replace(/(?<![\w/])(?:(?:repo-|dir-|pr_|evt_|rpt_|task-legacy:|roles-\d+-)[a-f0-9]{20,64}|[a-f0-9]{64}|[a-f0-9]{40})(?![\w/])/gi, shortId);
 }
 
-const authored = new Set(["text", "details", "body", "prompt", "spec", "summary", "findings", "snippet", "content", "comment", "answer", "title", "task", "clientRequestId", "idempotencyKey"]);
+const authored = new Set(["text", "details", "body", "prompt", "spec", "summary", "findings", "snippet", "content", "comment", "answer", "title", "task", "clientRequestId", "idempotencyKey",
+  "cursor", "nextCursor", "next_cursor", "page_of"]);
 const status = new Set(["stateDetail", "error", "detail"]);
 export function shortIdsInAnswer<T>(payload: T): T {
   const seen = new WeakMap<object, unknown>();
