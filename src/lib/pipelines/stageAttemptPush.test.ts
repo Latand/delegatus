@@ -486,7 +486,7 @@ async function foreignIntegration(local: boolean) {
   }
   const checks: { headRefOid: string; baseRefName: string; state: string; isDraft: boolean;
     statusCheckRollup: Array<Record<string, unknown>> } = { headRefOid: head, baseRefName: "main", state: "OPEN", isDraft: false,
-    statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }] };
+    statusCheckRollup: [{ __typename: "StatusContext", context: "ci", state: "SUCCESS" }] };
   let required: unknown = { protected: true, protection: { required_status_checks: { contexts: ["ci"] } } };
   let checksCode = 0;
   const commands: string[][] = [];
@@ -571,8 +571,8 @@ test.each(["extra commit", "amended merge", "non-main parent", "unpublished"])("
 test.each(["pending", "red", "empty", "malformed rollup", "stale head", "wrong base", "missing required", "malformed protection", "malformed protection body", "malformed contexts", "unavailable"])("published clean integration waits or refuses when checks are %s", async mode => {
   const f = await foreignIntegration(true);
   try {
-    if (mode === "pending") f.checks.statusCheckRollup[0]!.status = "IN_PROGRESS";
-    if (mode === "red") f.checks.statusCheckRollup[0]!.conclusion = "FAILURE";
+    if (mode === "pending") f.checks.statusCheckRollup[0]!.state = "PENDING";
+    if (mode === "red") f.checks.statusCheckRollup[0]!.state = "FAILURE";
     if (mode === "empty") f.checks.statusCheckRollup = [];
     if (mode === "malformed rollup") f.checks.statusCheckRollup.push(null as never);
     if (mode === "stale head") f.checks.headRefOid = f.reviewed;
@@ -587,7 +587,7 @@ test.each(["pending", "red", "empty", "malformed rollup", "stale head", "wrong b
     expect(await f.own("rev-parse", "HEAD")).toBe(f.head);
     if (["pending", "empty", "missing required", "unavailable"].includes(mode)) {
       expect(result).toMatchObject({ deferred: true });
-      f.checks.statusCheckRollup = [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }];
+      f.checks.statusCheckRollup = [{ __typename: "StatusContext", context: "ci", state: "SUCCESS" }];
       f.setRequired({ protected: true, protection: { required_status_checks: { contexts: ["ci"] } } });
       f.setChecksCode(0);
       expect(await settleStageAttemptPush(f.pipeline, f.attempt, f.exec, NOW)).toEqual({ ok: true, sha: f.head });
@@ -606,6 +606,44 @@ test.each(["FAILURE", "PENDING"] as const)("a green check run cannot hide an ind
     expect(result?.ok).toBe(false);
     if (state === "PENDING") expect(result).toMatchObject({ deferred: true });
     expect(await f.own("rev-parse", "HEAD")).toBe(f.head);
+  } finally { await f.close(); }
+});
+
+test.each(["FAILURE", "IN_PROGRESS"] as const)("a namesake run in another workflow cannot hide required %s", async state => {
+  const f = await foreignIntegration(true);
+  try {
+    f.checks.statusCheckRollup = [
+      { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-16T10:01:00Z",
+        app: { id: 123 }, checkSuite: { workflowRun: { workflow: { name: "optional-format" } } } },
+      { __typename: "CheckRun", name: "ci", status: state === "FAILURE" ? "COMPLETED" : state,
+        conclusion: state === "FAILURE" ? "FAILURE" : "", startedAt: "2026-10-16T10:00:00Z",
+        app: { id: 123 }, checkSuite: { workflowRun: { workflow: { name: "required-tests" } } } },
+    ];
+    const result = await settleStageAttemptPush(f.pipeline, f.attempt, f.exec, NOW);
+    expect(result?.ok).toBe(false);
+    if (state === "IN_PROGRESS") expect(result).toMatchObject({ deferred: true });
+    expect(await f.own("rev-parse", "HEAD")).toBe(f.head);
+  } finally { await f.close(); }
+});
+
+test.each(["status only", "wrong app", "missing app identity", "required app", "unrestricted source"] as const)("required check source app is enforced (%s)", async mode => {
+  const f = await foreignIntegration(true);
+  try {
+    const appId = mode === "unrestricted source" ? null : 123;
+    f.setRequired({ protected: true, protection: { required_status_checks: { contexts: [], checks: [{ context: "ci", app_id: appId }] } } });
+    if (mode === "status only") {
+      f.checks.statusCheckRollup = [{ __typename: "StatusContext", context: "ci", state: "SUCCESS" }];
+    } else {
+      f.checks.statusCheckRollup = [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS",
+        startedAt: "2026-10-16T10:01:00Z", ...(mode === "missing app identity" ? {} : { app: { id: mode === "wrong app" || mode === "unrestricted source" ? 456 : 123 } }),
+        checkSuite: { workflowRun: { workflow: { name: "required-tests" } } } }];
+    }
+    const result = await settleStageAttemptPush(f.pipeline, f.attempt, f.exec, NOW);
+    if (mode === "required app" || mode === "unrestricted source") expect(result).toEqual({ ok: true, sha: f.head });
+    else {
+      expect(result?.ok).toBe(false);
+      expect(result).toMatchObject({ deferred: true });
+    }
   } finally { await f.close(); }
 });
 

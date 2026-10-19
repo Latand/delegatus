@@ -3,7 +3,7 @@ import path from "node:path";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
-import { rollupChecks } from "@/lib/forge/checkRollup";
+import { rollupChecksWithIdentity } from "@/lib/forge/checkRollup";
 import type { ExecPort } from "@/lib/workflows/provision";
 import { pipelineLiteralGitEnv, verifyPassedHeadIntegration, type PipelineGitResult } from "./git";
 import type { Pipeline, PipelineStageAttempt } from "./types";
@@ -39,7 +39,7 @@ async function publishedIntegrationGreen(pipeline: Pipeline, target: string, mai
   if (!view || view.state !== "OPEN" || view.isDraft !== false || view.headRefOid !== target || view.baseRefName !== pipeline.baseBranch) return false;
   if (!Array.isArray(view.statusCheckRollup) || view.statusCheckRollup.some(entry => !entry || typeof entry !== "object"
     || !(typeof entry.name === "string" || typeof entry.context === "string"))) return false;
-  const checks = rollupChecks(view.statusCheckRollup);
+  const checks = rollupChecksWithIdentity(view.statusCheckRollup);
   if (!checks.length) throw new StageIntegrationChecksPending("the published integration is waiting for checks to register");
   if (checks.some(check => check.verdict === "red")) return false;
   const protection = await read(["api", `repos/${repository}/branches/${encodeURIComponent(pipeline.baseBranch)}`]) as {
@@ -52,9 +52,13 @@ async function publishedIntegrationGreen(pipeline: Pipeline, target: string, mai
   const contexts = required?.contexts === undefined ? [] : required.contexts;
   const configured = required?.checks === undefined ? [] : required.checks;
   if (!Array.isArray(contexts) || !contexts.every(name => typeof name === "string")
-    || !Array.isArray(configured) || !configured.every(check => check && typeof check.context === "string")) return false;
+    || !Array.isArray(configured) || !configured.every(check => check && typeof check === "object" && typeof check.context === "string"
+      && (check.app_id === null || (typeof check.app_id === "number" && Number.isSafeInteger(check.app_id))))) return false;
+  const requiredSatisfied = (name: string, appId?: number | null) => checks.some(check => check.name === name && check.verdict === "green"
+    && (appId == null || (check.source === "check" && check.appId === appId)));
   if (checks.some(check => check.verdict !== "green")
-    || [...contexts, ...configured.map(check => check.context)].some(name => !checks.some(check => check.name === name && check.verdict === "green"))) {
+    || contexts.some(name => !requiredSatisfied(name))
+    || configured.some(check => !requiredSatisfied(check.context, check.app_id as number | null))) {
     throw new StageIntegrationChecksPending("the published integration is waiting for green checks");
   }
   return true;
