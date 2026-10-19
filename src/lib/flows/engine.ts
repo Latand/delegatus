@@ -1949,10 +1949,11 @@ export async function reserveReviewerSpawnOffLoop(
     const receipt = request?.clientAttemptId ? registry.spawnReceiptForClientAttempt(request.clientAttemptId) : null;
     if (receipt?.state === "starting" && !receipt.key && !receipt.pane && !receipt.admissionOwner) {
       try {
-        await registry.failSpawnOffLoop(receipt.launchId, "flow changed before reviewer dispatch", () => {
+        const retired = await registry.failSpawnOffLoop(receipt.launchId, "flow changed before reviewer dispatch", () => {
           const fresh = registry.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId];
           if (!fresh || fresh.state !== "starting" || fresh.key || fresh.pane || fresh.admissionOwner) throw new FlowSpawnAdmissionChanged();
         });
+        if (!retired) throw new Error("agent registry is busy");
       } catch (cleanup) { if (!(cleanup instanceof FlowSpawnAdmissionChanged)) throw cleanup; }
     }
     return null;

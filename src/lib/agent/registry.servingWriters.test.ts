@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { listCodexAccounts, codexSessionRoots } from "@/lib/accounts/codex";
@@ -39,7 +40,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function fixture(shared = false) {
+function fixture(shared = false, writerDeadlineMs?: number) {
   // Serving commands have already resolved their account and board catalogs.
   // Initialize those prerequisites in this private installation, before timing
   // the registry wait and its recovery; no measured registry operation is warmed.
@@ -47,7 +48,7 @@ function fixture(shared = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "registry-serving-"));
   roots.push(root);
   const sqliteFilename = shared ? path.join(process.env.LLV_STATE_DIR!, "state.sqlite") : path.join(root, "registry.sqlite");
-  const registry = new AgentRegistry(path.join(root, "registry.json"), () => false, undefined, { sqliteMode: "sqlite", sqliteFilename });
+  const registry = new AgentRegistry(path.join(root, "registry.json"), () => false, undefined, { sqliteMode: "sqlite", sqliteFilename, sqliteWriterDeadlineMs: writerDeadlineMs });
   setAgentRegistryForTests(registry);
   const artifactPath = `/sessions/${SESSION}.jsonl`;
   const profile = emptyLaunchProfile({ cwd: "/repo", title: "Registry admission fixture" });
@@ -226,6 +227,43 @@ for (const family of ["flow", "resume"] as const) for (const phase of ["reservat
     } finally { f.registry.close(); }
   });
 }
+
+for (const family of ["flow", "resume"] as const) test(`${family} reports refused revocation cleanup and a reopened writer can finish it`, async () => {
+  const f = fixture(false, 0); f.seed();
+  const peer = new Database(f.sqliteFilename);
+  let locked = false;
+  const current = () => {
+    const receipt = Object.values(f.registry.snapshot().receipts)[0];
+    if (!receipt?.membershipAdmitted) return true;
+    if (!locked) { peer.exec("BEGIN IMMEDIATE"); locked = true; }
+    return false;
+  };
+  try {
+    let work: Promise<unknown>;
+    if (family === "resume") {
+      const entry = { engine: "codex", path: f.artifactPath } as FileEntry;
+      const spec = { engine: "codex", cwd: "/repo", windowName: "Resume" } as Parameters<typeof beginRegistryResumeOffLoop>[1];
+      work = beginRegistryResumeOffLoop(entry, spec, () => { if (!current()) throw new Error("resume authority replaced"); }, f.registry);
+    } else {
+      const flow = { id: "cleanup-refusal", project: "fixture", cwd: "/repo", implementerPath: f.artifactPath,
+        implementerConversationId: f.registry.conversationForPath(f.artifactPath)!.id,
+        roles: { reviewer: { engine: "codex", model: null, effort: "high" } }, rounds: [] } as unknown as Flow;
+      const round = newRound(flow, "button", null); round.reviewerBindingId = "cleanup-reviewer-binding";
+      work = reserveReviewerSpawnOffLoop(flow, round, flow.roles.reviewer, null, f.registry, current);
+    }
+    await expect(work).rejects.toThrow("agent registry is busy");
+    expect(locked).toBe(true);
+    const receipt = Object.values(f.registry.snapshot().receipts)[0]!;
+    expect(receipt.state).toBe("starting");
+    peer.exec("ROLLBACK"); locked = false;
+    f.registry.close();
+    const reopened = new AgentRegistry(path.join(f.root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    try {
+      expect(await reopened.failSpawnOffLoop(receipt.launchId, "revoked before dispatch")).toBe(true);
+      expect(reopened.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId]?.state).toBe("failed");
+    } finally { reopened.close(); }
+  } finally { if (locked) peer.exec("ROLLBACK"); peer.close(); f.registry.close(); }
+});
 
 test("actual launch account reconciliation waits and rereads the materialized receipt", async () => {
   const f = fixture();

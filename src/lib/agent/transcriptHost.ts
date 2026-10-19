@@ -704,10 +704,11 @@ export async function beginRegistryResumeOffLoop(
     const receipt = registry.spawnReceiptForClientAttempt(clientAttemptId);
     if (receipt?.state === "starting" && !receipt.key && !receipt.pane && !receipt.admissionOwner) {
       try {
-        await registry.failSpawnOffLoop(receipt.launchId, "resume admission ended before dispatch", () => {
+        const retired = await registry.failSpawnOffLoop(receipt.launchId, "resume admission ended before dispatch", () => {
           const fresh = registry.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId];
           if (!fresh || fresh.state !== "starting" || fresh.key || fresh.pane || fresh.admissionOwner) throw new TranscriptResumeAdmissionChanged();
         });
+        if (!retired) throw new Error("agent registry is busy");
       } catch (cleanup) { if (!(cleanup instanceof TranscriptResumeAdmissionChanged)) throw cleanup; }
     }
     throw error;
