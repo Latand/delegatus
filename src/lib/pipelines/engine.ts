@@ -1,4 +1,5 @@
 import { ensureStagePullRequest, stagePullRequestProducer, type StagePullRequestResult } from "./stagePullRequest";
+import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptPush";
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, withControllerPipelineScope } from "./controllerScope";
@@ -13704,6 +13705,8 @@ export async function patchPipeline(
         }
       }
     } else if (req.action === "pause") {
+      const pause = pipelinePauseInputSchema.safeParse({ reason: req.reason, resumeCondition: req.resumeCondition });
+      if (!pause.success) return { error: "pause requires a nonempty reason up to 2000 characters and a valid resumeCondition (date or account-usage)", status: 400 };
       if (pipeline.state === "draft") return { error: "draft pipelines can only be started, edited, or deleted", status: 409 };
       if (!TERMINAL_STATES.has(pipeline.state) && pipeline.state !== "paused") {
         if (attempt?.conversationId && needsProviderContinuationCancellation(attempt)) {
@@ -13717,6 +13720,7 @@ export async function patchPipeline(
         pipeline.pausedState = pipeline.state;
         pipeline.state = "paused";
         pipeline.pausedAt = ports.now();
+        pipeline.pause = { ...pause.data, actor };
         pipeline.controlGeneration = crypto.randomUUID();
         pipeline.stateDetail = pauseResumeDetail("paused", actor);
         if (flow && flow.state !== "paused" && flow.state !== "closed") ports.patchFlow(flow.id, "pause", undefined, actor);
@@ -13738,6 +13742,7 @@ export async function patchPipeline(
       if (pipeline.state !== "paused") return { error: "pipeline is not paused", status: 409 };
       pipeline.state = pipeline.pausedState ?? "running";
       pipeline.pausedState = null;
+      delete pipeline.pause;
       pipeline.resumedAt = ports.now();
       pipeline.controlGeneration = crypto.randomUUID();
       if (attempt?.suspension) {

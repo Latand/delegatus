@@ -1,4 +1,5 @@
 import { deepFreeze } from "@/lib/deepFreeze";
+import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { forEachCooperatively } from "@/lib/cooperative";
 import { controllerPipelineKeys, controllerReferences, inheritControllerGuards } from "./controllerScope";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
@@ -925,6 +926,8 @@ function isPipelineShape(value: unknown): value is Pipeline {
     ["draft", "provisioning", "running", "needs_decision", "needs_review", "paused", "completed", "closed"].includes(String(pipeline.state)) &&
     (pipeline.pausedState === null || ["provisioning", "running", "needs_decision", "needs_review", "completed", "closed"].includes(String(pipeline.pausedState))) &&
     (pipeline.pausedAt === undefined || isNullableString(pipeline.pausedAt)) &&
+    (pipeline.pause === undefined || (pipelinePauseInputSchema.safeParse(pipeline.pause).success
+      && (pipeline.pause.actor === undefined || pipeline.pause.actor === null || isActor(pipeline.pause.actor)))) &&
     (pipeline.resumedAt === undefined || isNullableString(pipeline.resumedAt)) &&
     (pipeline.controlGeneration === undefined || (typeof pipeline.controlGeneration === "string" && pipeline.controlGeneration.length > 0)) &&
     isNullableString(pipeline.stateDetail) &&
