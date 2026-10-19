@@ -234,8 +234,13 @@ export function activeRoleRuleRows(input: { project?: string; terms?: string[]; 
     if (owner) for (const alias of aliases) if (canonicalProject(alias) === canonicalProject(owner)) ruleScopes.add(scope.replace(`:${owner}`, `:${alias}`));
   }
   const terms = input.terms ?? [];
-  const conditions = terms.map(() => `(instr(lower(json_extract(r.value_json, '$.rule')), lower(?)) > 0 OR instr(json_extract(r.value_json, '$.id'), ?) > 0)`);
-  return reader().query<Pick<RoleMemoryRule, "id" | "scope" | "rule" | "changedAt">, SQLQueryBindings[]>(`
+  // SQLite lower() folds ASCII only. For non-ASCII queries, fetch the active
+  // rows in the already narrowed readable scopes and apply the same JavaScript
+  // lowercase matching to stored text and terms. ASCII queries keep filtering
+  // and limiting in SQLite.
+  const unicodeTerms = terms.some(term => /[^\x00-\x7f]/u.test(term));
+  const conditions = unicodeTerms ? [] : terms.map(() => `(instr(lower(json_extract(r.value_json, '$.rule')), lower(?)) > 0 OR instr(json_extract(r.value_json, '$.id'), ?) > 0)`);
+  const rows = reader().query<Pick<RoleMemoryRule, "id" | "scope" | "rule" | "changedAt">, SQLQueryBindings[]>(`
     SELECT DISTINCT json_extract(r.value_json, '$.id') AS id,
       json_extract(r.value_json, '$.scope') AS scope,
       json_extract(r.value_json, '$.rule') AS rule,
@@ -251,6 +256,12 @@ export function activeRoleRuleRows(input: { project?: string; terms?: string[]; 
       AND json_extract(r.value_json, '$.versionOf') IS NULL
       ${input.id ? "AND r.row_key=?" : ""}
       ${conditions.length ? `AND ${conditions.join(" AND ")}` : ""}
-    ORDER BY changedAt DESC, id LIMIT ?
-  `).all(JSON.stringify(scopes), JSON.stringify([...ruleScopes]), ...(input.id ? [`r:${input.id}`] : []), ...terms.flatMap(term => [term, term]), input.limit);
+    ORDER BY changedAt DESC, id ${unicodeTerms ? "" : "LIMIT ?"}
+  `).all(JSON.stringify(scopes), JSON.stringify([...ruleScopes]), ...(input.id ? [`r:${input.id}`] : []), ...(unicodeTerms ? [] : terms.flatMap(term => [term, term])), ...(unicodeTerms ? [] : [input.limit]));
+  if (!unicodeTerms) return rows;
+  const normalizedTerms = terms.map(term => term.toLowerCase());
+  return rows.filter(row => {
+    const text = row.rule.toLowerCase();
+    return normalizedTerms.every(term => text.includes(term) || row.id.includes(term));
+  }).slice(0, input.limit);
 }

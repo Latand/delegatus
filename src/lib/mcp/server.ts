@@ -4111,7 +4111,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   search_memory: z.object({
     clientRequestId: clientRequestIdSchema.max(256, "clientRequestId must be at most 256 characters for the bounded memory response"),
     query: z.string().trim().min(1).max(2000).optional().describe("Terms to match in the shared memory index. Supply query or id."),
-    id: z.string().regex(/^m_[a-zA-Z0-9_]+$/).max(64).optional().describe("Open one search hit and record its opened outcome in the local ledger."),
+    id: z.string().regex(/^(?:m_[a-zA-Z0-9_]+|r_[a-fA-F0-9]{16})$/).max(64).optional().describe("Open one memory or active role-rule search hit by its exact id and record its opened outcome in the local ledger."),
     project: z.string().trim().min(1).max(256).optional().describe("Canonical project key; includes that project's entries and global entries. Omit for cross-project search."),
     kind: z.enum(MEMORY_KINDS).optional(),
     limit: boundedNumericInput("search_memory", "limit"),

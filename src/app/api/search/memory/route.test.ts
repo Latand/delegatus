@@ -2,6 +2,8 @@ import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { viewerMcpBindings } from "@/lib/mcp/bindings";
 import { MEMORY_RESPONSE_BYTES } from "@/lib/memory/index";
@@ -219,5 +221,89 @@ test("search_memory finds and opens every rendered role rule by exact id, near i
     index.close();
     if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("the registered MCP search opens returned rule ids and matches Cyrillic text without case sensitivity", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "role-search-mcp-"));
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  const at = "2026-10-19T00:00:00.000Z";
+  const id = "r_0123456789abcdef";
+  const scope = "role:project-cyrillic:builder";
+  const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
+  const store = roleMemoryCollection(true)!;
+  const index = memoryIndex();
+  const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
+  const control = {
+    get: async (url: string) => {
+      const response = await GET(new Request(`http://localhost${url}`));
+      return response.json();
+    },
+    post: async (_url: string, body: unknown) => {
+      const response = await POST(new Request("http://localhost/api/search/memory", { method: "POST", body: JSON.stringify(body) }));
+      return response.json();
+    },
+  };
+  const service = createMcpToolService(viewerMcpBindings(undefined, control, { callerAttribution: () => ({ kind: "unidentified", conversationId: null, role: null }) } as never), new MemoryMcpReceiptStore());
+  const server = createViewerMcpServer(service);
+  const client = new Client({ name: "role-search-regression", version: "1" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    store.boundedPatch(2, tx => {
+      tx.put({ kind: "scope", scope, revision: 1, active: [id], history: [] });
+      tx.put({ kind: "rule", id, scope, rule: "Перевіряйте підпис перед повтором операції.", why: "Search must handle Unicode case consistently.", state: "active", hints: [], source: { project: "project-cyrillic", pipelineId: "seed", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_seed" }, createdAt: at, changedAt: at });
+    });
+    const direct = await GET(new Request("http://localhost/api/search/memory?q=Перевіряйте&project=project-cyrillic"));
+    expect(direct.ok, await direct.clone().text()).toBe(true);
+    expect((await direct.json()).items.map((item: { id: string }) => item.id)).toContain(id);
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    for (const [n, query] of ["Перевіряйте", "перевіряйте"].entries()) {
+      const found = await client.callTool({ name: "search_memory", arguments: { clientRequestId: `cyrillic-search-${n}`, query, project: "project-cyrillic" } });
+      expect(found.isError, JSON.stringify(found)).not.toBe(true);
+      const items = (found.structuredContent as { items: Array<{ id: string }> }).items;
+      expect(items.map(item => item.id)).toContain(id);
+      const opened = await client.callTool({ name: "search_memory", arguments: { clientRequestId: `cyrillic-open-${n}`, id: items.find(item => item.id === id)!.id, project: "project-cyrillic" } });
+      expect(opened.isError, JSON.stringify(opened)).not.toBe(true);
+      expect(opened.structuredContent).toMatchObject({ item: { id, body: "Перевіряйте підпис перед повтором операції." } });
+    }
+    const malformed = await client.callTool({ name: "search_memory", arguments: { clientRequestId: "malformed-rule-id", id: "r_0123456789abcde", project: "project-cyrillic" } });
+    expect(malformed.isError).toBe(true);
+  } finally {
+    await Promise.all([client.close(), server.close()]);
+    store.boundedPatch(2, tx => { tx.delete(`s:${scope}`); tx.delete(`r:${id}`); });
+    index.close();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("the registered search_memory schema accepts full rule ids and refuses malformed ones", async () => {
+  const id = "r_0123456789abcdef";
+  const calls: Record<string, unknown>[] = [];
+  const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
+  const service = createMcpToolService({ search_memory: async (args: Record<string, unknown>) => {
+    calls.push(args);
+    return args.id ? { item: { id, body: "rule body" } } : { items: [{ id, summary: "rule body" }] };
+  } } as never, new MemoryMcpReceiptStore());
+  const server = createViewerMcpServer(service, ["search_memory"]);
+  const client = new Client({ name: "rule-id-schema-regression", version: "1" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const found = await client.callTool({ name: "search_memory", arguments: { clientRequestId: "rule-schema-search", query: "rule" } });
+    const returnedId = (found.structuredContent as { items: Array<{ id: string }> }).items[0]!.id;
+    expect(returnedId).toBe(id);
+    const opened = await client.callTool({ name: "search_memory", arguments: { clientRequestId: "rule-schema-open", id: returnedId } });
+    expect(opened.isError).not.toBe(true);
+    expect(opened.structuredContent).toMatchObject({ item: { id, body: "rule body" } });
+    const count = calls.length;
+    const malformed = await client.callTool({ name: "search_memory", arguments: { clientRequestId: "rule-schema-invalid", id: "r_0123456789abcde" } });
+    expect(malformed.isError).toBe(true);
+    expect(calls).toHaveLength(count);
+  } finally {
+    await Promise.all([client.close(), server.close()]);
   }
 });
