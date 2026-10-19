@@ -4636,7 +4636,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   if (Object.keys(change).length > 0) {
     const activeSeat = own === project ? orchestratorSeatFor(project).active : null;
     const actor: SeatTickSettingsActor = {
-      kind: attribution.kind === "gateway" && callerSeat ? "manager" : attribution.kind,
+      kind: attribution.kind,
       conversationId: attribution.conversationId,
       project: own,
       seatEpoch: activeSeat?.conversationId === attribution.conversationId ? activeSeat.seatEpoch : null,
@@ -4648,9 +4648,12 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
       if (round) review.reviewId = round.id;
       if (!round || round.nativeAssociation || canonicalOrchestratorProject(round.project || project) !== project) throw new Error("autonomy cannot decide this form");
     }
+    // Instruction authorship is separate from the existing control authority.
+    const instructionActor = attribution.kind === "gateway" && callerSeat ? { ...actor, kind: "manager" as const } : actor;
+    const context = { at: new Date().toISOString(), actor, instructionActor };
     const applied = dependencies.writeTickSettings || dependencies.readTickSettings
-      ? applySeatTickSettingsChange(current, change, { at: new Date().toISOString(), actor })
-      : changeSeatTickSettings(project, change, { at: new Date().toISOString(), actor });
+      ? applySeatTickSettingsChange(current, change, context)
+      : changeSeatTickSettings(project, change, context);
     if (!applied.ok) throw new Error(applied.error);
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
     if (dependencies.writeTickSettings || dependencies.readTickSettings) writeSettings(project, applied.settings);

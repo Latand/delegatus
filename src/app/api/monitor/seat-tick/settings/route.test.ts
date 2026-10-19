@@ -559,3 +559,18 @@ test("a replacement seat epoch never stamps a predecessor's instruction", async 
   expect(line.author?.conversationId).toBe(SEAT_CONVERSATION);
   expect(line.author?.seatEpoch).toBeNull();
 });
+
+
+test("instruction attribution keeps the existing authority of unrelated settings controls", async () => {
+  setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  const rootSeat = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: SEAT_CONVERSATION }),
+    callerProject: () => PROJECT,
+    authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
+  } as never);
+  await rootSeat.seat_tick_settings({ clientRequestId: "instruction-control-authority", reason: "Seat note.", autoRotate: { enabled: true, thresholdPercent: 60 } });
+  const stored = readSeatTickSettings(PROJECT, settingsFile);
+  expect(stored.autoRotate).toMatchObject({ enabled: true, thresholdPercent: 60, setBy: { kind: "gateway" } });
+  expect(stored.instructionLines![0]!.author).toMatchObject({ kind: "manager", seatEpoch: 12 });
+});

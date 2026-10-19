@@ -148,7 +148,8 @@ reached from the seat sheet's tick row.
 The `reason` string remains the combined instruction text for cadence consumers.
 `settings.instructionLines` records each line as `{text, author, at}`. The server
 derives the author from the browser request or verified MCP caller. An active
-seat records its epoch even when its general MCP role is gateway. Request bodies
+seat records its epoch even when its general MCP role is gateway. This line
+attribution is independent of the existing settings-control authority. Request bodies
 cannot set line authors or dates.
 
 A `reason` write replaces that author's lines only. Clearing it removes only

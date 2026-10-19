@@ -491,7 +491,7 @@ export type SeatTickSettingsChangeResult =
 export function applySeatTickSettingsChange(
   current: SeatTickSettings,
   change: SeatTickSettingsChange,
-  context: { at: string; actor: SeatTickSettingsActor },
+  context: { at: string; actor: SeatTickSettingsActor; instructionActor?: SeatTickSettingsActor },
 ): SeatTickSettingsChangeResult {
   if (change.autonomy !== undefined || change.autonomyDecision !== undefined) {
     const effective = effectiveSeatTickSettings(current, Date.parse(context.at), 60 * 60_000);
@@ -530,7 +530,8 @@ export function applySeatTickSettingsChange(
   let reason = current.reason;
   let instructionLines = seatTickInstructionLines(current);
   if (Object.hasOwn(change, "reason")) {
-    if (context.actor.kind === "unidentified") return { ok: false, error: "instruction writes need an identified author" };
+    const author = context.instructionActor ?? context.actor;
+    if (author.kind === "unidentified") return { ok: false, error: "instruction writes need an identified author" };
     const raw = change.reason;
     if (raw === null) reason = null;
     else if (typeof raw !== "string") return { ok: false, error: "reason must be a string" };
@@ -541,7 +542,7 @@ export function applySeatTickSettingsChange(
       }
       reason = redacted || null;
     }
-    instructionLines = replaceSeatTickInstructions(current, reason, context.actor, context.at);
+    instructionLines = replaceSeatTickInstructions(current, reason, author, context.at);
     reason = instructionLines.map(line => line.text).join("\n") || null;
     if ((reason?.length ?? 0) > REASON_LIMIT) return { ok: false, error: `instructions (reason) are ${reason!.length} characters; the limit is ${REASON_LIMIT}. Nothing was stored — shorten the instructions and send them again` };
   }
@@ -722,7 +723,7 @@ export function markAutonomyReported(project: string, startedAt: string, at: str
 }
 
 /** Apply against the locked row so an extension cannot overwrite a decision or an end report. */
-export function changeSeatTickSettings(project: string, change: SeatTickSettingsChange, context: { at: string; actor: SeatTickSettingsActor }, filePath = seatTickSettingsPath()): SeatTickSettingsChangeResult {
+export function changeSeatTickSettings(project: string, change: SeatTickSettingsChange, context: { at: string; actor: SeatTickSettingsActor; instructionActor?: SeatTickSettingsActor }, filePath = seatTickSettingsPath()): SeatTickSettingsChangeResult {
   return settingsStore.mutate(filePath, file => {
     const result = applySeatTickSettingsChange(file.projects[project] ?? defaultSeatTickSettings(project), change, context);
     return { next: result.ok ? { ...file, projects: { ...file.projects, [project]: result.settings } } : file, result };
