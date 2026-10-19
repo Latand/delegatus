@@ -1819,7 +1819,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (capture.identities.length > 0) {
       let recorded = false;
       try { recorded = await listener(pid, capture.identities) === true; } catch { recorded = false; }
-      if (!recorded || this.terminationCapture !== listener || this.child.pid !== pid || !this.releaseFenceHolds()) return false;
+      // Health names the engine PID even when its launcher is a sandbox wrapper.
+      if (!recorded || this.terminationCapture !== listener || this.currentState().pid !== pid || !this.releaseFenceHolds()) return false;
       // Admission lets the child run. A new descendant must be captured on a
       // later attempt before any signal can make its parent disappear.
       let current: ProcessTreeCapture;
