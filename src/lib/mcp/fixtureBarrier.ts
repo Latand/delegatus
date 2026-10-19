@@ -15,6 +15,7 @@ export function waitForFixtureFile(filename: string): void {
   const deadline = Date.now() + FIXTURE_BARRIER_TIMEOUT_MS;
   while (!fs.existsSync(filename)) {
     checkBarrier(filename, deadline);
+    // eslint-disable-next-line no-restricted-syntax -- Test helper used by isolated MCP child entries to coordinate race seams.
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
   }
 }

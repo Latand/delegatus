@@ -94,8 +94,10 @@ export function createLinkTestInstalls() {
     const source = path.join(root, "source-c18ab355");
     if (fs.existsSync(source)) return source;
     fs.mkdirSync(source);
+    // eslint-disable-next-line no-restricted-syntax -- Test-only linked-install harness exporting a historical source revision.
     const archive = spawnSync("git", ["archive", "c18ab355", "src", "bin", "tsconfig.json", "package.json"], { maxBuffer: 64 * 1024 * 1024 });
     if (archive.status !== 0) throw new Error(`old source archive failed: ${archive.stderr.toString()}`);
+    // eslint-disable-next-line no-restricted-syntax -- Test-only linked-install harness unpacking its isolated historical source.
     const unpack = spawnSync("tar", ["-x", "-C", source], { input: archive.stdout });
     if (unpack.status !== 0) throw new Error(`old source extraction failed: ${unpack.stderr.toString()}`);
     fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(source, "node_modules"), "dir");
@@ -107,6 +109,7 @@ export function createLinkTestInstalls() {
     const checkout = path.join(root, name, "checkout", origin.split("/").at(-1)!);
     fs.mkdirSync(checkout, { recursive: true });
     for (const args of fs.existsSync(path.join(checkout, ".git")) ? [] : [["init", "-q"], ["remote", "add", "origin", `https://${origin}`]]) {
+      // eslint-disable-next-line no-restricted-syntax -- Test-only linked-install harness initializing an isolated fixture repository.
       const git = Bun.spawnSync(["git", ...args], { cwd: checkout, env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
       if (git.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${git.stderr.toString()}`);
     }

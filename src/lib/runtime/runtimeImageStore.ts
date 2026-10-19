@@ -66,6 +66,7 @@ const GC_GRACE_MS = 60 * 60 * 1000;
 const LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 
 function sleepSync(milliseconds: number): void {
+  // eslint-disable-next-line no-restricted-syntax -- Legacy synchronous image-store writer/GC admission during serving image operations.
   Atomics.wait(LOCK_SLEEP, 0, 0, milliseconds);
 }
 

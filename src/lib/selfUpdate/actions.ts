@@ -214,6 +214,7 @@ export interface ServiceRecovery { file: string; entry: string; bun: string }
 /** `owner` is the install the action was offered for. The unit is proven
     again here, at the moment it is handed to the service manager. */
 export function runInstallAction(action: InstallAction, run: (args: string[]) => void = args => {
+  // eslint-disable-next-line no-restricted-syntax -- Legacy user-service recovery action invoked from serving self-update controls.
   const result = spawnSync(args[0]!, args.slice(1), { stdio: "ignore", timeout: 10_000 });
   if (result.status !== 0) throw new Error("The user service manager did not accept the launcher action");
 }, recovery?: ServiceRecovery, owner?: { root: string; launcherPid?: number },

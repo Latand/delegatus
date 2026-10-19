@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 import { stateDir, statePath } from "@/lib/configDir";
+// eslint-disable-next-line no-restricted-imports -- Legacy serving disk-pressure measurement scans processes; sweep helpers also share this module.
 import { isOwnedTempConsumerName, ownTempRoots, scanProcesses, sweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";

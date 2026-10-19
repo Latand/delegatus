@@ -87,6 +87,7 @@ export function readCodexFeatures(binary: string, source: NodeJS.ProcessEnv = pr
     const temporary = path.join(root, "tmp");
     fs.mkdirSync(codexHome, { recursive: true });
     fs.mkdirSync(temporary);
+    // eslint-disable-next-line no-restricted-syntax -- Legacy isolated feature probe during serving Codex launch policy checks.
     const result = spawnSync(binary, ["features", "list"], {
       cwd: hostShim ? sharedHome : root,
       env: { ...source, HOME: hostShim ? sharedHome : home, USERPROFILE: home, CODEX_HOME: codexHome,
