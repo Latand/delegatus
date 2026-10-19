@@ -2362,7 +2362,7 @@ function visibleWakeAcknowledgments(state: SeatTickProjectState, commit: SeatTic
   const carries = (line: string) => !line.includes("\n") ? lines.has(line) : framed.includes(`\n${line}\n`);
   const proofs = commit.acknowledgmentLines;
   const visible = new Set(proofs?.filter(proof => carries(proof.line)).map(proof => proof.key));
-  const agenda = text.split("\nItems:\n")[1]?.split(/\n\n(?:Why you were woken:|Signals:|Bridge reports:|Snapshot at |Operator instructions for every wake:|Standing monitor note|Contract:|Spawned children whose transcript)/)[0] ?? "";
+  const agenda = text.split("\nItems:\n")[1]?.split(/\n\n(?:Why you were woken:|Signals:|Bridge reports:|Snapshot at |Operator instructions for every wake:|Seat notes for every wake:|Instructions — author unknown:|Standing monitor note|Contract:|Spawned children whose transcript)/)[0] ?? "";
   const bullets = [...agenda.matchAll(/^- \[([^\]]+)\] (\S+) — ([\s\S]*?)(?=\n- \[|$)/gm)]
     .filter(match => !match[0].trimEnd().endsWith("…")
       && framed.includes(`\n${match[0].trimEnd()}\n`));

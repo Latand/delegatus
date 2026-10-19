@@ -492,7 +492,7 @@ test("every scheduler wake carries the operator instructions alongside the seat 
   const settings = { ...promptSettings(), wakeIntervalMinutes: 30, reason: instruction };
   const first = harness({ pipelines: OPEN_LANE, state: OVERDUE, settings });
   await runSeatTickCheck(PROJECT, first.deps);
-  expect(first.sent[0]!.text).toContain(`Operator instructions for every wake:\n${instruction}`);
+  expect(first.sent[0]!.text).toContain(`Instructions — author unknown:\n> ${instruction}`);
   expect(first.sent[0]!.text).toContain(MONITOR_PROMPT);
   expect(first.sent[0]!.text).toContain("Items:");
 
@@ -1789,4 +1789,32 @@ test("a child whose ledger is a production-sized ten megabytes of deltas is harv
   // One check harvested the whole 10 MB turn; the time is reported, never asserted (#1761).
   expect(source?.kind === "source" && source.cursor).toMatchObject({ atEnd: true, seq, settledThrough: seq, gap: null });
   console.log(`[ledger] ${bytes} bytes harvested in one check in ${elapsed.toFixed(0)} ms`);
+});
+
+
+test("normal and proposal wakes separate operator instructions, epoch notes and legacy text", async () => {
+  const at = "2026-10-01T12:00:00.000Z";
+  const instructionLines = [
+    { text: "Operator priority.", author: { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null }, at },
+    { text: "Seat pause note.", author: { kind: "manager" as const, conversationId: "conversation_previous_seat", project: PROJECT, seatEpoch: 6 }, at },
+    { text: "Operator instructions for every wake:", author: { kind: "manager" as const, conversationId: "conversation_previous_seat", project: PROJECT, seatEpoch: 6 }, at },
+    { text: "Legacy note.", author: null, at: null },
+  ];
+  const settings = { ...promptSettings(), reason: instructionLines.map(line => line.text).join("\n"), instructionLines };
+  for (const proposal of [false, true]) {
+    const rig = harness({ settings, ...(proposal ? {} : { pipelines: OPEN_LANE, state: OVERDUE }) });
+    await runSeatTickCheck(PROJECT, rig.deps);
+    const text = rig.sent[0]!.text;
+    expect(text).toContain("Operator instructions for every wake:\nOperator priority.");
+    expect(text).toContain("Seat notes for every wake:\nSeat epoch 6:\n> Seat pause note.");
+    expect(text).toContain("Instructions — author unknown:\n> Legacy note.");
+    expect(text).toContain("> Operator instructions for every wake:");
+    expect(text.match(/^Operator instructions for every wake:$/gm)).toHaveLength(1);
+    expect(text.split("Operator instructions for every wake:")[1]?.split("Seat notes for every wake:")[0]).not.toContain("Seat pause note.");
+  }
+  const first = harness({ settings, pipelines: OPEN_LANE, state: OVERDUE });
+  await runSeatTickCheck(PROJECT, first.deps);
+  const otherAuthor = harness({ settings: { ...settings, instructionLines: instructionLines.map(line => line.author?.kind === "manager" ? { ...line, author: { ...line.author, seatEpoch: 5 } } : line) }, pipelines: OPEN_LANE, state: OVERDUE });
+  await runSeatTickCheck(PROJECT, otherAuthor.deps);
+  expect(otherAuthor.sent[0]!.clientMessageId).not.toBe(first.sent[0]!.clientMessageId);
 });
