@@ -1,7 +1,7 @@
 [
   {
     "id": "GHSA-vfj7-8cjw-p6xm",
-    "reason": "Fixed locally by patches/braces-3.0.3.patch, ported from upstream tree 28d440b5dd449dbf1fe6f3506cf94ecca4d02660. Revalidated on 2026-10-11: npm latest remains 3.0.3, the advisory has no patched release, and all 10 installed-package nesting, AST, parent-cycle and ordinary-behavior regressions pass. Remove patch and advisory metadata when upstream ships a fixed release; tracked by issue #2496.",
-    "expires": "2026-10-18"
+    "reason": "Fixed locally by patches/braces-3.0.3.patch, ported from upstream tree 28d440b5dd449dbf1fe6f3506cf94ecca4d02660. Revalidated on 2026-10-19 with the same facts: npm latest remains 3.0.3, the advisory has no patched release, and all 10 installed-package nesting, AST, parent-cycle and ordinary-behavior regressions pass. Remove patch and advisory metadata when upstream ships a fixed release; tracked by issue #2496.",
+    "expires": "2026-10-26"
   }
 ]
