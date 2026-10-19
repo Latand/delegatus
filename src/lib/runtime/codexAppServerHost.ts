@@ -1394,6 +1394,7 @@ export class CodexAppServerHost implements EngineHost {
   private releasePromise: Promise<void> | null = null;
   private releaseCleanup: (() => void) | null;
   private writerFence: (() => boolean) | null = null;
+  private persistenceFlush: (() => Promise<void>) | null = null;
   private ledgerFailed = false;
   private failure: Error | null = null;
   private readonly reapedPromise: Promise<void>;
@@ -3055,6 +3056,11 @@ export class CodexAppServerHost implements EngineHost {
     this.writerFence = fence;
   }
 
+  /** Release includes the registry checkpoint emitted when the transport ends. */
+  setPersistenceFlush(flush: () => Promise<void>): void {
+    this.persistenceFlush = flush;
+  }
+
   private writerFenceAllowsActuation(): boolean {
     try { return this.writerFence?.() ?? true; }
     catch { return false; }
@@ -3125,6 +3131,11 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   async release(): Promise<void> {
+    await this.releaseTransport();
+    await this.persistenceFlush?.();
+  }
+
+  private async releaseTransport(): Promise<void> {
     if (this.released) return;
     if (this.reconnecting) {
       this.disconnectSocketConnection();

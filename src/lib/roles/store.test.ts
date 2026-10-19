@@ -11,6 +11,13 @@ import { applyRoleMappingRetirements, ROLE_MAPPING_RETIREMENTS } from "./retirem
 import { applyRoleMappingPatch, loadRoleDefinitions, loadRoleOverrides, loadRoleRegistrySnapshot, mergeRoleDefinitions, parseRoleMappingPatch, saveRoleMapping, saveRoleOverrides } from "./store";
 import type { RoleConfig } from "./types";
 
+function writeLegacyRoleFixture(file: string, bytes: string): void {
+  const directory = path.dirname(file);
+  fs.rmSync(directory, { recursive: true, force: true });
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(file, bytes);
+}
+
 test("fresh installs and config:null resets restore every shipped role and variant", () => {
   withStateDir("llv-shipped-roles-", () => {
     const codex = (model: string, effort: string): RoleConfig => ({ engine: "codex", model, effort });
@@ -22,6 +29,7 @@ test("fresh installs and config:null resets restore every shipped role and varia
       architect: claude("opus", "xhigh"),
       orchestrator: claude("opus", "high"),
       cleaner: codex("gpt-6-luna", "medium"),
+      curator: codex("gpt-6.1-sol", "high"),
       "prod-auditor": codex("gpt-6.1-sol", "xhigh"),
       deployer: codex("gpt-6.1-sol", "medium"),
       merger: codex("gpt-6.1-sol", "high"),
@@ -72,7 +80,7 @@ test("role overrides persist with a schema version and merge only the selected r
   process.env.LLV_STATE_DIR = state;
   try {
     saveRoleOverrides({ builder: { config: { model: "gpt-custom-builder" }, promptScaffold: "Custom {{mode}} scaffold" } });
-    expect(JSON.parse(fs.readFileSync(path.join(state, "role-presets.json"), "utf8"))).toMatchObject({
+    expect(loadRoleOverrides()).toMatchObject({
       schemaVersion: 1,
       overrides: { builder: { config: { model: "gpt-custom-builder" } } },
     });
@@ -102,7 +110,7 @@ test("role overrides fail closed and preserve malformed or future-schema bytes",
       JSON.stringify({ schemaVersion: 1, overrides: { builder: { config: { model: "fable", effort: "banana" } } } }),
       JSON.stringify({ schemaVersion: 1, overrides: { builder: { unexpected: true } } }),
     ]) {
-      fs.writeFileSync(file, content, "utf8");
+      writeLegacyRoleFixture(file, content);
       expect(() => loadRoleOverrides()).toThrow();
       expect(fs.readFileSync(file, "utf8")).toBe(content);
     }
@@ -124,7 +132,7 @@ for (const effort of ["max", "ultra"]) {
       expect(loadRoleOverrides().overrides.orchestrator?.config).toEqual(config);
       expect(resolveRole("orchestrator")).toMatchObject({ ok: true, value: { config } });
       expect(resolveRole("builder")).toMatchObject({ ok: true, value: { config: { model: "gpt-5.6-sol" } } });
-      expect(JSON.parse(fs.readFileSync(path.join(state, "role-presets.json"), "utf8")).overrides.orchestrator.config).toEqual(config);
+      expect(loadRoleOverrides().overrides.orchestrator?.config).toEqual(config);
     } finally {
       if (previous === undefined) delete process.env.LLV_STATE_DIR;
       else process.env.LLV_STATE_DIR = previous;
@@ -144,7 +152,7 @@ for (const [engine, model] of [["codex", "gpt-5.6-luna"], ["codex", "gpt-6-luna"
       expect(() => saveRoleOverrides(overrides)).toThrow(message);
       const file = path.join(state, "role-presets.json");
       const bytes = JSON.stringify({ schemaVersion: 1, overrides });
-      fs.writeFileSync(file, bytes);
+      writeLegacyRoleFixture(file, bytes);
       expect(() => loadRoleOverrides()).toThrow(message);
       expect(fs.readFileSync(file, "utf8")).toBe(bytes);
     } finally {
@@ -161,12 +169,12 @@ test("builder variants round-trip under schema 2, and a schema 1 file still read
   process.env.LLV_STATE_DIR = state;
   const file = path.join(state, "role-presets.json");
   try {
-    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, overrides: { builder: { config: { model: "gpt-5.6-sol" } } } }));
+    writeLegacyRoleFixture(file, JSON.stringify({ schemaVersion: 1, overrides: { builder: { config: { model: "gpt-5.6-sol" } } } }));
     expect(loadRoleOverrides()).toEqual({ schemaVersion: 1, overrides: { builder: { config: { model: "gpt-5.6-sol" } } } });
 
     const variant = { engine: "claude" as const, model: "sonnet", effort: "medium" };
     saveRoleOverrides({ builder: { variants: { "apply-fixes": variant } } });
-    expect(JSON.parse(fs.readFileSync(file, "utf8")).schemaVersion).toBe(2);
+    expect(loadRoleOverrides().schemaVersion).toBe(2);
     const builder = loadRoleDefinitions().find((role) => role.id === "builder")!;
     expect(builder.variants?.["apply-fixes"]).toEqual(variant);
     expect(builder.variants?.frontend).toEqual({ engine: "claude", model: "claude-sonnet-5-5", effort: "high" });
@@ -175,7 +183,7 @@ test("builder variants round-trip under schema 2, and a schema 1 file still read
     /* Variants belong to the builder alone, and an invalid variant fails closed. */
     expect(() => saveRoleOverrides({ reviewer: { variants: { frontend: variant } } })).toThrow();
     const bytes = JSON.stringify({ schemaVersion: 2, overrides: { builder: { variants: { frontend: { effort: "banana" } } } } });
-    fs.writeFileSync(file, bytes);
+    writeLegacyRoleFixture(file, bytes);
     expect(() => loadRoleOverrides()).toThrow();
     expect(fs.readFileSync(file, "utf8")).toBe(bytes);
   } finally {
@@ -262,7 +270,7 @@ function withStateDir(prefix: string, run: (state: string, file: string) => void
   }
 }
 
-const readFile = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
+const readFile = (_file: string) => loadRoleOverrides();
 
 /* docs/design/model-sizing-tiers.md §1 and §5. */
 test("reviewer variants load and save, and schema 3 appears only when a newer variant is stored", () => {
@@ -304,14 +312,14 @@ test("a mapping patch putting a role on a light model it may not run is refused 
   expect(parseRoleMappingPatch({ reviewer: { variants: { docs: null } } })).toBe("unknown reviewer variant: docs");
   /* A legacy file carrying such a row still loads; only new writes are refused. */
   withStateDir("llv-role-legacy-sonnet-", (_state, file) => {
-    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, overrides: { reviewer: { config: { engine: "claude", model: "sonnet", effort: "high" } } } }));
+    writeLegacyRoleFixture(file, JSON.stringify({ schemaVersion: 1, overrides: { reviewer: { config: { engine: "claude", model: "sonnet", effort: "high" } } } }));
     expect(loadRoleOverrides().overrides.reviewer?.config?.model).toBe("sonnet");
   });
 });
 
 test("the boot pass drops rows equal to shipped, keeps the rest and every scaffold", () => {
   withStateDir("llv-role-normalize-", (_state, file) => {
-    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, overrides: {
+    writeLegacyRoleFixture(file, JSON.stringify({ schemaVersion: 2, overrides: {
       orchestrator: { config: { engine: "claude", model: "opus", effort: "high" } },
       architect: { config: { engine: "claude", model: "opus", effort: "xhigh" }, promptScaffold: "mine {{mode}}" },
       builder: { config: { engine: "codex", model: "gpt-6-sol", effort: "high" }, variants: { "apply-fixes": { engine: "codex", model: "gpt-6-luna", effort: "high" } } },
@@ -331,7 +339,7 @@ const RETIREMENT = { id: "test-builder-frontend-opus-xhigh", row: "builder:front
 test("a retirement resets only an exact match, records it once, and is not re-applied after a restore", () => {
   withStateDir("llv-role-retire-", (_state, file) => {
     const xhigh = { engine: "claude" as const, model: "opus", effort: "xhigh" };
-    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, overrides: { builder: { variants: { frontend: xhigh } } } }));
+    writeLegacyRoleFixture(file, JSON.stringify({ schemaVersion: 2, overrides: { builder: { variants: { frontend: xhigh } } } }));
     expect(applyRoleMappingRetirements([RETIREMENT], () => "2026-09-27T08:00:00.000Z")).toEqual({ state: "written", normalized: [], reset: ["builder:frontend"] });
     expect(readFile(file)).toEqual({
       schemaVersion: 1,
@@ -346,12 +354,12 @@ test("a retirement resets only an exact match, records it once, and is not re-ap
     expect(readFile(file).retirements).toEqual({ [RETIREMENT.id]: { at: "2026-09-27T08:00:00.000Z" } });
     expect(loadRoleRegistrySnapshot().resets).toEqual([]);
     expect(applyRoleMappingRetirements([RETIREMENT])).toEqual({ state: "unchanged" });
-    expect(readFile(file).overrides.builder.variants.frontend).toEqual(xhigh);
+    expect(readFile(file).overrides.builder?.variants?.frontend).toEqual(xhigh);
   });
   /* Any other value is the operator's choice: recorded as applied, row untouched. */
   withStateDir("llv-role-retire-other-", (_state, file) => {
     const sol = { engine: "codex" as const, model: "gpt-6-sol", effort: "xhigh" };
-    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, overrides: { builder: { variants: { frontend: sol } }, reviewer: { promptScaffold: "keep" } } }));
+    writeLegacyRoleFixture(file, JSON.stringify({ schemaVersion: 2, overrides: { builder: { variants: { frontend: sol } }, reviewer: { promptScaffold: "keep" } } }));
     expect(applyRoleMappingRetirements([RETIREMENT], () => "2026-09-27T08:00:00.000Z")).toEqual({ state: "written", normalized: [], reset: [] });
     expect(readFile(file)).toEqual({
       schemaVersion: 2,
@@ -366,10 +374,10 @@ test("the boot pass never creates the file, leaves an invalid one alone, and kee
     expect(applyRoleMappingRetirements([RETIREMENT])).toEqual({ state: "absent" });
     expect(fs.existsSync(file)).toBe(false);
     const bytes = JSON.stringify({ schemaVersion: 1, overrides: { builder: { config: { effort: "banana" } } } });
-    fs.writeFileSync(file, bytes);
+    writeLegacyRoleFixture(file, bytes);
     expect(applyRoleMappingRetirements([RETIREMENT])).toEqual({ state: "unreadable" });
     expect(fs.readFileSync(file, "utf8")).toBe(bytes);
-    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, overrides: { builder: { variants: { frontend: RETIREMENT.config } } } }));
+    writeLegacyRoleFixture(file, JSON.stringify({ schemaVersion: 2, overrides: { builder: { variants: { frontend: RETIREMENT.config } } } }));
     applyRoleMappingRetirements([RETIREMENT]);
     expect(fs.existsSync(file)).toBe(true);
     expect(readFile(file).overrides).toEqual({});
@@ -379,7 +387,7 @@ test("the boot pass never creates the file, leaves an invalid one alone, and kee
 test("the boot pass goes through the startup-mutation fence before it touches the file", () => {
   withStateDir("llv-role-retire-fence-", (state, file) => {
     const bytes = JSON.stringify({ schemaVersion: 2, overrides: { builder: { variants: { frontend: RETIREMENT.config } } } });
-    fs.writeFileSync(file, bytes);
+    writeLegacyRoleFixture(file, bytes);
     const fence = spyOn(stateOwnership, "assertStateStartupMutation").mockImplementation(() => { throw new Error("refused: not the state owner"); });
     try {
       expect(() => applyRoleMappingRetirements([RETIREMENT])).toThrow("refused: not the state owner");
@@ -413,7 +421,7 @@ test("Codex role tier round trips at schema 5 and a full config can clear it", (
     saveRoleMapping({ reviewer: { config: cleared } });
     expect(loadRoleOverrides().overrides.reviewer?.config).toEqual(cleared);
     expect(loadRoleDefinitions().find(role => role.id === "reviewer")?.config).toEqual(cleared);
-    expect(JSON.parse(fs.readFileSync(path.join(state, "role-presets.json"), "utf8")).schemaVersion).toBeLessThan(5);
+    expect(loadRoleOverrides().schemaVersion).toBeLessThan(5);
     saveRoleMapping({ reviewer: { variants: { trivial: config } } });
     expect(loadRoleOverrides().schemaVersion).toBe(5);
     saveRoleMapping({ reviewer: { variants: { trivial: cleared } } });

@@ -72,7 +72,18 @@ export interface SeatRuleSource {
   conversationId: string;
 }
 
-export type RuleSource = StageRuleSource | SeatRuleSource;
+export interface ImportRuleSource {
+  origin: "import";
+  project: string;
+  roleId: string | null;
+  fixRound: false;
+  candidate: string;
+  occurrences: import("./importTypes").ImportOccurrence[];
+  engine: "claude" | "codex";
+  sha256: string;
+  importId: string;
+}
+export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource;
 
 export interface RoleMemoryRule {
   kind: "rule";
@@ -101,6 +112,8 @@ export interface RoleMemoryRule {
   mergedFrom?: string[];
   movedFrom?: string;
   splitFrom?: string;
+  /** Forward lineage lets import undo follow splits without scanning history. */
+  splitChildren?: string[];
   /** Requests from the split source after this point belong only to its first part. */
   splitAt?: string;
   /** A curator transfer retained with the reversible archive. */
@@ -149,6 +162,8 @@ export interface RoleMemoryScopeRow {
   active: string[];
   history: ScopeHistoryEntry[];
   curatedAt?: string;
+  /** Raised only by a completed project import with a seat room trigger. */
+  fourScopeTarget?: 24000;
 }
 
 /** One stage attempt that was asked for a lesson, and what it left. */
@@ -195,6 +210,7 @@ export interface RuleView {
   roleId: string | null;
   fixRound: boolean;
   stageId: string;
+  importSource?: Pick<ImportRuleSource, "candidate" | "occurrences" | "engine" | "sha256" | "importId">;
   /** Left within the last day, as the server read it. */
   fresh: boolean;
   createdAt: string;

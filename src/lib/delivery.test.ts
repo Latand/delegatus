@@ -1586,6 +1586,29 @@ test("a send or resume aimed at a superseded round answers 409 with the live cha
   expect(recoveryCalls).toBe(0);
 });
 
+test("transcript resume repeats the liveness probe inside registry admission", async () => {
+  const sessionId = ["33333333", "3333", "4333", "8333", "333333333333"].join("-");
+  const pathname = path.join(SANDBOX, `${sessionId}.jsonl`);
+  fs.writeFileSync(pathname, "{}");
+  const registry = new AgentRegistry(path.join(SANDBOX, "resume-admission.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  let probes = 0;
+  let deliveries = 0;
+  try {
+    const result = await resumeConversation(pathname, {
+      registry, pathAllowed: () => true,
+      listFiles: async () => [{ engine: "codex", path: pathname, cwd: "/repo" } as FileEntry],
+      recover: async () => null,
+      // A session starts after the outer routing probe but before admission.
+      liveOwnership: () => ++probes === 1 ? null : "session",
+      deliver: async () => { deliveries++; return { ok: true, outcome: "resumed", target: "%7" }; },
+    });
+    expect(result).toMatchObject({ ok: false, status: 409 });
+    expect(probes).toBe(2);
+    expect(deliveries).toBe(0);
+    expect(registry.conversationForPath(pathname)).toBeNull();
+  } finally { registry.close(); }
+});
+
 test("a tmux resume rebuilds the command with the conversation's stored MCP grant", async () => {
   /* A plain fixture name: the publication gate reads a real session-id shape as
      a resource identifier, and every lookup here is overridden anyway. */

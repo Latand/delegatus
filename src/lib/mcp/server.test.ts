@@ -2107,7 +2107,9 @@ test("seat_tick_settings publishes the panel instruction contract through tools/
   try {
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     const tool = (await client.listTools()).tools.find((entry) => entry.name === "seat_tick_settings")!;
-    expect(tool.description).toContain("operator instructions on every scheduler-fired wake");
+    expect(tool.description).toContain("Each reason write replaces only the caller’s own lines");
+    expect(tool.description).toContain("author unknown");
+    expect(tool.description).not.toContain("labelled as operator instructions");
     expect(tool.inputSchema.properties!.reason).toMatchObject({
       description: TOOL_INPUT_SCHEMAS.seat_tick_settings.shape.reason.description,
     });

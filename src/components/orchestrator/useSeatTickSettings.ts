@@ -39,6 +39,8 @@ export interface SeatTickChange {
    */
   wakeIntervalMinutes?: number | string | null;
   reason?: string | null;
+  clearUnknownInstructions?: boolean;
+  replaceOtherInstructions?: boolean;
   untilMinutes?: number | null;
   /**
    * The board maintenance timer (#2162). `intervalHours` follows the same

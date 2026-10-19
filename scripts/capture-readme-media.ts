@@ -157,8 +157,9 @@ export const SHOTS: ReadmeShot[] = [
     id: "orchestrator",
     target: { kind: "project", project: "harbor-api" },
     /* Below 800 px the seat folds its Reports log away; at this height the
-       whole three-question form and its Telegram line fit in the column. */
-    viewport: { width: WIDE.width, height: 1040 },
+       whole three-question form, each question's «Already decided» row, its
+       Telegram line and the Answer row fit in the column. */
+    viewport: { width: WIDE.width, height: 1200 },
     /* The column opens on Decisions while a form waits: the seeded retry
        window, which the seat handed on and Telegram received. */
     requiredText: ["Orchestrator", "workers ", "Decisions", "Reports", "Take the open harbor-api work", "Retry policy for failed webhook deliveries", "Sent to Telegram"],

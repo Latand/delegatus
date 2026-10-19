@@ -71,6 +71,7 @@ function serviceAs(conversationId: string, replaced = false, record = pipeline()
   const bindings = viewerMcpBindings(undefined, undefined, {
     callerAttribution: () => ({ kind: "agent", conversationId, role: null }),
     callerProject: () => PROJECT,
+    authorizedSeats: () => [{ project: PROJECT, conversationId: "conversation_seat" }],
     reportStageCompletion: async () => ({
       pipelineId: record.id, stageId: conversationId === "conversation_fix" ? "fix" : "review", attempt: 1, replaced,
       report: { seq: 1, at: "2026-10-07T12:00:00.000Z", actor: { kind: "agent", role: null, conversationId }, verdict: { status: "pass", findings: [] }, summary: "done", provenance: { state: "pending", head: null, branch: "b", uncommitted: null, pullRequest: null, pullRequestState: "pending", outputs: [] }, calls: 1 },
@@ -238,4 +239,89 @@ test("text limits count Unicode code points in the schema and in the store alike
   const atCap = await call("conversation_fix", "leave_lesson", { lesson: { scope: "role", rule: wide(300), why: wide(160) } });
   expect(atCap).toMatchObject({ ok: true, stageId: "fix" });
   expect(learnedRulesBlock(PROJECT, "builder")).toContain(wide(300));
+});
+
+
+test("every exact id in the rendered four-scope block can be rewritten through leave_lesson", async () => {
+  const { roleMemoryCollection, learnedRulesSnapshot } = await import("@/lib/memory/roleStore");
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(previous!, "rendered-rewrites");
+  const at = "2026-10-19T00:00:00.000Z";
+  const scopes = [`role:${PROJECT}:builder`, "role:*:builder", `project:${PROJECT}`, "machine"];
+  const ids = scopes.map((_, n) => `r_${String(n + 1).padStart(16, "0")}`);
+  try {
+    const store = roleMemoryCollection(true)!;
+    store.boundedPatch(20, tx => {
+      scopes.forEach((scope, n) => {
+        tx.put({ kind: "scope", scope, revision: 1, active: [ids[n]], history: [] });
+        tx.put({ kind: "rule", id: ids[n], scope, rule: `Verify durable ownership before replaying the ${["first", "second", "third", "fourth"][n]} operation.`, why: "An earlier owner retained a durable receipt.", state: "active", hints: [], source: { project: PROJECT, pipelineId: "seed", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_seed" }, createdAt: at, changedAt: at });
+      });
+    });
+    const snapshot = learnedRulesSnapshot(PROJECT, "builder");
+    const rendered = [...snapshot.block.matchAll(/^- \[([^\]]+)\]/gm)].map(match => match[1]);
+    expect(rendered).toEqual(ids);
+    expect(snapshot.rules.map(rule => rule.id)).toEqual(ids);
+    for (const id of rendered) {
+      fixture += 1;
+      const service = serviceAs("conversation_fix");
+      expect(await service.callTool("stage_report", { clientRequestId: `report-${id}`, verdict: "pass" })).toMatchObject({ ok: true });
+      const rewrite = { id, rule: "Before replaying a durable operation, verify both its owner and its acknowledgement.", why: "A replay accepted a receipt from an earlier owner." };
+      const before = store.get(`r:${id}`);
+      const result = await service.callTool("leave_lesson", { clientRequestId: `rewrite-${id}`, rewrite });
+      expect(result).toMatchObject({ ok: true, left: [{ id, action: "rewrite", scope: scopes[ids.indexOf(id)] }] });
+      const updated = store.get(`r:${id}`);
+      if (updated?.kind !== "rule") throw Error("missing rewritten rule");
+      expect(updated.rule).toBe(rewrite.rule);
+      expect(store.get(`r:${updated.versions![0]}`)).toMatchObject({ kind: "rule", rule: before?.kind === "rule" ? before.rule : "", versionOf: id });
+    }
+    // A near miss must fail without consuming the answer or guessing a write.
+    fixture += 1;
+    const service = serviceAs("conversation_fix");
+    await service.callTool("stage_report", { clientRequestId: "near-report", verdict: "pass" });
+    const rewrite = { id: ids[0].slice(0, -1), rule: "Check both durable ownership and operation identity before acknowledging a replay.", why: "The durable record belonged to another operation." };
+    const miss = await service.callTool("leave_lesson", { clientRequestId: "near-rewrite", rewrite });
+    expect(miss).toMatchObject({ ok: false, details: { code: "RULE_NOT_READABLE" } });
+    if (miss.ok) throw Error("near miss unexpectedly accepted");
+    expect(miss.error).toContain(ids[0]);
+    expect(await service.callTool("leave_lesson", { clientRequestId: "corrected-rewrite", rewrite: { ...rewrite, id: ids[0] } })).toMatchObject({ ok: true, left: [{ id: ids[0] }] });
+  } finally { process.env.LLV_STATE_DIR = previous; }
+});
+
+
+test("rewrite hints disclose only active rules in the caller's readable scopes", async () => {
+  const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(previous!, "rewrite-authority");
+  try {
+    const store = roleMemoryCollection(true)!;
+    const at = "2026-10-19T00:00:00.000Z";
+    const cases = [
+      { id: "r_1111111111111111", scope: `role:${PROJECT}:architect`, state: "active" as const },
+      { id: "r_2222222222222222", scope: "role:foreign:builder", state: "active" as const },
+      { id: "r_3333333333333333", scope: `role:${PROJECT}:builder`, state: "archived" as const },
+      { id: "r_4444444444444444", scope: `role:${PROJECT}:builder`, state: "active" as const, versionOf: "r_5555555555555555" },
+      { id: "r_6666666666666666", scope: `role:${PROJECT}:builder`, state: "active" as const, unlisted: true },
+    ];
+    store.boundedPatch(20, tx => {
+      const groups = new Map<string, string[]>();
+      for (const row of cases) {
+        tx.put({ kind: "rule", ...row, rule: RULE, why: "An earlier replay ignored its durable owner.", hints: [], source: { project: PROJECT, pipelineId: "seed", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_seed" }, createdAt: at, changedAt: at });
+        if (!row.unlisted) groups.set(row.scope, [...(groups.get(row.scope) ?? []), row.id]);
+      }
+      for (const [scope, active] of groups) tx.put({ kind: "scope", scope, revision: 1, active, history: [] });
+    });
+    fixture += 1;
+    const record = pipeline();
+    const service = serviceAs("conversation_fix", false, record);
+    await service.callTool("stage_report", { clientRequestId: "authority-report", verdict: "pass" });
+    for (const row of cases) for (const id of [row.id, row.id.slice(0, -1)]) {
+      const result = await service.callTool("leave_lesson", { clientRequestId: `authority-${id}`, rewrite: { id, rule: "Verify both the durable owner and operation before accepting a replayed receipt.", why: "An earlier replay ignored its durable owner." } });
+      expect(result).toMatchObject({ ok: false, details: { code: "RULE_NOT_READABLE" } });
+      if (result.ok) throw Error("unreadable rewrite accepted");
+      expect(result.error).not.toContain(row.id);
+      expect(result.error).not.toContain("closest readable");
+    }
+    expect(lessonRequest(record.id, "fix", 1)?.rewrote).toBeUndefined();
+    expect(await service.callTool("leave_lesson", { clientRequestId: "authority-none", none: "The existing authority guard covers this case." })).toMatchObject({ ok: true });
+  } finally { process.env.LLV_STATE_DIR = previous; }
 });
