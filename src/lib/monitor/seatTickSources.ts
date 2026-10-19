@@ -1118,7 +1118,8 @@ function pauseInputs(pipelines: readonly Pipeline[], seat: SeatTickSeatInput | n
         pauseConditionMet = liveFreshObservation(observation, now) && !!window
           && Number.isFinite(window.usedPercent) && window.usedPercent >= 0 && window.usedPercent < condition.belowPercent;
       }
-      return [pipeline.id, { pausedBy: by, pausedAt: pipeline.pausedAt ?? pipeline.createdAt, pause: pipeline.pause, pauseConditionMet }] as const;
+      return [pipeline.id, { pausedBy: by, pausedAt: pipeline.pausedAt ?? pipeline.createdAt,
+        pauseGeneration: pipeline.controlGeneration, pause: pipeline.pause, pauseConditionMet }] as const;
     }));
   });
 }
@@ -1567,7 +1568,7 @@ function changeFingerprint(
      that could not be read contributes nothing here — the children list is
      empty then, and the gap beside it keeps the check from concluding quiet. */
   const board = [
-    ...pipelines.map((pipeline) => `p:${pipeline.id}:${pipeline.state}:${pipeline.updatedAt ?? ""}:${JSON.stringify([pipeline.pausedBy, pipeline.pausedAt, pipeline.pause, pipeline.pauseConditionMet])}`),
+    ...pipelines.map((pipeline) => `p:${pipeline.id}:${pipeline.state}:${pipeline.updatedAt ?? ""}:${JSON.stringify([pipeline.pausedBy, pipeline.pausedAt, pipeline.pauseGeneration, pipeline.pause, pipeline.pauseConditionMet])}`),
     ...tasks.map((task) => `t:${task.id}:${task.status}:${task.owned}:${task.updatedAt ?? ""}:${JSON.stringify([task.accepted, task.hold, task.waitingSince])}`),
     ...children.map((child) => `c:${child.conversationId}:${child.outcomeId ?? ""}:${child.status}:${child.terminalAt ?? ""}`),
     /* The seat's own settled lanes decide a wake reason of their own (#1749),

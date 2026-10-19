@@ -56,7 +56,7 @@ export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
   for (const pipeline of input.pipelines) {
     if (!pauseReminderReady(pipeline, input.now)) continue;
     const since = pipeline.pausedAt ?? pipeline.updatedAt;
-    const key = `${PREFIX}pause:${createHash("sha256").update(`${pipeline.id}:${since ?? "legacy"}`).digest("hex")}`;
+    const key = `${PREFIX}pause:${createHash("sha256").update(`${pipeline.id}:${pipeline.pauseGeneration ?? since ?? "legacy"}`).digest("hex")}`;
     const last = shown.get(key);
     if (last !== undefined && input.now - last < SEAT_REMINDER_REPEAT_MS) continue;
     const hours = since && Number.isFinite(Date.parse(since)) ? `${Math.floor((input.now - Date.parse(since)) / SEAT_REMINDER_AFTER_MS)}h` : "an unknown time";

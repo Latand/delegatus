@@ -92,7 +92,7 @@ test("a cropped waiting-work bullet earns no reminder stamp", () => {
 test("a pause reminds when its date arrives and legacy pauses repeat after a day", () => {
   const pausedAt = new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString();
   const future = new Date(NOW + 60 * MINUTE).toISOString();
-  const paused = lane({ state: "inert", pausedBy: "other", pausedAt,
+  const paused = lane({ state: "inert", pausedBy: "other", pausedAt, pauseGeneration: "pause-one",
     pause: { reason: "wait for the maintenance window", resumeCondition: { kind: "date", at: future } } });
   expect(seatTickDecision(input({ pipelines: [paused] })).verdict.kind).toBe("quiet");
   const due = seatTickDecision(input({ now: NOW + 60 * MINUTE, pipelines: [paused] }));
@@ -101,6 +101,7 @@ test("a pause reminds when its date arrives and legacy pauses repeat after a day
   expect(due.verdict.items[0]!.label).toContain(paused.pause!.reason);
   const state = seatTickWakeCommit(due.state, plan(due.verdict, "fp-1", 0), NOW + 60 * MINUTE);
   expect(seatTickDecision(input({ now: NOW + 150 * MINUTE, state, pipelines: [paused] })).verdict.kind).toBe("quiet");
+  expect(seatTickDecision(input({ now: NOW + 150 * MINUTE, state, pipelines: [{ ...paused, pauseGeneration: "pause-two" }] })).verdict.kind).toBe("wake");
   expect(seatTickDecision(input({ now: NOW + 25 * 60 * MINUTE, state, pipelines: [paused] })).verdict.kind).toBe("wake");
   expect(seatTickDecision(input({ pipelines: [{ ...paused, pause: undefined }] })).verdict.kind).toBe("wake");
   expect(seatTickDecision(input({ state: { ...emptySeatTickState(), lastProposalAt: new Date(NOW).toISOString() }, pipelines: [{ ...paused, pausedBy: "operator" }] })).verdict.kind).toBe("quiet");

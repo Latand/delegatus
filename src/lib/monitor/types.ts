@@ -509,6 +509,7 @@ export interface SeatTickSeatInput {
  */
 export interface SeatTickPipelineInput {
   pausedAt?: string | null;
+  pauseGeneration?: string;
   pause?: import("@/lib/pipelines/pauseMetadata").PipelinePause;
   /** True only from a fresh cached observation; unknown remains unproven. */
   pauseConditionMet?: boolean;

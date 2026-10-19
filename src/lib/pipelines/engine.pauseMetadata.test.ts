@@ -1,6 +1,6 @@
 import { expect, test, harness, create, patchPipeline, loadPipelines } from "./engine.fixture";
 import { TOOL_INPUT_SCHEMAS } from "@/lib/mcp/server";
-import { viewerMcpBindings } from "@/lib/mcp/bindings";
+import { viewerMcpBindings, type ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
 
 test("pause persists its reason and resume date; resume clears the metadata", async () => {
   const h = harness();
@@ -34,10 +34,11 @@ test("pipeline_action carries an account resume condition through MCP to the rea
   const args = TOOL_INPUT_SCHEMAS.pipeline_action.parse({ clientRequestId: "pause-with-condition", pipelineId: lane.id,
     action: "pause", reason: "wait for quota recovery", resumeCondition });
   const conversationId = ["conversation", "fixture-seat"].join("_");
-  const bindings = viewerMcpBindings(undefined, undefined, {
+  const dependencies: Partial<ViewerMcpDomainDependencies> = {
     patchPipeline: (id, request, _ports, actor) => patchPipeline(id, request, h.ports, actor),
     callerAttribution: () => ({ kind: "manager", conversationId, role: "orchestrator" }),
-  });
+  };
+  const bindings = viewerMcpBindings(undefined, undefined, dependencies as ViewerMcpDomainDependencies);
   await bindings.pipeline_action(args);
   const pause = loadPipelines().find(p => p.id === lane.id)!.pause;
   expect(pause).toEqual({ reason: "wait for quota recovery", resumeCondition,
