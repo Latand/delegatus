@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 
 /* This suite exercises the close path's host teardown, which terminates agent
    processes. Everything it touches is a throwaway registry inside this sandbox
@@ -43,7 +44,7 @@ type Registry = InstanceType<typeof AgentRegistry>;
 
 /** Seats a structured conversation whose host process is this test process, so
     the liveness probe reports a resident host without spawning anything. */
-function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolean; pane?: TmuxHostEvidence | null; process?: { pid: number; startIdentity: string | null; bootEpoch?: string } } = {}): {
+function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolean; pane?: TmuxHostEvidence | null; process?: { pid: number; startIdentity: string | null; bootEpoch?: string | null } } = {}): {
   registry: Registry;
   conversationId: string;
   launchId: string;
@@ -417,15 +418,15 @@ test("a recycled pane id is reported unknown and never signalled (#670)", async 
 });
 
 test("an unstamped attempt requires positive idle evidence before retiring a host without a stream", async () => {
-  const fixture = hostedConversation({ status: "dead", process: { pid: process.pid,
-    startIdentity: procBackend.processIdentity(process.pid), bootEpoch: "fixture-boot" } });
+  const processRef = captureProcessIdentity(process.pid);
+  const fixture = hostedConversation({ status: "dead", process: processRef });
   const { retirePipelineStageAgent } = await import("./engine");
   const signals: number[] = [];
   let alive = true;
   const identity = procBackend.processIdentity(process.pid);
   const result = await retirePipelineStageAgent({ ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId }, {
     requireIdleEvidence: true,
-    termination: { processIdentity: pid => alive && pid === process.pid ? identity : null, bootEpoch: () => "fixture-boot",
+    termination: { processIdentity: pid => alive && pid === process.pid ? identity : null, bootEpoch: () => processRef.bootEpoch ?? null,
       pidAlive: pid => alive && pid === process.pid, ppidMap: () => new Map(), processGroupId: () => null,
       signal: pid => { signals.push(pid); alive = false; }, sleep: async () => {}, terminateOwnedHost: async () => false,
       retireRegistryEntry: () => true },
