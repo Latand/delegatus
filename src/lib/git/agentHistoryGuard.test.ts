@@ -465,3 +465,133 @@ test.skipIf(process.platform === "win32").each(["root", "directory"])("launch re
     expect(fs.readFileSync(hook, "utf8")).toBe("foreign body");
   } finally { f.close(); }
 });
+
+// Count real shell entries so the old recursive exec fails deterministically,
+// without waiting for a timeout or leaving descendants behind.
+test.each(["default", ".githooks", "guard", "relative guard", "symlink guard", "wrapper", "worktree .githooks", "worktree guard"]
+  .flatMap(kind => [false, true].map(bound => ({ kind, bound }))))(
+  "pre-push chains %j exactly once across fresh Git processes", ({ kind, bound }) => {
+    const f = fixture(undefined, kind.startsWith("worktree"));
+    try {
+      const origin = path.join(f.root, "origin.git");
+      f.ok(["init", "--bare", origin]);
+      f.ok(["remote", "add", "origin", origin]);
+      if (bound) {
+        const receipt = path.join(f.root, "receipt");
+        fs.mkdirSync(receipt);
+        fs.writeFileSync(path.join(receipt, "base"), f.ok(["rev-parse", "HEAD"]));
+        Object.assign(f.env, agentPublicationIdentityEnv({ ...f.env,
+          LLV_STAGE_GIT_RECEIPT: receipt, LLV_STAGE_GIT_WORKTREE: f.root }));
+      }
+      const guard = f.env.LLV_AGENT_GIT_GUARD_DIR!;
+      const generated = path.join(guard, "pre-push");
+      const body = fs.readFileSync(generated, "utf8");
+      fs.writeFileSync(generated, body.replace("set -eu", `set -eu
+printf 'entry\\n' >> guard-entries
+[ "$(wc -l < guard-entries)" -le 3 ] || { echo 'recursive guard entry' >&2; exit 99; }`));
+      const hooks = kind === "default" ? f.ok(["rev-parse", "--git-common-dir"]) + "/hooks" : ".githooks";
+      fs.mkdirSync(path.resolve(f.root, hooks), { recursive: true });
+      const target = path.resolve(f.root, hooks, "pre-push");
+      fs.writeFileSync(target, `#!/bin/sh
+${kind === "wrapper" ? `input=$(cat)\nprintf '%s\\n' "$input" | "${generated}" "$@" || exit $?\nprintf '%s\\n' "$input" > hook-input\n` : "cat > hook-input\n"}printf '%s\\n' "$@" > hook-args
+printf 'called\\n' >> hook-calls
+if [ -f reject-push ]; then echo 'repository publication refused' >&2; exit 7; fi
+`, { mode: 0o700 });
+      if (kind.includes("guard")) {
+        let configured = guard;
+        if (kind === "relative guard") configured = path.relative(f.root, guard);
+        if (kind === "symlink guard") {
+          configured = path.join(f.root, "guard-link");
+          fs.symlinkSync(guard, configured, "dir");
+        }
+        f.ok(["config", "core.hooksPath", configured]);
+      } else if (kind !== "default") f.ok(["config", "core.hooksPath", ".githooks"]);
+      const config = f.ok(["config", "--local", "--list"], f.source);
+      const head = f.ok(["rev-parse", "HEAD"]);
+      for (const refused of [false, true]) {
+        if (refused) fs.writeFileSync(path.join(f.root, "reject-push"), "");
+        for (const file of ["guard-entries", "hook-calls"]) fs.rmSync(path.join(f.root, file), { force: true });
+        const ref = `refs/heads/${refused ? "refused" : "accepted"}`;
+        const input = `HEAD ${head} ${ref} ${"0".repeat(40)}\n`;
+        const result = f.run(["push", "origin", `HEAD:${ref}`]);
+        if (refused) expect(result.exitCode).not.toBe(0);
+        else expect(result.exitCode, result.stderr.toString()).toBe(0);
+        expect(fs.readFileSync(path.join(f.root, "guard-entries"), "utf8")).toBe(kind === "wrapper" ? "entry\nentry\n" : "entry\n");
+        expect(fs.readFileSync(path.join(f.root, "hook-calls"), "utf8")).toBe("called\n");
+        expect(fs.readFileSync(path.join(f.root, "hook-args"), "utf8")).toBe(`origin\n${origin}\n`);
+        expect(fs.readFileSync(path.join(f.root, "hook-input"), "utf8")).toBe(input);
+        if (refused) expect(result.stderr.toString()).toContain("repository publication refused");
+      }
+      expect(f.ok(["config", "--local", "--list"], f.source)).toBe(config);
+    } finally { f.close(); }
+  });
+
+test("a retained pre-fix guard path routes pushes to the repository hook once", () => {
+  const f = fixture();
+  try {
+    const origin = path.join(f.root, "origin.git");
+    f.ok(["init", "--bare", origin]);
+    f.ok(["remote", "add", "origin", origin]);
+    const currentGuard = f.env.LLV_AGENT_GIT_GUARD_DIR!;
+    const cacheRoot = path.dirname(path.dirname(currentGuard));
+    const oldDirectory = path.join(cacheRoot, "guard-legacy", "0123456789abcdef01234567");
+    fs.mkdirSync(oldDirectory, { recursive: true });
+    const currentBody = fs.readFileSync(path.join(currentGuard, "pre-push"), "utf8");
+    const legacyBody = currentBody.replace(
+      /# A repository may have persisted the launch override[\s\S]*?export LLV_AGENT_GIT_CHAINED_HOOK="\$chain_target"\n/,
+      "",
+    );
+    expect(legacyBody).not.toBe(currentBody);
+    fs.writeFileSync(path.join(oldDirectory, "pre-push"), legacyBody.replace("set -eu", `set -eu
+printf 'legacy\\n' >> legacy-entries`), { mode: 0o700 });
+    const liveGuard = path.join(currentGuard, "pre-push");
+    fs.writeFileSync(liveGuard, currentBody.replace("set -eu", `set -eu
+printf 'current\\n' >> current-entries`), { mode: 0o700 });
+    const hooks = path.join(f.root, ".githooks");
+    fs.mkdirSync(hooks);
+    fs.writeFileSync(path.join(hooks, "pre-push"), `#!/bin/sh
+cat > hook-input
+printf 'called\\n' >> hook-calls
+if [ -f reject-push ]; then echo 'repository publication refused' >&2; exit 7; fi
+`, { mode: 0o700 });
+    f.ok(["config", "core.hooksPath", oldDirectory]);
+    const head = f.ok(["rev-parse", "HEAD"]);
+    for (const refused of [false, true]) {
+      if (refused) fs.writeFileSync(path.join(f.root, "reject-push"), "");
+      for (const file of ["legacy-entries", "current-entries", "hook-calls"]) {
+        fs.rmSync(path.join(f.root, file), { force: true });
+      }
+      const ref = `refs/heads/${refused ? "refused" : "accepted"}`;
+      const result = f.run(["push", "origin", `HEAD:${ref}`]);
+      if (refused) {
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stderr.toString()).toContain("repository publication refused");
+      } else expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(fs.readFileSync(path.join(f.root, "current-entries"), "utf8")).toBe("current\n");
+      expect(fs.existsSync(path.join(f.root, "legacy-entries"))).toBe(false);
+      expect(fs.readFileSync(path.join(f.root, "hook-calls"), "utf8")).toBe("called\n");
+      expect(fs.readFileSync(path.join(f.root, "hook-input"), "utf8")).toBe(
+        `HEAD ${head} ${ref} ${"0".repeat(40)}\n`,
+      );
+    }
+  } finally { f.close(); }
+});
+
+
+test.each(["missing", "self symlink"])("a self-configured guard tolerates a %s fallback", (kind) => {
+  const f = fixture();
+  try {
+    const guard = f.env.LLV_AGENT_GIT_GUARD_DIR!;
+    f.ok(["config", "core.hooksPath", guard]);
+    if (kind === "self symlink") fs.symlinkSync(guard, path.join(f.root, ".githooks"), "dir");
+    f.ok(["commit", "--allow-empty", "-m", "guarded work"]);
+    const before = f.ok(["rev-parse", "HEAD"]);
+    const refused = f.run(["commit", "--amend", "--reset-author", "--allow-empty", "-m", "inherited author"], {
+      ...f.env, GIT_AUTHOR_NAME: "Fixture Author", GIT_AUTHOR_EMAIL: ["fixture", "example.invalid"].join("@"),
+      LLV_AGENT_GIT_CHAINED_HOOK: path.join(f.root, ".githooks", "prepare-commit-msg"),
+    });
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr.toString()).toContain("add a new commit on top");
+    expect(f.ok(["rev-parse", "HEAD"])).toBe(before);
+  } finally { f.close(); }
+});

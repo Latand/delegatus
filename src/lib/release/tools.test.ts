@@ -1,13 +1,45 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { promisify } from "node:util";
+import { ready } from "./policy.fixture";
+import { releaseState } from "./policy";
 import { captureTools, requiredReleaseChecks } from "./production";
 test("capture readiness probes the host Bun bridge used by the capture agent", async () => {
   let calls = 0;
   const tools = await captureTools("/synthetic/repo", async (file, args, cwd) => {
     calls++; expect(file).toBe("bun"); expect(args[0]).toBe("-e"); expect(cwd).toBe("/synthetic/repo");
-    return JSON.stringify({ missing: ["tesseract"], chrome: "chrome-fixture" });
+    return JSON.stringify({ missing: ["pdftocairo"], chrome: "chrome-fixture" });
   });
-  expect(calls).toBe(1); expect(tools.missing).toEqual(["tesseract"]);
+  expect(calls).toBe(1); expect(tools.missing).toEqual(["pdftocairo"]);
+});
+
+/** Runs the real probe with a PATH holding only the named stub tools (plus the directory of the running Bun). */
+async function probe(stubs: string[]) {
+  const dir = mkdtempSync(join(tmpdir(), "capture-tools-"));
+  try {
+    for (const name of stubs) { writeFileSync(join(dir, name), "#!/bin/sh\n"); chmodSync(join(dir, name), 0o755); }
+    const env: Record<string, string> = { PATH: `${dir}:${dirname(process.execPath)}`, HOME: dir, CHROME_BIN: join(dir, "chrome"), PLAYWRIGHT_BROWSERS_PATH: join(dir, "none") };
+    return await captureTools(dir, async (file, args, cwd) => (await promisify(execFile)(process.execPath, args, { cwd, env: env as NodeJS.ProcessEnv })).stdout.trim());
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test("a machine without tesseract but with pdftocairo and Chrome is not blocked by capture tools", async () => {
+  const tools = await probe(["pdftocairo", "chrome"]);
+  expect(tools.missing).toEqual([]);
+  expect((await releaseState({ ...ready(), tools: tools.missing })).state).toBe("due");
+});
+
+test.each([["pdftocairo", ["chrome"]], ["Chrome", ["pdftocairo"]]])("a machine without %s still blocks with blocker 10", async (name, stubs) => {
+  const tools = await probe(stubs);
+  expect(tools.missing).toEqual([name]);
+  expect(await releaseState({ ...ready(), tools: tools.missing })).toMatchObject({ state: "blocked", blocker: 10 });
+});
+
+test("a probe that reports tesseract as missing is rejected as unreadable", async () => {
+  await expect(captureTools("/synthetic/repo", async () => JSON.stringify({ missing: ["tesseract"], chrome: "chrome-fixture" }))).rejects.toThrow("capture tools could not be read");
 });
 
 const repo = "example/project";
