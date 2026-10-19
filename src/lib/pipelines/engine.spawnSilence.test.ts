@@ -248,7 +248,8 @@ test("replacement budget survives a fresh controller process", async () => {
     expect(retried.error).toBeUndefined();
     const resumed = loadPipelines()[0]!;
     expect(resumed.runs[0]!.attempts).toHaveLength(3);
-    expect(resumed.runs[0]!.attempts[2]!.restartContext).toBeUndefined();
+    expect(resumed.runs[0]!.attempts[2]!.restartContext).toMatchObject({ previousAttempt: 2 });
+    expect(resumed.runs[0]!.attempts[2]!.restartRecovery?.replacedAttempt).toBeUndefined();
     const freshRoot = resumed.runs[0]!.attempts[2]!;
     const freshLaunchId = "launch-manual-retry";
     const freshConversationId = "conversation_manual_retry";

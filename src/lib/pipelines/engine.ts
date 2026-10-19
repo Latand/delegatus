@@ -8935,7 +8935,7 @@ async function replaceUnansweredStageLaunch(
   // automatic replacement parent.
   if (manual) {
     const fresh = currentAttempt(pipeline, stage.id);
-    if (fresh && fresh.n !== attempt.n) delete fresh.restartContext;
+    if (fresh && fresh.n !== attempt.n) delete fresh.restartRecovery?.replacedAttempt;
   }
   attempt.error = `${UNANSWERED_STAGE_PREFIX}; recorded host stopped; replaced by a fresh stage attempt`;
   if (manual) {
