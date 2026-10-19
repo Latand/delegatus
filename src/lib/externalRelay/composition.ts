@@ -56,6 +56,7 @@ function sourceLeaves(text: string) {
       let end = i + 1; while (points[end] === c) end++;
       const before = points[i - 1] ?? " ", after = points[end] ?? " ";
       if (!(c === "_" && /[\p{L}\p{N}]/u.test(before) && /[\p{L}\p{N}]/u.test(after)) && !(c === "~" && end - i !== 2)) {
+        if (!/\s/.test(before) || !/\s/.test(after)) leaves.fill(-1, i, end);
         const delimiter = points.slice(i, end).join(""), opens = emphasis.get(delimiter) ?? [];
         if (!/\s/.test(before) && opens.length) {
           const start = opens.pop()!; leaves.fill(-1, start, start + delimiter.length); leaves.fill(-1, i, end);
@@ -66,12 +67,13 @@ function sourceLeaves(text: string) {
     }
   }
   const images: { id: string; line: number }[] = [];
-  let leaf = 1, base = 0, fence: string | null = null;
+  let leaf = 1, base = 0, fence: string | null = null, listContext = false;
   const lines = text.split("\n");
   for (let lineNo = 0; lineNo < lines.length; lineNo++) {
     const line = lines[lineNo]!, chars = Array.from(line);
     const marker = /^(?:\s{0,3}>\s*)*(?:\s*(?:[-+*]|\d+[.)])\s+)?\s*(`{3,}|~{3,})/.exec(line)?.[1];
-    const indented = /^(?: {4}|\t)/.test(line);
+    const nestedList = listContext && /^(?: {4,}|\t+)(?:[-+*]|\d+[.)])[\t ]+/.test(line);
+    const indented = /^(?: {4}|\t)/.test(line) && !nestedList;
     const isCode = !!fence || !!marker || indented;
     if (indented && !fence && !marker && /!\[.*\]\(attachment:/.test(line)) invalid();
     if (fence) { if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null; }
@@ -91,16 +93,16 @@ function sourceLeaves(text: string) {
 
       let containerPrefix = "", remaining = line;
       while (true) {
-        const container = /^(?: {0,3}>[\t ]?| {0,3}(?:[-+*]|\d+[.)])[\t ]+)/.exec(remaining)?.[0];
+        const container = /^(?: {0,3}>[\t ]?| {0,}(?:[-+*]|\d+[.)])[\t ]+)/.exec(remaining)?.[0];
         if (!container) break;
         containerPrefix += container; remaining = remaining.slice(container.length);
       }
       const headingMarker = /^ {0,3}#{1,6}(?:[\t ]+|$)/.exec(remaining)?.[0];
       const headingPrefix = headingMarker ? containerPrefix + headingMarker : undefined;
-      const prefix = headingPrefix ?? /^(?: {0,3}(?:>\s*)+| {0,3}#{1,6}\s+|\s*(?:[-+*]|\d+[.)])\s+)/.exec(line)?.[0];
+      const prefix = headingPrefix ?? (containerPrefix || /^(?: {0,3}(?:>\s*)+| {0,3}#{1,6}\s+|\s*(?:[-+*]|\d+[.)])\s+)/.exec(line)?.[0]);
       if (prefix) leaves.fill(-1, base, base + Array.from(prefix).length);
       if (headingPrefix) {
-        const closing = /[\t ]+(#{1,6})[\t ]*$/.exec(line);
+        const closing = /[\t ]+(#+)[\t ]*$/.exec(line);
         if (closing) {
           const closingStart = Array.from(line.slice(0, closing.index + closing[0].indexOf(closing[1]!))).length;
           leaves.fill(-1, base + closingStart, base + closingStart + closing[1]!.length);
@@ -116,6 +118,10 @@ function sourceLeaves(text: string) {
       const syntax = chars.map((c, i) => inert[i] ? " " : c).join("");
       if (/<\/?tg-slideshow\b/i.test(syntax)) invalid();
     }
+    const listLine = /^(?: {0,3}>[\t ]?)*\s*(?:[-+*]|\d+[.)])[\t ]+/.test(line);
+    if (!line.trim()) listContext = false;
+    else if (listLine || nestedList) listContext = true;
+    else if (!/^(?: {0,3}>[\t ]?)/.test(line)) listContext = false;
     base += chars.length + 1; leaf++;
   }
   return { points, leaves, images, lines };

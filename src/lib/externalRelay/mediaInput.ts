@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Transform } from "node:stream";
+import { Worker, threadId } from "node:worker_threads";
 import { pipeline } from "node:stream/promises";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ExternalRelayError, relayDownloadMedia } from "./client";
@@ -24,7 +25,7 @@ function contentGuard(mime: string) {
         let decoded: string;
         try { decoded = decoder.decode(chunk, { stream: true }); } catch { return fail("unsupported_media_type", 415); }
         const scan = overlap + decoded;
-        if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(scan) || /<(?:!doctype\s+html|html|head|body|script|iframe|object|embed|form|meta|link|style|title|div|span|p|a|img|table|ul|ol|li|br|section|main|article|svg)\b/i.test(scan)) fail("unsupported_media_type", 415);
+        if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(scan) || /<\/?[a-z][a-z0-9:-]*(?:[\t\r\n />])|<\?|<!/i.test(scan)) fail("unsupported_media_type", 415);
         overlap = scan.slice(-64);
       }
     },
@@ -37,59 +38,42 @@ function contentGuard(mime: string) {
     },
   };
 }
-/** Parse PDFs through bounded file ranges so structural validation never
- * retains the downloaded document as one buffer. */
-async function validatePdfStructure(filename: string, signal: AbortSignal, authorize: () => void) {
-  const { getDocument, PDFDataRangeTransport } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+/** Parsing runs in an owned worker with a byte cap, heap cap and hard deadline. */
+export async function validatePdfStructure(filename: string, signal: AbortSignal, authorize: () => void,
+  runtime: { timeoutMs?: number; workerStarted?: (workerThreadId: number) => void } = {}) {
   signal.throwIfAborted(); authorize();
-  const handle = await fs.promises.open(filename, "r");
-  let fileSize: number;
-  try { signal.throwIfAborted(); authorize(); fileSize = (await handle.stat({ bigint: false })).size; signal.throwIfAborted(); authorize(); }
-  catch (error) { await handle.close(); throw error; }
-  let loadingTask: ReturnType<typeof getDocument> | null = null;
-  let rangeFailure: unknown = null;
-  class FileRangeTransport extends PDFDataRangeTransport {
-    constructor() { super(fileSize, null); }
-    requestDataRange(begin: number, end: number) {
-      void (async () => {
-        try {
-          signal.throwIfAborted(); authorize();
-          const length = end - begin;
-          if (length < 1 || length > 64 * 1024 || begin < 0 || end > fileSize) fail("unsupported_media_type", 415);
-          const bytes = Buffer.allocUnsafe(length);
-          const { bytesRead } = await handle.read(bytes, 0, length, begin);
-          signal.throwIfAborted(); authorize();
-          if (bytesRead !== length) fail("unsupported_media_type", 415);
-          this.onDataRange(begin, bytes);
-        } catch (error) {
-          rangeFailure = error;
-          void loadingTask?.destroy().catch(() => {});
-          try { this.onDataRange(begin, null); } catch { /* The parser may already have stopped. */ }
-        }
-      })();
-    }
-  }
-  const onAbort = () => { void loadingTask?.destroy().catch(() => {}); };
-  signal.addEventListener("abort", onAbort, { once: true });
-  try {
-    signal.throwIfAborted(); authorize();
-    loadingTask = getDocument({ range: new FileRangeTransport(), rangeChunkSize: 64 * 1024,
-      disableStream: true, disableAutoFetch: true, verbosity: 0 });
-    const document = await loadingTask.promise;
-    signal.throwIfAborted(); authorize();
-    if (!Number.isInteger(document.numPages) || document.numPages < 1) fail("unsupported_media_type", 415);
-    await document.getPage(1);
-    signal.throwIfAborted(); authorize();
-  } catch (error) {
-    if (rangeFailure instanceof ExternalRelayError) throw rangeFailure;
-    if (signal.aborted) throw error;
-    if (error instanceof ExternalRelayError) throw error;
-    fail("unsupported_media_type", 415);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-    await loadingTask?.destroy().catch(() => {});
-    await handle.close();
-  }
+  const workerPath = [path.join(process.cwd(), ".next/server/relay-pdf-validation-worker.js"),
+    path.join(process.cwd(), "src/lib/externalRelay/pdfValidation.worker.ts")].find(candidate => fs.existsSync(candidate));
+  if (!workerPath) return fail("unsupported_media_type", 415);
+  const worker = new Worker(workerPath, { workerData: { filename, maxBytes: 20 * MiB }, resourceLimits: { maxOldGenerationSizeMb: 128 } });
+  const timeoutMs = runtime.timeoutMs ?? 5_000;
+  return await new Promise<number>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => finish(new Error("PDF validation deadline exceeded")), timeoutMs);
+    const finish = (error?: Error, workerThreadId?: number) => {
+      if (settled) return; settled = true; clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      void worker.terminate().catch(() => undefined).then(() => error ? reject(error) : resolve(workerThreadId!));
+    };
+    const onAbort = () => finish(signal.reason instanceof Error ? signal.reason : new DOMException("PDF validation cancelled", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    worker.on("message", (message: { type?: string; ok?: boolean; workerThreadId?: number }) => {
+      if (message?.type === "started" && message.workerThreadId !== threadId) {
+        try { signal.throwIfAborted(); authorize(); runtime.workerStarted?.(message.workerThreadId!); }
+        catch (error) { finish(error as Error); }
+        return;
+      }
+      if (!message?.ok || !Number.isInteger(message.workerThreadId) || message.workerThreadId === threadId) {
+        finish(new Error("PDF structural validation failed")); return;
+      }
+      try { signal.throwIfAborted(); authorize(); }
+      catch (error) { finish(error as Error); return; }
+      finish(undefined, message.workerThreadId);
+    });
+    worker.once("error", error => finish(error instanceof Error ? error : new Error(String(error))));
+    worker.once("exit", code => { if (!settled) finish(new Error(`PDF validation worker exited (${code})`)); });
+    if (signal.aborted) onAbort();
+  });
 }
 /** Claude's native image input is a stream-json user message. Spool its
  * base64 representation in chunks; the launcher streams the file to stdin. */
@@ -167,7 +151,10 @@ export async function prepareInboundMedia(relay: Pick<PairedRelay, "api_base" | 
             check(); signal.throwIfAborted();
             if (size !== length) fail("malformed", 400);
             content.finish();
-            if (media.mime_type === "application/pdf") await validatePdfStructure(filename, signal, check);
+            if (media.mime_type === "application/pdf") {
+              try { await validatePdfStructure(filename, signal, check); }
+              catch (error) { if (signal.aborted) throw error; if (error instanceof ExternalRelayError) throw error; fail("unsupported_media_type", 415); }
+            }
           } finally { await handle.close().catch(() => {}); }
         }, { signal, beforeSend: check });
         check();

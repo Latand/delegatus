@@ -46,6 +46,21 @@ test("heading delimiters stay outside mention leaves, including nested block pre
     refuses(() => validateAnswerComposition(reply(item.text, { mentions: [{ ...mention, offset: item.offset, length: item.length }] }), request(), []));
   }
 });
+test("mentions cannot cross Markdown container and closing syntax", () => {
+  const invalid = [
+    { text: "- > Person", offset: 2, length: 8 },
+    { text: "***Person** label*", offset: 3, length: 8 },
+    { text: "# Person #######", offset: 2, length: 14 },
+  ];
+  for (const item of invalid) refuses(() => validateAnswerComposition(reply(item.text, {
+    mentions: [{ ...mention, offset: item.offset, length: item.length }],
+  }), request(), []));
+  const nestedList = "- Outer\n    - Person";
+  validateAnswerComposition(reply(nestedList, { mentions: [{ ...mention, offset: 14, length: 6 }] }), request(), []);
+  const nestedQuoteList = "> - Outer\n>     - Person";
+  validateAnswerComposition(reply(nestedQuoteList, { mentions: [{ ...mention, offset: 18, length: 6 }] }), request(), []);
+  refuses(() => validateAnswerComposition(reply("    Person", { mentions: [{ ...mention, offset: 4, length: 6 }] }), request(), []));
+});
 test("every malformed mention is refused before completion", () => {
   const cases = [null, {}, [null], [{ ...mention, extra: true }], [{ ...mention, offset: -1 }], [{ ...mention, offset: 0.5 }], [{ ...mention, offset: 31999 }], [{ ...mention, length: 0 }], [{ ...mention, length: 129 }], [{ ...mention, length: 1.5 }], [{ ...mention, author_key: "foreign" }], [{ ...mention, author_key: "123" }], [{ ...mention, author_key: "person_a " }], [mention, mention], [{ ...mention, offset: 9, length: 1 }, mention], Array(17).fill(mention)];
   for (const mentions of cases) refuses(() => checkedAnswerV2(reply(undefined, { mentions }), request(), answerCapabilities(request(), "codex")));

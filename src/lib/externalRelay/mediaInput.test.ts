@@ -5,7 +5,8 @@ import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { prepareInboundMedia, validateMediaInput, writeInboundAgentInput } from "./mediaInput";
+import { threadId } from "node:worker_threads";
+import { prepareInboundMedia, validateMediaInput, validatePdfStructure, writeInboundAgentInput } from "./mediaInput";
 import { requestSchema, type ExternalRelayRequest } from "./protocol";
 import { richRequest } from "./rich.fixture";
 import { ExternalRelayError, relayDownloadMedia } from "./client";
@@ -120,6 +121,21 @@ test("PDF structure is validated before admission; malformed and truncated origi
     } finally { await f.close(); }
   }
 });
+test("PDF parsing runs on an owned worker and abort terminates it after its start handshake", async () => {
+  const f = await fs.mkdtemp(path.join(os.tmpdir(), "relay-pdf-worker-"));
+  const filename = path.join(f, "valid.pdf"); await fs.writeFile(filename, validPdf());
+  try {
+    const workerThreadId = await validatePdfStructure(filename, new AbortController().signal, () => {});
+    expect(workerThreadId).not.toBe(threadId);
+    const controller = new AbortController(); let started: number | undefined;
+    const pending = validatePdfStructure(filename, controller.signal, () => {}, {
+      timeoutMs: 2_000,
+      workerStarted: workerId => { started = workerId; controller.abort(new DOMException("fixture cancellation", "AbortError")); },
+    });
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(started).toBeTypeOf("number"); expect(started).not.toBe(threadId);
+  } finally { await fs.rm(f, { recursive: true, force: true }); }
+});
 test("stream accepts exact file and total limits without accumulating original buffers", async () => {
   const r = request([ref("media_a", 20 * MiB), ref("media_b", 20 * MiB)]);
   const f = await fixture(async (_req, res) => {
@@ -181,6 +197,33 @@ test("hostile responses preserve errors and delete every partial file", async ()
       await expect(prepareInboundMedia(f.relay, r, f.directory, auth)).rejects.toMatchObject({ code, status });
       expect(await fs.readdir(f.directory)).toEqual([]);
     } finally { await f.close(); }
+  }
+});
+test("HTML tags beyond the common tag set are refused across stream chunk boundaries", async () => {
+  for (const body of ["<h1>Injected</h1>", "<textarea>Injected</textarea>"]) {
+    const r = request([ref("media_first", 2), ref("media_a", Buffer.byteLength(body))]);
+    const f = await fixture((req, res) => {
+      if (req.url?.endsWith("media_first")) {
+        res.writeHead(200, { "content-type": "text/plain", "content-length": 2 }); res.end("ok"); return;
+      }
+      res.writeHead(200, { "content-type": "text/plain", "content-length": Buffer.byteLength(body) });
+      res.write(body.slice(0, 2)); res.end(body.slice(2));
+    });
+    try {
+      await expect(prepareInboundMedia(f.relay, r, f.directory, options())).rejects.toMatchObject({ code: "unsupported_media_type", status: 415 });
+      expect(await fs.readdir(f.directory)).toEqual([]);
+    } finally { await f.close(); }
+  }
+});
+test("ordinary inbound text formats remain accepted", async () => {
+  for (const [mime, body] of [["text/plain", "hello"], ["text/markdown", "# heading"], ["text/csv", "a,b\n1,2"], ["application/json", "{\"ok\":true}"]] as const) {
+    const r = request([ref("media_a", Buffer.byteLength(body))]);
+    r.input.conversation[0]!.media![0]!.mime_type = mime;
+    const f = await fixture((_req, res) => {
+      res.writeHead(200, { "content-type": mime, "content-length": Buffer.byteLength(body) }); res.end(body);
+    });
+    try { const result = await prepareInboundMedia(f.relay, r, f.directory, options()); expect(result.files).toHaveLength(1); await result.dispose(); }
+    finally { await f.close(); }
   }
 });
 test.each(["revoked", "aborted"] as const)("%s during an active stream removes the partial file and earlier originals", async mode => {
