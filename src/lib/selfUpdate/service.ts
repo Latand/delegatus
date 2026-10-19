@@ -1812,7 +1812,9 @@ export class SelfUpdateService {
           const joinTarget = checkoutDeployments(this.deps.dir).find(row => row.deploymentId === active.deploymentId);
           if (joinTarget && joinTarget.revision.toLowerCase().startsWith(requested)) {
             const idempotencyKeys = [...new Set([...(joinTarget.idempotencyKeys ?? []), request.idempotencyKey])];
-            saveCheckoutDeployment(this.deps.dir, { ...joinTarget, idempotencyKeys });
+            const idempotencyRequests = [...(joinTarget.idempotencyRequests ?? []).filter(row => row.idempotencyKey !== request.idempotencyKey),
+              { idempotencyKey: request.idempotencyKey, requestedRevision: request.revision! }];
+            saveCheckoutDeployment(this.deps.dir, { ...joinTarget, idempotencyKeys, idempotencyRequests });
             return { state: "accepted" as const, deploymentId: joinTarget.deploymentId, revision: joinTarget.revision, replayed: false };
           }
         }

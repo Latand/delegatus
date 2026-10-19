@@ -13,7 +13,13 @@ export function checkoutDeployments(directory: string): ViewerDeploymentStatus[]
 export function checkoutDeploymentByIdempotencyKey(directory: string, idempotencyKey: string): ViewerDeploymentStatus | null {
   const status = checkoutDeployments(directory).find(row => row.idempotencyKey === idempotencyKey
     || row.idempotencyKeys?.includes(idempotencyKey));
-  return status ? { ...status, idempotencyKey } : null;
+  if (!status) return null;
+  const request = Array.isArray(status.idempotencyRequests)
+    ? status.idempotencyRequests.find(row => row && row.idempotencyKey === idempotencyKey
+      && typeof row.requestedRevision === "string")
+    : undefined;
+  return { ...status, idempotencyKey,
+    requestedRevision: request?.requestedRevision ?? status.requestedRevision };
 }
 export function saveCheckoutDeployment(directory: string, status: ViewerDeploymentStatus): void {
   const rows = checkoutDeployments(directory);

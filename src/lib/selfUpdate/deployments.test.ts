@@ -15,6 +15,7 @@ test("checkout deployment lookup resolves both original and joined admission key
   roots.push(root);
   const status = {
     deploymentId: "checkout-deploy-1", idempotencyKey: "original-key", idempotencyKeys: ["joined-key"],
+    idempotencyRequests: [{ idempotencyKey: "joined-key", requestedRevision: "a".repeat(9) }],
     requestedRevision: "a".repeat(40), revision: "a".repeat(40), phase: "succeeded", terminal: true,
     candidate: null, previous: null, mcpRuntime: { candidate: null, previous: null, publications: [], health: [] },
     health: [], error: null, owner: { pid: 10, startIdentity: "10:1" },
@@ -26,7 +27,7 @@ test("checkout deployment lookup resolves both original and joined admission key
     deploymentId: status.deploymentId, idempotencyKey: "original-key", terminal: true,
   });
   expect(checkoutDeploymentByIdempotencyKey(root, "joined-key")).toMatchObject({
-    deploymentId: status.deploymentId, idempotencyKey: "joined-key", terminal: true,
+    deploymentId: status.deploymentId, idempotencyKey: "joined-key", requestedRevision: "a".repeat(9), terminal: true,
   });
   expect(checkoutDeploymentByIdempotencyKey(root, "unrelated-key")).toBeNull();
 });

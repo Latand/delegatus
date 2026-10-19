@@ -965,6 +965,8 @@ export interface ViewerDeploymentStatus {
   servingProgress?: string;
   /** Request keys that joined this deployment while it was already active. */
   idempotencyKeys?: string[];
+  /** Exact requested revision paired with each joined checkout key. */
+  idempotencyRequests?: Array<{ idempotencyKey: string; requestedRevision: string }>;
   deploymentId: string;
   idempotencyKey: string;
   requestedRevision: string;

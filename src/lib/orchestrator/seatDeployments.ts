@@ -186,7 +186,7 @@ export async function recoverSeatDeploymentRequests(
     try {
       const status = await lookup(pending.idempotencyKey);
       if (!status || !status.deploymentId || status.idempotencyKey !== pending.idempotencyKey
-        || !status.revision.toLowerCase().startsWith(pending.revision.toLowerCase())) continue;
+        || status.requestedRevision.toLowerCase() !== pending.revision.toLowerCase()) continue;
       await record({ ...pending, deploymentId: status.deploymentId, revision: status.revision });
       await forgetSeatDeploymentRequest(pending.idempotencyKey, pending.conversationId);
     } catch {
