@@ -4630,6 +4630,7 @@ export class RegistryWriterBusyError extends Error {
 export class AgentRegistry {
   private readonly sqliteMode: AgentRegistrySqliteMode;
   private readonly writerDeadlineMs: number | undefined;
+  private writerAdmissionTail: Promise<void> = Promise.resolve();
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
   private lastDeliveryCompactionChangeId: number | null = null;
@@ -5548,13 +5549,34 @@ export class AgentRegistry {
     operation: () => T,
     correlate?: (value: T) => { label: string; operationId?: string | null } | null,
   ): Promise<{ acquired: true; value: T } | { acquired: false }> {
-    return withViewerOperation("registry.write", () => this.whenWriterAdmitted(correlation, operation, correlate));
+    return withViewerOperation("registry.write", async () => {
+      if (accountMutationHeld() || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) {
+        return await this.whenWriterAdmitted(correlation, operation, correlate);
+      }
+
+      /* SQLite polls are individually nonblocking, so a later caller could
+         grab the writer during the earlier caller's next poll interval. Keep
+         those admissions in invocation order while every wait remains async. */
+      const queuedAt = performance.now();
+      const previous = this.writerAdmissionTail;
+      let release!: () => void;
+      this.writerAdmissionTail = new Promise<void>((resolve) => { release = resolve; });
+      await previous;
+      try {
+        const totalDeadlineMs = this.writerDeadlineMs ?? 5_000;
+        const remainingDeadlineMs = Math.max(0, totalDeadlineMs - (performance.now() - queuedAt));
+        return await this.whenWriterAdmitted(correlation, operation, correlate, remainingDeadlineMs);
+      } finally {
+        release();
+      }
+    });
   }
 
   private async whenWriterAdmitted<T>(
     correlation: { label: string; operationId?: string | null },
     operation: () => T,
     correlate?: (value: T) => { label: string; operationId?: string | null } | null,
+    deadlineMs?: number,
   ): Promise<{ acquired: true; value: T } | { acquired: false }> {
     if (accountMutationHeld()) return this.deliveryWriteNow(correlation, operation);
     if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
@@ -5563,7 +5585,7 @@ export class AgentRegistry {
     const waitStartedAt = performance.now();
     const written = await withWaitCorrelation(correlation, () => this.sqliteStore!.withWriter(operation, {
       ...(correlate ? { correlate } : {}),
-      ...(this.writerDeadlineMs !== undefined ? { deadlineMs: this.writerDeadlineMs } : {}),
+      deadlineMs: deadlineMs ?? this.writerDeadlineMs,
     }));
     if (!written.acquired) {
       console.warn(`[registry] ${correlation.label}${correlation.operationId ? ` for ${correlation.operationId}` : ""} `

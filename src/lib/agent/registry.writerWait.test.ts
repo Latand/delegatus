@@ -2,7 +2,7 @@ import { loopProgressProbe, registryLockHolder, whileRegistryWriterHeld } from "
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -417,6 +417,43 @@ test("Viewer policy writer deadline refuses without a commit and the same reques
     expect((await request()).status).toBe(200);
     expect(registry.autoBalancePolicy("claude")).toMatchObject({ enabled: true, revision: 1 });
   } finally {
+    await holder.close();
+    setAgentRegistryForTests(null);
+    registry.close();
+  }
+});
+
+test("Viewer policy writes commit in admission order when the writer is released between retries", async () => {
+  const { NextRequest } = await import("next/server");
+  const { PATCH } = await import("@/app/api/accounts/claude/policy/route");
+  const directory = fs.mkdtempSync(path.join(root, "viewer-policy-order-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const holder = registryLockHolder(path.join(directory, "registry.sqlite"));
+  const request = (automaticSwitching: boolean) => PATCH(new NextRequest("http://localhost/api/accounts/claude/policy", {
+    method: "PATCH", headers: { host: "localhost", "content-type": "application/json" },
+    body: JSON.stringify({ automaticSwitching }),
+  }));
+  const originalWithWriter = SqliteAgentRegistryStore.prototype.withWriter;
+  let firstWaiting!: () => void;
+  const observedFirstWait = new Promise<void>(resolve => { firstWaiting = resolve; });
+  const withWriter = spyOn(SqliteAgentRegistryStore.prototype, "withWriter").mockImplementation((async function (
+    this: SqliteAgentRegistryStore, ...args: Parameters<SqliteAgentRegistryStore["withWriter"]>
+  ) {
+    if (this.filename === holder.sqliteFilename) firstWaiting();
+    return originalWithWriter.apply(this, args);
+  }) as typeof originalWithWriter);
+  setAgentRegistryForTests(registry);
+  try {
+    await holder.hold();
+    const earlier = request(true);
+    await observedFirstWait;
+    await holder.release();
+    const later = request(false);
+    const responses = await Promise.all([earlier, later]);
+    expect(responses.map(response => response.status)).toEqual([200, 200]);
+    expect(registry.autoBalancePolicy("claude")).toMatchObject({ enabled: false, revision: 2 });
+  } finally {
+    withWriter.mockRestore();
     await holder.close();
     setAgentRegistryForTests(null);
     registry.close();
