@@ -1252,6 +1252,11 @@ export class SqliteStateCollection<T> {
   }
 
   async snapshotAsync(): Promise<T[]> {
+    return mapCooperatively(await this.loadReadonlyAsync(), record => this.options.clone(record), { batchSize: 4, timeBudgetMs: 16 });
+  }
+
+  /** Cold fills use bounded pages; warm readers keep the same revision cache. */
+  async loadReadonlyAsync(): Promise<readonly T[]> {
     const revision = this.revision();
     const context = this.refreshReadCache();
     const meta = this.collectionMeta()!;
@@ -1275,9 +1280,9 @@ export class SqliteStateCollection<T> {
       }
       if (this.revision() !== revision) throw new StateSnapshotChangedError();
       const source = this.publishCache(this.createCache(revision, records), context);
-      return mapCooperatively(source, record => this.options.clone(record), { batchSize: 4, timeBudgetMs: 16 });
+      return source;
     }
-    return mapCooperatively(this.loadReadonly(), record => this.options.clone(record), { batchSize: 4, timeBudgetMs: 16 });
+    return this.loadReadonly();
   }
 
   /** The indexed maximum records this pass's provisioning boundary without

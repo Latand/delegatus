@@ -334,6 +334,13 @@ export function persistedFileScanSnapshot(): FileScanSnapshot | undefined {
     back and the projection is dated by what it actually read. */
 export type PersistedFileScanGeneration = { epoch: string; generation: number };
 
+/** A worker may consume only the inventory generation the Viewer has published. */
+export function completedFileScanDescriptor(): (PersistedFileScanGeneration & { snapshotFile: string }) | null {
+  const slot = fileScanCache().get("") as FileScanCacheSlot | undefined;
+  if (!slot?.snapshot || slot.schemaVersion !== FILE_SCAN_CACHE_SCHEMA_VERSION) return null;
+  return { epoch: slot.epoch, generation: slot.snapshotGeneration, snapshotFile: statePath(FILE_SCAN_SNAPSHOT_FILE) };
+}
+
 function writePersistedFileScanSnapshot(snapshot: FileScanSnapshot, scanned: PersistedFileScanGeneration): void {
   return performanceSpans.sync("scanner.cache-persist", () => persistFileScanSnapshot(snapshot, scanned));
 }
