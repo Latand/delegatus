@@ -1,5 +1,42 @@
 # Structured startup quarantine
 
+## Terminal missing rollouts (2026-10-19)
+
+An explicit Codex app-server `no rollout found for thread id` refusal ends
+boot adoption after one attempt. The existing claimed host write records
+`unhosted` and the fixed end reason `missing-rollout`, releases the writer
+claim and clears the row's endpoint and process reference. A surviving shared
+app-server receives no signal. Both the direct boot adopter and startup's
+eligibility and publication filters exclude the saved terminal reason on
+subsequent passes and after a process restart. An explicit on-demand resume
+can replace the host columns if the history is repaired.
+
+Startup closes an existing quarantine card, including its legacy identifier,
+and removes its retry record. A refused card closure retains the existing
+resolved retry duty; its timer retries only card cleanup. A new terminal
+refusal creates no quarantine card. Transient errors keep their durable
+backoff, including when the failed open has already released its process.
+This changes no lane-completion retirement path.
+
+The host end-cause field already exists. Its writer is the boot adopter under
+`setStructuredHostClaimed`'s owner/epoch fence; normalization, SQLite payloads
+and registry cloning retain it. Startup and the direct boot adopter read the
+fixed reason. Successful Codex host persistence constructs fresh columns,
+clearing that reason on explicit recovery. Claude end causes and termination
+writers keep their existing behavior. The failure classifier is shared with
+the retry journal; the adopter callback still has two producers (Codex and
+Claude), one startup consumer and its existing optional default. Task creation,
+legacy notice reuse and closure retain the existing asynchronous admission.
+
+Verification uses `src/lib/runtime/startup.quarantine.test.ts` and its
+`fixtures/startupRollout.ts` child fixture: actual app-server RPC refusals,
+fresh and legacy rows, separate process boots over the saved registry,
+transient retry deadlines, surviving socket owners and normal recovery.
+The new terminal and transient-retry assertions fail on starting revision
+`1f3872d6`. The work
+exercises Viewer startup; runtime-host process source is unchanged. No
+performance gain is claimed.
+
 ## Read-only cause (2026-10-16)
 
 The investigation read the user-service journal and a read-only SQLite
@@ -33,7 +70,8 @@ at the outer scheduler's five-minute cap.
 
 ## Mechanism and shared boundaries
 
-The initial pass completes with contested rows retained. Each row has its own
+For transient failures and incumbent ownership, the initial pass completes
+with contested rows retained. Each row has its own
 retry record and deadline beside the registry, outside the registry schema.
 The first two delays are one and two seconds. The third failure enters
 quarantine, with delays of one, two, four, eight and then fifteen minutes.
@@ -49,8 +87,9 @@ pipeline/restart-cut deferrals remain in place. The controller's ordinary
 publication registers a recovered row. The existing pipeline admission and
 claim checks still decide whether that row may be adopted.
 
-The log carries the row key and a fixed reason: missing rollout, failed
-adoption or incumbent ownership. After the third failure, the existing task
+The log carries the row key and a fixed reason. Missing rollout is terminal;
+failed adoption and incumbent ownership remain retryable. After the third
+retryable failure, the existing task
 store admits one deterministic quarantine card in the row's project. The
 seat can read it through its normal task tools. Recovery closes the card;
 a refused task write is retried by the row timer. No exception payload enters
@@ -60,7 +99,7 @@ The optional `onFailure` adopter callback has two producers, the Codex and
 Claude adoption catch paths, and one production consumer, Viewer startup.
 Both default to no callback. Direct adopter users in native callback and seat
 fixtures, host tests, linked boot adoption, pipeline restart recovery and CPU
-placement keep their previous behavior. Registry storage, row normalization,
+placement retain their existing admission and ownership checks. Registry storage, row normalization,
 copy paths and write contracts are unchanged. The new retry document has one
 Viewer owner per registry shared across compiled module copies. It reads only
 startup host keys, evicts settled rows, and serializes timers that become due
@@ -78,7 +117,7 @@ GC-attribution lane also edits `viewerLoopMonitor.ts`; its actual diff was
 read before publication. This change adds only an operation name to the type
 in that file, leaving its collector implementation alone.
 
-## Verification and measurement
+## Historical verification and measurement (2026-10-16)
 
 The unchanged comparison revision is `02f9301fc323`. The candidate source
 hashes, offline input digest, complete row census, six samples and procedure
@@ -126,7 +165,8 @@ driver claims a private test temp root before loading state-resolving modules.
 Acceptance detectors run by explicit file path:
 
 - `src/lib/runtime/startup.quarantine.test.ts`: the absent-rollout/live-owner
-  causal shape, log reason and seat card, repair and eviction, one-hour
+  causal shape, terminal retirement and notice closure, transient recovery,
+  restart persistence, one-hour
   scheduler work bounds, and preservation of another pipeline's deferral.
   Each acceptance case is red against main's startup implementation.
 - `src/lib/runtime/startup.handoverRetry.test.ts`: a lone handover completes

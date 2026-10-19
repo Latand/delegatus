@@ -46,3 +46,10 @@ export function claudeHostEndText(cause: HostEndCause): string {
   }
   return CLAUDE_CHILD_EXITED;
 }
+
+/** An explicit native resume refusal proves this thread has no history to adopt. */
+export function isMissingCodexRolloutError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("no rollout found for thread id");
+}
+
+export const CODEX_MISSING_ROLLOUT_REASON = "missing-rollout";
