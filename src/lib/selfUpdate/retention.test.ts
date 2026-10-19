@@ -95,31 +95,35 @@ test("the loop stays within 50 ms while counting 87 retained release trees", asy
     setInterval(() => Atomics.add(pulses, 0, 1), 10);
     parentPort.postMessage("ready");
   `, { eval: true, workerData: heartbeat });
-  await new Promise<void>((resolve, reject) => {
-    worker.once("message", value => value === "ready" ? resolve() : reject(new Error("loop probe heartbeat did not become ready")));
-    worker.once("error", reject);
-    worker.once("exit", code => reject(new Error(`loop probe heartbeat exited before ready (${code})`)));
-  });
-  let lastTicks = Atomics.load(ticks, 0);
+  let heartbeatError: Error | undefined;
+  worker.on("error", error => { heartbeatError = error; });
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let lastTicks = 0;
   let maxBlockedMs = 0;
   let maxObservedGapMs = 0;
   let last = performance.now();
   let samples = 0;
   let nextSample: (() => void) | undefined;
   const sample = () => new Promise<void>(resolve => { nextSample = resolve; });
-  const timer = setInterval(() => {
-    const at = performance.now();
-    maxObservedGapMs = Math.max(maxObservedGapMs, at - last);
-    last = at;
-    const currentTicks = Atomics.load(ticks, 0);
-    maxBlockedMs = Math.max(maxBlockedMs, missedLoopTimeMs(currentTicks - lastTicks));
-    lastTicks = currentTicks;
-    samples++;
-    const resolve = nextSample;
-    nextSample = undefined;
-    resolve?.();
-  }, 10);
   try {
+    await new Promise<void>((resolve, reject) => {
+      worker.once("message", value => value === "ready" ? resolve() : reject(new Error("loop probe heartbeat did not become ready")));
+      worker.once("error", reject);
+      worker.once("exit", code => reject(new Error(`loop probe heartbeat exited before ready (${code})`)));
+    });
+    lastTicks = Atomics.load(ticks, 0);
+    timer = setInterval(() => {
+      const at = performance.now();
+      maxObservedGapMs = Math.max(maxObservedGapMs, at - last);
+      last = at;
+      const currentTicks = Atomics.load(ticks, 0);
+      maxBlockedMs = Math.max(maxBlockedMs, missedLoopTimeMs(currentTicks - lastTicks));
+      lastTicks = currentTicks;
+      samples++;
+      const resolve = nextSample;
+      nextSample = undefined;
+      resolve?.();
+    }, LOOP_PROBE_INTERVAL_MS);
     await sample();
     maxBlockedMs = 0;
     maxObservedGapMs = 0;
@@ -131,11 +135,12 @@ test("the loop stays within 50 ms while counting 87 retained release trees", asy
     expect(report.errors).toEqual([]);
     expect(report.kept).toHaveLength(87);
     expect(report.kept.every(row => row.bytes > 0)).toBeTrue();
+    expect(heartbeatError).toBeUndefined();
     console.info("[retention fixture]", JSON.stringify({ releases: 87, maxBlockedMs, maxObservedGapMs, timerSamplesDuringPass: during }));
     expect(maxBlockedMs).toBeLessThanOrEqual(50);
     expect(during).toBeGreaterThan(0);
   } finally {
-    clearInterval(timer);
+    if (timer) clearInterval(timer);
     await worker.terminate();
   }
 }, 30_000);
