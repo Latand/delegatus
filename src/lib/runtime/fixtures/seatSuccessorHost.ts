@@ -29,7 +29,7 @@ let stopping = false;
 function spawnEngine(engineMode: "hold" | "probe") {
   return (_command: string, _args: string[], options: SpawnOptionsWithoutStdio): ChildProcessWithoutNullStreams => spawn(
     process.execPath,
-    [engineFixture, engineMode, mcpProofPath, transcriptPath],
+    [engineFixture, engineMode, mcpProofPath, transcriptPath, ...(process.env.LLV_SEAT_SUCCESSOR_MCP_ENTRY ? [process.env.LLV_SEAT_SUCCESSOR_MCP_ENTRY] : [])],
     { ...options, stdio: ["pipe", "pipe", "pipe"] },
   );
 }

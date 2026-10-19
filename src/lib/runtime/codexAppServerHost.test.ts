@@ -5207,7 +5207,7 @@ describe("CodexAppServerHost", () => {
     await releasedRows[0]!.host.release();
   });
 
-  test("a severed seat re-hosts in a distinct process with a discoverable working Viewer MCP", async () => {
+  test.each(["launcher", "source"] as const)("a severed seat re-hosts in a distinct process with a discoverable working Viewer MCP (%s)", async entry => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-successor-process-"));
     const home = path.join(directory, "home");
     const configHome = path.join(directory, "config");
@@ -5233,9 +5233,24 @@ describe("CodexAppServerHost", () => {
     const control = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      fetch(request) {
+      async fetch(request) {
         controlRequests += 1;
         const url = new URL(request.url);
+        // A retained launcher bundle can still use the deployment read API;
+        // the current stdio adapter forwards the MCP request to the Viewer.
+        if (url.pathname === "/api/mcp") {
+          expect(request.method).toBe("POST");
+          const call = await request.json() as { id: string; method: string; params: { name: string; arguments: { clientRequestId: string } } };
+          expect(call.method).toBe("tools/call");
+          expect(call.params.name).toBe("deployment_status");
+          expect(call.params.arguments.clientRequestId).toBe("seat-successor-deployment-status");
+          const result = { ok: true, toolName: "deployment_status", clientRequestId: call.params.arguments.clientRequestId,
+            replayed: false, count: 1, deployments: [deployment] };
+          return Response.json({ jsonrpc: "2.0", id: call.id, result: {
+            content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result,
+          } });
+        }
+        expect(entry).toBe("launcher");
         expect(request.method).toBe("GET");
         expect(url.pathname).toBe("/api/runtime/deployments");
         expect(url.searchParams.get("limit")).toBe("25");
@@ -5264,6 +5279,7 @@ describe("CodexAppServerHost", () => {
       LLV_STATE_DIR: stateDirectory,
       LLV_VIEWER_DEPLOY_TARGET: targetPath,
       LLV_VIEWER_PORT: String(control.port),
+      ...(entry === "source" ? { LLV_SEAT_SUCCESSOR_MCP_ENTRY: path.resolve("src/lib/mcp/entry.ts") } : {}),
     };
     const hostFixture = path.join(import.meta.dir, "fixtures", "seatSuccessorHost.ts");
     type FixtureIdentity = { pid: number; startIdentity: string };
@@ -5276,6 +5292,7 @@ describe("CodexAppServerHost", () => {
       activeTurnRef: string | null;
       proof?: {
         enginePid: number;
+        entry: string;
         toolNames?: string[];
         structuredContent?: unknown;
         error?: string;
@@ -5391,6 +5408,8 @@ describe("CodexAppServerHost", () => {
       expect(successorReady.engine.pid).not.toBe(successorReady.viewer.pid);
       expect(successorReady.proof).not.toHaveProperty("error");
       expect(successorReady.proof?.enginePid).toBe(successorReady.engine.pid);
+      expect(successorReady.proof?.entry).toBe(entry === "source"
+        ? path.resolve("src/lib/mcp/entry.ts") : path.resolve("bin/mcp-server.mjs"));
       expect(successorReady.proof?.toolNames).toContain("deployment_status");
       expect(successorReady.proof?.structuredContent).toMatchObject({
         ok: true,
