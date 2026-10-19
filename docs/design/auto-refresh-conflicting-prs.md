@@ -206,7 +206,7 @@ const request: CreatePipelineRequest = {
   finishesTask: finished.finishesTaskIds ?? false,
   spec: refreshSpec(finished, pr, base, baseSha, head),
   repoDir: finished.repoDir,
-  baseBranch: finished.baseBranch || "main",
+  baseBranch: base,
   delivery: { branch: finished.delivery.target.branch, remote: finished.delivery.target.remote, pr },
   publication: "remote-branch",
   autoStart: true,
@@ -306,6 +306,8 @@ dismissible. `PipelineMerge` gains:
 refresh?: {
   /** `attempts` when it started: one refresh per stopped merge. */
   attempt: number;
+  /** Forge base name; absent on older reservations. */
+  baseBranch?: string;
   /** The base tip GitHub reported the conflict against, and the PR head. */
   base: string;
   head: string;
@@ -333,10 +335,13 @@ creation on the refresh lane and never changed.
 | `refreshing` | the forge cache reads the PR closed | `blocked`: the PR was closed | sweep |
 | `refreshing` | the refresh lane is `closed` | `blocked`: the refresh was closed before the PR merged | sweep |
 | `refreshing` | the setting is turned off | `cancelled`: the project's merge setting was turned off | sweep |
-| `blocked` or `cancelled` | `retry-merge` | `queued`, `attempts + 1` (today, unchanged) | operator |
+| delegated record | refresh completes and its merge progresses | reflect the successor's queue, check-waiting or stopped state, still outside the queue | sweep |
+| `blocked`, `cancelled` or stale `refreshing` | `retry-merge`, refresh completed | retry or admit the successor's merge in the same transaction | operator |
+| `blocked`, `cancelled` or stale `refreshing` | `retry-merge`, refresh closed | remove delegation, `queued`, `attempts + 1` | operator |
 
-While the refresh lane runs, parks, or has its own merge record in any state,
-the finished lane stays `refreshing`: the refresh lane owns the PR. A refresh
+While the refresh lane runs or parks, the finished lane stays `refreshing`.
+After completion it reflects the successor's merge progress. The successor
+continues to own the PR's reviewed head and the repository queue. A refresh
 lane archived before the PR settles leaves the finished lane as it is; both
 archive three days after their own `closedAt`.
 
@@ -597,3 +602,39 @@ publication. No suite that sweeps runtime directories runs against live state
   code and from last night's record: successor lane (§3), no burst for old
   blocks (§8), a running refresh survives turning the setting off (§4.8), and
   the seat owns the refresh lane (§4.2).
+
+
+## Completion and recovery (2026-10-19)
+
+The controller's global merge sweep reconciles persisted refresh completion on
+its next pass, including after a delayed or missed completion wake. The refresh
+lane owns the resolution's reviewed head and the existing check-settle clock.
+The original lane reflects that merge's queued, check-waiting, stopped and
+merged states. A record with `refresh.pipelineId` stays outside the repository
+queue, so reflecting progress cannot merge the original, older head or perform
+a second merge. Red checks stop both records with the same reason.
+
+`retry-merge` accepts a refreshing original whose refresh lane has completed
+or closed. Completion retries or admits the successor's merge record in the
+same registry transaction. An already queued successor is nudged; its checks
+still have to pass. Closure removes the delegation and queues the original for
+a fresh forge read. An open refresh, unavailable or conflicting lineage, and a
+project with automatic merging disabled refuse the retry. A stale refreshing
+record on another completed or closed lane never vetoes admission of a carrier
+on the same PR.
+
+A new refresh reservation saves the forge PR base branch alongside its SHA and
+includes the branch in its creation digest. The request, task and stage prompts
+use that saved branch. Older reservations remain readable; creation replay
+reads the PR's forge base, with the repository default branch as fallback. The
+lane's checkout `baseBranch` supplies no refresh-source authority, because a PR
+successor may have checked out its own delivery branch. A source equal to the
+delivery branch is refused. Existing reservations keep their creation keys and
+digests during replay.
+
+Regression coverage lives in `src/lib/forge/autoRefresh.test.ts`,
+`src/lib/forge/autoMergeStore.test.ts` and
+`src/lib/pipelines/engine.ports.test.ts`. The controller cases settle a real
+refresh review, delay the handoff by zero or 27 seconds, and require one merge
+at the refreshed head only after checks pass. This change claims no performance
+gain.

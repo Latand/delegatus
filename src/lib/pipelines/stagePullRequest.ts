@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { performanceSpans } from "@/lib/performanceSpans";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
@@ -59,23 +62,36 @@ function repositoryRefusal(part: "title" | "body", output: string): StagePullReq
   return refused(part, "repository publication privacy gate", kinds.join(", ") || "inspection-error");
 }
 
+const HEAD_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 14_000];
+const HEAD_RETRY_BUDGET_MS = 30_000;
+type HeadRetryTiming = { now(): number; sleep(ms: number): Promise<void> };
+
 /** Called under the settlement's lane lock and cancellation fence, outside
  * the state mutation lease. Discovery recovers a create whose reply was lost. */
-export async function ensureStagePullRequest(pipeline: Pipeline, attempt: PipelineStageAttempt, exec: ExecPort, acceptedHead = pipeline.lastPassedCommit): Promise<StagePullRequestResult> {
+export async function ensureStagePullRequest(pipeline: Pipeline, attempt: PipelineStageAttempt, exec: ExecPort, acceptedHead = pipeline.lastPassedCommit,
+  timing: HeadRetryTiming = { now: () => performance.now(), sleep }): Promise<StagePullRequestResult> {
   const delivery = pipeline.delivery;
   if (!delivery || delivery.publish !== "enabled" || !delivery.active || delivery.disposition !== "owner"
     || delivery.ownerId !== pipeline.id || (acceptedHead === pipeline.baseRef && delivery.target.pr === undefined)) return { ok: true };
   const repository = githubRepositoryOfRemote(delivery.target.remote);
   if (!repository) return { ok: false, error: "the delivery remote has no supported pull request service" };
   const branch = delivery.target.branch.replace(/^refs\/heads\//, "");
-  const find = async (): Promise<{ ok: true; number: number | null } | Extract<StagePullRequestResult, { ok: false }>> => {
+  // Only this attempt's accepted publication can explain a temporarily stale
+  // PR head. Review checks and older publication receipts keep refusing at once.
+  const operation = delivery.operation;
+  const justPublished = pipeline.publishedCommit === acceptedHead && operation?.sha === acceptedHead
+    && operation.epoch === delivery.epoch && operation.state === "settled" && operation.passedStage === true
+    && operation.requestKey === `pass:${pipeline.cursor?.stageId}:${attempt.n}`
+    && operation.result?.ok === true && operation.result.remote === "published";
+  type Found = { ok: true; number: number | null } | (Extract<StagePullRequestResult, { ok: false }> & { retryHead?: true });
+  const readOnce = async (timeoutMs: number): Promise<Found> => {
     const linked = delivery.target.pr;
     const fields = "number,headRefName,baseRefName,state,headRefOid,isCrossRepository";
     const args = linked !== undefined
       ? ["pr", "view", String(linked), "--repo", repository, "--json", fields]
       : ["pr", "list", "--repo", repository, "--head", branch, "--base", pipeline.baseBranch,
         "--state", "open", "--limit", "2", "--json", fields];
-    const read = await exec("gh", args, pipeline.worktreeDir, undefined, { timeoutMs: 30_000 });
+    const read = await exec("gh", args, pipeline.worktreeDir, undefined, { timeoutMs });
     if (read.code !== 0) return { ok: false, error: "the delivery pull request lookup failed" };
     const rows = linked !== undefined ? [JSON.parse(read.stdout)] : JSON.parse(read.stdout);
     if (!Array.isArray(rows) || rows.length > 1) return { ok: false, error: "the delivery pull request is ambiguous" };
@@ -91,12 +107,32 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       pr?.isCrossRepository !== false ? "isCrossRepository (expected same repository)" : null,
       linked === undefined && pr?.baseRefName !== pipeline.baseBranch ? "baseRefName" : null,
     ].filter(Boolean);
-    if (mismatches.length) return { ok: false, error: `the delivery pull request differs in ${mismatches.join(", ")}` };
+    if (mismatches.length) return { ok: false, error: `the delivery pull request differs in ${mismatches.join(", ")}`,
+      ...(mismatches.length === 1 && mismatches[0] === "headRefOid" ? { retryHead: true } : {}) };
     return { ok: true, number: pr.number };
+  };
+  const find = async (): Promise<Found> => {
+    let found = await readOnce(30_000);
+    if (found.ok || !found.retryHead || !justPublished) return found;
+    // The retry deadline covers both asynchronous sleeps and every gh read.
+    // The settlement executor revalidates its cancellation/ownership fence
+    // before each read; the controller's mutation lease is never held here.
+    return withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", async () => {
+      const deadline = timing.now() + HEAD_RETRY_BUDGET_MS;
+      for (const delay of HEAD_RETRY_DELAYS_MS) {
+        if (deadline - timing.now() <= delay) break;
+        await timing.sleep(delay);
+        const remaining = deadline - timing.now();
+        if (remaining <= 0) break;
+        found = await readOnce(remaining);
+        if (found.ok || !found.retryHead) return found;
+      }
+      return found;
+    }));
   };
   try {
     const found = await find();
-    if (!found.ok) return found;
+    if (!found.ok) return { ok: false, error: found.error };
     let number = found.number;
     if (number === null) {
       const producer = stagePullRequestProducer(pipeline, attempt);
@@ -133,7 +169,7 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
         // A timeout/status is no proof of whether creation landed. Read the
         // branch again before either acceptance or a future create retry.
         const recovered = await find();
-        if (!recovered.ok) return recovered;
+        if (!recovered.ok) return { ok: false, error: recovered.error };
         number = recovered.number;
         if (number === null) return { ok: false, error: created.code === 0
           ? "the forge answered without a linked delivery pull request" : "the delivery pull request could not be opened" };

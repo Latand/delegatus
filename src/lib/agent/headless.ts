@@ -1,4 +1,6 @@
 import { signalDomain, signalAgentDomain, spawnHeadlessSignalSandbox, headlessFixtureTransport } from "@/lib/runtime/agentSignalSandbox";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { pipeline } from "node:stream/promises";
 import { AgentMemoryCell, planAgentMemory, wrapAgentCommand } from "@/lib/runtime/agentMemory";
 import { planAgentCpu } from "@/lib/runtime/cpuPlacement";
 import { agentRegistry } from "./registry";
@@ -305,6 +307,8 @@ export interface BuiltHeadlessCommand {
   args: string[];
   env: NodeJS.ProcessEnv;
   stdin: string | null;
+  /** Private, already prepared input; streamed with backpressure. */
+  stdinFile?: string;
   outputPath: string | null;
   sessionId: string | null;
   reviewerPath: string | null;
@@ -441,7 +445,12 @@ export function launchDetached(input: {
     child.once("error", () => memoryCell?.close());
     if (input.built.stdin !== null && child.stdin) {
       child.stdin.on("error", () => {});
-      child.stdin.end(input.built.stdin, "utf8");
+      if (input.built.stdinFile) {
+        const source = fs.createReadStream(input.built.stdinFile);
+        child.once("close", () => source.destroy());
+        child.stdin.once("close", () => source.destroy());
+        void withViewerOperation("agent.stdin-file", () => pipeline(source, child.stdin!)).catch(() => { child.stdin?.destroy(); child.kill("SIGTERM"); });
+      } else child.stdin.end(input.built.stdin, "utf8");
     }
   } finally {
     fs.closeSync(stdoutFd);

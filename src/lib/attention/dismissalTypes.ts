@@ -33,6 +33,8 @@ export const ATTENTION_SYSTEM_RULES = [
   /** The stage attempt that asked has settled, and its lane carries what is
       left to decide. */
   "stage-settled",
+  /** The dead conversation asked before its task or lane finished. */
+  "container-finished",
   /** A later assignment replaced the failed launch on its task. */
   "launch-relaunched",
   /** The task that owned the failed launch finished. */
@@ -53,6 +55,8 @@ export type LaneReasonKind = "lane-decision" | "lane-review" | "lane-merge";
 
 /** A conversation's dismissal as `/api/files` projects it onto the entry. */
 export interface AttentionDismissalMark {
+  /** The operator restored this exact reason; automatic withdrawal respects it. */
+  restoredAt?: string;
   /** Server clock, ISO. */
   at: string;
   by: DismissedBy;

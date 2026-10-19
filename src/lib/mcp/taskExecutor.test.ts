@@ -516,6 +516,42 @@ test("task HTTP calls authenticate unknown and rotated capabilities before recei
   } finally { if (previous) holder[key] = previous; else delete holder[key]; }
 });
 
+test("production task HTTP pagination binds unidentified compatibility connections", async () => {
+  const executor = create();
+  const key = Symbol.for("llv.mcp.taskExecutor");
+  const holder = globalThis as typeof globalThis & { [key]?: McpTaskExecutor };
+  const previous = holder[key]; holder[key] = executor;
+  const { NextRequest } = await import("next/server");
+  const { handleMcpHttpRequest } = await import("./http");
+  const { internalServiceHeaders } = await import("@/lib/agent/callerClaims");
+  const compatibilityAuth = { ...internalServiceHeaders("mcp"), "x-delegatus-mcp-unattributed": "1" };
+  const post = async (connection: string, cursor?: unknown) => {
+    const response = await handleMcpHttpRequest(new NextRequest("http://127.0.0.1/api/mcp", { method: "POST",
+      headers: { host: "127.0.0.1", ...compatibilityAuth, "content-type": "application/json",
+        accept: "application/json, text/event-stream", "mcp-session-id": connection },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_tasks",
+        arguments: { project: "fixture", limit: 1, ...(cursor ? { cursor } : {}) } } }),
+    }));
+    const body = await response.json() as { result?: { structuredContent?: Record<string, unknown> } };
+    if (!body.result?.structuredContent) throw new Error(`missing task tool response: ${response.status}`);
+    return body.result.structuredContent;
+  };
+  try {
+    const first = await post("compatibility-a");
+    expect(first.ok).toBe(true);
+    expect(typeof first.nextCursor).toBe("string");
+    const handle = first.nextCursor;
+    const foreign = await post("compatibility-b", handle);
+    expect(foreign).toMatchObject({ ok: true, cursorReset: true, tasks: first.tasks });
+    const resumed = await post("compatibility-a", handle);
+    expect(resumed.ok).toBe(true);
+    expect(resumed.cursorReset).toBe(false);
+    expect(resumed.tasks).not.toEqual(first.tasks);
+    const resumedIds = new Set((resumed.tasks as Array<{ id: string }>).map(task => task.id));
+    expect((foreign.tasks as Array<{ id: string }>).some(task => resumedIds.has(task.id))).toBe(false);
+  } finally { if (previous) holder[key] = previous; else delete holder[key]; }
+});
+
 test("isolated task service preserves receipts, identity, revisions and same-key replay across executors", async () => {
   const first = create();
   const created = await call(first, "create_task", { project: "fixture", text: "Executor task", board: "hidden", clientRequestId: "executor-create" });

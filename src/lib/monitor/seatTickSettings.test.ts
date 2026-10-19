@@ -33,6 +33,7 @@ const PROJECT = "viewer";
 const HOUR_MS = 60 * 60_000;
 const NOW = Date.parse("2026-08-28T12:00:00.000Z");
 const AT = new Date(NOW).toISOString();
+const NEXT_AT = new Date(NOW + 60_000).toISOString();
 const SEAT: SeatTickSettingsActor = {
   kind: "manager",
   conversationId: ["conversation", "0f4c21b7729fbc9e"].join("_"),
@@ -312,7 +313,7 @@ test("a lapse with no seat note keeps the operator instructions on the default s
     until: new Date(NOW + 30 * 60_000).toISOString(),
   }));
   const lapsed = effectiveSeatTickSettings(expiring, NOW + 31 * 60_000, HOUR_MS);
-  expect(seatTickSettingsAfterLapse(PROJECT, lapsed)).toEqual({ ...defaultSeatTickSettings(PROJECT), reason: expiring.reason, updatedAt: expiring.updatedAt, setBy: expiring.setBy });
+  expect(seatTickSettingsAfterLapse(PROJECT, lapsed)).toEqual({ ...defaultSeatTickSettings(PROJECT), reason: expiring.reason, instructionLines: expiring.instructionLines, updatedAt: expiring.updatedAt, setBy: expiring.setBy });
 });
 
 test("a prompt survives the write and the read a later check does", () => {
@@ -364,4 +365,95 @@ test("auto-rotation requires a reason from every agent, attributes changes and s
   expect(gateway.ok).toBe(true);
   const file = settingsFile(); writeSeatTickSettings(PROJECT, armed, file);
   expect(readSeatTickSettings(PROJECT, file).autoRotate).toEqual(armed.autoRotate);
+});
+
+
+test("seat edits preserve operator lines verbatim with their original write dates", () => {
+  const operator: SeatTickSettingsActor = { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
+  const initial = settingsOf(applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { reason: "Keep  this line.\nSecond instruction." }, { at: AT, actor: operator }));
+  const later = "2026-08-29T12:00:00.000Z";
+  const noted = settingsOf(applySeatTickSettingsChange(initial, { reason: "Release paused." }, { at: later, actor: SEAT }));
+  expect(noted.reason).toBe("Keep  this line.\nSecond instruction.\nRelease paused.");
+  expect(noted.instructionLines).toEqual([
+    { text: "Keep  this line.", at: AT, author: operator },
+    { text: "Second instruction.", at: AT, author: operator },
+    { text: "Release paused.", at: later, author: SEAT },
+  ]);
+  const edited = settingsOf(applySeatTickSettingsChange(noted, { reason: "Release resumed." }, { at: later, actor: SEAT }));
+  expect(edited.instructionLines?.slice(0, 2)).toEqual(initial.instructionLines);
+  expect(edited.reason).toBe("Keep  this line.\nSecond instruction.\nRelease resumed.");
+  const cleared = settingsOf(applySeatTickSettingsChange(edited, { reason: null }, { at: later, actor: SEAT }));
+  expect(cleared.reason).toBe(initial.reason);
+});
+
+test("the operator can remove migrated unknown text and save a replacement within the full field limit", () => {
+  const legacy = { ...defaultSeatTickSettings(PROJECT), reason: "u".repeat(500) };
+  const result = applySeatTickSettingsChange(legacy, {
+    reason: "New operator instruction.",
+    clearUnknownInstructions: true,
+  }, { at: AT, actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } });
+  expect(result.ok).toBe(true);
+  expect(settingsOf(result).reason).toBe("New operator instruction.");
+  expect(settingsOf(result).instructionLines).toEqual([
+    { text: "New operator instruction.", author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, at: AT },
+  ]);
+});
+
+test("a seat cannot clear migrated unknown instructions", () => {
+  const legacy = { ...defaultSeatTickSettings(PROJECT), reason: "u".repeat(500) };
+  const result = applySeatTickSettingsChange(legacy, { clearUnknownInstructions: true }, {
+    at: AT, actor: SEAT, instructionActor: SEAT,
+  });
+  expect(result).toEqual({ ok: false, error: "only an operator can remove instructions with unknown authors" });
+  expect(legacy.reason).toBe("u".repeat(500));
+});
+
+test("the operator can replace full seat-authored instructions without changing the schedule", () => {
+  const operator: SeatTickSettingsActor = { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
+  const seat: SeatTickSettingsActor = { kind: "manager", conversationId: "seat-full-field", project: PROJECT, seatEpoch: 4 };
+  const current = {
+    ...defaultSeatTickSettings(PROJECT), enabled: false, wakeIntervalMinutes: 30,
+    reason: "s".repeat(500), instructionLines: [{ text: "s".repeat(500), author: seat, at: AT }],
+  };
+  const result = applySeatTickSettingsChange(current, { replaceOtherInstructions: true, reason: "Replacement from operator." }, { at: NEXT_AT, actor: operator });
+  expect(result.ok).toBe(true);
+  expect(settingsOf(result)).toMatchObject({
+    enabled: false, wakeIntervalMinutes: 30, reason: "Replacement from operator.",
+    instructionLines: [{ text: "Replacement from operator.", author: operator, at: NEXT_AT }],
+  });
+});
+
+test("replacing other instructions requires an operator and a non-empty replacement", () => {
+  const seat: SeatTickSettingsActor = { kind: "manager", conversationId: "seat-full-field", project: PROJECT, seatEpoch: 4 };
+  const current = { ...defaultSeatTickSettings(PROJECT), reason: "Seat note.", instructionLines: [{ text: "Seat note.", author: seat, at: AT }] };
+  expect(applySeatTickSettingsChange(current, { replaceOtherInstructions: true, reason: "Replacement." }, { at: NEXT_AT, actor: seat })).toEqual({ ok: false, error: "only an operator can replace other authors’ instructions" });
+  expect(applySeatTickSettingsChange(current, { replaceOtherInstructions: true }, { at: NEXT_AT, actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } })).toEqual({ ok: false, error: "an operator replacement is required when replacing other authors’ instructions" });
+  expect(current.reason).toBe("Seat note.");
+});
+
+
+test("a new seat epoch preserves its predecessor, unchanged dates and the operator's lines", () => {
+  const nextAt = "2026-08-29T12:00:00.000Z";
+  const initial = settingsOf(change(defaultSeatTickSettings(PROJECT), { reason: "Unchanged note.\nOld note." }));
+  const edited = settingsOf(applySeatTickSettingsChange(initial, { reason: "Unchanged note.\nNew note." }, { at: nextAt, actor: SEAT }));
+  expect(edited.instructionLines?.map(line => line.at)).toEqual([AT, nextAt]);
+  const successor = { ...SEAT, seatEpoch: 8, conversationId: "conversation_successor" };
+  const next = settingsOf(applySeatTickSettingsChange(edited, { reason: "Successor note." }, { at: nextAt, actor: successor }));
+  expect(next.instructionLines?.slice(0, 2)).toEqual(edited.instructionLines!);
+  expect(next.instructionLines?.at(-1)?.author?.seatEpoch).toBe(8);
+  expect(settingsOf(applySeatTickSettingsChange(next, { reason: null }, { at: nextAt, actor: successor })).reason).toBe(edited.reason);
+});
+
+test("a reason write cannot supply attribution and a refused write preserves the complete record", () => {
+  const operator: SeatTickSettingsActor = { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
+  const current = settingsOf(applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { reason: "o".repeat(490) }, { at: AT, actor: operator }));
+  const before = structuredClone(current);
+  const refused = change(current, { reason: "s".repeat(20) });
+  expect(refused.ok).toBe(false);
+  expect(current).toEqual(before);
+  expect(applySeatTickSettingsChange(current, { reason: "unknown writer" }, { at: AT, actor: { kind: "unidentified", conversationId: null, project: null, seatEpoch: null } })).toEqual({ ok: false, error: "instruction writes need an identified author" });
+  const written = settingsOf(change(current, { reason: "Seat", instructionLines: [{ text: "Seat", author: operator, at: AT }] } as never));
+  expect(written.instructionLines?.at(-1)?.author).toEqual(SEAT);
+  const effective = effectiveSeatTickSettings({ ...written, enabled: false, until: AT }, NOW, HOUR_MS);
+  expect(seatTickSettingsAfterLapse(PROJECT, effective).instructionLines).toEqual(written.instructionLines!);
 });

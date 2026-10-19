@@ -1085,7 +1085,8 @@ async function compareStageTrees(pipeline: Pipeline, head: string, accepted: str
 /** Transfer a pass only across clean main integrations. Ancestry alone also
     admits new lane work. Reconstruct every non-main merge with controlled
     attributes, so an amended merge or a custom driver cannot hide that work. */
-export async function verifyPassedHeadIntegration(pipeline: Pipeline, passed: string, accepted: string, exec: ExecPort): Promise<
+export async function verifyPassedHeadIntegration(pipeline: Pipeline, passed: string, accepted: string, exec: ExecPort,
+  verifiedMainSha?: string): Promise<
   { ok: true; passedSha: string; acceptedSha: string; mainSha: string } | { ok: false; error: string }
 > {
   const literalExec = withLiteralGitObjects(exec);
@@ -1096,7 +1097,11 @@ export async function verifyPassedHeadIntegration(pipeline: Pipeline, passed: st
     : "could not verify the previously passed commit is an ancestor of acceptedSha");
   const baseBranch = pipeline.baseBranch || DEFAULT_PIPELINE_BASE_BRANCH;
   if (!validBaseBranch(baseBranch)) return refuse("could not verify the configured main branch");
-  const main = await literalExec("git", ["rev-parse", "--verify", `refs/remotes/origin/${baseBranch}^{commit}`], pipeline.worktreeDir);
+  // Settlement supplies the freshly fetched remote tip, never a tracking ref
+  // an agent can move locally. Explicit operator adoption retains its old read.
+  const main = verifiedMainSha === undefined
+    ? await literalExec("git", ["rev-parse", "--verify", `refs/remotes/origin/${baseBranch}^{commit}`], pipeline.worktreeDir)
+    : { code: 0, stdout: verifiedMainSha };
   const mainSha = main.stdout.trim();
   if (main.code !== 0 || !/^[0-9a-f]{40}$/i.test(mainSha)) return refuse(`could not verify origin/${baseBranch}`);
   const introduced = await literalExec("git", ["rev-list", "--parents", accepted, `^${passed}`, `^${mainSha}`], pipeline.worktreeDir);
