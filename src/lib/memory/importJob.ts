@@ -18,9 +18,8 @@ export async function memoryImportLaunch(cwd = process.cwd()) {
     entry: await exists(source) ? source : path.join(cwd, ".next/server/memory-import-worker.js") };
 }
 
-/** Explicit background operation for slice 3. No request handler starts an
- * import in slice 2. The shared owner admits one job, sends only a small
- * request and receives counts; candidate text never crosses this pipe. */
+/** The shared owner admits one deferred import job, sends a bounded request
+ * and receives counts; candidate text never crosses this pipe. */
 export function runMemoryImport(request: ImportRequest, ports: { observeOperation?: (operation: ViewerOperation, current: ViewerOperation | undefined) => void | Promise<void> } = {}): Promise<ImportRecord> {
   validateImportId(request.importId);
   const directory = stateDir(), active = host.__delegatusMemoryImport;

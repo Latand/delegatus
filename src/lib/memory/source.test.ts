@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
-import { memorySource, engineMemoryOff, readMemorySourceFile, setMemorySource } from "./source";
+import { memorySource, engineMemoryOff, readMemorySourceFile, setMemorySource, restoreMemorySourceAfterImport } from "./source";
 import { roleMemoryEnabled, roleMemorySelectorEnabled } from "./settings";
 import { SOURCE_STATES, CHANGED_AT, chooseSource, sourceTurnsEnginesOff } from "./fixtures/source";
 
@@ -56,10 +56,16 @@ test("cached reads return copies, follow peer writes and root replacement, and r
   chooseSource("unchosen"); expect(engineMemoryOff()).toBe(false);
 });
 
-test("the first choice waits for the import implementation", () => {
-  expect(setMemorySource("delegatus")).toBe("import_unavailable");
+test("the first choice starts a deferred import, an idempotent choice preserves it, and reselecting creates a new import", () => {
   expect(setMemorySource("engines")).toBe("first_choice_delegatus");
-  expect(fs.existsSync(statePath("memory-source.json"))).toBe(false);
+  expect(setMemorySource("delegatus", CHANGED_AT)).toBeNull();
+  const first = readMemorySourceFile()!;
+  expect(first).toMatchObject({ source: "delegatus", phase: "importing", importStartedAt: CHANGED_AT });
+  expect(engineMemoryOff()).toBe(false);
+  expect(setMemorySource("delegatus", CHANGED_AT)).toBeNull(); expect(readMemorySourceFile()).toEqual(first);
+  expect(setMemorySource("engines", CHANGED_AT)).toBeNull();
+  expect(setMemorySource("delegatus", CHANGED_AT)).toBeNull();
+  expect(readMemorySourceFile()?.importId).not.toBe(first.importId);
   chooseSource("active");
   fs.rmSync(statePath("memory-source.json")); fs.mkdirSync(statePath("memory-source.json"));
   // A directory is malformed and cannot become an engine selection.
@@ -83,4 +89,26 @@ test("warm reads reuse one small parsed file; a fresh process follows durable ch
   expect(await fresh()).toEqual({ choice: "delegatus", phase: "active", off: true });
   expect(setMemorySource("engines")).toBeNull();
   expect(await fresh()).toEqual({ choice: "engines", phase: "active", off: false });
+});
+
+test("failed-import recovery waits asynchronously behind a later operator choice", async () => {
+  const { selectMemorySource } = await import("./source");
+  const { withFileTransaction } = await import("@/lib/state/fileTransaction");
+  chooseSource("importing");
+  // An idempotent UI selection creates the normal source lock queue.
+  await selectMemorySource("delegatus", CHANGED_AT);
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const writer = withFileTransaction(statePath("memory-source.json"), "fixture source busy", async () => {
+    entered(); await held; setMemorySource("engines", CHANGED_AT);
+  });
+  await started;
+  const recovering = restoreMemorySourceAfterImport("fixture-import", null);
+  try {
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(memorySource().choice).toBe("delegatus");
+  } finally { release(); }
+  await writer; await recovering;
+  expect(memorySource().choice).toBe("engines");
 });
