@@ -88,7 +88,7 @@ import {
 import { redactBounded } from "@/lib/monitor/redact";
 import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { parseReview, type ReviewFinding } from "@/lib/review";
-import { spawnStructuredConversation, stagedLaunchRecovery, recoverStagedStructuredLaunch, STAGED_RECOVERY_MAX_CHECKS, STAGED_RECOVERY_BUDGET_MS, type StagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
+import { spawnStructuredConversation, stagedLaunchRecovery, recoverStagedStructuredLaunch, releaseFailedStagedLaunchContinuation, STAGED_RECOVERY_MAX_CHECKS, STAGED_RECOVERY_BUDGET_MS, type StagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { loadTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -310,6 +310,8 @@ export interface PipelinePorts {
   failStageLaunch?(launchId: string, conversationId: string, reason: string): boolean;
   /** After identity-confirmed termination, fence the original first delivery. */
   failStoppedStageLaunch?(launchId: string, conversationId: string, reason: string, eligible: () => boolean): Promise<boolean>;
+  /** Release only a continuation whose exact durable launch receipt is failed. */
+  releaseFailedStageLaunchContinuation?(launchId: string, conversationId: string): boolean;
   claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict" | Promise<"claimed" | "settled" | "conflict">;
   /** Original launch/message journal evidence, freshly fenced by the failed
       receipt. An unavailable read never proves that a prompt was absent. */
@@ -994,6 +996,15 @@ function stageArtifactStamp(pathname: string | null | undefined): string | null 
   } catch (error) {
     return ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "") ? null : undefined;
   }
+}
+
+/** A complete artifact with no native prompt, task start, or agent output is
+ * verified silence for either supported engine. Null or partial evidence keeps
+ * the launch fenced. */
+function provesNoNativeStageTurn(evidence: Awaited<ReturnType<typeof durableStageTurnEvidence>>): boolean {
+  return Boolean(evidence && evidence.promptHistoryComplete === true && evidence.turn === "unknown"
+    && evidence.message === null && evidence.turnStartedAt == null && evidence.lastAgentEventAt == null
+    && (evidence.prompts?.length ?? 0) === 0);
 }
 
 async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostProbe | null> {
@@ -1705,7 +1716,7 @@ export function defaultPipelinePorts(
       if (stamp === undefined) return false;
       if (stamp !== null) {
         const evidence = await durableStageTurnEvidence(before.engine, before.artifactPath!);
-        if (!evidence?.launchOnly || stageArtifactStamp(before.artifactPath) !== stamp) return false;
+        if (!provesNoNativeStageTurn(evidence) || stageArtifactStamp(before.artifactPath) !== stamp) return false;
       }
       const safe = (file: RegistryFile, receipt: RegistryFile["receipts"][string]) => {
         if (!eligible() || receipt.conversationId !== conversationId || receipt.error !== before.error
@@ -1729,6 +1740,8 @@ export function defaultPipelinePorts(
       invalidateRegistryProjection();
       return failed.claimed && failed.receipt?.state === "failed";
     }),
+    releaseFailedStageLaunchContinuation: (launchId, conversationId) =>
+      releaseFailedStagedLaunchContinuation(launchId, conversationId, registry),
     unpublishedLaunchRetrySafe: async (launchId) => {
       const before = registry.readOnlySnapshot().receipts[launchId];
       if (before?.state !== "failed" || !isPrepublicationSpawnFailure(before.error ?? "")) return false;
@@ -1798,7 +1811,7 @@ export function defaultPipelinePorts(
         if (!receipt || stamp === undefined || (receipt.engine !== "codex" && receipt.engine !== "claude")) return { outcome: "failed", error: "stage launch artifact is unreadable" };
         if (stamp !== null) {
           const evidence = await durableStageTurnEvidence(receipt.engine, receipt.artifactPath!);
-          if (!evidence?.launchOnly) return { outcome: "failed", error: "stage launch already has native turn evidence" };
+          if (!provesNoNativeStageTurn(evidence)) return { outcome: "failed", error: "stage launch already has native turn evidence" };
         }
         const writer = receipt.key ? registry.readOnlySnapshot().entries[sessionKeyId(receipt.key)] : null;
         if (writer?.claimOwner && writer.structuredHost?.writerClaimEpoch !== writer.claimEpoch) {
@@ -8863,7 +8876,7 @@ async function replaceUnansweredStageLaunch(
   const stillUnanswered = async () => {
     if (!pathname || ports.transcriptPresent?.(pathname) === false) return true;
     if (!ports.sourcePathAllowed(pathname)) return false;
-    return (await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname))?.launchOnly === true;
+    return provesNoNativeStageTurn(await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname));
   };
   if (!await stillUnanswered()) return false;
   const host = await ports.conversationHostProcess?.(attempt.conversationId);
@@ -8882,8 +8895,13 @@ async function replaceUnansweredStageLaunch(
   const turn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
   if (turn?.pathname) { reopenDeliveredAttempt(pipeline, attempt, turn.pathname); return true; }
   if (attempt.report || turn?.operationConflict || !await stillUnanswered()) return false;
-  if (!await ports.failStoppedStageLaunch?.(attempt.launchId, attempt.conversationId,
-    `${UNANSWERED_STAGE_PREFIX}; recorded host stopped after bounded spawn recovery`, eligible)) {
+  const settled = await ports.failStoppedStageLaunch?.(attempt.launchId, attempt.conversationId,
+    `${UNANSWERED_STAGE_PREFIX}; recorded host stopped after bounded spawn recovery`, eligible);
+  // The registry settlement may have committed before its acknowledgement or
+  // before the pipeline replacement. The spawn layer verifies the exact failed
+  // receipt before releasing the launch's retained host continuation.
+  ports.releaseFailedStageLaunchContinuation?.(attempt.launchId, attempt.conversationId);
+  if (!settled) {
     await park(pipeline, `${UNANSWERED_STAGE_PREFIX}; original launch settlement is pending; retry-stage to reconcile it`, attempt);
     return true;
   }
@@ -13763,6 +13781,24 @@ export async function patchPipeline(
         await reconcileStageAccountGuard(pipeline, stage, attempt, ports, persist);
         await persist(); requestPipelineTick();
         return { pipeline };
+      }
+      if (stage?.kind === "run" && attempt?.restartContext?.previousAttempt !== undefined
+        && isStructuredSpawnPark(pipeline, attempt) && !attempt.report
+        && ["running", "paused", "needs_decision"].includes(pipeline.state)) {
+        const recovery = unansweredLaunchRecovery(attempt, attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null);
+        if (!recovery) return { error: "stage launch recovery could not verify that the first message remains unanswered", status: 409 };
+        if (await replaceUnansweredStageLaunch(pipeline, stage, attempt, recovery, ports, true)) {
+          await persist(); requestPipelineTick();
+          return currentAttempt(pipeline, stage.id)?.n !== attempt.n ? { pipeline }
+            : { error: pipeline.stateDetail ?? "stage launch could not be replaced", status: 409 };
+        }
+        const turn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
+        if (turn?.pathname) {
+          reopenDeliveredAttempt(pipeline, attempt, turn.pathname);
+          await persist(); requestPipelineTick();
+          return { pipeline };
+        }
+        return { error: "stage launch recovery could not verify that the first message remains unanswered", status: 409 };
       }
       if (pipeline.state === "needs_decision" && stage && attempt?.restartRecovery && !attempt.verdict) {
         if (deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)

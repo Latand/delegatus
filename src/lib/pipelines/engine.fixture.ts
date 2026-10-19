@@ -1714,6 +1714,7 @@ function productionHostSeams(f: Awaited<ReturnType<typeof stagedRecoveryHarness>
     transcriptPresent: (pathname: string) => ports().transcriptPresent!(pathname),
     failStageLaunch: (launchId: string, conversationId: string, reason: string) => ports().failStageLaunch!(launchId, conversationId, reason),
     failStoppedStageLaunch: (launchId: string, conversationId: string, reason: string, eligible: () => boolean) => ports().failStoppedStageLaunch!(launchId, conversationId, reason, eligible),
+    releaseFailedStageLaunchContinuation: (launchId: string, conversationId: string) => ports().releaseFailedStageLaunchContinuation!(launchId, conversationId),
     conversationHostUnavailableSince: (conversationId: string) => ports().conversationHostUnavailableSince!(conversationId),
     conversationHostProcess: (conversationId: string) => ports().conversationHostProcess!(conversationId),
   } satisfies Partial<PipelinePorts>);

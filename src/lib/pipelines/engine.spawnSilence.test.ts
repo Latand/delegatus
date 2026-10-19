@@ -1,4 +1,4 @@
-import { expect, test, aliveStagedLaunch, stagedRecoveryHarness, stageHostChild, productionHostSeams, defaultPipelinePorts, loadPipelines, setAgentRegistryForTests, tickPipelines, patchPipeline, savePipelines, fs, path, harness } from "./engine.fixture";
+import { expect, test, aliveStagedLaunch, stagedRecoveryHarness, stageHostChild, productionHostSeams, defaultPipelinePorts, loadPipelines, setAgentRegistryForTests, tickPipelines, patchPipeline, savePipelines, fs, path, harness, durableStageTurnEvidence } from "./engine.fixture";
 
 const BUDGET = 10 * 60_000;
 
@@ -14,9 +14,16 @@ async function silentLaunch(unpublished = false) {
 
 test.each([false, true])("unanswered first message is replaced after real checks (unpublished: %s)", async unpublished => {
   const f = await silentLaunch(unpublished);
+  let liveLaunch: string | null = null;
   try {
     if (unpublished) { await f.wake(); await f.wake(); }
     const original = f.attempt().launchId;
+    const continuations = (process as typeof process & { __llvStagedContinuations?: Map<string, unknown> }).__llvStagedContinuations!;
+    expect(continuations.has(original!)).toBe(true);
+    const launchMarker = `live-${original}`;
+    liveLaunch = launchMarker;
+    continuations.set(launchMarker, {});
+    expect(f.h.ports.releaseFailedStageLaunchContinuation!(original!, "another-conversation")).toBe(false);
     f.advance(BUDGET);
     await f.wake();
     const lane = loadPipelines()[0]!;
@@ -24,9 +31,34 @@ test.each([false, true])("unanswered first message is replaced after real checks
     expect(lane.runs[0]!.attempts[0]).toMatchObject({ state: "failed", launchId: original });
     expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1 });
     expect(f.registry.readOnlySnapshot().receipts[original!]?.state).toBe("failed");
+    expect(continuations.has(original!)).toBe(false);
+    expect(continuations.has(launchMarker)).toBe(true);
     // The recorded incarnation was stopped; a replacement never overlaps it.
     const { processIdentityStatus } = await import("@/lib/processIdentity");
     expect(processIdentityStatus(f.host.process)).toBe("dead");
+  } finally {
+    if (liveLaunch) (process as typeof process & { __llvStagedContinuations?: Map<string, unknown> }).__llvStagedContinuations?.delete(liveLaunch);
+    setAgentRegistryForTests(null); await f.host.end();
+  }
+});
+
+test("a failed receipt releases its continuation after the settlement acknowledgement is lost", async () => {
+  const f = await silentLaunch();
+  try {
+    const original = f.attempt().launchId!;
+    const fail = f.h.ports.failStoppedStageLaunch!;
+    let loseAcknowledgement = true;
+    f.h.ports.failStoppedStageLaunch = async (...args) => {
+      const settled = await fail(...args);
+      if (loseAcknowledgement) { loseAcknowledgement = false; return false; }
+      return settled;
+    };
+    f.advance(BUDGET); await f.wake();
+    expect(f.registry.spawnReceipt(original)?.state).toBe("failed");
+    expect((process as typeof process & { __llvStagedContinuations?: Map<string, unknown> })
+      .__llvStagedContinuations?.has(original)).toBe(false);
+    await f.wake();
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
   } finally { setAgentRegistryForTests(null); await f.host.end(); }
 });
 
@@ -82,6 +114,29 @@ test("metadata alone cannot keep a silent host alive past recovery", async () =>
   } finally { setAgentRegistryForTests(null); await f.host.end(); }
 });
 
+test("a complete empty transcript cannot keep a silent host alive past recovery", async () => {
+  const f = await silentLaunch();
+  try {
+    const receipt = f.registry.spawnReceipt(f.attempt().launchId!)!;
+    fs.writeFileSync(receipt.artifactPath!, "");
+    f.h.ports.sourcePathAllowed = () => true;
+    f.advance(BUDGET); await f.wake();
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+  } finally { setAgentRegistryForTests(null); await f.host.end(); }
+});
+
+test("Claude init metadata is complete silence evidence without a Codex launchOnly marker", async () => {
+  const f = await silentLaunch();
+  try {
+    const pathname = f.registry.spawnReceipt(f.attempt().launchId!)!.artifactPath!;
+    fs.writeFileSync(pathname, JSON.stringify({ type: "system", subtype: "init", session_id: "silent-claude" }) + "\n");
+    const evidence = await durableStageTurnEvidence("claude", pathname);
+    expect(evidence).toMatchObject({ promptHistoryComplete: true, turn: "unknown", message: null,
+      turnStartedAt: null, lastAgentEventAt: null, prompts: [] });
+    expect(evidence?.launchOnly).not.toBe(true);
+  } finally { setAgentRegistryForTests(null); await f.host.end(); }
+});
+
 test("a first turn arriving during host evidence withdraws the stop", async () => {
   const f = await silentLaunch();
   try {
@@ -102,6 +157,44 @@ test("a first turn arriving during host evidence withdraws the stop", async () =
     expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
     expect(f.attempt().state).toBe("running");
     expect((await readHost(f.attempt().conversationId!)).state).toBe("alive");
+  } finally { setAgentRegistryForTests(null); await f.host.end(); }
+});
+
+test("retry-stage never terminates a replacement after its first native answer arrives", async () => {
+  const f = await silentLaunch();
+  try {
+    f.advance(BUDGET); await f.wake();
+    const lane = loadPipelines()[0]!;
+    const replacement = lane.runs[0]!.attempts[1]!;
+    expect(replacement.restartRecovery).toBeDefined();
+    expect(replacement.launchId).toBeDefined();
+    const receipt = f.registry.spawnReceipt(replacement.launchId!)!;
+    expect(receipt.artifactPath).toBeDefined();
+    await f.client.command({ operationId: `spawn_message_${receipt.launchId}`, conversationId: receipt.conversationId,
+      kind: "send", text: "Build the change" } as Parameters<typeof f.client.command>[0]);
+    const at = f.h.ports.now();
+    fs.writeFileSync(receipt.artifactPath!, [
+      { timestamp: at, type: "session_meta", payload: { id: "replacement-stage" } },
+      { timestamp: at, type: "event_msg", payload: { type: "task_started" } },
+      { timestamp: at, type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "I am working" }] } },
+    ].map(row => JSON.stringify(row)).join("\n") + "\n");
+    replacement.state = "needs_decision";
+    replacement.error = "stage spawn recovery stopped: runtime host recovery exhausted after 11 checks; original launch retained";
+    lane.state = "needs_decision"; lane.stateDetail = replacement.error;
+    lane.cursor!.state = "spawning";
+    savePipelines([lane]);
+    let stopCalls = 0;
+    const stop = f.h.ports.stopStageAgent;
+    f.h.ports.stopStageAgent = async (...args) => { stopCalls++; return stop(...args); };
+
+    const result = await patchPipeline(lane.id, {
+      action: "retry-stage", stageId: "build", launchId: replacement.launchId!,
+    }, f.h.ports);
+
+    expect(stopCalls).toBe(0);
+    expect(result.error).toBeUndefined();
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.state).toBe("running");
   } finally { setAgentRegistryForTests(null); await f.host.end(); }
 });
 
