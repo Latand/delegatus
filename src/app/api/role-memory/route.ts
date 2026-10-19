@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { deleteRule, projectViewAsync, restoreRule, revertRule, RoleMemoryRefusal } from "@/lib/memory/roleStore";
-import { revertCuratorPass } from "@/lib/memory/curation/apply";
+import { runPrivacyWork } from "@/lib/links/taskPageWorker";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +31,10 @@ export async function POST(request: NextRequest) {
     if (body.action === "delete") deleteRule(body.ruleId);
     else if (body.action === "restore") restoreRule(body.ruleId);
     else if (body.action === "revert") revertRule(body.ruleId);
-    else revertCuratorPass(body.ruleId);
+    else {
+      const { value: undo } = await runPrivacyWork({ kind: "curation-undo", passId: body.ruleId });
+      return Response.json({ ...await projectViewAsync(body.project), undo }, NO_STORE);
+    }
     return answer(body.project);
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) return Response.json({ error: error.code }, { status: 409 });

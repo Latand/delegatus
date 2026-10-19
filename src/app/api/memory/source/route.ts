@@ -1,13 +1,16 @@
 import { NextRequest } from "next/server";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
-import { memorySource, setMemorySource } from "@/lib/memory/source";
+import { scheduleMemoryImport } from "@/lib/memory/importController";
+import { memorySource, selectMemorySource } from "@/lib/memory/source";
+import { memoryImportStatus } from "@/lib/memory/importStatus";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return Response.json(memorySource(), { headers: { "Cache-Control": "no-store" } });
+  const status = memoryImportStatus();
+  return Response.json({ ...memorySource(), ...(status ? { import: status } : {}) }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function PUT(request: NextRequest) {
@@ -20,7 +23,8 @@ export async function PUT(request: NextRequest) {
   const source = (body as Record<string, unknown>).source;
   if (source !== "delegatus" && source !== "engines") return Response.json({}, { status: 400 });
   try {
-    const error = setMemorySource(source);
+    const error = await selectMemorySource(source);
+    if (!error && source === "delegatus") void scheduleMemoryImport();
     return error ? Response.json({ error }, { status: 409 }) : GET();
   } catch { return Response.json({ error: "write_failed" }, { status: 500 }); }
 }

@@ -164,7 +164,7 @@ export function joinMovedScopes(now = new Date().toISOString()): void {
       const revisionScope = `succession:${from}:${into}:${revision}`;
       const sourceHistory = source.history.map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? source.scope }));
       const currentHistory = current.history.map(entry => ({ ...entry, revisionScope: entry.revisionScope ?? current.scope }));
-      tx.put({ ...current, revision, active: retained.active.map((rule) => rule.id),
+      tx.put({ ...current, ...(current.fourScopeTarget || source.fourScopeTarget ? { fourScopeTarget: current.fourScopeTarget ?? source.fourScopeTarget } : {}), revision, active: retained.active.map((rule) => rule.id),
         revisionScope, history: keepHistory([...sourceHistory, ...currentHistory, { revision, revisionScope, at: now, by: "succession" as const, added: source.active, merged, archived }]) });
       tx.delete(`s:${from}`);
     }
@@ -497,7 +497,8 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
   return {
     id: row.id, rule: row.rule, why: row.why, state: row.state, hints: row.hints, tasks,
     ...(row.reason ? { reason: row.reason } : {}), ...(row.mergedInto ? { mergedInto: row.mergedInto } : {}),
-    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.origin === "seat" ? "seat" : row.source.stageId,
+    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.origin === "seat" ? "seat" : row.source.origin === "import" ? "import" : row.source.stageId,
+    ...(row.source.origin === "import" ? { importSource: { candidate: row.source.candidate, occurrences: row.source.occurrences, engine: row.source.engine, sha256: row.source.sha256, importId: row.source.importId } } : {}),
     fresh: now - Date.parse(row.createdAt) < DAY_MS, createdAt: row.createdAt, changedAt: row.changedAt,
     ...(row.revisedBy ? { revisedBy: revisionView(row.revisedBy) } : {}),
     ...(row.curatedAt ? { curatedAt: row.curatedAt } : {}),

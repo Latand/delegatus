@@ -2,12 +2,13 @@ import fs from "node:fs/promises";
 import { createReadStream, createWriteStream } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { stateDir } from "@/lib/configDir";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { readMemorySourceFile, restoreMemorySourceAfterImport } from "./source";
-import { assertPrivateImportDatabaseFiles, readImportRecord, writeImportRows } from "./importStore";
+import { assertPrivateImportDatabaseFiles, importCollection, withImportLookups, readImportRecord, writeImportRows } from "./importStore";
+import { candidateKey } from "./importCuration";
 import { validateImportId } from "./importTypes";
 import type { ImportCandidate, ImportManifest, ImportManifestFile, ImportRecord, ImportRequest, ImportRoots, ImportWriter } from "./importTypes";
 import { ImportCandidates, topicMetadata } from "./importCandidates";
@@ -59,7 +60,8 @@ export class MemoryImportRecoveryError extends AggregateError {
     this.name = "MemoryImportRecoveryError";
   }
 }
-type Ports = {
+export type ImportWorkPorts = {
+  hostProject?: string;
   projectForSlug?: (slug: string) => string | Promise<string>;
   writer?: (session: string) => Promise<ImportWriter>;
   /** Integrity/race seam at the real copy boundary; never crosses the helper protocol. */
@@ -112,7 +114,7 @@ async function rejectPreflight(error: unknown, request: ImportRequest, roots: Im
   }
   throw error;
 }
-async function defaultRoots(): Promise<ImportRoots> {
+export async function defaultImportRoots(): Promise<ImportRoots> {
   if (guardedContext()) throw new MemoryImportError("backup_refused");
   const home = os.homedir(), managed = path.join(path.dirname(stateDir()), "accounts");
   const homes = async (engine: string) => {
@@ -121,9 +123,9 @@ async function defaultRoots(): Promise<ImportRoots> {
   };
   return { claudeHomes: [process.env.LLV_CLAUDE_HOME || path.join(home, ".claude"), ...await homes("claude")], codexHomes: [process.env.LLV_CODEX_HOME || path.join(home, ".codex"), ...await homes("codex")] };
 }
-function assertCurrent(id: string) {
+function assertCurrent(id: string, rescan = false) {
   const source = readMemorySourceFile();
-  if (source?.source !== "delegatus" || source.phase !== "importing" || source.importId !== id) throw new MemoryImportError("source_changed");
+  if (source?.source !== "delegatus" || (!rescan && source.phase !== "importing" || rescan && !["importing", "draining"].includes(source.phase!)) || source.importId !== id) throw new MemoryImportError("source_changed");
 }
 
 async function inventory(roots: ImportRoots, projectForSlug: (slug: string) => string | Promise<string>) {
@@ -180,15 +182,16 @@ async function inventory(roots: ImportRoots, projectForSlug: (slug: string) => s
 }
 
 /** Disk and hashing work is called by the leased job helper, never by a route. */
-export async function runMemoryImportWork(request: ImportRequest, ports: Ports = {}): Promise<ImportRecord> {
+export async function runMemoryImportWork(request: ImportRequest, ports: ImportWorkPorts = {}): Promise<ImportRecord> {
   validateImportId(request.importId);
   const directory = stateDir();
+  const assertOwned = () => assertCurrent(request.importId, request.rescan);
   const backups = path.join(directory, "backups"), parent = path.join(backups, "engine-memory");
   let files: Awaited<ReturnType<typeof inventory>>["files"], stores: string[];
   let roots: ImportRoots | undefined;
   let sourceSeparationProven = false;
   try {
-    roots = request.roots ?? await defaultRoots();
+    roots = request.roots ?? await defaultImportRoots();
     sourceSeparationProven = await sourceStoresAreSeparate(directory, roots);
     if (!sourceSeparationProven) throw new MemoryImportError("backup_refused");
     await outsideCheckout(directory);
@@ -220,23 +223,32 @@ export async function runMemoryImportWork(request: ImportRequest, ports: Ports =
   await privateDirectory(directory);
   await privateDirectory(backups); await privateDirectory(parent); await outsideCheckout(parent);
   return withFileTransaction(path.join(parent, "import-job"), "memory import busy", async () => {
-    assertCurrent(request.importId);
+    assertOwned();
     const prior = readImportRecord(request.importId);
-    if (prior?.state === "ready") return prior;
-    const record: ImportRecord = { kind: "import", id: request.importId, state: "copying", at: new Date(request.at ?? Date.now()).toISOString(), previous: prior ? prior.previous : request.previous, backup: path.join(parent, request.importId), files: 0, candidates: 0, parts: 0 };
-    await writeImportRows([record], () => assertCurrent(request.importId));
+    if (prior?.state === "ready" && !request.rescan) return prior;
+    const record: ImportRecord = prior?.state === "ready" ? { ...prior } : { kind: "import", id: request.importId, state: "copying", at: new Date(request.at ?? Date.now()).toISOString(), previous: prior ? prior.previous : request.previous, backup: path.join(parent, request.importId), files: 0, candidates: 0, parts: 0 };
+    await writeImportRows([record], assertOwned);
     try {
       ports.phase?.("backup");
-      try { await fs.mkdir(record.backup, { mode: 0o700 }); }
+      try { if (!request.rescan) await fs.mkdir(record.backup, { mode: 0o700 }); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new MemoryImportError("interrupted"); throw error; }
-      const manifest: ImportManifest = { schemaVersion: 1, importId: record.id, createdAt: record.at, files: [] };
+      if (record.backup !== path.join(parent, request.importId)) throw new MemoryImportError("backup_refused");
+      if (request.rescan) await privateDirectory(record.backup);
+      const manifest: ImportManifest = request.rescan ? JSON.parse(await fs.readFile(path.join(record.backup, "manifest.json"), "utf8")) : { schemaVersion: 1, importId: record.id, createdAt: record.at, files: [] };
+      if (manifest.schemaVersion !== 1 || manifest.importId !== record.id || !Array.isArray(manifest.files)) throw new MemoryImportError("integrity");
+      const newFiles: { file: typeof files[number]; entry: ImportManifestFile }[] = [];
       for (const file of files) {
-        assertCurrent(record.id);
+        assertOwned();
         const { source, store, ...entry } = file;
-        const copy = path.join("stores", hash(await fs.realpath(store)).slice(0, 16), path.relative(store, source));
-        const destination = path.join(record.backup, copy);
-        await privateDirectory(path.dirname(destination));
+        const previous = manifest.files.findLast(entry => entry.home === file.home && entry.file === file.file);
+        if (request.rescan && previous?.size === file.size && previous.modifiedAt === file.modifiedAt) continue;
         const sourceHash = await digest(source);
+        if (previous?.sha256 === sourceHash) continue;
+        const copy = path.join("stores", hash(await fs.realpath(store)).slice(0, 16), ...(request.rescan ? ["versions", sourceHash, randomUUID()] : []), path.relative(store, source));
+        const destination = path.join(record.backup, copy);
+        const resolved = await resolvedDestination(destination);
+        if (!within(await fs.realpath(directory), resolved) || stores.some(store => within(store, resolved) || within(resolved, store))) throw new MemoryImportError("backup_refused");
+        await privateDirectory(path.dirname(destination));
         const sourceStat = await fs.stat(source);
         if (sourceStat.size !== file.size || sourceStat.mtime.toISOString() !== file.modifiedAt) throw new MemoryImportError("integrity");
         await pipeline(createReadStream(source), createWriteStream(destination, { flags: "wx", mode: 0o600 }));
@@ -244,49 +256,71 @@ export async function runMemoryImportWork(request: ImportRequest, ports: Ports =
         if (await digest(destination) !== sourceHash || await digest(source) !== sourceHash) throw new MemoryImportError("integrity");
         const handle = await fs.open(destination, "r+");
         try { await handle.sync(); } finally { await handle.close(); }
-        manifest.files.push({ ...entry, copy, sha256: sourceHash });
+        const copied = { ...entry, copy, sha256: sourceHash };
+        manifest.files.push(copied); newFiles.push({ file, entry: copied });
       }
       // All copies pass before the first candidate is committed.
       ports.phase?.("candidates");
       const loaded = new Set<string>();
-      for (let index = 0; index < manifest.files.length; index++) {
-        const file = manifest.files[index]!;
+      for (const file of files) {
         if (file.kind !== "claude_index" || !file.loadedAtStart) continue;
-        const text = await fs.readFile(path.join(record.backup, file.copy), "utf8");
+        const entry = manifest.files.findLast(entry => entry.home === file.home && entry.file === file.file);
+        if (!entry) throw new MemoryImportError("integrity");
+        const text = await fs.readFile(path.join(record.backup, entry.copy), "utf8");
         for (const match of text.matchAll(/\[[^\]]*\]\(([^)]+\.md)(?:#[^)]*)?\)/g)) {
-          try { loaded.add(await fs.realpath(path.resolve(path.dirname(files[index]!.source), match[1]))); }
+          try { loaded.add(await fs.realpath(path.resolve(path.dirname(file.source), match[1]))); }
           catch (error) { if (!missing(error)) throw error; }
         }
       }
       const builder = new ImportCandidates(record.id);
       let resolveWriter = ports.writer;
-      for (let index = 0; index < manifest.files.length; index++) {
-        const file = manifest.files[index]!;
-        if (file.kind !== "claude_topic" && file.kind !== "codex_summary") continue;
-        const bytes = await fs.readFile(path.join(record.backup, file.copy));
+      for (const { file, entry } of newFiles) {
+        if (entry.kind !== "claude_topic" && entry.kind !== "codex_summary") continue;
+        const bytes = await fs.readFile(path.join(record.backup, entry.copy));
         const body = bytes.toString("utf8");
         if (!Buffer.from(body).equals(bytes)) throw new MemoryImportError("integrity");
-        file.loadedAtStart ||= loaded.has(files[index]!.physical);
-        const session = file.engine === "claude" ? topicMetadata(body).session : undefined;
+        entry.loadedAtStart = !request.rescan && (entry.loadedAtStart || loaded.has(file.physical));
+        const session = entry.engine === "claude" ? topicMetadata(body).session : undefined;
         if (session && !resolveWriter) resolveWriter = await (await import("./importWriter")).productionImportWriter();
-        builder.add(file, body, session ? await resolveWriter!(session) : undefined);
+        builder.add(entry, body, session ? await resolveWriter!(session) : undefined);
       }
       const candidates: ImportCandidate[] = builder.rows();
-      // Recheck the complete snapshot after all asynchronous copies and writer
-      // lookups, before publishing any candidate. Engine stores remain read-only.
-      for (let index = 0; index < files.length; index++) {
-        if (await digest(files[index]!.source) !== manifest.files[index]!.sha256 || await digest(path.join(record.backup, manifest.files[index]!.copy)) !== manifest.files[index]!.sha256) throw new MemoryImportError("integrity");
+      // Recheck copied changes after every asynchronous writer lookup.
+      for (const { file, entry } of newFiles) {
+        if (await digest(file.source) !== entry.sha256 || await digest(path.join(record.backup, entry.copy)) !== entry.sha256) throw new MemoryImportError("integrity");
       }
-      assertCurrent(record.id);
+      const { projectInfoFromCwd } = await import("@/lib/scanner/describe");
+      record.hostProject ??= ports.hostProject ?? projectInfoFromCwd(process.cwd())?.project ?? "installation";
+      record.roots ??= roots;
+      const { orchestratorSeatFor } = await import("@/lib/orchestrator/seats");
+      const { inheritImportDispositions } = await import("./importHistory");
+      for (const candidate of candidates) {
+        const project = candidate.occurrences[0].project;
+        candidate.curationProject = project && orchestratorSeatFor(project).active ? project : record.hostProject;
+        if (!request.rescan) inheritImportDispositions(candidate);
+      }
+      assertOwned();
       commitImportManifest(record.backup, manifest);
-      for (let offset = 0; offset < candidates.length; offset += 64) await writeImportRows(candidates.slice(offset, offset + 64), () => assertCurrent(record.id));
+      for (let offset = 0; offset < candidates.length; offset += 40) {
+        const batch = candidates.slice(offset, offset + 40);
+        await importCollection(true)!.patch(() => {
+          assertOwned();
+          return { records: withImportLookups(batch.map(candidate => {
+            const prior = importCollection()!.get(candidateKey(candidate));
+            if (prior?.kind !== "candidate") return candidate;
+            return { ...prior, linked: [...new Set([...prior.linked, ...candidate.linked])], occurrences: [...prior.occurrences, ...candidate.occurrences.filter(o => !prior.occurrences.some(p => p.id === o.id))] };
+          })) };
+        });
+      }
       ports.phase?.("retention");
       await pruneMemoryBackups(parent);
-      Object.assign(record, { state: "ready", files: manifest.files.length, candidates: new Set(candidates.map(row => row.group)).size, parts: candidates.length });
-      await writeImportRows([record], () => assertCurrent(record.id));
+      Object.assign(record, { state: "ready", curationDirty: true, files: manifest.files.length,
+        candidates: (request.rescan ? record.candidates : 0) + new Set(candidates.map(row => row.group)).size,
+        parts: (request.rescan ? record.parts : 0) + candidates.length });
+      await writeImportRows([record], assertOwned);
       return record;
     } catch (error) {
-      record.state = "failed"; record.reason = error instanceof MemoryImportError ? error.reason : "failed";
+      record.state = request.rescan ? "ready" : "failed"; record.reason = error instanceof MemoryImportError ? error.reason : "failed";
       let statusFailure: unknown, restoreFailure: unknown;
       if (!(await sourceStoresAreSeparate(directory, roots!))) throw error;
       try { await writeImportRows([record]); } catch (caught) { statusFailure = caught; }
@@ -301,4 +335,11 @@ export async function runMemoryImportWork(request: ImportRequest, ports: Ports =
       throw error;
     }
   });
+}
+
+/** Worker preflight for a ready import, before a phase or budget mutation. */
+export async function validateMemoryImportEnvironment(roots: ImportRoots) {
+  if (!(await sourceStoresAreSeparate(stateDir(), roots))) throw new MemoryImportError("backup_refused");
+  await outsideCheckout(stateDir());
+  assertPrivateImportDatabaseFiles();
 }
