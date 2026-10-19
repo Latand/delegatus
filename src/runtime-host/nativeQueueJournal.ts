@@ -1,3 +1,5 @@
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
+import path from "node:path";
 import { nativeQueueInputMatches } from "@/lib/runtime/nativeQueueContent";
 import type { RuntimeOperationCommand } from "@/lib/runtime/contracts";
 import type { Database } from "bun:sqlite";
@@ -40,9 +42,15 @@ function entryTargeted(command: NativeQueueCommand): boolean {
   return command.action === "add" || command.entryId !== undefined;
 }
 
+const nativeQueueIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS native_queue_conversation ON native_queue_entries(conversation_id)`,
+  `CREATE INDEX IF NOT EXISTS native_queue_operation_holds_entry ON native_queue_operation_holds(entry_id)`,
+]);
+
 /** Called inside the journal's admission/transition transaction. No transport. */
 export class NativeQueueJournal {
   constructor(private readonly db: Database) {
+    nativeQueueIndexes.assertRepairAuthority(db, path.dirname(db.filename));
     /* One statement per exec: Bun reports only the last statement's failure
        of a batch. A table creation refused for a peer's lock would surface as
        the following index's missing table, and a refused BEGIN IMMEDIATE would
@@ -50,9 +58,8 @@ export class NativeQueueJournal {
     db.exec(`CREATE TABLE IF NOT EXISTS native_queue_entries (
       entry_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, state_json TEXT NOT NULL
     )`);
-    db.exec("CREATE INDEX IF NOT EXISTS native_queue_conversation ON native_queue_entries(conversation_id)");
     db.exec("CREATE TABLE IF NOT EXISTS native_queue_operation_holds (operation_id TEXT PRIMARY KEY, entry_id TEXT NOT NULL)");
-    db.exec("CREATE INDEX IF NOT EXISTS native_queue_operation_holds_entry ON native_queue_operation_holds(entry_id)");
+    nativeQueueIndexes.install(db, path.dirname(db.filename));
     /* Rebuilt from the entries on every open, so a journal written before the
        holds existed gains them before its first compaction. Bounded by the
        entries they mirror, which are never deleted: at most two ids per

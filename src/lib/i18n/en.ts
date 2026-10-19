@@ -3706,6 +3706,7 @@ export const en = {
   "needs.clearedRule.retired-seat": "Delegatus: the seat was replaced and its conversation ended",
   "needs.clearedRule.operator-replied": "Delegatus: you replied in the conversation",
   "needs.clearedRule.resumed": "Delegatus: the agent ran again after the memory kill",
+  "needs.clearedRule.container-finished": "Delegatus: the conversation’s task or lane finished",
   "needs.clearedRule.stage-settled": "Delegatus: the stage settled and its lane carries the rest",
   "needs.clearedRule.launch-relaunched": "Delegatus: a later assignment replaced the failed launch",
   "needs.clearedRule.launch-task-done": "Delegatus: the failed launch's task is done",

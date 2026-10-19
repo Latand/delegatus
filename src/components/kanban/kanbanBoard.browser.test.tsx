@@ -1,3 +1,4 @@
+import type { FileEntry } from "@/lib/types";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
@@ -34671,4 +34672,86 @@ describe("relay reply-chain conversation list", () => {
       }
     } finally { await browser?.close(); if (tempFd !== null) fs.closeSync(tempFd); fixture.stop(); }
   }, 60000);
+});
+
+
+describe("finished work leaves In progress", () => {
+  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1")("terminal containers withdraw stale asks and retain the live ask", async () => {
+    const before = process.env.FINISHED_WORK_STAMP === "before";
+    const out = path.resolve(".artifacts/finished-work", before ? "before" : "after"); fs.mkdirSync(out, { recursive: true });
+    const now = Date.parse("2026-10-19T06:00:00Z");
+    const at = "2026-10-12T06:00:00Z", ended = "2026-10-12T07:00:00Z";
+    const files = ["finished", "done", "live"].map(name => ({
+      root: "claude-projects", name, path: `/fixture/${name}.jsonl`, conversationId: `conversation_${name}`, project: "atlas", title: `${name} conversation`, kind: "session", engine: "claude", fmt: "claude", mtime: name === "live" ? now / 1000 : Date.parse(at) / 1000, size: 1,
+      proc: name === "live" ? "running" : "killed", pid: name === "live" ? 1234 : null, parent: null, model: "fable", activity: "idle", pendingQuestion: null, waitingInput: null,
+      lastTurn: { startedAt: Date.parse(at), endedAt: null }, pendingPermission: { id: `permission-${name}`, since: at, tool: "Bash", command: "make" },
+    })) as FileEntry[];
+    const tasks = files.map(file => ({ id: `t-${file.name}`, project: "atlas", status: file.name === "done" ? "done" : "assigned", text: file.name === "finished" ? "Finished lane" : file.name === "done" ? "Done task" : "Live approval", placement: "unplaced", createdAt: at, updatedAt: at,
+      ...(file.name === "done" ? { doneAt: "2026-10-19T05:00:00Z", prototypeReview: { latestReviewId: "review-done", waitingReviewId: "review-done", title: "Release choice", rounds: 1, createdAt: at, asks: "questions" } } : {}), assignments: [{ path: file.path, conversationId: file.conversationId, panePid: null, state: "linked", error: null, at }],
+    }));
+    const ghost: FileEntry = { ...files[0]!, name: "hostless", path: "/fixture/hostless.jsonl", conversationId: "conversation_hostless", proc: null, activity: "live", activityReason: "structured_spawn_host_gone_turn_open", pendingPermission: null };
+    files.push(ghost);
+    tasks[0]!.assignments.push({ path: ghost.path, conversationId: ghost.conversationId, panePid: null, state: "linked", error: null, at });
+    const pipelines = [{ id: "finished-lane", project: "atlas", repoDir: "/fixture", worktreeDir: "/fixture-lane", branch: "pipeline/finished", baseBranch: "main", baseRef: "", lastPassedCommit: "", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null, task: "Finished lane", taskIds: ["t-finished"], state: "completed", createdAt: at, closedAt: ended, stages: [],
+      runs: [{ stageId: "review", attempts: [{ n: 1, state: "needs_decision", effectiveRole: { roleId: "reviewer", engine: "codex" }, conversationId: "conversation_finished", agentPath: files[0]!.path, startedAt: at, completedAt: ended }] }], cursor: null,
+    }];
+    if (!before) {
+      /* Match the production response after its task projection settles the
+         assignment and omits the closed owner from visible pipelines. */
+      tasks[0]!.status = "inbox";
+      pipelines.length = 0;
+      for (const file of files.filter(entry => entry.name === "finished" || entry.name === "done")) {
+        file.attentionDismissal = { at: ended, by: { kind: "system", rule: "container-finished" } } as FileEntry["attentionDismissal"];
+      }
+    }
+    const payload = { files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 3, smt: now / 1000 }], projectCwds: { atlas: "/fixture" }, systemHealth: { tmux: { status: "healthy" } } };
+    const server = await serveEvidenceFixture(out, undefined, { "/api/files": payload, "/api/tasks": { tasks } });
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    let browser: Browser | null = null;
+    const readings: unknown[] = [];
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+        ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }) });
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1440]) {
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, colorScheme: theme, reducedMotion: "reduce", ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
+        const page = await context.newPage(); const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+        try {
+          await context.addInitScript(({ lang, theme }) => { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme); localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); }, { lang, theme });
+          await page.clock.install({ time: new Date(now) });
+          await page.goto(`${server.base}?scenario=finished-work`);
+          await page.evaluate(theme => document.documentElement.setAttribute("data-theme", theme), theme);
+          const assigned = page.locator(width === 390 ? '[data-phone-kanban-column="assigned"]' : '.column[data-status="assigned"]');
+          // Both layouts expose their card's stable task id.
+          await page.locator('[data-id="task:t-live"], [data-phone-card="task:t-live"]').first().waitFor();
+          const card = (id: string) => page.locator(`[data-id="task:${id}"], [data-phone-card="task:${id}"]`).first();
+          expect(await card("t-finished").count()).toBe(1);
+          const inProgress = await page.evaluate(() => {
+            const card = document.querySelector('[data-id="task:t-finished"], [data-phone-card="task:t-finished"]');
+            return card?.closest('[data-status], [data-phone-kanban-column]')?.getAttribute('data-status') ?? card?.closest('[data-phone-kanban-column]')?.getAttribute('data-phone-kanban-column');
+          });
+          expect(inProgress).toBe(before ? "assigned" : "inbox");
+          const attention = await page.evaluate(() => {
+            const phone = document.querySelector("[data-mobile2-attention-count]");
+            return Number(phone ? phone.getAttribute("data-mobile2-attention-count") : document.querySelector("[data-attention-count] .tabular-nums")?.textContent);
+          });
+          expect(attention).toBe(before ? 4 : 1);
+          const working = await page.evaluate(() => {
+            const phone = document.querySelector('[data-phone-kanban-tab="assigned"] [data-phone-tab-working]');
+            return Number(phone?.getAttribute("data-phone-tab-working") ?? document.querySelector('.column[data-status="assigned"] .live[data-count]')?.getAttribute("data-count") ?? 0);
+          });
+          expect(working).toBe(before ? 1 : 0);
+          const assignedCards = await assigned.locator('[data-phone-card], .card[data-id^="task:"]').count();
+          expect(assignedCards).toBe(before ? 2 : 1);
+          expect(errors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}.png`), fullPage: true });
+          readings.push({ lang, theme, width, finishedColumn: inProgress, assignedColumns: await assigned.count(), assignedCards, attention, working, pageErrors: errors });
+        } catch (error) {
+          await page.screenshot({ path: path.join(out, `failure-${lang}-${theme}-${width}.png`), fullPage: true });
+          fs.writeFileSync(path.join(out, "failure.json"), JSON.stringify({ errors, message: String(error) }));
+          throw error;
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser?.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 120_000);
 });

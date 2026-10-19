@@ -7298,7 +7298,7 @@ async function escalateThroughService(
        wait escalated to it would leave the seat for a form nobody sees. */
     const summary = task ? withPrototypeReviewSummaries([task])[0]?.prototypeReview : undefined;
     const seatNotice = seatRound ? seatDecisionNotices(project).find(notice => notice.reviewId === round.reviewId && !notice.undelivered) : undefined;
-    if (task ? !prototypeWaitsOnOperator(summary) || summary?.waitingReviewId !== round.reviewId : !seatNotice) {
+    if (task ? !prototypeWaitsOnOperator(summary, task) || summary?.waitingReviewId !== round.reviewId : !seatNotice) {
       throw new McpToolRefusal(`decision round ${round.reviewId} no longer waits: read it with read_prototype_review and carry its answer to the asker`, { code: "ROUND_NOT_WAITING" });
     }
     taskId = task?.id ?? null;

@@ -1,0 +1,34 @@
+{
+  "evaluatedAt": "2026-10-19T06:35:00Z",
+  "baseline": "f090bde76d6d",
+  "inProgress": {
+    "cards": 34,
+    "terminalLanesOnly": 18,
+    "activeLane": 15,
+    "withoutLane": 1
+  },
+  "attention": {
+    "total": 31,
+    "olderThan24Hours": 19,
+    "permissionRequests": 0,
+    "deadHostReasons": 0,
+    "stageConversationDecisions": 0,
+    "conversationAsks": 14,
+    "taskDecisionForms": 4,
+    "seatDecisionForms": 1
+  },
+  "anchors": {
+    "doneTasks": 1,
+    "completedMergedLanes": 1,
+    "deadRegistryEntries": 20,
+    "pendingPermissionRequests": 0
+  },
+  "dryRun": {
+    "tasksReturnedToInbox": 7,
+    "conversationAsksWithdrawn": 2,
+    "taskDecisionFormsExpired": 4,
+    "permissionRequestsWithdrawn": 0,
+    "stageConversationDecisionsWithdrawn": 0
+  },
+  "productionMutations": 0
+}
