@@ -596,6 +596,7 @@ async function reconcileAuthorityProjections(
 ): Promise<OrchestratorSeat> {
   if (!seat.conversationId) throw new Error("active orchestrator seat is missing its conversation identity");
   const registry = agentRegistry();
+  const deadline = performance.now() + (dependencies.seatStoreWaitMs ?? SEAT_STORE_WAIT_MS);
   for (let attempt = 0; attempt < 3; attempt++) {
     const revision = registry.storageDiagnostics().revision;
     // Discovery can take another state lease. Prepare outside both writers,
@@ -617,8 +618,8 @@ async function reconcileAuthorityProjections(
       }) ?? current;
       dependencies.stampRegistryIdentity(repaired);
       return repaired;
-    }, undefined, { releaseBeforeWrite: true });
-    if (!written.acquired) throw new Error("agent registry is busy");
+    }, undefined, { releaseBeforeWrite: true, waitMs: Math.max(0, deadline - performance.now()) });
+    if (!written.acquired) throw new AccountMutationBusyError();
     if (written.value) return written.value;
   }
   throw new AccountAdmissionChangedError();
