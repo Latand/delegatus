@@ -63,3 +63,59 @@ compares the old membership enumeration with the production selector. External
 controller ports are deterministic fixtures; these results establish the
 synthetic replay bounds. Production acceptance still requires observation of
 the deployed revision under live load.
+
+
+## Recorded results
+
+The final replay ran on 2026-10-19, 08:23:48–08:24:47 UTC, under Bun 1.4.0.
+Each side used identical corpus, registry and dependency digests at its lane
+count. The data contains approximately 166.94 MB of pipeline JSON and 14.32 MB
+of role-memory scope JSON. The owned command had a three-CPU quota and an
+8 GiB memory limit on a 24-CPU machine. Full load samples, limits, source and
+driver fingerprints, cold observations and six passes per side are in
+`evidence/perf/viewer-lane-readers.json`.
+
+| Open lanes | Before p95 / max loop delay | After p95 / max loop delay | Selected pipelines per tick |
+| --- | --- | --- | --- |
+| 15 | 1243.4 / 1925.6 ms | 36.6 / 264.4 ms | 4 on all six passes, both sides |
+| 30 | 1364.1 / 1943.9 ms | 40.0 / 253.4 ms | 4 on all six passes, both sides |
+
+The p95 uses every recorded interval across the cold observation and six
+passes. Per-pass tails remain in the artifact; cold setup and fingerprinting
+are outside measurement. The first controller pass is observed.
+
+| Repeated reader, median wall time | 15 lanes before / after | 30 lanes before / after |
+| --- | --- | --- |
+| Curator authority | 77.43 / 0.60 ms | 71.52 / 0.67 ms |
+| Curator display counts | 69.53 / 0.78 ms | 68.85 / 0.66 ms |
+| Registry retirement | 52.73 / 2.90 ms | 57.68 / 3.79 ms |
+| Startup membership selection | 17.55 / 31.44 ms | 16.72 / 37.95 ms |
+| Idle-retirement ownership | 401.43 / 0.40 ms | 472.98 / 0.52 ms |
+| Ownership after one pipeline edit | 409.50 / 7.78 ms | 433.66 / 7.19 ms |
+| Archive insert/delete and ownership checks | 823.58 / 19.02 ms | 939.59 / 17.83 ms |
+
+Authority reads decode 473 bytes of pass metadata on each repeated call,
+versus 14,317,348 bytes before. A fresh ownership check decodes no pipeline
+payload after preparation; a single progress edit refreshes one 132,871-byte
+row. The old complete reader materializes all 1,254 pipeline rows per check.
+The `rawDecodedBytes` field counts the compact visitor's instrumented sites;
+its zero on the old full reader does not mean that reader decoded nothing.
+
+Startup's warm membership selection has a higher median in this fixture.
+Its gain is limited to avoiding unrelated membership payloads and repeated
+historical attempt resolution. No warm-startup speedup is claimed. Controller
+payload work remains bounded by four selected rows, with a 531,619-byte maximum
+in these passes; cache hits reduce decoding when selected rows repeat.
+
+## Verification
+
+The Node TypeScript check passed. Explicit-path comparisons for curator,
+registry-reader, retirement, and evidence-index tests introduced no failures.
+The comparator reproduced two base failures: the curator fixture's helper
+cleanup and the synchronous-initialization contention assertion. The separate
+production termination callback file passed all 42 cases.
+
+The runtime-host rehearsal under Bun 1.4.0 completed succession in 507 ms and
+answered 27/27 stable-listener and 27/27 runtime-socket probes over 15 seconds.
+It used private state and ephemeral endpoints. The final pre-push gate also
+checks the scheduler checkpoint regression and adjacent startup/store tests.
