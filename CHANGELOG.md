@@ -117,17 +117,18 @@ guarantees for the 1.x series.
   any prefix of seven or more that names one record is accepted
   ([#2985]). Page cursors are 22-character handles that expire after five
   minutes or a restart, and an expired one restarts from the first page
-  ([#3090]). Codex and Claude Code receive each result once instead of
-  twice, which halved a sample result in Codex's input ([#3022]).
+  ([#3090]). Codex receives each result once instead of twice, which
+  halved a sample result in its input; Claude Code already received one
+  copy and its input is unchanged ([#3022]).
   `search_memory` finds active role rules by their exact ids, and a rule
   rewrite with a wrong id suggests the nearby ones ([#3097]).
 - **Managed updates no longer fail on slow timings alone.** Durations over
   the performance budget are reported as warnings; failed operations,
   missing evidence and lost state still block promotion ([#3058]).
-- **The terminal is quieter on a fresh install.** Progress, loop-gap and
-  worker lines move behind `DELEGATUS_DEBUG=1`, and the duplicate install
-  ping notice is gone ([#3056]). A service or journal launch keeps the
-  loop-gap and performance-summary lines ([#3057]).
+- **The terminal is quieter on a fresh install.** Progress and worker
+  lines move behind `DELEGATUS_DEBUG=1`, and the duplicate install ping
+  notice is gone ([#3056]). Loop-gap and performance-summary lines stay
+  visible in terminals and service journals without debug mode ([#3057]).
 - **The service log names what holds the main thread.** For 30 minutes
   after each deploy a sampling profiler attaches the JavaScript stack to
   every gap of two seconds or more; `loop-profiler.json` with
@@ -196,22 +197,6 @@ guarantees for the 1.x series.
   every 15 minutes ([#3082]).
 - **The agent Git hook no longer calls itself** when `core.hooksPath`
   points at it ([#3078]).
-
-### Maintainer notes
-- The pre-push hook gives the same verdict when many lanes run at once:
-  private build output, two Next build workers, fresh state per native
-  test and one bounded retry for a known intermittent diagnostic
-  ([#3094]).
-- ESLint refuses synchronous subprocess calls, `Atomics.wait` and process
-  scans in server code unless a comment names the reason ([#3073]).
-- The candidate performance gate replays a generated history of pipelines,
-  tasks and role memory and reads the runtime host's own loop gaps
-  ([#3074]).
-- `scripts/verify-viewer-runtime.ts` passes a valid build when run from a
-  stage scratch directory ([#3019]). The `braces` audit exception was
-  revalidated and now expires on 2026-10-26 ([#3072]).
-- The README capture seeds the bridge channels before its first report and
-  frames the orchestrator tall enough for the whole decision form.
 
 ## [1.13.0] — 2026-10-17
 
@@ -4589,7 +4574,6 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#3016]: https://github.com/Latand/delegatus/pull/3016
 [#3017]: https://github.com/Latand/delegatus/pull/3017
 [#3018]: https://github.com/Latand/delegatus/pull/3018
-[#3019]: https://github.com/Latand/delegatus/pull/3019
 [#3020]: https://github.com/Latand/delegatus/pull/3020
 [#3021]: https://github.com/Latand/delegatus/pull/3021
 [#3022]: https://github.com/Latand/delegatus/pull/3022
@@ -4638,9 +4622,6 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#3069]: https://github.com/Latand/delegatus/pull/3069
 [#3070]: https://github.com/Latand/delegatus/pull/3070
 [#3071]: https://github.com/Latand/delegatus/pull/3071
-[#3072]: https://github.com/Latand/delegatus/pull/3072
-[#3073]: https://github.com/Latand/delegatus/pull/3073
-[#3074]: https://github.com/Latand/delegatus/pull/3074
 [#3075]: https://github.com/Latand/delegatus/pull/3075
 [#3076]: https://github.com/Latand/delegatus/pull/3076
 [#3078]: https://github.com/Latand/delegatus/pull/3078
@@ -4655,6 +4636,5 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#3090]: https://github.com/Latand/delegatus/pull/3090
 [#3091]: https://github.com/Latand/delegatus/pull/3091
 [#3092]: https://github.com/Latand/delegatus/pull/3092
-[#3094]: https://github.com/Latand/delegatus/pull/3094
 [#3097]: https://github.com/Latand/delegatus/pull/3097
 [#3099]: https://github.com/Latand/delegatus/pull/3099
