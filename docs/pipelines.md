@@ -241,6 +241,8 @@ actual delivery tip is another verified prefix when it is already an ancestor
 of the launch's starting head. Settlement rechecks that tip before accepting
 the prefix. Commits imported after launch and new suffix commits still need
 creation proof; a tracking ref alone cannot authorize them.
+The ordinary committer fences the head captured before custody verification,
+so a later foreign tip cannot enter through the handoff after proof checking.
 
 If custody refuses a passed stage, use `resolve-decision` with the stage,
 attempt and revision from `get_pipeline` to request a repair. The action retires

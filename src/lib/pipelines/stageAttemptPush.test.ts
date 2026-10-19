@@ -73,6 +73,46 @@ test("B: a controller-created replacement link proves a completed parent without
   } finally { if (childLaunch) await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true }); await f.close(); }
 });
 
+test.each(["none", "foreign", "unrecorded"] as const)("the custody-to-committer handoff fences a %s head change", async race => {
+  const f = await fixture();
+  try {
+    await f.push();
+    await fs.rm(path.join(f.receipt, "pushes", f.pipeline.baseRef));
+    const proved = await f.commit("proved stage output");
+    let head = proved;
+    let verified = false;
+    let raced = false;
+    const exec: typeof realExec = async (command, args, cwd, env, options) => {
+      const result = await realExec(command, args, cwd, env, options);
+      if (command === "git" && args[0] === "rev-list" && args.includes("--max-count=128")) verified = true;
+      if (race !== "none" && verified && !raced && command === "git" && args[0] === "status" && args[1] === "--porcelain") {
+        raced = true;
+        if (race === "foreign") {
+          const foreign = path.join(f.root, "handoff-foreign");
+          await f.own("worktree", "add", "--detach", foreign, head);
+          await f.git(foreign, "commit", "--allow-empty", "-m", "foreign handoff output");
+          head = await f.git(foreign, "rev-parse", "HEAD");
+          await f.own("merge", "--ff-only", head);
+        } else {
+          head = await f.commit("unrecorded handoff output");
+          await fs.rm(path.join(f.receipt, "commits", head));
+        }
+      }
+      return result;
+    };
+    f.pipeline.repoDir = f.lane;
+    const result = await commitAndAdoptStageBranch(f.pipeline, "build", exec, () => [f.pipeline], undefined,
+      () => {}, null, undefined, undefined, f.attempt, NOW);
+    if (race === "none") expect(result).toEqual({ ok: true, sha: proved });
+    else {
+      expect(raced).toBe(true);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain("settling the stage push:");
+    }
+    expect(await f.own("rev-parse", "HEAD")).toBe(head);
+  } finally { await f.close(); }
+});
+
 test.each((["accepted", "accepted replacement", "published"] as const).flatMap(proof =>
   (["valid", "foreign suffix", "unrecorded suffix", "dropped history", "remote race", "head race"] as const).map(suffix => ({ proof, suffix }))))
 ("recorded ancestry survives a later attempt ($proof, $suffix)", async ({ proof, suffix }) => {
