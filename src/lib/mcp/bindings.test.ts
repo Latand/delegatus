@@ -3530,7 +3530,7 @@ test("a designated seat keeps instruction authorship when its caller project and
   }]]);
   const { bindings } = tickSettingsBindings({ kind: "gateway", callerProject: null, store });
   const result = await bindings.seat_tick_settings({ clientRequestId: "tick-unresolved-author-write", project, reason: "Seat note." });
-  const written = store.get(project) as { reason: string; instructionLines: Array<{ text: string; at: string; author: { kind: string; conversationId: string | null; seatEpoch: number | null } }> };
+  const written = store.get(project) as { reason: string; instructionLines: Array<{ text: string; at: string; author: { kind: string; conversationId: string | null; project: string | null; seatEpoch: number | null } }> };
   expect(written.reason).toBe("Operator instruction.\nSeat note.");
   expect(written.instructionLines[0]).toEqual({ text: "Operator instruction.", at: "2026-10-19T12:00:00.000Z", author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } });
   expect(written.instructionLines[1]?.author).toMatchObject({ kind: "manager", conversationId, seatEpoch });

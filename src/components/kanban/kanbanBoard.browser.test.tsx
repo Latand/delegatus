@@ -18574,7 +18574,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
       instructionLines: [{ text: "u".repeat(500), author: null, at: null }],
       updatedAt: at,
     };
-    let stored = structuredClone(initial);
+    let stored: ReturnType<typeof defaultSeatTickSettings> = structuredClone(initial);
     const answer = () => ({ ...tickAnswer(stored.reason ?? ""), settings: stored,
       effective: { ...tickAnswer(stored.reason ?? "").effective, reason: stored.reason } });
     const server = await serveEvidenceFixture(out, undefined, {
