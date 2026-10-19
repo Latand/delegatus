@@ -39,7 +39,8 @@ test("production writer resolution reads registry membership and retained seat l
   const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "registry.json"), undefined, undefined, { sqliteMode: "off" });
   setAgentRegistryForTests(registry);
-  const sessions = ["fixture-seat-session", "fixture-stage-session", "fixture-operator-session"];
+  const prefix = ["00000000", "0000", "4000", "8000"].join("-");
+  const sessions = [1, 2, 3].map(index => prefix + "-" + String(index).padStart(12, "0"));
   let seatId = "";
   for (let index = 0; index < 3; index++) {
     const sessionId = sessions[index], transcript = path.join(root, sessionId + ".jsonl");
