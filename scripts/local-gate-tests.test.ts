@@ -26,6 +26,7 @@ const source = (pass: boolean) => `import { test, expect, describe } from "bun:t
 test("review evidence names the exact base and head without changing repository refs", async () => {
   const f = fixture(source(false));
   // The fixture's private run environment may acquire Bun cache files.
+  mkdirSync(path.join(f.dir, ".git/info"), { recursive: true });
   writeFileSync(path.join(f.dir, ".git/info/exclude"), "env/\n");
   writeFileSync(path.join(f.dir, "example.test.ts"), `${source(false)}\ntest("added passing case", () => {});`);
   f.git("add", "example.test.ts"); f.git("commit", "-m", "reviewed change");
@@ -419,6 +420,35 @@ describe("diagnostic", () => {
   const restarted = cliAt(f, f.base);
   expect(restarted.status).toBe(outcome.status);
   expect(readFileSync(marker, "utf8")).toBe("2");
+});
+
+test("diagnostic retry preserves extra occurrences beyond the base across comparator restarts", () => {
+  const f = fixture(source(true));
+  const marker = path.join(f.dir, "diagnostic-multiplicity");
+  const scheduled = `import { test, describe } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const counter = ${JSON.stringify(marker)} + "-" + side;
+const run = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
+writeFileSync(counter, String(run));
+test("passing test", () => {});
+const errors = side === "base" ? ["A"] : run === 1 ? ["A", "B"] : ["A", "A"];
+for (const [index, message] of errors.entries()) describe("diagnostic " + index, () => { throw new Error(message); });`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), scheduled);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "diagnostic multiplicity schedule");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, "example.test.ts"), `${scheduled}\n// reviewed head`);
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    writeFileSync(marker + "-base", "0");
+    writeFileSync(marker + "-head", "0");
+    const result = cliAt(f, base);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("NEW example.test.ts: <between-tests error> error: A");
+    expect(result.stdout).toContain("FLAKY example.test.ts: <between-tests error> error: B");
+    expect(result.stdout).toContain("1 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+  }
 });
 
 test("a between-tests error present on both sides is PRE-EXISTING from the CLI and never blocks", async () => {

@@ -22,6 +22,18 @@ const key = (site: TestSite) => JSON.stringify([site.file, site.suite,
     : diagnosticName(site), site.kind]);
 const occurrenceKey = (site: TestSite) => JSON.stringify([key(site), site.occurrence ?? 0]);
 const comparisonKey = (site: TestSite) => site.kind === "test" && site.occurrence !== undefined ? occurrenceKey(site) : key(site);
+const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite[]) => {
+  const merged = [...first];
+  const counts = new Map<string, number>();
+  for (const site of first) counts.set(comparisonKey(site), (counts.get(comparisonKey(site)) ?? 0) + 1);
+  const retryCounts = new Map<string, number>();
+  for (const site of retry) retryCounts.set(comparisonKey(site), (retryCounts.get(comparisonKey(site)) ?? 0) + 1);
+  for (const [identity, count] of retryCounts) {
+    const missing = count - (counts.get(identity) ?? 0);
+    if (missing > 0) merged.push(...retry.filter(site => comparisonKey(site) === identity).slice(0, missing));
+  }
+  return merged;
+};
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const RUN_BUDGET_MS = 15 * 60 * 1000;
 const FILE_BUDGET_MS = 5 * 60 * 1000;
@@ -57,15 +69,15 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       flaky.push({ ...site, base: { pass: base.completed.includes(site.file) ? 1 : 0, fail: 0 }, head: { pass: 1, fail: 1 } });
     }
     comparison.introduced = comparison.introduced.filter(site => !recovered.has(key(site)));
-    // A different failure on retry still refuses publication. The single retry
-    // is not an opportunity to discard a new assertion or diagnostic.
-    const known = new Set(head.failures.map(comparisonKey));
-    const additional = retry.failures.filter(site => !known.has(comparisonKey(site)));
-    const retried = compareTests(base, { ...retry, failures: additional });
-    comparison.introduced.push(...retried.introduced);
-    comparison.preexisting.push(...retried.preexisting);
-    const repeated = new Set(additional.map(comparisonKey));
-    comparison.fixed = comparison.fixed.filter(site => !repeated.has(comparisonKey(site)));
+    // Compare the complete retry against the base so base occurrences are
+    // consumed once. Merge the two samples by maximum multiplicity: repeated
+    // observations do not inflate evidence, while an extra retry occurrence
+    // remains visible even when its identity appeared in the first sample.
+    const retried = compareTests(base, retry);
+    comparison.introduced = mergeObservedSites(comparison.introduced, retried.introduced);
+    comparison.preexisting = mergeObservedSites(comparison.preexisting, retried.preexisting);
+    comparison.fixed = mergeObservedSites(comparison.fixed, retried.fixed);
+    comparison.absent = mergeObservedSites(comparison.absent, retried.absent);
   }
   // Only assertions in the initial sample have the occurrence counts required
   // for filtered confirmation. New retry failures above remain blocking.
