@@ -38,6 +38,30 @@ afterAll(() => {
   fs.rmSync(state, { recursive: true, force: true });
 });
 
+// Run the real PR verifier against a fixture service. Its head comes from
+// the bare remote, so an unpushed or mismatched head cannot advance the lane.
+// This function is also installed in the fresh-process retry controllers.
+async function publicationFixtureExec(...args: Parameters<typeof realExec>) {
+  const [command, argv, cwd, env, options] = args;
+  if (command !== "gh") return realExec(...args);
+  const unavailable = { code: 1, stdout: "", stderr: "fixture pull request service unavailable" };
+  if (argv[0] !== "pr" || !["list", "view"].includes(argv[1]!)
+    || !argv.includes("number,headRefName,baseRefName,state,headRefOid,isCrossRepository")
+    || argv[argv.indexOf("--repo") + 1] !== "example/widgets") return unavailable;
+  if (argv[1] === "view" && argv[2] !== "17") return unavailable;
+  const branch = await realExec("git", ["symbolic-ref", "--short", "HEAD"], cwd, env, options);
+  if (branch.code !== 0) return unavailable;
+  const headRefName = branch.stdout.trim();
+  if (argv[1] === "list" && (argv[argv.indexOf("--head") + 1] !== headRefName
+    || argv[argv.indexOf("--base") + 1] !== "main")) return unavailable;
+  const remote = await realExec("git", ["ls-remote", "--heads", "origin", `refs/heads/${headRefName}`], cwd, env, options);
+  if (remote.code !== 0) return unavailable;
+  const headRefOid = remote.stdout.trim().split(/\s+/)[0];
+  if (!headRefOid) return argv[1] === "list" ? { code: 0, stdout: "[]", stderr: "" } : unavailable;
+  const pr = { number: 17, headRefName, headRefOid, baseRefName: "main", state: "OPEN", isCrossRepository: false };
+  return { code: 0, stdout: JSON.stringify(argv[1] === "list" ? [pr] : pr), stderr: "" };
+}
+
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-publication-repo-"));
   const repo = path.join(root, "source"); fs.mkdirSync(repo);
@@ -59,7 +83,11 @@ function fixture() {
   git("checkout", "-q", "main"); fs.writeFileSync(path.join(repo, "main.txt"), "hook repair\n");
   git("add", "."); git("commit", "-q", "-m", "main hook repair"); git("checkout", "-q", lane.branch);
   git("merge", "-q", "--no-ff", "main", "-m", "merge main"); const head = git("rev-parse", "HEAD");
-  git("remote", "add", "origin", remote);
+  // Git still uses the real local transport and hooks, including from child
+  // controllers, while the delivery target names the fixture PR service.
+  const deliveryRemote = "https://github.com/example/widgets.git";
+  git("config", `url.${remote}.insteadOf`, deliveryRemote);
+  git("remote", "add", "origin", deliveryRemote);
   git("push", "-q", "origin", "main"); git("fetch", "-q", "origin", "main");
   const checkout = `${repo}-pipeline-${lane.id}`;
   git("checkout", "-q", "main"); git("worktree", "add", "-q", checkout, lane.branch); workingRepo = checkout;
@@ -71,16 +99,19 @@ function fixture() {
   const attempt = lane.runs[0]!.attempts[0]!;
   attempt.state = "passed"; attempt.verdict = { status: "pass", findings: [] };
   attempt.agentPath = null; attempt.conversationId = null; attempt.launchId = null; attempt.paneId = null;
-  lane.delivery = { target: { repository: `fixture-${lane.id}`, remote, branch: `refs/heads/${lane.branch}` },
+  lane.delivery = { target: { repository: `fixture-${lane.id}`, remote: deliveryRemote, branch: `refs/heads/${lane.branch}` },
     disposition: "owner", publish: "enabled", ownerId: lane.id, epoch: 1, active: true, journal: [] };
   savePipelines([lane]);
   let pushes = 0;
+  let pullRequestReads = 0;
   const ports = { ...defaultPipelinePorts(), exec: async (...args: Parameters<typeof realExec>) => {
     if (args[0] === "git" && args[1][0] === "push") pushes++;
-    return realExec(...args);
+    if (args[0] === "gh") pullRequestReads++;
+    return publicationFixtureExec(...args);
   }, conversationAgentActive: async () => false, stageHostResident: async () => false,
   paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
   return { root, repo: checkout, hook: path.join(repo, ".git", "hooks", "pre-push"), remote, lane, git, head, passed, ports, pushes: () => pushes,
+    pullRequestReads: () => pullRequestReads,
     current: () => findPipelineRecord(lane.id)!,
     tick: async () => { for (let n = 0; n < 3; n++) await tickPipelines([], ports); },
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
@@ -95,7 +126,30 @@ for (const alreadyRemote of [false, true]) test(`parked publication accepts a cl
     expect(h.current()).toMatchObject({ lastPassedCommit: h.head, publishedCommit: h.head, state: "completed" });
     expect(h.current().runs[0]!.attempts).toHaveLength(1);
     expect(h.current().runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+    expect(h.current().delivery!.target.pr).toBe(17);
+    expect(h.pullRequestReads()).toBeGreaterThan(0);
     expect(h.pushes()).toBe(alreadyRemote ? 0 : 1);
+  } finally { h.cleanup(); }
+});
+
+for (const failure of ["lookup", "head"] as const) test(`parked publication retains its pass when the PR service refuses ${failure}`, async () => {
+  const h = fixture();
+  try {
+    const ports = { ...h.ports, exec: async (...args: Parameters<typeof realExec>) => {
+      if (args[0] !== "gh") return h.ports.exec(...args);
+      if (failure === "lookup") return { code: 1, stdout: "", stderr: "fixture lookup refused" };
+      const result = await h.ports.exec(...args);
+      const rows = JSON.parse(result.stdout);
+      return { ...result, stdout: JSON.stringify(rows.map((row: object) => ({ ...row, headRefOid: "f".repeat(40) }))) };
+    } };
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    expect(h.current()).toMatchObject({ state: "needs_decision", lastPassedCommit: h.head, publishedCommit: h.head });
+    expect(h.current().stateDetail).toContain(failure === "lookup" ? "pull request lookup failed" : "pull request differs in headRefOid");
+    expect(h.current().runs[0]!.attempts).toHaveLength(1);
+    expect(h.current().runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+    expect(h.current().delivery!.target.pr).toBeUndefined();
+    expect(h.pushes()).toBe(1);
   } finally { h.cleanup(); }
 });
 
@@ -1267,11 +1321,10 @@ for (const failsAfterWait of [false, true]) test(`capacity retries survive a con
     expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 1, retryAt: "2026-10-16T10:01:00.000Z" });
     const engine = path.join(import.meta.dir, "engine.ts");
     const restart = async () => {
-      const script = `const stagePullRequest = await import(${JSON.stringify(path.join(import.meta.dir, "stagePullRequest.ts"))});
-      const { spyOn } = await import("bun:test");
-      spyOn(stagePullRequest, "ensureStagePullRequest").mockResolvedValue({ ok: true });
+      const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
       const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(engine)});
-        const ports = { ...defaultPipelinePorts(), now: () => ${JSON.stringify(new Date(clock).toISOString())}, scheduleTick: () => {},
+        const ports = { ...defaultPipelinePorts(), exec: ${publicationFixtureExec.toString()},
+          now: () => ${JSON.stringify(new Date(clock).toISOString())}, scheduleTick: () => {},
           conversationAgentActive: async () => false, stageHostResident: async () => false, paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
         for (let n = 0; n < 8; n++) await tickPipelines([], ports);`;
       const outcome = await realExec(process.execPath, ["-e", script], process.cwd(), { ...process.env, LLV_STATE_DIR: state }, { timeoutMs: 30_000 });
