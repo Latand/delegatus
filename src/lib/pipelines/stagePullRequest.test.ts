@@ -203,6 +203,56 @@ test.each(["attempt", "epoch", "head", "pending", "failed", "review"] as const)(
   } finally { f.close(); }
 });
 
+test("the production head retry clock bounds slow lookups in a supervised process", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-pr-deadline-"));
+  const home = path.join(root, "home"), config = path.join(root, "config"), tmp = path.join(root, "tmp"), state = path.join(root, "state");
+  fs.mkdirSync(home); fs.mkdirSync(config); fs.mkdirSync(tmp); fs.mkdirSync(state);
+  const childSource = `
+    import { ensureStagePullRequest } from ${JSON.stringify(path.resolve("src/lib/pipelines/stagePullRequest.ts"))};
+    const head = "1".repeat(40);
+    const attempt = { n: 1, effectiveRole: { access: "read-write" } };
+    const pipeline = {
+      id: "pipeline-fixture", worktreeDir: process.cwd(), baseRef: "0".repeat(40), baseBranch: "main",
+      publishedCommit: head, lastPassedCommit: head, cursor: { stageId: "build" }, runs: [{ attempts: [attempt] }],
+      delivery: { publish: "enabled", active: true, disposition: "owner", ownerId: "pipeline-fixture", epoch: 1,
+        operation: { epoch: 1, sha: head, requestKey: "pass:build:1", state: "settled", passedStage: true,
+          result: { ok: true, sha: head, remote: "published" } },
+        target: { remote: "https://github.com/example/widgets.git", branch: "refs/heads/branch", pr: 17 } },
+    };
+    let reads = 0;
+    const started = performance.now();
+    const result = await ensureStagePullRequest(pipeline, attempt, async (_command, _args, _cwd, _env, _options) => {
+      if (++reads > 1) await Bun.sleep(2_000);
+      return { code: 0, stdout: JSON.stringify({ number: 17, headRefName: "branch", baseRefName: "main",
+        state: "OPEN", isCrossRepository: false, headRefOid: "2".repeat(40) }), stderr: "" };
+    });
+    console.log(JSON.stringify({ result, reads, elapsedMs: Math.round(performance.now() - started) }));
+  `;
+  const child = Bun.spawn([process.execPath, "-e", childSource], {
+    cwd: process.cwd(),
+    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: config, TMPDIR: tmp, LLV_STATE_DIR: state,
+      LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_STATE_OWNER: undefined },
+    stdout: "pipe", stderr: "pipe",
+  });
+  let watchdogExpired = false;
+  const watchdog = setTimeout(() => { watchdogExpired = true; child.kill("SIGKILL"); }, 28_000);
+  try {
+    const exitCode = await child.exited;
+    const stdout = await new Response(child.stdout).text();
+    const stderr = await new Response(child.stderr).text();
+    expect(watchdogExpired, `production retry exceeded the parent watchdog: ${stderr}`).toBe(false);
+    expect(exitCode, stderr || stdout).toBe(0);
+    const result = JSON.parse(stdout.trim());
+    expect(result.result).toEqual({ ok: false, error: "the delivery pull request differs in headRefOid" });
+    expect(result.reads).toBe(5);
+    expect(result.elapsedMs).toBeLessThan(28_000);
+  } finally {
+    clearTimeout(watchdog);
+    if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 35_000);
+
 test("each reread validates the PR's other fields before accepting its head", async () => {
   const f = await publishedHeadFixture();
   try {
@@ -250,28 +300,30 @@ test("head backoff carries the pipeline operation label across its await", async
 
 test("a published lane advances through real asynchronous PR head backoff", async () => {
   const f = await fixture();
-  let heartbeat: ReturnType<typeof setInterval> | undefined;
   try {
     f.link(); await f.commit();
     const exec = f.h.ports.exec;
-    let reads = 0, ticks = 0, ticksAtMismatch = 0, ticksDuringBackoff = 0;
+    let reads = 0, scheduledTurnRanDuringBackoff = false;
     f.h.ports.exec = async (...args) => {
+      const isHeadLookup = args[0] === "gh" && args[1].some(arg => arg.includes("isCrossRepository"));
+      if (isHeadLookup) {
+        reads++;
+        if (reads === 2) await new Promise(resolve => setTimeout(resolve, 50));
+      }
       const result = await exec(...args);
-      if (args[0] === "gh" && args[1].some(arg => arg.includes("isCrossRepository")) && ++reads === 1) {
-        ticksAtMismatch = ticks;
+      if (isHeadLookup && reads === 1) {
         const row = JSON.parse(result.stdout);
+        setImmediate(() => { scheduledTurnRanDuringBackoff = reads === 1; });
         return { ...result, stdout: JSON.stringify({ ...row, headRefOid: "2".repeat(40) }) };
       }
-      if (reads === 2) ticksDuringBackoff = ticks - ticksAtMismatch;
       return result;
     };
-    heartbeat = setInterval(() => { ticks++; }, 10);
     const p = await f.finish();
     expect(p.state).toBe("running");
     expect(p.cursor?.stageId).toBe("review");
     expect(reads).toBe(2);
-    expect(ticksDuringBackoff).toBeGreaterThan(1);
-  } finally { if (heartbeat) clearInterval(heartbeat); f.close(); }
+    expect(scheduledTurnRanDuringBackoff).toBe(true);
+  } finally { f.close(); }
 }, 10_000);
 
 test.each(["pause", "release"] as const)("a %s during the PR head reread cannot advance the lane", async kind => {
