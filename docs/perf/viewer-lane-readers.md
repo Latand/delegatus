@@ -38,12 +38,13 @@ candidate. Copy the same driver into the base export. Keep the exports'
 dependency graphs identical, and run each command through
 `scripts/gate-slot.sh` with private `HOME`, `XDG_CONFIG_HOME`, `TMPDIR` and
 `LLV_STATE_DIR`, `NODE_ENV=test`, plus `LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1`.
+Use a freshly created empty state root for each command.
 
 ```sh
-bun scripts/replay-viewer-readers.ts 15 before
-bun scripts/replay-viewer-readers.ts 15 after
-bun scripts/replay-viewer-readers.ts 30 before
-bun scripts/replay-viewer-readers.ts 30 after
+bash scripts/gate-slot.sh bun scripts/replay-viewer-readers.ts 15 before
+bash scripts/gate-slot.sh bun scripts/replay-viewer-readers.ts 15 after
+bash scripts/gate-slot.sh bun scripts/replay-viewer-readers.ts 30 before
+bash scripts/gate-slot.sh bun scripts/replay-viewer-readers.ts 30 after
 ```
 
 Each process generates 274 hot and 980 archived pipelines, sixteen attempts
@@ -117,8 +118,22 @@ production termination callback file passed all 42 cases.
 
 The runtime-host rehearsal under Bun 1.4.0 completed succession in 507 ms and
 answered 27/27 stable-listener and 27/27 runtime-socket probes over 15 seconds.
-It used private state and ephemeral endpoints. The final pre-push gate also
-checks the scheduler checkpoint regression and adjacent startup/store tests.
+It used private state and ephemeral endpoints.
+
+The final pre-push gate passed on the committed source: privacy, TypeScript,
+changed-file ESLint, touched tests, Linux backend and Linux tests. Its touched
+comparison sampled the six failing files on base `f090bde7` and reported zero
+new failures, 37 pre-existing failures and no flaky cases. Those baseline
+failures include spawn/connector fixtures, curator helper cleanup, a CPU-ticket
+fixture, startup fixtures and the synchronous-initialization assertion. The new
+scheduler checkpoint case and both new reader test files introduced no failure.
+TypeScript completed in 237 seconds; the touched comparison in 153 seconds.
+Every check used private state, home, config and temporary roots and a closed
+Viewer control port.
+
+The final gate command was `bash scripts/gate-slot.sh bun
+scripts/local-gate.ts pre-push`, executed from a scratch copy of the commit;
+its origin was the publication remote. No push or deployment was performed.
 
 
 Main advanced during verification. Its additional loop-monitor label shared a
