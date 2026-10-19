@@ -549,7 +549,10 @@ test("continuation failures cannot starve later cancellation or host teardown ac
   expect(report.pending).toEqual([]);
   expect(report.pendingContinuations).toHaveLength(16);
   expect(report.pendingContinuations!.every(item => item.detail?.includes("temporary refusal"))).toBe(true);
-});
+  // Ten controller passes and a real child restart must finish before the
+  // next fixture resets the shared store. The child alone has a ten-second
+  // deadline, beyond Bun's default five-second budget for this whole test.
+}, 30_000);
 
 test.each([0,1000])("resident terminal hosts and stale flow cleanup use indexed peer ownership with %s retained peers", async history => {
   const { h, lane } = await committing();
