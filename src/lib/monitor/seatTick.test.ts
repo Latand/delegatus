@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { seatTickWakeMessage } from "./report";
+import { seatTickWakeMessage, seatTickWakePayload } from "./report";
 import type { AttentionEscalationMark } from "@/lib/attention/routeTypes";
 import { stampAttentionRoutes, type AttentionRoutingInputs } from "@/lib/attention/routing";
 import { seatAgendaAsks } from "@/lib/attention/seatAgenda";
@@ -60,6 +60,24 @@ test("accepted inbox work stays owed past the backlog bound and repeats only aft
   const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
   expect(seatTickDecision(input({ tasks: [task], state: landed, now: NOW + 90 * MINUTE })).verdict.kind).toBe("quiet");
   expect(seatTickDecision(input({ tasks: [task], state: landed, now: NOW + 24 * 60 * MINUTE })).verdict.kind).toBe("wake");
+});
+
+test("a shortened accepted-work reminder keeps its id and waiting duration before delivery credit", () => {
+  const task = card({ id: "task-long-title", status: "inbox", accepted: true, title: "x".repeat(4_950),
+    updatedAt: new Date(NOW - 96 * 60 * MINUTE).toISOString() });
+  const first = seatTickDecision(input({ tasks: [task] }));
+  expect(first.verdict.kind).toBe("wake");
+  if (first.verdict.kind !== "wake") return;
+
+  const rendered = seatTickWakePayload({ project: PROJECT, reasons: first.verdict.reasons, items: first.verdict.items,
+    deferred: 0, signals: [], now: NOW });
+  expect(rendered.text).toContain(task.id);
+  expect(rendered.text).toContain("waited 96h");
+
+  const renderedVerdict = { ...first.verdict, items: [...rendered.items] };
+  const commit = seatTickWakeCommitPlan(renderedVerdict, { fingerprint: "long-title", eventsThrough: 0, frozenText: rendered.text })!;
+  const landed = seatTickWakeCommit(first.state, commit, NOW);
+  expect(seatTickDecision(input({ tasks: [task], state: landed, now: NOW + 2 * 60 * MINUTE })).verdict.kind).toBe("quiet");
 });
 
 test("accepted work with a real hold, an owner, or a remote runner is not offered", () => {

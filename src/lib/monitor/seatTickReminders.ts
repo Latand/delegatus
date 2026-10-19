@@ -52,7 +52,7 @@ export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
     items.push({ dueAt: last === undefined ? since : Math.max(since, last + SEAT_REMINDER_REPEAT_MS), item: {
       kind: "task", reminderKind: "task", id: task.id, occurredAt: new Date(since).toISOString(),
       itemVersion: `${key}@${input.now}`,
-      label: `${task.title} — accepted work, no open lane; waited ${Math.floor((input.now - since) / SEAT_REMINDER_AFTER_MS)}h` } });
+      label: `Accepted work, no open lane; waited ${Math.floor((input.now - since) / SEAT_REMINDER_AFTER_MS)}h — ${task.title}` } });
   }
   for (const pipeline of input.pipelines) {
     if (!pauseReminderReady(pipeline, input.now)) continue;
