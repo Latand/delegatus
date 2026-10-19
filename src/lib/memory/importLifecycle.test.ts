@@ -118,6 +118,33 @@ test("a legacy Claude writer holds the drain and its retirement scan imports the
   expect(importTrialExcludes(readImportRecord(ID)!, ["new-generation"])).toBe(false);
 });
 
+test("a whitespace-only rescan adds its occurrence to every canonical part offered to the curator", async () => {
+  const instructions = Array.from({ length: 160 }, (_, index) =>
+    index === 159 ? "Final condition: verify the decisive tail." : `Rule ${String(index).padStart(3, "0")}: check owner.`);
+  const initial = instructions.join(" ".repeat(110));
+  const compact = instructions.join(" ");
+  await backup(initial); const original = readImportCandidates(ID).candidates;
+  expect(original.length).toBeGreaterThan(1);
+  expect(original.every(row => row.part.of === original.length)).toBe(true);
+  const originalOccurrence = original[0].occurrences[0].id;
+  await dispose();
+  await advanceMemoryImportWork(request(10), { ...ports(), legacy: async () => ["legacy-claude"] });
+  await fs.writeFile(path.join(memory, "topic.md"), compact);
+  await advanceMemoryImportWork(request(20), { ...ports(), legacy: async () => [] });
+
+  const pending = readImportCandidates(ID).candidates.filter(row => row.group === original[0].group);
+  const addedOccurrence = pending[0].occurrences.find(item => item.id !== originalOccurrence)!.id;
+  expect(pending).toHaveLength(original.length);
+  expect(pending.map(row => row.part.index)).toEqual(original.map(row => row.part.index));
+  expect(pending.every(row => row.occurrences.some(item => item.id === addedOccurrence))).toBe(true);
+  expect(pending.flatMap(row => row.occurrences.filter(item => item.id === addedOccurrence))).toHaveLength(pending.length);
+
+  const pass = claimPass({ project: PROJECT, repoDir: null, now: NOW + 30 })!;
+  const offered = await readCuration(pass, "imports");
+  expect("candidates" in offered ? offered.candidates.filter(row => row.group === original[0].group).map(row => row.body).join("") : "").toBe(initial);
+  expect(JSON.stringify(offered)).toContain("Final condition: verify the decisive tail.");
+});
+
 test("a retirement during a scan owes another final scan; failed scans never start the trial", async () => {
   await backup(); await dispose(); let legacy = ["legacy-claude"];
   await advanceMemoryImportWork(request(10), { ...ports(), legacy: async () => legacy, afterScan: async () => {

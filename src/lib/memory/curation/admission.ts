@@ -105,13 +105,11 @@ function archive(pass: CuratorPass, sources: SeatTickAdmissionSources) {
 export function settle(pass: CuratorPass, ports: CurationAdmissionPorts, failure: string | null, finalText?: string | null) {
   const current = readPass(pass.id);
   if (!current || !passIsLive(current)) return current?.failure?.startsWith("abandoned:") ? `curation: failed, ${current.failure}` : null;
-  if (!failure) {
-    const gap = importBatchAccountingGap(current);
-    if (gap) throw new Error(`curation pass cannot succeed: ${gap}`);
-  }
+  const accountingGap = !failure ? importBatchAccountingGap(current) : null;
+  const settledFailure = failure ?? (accountingGap ? `import-accounting: ${accountingGap}` : null);
   // Final state releases the machine claim even if archive placement is unavailable.
-  const next = patchPass(pass.id, { state: failure ? "failed" : "succeeded", failure, endedAt: new Date(ports.sources.now()).toISOString(), ...(finalText ? { finalText } : {}) })!;
-  const detail = `curation: ${failure ? `failed, ${failure}` : `settled ${pass.id}, ${next.counts.calls} calls, ${next.counts.changed} rules changed`}`;
+  const next = patchPass(pass.id, { state: settledFailure ? "failed" : "succeeded", failure: settledFailure, endedAt: new Date(ports.sources.now()).toISOString(), ...(finalText ? { finalText } : {}) })!;
+  const detail = `curation: ${settledFailure ? `failed, ${settledFailure}` : `settled ${pass.id}, ${next.counts.calls} calls, ${next.counts.changed} rules changed`}`;
   try { (ports.archive ?? (p => archive(p, ports.sources)))(next); }
   catch { return `${detail}; archive placement pending`; }
   return detail;

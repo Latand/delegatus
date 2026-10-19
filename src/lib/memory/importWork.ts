@@ -300,7 +300,41 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
         if (session && !resolveWriter) resolveWriter = await (await import("./importWriter")).productionImportWriter();
         builder.add(entry, body, session ? await resolveWriter!(session) : undefined);
       }
-      const candidates: ImportCandidate[] = builder.rows();
+      const builtCandidates = builder.rows();
+      const candidates: ImportCandidate[] = [];
+      const groups = new Map<string, ImportCandidate[]>();
+      for (const candidate of builtCandidates) {
+        const group = groups.get(candidate.group) ?? [];
+        group.push(candidate); groups.set(candidate.group, group);
+      }
+      for (const [groupId, incoming] of groups) {
+        const collection = importCollection(true)!;
+        const prefix = `c:${record.id}:${groupId}:`;
+        const existing: ImportCandidate[] = [];
+        let cursor = prefix;
+        for (;;) {
+          const page = collection.keyRangeEntries(cursor, `${prefix}\uffff`, 40);
+          existing.push(...page.flatMap(row => row.value?.kind === "candidate" ? [row.value] : []));
+          if (page.length < 40) break;
+          cursor = page.at(-1)!.key;
+        }
+        const canonicalCount = existing[0]?.part.of;
+        const canonical = existing.length > 0 && existing.length === canonicalCount
+          && existing.every((row, index) => row.part.of === canonicalCount && row.part.index === index);
+        if (!canonical) {
+          candidates.push(...incoming);
+          continue;
+        }
+        const occurrences = new Map(incoming.flatMap(row => row.occurrences).map(item => [item.id, item]));
+        const linked = [...new Set(incoming.flatMap(row => row.linked))];
+        for (const row of existing) {
+          candidates.push({ ...row,
+            linked: [...new Set([...row.linked, ...linked])],
+            occurrences: [...row.occurrences, ...[...occurrences.values()].filter(item => !row.occurrences.some(prior => prior.id === item.id))],
+            loadedAtStart: row.loadedAtStart || incoming.some(item => item.loadedAtStart),
+          });
+        }
+      }
       const missingCandidates = candidates.filter(candidate => !candidateById(record.id, candidate.id));
       // Recheck copied changes after every asynchronous writer lookup.
       for (const { file, entry, copied } of newFiles) {

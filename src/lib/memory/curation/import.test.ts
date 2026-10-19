@@ -2,7 +2,8 @@ import { beforeEach, afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { claimPass, patchPass, readPass, type CuratorPass } from "./store";
+import { claimPass, patchPass, readPass, machinePass, type CuratorPass } from "./store";
+import { CURATION_INTERVAL_MS } from "../roleTypes";
 import { readCuration } from "./read";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
 import { settle } from "./admission";
@@ -113,12 +114,18 @@ test("one occurrence can be adopted and another dropped; explicit defer permits 
   expect(candidateState(candidateById(IMPORT_ID, b.id)!).state).toBe("dropped");
 });
 
-test("successful settlement refuses a pass with no import accounting", async () => {
+test("an ended pass with missing import accounting fails, releases its claim, and keeps the cooldown", async () => {
   const candidate = importCandidate(1); await seedImport([candidate]);
   const p = pass();
-  const ports = { sources: { now: () => NOW } as never, archive: () => {} };
-  expect(() => settle(p, ports, null)).toThrow(/cannot succeed: import candidate/);
-  expect(readPass(p.id)?.state).toBe("claimed");
+  patchPass(p.id, { state: "running", launchedAt: IMPORT_AT });
+  const ports = { sources: { now: () => NOW + 2 * 60 * 60_000 } as never, archive: () => {} };
+  const result = settle(readPass(p.id)!, ports, null);
+  expect(result).toContain("failed, import-accounting:");
+  expect(readPass(p.id)).toMatchObject({ state: "failed", endedAt: new Date(NOW + 2 * 60 * 60_000).toISOString(), failure: expect.stringContaining("unaccounted") });
+  expect(machinePass()).toBeNull();
+  expect(candidateState(candidateById(IMPORT_ID, candidate.id)!)).toMatchObject({ state: "pending", pending: ids(candidate) });
+  expect(claimPass({ project: IMPORT_PROJECT, repoDir: null, now: NOW + 2 * 60 * 60_000 + 1 })).toBeNull();
+  expect(claimPass({ project: IMPORT_PROJECT, repoDir: null, now: NOW + 2 * CURATION_INTERVAL_MS + 1 })).not.toBeNull();
 });
 
 test("a read batch with explicit durable deferrals can settle successfully", async () => {
