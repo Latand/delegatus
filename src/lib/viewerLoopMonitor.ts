@@ -35,7 +35,8 @@ export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.r
   | "memory.search" | "memory.open"
   | "codex.protocol-admission" | "mcp.page-cursors"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"
-  | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel";
+  | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel"
+  | "seat-tick.pause-conditions";
 type Operation = { name: ViewerOperation; start: number; end?: number };
 const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: ReturnType<typeof createViewerLoopMonitor> };
 

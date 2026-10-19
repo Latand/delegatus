@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { seatTickWakeMessage } from "./report";
+import { seatTickWakeMessage, seatTickWakePayload } from "./report";
 import type { AttentionEscalationMark } from "@/lib/attention/routeTypes";
 import { stampAttentionRoutes, type AttentionRoutingInputs } from "@/lib/attention/routing";
 import { seatAgendaAsks } from "@/lib/attention/seatAgenda";
@@ -48,6 +48,159 @@ const PROJECT = "viewer";
    gate refuses in a committed artifact. */
 const CONVERSATION = ["conversation", "0f4c21b7729fbc9e"].join("_");
 const MINUTE = 60_000;
+
+test("accepted inbox work stays owed past the backlog bound and repeats only after a day", () => {
+  const task = card({ status: "inbox", accepted: true, updatedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() });
+  const first = seatTickDecision(input({ tasks: [task] }));
+  expect(first.verdict.kind).toBe("wake");
+  if (first.verdict.kind !== "wake") return;
+  expect(first.verdict.items[0]!.id).toBe(task.id);
+  expect(first.verdict.items[0]!.label).toContain("96h");
+  expect(seatTickDecision(input({ tasks: [task], state: first.state })).verdict.kind).toBe("wake");
+  const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  expect(seatTickDecision(input({ tasks: [task], state: landed, now: NOW + 90 * MINUTE })).verdict.kind).toBe("quiet");
+  expect(seatTickDecision(input({ tasks: [task], state: landed, now: NOW + 24 * 60 * MINUTE })).verdict.kind).toBe("wake");
+});
+
+test("a shortened accepted-work reminder keeps its id and waiting duration before delivery credit", () => {
+  const task = card({ id: "task-long-title", status: "inbox", accepted: true, title: "x".repeat(4_950),
+    updatedAt: new Date(NOW - 96 * 60 * MINUTE).toISOString() });
+  const first = seatTickDecision(input({ tasks: [task] }));
+  expect(first.verdict.kind).toBe("wake");
+  if (first.verdict.kind !== "wake") return;
+
+  const rendered = seatTickWakePayload({ project: PROJECT, reasons: first.verdict.reasons, items: first.verdict.items,
+    deferred: 0, signals: [], now: NOW });
+  expect(rendered.text).toContain(task.id);
+  expect(rendered.text).toContain("waited 96h");
+
+  const renderedVerdict = { ...first.verdict, items: [...rendered.items] };
+  const commit = seatTickWakeCommitPlan(renderedVerdict, { fingerprint: "long-title", eventsThrough: 0, frozenText: rendered.text })!;
+  const landed = seatTickWakeCommit(first.state, commit, NOW);
+  expect(seatTickDecision(input({ tasks: [task], state: landed, now: NOW + 2 * 60 * MINUTE })).verdict.kind).toBe("quiet");
+});
+
+test("accepted work with a real hold, an owner, or a remote runner is not offered", () => {
+  const updatedAt = new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString();
+  const tasks = [
+    card({ id: "held", accepted: true, hold: { kind: "external", note: "waiting for the upstream release", since: updatedAt, by: "agent" }, updatedAt }),
+    card({ id: "owned", accepted: true, owned: true, updatedAt }),
+    card({ id: "remote", accepted: true, runsOn: "peer", updatedAt }),
+  ];
+  expect(seatTickDecision(input({ tasks })).verdict.kind).toBe("quiet");
+  expect(seatTickDecision(input({ tasks: [card({ status: "inbox", accepted: true })] })).verdict.kind).toBe("quiet");
+  const unstated = seatTickDecision(input({ tasks: [card({ accepted: true, updatedAt,
+    hold: { kind: "unstated", note: "", since: updatedAt, by: "migration" } })] }));
+  expect(unstated.verdict.kind).toBe("wake");
+  for (const hold of [
+    { kind: "external" as const, note: "", since: updatedAt, by: "agent" as const },
+    { kind: "limit" as const, note: "wait for quota reset", since: updatedAt, by: "agent" as const, until: new Date(NOW - MINUTE).toISOString() },
+  ]) expect(seatTickDecision(input({ tasks: [card({ accepted: true, updatedAt, hold })] })).verdict.kind).toBe("wake");
+});
+
+test("a cropped waiting-work bullet earns no reminder stamp", () => {
+  const task = card({ accepted: true, updatedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() });
+  const first = seatTickDecision(input({ tasks: [task] }));
+  const commit = plan(first.verdict, "fp-1", 0);
+  const state = seatTickWakeCommit({ ...first.state, outstandingWake: { clientMessageId: "cropped-reminder", conversationId: CONVERSATION,
+    seatEpoch: 7, operationId: null, text: "The agenda was cropped", commit } }, commit, NOW);
+  expect(seatTickDecision(input({ tasks: [task], state, now: NOW + 90 * MINUTE })).verdict.kind).toBe("wake");
+});
+
+test("a pause reminds when its date arrives and legacy pauses repeat after a day", () => {
+  const pausedAt = new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString();
+  const future = new Date(NOW + 60 * MINUTE).toISOString();
+  const paused = lane({ state: "inert", pausedBy: "other", pausedAt, pauseGeneration: "pause-one",
+    pause: { reason: "wait for the maintenance window", resumeCondition: { kind: "date", at: future } } });
+  expect(seatTickDecision(input({ pipelines: [paused] })).verdict.kind).toBe("quiet");
+  const due = seatTickDecision(input({ now: NOW + 60 * MINUTE, pipelines: [paused] }));
+  expect(due.verdict.kind).toBe("wake");
+  if (due.verdict.kind !== "wake") return;
+  expect(due.verdict.items[0]!.label).toContain(paused.pause!.reason);
+  const state = seatTickWakeCommit(due.state, plan(due.verdict, "fp-1", 0), NOW + 60 * MINUTE);
+  expect(seatTickDecision(input({ now: NOW + 150 * MINUTE, state, pipelines: [paused] })).verdict.kind).toBe("quiet");
+  expect(seatTickDecision(input({ now: NOW + 150 * MINUTE, state, pipelines: [{ ...paused, pauseGeneration: "pause-two" }] })).verdict.kind).toBe("wake");
+  expect(seatTickDecision(input({ now: NOW + 25 * 60 * MINUTE, state, pipelines: [paused] })).verdict.kind).toBe("wake");
+  expect(seatTickDecision(input({ pipelines: [{ ...paused, pause: undefined }] })).verdict.kind).toBe("wake");
+  expect(seatTickDecision(input({ state: { ...emptySeatTickState(), lastProposalAt: new Date(NOW).toISOString() }, pipelines: [{ ...paused, pausedBy: "operator" }] })).verdict.kind).toBe("quiet");
+});
+
+test("empty and unaccepted inbox agendas owe neither reminder", () => {
+  expect(seatTickDecision(input({ state: { ...emptySeatTickState(), lastProposalAt: new Date(NOW).toISOString() } })).verdict.kind).toBe("quiet");
+  expect(seatTickDecision(input({ tasks: [card({ status: "inbox", updatedAt: new Date(NOW - 5 * 24 * 60 * MINUTE).toISOString() })] })).verdict.kind).toBe("quiet");
+});
+
+test("a delivered reminder stays deduped across real process restarts", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seat-reminder-restart-"));
+  try {
+    const inputFile = path.join(dir, "input.json");
+    fs.writeFileSync(inputFile, JSON.stringify(input({ pipelines: [lane({ pausedBy: "other", state: "inert", pausedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() })], tasks: [card({ accepted: true, status: "inbox",
+      updatedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() })] })));
+    const run = async (now: number, mode = "check") => {
+      const child = Bun.spawn([process.execPath, "src/lib/monitor/seatTickReminderProcess.fixture.ts", inputFile, String(now), mode], {
+        env: { ...process.env, HOME: dir, XDG_CONFIG_HOME: path.join(dir, "config"), TMPDIR: dir,
+          LLV_STATE_DIR: path.join(dir, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+        stdout: "pipe", stderr: "pipe",
+      });
+      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      if (code !== 0) throw new Error(stderr);
+      return JSON.parse(stdout);
+    };
+    expect(await run(NOW, "deliver")).toEqual({ kind: "wake", ids: ["pipeline_a1", "task_b2"] });
+    expect((await run(NOW + 90 * MINUTE)).kind).toBe("quiet");
+    expect((await run(NOW + 24 * 60 * MINUTE)).kind).toBe("wake");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("accepted reminders drain a deterministic bounded agenda without a retry-guard stop", () => {
+  const tasks = Array.from({ length: 7 }, (_, i) => card({ id: `work-${i}`, accepted: true, status: "inbox", updatedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() })).reverse();
+  let state = emptySeatTickState();
+  const ids: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const now = NOW + i * 60 * MINUTE;
+    const d = seatTickDecision(input({ tasks, now, state, policy: { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 1 } }));
+    expect(d.verdict.kind).toBe("wake");
+    if (d.verdict.kind !== "wake") return;
+    ids.push(...d.verdict.items.map(item => item.id));
+    state = seatTickWakeCommit(d.state, plan(d.verdict, "fp-1", 0), now);
+  }
+  expect(ids).toEqual(Array.from({ length: 7 }, (_, i) => `work-${i}`));
+});
+
+test("an agenda longer than a day names unseen accepted work before repeating old reminders", () => {
+  const tasks = Array.from({ length: 26 }, (_, i) => card({ id: `due-${String(i).padStart(2, "0")}`, accepted: true,
+    status: "inbox", updatedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() }));
+  let state = emptySeatTickState();
+  const shown: string[] = [];
+  for (let i = 0; i < tasks.length; i++) {
+    const now = NOW + i * 61 * MINUTE;
+    const d = seatTickDecision(input({ tasks, now, state, policy: { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 1 } }));
+    expect(d.verdict.kind).toBe("wake");
+    if (d.verdict.kind !== "wake") return;
+    shown.push(...d.verdict.items.map(item => item.id));
+    state = seatTickWakeCommit(d.state, plan(d.verdict, "fp-1", 0), now);
+  }
+  expect(shown).toEqual(tasks.map(task => task.id));
+});
+
+test("unrelated history eviction and seat rotation cannot repeat a reminder early", async () => {
+  const task = card({ accepted: true, status: "inbox", updatedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() });
+  const first = seatTickDecision(input({ tasks: [task] }));
+  let state = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  state = seatTickWakeCommit(state, { proposal: false, reasons: [], fingerprint: "other", eventsThrough: 0, children: [],
+    itemsShown: Array.from({ length: 2001 }, (_, i) => `other-${i}@revision`) }, NOW + 60 * MINUTE);
+  const { seatTickStateForEpoch } = await import("./seatTickState");
+  state = seatTickStateForEpoch(state, 8);
+  expect(seatTickDecision(input({ tasks: [task], state, now: NOW + 150 * MINUTE })).verdict.kind).toBe("quiet");
+});
+
+test("waiting-work reminders preserve disk pressure at the head of the agenda", () => {
+  const d = seatTickDecision(input({ tasks: [card({ accepted: true, updatedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() })],
+    signals: [{ id: "disk-space", label: "low disk space", episode: "fixture-pressure", actionable: true }] }));
+  expect(d.verdict.kind).toBe("wake");
+  if (d.verdict.kind !== "wake") return;
+  expect(d.verdict.items.map(item => item.id)).toEqual(["disk-space", "task_b2"]);
+});
 
 function seat(over: Partial<SeatTickSeatInput> = {}): SeatTickSeatInput {
   return { conversationId: CONVERSATION, seatEpoch: 7, path: null, designatedAt: null, turn: "idle", activity: null, ...over };
@@ -1922,7 +2075,7 @@ test("cropped item lines stay owed after the frozen message lands", () => {
 
 
 test("a later deploy settlement re-offers unchanged seat-paused lanes", () => {
-  const paused = lane({ pausedBy: "seat", state: "inert" });
+  const paused = lane({ pausedBy: "seat", state: "inert", pausedAt: new Date(NOW - 24 * 60 * MINUTE).toISOString() });
   const first = seatTickDecision(input({ pipelines: [paused] }));
   const state = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
   const decision = seatTickDecision(input({ now: NOW + 90 * MINUTE, state, pipelines: [paused],
@@ -1948,7 +2101,7 @@ test("a later task revision cannot render a previously delivered signal again", 
 });
 
 test("later deploy resume instructions drain every previously shown paused lane", () => {
-  const pipelines = Array.from({ length: 5 }, (_, i) => lane({ id: `paused-${i}`, pausedBy: "seat", state: "inert" }));
+  const pipelines = Array.from({ length: 5 }, (_, i) => lane({ id: `paused-${i}`, pausedBy: "seat", state: "inert", pausedAt: new Date(NOW - 24 * 60 * MINUTE).toISOString() }));
   const first = seatTickDecision(input({ pipelines }));
   expect(first.verdict.kind).toBe("wake");
   const state = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
@@ -1966,6 +2119,37 @@ test("later deploy resume instructions drain every previously shown paused lane"
   expect(next.verdict.items.map(item => item.id)).toEqual([pipelines[4]!.id]);
   const finished = seatTickWakeCommit(next.state, plan(next.verdict, "fp-1", 0), NOW + 180 * MINUTE);
   expect(seatTickDecision(input({ now: NOW + 270 * MINUTE, state: finished, pipelines })).verdict.kind).toBe("quiet");
+  const newlyPaused = lane({ id: "new-pause", pausedBy: "seat", state: "inert", pausedAt: new Date(NOW + 200 * MINUTE).toISOString() });
+  expect(seatTickDecision(input({ now: NOW + 270 * MINUTE, state: finished, pipelines: [...pipelines, newlyPaused] })).verdict.kind).toBe("quiet");
+});
+
+test("a deploy reminder credits the matching ordinary pause agenda", () => {
+  const paused = lane({ pausedBy: "seat", state: "inert", pausedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() });
+  const deploy = { deploymentId: "deploy-pause-credit", phase: "succeeded" as const, sha: "c".repeat(40), error: null,
+    settledAt: new Date(NOW - MINUTE).toISOString() };
+  const first = seatTickDecision(input({ pipelines: [paused], state: stateWith({ stalledSeen: [paused.id] }), settledDeploys: [deploy] }));
+  expect(first.verdict.kind).toBe("wake");
+  if (first.verdict.kind !== "wake") return;
+  expect(first.verdict.items.map(item => item.id)).toEqual([deploy.deploymentId, paused.id]);
+  expect(first.verdict.items[1]).toMatchObject({ reminderKind: "pause" });
+  const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  const quiet = seatTickDecision(input({ now: NOW + 90 * MINUTE, pipelines: [paused], state: landed, settledDeploys: [] }));
+  expect(quiet.verdict.kind).toBe("quiet");
+  expect(seatTickDecision(input({ now: NOW + 24 * 60 * MINUTE, pipelines: [paused], state: landed, settledDeploys: [] })).verdict.kind).toBe("wake");
+});
+
+test("a deployment cutoff excludes pauses that began after settlement", () => {
+  const deploy = { deploymentId: "deploy-cutoff", phase: "succeeded" as const, sha: "d".repeat(40), error: null,
+    settledAt: new Date(NOW - 30 * MINUTE).toISOString() };
+  const laterPause = lane({ pausedBy: "seat", state: "inert", pausedAt: new Date(NOW - 10 * MINUTE).toISOString() });
+  const first = seatTickDecision(input({ pipelines: [laterPause], settledDeploys: [deploy] }));
+  expect(first.verdict.kind).toBe("wake");
+  if (first.verdict.kind !== "wake") return;
+  expect(first.verdict.items.map(item => item.id)).toEqual([deploy.deploymentId]);
+  const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+  expect(landed.deployResumeThrough).toBe(deploy.settledAt);
+  const next = seatTickDecision(input({ now: NOW + 90 * MINUTE, pipelines: [laterPause], state: landed, settledDeploys: [] }));
+  expect(next.verdict.kind).toBe("quiet");
 });
 
 test("cropped outcome bullets leave child, deployment and maintenance obligations unacknowledged", () => {
