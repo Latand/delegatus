@@ -73,6 +73,96 @@ test("B: a controller-created replacement link proves a completed parent without
   } finally { if (childLaunch) await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true }); await f.close(); }
 });
 
+test.each((["accepted", "accepted replacement", "published"] as const).flatMap(proof =>
+  (["valid", "foreign suffix", "unrecorded suffix", "dropped history", "remote race", "head race"] as const).map(suffix => ({ proof, suffix }))))
+("recorded ancestry survives a later attempt ($proof, $suffix)", async ({ proof, suffix }) => {
+  const f = await fixture();
+  const childLaunch = `stage-proof-recorded-ancestry-${nextFixture}`;
+  let lostLaunch: string | null = null;
+  try {
+    const inherited = await f.commit("earlier passed output");
+    await f.push();
+    const parent = { ...f.attempt, n: 1, state: "passed", verdict: { status: "pass" },
+      completedAt: "2026-10-16T09:30:00.000Z", agentPath: "/stage/earlier.jsonl" } as PipelineStageAttempt;
+    // Controller-accepted output can lack a native agent creation receipt.
+    await fs.rm(path.join(f.receipt, "commits", inherited));
+    let accepted = inherited;
+    if (proof !== "published") {
+      accepted = await f.commit("later accepted output");
+      f.pipeline.lastPassedCommit = accepted;
+      await fs.rm(path.join(f.receipt, "commits", accepted));
+      // A refused rewrite was the next launch's starting head. The repair
+      // merges back the accepted head, including its published ancestors.
+      await f.own("reset", "--hard", f.pipeline.baseRef);
+      await f.commit("refused rewrite");
+    } else f.pipeline.publishedCommit = inherited;
+    let lost: PipelineStageAttempt | null = null;
+    if (proof === "accepted replacement") {
+      const launchId = `${childLaunch}-lost`;
+      Object.assign(f.env, await prepareStageGitGuard(launchId, f.lane, realExec, "2026-10-16T09:45:00.000Z"));
+      lostLaunch = launchId;
+      lost = { ...parent, n: 2, launchId, startedAt: "2026-10-16T09:45:00.000Z", completedAt: "2026-10-16T09:55:00.000Z",
+        state: "failed", verdict: null, agentPath: "/stage/lost.jsonl", restartRecovery: { bootId: "lost-host", requestedAt: "2026-10-16T09:55:00.000Z",
+          lastRecordAt: null, replacementAttempt: 3 } };
+      await f.commit("lost attempt output");
+    }
+    const startedAt = "2026-10-16T10:00:00.000Z";
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, startedAt));
+    const previous = lost ?? parent;
+    const child = { ...f.attempt, n: lost ? 3 : 2, launchId: childLaunch, startedAt, state: "passed",
+      agentPath: "/stage/later.jsonl", ...(proof !== "accepted" ? {
+        restartContext: { previousAttempt: previous.n, transcriptPath: previous.agentPath, cause: "host-lost" },
+      } : {}) } as PipelineStageAttempt;
+    if (proof !== "published") await f.own("merge", "--no-ff", "-m", "restore accepted history", accepted);
+    let head = await f.commit("later attempt output");
+    if (suffix === "unrecorded suffix") await fs.rm(path.join(stageGitReceiptDirectory(childLaunch), "commits", head));
+    if (suffix === "foreign suffix") {
+      const foreign = path.join(f.root, "foreign-suffix");
+      await f.own("worktree", "add", "--detach", foreign, head);
+      await f.git(foreign, "commit", "--allow-empty", "-m", "unproved foreign suffix");
+      head = await f.git(foreign, "rev-parse", "HEAD");
+      await f.own("merge", "--ff-only", head);
+    }
+    if (suffix === "dropped history") {
+      await f.own("reset", "--hard", f.pipeline.baseRef);
+      head = await f.commit("dropped accepted history");
+    }
+    f.pipeline.repoDir = f.lane;
+    f.pipeline.runs = [{ stageId: "build", attempts: lost ? [parent, lost, child] : [parent, child] }] as never;
+    let raced = false;
+    const exec: typeof realExec = async (command, args, cwd, env, options) => {
+      const result = await realExec(command, args, cwd, env, options);
+      if ((suffix === "remote race" || suffix === "head race") && !raced && command === "git" && args[0] === "rev-list") {
+        raced = true;
+        if (suffix === "remote race") await f.git(f.remote, "update-ref", "refs/heads/pipeline/proof", f.pipeline.baseRef);
+        else {
+          const foreign = path.join(f.root, "raced-suffix");
+          await f.own("worktree", "add", "--detach", foreign, head);
+          await f.git(foreign, "commit", "--allow-empty", "-m", "raced foreign suffix");
+          head = await f.git(foreign, "rev-parse", "HEAD");
+          await f.own("merge", "--ff-only", head);
+        }
+      }
+      return result;
+    };
+    const result = await commitAndAdoptStageBranch(f.pipeline, "build", exec, () => [f.pipeline], undefined,
+      () => {}, null, undefined, undefined, child, NOW);
+    if (suffix === "valid") {
+      expect(result).toEqual({ ok: true, sha: head });
+      expect(await f.own("merge-base", "--is-ancestor", inherited, "HEAD")).toBe("");
+      expect(await f.own("ls-remote", "--refs", "origin", "refs/heads/pipeline/proof")).toBe(`${inherited}\trefs/heads/pipeline/proof`);
+    } else {
+      expect(result.ok).toBe(false);
+      if (suffix === "remote race" || suffix === "head race") expect(raced).toBe(true);
+    }
+    expect(await f.own("rev-parse", "HEAD")).toBe(head);
+  } finally {
+    await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
+    if (lostLaunch) await fs.rm(stageGitReceiptDirectory(lostLaunch), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
 test.each([1, 3])("A: main fast-forward plus %i own commits settles after an in-worktree push", async count => {
   const f = await fixture();
   try {

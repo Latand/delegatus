@@ -54,6 +54,8 @@ async function fixture() {
   h.ports.exec = execute;
   h.ports.provisionExec = async (command, args, cwd, signal) => await execute(command, args, cwd, undefined, { signal });
   h.ports.resumeSeveredTurn = undefined;
+  h.ports.restartRecoveryBootId = () => "publication-recovery-boot";
+  h.ports.restartRecoveryBootStartedAt = () => 0;
   const spawn = h.ports.spawnAgent;
   h.ports.spawnAgent = async (input, reserved) => {
     const launchId = `recovery-${input.clientAttemptId}`;
@@ -149,19 +151,37 @@ test("a fresh attempt can finish after the controller accepted and committed dir
   } finally { f.close(); }
 });
 
-test.each(["proved", "unproved"])("a replacement checks the lost attempt's %s commits", async proof => {
+test.each([
+  { proof: "proved", writes: true }, { proof: "proved", writes: false },
+  { proof: "unrecorded", writes: true }, { proof: "hooks-off", writes: false }, { proof: "foreign", writes: false },
+])("a replacement checks the lost attempt's $proof commits (replacement writes: $writes)", async ({ proof, writes }) => {
   const f = await fixture();
   try {
-    const first = await f.commit("lost attempt output");
+    let first: string;
+    if (proof === "foreign") {
+      const foreign = path.join(f.root, "foreign-output");
+      await f.git(f.lane(), "worktree", "add", "--detach", foreign, "HEAD");
+      await f.git(foreign, "commit", "--allow-empty", "-m", "foreign output");
+      first = await f.git(foreign, "rev-parse", "HEAD");
+      await f.git(f.lane(), "merge", "--ff-only", first);
+    } else if (proof === "hooks-off") {
+      const made = await f.execute("git", ["-c", "core.hooksPath=", "commit", "--allow-empty", "-m", "unproved output"], f.lane());
+      expect(made.code, made.stderr).toBe(0);
+      first = await f.git(f.lane(), "rev-parse", "HEAD");
+    } else first = await f.commit("lost attempt output");
     const old = current().runs[0]!.attempts[0]!;
-    if (proof === "unproved") fs.unlinkSync(path.join(stageGitReceiptDirectory(old.launchId!), "commits", first));
+    if (proof === "unrecorded") fs.unlinkSync(path.join(stageGitReceiptDirectory(old.launchId!), "commits", first));
+    expect(fs.existsSync(path.join(stageGitReceiptDirectory(old.launchId!), "commits", first))).toBe(proof === "proved");
     f.h.durableTurns.set(old.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(old.startedAt!) + 1 });
     f.h.advanceWallClock(600_000);
     f.h.ports.conversationTurnInterrupted = async () => "dead";
     await tickPipelines([entry(old.agentPath!)], f.h.ports);
     await tickPipelines([], f.h.ports);
     expect(current().runs[0]!.attempts).toHaveLength(2);
-    const head = await f.commit("replacement output"); await f.finish(2);
+    expect(current().runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "host-lost" });
+    expect(current().worktreeDir).toBe(f.lane());
+    const head = writes ? await f.commit("replacement output") : first;
+    await f.finish(2);
     if (proof === "proved") {
       expect(current()).toMatchObject({ lastPassedCommit: head, publishedCommit: head, cursor: { stageId: "review", state: "pending" } });
     } else {
@@ -169,6 +189,76 @@ test.each(["proved", "unproved"])("a replacement checks the lost attempt's %s co
       expect(current().stateDetail).toContain(first);
       expect(current().publishedCommit).toBeNull();
     }
+  } finally { f.close(); }
+});
+
+test("a passed replacement's custody refusal can be answered without resetting its checkout", async () => {
+  const f = await fixture();
+  try {
+    const head = await f.commit("lost attempt output");
+    const old = current().runs[0]!.attempts[0]!;
+    // Model a commit whose creation cannot be attributed to any launch.
+    fs.unlinkSync(path.join(stageGitReceiptDirectory(old.launchId!), "commits", head));
+    f.h.durableTurns.set(old.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(old.startedAt!) + 1 });
+    f.h.advanceWallClock(600_000);
+    f.h.ports.conversationTurnInterrupted = async () => "dead";
+    await tickPipelines([entry(old.agentPath!)], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect(current().runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "host-lost" });
+    await f.finish(2);
+    const parked = current();
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.stateDetail).toContain("not created in the attempt worktree");
+    expect(parked.runs[0]!.attempts[1]!.verdict?.status).toBe("pass");
+    f.h.setConversationActive(false);
+    const request = { action: "resolve-decision" as const, clientRequestId: "answer-custody-refusal",
+      answer: "Investigate the missing creation receipt while preserving the accepted history.",
+      expectedStageId: "build", expectedAttempt: 2, expectedRevision: pipelineRevision(parked) };
+    const result = await rawPatchPipeline(parked.id, request, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(result.error).toBeUndefined();
+    expect(current().runs[0]!.attempts[1]!.report).toEqual(parked.runs[0]!.attempts[1]!.report);
+    expect(current().runs[0]!.attempts[1]!.completedAt).toBe(current().decisionAnswers!.at(-1)!.at);
+    expect((await rawPatchPipeline(parked.id, request, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR)).replayed).toBe(true);
+    expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(head);
+    await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs[2]!.prompt).toContain("not created in the attempt worktree");
+    await f.finish(3);
+    // An answer starts repair work; it grants no creation proof of its own.
+    expect(current().state).toBe("needs_decision");
+    expect(current().publishedCommit).toBeNull();
+    expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(head);
+  } finally { f.close(); }
+});
+
+test.each(["active", "unknown", "busy", "queued", "revision", "actor", "changed during read", "unrelated park"] as const)
+("a custody decision retains its %s fence", async fence => {
+  const f = await fixture();
+  try {
+    const head = await f.commit("unrecorded output");
+    const attempt = current().runs[0]!.attempts[0]!;
+    fs.unlinkSync(path.join(stageGitReceiptDirectory(attempt.launchId!), "commits", head));
+    await f.finish();
+    expect(current().stateDetail).toContain("not created in the attempt worktree");
+    f.h.setConversationActive(false);
+    if (fence === "active") f.h.setConversationActive(true);
+    if (fence === "unknown") f.h.setConversationActive(null);
+    if (fence === "busy") f.h.ports.durableTurnEvidence = async () => ({ turn: "busy", message: null });
+    if (fence === "queued") f.h.ports.conversationDeliveryOutstanding = () => true;
+    if (fence === "changed during read") f.h.ports.conversationAgentActive = async () => {
+      const moved = current(); moved.state = "paused"; savePipelines([moved]); return false;
+    };
+    if (fence === "unrelated park") {
+      const moved = current(); moved.stateDetail = "another settlement refusal"; savePipelines([moved]);
+    }
+    const parked = current();
+    const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: `custody-fence-${fence}`,
+      answer: "Investigate custody.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: fence === "revision" ? "0".repeat(64) : pipelineRevision(parked) }, f.h.ports,
+    fence === "actor" ? { kind: "agent", role: "builder", conversationId: "conversation_other" } : OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(result.status).toBe(fence === "actor" ? 403 : 409);
+    expect(current().runs[0]!.attempts).toHaveLength(1);
+    expect(current().publishedCommit).toBeNull();
+    expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(head);
   } finally { f.close(); }
 });
 
