@@ -10,6 +10,7 @@ const tables = [
 const tracked = (row: string) => `${row}.collection IN ('pipelines','pipelines_archive')`;
 const touch = (row: string) => `INSERT INTO pipeline_evidence_rows VALUES (${row}.collection,${row}.row_key,(SELECT revision FROM pipeline_evidence_clock WHERE id=1))
   ON CONFLICT(collection,row_key) DO UPDATE SET revision=excluded.revision;`;
+const revisionIndex = "CREATE INDEX pipeline_evidence_changed ON pipeline_evidence_rows(revision,collection,row_key)";
 const triggers = [
   `CREATE TRIGGER pipeline_evidence_insert AFTER INSERT ON state_rows WHEN ${tracked("NEW")} BEGIN
     UPDATE pipeline_evidence_clock SET revision=revision+1 WHERE id=1; ${touch("NEW")} END`,
@@ -26,6 +27,8 @@ export function installPipelineEvidenceIndex(db: Database, directory: string): v
   if (pipelineEvidenceIndexReady(db) || !mayRunStateStartupMutation(directory)) return;
   installHistoryProjection(db, directory);
   for (const sql of tables) db.exec(sql);
+  db.exec("DROP INDEX IF EXISTS pipeline_evidence_changed");
+  db.exec(revisionIndex);
   for (const sql of triggers) {
     const name = sql.split(" ")[2]!;
     const current = db.query<{ sql: string }, [string]>("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?").get(name);
@@ -38,8 +41,8 @@ export function installPipelineEvidenceIndex(db: Database, directory: string): v
 
 export function pipelineEvidenceIndexReady(db: Database): boolean {
   const rows = db.query<{ name: string; sql: string }, []>(
-    "SELECT name,sql FROM sqlite_master WHERE name IN ('pipeline_evidence_clock','pipeline_evidence_rows','pipeline_evidence_insert','pipeline_evidence_update','pipeline_evidence_delete')",
+    "SELECT name,sql FROM sqlite_master WHERE name IN ('pipeline_evidence_clock','pipeline_evidence_rows','pipeline_evidence_insert','pipeline_evidence_update','pipeline_evidence_delete','pipeline_evidence_changed')",
   ).all();
-  return historyProjectionReady(db) && rows.length === 5 && triggers.every(sql => rows.some(row => row.sql === sql))
+  return historyProjectionReady(db) && rows.length === 6 && rows.some(row => row.sql === revisionIndex) && triggers.every(sql => rows.some(row => row.sql === sql))
     && Boolean(db.query("SELECT 1 FROM pipeline_evidence_clock WHERE id=1").get());
 }

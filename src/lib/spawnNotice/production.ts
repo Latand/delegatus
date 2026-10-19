@@ -142,7 +142,7 @@ export function transcriptErrorFromRecords(records: readonly Record<string, unkn
 
 /** The child's final assistant message and any error text, from one bounded
     tail read. A caller's egress redactor sees raw text before any shaping. */
-export function spawnNoticeFinalMessage(child: string, redact: (text: string) => string = hardenedRedact): SpawnNoticeFinalMessage {
+export function spawnNoticeFinalMessage(child: string, redact: (text: string) => string = hardenedRedact, options: { preserveWhitespace?: boolean } = {}): SpawnNoticeFinalMessage {
   try {
     const conversation = agentRegistry().conversation(child as ViewerConversationId);
     const generation = conversation?.generations.at(-1);
@@ -151,8 +151,8 @@ export function spawnNoticeFinalMessage(child: string, redact: (text: string) =>
     if (!stat.isFile()) return { text: null, error: null };
     const records = tailRecords(generation.path, stat.size, stat.mtimeMs);
     const root = conversation.engine === "codex" ? "codex-sessions" : "claude-projects";
-    const message = lastAssistantMessageFromRecords(records, root, stat.mtimeMs);
-    const text = message?.text.trim() ? redact(message.text.trim()) : null;
+    const message = lastAssistantMessageFromRecords(records, root, stat.mtimeMs, options);
+    const text = message?.text.trim() ? redact(options.preserveWhitespace ? message.text : message.text.trim()) : null;
     const error = transcriptErrorFromRecords(records, conversation.engine);
     return { text, error: error ? redact(error).slice(0, ERROR_LIMIT) : null };
   } catch {

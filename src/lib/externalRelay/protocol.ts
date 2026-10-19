@@ -1,3 +1,4 @@
+import { hasInboundMedia, validateMediaInput } from "./mediaInputValidation";
 import { z } from "zod";
 
 // JSON Schema maxLength counts Unicode code points, including astral characters.
@@ -91,8 +92,15 @@ export const pairingConfirmedSchema = z.object({
   owner: ownerSchema,
   targets: z.array(targetSchema).max(100),
 });
+const inputMediaSchema = z.object({
+  ref: id, kind: z.enum(["photo", "document"]), availability: z.enum(["ready", "too_large", "unsupported_type", "missing", "protected"]),
+  mime_type: boundedString(100).optional(), filename: boundedString(128).optional(),
+  byte_size: z.number().int().positive().max(20971520).optional(), expires_at: time.optional(),
+}).strict();
+const mentionSchema = z.object({ author_key: id, offset: z.number().int().min(0).max(31999), length: z.number().int().min(1).max(128) }).strict();
 const messageSchema = z.object({
   id,
+  media: z.array(inputMediaSchema).max(4).optional(),
   author: z.object({
     key: id,
     name: boundedString(128),
@@ -124,6 +132,7 @@ const toolSchema = z.object({
   audience: z.enum(["admin", "owner"]).optional(),
 });
 export const relayAnswerSchema = z.object({
+  mentions: z.array(mentionSchema).max(16).optional(),
   format: z.enum(["plain","rich_markdown"]).optional(),
   buttons: z.array(z.array(z.object({text:boundedString(64).refine(v => v.length > 0),url:boundedString(2048).refine(v => v.length > 0)})).min(1).max(3)).max(2).optional(),
   attachments: z.array(z.object({path:z.string().min(1).max(4096),kind:z.enum(["photo","document","audio","video"]),caption:z.string().max(1024).optional(),filename:boundedString(128).refine(v => v.length > 0).optional()})).max(4).optional(),
@@ -136,6 +145,8 @@ export const relayFormatSchema = z.object({
   formats: z.object({ plain: z.number().int().positive(), rich_markdown: z.number().int().positive() }).passthrough(),
   guide: boundedString(4000), markdown_subset: z.array(boundedString(64)).max(64),
   max_blocks: z.number().int().positive(), max_depth: z.number().int().positive(), max_table_columns: z.number().int().positive(),
+  mentions: z.object({ placement: z.literal("answer.mentions"), max_items: z.number().int().min(1).max(16), offset_units: z.literal("unicode_scalars"), max_label_chars: z.number().int().min(1).max(128) }).optional(),
+  image_refs: z.object({ requires: z.literal("relay_media_out").optional(), syntax: z.literal("![](attachment:attachment_id)"), max_items: z.number().int().min(1).max(4), layout: z.literal("photo_carousel") }).optional(),
   buttons: z.object({ allowed: z.boolean(), max_rows: z.number().int().min(0), max_per_row: z.number().int().min(0), max_total: z.number().int().min(0) }).passthrough(),
   forbidden: z.array(boundedString(64)).max(64),
 }).passthrough();
@@ -149,7 +160,7 @@ export const inputSchema = z.object({
   owner_instructions: boundedString(16000).nullable(),
   documents: z
     .array(
-      z.object({ title: boundedString(200), text: boundedString(16000) }),
+      z.object({ title: boundedString(200), text: boundedString(16000), message_id: id.optional(), media_ref: id.optional(), extraction: z.enum(["complete", "truncated", "unavailable"]).optional() }),
     )
     .max(20),
   conversation: z.array(messageSchema).max(200),
@@ -176,7 +187,7 @@ export const inputSchema = z.object({
   }
 });
 const chatKey = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
-export const requestSchema = z.object({
+const answerRequestSchema = z.object({
   features: z.array(boundedString(64)).max(32).refine(v => new Set(v).size === v.length).optional().catch(undefined),
   request_id: id,
   lease_id: leaseId,
@@ -194,6 +205,29 @@ export const requestSchema = z.object({
     progress: z.enum(["notes", "none"]),
   }),
 });
+/** Strip additive media fields before validation when the capability is absent,
+ * preserving the legacy treatment of arbitrary unknown properties. */
+export const requestSchema = z.preprocess(raw => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const value = raw as Record<string, unknown>;
+  if (Array.isArray(value.features) && value.features.includes("relay_media_in")) return raw;
+  if (!value.input || typeof value.input !== "object" || Array.isArray(value.input)) return raw;
+  const input = value.input as Record<string, unknown>;
+  return { ...value, input: { ...input,
+    ...(Array.isArray(input.conversation) ? { conversation: input.conversation.map(message => {
+      if (!message || typeof message !== "object") return message;
+      const copy = { ...message }; delete copy.media; return copy;
+    }) } : {}),
+    ...(Array.isArray(input.documents) ? { documents: input.documents.map(document => {
+      if (!document || typeof document !== "object") return document;
+      const copy = { ...document }; delete copy.message_id; delete copy.media_ref; delete copy.extraction; return copy;
+    }) } : {}),
+  } };
+}, answerRequestSchema.superRefine((request, context) => {
+  if (!hasInboundMedia(request)) return;
+  try { validateMediaInput(request); }
+  catch { context.addIssue({ code: "custom", message: "invalid negotiated media input" }); }
+}));
 export type ExternalRelayRequest = z.infer<typeof requestSchema>;
 export type ExternalRelayTool = z.infer<typeof toolSchema>;
 export const RELAY_TOOLS_ON_DEMAND = "relay_tools_on_demand";
@@ -290,11 +324,13 @@ export const replyAnswerSchema = {
 /** Hand-off is offered only for a request whose service listed its tools. */
 export const offersHandoff = (request: ExternalRelayRequest) =>
   (request.input.tools?.length ?? 0) > 0;
+export type RelayMention = { author_key: string; offset: number; length: number };
 export type RelayUrlButton = { text: string; url: string };
 export type RelayAttachment = { attachment_id: string; kind: RelayMediaKind; caption?: string };
 export type ExternalRelayAnswer = {
   format?: "plain" | "rich_markdown";
   buttons?: RelayUrlButton[][];
+  mentions?: RelayMention[];
   attachments?: RelayAttachment[];
   action: "reply" | "ignore";
   text: string;

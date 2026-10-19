@@ -953,6 +953,33 @@ its own:
   finish.
 - **Synthesis** into the project scope (2.7, item 2).
 
+### Exact rule ids and explicit search
+
+The learned-rules renderer emits each stored rule id in full. The byte ceiling
+omits whole rules and keeps the rendered selection's ids aligned with its
+metadata. A stage can pass an active rule's exact id to `leave_lesson` for any
+of its four readable scopes: its role on this project, its role on every
+project, the project, and the machine. Rewrites retain the id and archive the
+previous text as an immutable version.
+
+`RULE_NOT_READABLE` includes the nearest active readable ids for a typo within
+two edits, at most three equally close candidates. It performs no rewrite and
+leaves the lesson request unanswered so the stage can retry with an exact id.
+Archived rules, prior versions, unlisted rows and other roles' or projects'
+rules supply no hint.
+
+`search_memory` searches active learned rules alongside engine memories.
+Rule hits keep their exact `r_` ids and can be opened through the same tool.
+Project filtering includes that project's role and project rules, every
+cross-project role scope, and machine rules. Omitting the project searches
+across projects, as it does for engine memories. These are explicit reads,
+including for clean review stages; automatic memory exclusion still applies.
+Kind `instruction` includes learned rules. Role hits precede engine hits and
+share the result limit and 16 KB response budget. Search reads current active
+membership directly, so a rewrite or archive needs no index refresh; provenance
+and immutable versions stay outside results. Archived-rule search remains
+in slice 3 below.
+
 ### 3.3 Slice 3
 
 - Usefulness: count review findings in later lanes that fall in a rule's class,

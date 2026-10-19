@@ -828,3 +828,93 @@ for (const evidence of ["another lane's form", "earlier publisher attempt", "old
     expect(loadTasks().find((task) => task.id === taskId)?.status).toBe("inbox");
   });
 }
+
+
+describe("refresh retry recovery", () => {
+  async function waitingRefresh(state: Pipeline["state"]) {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const parent = completedLane("refresh-parent");
+    parent.workLinks = [{ kind: "pr", repository: REPO, number: 7, addedAt: iso(T0), addedBy: "operator" }];
+    savePipelines([parent]);
+    expect((await patchPipeline(parent.id, { action: "retry-merge" }, { now: () => iso(T0) } as never)).error).toBeUndefined();
+    const waiting = loadPipelines()[0]!;
+    waiting.merge!.state = "refreshing";
+    waiting.merge!.refresh = { attempt: 0, base: "b".repeat(40), head: HEAD, key: "refresh-recovery", digest: "c".repeat(64), requestedAt: iso(T0), pipelineId: "refresh-child" };
+    const child = completedLane("refresh-child");
+    child.refreshOf = { pipelineId: waiting.id, base: "b".repeat(40) };
+    child.lastPassedCommit = "d".repeat(40);
+    child.workLinks = structuredClone(parent.workLinks);
+    child.state = state;
+    savePipelines([waiting, child]);
+    return { waiting, child };
+  }
+
+  test.each(["completed", "closed"] as const)("retry accepts a refreshing record after its refresh lane is %s", async state => {
+    const { waiting, child } = await waitingRefresh(state);
+    const result = await patchPipeline(waiting.id, { action: "retry-merge" }, { now: () => iso(T0 + 1_000) } as never);
+    expect(result.error).toBeUndefined();
+    const stored = loadPipelines();
+    if (state === "completed") {
+      expect(stored.find(lane => lane.id === child.id)?.merge).toMatchObject({ state: "queued", reviewedHead: child.lastPassedCommit });
+      expect(stored.find(lane => lane.id === waiting.id)?.merge?.refresh?.pipelineId).toBe(child.id);
+    } else {
+      expect(stored.find(lane => lane.id === waiting.id)?.merge).toMatchObject({ state: "queued", attempts: 1 });
+      expect(stored.find(lane => lane.id === waiting.id)?.merge?.refresh).toBeUndefined();
+    }
+  });
+
+  test.each(["running", "needs_decision"] as const)("retry refuses a refresh still %s", async state => {
+    const { waiting } = await waitingRefresh(state);
+    const before = loadPipelines();
+    const result = await patchPipeline(waiting.id, { action: "retry-merge" }, { now: () => iso(T0 + 1_000) } as never);
+    expect(result.status).toBe(409);
+    expect(loadPipelines()).toEqual(before);
+  });
+
+  test.each(["lineage", "project", "PR", "review"] as const)("retry refuses changed refresh %s evidence without changing either lane", async evidence => {
+    const { waiting } = await waitingRefresh("completed");
+    const lanes = loadPipelines();
+    const child = lanes.find(lane => lane.id === "refresh-child")!;
+    if (evidence === "lineage") child.refreshOf!.base = "e".repeat(40);
+    if (evidence === "project") child.project = "repo-other";
+    if (evidence === "PR") child.workLinks![0]!.number = 9;
+    if (evidence === "review") child.runs[1]!.attempts[0]!.state = "failed";
+    savePipelines(lanes);
+    const before = loadPipelines();
+    const result = await patchPipeline(waiting.id, { action: "retry-merge" }, { now: () => iso(T0 + 1_000) } as never);
+    expect(result.status).toBe(409);
+    expect(loadPipelines()).toEqual(before);
+  });
+
+  test("retry recovery uses persisted completion and settings after a process restart", async () => {
+    await waitingRefresh("completed");
+    const childRoot = fs.mkdtempSync(path.join(sandbox, "refresh-restart-"));
+    for (const directory of ["home", "config", "tmp"]) fs.mkdirSync(path.join(childRoot, directory));
+    const reader = Bun.spawn([process.execPath, "-e", `
+      const { patchPipeline } = await import("./src/lib/pipelines/engine.ts");
+      const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+      const result = await patchPipeline("refresh-parent", { action: "retry-merge" }, { now: () => "2026-09-25T10:00:01.000Z" });
+      console.log(JSON.stringify({ error: result.error ?? null, lanes: loadPipelines().map(lane => [lane.id, lane.merge?.state, lane.merge?.reviewedHead]).sort((a, b) => a[0].localeCompare(b[0])) }));
+    `], {
+      cwd: process.cwd(), env: { ...process.env, HOME: path.join(childRoot, "home"), XDG_CONFIG_HOME: path.join(childRoot, "config"),
+        TMPDIR: path.join(childRoot, "tmp"), LLV_STATE_DIR: sandbox, LLV_STAGING: "1", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, stdout: "pipe", stderr: "pipe",
+    });
+    const [output, error, code] = await Promise.all([new Response(reader.stdout).text(), new Response(reader.stderr).text(), reader.exited]);
+    expect({ code, error }).toEqual({ code: 0, error: "" });
+    expect(JSON.parse(output)).toEqual({ error: null, lanes: [["refresh-child", "queued", "d".repeat(40)], ["refresh-parent", "queued", HEAD]] });
+  });
+
+  test.each(["completed", "closed"] as const)("a stale refreshing record on a %s lane cannot prevent a carrier on the same PR from queueing", async state => {
+    const { waiting } = await waitingRefresh("closed");
+    const closed = loadPipelines().find(lane => lane.id === waiting.id)!;
+    closed.state = state;
+    const carrier = completedLane("carrier");
+    carrier.workLinks = structuredClone(closed.workLinks);
+    savePipelines([closed, carrier]);
+    const ports = productionAutoMergePorts({ now: () => T0, loadPipelines: loadPipelinesForList,
+      cachedState: () => null, run: async () => { throw new Error("offline fixture"); }, log: () => undefined });
+    await sweepAutoMerge(ports);
+    expect(loadPipelines().find(lane => lane.id === carrier.id)?.merge).toMatchObject({ prNumber: 7, reviewedHead: HEAD });
+  });
+});

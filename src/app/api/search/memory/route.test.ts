@@ -2,6 +2,8 @@ import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { viewerMcpBindings } from "@/lib/mcp/bindings";
 import { MEMORY_RESPONSE_BYTES } from "@/lib/memory/index";
@@ -142,5 +144,166 @@ test("index failures emit a safe diagnostic without database paths or query text
     memoryIndex().close();
     if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("search_memory finds and opens every rendered role rule by exact id, near id and text without engine indexing", async () => {
+  const { roleMemoryCollection, learnedRulesSnapshot } = await import("@/lib/memory/roleStore");
+  const previous = process.env.LLV_STATE_DIR;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "role-search-"));
+  process.env.LLV_STATE_DIR = root;
+  const at = "2026-10-19T00:00:00.000Z";
+  const scopes = ["role:project-a:builder", "role:*:builder", "project:project-a", "machine"];
+  const ids = scopes.map((_, n) => `r_${String(n + 1).padStart(16, "0")}`);
+  const rule = (id: string, scope: string, text: string) => ({ kind: "rule" as const, id, scope, rule: text, why: "Private provenance must stay outside search results.", state: "active" as const, hints: [], source: { project: "project-a", pipelineId: "seed", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_seed" }, createdAt: at, changedAt: at });
+  const index = memoryIndex();
+  const decode = async (response: Response) => {
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error);
+    return body;
+  };
+  const control = {
+    get: async (url: string) => decode(await GET(new Request(`http://localhost${url}`))),
+    post: async (_url: string, body: unknown) => decode(await POST(new Request("http://localhost/api/search/memory", { method: "POST", body: JSON.stringify(body) }))),
+  };
+  const { createMcpToolService, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
+  const service = createMcpToolService(viewerMcpBindings(undefined, control, { callerAttribution: () => ({ kind: "unidentified", conversationId: null, role: null }) } as never), new MemoryMcpReceiptStore());
+  let request = 0;
+  const call = (args: Record<string, unknown>) => service.callTool("search_memory", { clientRequestId: `role-search-${request += 1}`, ...args });
+  try {
+    const store = roleMemoryCollection(true)!;
+    store.boundedPatch(30, tx => {
+      scopes.forEach((scope, n) => {
+        tx.put({ kind: "scope", scope, revision: 1, active: [ids[n]], history: [] });
+        tx.put(rule(ids[n], scope, `Verify the ${["amber", "bronze", "cobalt", "denim"][n]} receipt before replaying its durable operation.`));
+      });
+      const foreign = "r_1000000000000001";
+      tx.put({ kind: "scope", scope: "role:project-b:builder", revision: 1, active: [foreign], history: [] });
+      tx.put(rule(foreign, "role:project-b:builder", "Verify the foreign receipt before replaying its durable operation."));
+      tx.put({ ...rule("r_2000000000000001", scopes[0], "Verify the archived receipt before replaying its durable operation."), state: "archived" });
+      tx.put({ ...rule("r_3000000000000001", scopes[0], "Verify the version receipt before replaying its durable operation."), versionOf: ids[0] });
+      tx.put(rule("r_4000000000000001", scopes[0], "Verify the unlisted receipt before replaying its durable operation."));
+      tx.put({ kind: "scope", scope: scopes[0], revision: 1, active: [ids[0], "r_2000000000000001", "r_3000000000000001"], history: [] });
+    });
+    const rendered = [...learnedRulesSnapshot("project-a", "builder").block.matchAll(/^- \[([^\]]+)\]/gm)].map(match => match[1]);
+    expect(rendered).toEqual(ids);
+    for (const [n, id] of rendered.entries()) {
+      const query = [id, id.slice(0, -1), ["amber", "bronze", "cobalt", "denim"][n]];
+      for (const q of query) {
+        const result = await call({ query: q, project: "project-a" });
+        expect(result).toMatchObject({ ok: true, items: expect.arrayContaining([expect.objectContaining({ id })]) });
+      }
+      const result = await call({ id, project: "project-a" });
+      expect(result).toMatchObject({ ok: true, item: { id, engine: "shared", kind: "instruction", body: store.get(`r:${id}`)?.kind === "rule" ? (store.get(`r:${id}`) as { rule: string }).rule : "" } });
+      expect(JSON.stringify(result)).not.toContain("Private provenance");
+    }
+    expect(await call({ query: "amber" })).toMatchObject({ ok: true, items: [{ id: ids[0] }] });
+    for (const query of ["foreign", "archived", "version", "unlisted"]) expect(await call({ query, project: "project-a" })).toMatchObject({ ok: true, items: [] });
+    for (const id of ["r_1000000000000001", "r_2000000000000001", "r_3000000000000001", "r_4000000000000001"]) {
+      expect(await call({ id, project: "project-a" })).toMatchObject({ ok: false, error: "memory entry not found" });
+      const refused = await POST(new Request("http://localhost/api/search/memory", { method: "POST", body: JSON.stringify({ id, project: "project-a", requestId: `refused-${id}` }) }));
+      expect(refused.status).toBe(404);
+    }
+    expect(await call({ query: "receipt", project: "project-a", kind: "preference" })).toMatchObject({ ok: true, items: [] });
+    expect(await call({ query: "receipt", project: "project-a", limit: 2 })).toMatchObject({ ok: true, items: [{ id: ids[0] }, { id: ids[1] }], truncated: true });
+    // A peer rewrite is visible immediately; no discovery or refresh is needed.
+    store.boundedPatch(1, tx => { tx.put(rule(ids[0], scopes[0], "Verify the emerald receipt before replaying its durable operation.")); });
+    expect(await call({ query: "amber", project: "project-a" })).toMatchObject({ ok: true, items: [] });
+    expect(await call({ query: "emerald", project: "project-a" })).toMatchObject({ ok: true, items: [{ id: ids[0] }] });
+    const { persistProjectAliases } = await import("@/lib/projects/aliases");
+    const { joinMovedScopes } = await import("@/lib/memory/roleStore");
+    expect(persistProjectAliases([{ source: "project-a", target: "project-renamed", displayName: "Renamed fixture" }])).toBe(true);
+    joinMovedScopes(at);
+    expect(await call({ query: "emerald", project: "project-renamed" })).toMatchObject({ ok: true, items: [{ id: ids[0] }] });
+    expect(await call({ id: ids[0], project: "project-renamed" })).toMatchObject({ ok: true, item: { id: ids[0], project: "project-renamed" } });
+  } finally {
+    index.close();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("the registered MCP search opens returned rule ids and matches Cyrillic text without case sensitivity", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "role-search-mcp-"));
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  const at = "2026-10-19T00:00:00.000Z";
+  const id = "r_0123456789abcdef";
+  const scope = "role:project-cyrillic:builder";
+  const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
+  const store = roleMemoryCollection(true)!;
+  const index = memoryIndex();
+  const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
+  const control = {
+    get: async (url: string) => {
+      const response = await GET(new Request(`http://localhost${url}`));
+      return response.json();
+    },
+    post: async (_url: string, body: unknown) => {
+      const response = await POST(new Request("http://localhost/api/search/memory", { method: "POST", body: JSON.stringify(body) }));
+      return response.json();
+    },
+  };
+  const service = createMcpToolService(viewerMcpBindings(undefined, control, { callerAttribution: () => ({ kind: "unidentified", conversationId: null, role: null }) } as never), new MemoryMcpReceiptStore());
+  const server = createViewerMcpServer(service);
+  const client = new Client({ name: "role-search-regression", version: "1" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    store.boundedPatch(2, tx => {
+      tx.put({ kind: "scope", scope, revision: 1, active: [id], history: [] });
+      tx.put({ kind: "rule", id, scope, rule: "Перевіряйте підпис перед повтором операції.", why: "Search must handle Unicode case consistently.", state: "active", hints: [], source: { project: "project-cyrillic", pipelineId: "seed", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_seed" }, createdAt: at, changedAt: at });
+    });
+    const direct = await GET(new Request("http://localhost/api/search/memory?q=Перевіряйте&project=project-cyrillic"));
+    expect(direct.ok, await direct.clone().text()).toBe(true);
+    expect((await direct.json()).items.map((item: { id: string }) => item.id)).toContain(id);
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    for (const [n, query] of ["Перевіряйте", "перевіряйте"].entries()) {
+      const found = await client.callTool({ name: "search_memory", arguments: { clientRequestId: `cyrillic-search-${n}`, query, project: "project-cyrillic" } });
+      expect(found.isError, JSON.stringify(found)).not.toBe(true);
+      const items = (found.structuredContent as { items: Array<{ id: string }> }).items;
+      expect(items.map(item => item.id)).toContain(id);
+      const opened = await client.callTool({ name: "search_memory", arguments: { clientRequestId: `cyrillic-open-${n}`, id: items.find(item => item.id === id)!.id, project: "project-cyrillic" } });
+      expect(opened.isError, JSON.stringify(opened)).not.toBe(true);
+      expect(opened.structuredContent).toMatchObject({ item: { id, body: "Перевіряйте підпис перед повтором операції." } });
+    }
+    const malformed = await client.callTool({ name: "search_memory", arguments: { clientRequestId: "malformed-rule-id", id: "r_0123456789abcde", project: "project-cyrillic" } });
+    expect(malformed.isError).toBe(true);
+  } finally {
+    await Promise.all([client.close(), server.close()]);
+    store.boundedPatch(2, tx => { tx.delete(`s:${scope}`); tx.delete(`r:${id}`); });
+    index.close();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("the registered search_memory schema accepts full rule ids and refuses malformed ones", async () => {
+  const id = "r_0123456789abcdef";
+  const calls: Record<string, unknown>[] = [];
+  const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } = await import("@/lib/mcp/server");
+  const service = createMcpToolService({ search_memory: async (args: Record<string, unknown>) => {
+    calls.push(args);
+    return args.id ? { item: { id, body: "rule body" } } : { items: [{ id, summary: "rule body" }] };
+  } } as never, new MemoryMcpReceiptStore());
+  const server = createViewerMcpServer(service, ["search_memory"]);
+  const client = new Client({ name: "rule-id-schema-regression", version: "1" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const found = await client.callTool({ name: "search_memory", arguments: { clientRequestId: "rule-schema-search", query: "rule" } });
+    const returnedId = (found.structuredContent as { items: Array<{ id: string }> }).items[0]!.id;
+    expect(returnedId).toBe(id);
+    const opened = await client.callTool({ name: "search_memory", arguments: { clientRequestId: "rule-schema-open", id: returnedId } });
+    expect(opened.isError).not.toBe(true);
+    expect(opened.structuredContent).toMatchObject({ item: { id, body: "rule body" } });
+    const count = calls.length;
+    const malformed = await client.callTool({ name: "search_memory", arguments: { clientRequestId: "rule-schema-invalid", id: "r_0123456789abcde" } });
+    expect(malformed.isError).toBe(true);
+    expect(calls).toHaveLength(count);
+  } finally {
+    await Promise.all([client.close(), server.close()]);
   }
 });

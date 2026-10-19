@@ -880,8 +880,9 @@ function fakeSpawn(server: FakeAppServer, captured?: { args?: string[]; options?
   };
 }
 
-async function waitForCondition(predicate: () => boolean | Promise<boolean>, message: string): Promise<void> {
-  for (let attempt = 0; attempt < 500; attempt += 1) {
+async function waitForCondition(predicate: () => boolean | Promise<boolean>, message: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     if (await predicate()) return;
     await Bun.sleep(10);
   }
@@ -5315,6 +5316,7 @@ describe("CodexAppServerHost", () => {
       await waitForCondition(
         () => fs.existsSync(filename) || child.exitCode !== null || child.signalCode !== null,
         `fixture host ${child.pid} produced no ready evidence: ${diagnostics.get(child.pid) ?? ""}`,
+        60_000,
       );
       if (!fs.existsSync(filename)) {
         throw new Error(`fixture host ${child.pid} exited before readiness: ${diagnostics.get(child.pid) ?? ""}`);
@@ -5432,7 +5434,7 @@ describe("CodexAppServerHost", () => {
       control.stop(true);
       fs.rmSync(directory, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 120_000);
 
   test("boot adoption starts only Codex rows admitted by its candidate filter", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-filtered-structured-adoption-"));

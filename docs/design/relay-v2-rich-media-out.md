@@ -1,5 +1,80 @@
 # Relay v2, install side: rich answers, URL buttons and media out
 
+## Amendment: mentions, photo references and media input (2026-10-19)
+
+The service contract `docs/design/relay-protocol-v2.md` at `efeac13c`
+supersedes the older exclusions and separate-photo rules below. This slice
+adds no flags for mentions or carousel composition. Reply-chain negotiation
+and compaction remain outside this amendment.
+
+- `protocol.ts`, `mediaInputValidation.ts`, `poller.ts`, and the rich fixture preserve the new guide,
+  mention annotations, message media, and document extraction metadata.
+  Advertise `relay_media_in` only when offered, with `requester_context`.
+  Validate four refs, 20 MiB per file, 40 MiB distinct bytes, ready metadata,
+  trigger/direct-parent membership, 16,000 scalars per document and 32,000
+  total. Seed refs stay opaque and pass through the existing service-tool
+  schema; the service resolves their private image identities.
+- `answerV2.ts`, `ownerAnswer.ts`, `ownerRun.ts`, and `runner.ts` preserve
+  original source offsets. Mentions require rich format, at most 16 sorted,
+  non-overlapping, nonblank spans of 1–128 scalars in one ordinary text leaf.
+  Admit only final-request author/requester keys; exclude self, anonymous and
+  explicitly tagged non-person identities and numeric keys. The service's
+  private admitted-person map remains the final authority for bot/channel
+  identities that the public wire cannot distinguish. Invalid annotations
+  raise 400 `malformed`; never repair offsets or silently drop annotations.
+  The owner tool maps malformed mention fields to the same error. Owner
+  transcript reads opt into source-preserving extraction through
+  `scanner/lastAssistantMessage.ts` and `spawnNotice/production.ts`, including
+  continuation reads; ordinary notice/review readers keep their defaults.
+  Reverse continuation scans join byte fragments before UTF-8 decoding, so
+  a read boundary cannot change a Unicode scalar or its mention offset.
+- Explicit photo refs require rich format and media output. Accept only
+  standalone `![](attachment:id)` blocks, one contiguous run containing all
+  selected photos once, in attachment order. Syntax, ordering, duplicate,
+  foreign and non-photo refs raise 422 `invalid_format`; missing selected
+  uploads raise 422 `attachment_not_ready`. Absent refs leave composition to
+  the service: one photo block or a two-to-four-photo carousel, then separate
+  non-photo sends. Validate against stable staged IDs after upload; preserve
+  annotations on completion, and remove them together with rich syntax on an
+  explicit plain fallback.
+- `client.ts` gains an authenticated streaming download using the existing
+  DNS pinning and redirect refusal. Only
+  `/requests/{request_id}/media/{media_ref}` is constructed, with bearer,
+  version and lease headers. No supplied URL or filename becomes a path.
+  `mediaInput.ts` writes exclusive, generated files below private run scratch,
+  using pipeline backpressure and counters before each write. Enforce exact
+  content length, negotiated MIME, per-file and aggregate byte limits while
+  streaming; cancellation, interruption and authorization loss discard partial
+  files. Transfers run under the lesser of 30 seconds and the request deadline,
+  with a labelled Viewer span and fresh authority checks after awaits.
+  PDF structure is parsed in an owned Bun process inside a transient systemd
+  scope, capped at 20 MiB input and 256 MiB total memory with swap disabled,
+  and forcibly terminated after five seconds. The process boundary keeps a
+  parser memory failure from exhausting the Viewer; systems without the Linux
+  user systemd memory controller fail PDF validation closed.
+  HTML tags are rejected by the streaming text guard across chunk boundaries.
+  Original bytes remain untrusted; document extraction is supplied by the
+  service and validated locally, with no local execution or extraction call.
+- The runner downloads only admitted ready refs after lease acknowledgement,
+  exposes paths as untrusted context to both answer profiles, attaches images
+  through native Codex image flags or a streamed Claude user frame, and removes them
+  with the owned run directory. The shared headless launcher streams the prepared Claude frame with backpressure
+  under `agent.stdin-file`; `ephemeral.ts` carries only private input references.
+  Existing conversation state and logs retain
+  no credential, download URL or original bytes. HTTP service refusals retain
+  their exact status/code; local cap/type/availability failures use 413
+  `too_large`, 415 `unsupported_media_type`, 422 `media_unavailable` and 409
+  `lease_lost`. Malformed metadata uses 400 `malformed`.
+
+Shared path audit: descriptor → stored features → claim → request parser →
+tool-index hydration → ordinary/owner prompts → tool rounds/owner answer
+registry → staging/upload → completion/retry → answer history. Document and
+media fields also reach conversation prompt digests/cursors, so downloads are
+passed as ephemeral prompt context rather than persisted input mutations.
+The shared tool loop checks seed-ref membership and readiness before dispatch;
+the service retains role checks and private image adaptation.
+No file-ID or destination authority is added. No performance gain is claimed.
+
 Design only. Base: `49648aba0d4f6f9c4c1c3f45f78d1cf3844d6c18` on main,
 read 2026-10-17. Every `file:line` below is at that commit unless it names a
 lane branch. Contract: the relay service's `docs/design/relay-protocol-v2.md`

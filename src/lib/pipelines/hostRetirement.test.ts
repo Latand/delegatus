@@ -4,6 +4,7 @@ import { afterEach, expect, test } from "bun:test";
 import { pipelineHostHasLiveWork } from "./hostRetirement";
 import * as retirement from "./hostRetirement";
 import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { blockingHostActivityFlags } from "@/lib/runtime/hostActivityFlags";
 import { terminateStructuredHostTree } from "@/lib/runtime/structuredHostControl";
@@ -64,14 +65,20 @@ function fixture(engine: "codex" | "claude" = "codex") {
   const state = { activeQueue: queue };
   let pipelineReads = 0;
   const deps = {
-    ...retirement, runtimeIdleKillMatches, sameRecordedProcessIdentity, blockingHostActivityFlags,
+    ...retirement, registryRowsMatching, runtimeIdleKillMatches, sameRecordedProcessIdentity, blockingHostActivityFlags,
     stopped: false, state, queue,
     client: { readSession: async () => session, operationStatus: async () => ({ receipt: { status: "delivering", retirementClaim: claim } }) },
     registry: { readOnlySnapshot: () => snapshot, conversation: () => conversation,
+      deliveryWriteOrBusy: async (_options: unknown, work: () => unknown) => work(),
       terminateInactiveStructuredHost: () => false,
       recordStructuredTerminationSurvivors: (_key: unknown, _ref: unknown, identities: unknown[]) => { entry.structuredTerminationSurvivors = identities; return true; },
       terminateStructuredHost: () => true },
-    loadPipelinesForRetirement: () => { pipelineReads++; return [pipeline]; },
+    findPipelineRecord: () => { pipelineReads++; return pipeline; },
+    conversationIdsResolvingTo: (_snapshot: unknown, id: string) => [id],
+    pipelineRetirementReader: async () => (target: { conversations: string[]; sessionId: string; agentPath: string }, recovery?: typeof ref) => {
+      const allowed = recovery ? retirement.providerRecoveryAttempt([pipeline], recovery, { conversationId: target.conversations[0]!, sessionId: target.sessionId, agentPath: target.agentPath, engine }) : undefined;
+      return pipelineHostHasLiveWork([pipeline], { conversationId: target.conversations[0]!, sessionId: target.sessionId, agentPath: target.agentPath, paneId: null }, id => id, allowed ?? undefined);
+    },
     handoffQueue: () => ({ rows: () => [] }),
     sessionKeyId: () => `${engine}:session-fixture`, resolveConversationAlias: (_snapshot: unknown, id: string) => id,
     readOrchestratorSeatRetirementEvidenceOrNull: () => ({ seats: {}, pending: {}, revocations: [] }),
@@ -136,7 +143,7 @@ test.each(["human", "human-before-new-cut", "control", "report", "verdict", "new
     payload: { type: "task_complete", error: { message: "connection failed", codex_error_info: "stream_disconnected" } } }) + "\n");
   if (change === "prose") fs.writeFileSync(f.transcript, JSON.stringify({ type: "response_item", timestamp: new Date(cut).toISOString(),
     payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "usage limit" }] } }) + "\n");
-  if (change === "pipeline-read") f.deps.loadPipelinesForRetirement = () => { throw new Error("ownership unknown"); };
+  if (change === "pipeline-read") f.deps.pipelineRetirementReader = async () => { throw new Error("ownership unknown"); };
   if (change === "claim") f.deps.client.operationStatus = async () => ({ receipt: { status: "delivering", retirementClaim: { executorId: "replacement", process: { pid: 987001, startIdentity: "fake-root", bootEpoch: "fake-boot" } } } });
   if (change === "generation") f.conversation.generations.push({ id: "new-generation" });
   if (change === "rebind") f.deps.state.activeQueue = {};
@@ -198,4 +205,17 @@ test.each([true, false])("provider recovery preserves live background work and p
   fs.writeFileSync(f.transcript, JSON.stringify(task) + "\n" + fs.readFileSync(f.transcript, "utf8"));
   expect(await f.terminate()).toBe(!persistent);
   expect(f.signals).toEqual(persistent ? [] : [987001, 987002]);
+});
+
+
+test("an executor replacement during asynchronous ownership preparation cannot admit a signal", async () => {
+  const f = fixture();
+  const prepare = f.deps.pipelineRetirementReader;
+  f.deps.pipelineRetirementReader = async () => {
+    await Promise.resolve();
+    f.deps.client.operationStatus = async () => ({ receipt: { status: "delivering", retirementClaim: { executorId: "replaced", process: { pid: 987001, startIdentity: "fake-root", bootEpoch: "fake-boot" } } } });
+    return prepare();
+  };
+  expect(await f.terminate()).toBe(false);
+  expect(f.signals).toEqual([]);
 });

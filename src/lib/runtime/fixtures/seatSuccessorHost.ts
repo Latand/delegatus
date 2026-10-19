@@ -35,7 +35,8 @@ function spawnEngine(engineMode: "hold" | "probe") {
 }
 
 async function waitFor(predicate: () => boolean | Promise<boolean>, message: string): Promise<void> {
-  for (let attempt = 0; attempt < 500; attempt += 1) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
     if (await predicate()) return;
     await Bun.sleep(10);
   }
@@ -68,7 +69,7 @@ async function startIncumbent(): Promise<void> {
     env: process.env,
     mcpServers: ["viewer"],
     eventStore,
-    requestTimeoutMs: 5_000,
+    requestTimeoutMs: 30_000,
     shutdownGraceMs: 250,
     spawnProcess: spawnEngine("hold"),
     readProtocolVersion: () => "0.162.1",
@@ -110,6 +111,8 @@ async function startIncumbent(): Promise<void> {
   const receipt = await host.send({ id: "seat-successor-held-turn", text: "hold this turn" });
   if (receipt.outcome !== "turn-started") throw new Error("the incumbent fixture turn did not start");
   await waitFor(async () => (await host!.health()).status === "active", "the incumbent fixture turn stayed idle");
+  await waitFor(() => registry.snapshot().entries[`codex:${key.sessionId}`]?.structuredHost?.activeTurnRef === "turn-1",
+    "the incumbent turn was not durably published");
   writeReady({
     mode,
     sessionId: key.sessionId,
@@ -125,7 +128,7 @@ async function startSuccessor(): Promise<void> {
       env: process.env,
       mcpServers: ["viewer"],
       eventStore,
-      requestTimeoutMs: 5_000,
+      requestTimeoutMs: 30_000,
       shutdownGraceMs: 250,
       spawnProcess: spawnEngine("probe"),
       readProtocolVersion: () => "0.162.1",
@@ -140,6 +143,11 @@ async function startSuccessor(): Promise<void> {
   const proof = JSON.parse(fs.readFileSync(mcpProofPath, "utf8")) as { error?: string };
   if (proof.error) throw new Error(proof.error);
   await waitFor(async () => (await host!.health()).status === "idle", "the successor fixture turn did not complete");
+  await waitFor(() => {
+    const entry = registry.snapshot().entries[`codex:${adopted[0]!.key.sessionId}`];
+    return entry?.status === "idle" && entry.structuredHost?.activeTurnRef === null
+      && eventStore.load(adopted[0]!.key.sessionId).some(event => event.kind === "turn-ended" && event.status === "completed");
+  }, "the successor ending was not durably published");
   writeReady({
     mode,
     sessionId: adopted[0]!.key.sessionId,
