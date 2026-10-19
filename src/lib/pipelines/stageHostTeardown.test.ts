@@ -43,7 +43,7 @@ type Registry = InstanceType<typeof AgentRegistry>;
 
 /** Seats a structured conversation whose host process is this test process, so
     the liveness probe reports a resident host without spawning anything. */
-function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolean; pane?: TmuxHostEvidence | null; process?: { pid: number; startIdentity: string | null } } = {}): {
+function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolean; pane?: TmuxHostEvidence | null; process?: { pid: number; startIdentity: string | null; bootEpoch?: string } } = {}): {
   registry: Registry;
   conversationId: string;
   launchId: string;
@@ -416,6 +416,25 @@ test("a recycled pane id is reported unknown and never signalled (#670)", async 
   setAgentRegistryForTests(null);
 });
 
+test("an unstamped attempt requires positive idle evidence before retiring a host without a stream", async () => {
+  const fixture = hostedConversation({ status: "dead", process: { pid: process.pid,
+    startIdentity: procBackend.processIdentity(process.pid), bootEpoch: "fixture-boot" } });
+  const { retirePipelineStageAgent } = await import("./engine");
+  const signals: number[] = [];
+  let alive = true;
+  const identity = procBackend.processIdentity(process.pid);
+  const result = await retirePipelineStageAgent({ ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId }, {
+    requireIdleEvidence: true,
+    termination: { processIdentity: pid => alive && pid === process.pid ? identity : null, bootEpoch: () => "fixture-boot",
+      pidAlive: pid => alive && pid === process.pid, ppidMap: () => new Map(), processGroupId: () => null,
+      signal: pid => { signals.push(pid); alive = false; }, sleep: async () => {}, terminateOwnedHost: async () => false,
+      retireRegistryEntry: () => true },
+  });
+  expect(signals).toEqual([]);
+  expect(result).toMatchObject({ outcome: "failed", error: expect.stringContaining("cannot prove an idle turn") });
+  expect(killed).toEqual([]);
+});
+
 test("provider recovery authority survives the engine idle retirement helper", async () => {
   const fixture = hostedConversation();
   const providerRecovery = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: 42, controlGeneration: null };
@@ -423,7 +442,7 @@ test("provider recovery authority survives the engine idle retirement helper", a
   const client = { readSession: async () => ({ conversationId: fixture.conversationId, host: "hosted", turn: "idle", activeTurnId: null,
     attentionIds: [], retirementBlocked: false, revision: 1, writerClaim: onlyIfIdle.writerClaim, artifactPath: fixture.path }) } as unknown as RuntimeHostClient;
   const { retirePipelineStageAgent } = await import("./engine");
-  expect(await retirePipelineStageAgent(target(fixture.conversationId, fixture.path), { client, providerRecovery })).toEqual({ outcome: "stopped" });
+  expect(await retirePipelineStageAgent(target(fixture.conversationId, fixture.path), { client, providerRecovery, requireIdleEvidence: true })).toEqual({ outcome: "stopped" });
   expect(killed).toEqual([expect.objectContaining({ onlyIfIdle, providerRecovery })]);
 });
 

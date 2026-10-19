@@ -107,11 +107,13 @@ test.each(["completed", "closed", "superseded"] as const)("the production idle c
 test.each(["turn", "writer", "replacement", "publication"] as const)("released attempts still refuse a changed %s after awaited admission", async change => {
   const f = fixture();
   f.pipeline.state = "completed";
+  const peer: Pipeline = { ...f.pipeline };
+  if (change === "replacement") f.deps.loadPipelinesForRetirement = () => [f.pipeline, peer];
   const status = f.deps.client.operationStatus;
   f.deps.client.operationStatus = async () => {
     if (change === "turn") f.entry.structuredHost.activeTurnRef = "new-turn" as never;
     if (change === "writer") f.entry.claimOwner = "replacement";
-    if (change === "replacement") f.deps.loadPipelinesForRetirement = () => [f.pipeline, { ...f.pipeline, state: "running" }];
+    if (change === "replacement") peer.state = "running";
     if (change === "publication") f.pipeline.publicationAdmission = { state: "pending" } as Pipeline["publicationAdmission"];
     return status();
   };

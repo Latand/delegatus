@@ -91,6 +91,7 @@ function pipelineRecord(input: {
 
 function harness() {
   const stops: string[] = [];
+  const idleEvidenceRequired: boolean[] = [];
   const resident = new Map<string, boolean>();
   const stopResults = new Map<string, PipelineStageStopResult>();
   const active = new Map<string, boolean | null>();
@@ -109,6 +110,7 @@ function harness() {
       if (options?.onlyIfIdle && active.has(target.conversationId ?? "")
         && active.get(target.conversationId ?? "") !== false) return { outcome: "deferred" };
       stops.push(`${target.stageId}:${target.attempt}:${target.conversationId ?? "none"}`);
+      idleEvidenceRequired.push(options?.requireIdleEvidence === true);
       monotonic += stopCostMs;
       const result = stopResults.get(target.conversationId ?? "") ?? { outcome: "stopped" as const };
       if (result.outcome === "stopped") resident.set(target.conversationId ?? "", false);
@@ -137,6 +139,7 @@ function harness() {
   return {
     ports,
     stops,
+    idleEvidenceRequired,
     resident,
     stopResults,
     active,
@@ -171,6 +174,7 @@ for (const terminal of ["budget-spent", "outside-merge", "closed", "successor"] 
     h.active.set("conversation_terminal", false);
     await tickPipelinesController([], h.ports);
     expect(h.stops).toEqual(["implement:1:conversation_terminal"]);
+    expect(h.idleEvidenceRequired).toEqual([true]);
     expect(loadPipelines()[0]!.terminalReap?.settledAttempts).toEqual(["implement:1"]);
     expect(loadPipelines()[0]!.terminalReap?.settledAt).toBeTruthy();
   });

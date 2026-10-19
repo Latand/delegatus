@@ -329,6 +329,7 @@ export interface PipelinePorts {
   /** Terminates the host that owns a stage attempt's agent. `not-running` means
       no host was resident, so a close can tell an idle lane from one it stopped. */
   stopStageAgent(target: PipelineStageHostRef, options?: { onlyIfIdle?: true; operationId?: string; automatic?: true;
+    requireIdleEvidence?: true;
     providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
     recordedSurvivors?: readonly ProcessIdentity[] }): Promise<PipelineStageStopResult>;
   /** Null means newer working-host evidence withdrew the automatic stop. */
@@ -894,6 +895,8 @@ export type StageStopProbes = {
   operationId?: string;
   automatic?: true;
   onlyIfIdle?: import("@/lib/runtime/contracts").RuntimeIdleKillFence;
+  /** An unstamped terminal attempt cannot authorize the orphan fallback. */
+  requireIdleEvidence?: true;
   providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
   client?: RuntimeHostClient | null;
   /** Injected into the identity-bound termination a socketless caller falls
@@ -1182,7 +1185,11 @@ export async function retirePipelineStageAgent(
     if (!probe || !probe.resident()) return { outcome: "not-running" };
     /* No idle evidence can come from a host whose stream is gone. Its stage is
        settled, so the orphan behind the terminal row is ended by identity. */
-    if (probe.orphaned()) return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {});
+    if (probe.orphaned()) {
+      if (probes.requireIdleEvidence) return { outcome: "failed",
+        error: "automatic retirement cannot prove an idle turn for this recorded host without a stream; nothing was signalled" };
+      return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {});
+    }
     const client = probes.client === undefined ? runtimeHostClient() : probes.client;
     if (!client) return { outcome: "deferred" };
     const session = await client.readSession?.({ conversationId: probe.conversationId });
@@ -1747,7 +1754,7 @@ export function defaultPipelinePorts(
       return [...observation.panes.values()].some(pane => pane.paneId === paneId);
     },
     stopStageAgent: (target, options) => options?.onlyIfIdle
-      ? retirePipelineStageAgent(target, { providerRecovery: options.providerRecovery })
+      ? retirePipelineStageAgent(target, { providerRecovery: options.providerRecovery, requireIdleEvidence: options.requireIdleEvidence })
       : stopPipelineStageAgent(target, { operationId: options?.operationId, automatic: options?.automatic,
         ...(options?.recordedSurvivors ? { recordedSurvivors: options.recordedSurvivors } : {}) }),
     stopInterruptedStageAgent: async (target, options) => {
@@ -10020,7 +10027,7 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
   let attempted = false;
   let deferred = otherCandidates || candidates.some(({ target }) => !controllerAttemptSelected(pipeline.id, target.stageId, target.attempt));
   let liveWork = false;
-  for (const [index, { target, attempt }] of candidates.entries()) {
+  for (const [index, { target, attempt, turnSettled }] of candidates.entries()) {
     if (!controllerAttemptSelected(pipeline.id, target.stageId, target.attempt)) continue;
     const attemptKey = `${target.stageId}:${target.attempt}`;
     if (ports.monotonicNow() >= deadline) {
@@ -10058,7 +10065,7 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
       liveWork = true;
       continue;
     }
-    const result = await ports.stopStageAgent(target, { onlyIfIdle: true });
+    const result = await ports.stopStageAgent(target, { onlyIfIdle: true, ...(!turnSettled ? { requireIdleEvidence: true as const } : {}) });
     if (result.outcome === "deferred") {
       liveWork = true;
       continue;

@@ -18,6 +18,10 @@ close obligations continue to drain their frozen targets. Closed lanes without
 an obligation use the automatic idle reap. Archiving waits for outstanding
 retirement and unconfirmed hosts.
 
+An unstamped attempt also requires positive runtime idle evidence when its
+registry row has lost its control stream. Its orphan fallback records why it
+cannot prove idleness and sends no process signal.
+
 The fenced schema upgrade rebuilds ownership references and scheduler triggers
 and re-enrols outstanding terminal hosts, including a lane with an earlier
 false clean receipt. It preserves authoritative payloads and existing attempt
