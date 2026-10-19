@@ -325,7 +325,7 @@ test.skipIf(process.env.LLV_INDEX_REPAIR_BENCHMARK !== "1")("index repair startu
       db.exec("BEGIN IMMEDIATE");
       db.exec(`WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i<99999)
         INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
-        SELECT 'tasks',printf('task-%06d',i),json_object('id',printf('task-%06d',i),'project','repo-fixture','text','fixture','status','inbox'),i,1,1 FROM n`);
+        SELECT 'tasks',printf('task-%06d',i),json_object('id',printf('task-%06d',i),'project','repo-fixture','text',printf('%02048d',i),'status','inbox'),i,1,1 FROM n`);
       db.exec(`WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i<53298)
         INSERT INTO pipeline_tick_work SELECT printf('pipeline-%06d',i),i,1,i%2,i*1000,i%8 FROM n`);
       db.exec("INSERT INTO pipeline_controller_work SELECT 'publication',row_key,row_order FROM pipeline_tick_work");
@@ -338,7 +338,7 @@ test.skipIf(process.env.LLV_INDEX_REPAIR_BENCHMARK !== "1")("index repair startu
       db.exec("COMMIT");
       db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     } finally { db.close(); }
-    console.log(JSON.stringify({store:"state",fixture:{stateRows:100000,queueRows:53299,attemptRows:53299},
+    console.log(JSON.stringify({store:"state",fixture:{stateRows:100000,taskTextBytes:2048,queueRows:53299,attemptRows:53299,seedBytes:fs.statSync(seed).size},
       ...measureStartup(root, seed, source)}));
   } finally { fs.rmSync(root, {recursive:true,force:true}); }
 }, 120_000);
@@ -381,7 +381,7 @@ test.skipIf(process.env.LLV_INDEX_REPAIR_BENCHMARK !== "1")("companion index rep
     try {
       db.exec("BEGIN IMMEDIATE");
       db.exec(`WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i<53298)
-        INSERT INTO registry_rows SELECT 'fixture',printf('row-%06d',i),'{}',i FROM n`);
+        INSERT INTO registry_rows SELECT 'fixture',printf('row-%06d',i),json_object('text',printf('%02048d',i)),i FROM n`);
       db.exec("INSERT INTO registry_generation_identities SELECT row_key,row_key,row_key FROM registry_rows");
       db.exec("INSERT INTO registry_caller_roots SELECT row_key,'2026-10-19T00:00:00.000Z',row_order FROM registry_rows");
       db.exec("COMMIT");
@@ -392,7 +392,7 @@ test.skipIf(process.env.LLV_INDEX_REPAIR_BENCHMARK !== "1")("companion index rep
       const start=performance.now();
       const store=new SqliteAgentRegistryStore(process.argv[1],{initialSnapshot:normalizeRegistry({version:2,entries:{},receipts:{}}),normalize:normalizeRegistry});
       store.close();console.log(JSON.stringify({ms:performance.now()-start}));`;
-    console.log(JSON.stringify({store:"registry",fixture:{rows:53299,generationRows:53299,callerRows:53299},
+    console.log(JSON.stringify({store:"registry",fixture:{rows:53299,textBytes:2048,generationRows:53299,callerRows:53299,seedBytes:fs.statSync(registry).size},
       ...measureStartup(root,registry,registrySource,indexes(registry).filter(index=>/registry_(generation_identities|caller_)/.test(index.name)).map(index=>index.name))}));
     const journal = path.join(root, "journal.sqlite");
     const {SessionHostMetadata} = await import("@/runtime-host/journalSessionMetadata");
