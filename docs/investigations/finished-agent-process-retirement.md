@@ -43,6 +43,14 @@ false clean receipt. It preserves authoritative payloads and existing attempt
 receipts. Ordinary ticks keep the existing bounded attempt windows and indexed
 owner reads. This change claims no performance gain.
 
+Legacy reaps without `settledAttempts` infer receipts only for attempts with a
+verdict or completion stamp, matching `reviveLoadedPipeline` in
+`src/lib/pipelines/store.ts`. The SQL projection now applies that same default.
+Otherwise a false clean legacy receipt hides every unstamped host from the
+upgrade's queue, even though the decoded lane still owes its cleanup. Fresh-process
+regressions cover completed and closed lanes with explicit and omitted lists,
+preserve stamped receipts and compare the authoritative payload after reopening.
+
 Regressions exercise budget-exhausted completion, outside merge, completed
 successor lanes, legacy closed lanes, superseded attempts, an open turn becoming
 idle, archive custody, production termination guards and schema recovery in a

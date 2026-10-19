@@ -87,11 +87,16 @@ test("indexed superseded operational hosts remain terminal ahead of adopted help
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("retirement upgrade re-enrols a terminal host missed by the old projection across a process restart", () => {
+test.each([
+  ["completed", false], ["completed", true], ["closed", false], ["closed", true],
+] as const)("retirement upgrade re-enrols a %s host across restart (legacy receipts omitted: %s)", (state, omitted) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-retirement-upgrade-"));
   const filename = path.join(dir, "state.sqlite");
-  const row = { key: "terminal-lane", state: "completed", terminalReap: { settledAt: "done", settledAttempts: [] },
-    runs: [{ stageId: "build", attempts: [{ n: 1, state: "running", conversationId: "terminal-host", completedAt: null }] }] };
+  const row = { key: "terminal-lane", state, terminalReap: { settledAt: "done", ...(omitted ? {} : { settledAttempts: [] }) },
+    runs: [{ stageId: "build", attempts: [
+      { n: 1, state: "running", conversationId: "terminal-host", completedAt: null },
+      { n: 2, state: "passed", conversationId: "stamped-host", completedAt: "done" },
+    ] }] };
   const options = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (value: typeof row) => value.key,
     decode: (raw: unknown) => raw as typeof row, clone: (value: typeof row) => structuredClone(value) };
   try {
@@ -125,6 +130,9 @@ test("retirement upgrade re-enrols a terminal host missed by the old projection 
     try {
       expect(JSON.parse(upgraded.query<{ value_json: string }, []>("SELECT value_json FROM state_rows").get()!.value_json)).toEqual(row);
       expect(upgraded.query("SELECT controller_active FROM state_rows").get()).toEqual({ controller_active: 1 });
+      expect(upgraded.query("SELECT n,terminal FROM pipeline_attempt_refs ORDER BY n").all()).toEqual([
+        { n: 1, terminal: 1 }, { n: 2, terminal: omitted ? 0 : 1 },
+      ]);
     } finally { upgraded.close(); }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

@@ -87,7 +87,8 @@ export function installPipelineControllerReferences(db: Database, directory: str
             OR json_extract(${attemptValue},'$.verdict') IS NOT NULL OR COALESCE(json_extract(${attemptValue},'$.completedAt'),'')!='')
             AND (COALESCE(json_extract(${attemptValue},'$.conversationId'),'')='' OR json_extract(${attemptValue},'$.conversationId') IS NOT ${field("srcConversationId")})
             AND (COALESCE(json_extract(${attemptValue},'$.agentPath'),'')='' OR json_extract(${attemptValue},'$.agentPath') IS NOT ${field("srcPath")})
-            AND NOT (COALESCE(${field("terminalReap.settledAt")},'')!='' AND ${field("terminalReap.settledAttempts")} IS NULL)
+            AND NOT (COALESCE(${field("terminalReap.settledAt")},'')!='' AND ${field("terminalReap.settledAttempts")} IS NULL
+              AND (json_extract(${attemptValue},'$.verdict') IS NOT NULL OR COALESCE(json_extract(${attemptValue},'$.completedAt'),'')!=''))
             AND NOT EXISTS (SELECT 1 FROM settled WHERE settled.identity=json_extract(${runValue},'$.stageId')||':'||CAST(json_extract(${attemptValue},'$.n') AS INTEGER))
             AND NOT EXISTS (SELECT 1 FROM unconfirmed h WHERE h.stageId=json_extract(${runValue},'$.stageId') AND h.n=json_extract(${attemptValue},'$.n'))
             THEN 1 ELSE 0 END AS terminal,
