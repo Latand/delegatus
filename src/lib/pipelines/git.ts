@@ -13,6 +13,7 @@ import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { procBackend } from "@/lib/proc";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { tryLockFenceExclusive } from "@/runtime-host/fenceLock";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { redactBounded, redactMonitorText } from "@/lib/monitor/redact";
@@ -2025,15 +2026,26 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
 /** Explicit recovery reads the remote only after proving the previous executor
     and all its fenced Git children can no longer write. No age-based election. */
 export async function reconcilePipelinePublication(id: string, expectedEpoch: number, exec: ExecPort, conversationId: string | null): Promise<string | null> {
+  return withViewerOperation("pipelines.publication-recovery", () => reconcilePublication(id, expectedEpoch, exec, conversationId));
+}
+
+async function reconcilePublication(id: string, expectedEpoch: number, exec: ExecPort, conversationId: string | null): Promise<string | null> {
   const pipeline = findPipelineRecord(id);
   const operation = pipeline?.delivery?.operation;
   if (!pipeline?.delivery || pipeline.delivery.epoch !== expectedEpoch) return "publication owner or epoch changed";
   if (operation?.state !== "running") return null;
   const executor = operation.executor;
   if (!executor?.lockIdentity) return "publisher quiescence is unknown; no executor lock identity was recorded";
+  // The start token identifies the Viewer generation, including PID reuse.
+  // Its children can outlive it, so only the inherited kernel fence below
+  // proves quiescence. Conversely, a free fence permits settlement even when
+  // a live Viewer failed to persist its finished marker.
+  const generationRunning = !executor.finished && executor.identity
+    && procBackend.processIdentity(executor.pid) === executor.identity
+    && !(procBackend.name === "linux" && procBackend.processExited(executor.pid));
   // The parent takes this lock before recording the operation and holds it
-  // through its final Git command. A free lock therefore proves quiescence
-  // even when a live Viewer could not persist its finished marker.
+  // through its final Git command. A departed generation's children can still
+  // inherit it, so its process identity alone never authorizes replacement.
   const reconciled = await withPublicationFileLock(executor.lock, async () => {
     const remote = (await readRemotePipelineBranch(pipeline, exec, "reconciling the interrupted publisher"));
     if (!remote.ok) return redactBounded(redactPublicationText(remote.error), 4500);
@@ -2041,7 +2053,11 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
       const current = tx.get(id);
       if (!current?.delivery || current.delivery.epoch !== expectedEpoch || current.delivery.operation?.id !== operation.id
         || current.delivery.operation.state !== "running" || current.delivery.operation.epoch !== expectedEpoch
-        || current.delivery.operation.sha !== operation.sha) return "publication changed while reconciling";
+        || current.delivery.operation.sha !== operation.sha
+        || current.delivery.operation.executor?.pid !== executor.pid
+        || current.delivery.operation.executor.identity !== executor.identity
+        || current.delivery.operation.executor.lock !== executor.lock
+        || current.delivery.operation.executor.lockIdentity !== executor.lockIdentity) return "publication changed while reconciling";
       // The publisher can persist its outcome between the initial record read
       // and quiescence. Use the fenced transaction's latest durable evidence.
       const retained = current.delivery.operation.executor?.result;
@@ -2057,10 +2073,14 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
           : { ok: false, error: "interrupted publication did not leave its accepted head on the remote" };
       if (!result.ok && (!retained || (retained.ok && retained.uncertain))) result.outcome = "not-landed";
       const attempt = current.runs.find((run) => run.stageId === current.cursor?.stageId)?.attempts.at(-1);
+      const publicationPark = current.stateDetail?.startsWith("publishing the passed stage:") === true
+        || current.stateDetail?.startsWith("the worktree moved ") === true
+        || current.stateDetail?.startsWith("the accepted head cannot be verified before completion:") === true
+        || current.stateDetail === "interrupted publication did not leave its accepted head on the remote";
       // Older engines parked the accepted attempt itself. Preserve its pass
       // before replacing the legacy display prefix, and upgrade the operation
       // so subsequent recovery uses durable identity rather than diagnostics.
-      if (current.state === "needs_decision" && current.cursor?.state === "committing"
+      if (current.state === "needs_decision" && publicationPark && current.cursor?.state === "committing"
         && current.lastPassedCommit === operation.sha && current.delivery.ownerId === id
         && !deliveryOwnerError(current, tx.pipelineLookup({ ...current.delivery.target, active: true }))
         && (current.delivery.operation.passedStage === true || (current.delivery.operation.passedStage === undefined
@@ -2071,14 +2091,16 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
       }
       current.delivery.operation = { ...current.delivery.operation, state: "settled", result };
       if (result.ok) current.publishedCommit = operation.sha;
-      else if ((current.state === "needs_decision" || current.state === "running") && current.cursor?.state === "committing"
+      else if ((current.state === "running" || (current.state === "needs_decision" && publicationPark)) && current.cursor?.state === "committing"
         && current.lastPassedCommit === operation.sha) current.stateDetail = result.error;
       deliveryJournal(current, "recovery", "publisher quiescent; remote reconciled", conversationId);
       tx.put(current);
       return null;
     });
   }, executor.lockIdentity);
-  return reconciled.locked ? reconciled.value : "publisher child is still in flight or its lock could not be checked";
+  return reconciled.locked ? reconciled.value : generationRunning
+    ? "the recorded publisher generation is still in flight"
+    : "publisher child is still in flight or its lock could not be checked";
 }
 
 async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
