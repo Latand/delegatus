@@ -8843,6 +8843,7 @@ async function replaceUnansweredStageLaunch(
   recovery: StagedLaunchRecovery, ports: PipelinePorts, manual = false,
 ): Promise<boolean> {
   if ((!["running", "needs_decision"].includes(pipeline.state) && !(manual && pipeline.state === "paused"))
+    || (attempt.state !== "spawning" && !(attempt.state === "needs_decision" && isStructuredSpawnPark(pipeline, attempt)))
     || !ports.failStoppedStageLaunch || !attempt.launchId || !attempt.conversationId || attempt.report || attempt.verdict || attempt.completedAt
     || attempt.activation || attempt.paneId || openRuntimeSwitch(attempt) || pipelineSurvivorRefusal(pipeline)
     || (recovery.stopped && !recovery.reason.startsWith(STAGED_RECOVERY_EXHAUSTED))
@@ -8889,6 +8890,7 @@ async function replaceUnansweredStageLaunch(
   const previous = attempt.restartContext?.previousAttempt;
   const prior = runFor(pipeline, stage.id)?.attempts.find(a => a.n === previous);
   if (!manual && prior?.error?.startsWith(UNANSWERED_STAGE_PREFIX)) {
+    attempt.completedAt ??= ports.now();
     await park(pipeline, `${UNANSWERED_STAGE_PREFIX} in the automatic replacement; retry-stage to start another attempt`, attempt);
     return true;
   }
@@ -8905,6 +8907,7 @@ async function replaceUnansweredStageLaunch(
 
 /** Reconcile old never-started parks through the same bounded replacement. */
 async function settleAbandonedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<boolean> {
+  if (pipeline.state !== "closed" && attempt.state === "running") return false;
   const stage = currentStage(pipeline);
   if (pipeline.state !== "closed" && stage?.kind === "run" && currentAttempt(pipeline, stage.id) === attempt) {
     const recovery = unansweredLaunchRecovery(attempt, attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null);
@@ -8926,6 +8929,9 @@ async function waitForStagedLaunch(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   recovery: StagedLaunchRecovery, ports: PipelinePorts,
 ): Promise<void> {
+  // The receipt may finish reconciling after native evidence adopted the turn.
+  // A late receipt observation cannot put that attempt back into spawning.
+  if (attempt.state === "running") return;
   const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   if (receipt?.staged && receipt.currentGeneration === false) {
     await park(pipeline, SPAWN_GENERATION_CONFLICT, attempt);

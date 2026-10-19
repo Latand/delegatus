@@ -275,3 +275,30 @@ test.each(["generation", "writer"] as const)("a newer %s during host observation
     expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
   } finally { setAgentRegistryForTests(null); await f.host.end(); await peer.end(); }
 });
+
+
+test("a previously adopted running turn never re-enters silent first-message replacement", async () => {
+  const f = await silentLaunch();
+  try {
+    const receipt = f.registry.spawnReceipt(f.attempt().launchId!)!;
+    await f.client.command({ operationId: `spawn_message_${receipt.launchId}`, conversationId: receipt.conversationId,
+      kind: "send", text: "Build the change" } as Parameters<typeof f.client.command>[0]);
+    const at = f.h.ports.now();
+    fs.writeFileSync(receipt.artifactPath!, [
+      { timestamp: at, type: "session_meta", payload: { id: "working-stage" } },
+      { timestamp: at, type: "event_msg", payload: { type: "task_started" } },
+    ].map(row => JSON.stringify(row)).join("\n") + "\n");
+    await f.wake();
+    expect(f.attempt().state).toBe("running");
+    fs.unlinkSync(receipt.artifactPath!);
+    let silentStops = 0;
+    const stop = f.h.ports.stopStageAgent;
+    f.h.ports.stopStageAgent = async (target, options) => {
+      if (options?.recordedIdentity) silentStops++;
+      return stop(target, options);
+    };
+    f.advance(BUDGET); await f.wake();
+    expect(silentStops).toBe(0);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  } finally { setAgentRegistryForTests(null); await f.host.end(); }
+});
