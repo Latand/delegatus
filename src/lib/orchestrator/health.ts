@@ -218,7 +218,9 @@ function codexUsageTokens(row: Record<string, unknown>): number | null {
   const info = usageObject(usageObject(row.payload)?.info);
   const usage = usageObject(info?.last_token_usage) ?? usageObject(info?.total_token_usage);
   if (!usage) return null;
-  return tokenSum(usage, ["input_tokens", "cached_input_tokens"]);
+  // Codex's context meter uses total_tokens. Cached input and reasoning are
+  // already included in input and output; sparse records retain those totals.
+  return tokenSum(usage, ["total_tokens"]) ?? tokenSum(usage, ["input_tokens", "output_tokens"]);
 }
 
 /* Base64 alphabet (with padding): the bytes an encoded attachment is made of.

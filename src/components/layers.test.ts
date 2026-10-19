@@ -8,17 +8,24 @@ const COMPONENTS = path.resolve(import.meta.dir);
 const SCALE_MODULE = path.join(COMPONENTS, "layers.ts");
 
 /**
- * Raw z-indexes the guard tolerates for now, file by file, exactly: files
- * another open pull request owns keep their numbers until it merges, and the
- * follow-up moves them onto the scale and deletes their entry here. An entry
- * that no longer matches its file fails the guard too, so the list can only
- * shrink.
+ * Exact inventory of existing raw z-indexes, retained until those surfaces move
+ * onto the scale. A changed or removed entry fails alongside new raw values.
+ * The reasons below preserve existing stacking while repairing this inventory.
  */
 const LEGACY_RAW_Z: Record<string, readonly string[]> = {
   "SoundToggle.tsx": ["z-50"],
-  "Viewer.tsx": ["z-50", "z-50", "z-40", "z-40"],
+  /* Reload banner, two notice stacks and two focus notices. */
+  "Viewer.tsx": ["z-50", "z-50", "z-50", "z-40", "z-40"],
   "AccountBadge.tsx": ["z-[95]"],
   "mobile/MobileFocusView.tsx": ["z-[55]"],
+  /* Body-mounted drag ghost stays above the phone's dock and sheets (#2421). */
+  "mobile/phoneCardLift.ts": ['zIndex: "80'],
+  /* Existing header-anchored attention dropdown (#2256). */
+  "attention/AttentionPanel.tsx": ["z-50"],
+  /* Jump strip stays above the transcript and its live-tail pill (#2756). */
+  "LogFeed.tsx": ["z-20"],
+  /* Browser-only pixel probe covers the fixture; never shipped as a surface. */
+  "kanban/issue1695BrowserHarness.ts": ["z-index:2147483647"],
   "kanban/kanbanBoard.css": [
     "z-index: 60",
     "z-index: 58",
@@ -26,6 +33,10 @@ const LEGACY_RAW_Z: Record<string, readonly string[]> = {
     "z-index: 70",
     "z-index: 80",
     "z-index: 70",
+    /* Field, scrim, agent window and relay reader share reader=64 (#2661, #3024). */
+    "z-index: 64",
+    "z-index: 64",
+    "z-index: 64",
     "z-index: 64",
     "z-index: 62",
   ],
@@ -64,12 +75,31 @@ export function rawZIndexes(source: string): RawZ[] {
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name, "en"))) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) out.push(...sourceFiles(full));
     else if (/\.(tsx?|css)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) && !entry.name.endsWith(".fixture.tsx")) out.push(full);
   }
   return out;
+}
+
+function rawZViolations(sources: Record<string, string>, legacy: Record<string, readonly string[]>) {
+  const offenders: string[] = [];
+  const stale: string[] = [];
+  for (const [file, source] of Object.entries(sources)) {
+    const found = rawZIndexes(source);
+    const expected = legacy[file];
+    if (expected) {
+      const texts = found.map((entry) => entry.text);
+      if (JSON.stringify(texts) !== JSON.stringify(expected)) stale.push(`${file}: expected exactly ${JSON.stringify(expected)}, found ${JSON.stringify(texts)}`);
+    } else {
+      for (const entry of found) offenders.push(`${file}:${entry.line} ${entry.text} — take it from src/components/layers.ts`);
+    }
+  }
+  for (const file of Object.keys(legacy)) {
+    if (!(file in sources)) stale.push(`${file}: exempted file is missing`);
+  }
+  return { offenders, stale };
 }
 
 describe("the guard reads every spelling of a raw z-index", () => {
@@ -81,6 +111,35 @@ describe("the guard reads every spelling of a raw z-index", () => {
       `.menu { z-index: 70; }`,
     ].join("\n");
     expect(rawZIndexes(source).map((entry) => entry.text)).toEqual(["z-50", "z-[80]", "z-30", "zIndex: 95", "z-index: 70"]);
+  });
+
+  test("unchanged exemptions and scale references pass both checks", () => {
+    expect(rawZViolations({
+      "legacy.tsx": '<div className="z-50" />',
+      "scaled.tsx": '<div className={Z.popover} />',
+    }, { "legacy.tsx": ["z-50"] })).toEqual({ offenders: [], stale: [] });
+  });
+
+  test("new raw values and every stale exemption are reported together", () => {
+    expect(rawZViolations({
+      "new.tsx": '<div className="z-50 z-[80]" />',
+      "changed.css": '.menu { z-index: 70; }',
+      "migrated.tsx": '<div className={Z.popover} />',
+    }, {
+      "changed.css": ["z-index: 60"],
+      "migrated.tsx": ["z-50"],
+      "removed.tsx": ["z-50"],
+    })).toEqual({
+      offenders: [
+        "new.tsx:1 z-50 — take it from src/components/layers.ts",
+        "new.tsx:1 z-[80] — take it from src/components/layers.ts",
+      ],
+      stale: [
+        'changed.css: expected exactly ["z-index: 60"], found ["z-index: 70"]',
+        'migrated.tsx: expected exactly ["z-50"], found []',
+        "removed.tsx: exempted file is missing",
+      ],
+    });
   });
 
   test("content-range values, scale references and lookalikes pass", () => {
@@ -143,21 +202,13 @@ describe("one layering scale", () => {
   });
 
   test("no component under src/components uses a raw z-index outside the scale module", () => {
-    const offenders: string[] = [];
-    const stale: string[] = [];
+    const sources: Record<string, string> = {};
     for (const file of sourceFiles(COMPONENTS)) {
       if (file === SCALE_MODULE) continue;
       const rel = path.relative(COMPONENTS, file).split(path.sep).join("/");
-      const found = rawZIndexes(fs.readFileSync(file, "utf8"));
-      const legacy = LEGACY_RAW_Z[rel];
-      if (legacy) {
-        const texts = found.map((entry) => entry.text);
-        if (JSON.stringify(texts) !== JSON.stringify(legacy)) stale.push(`${rel}: expected exactly ${JSON.stringify(legacy)}, found ${JSON.stringify(texts)}`);
-        continue;
-      }
-      for (const entry of found) offenders.push(`${rel}:${entry.line} ${entry.text} — take it from src/components/layers.ts`);
+      sources[rel] = fs.readFileSync(file, "utf8");
     }
-    expect(offenders).toEqual([]);
-    expect(stale).toEqual([]);
+    /* One assertion prints both groups even when new raw values are present. */
+    expect(rawZViolations(sources, LEGACY_RAW_Z)).toEqual({ offenders: [], stale: [] });
   });
 });

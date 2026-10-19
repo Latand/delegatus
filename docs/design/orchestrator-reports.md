@@ -828,7 +828,10 @@ operator, which is what "the language I selected" means.
   `reportFingerprint = checkFingerprint`, the fingerprint of the check *before*
   the report was observed. A board change between that check and the report
   therefore still counts as unreported, and costs at most one extra digest; no
-  change is absorbed. Then set `checkFingerprint` to this check's fingerprint.
+  change is absorbed. When there is no saved board observation, use the
+  current board as the baseline; absence of a baseline proves no movement.
+  Retirement signal counts and wording contribute no board movement. Then set
+  `checkFingerprint` to this check's fingerprint.
 - **Wake text** (`seatTickWakeMessage`, `src/lib/monitor/report.ts:236`), in
   the reserved tail so the length bound never cuts it. `in Ukrainian` stands
   for the operator's language; while `operatorLocale` is null the clause is

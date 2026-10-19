@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { CODEX_TOKEN_COUNT } from "../orchestrator/codexUsage.fixture";
+import { contextReading, readOrchestratorTranscriptFacts } from "../orchestrator/health";
 import { autoRotationCardNotice, autoRotationStep, type AutoRotationAttempt, type SeatContextUsage } from "./seatAutoRotation";
 import { defaultSeatTickSettings, effectiveSeatTickSettings } from "./seatTickSettings";
 import { AUTO_ROTATE_COOLDOWN_MS } from "./seatTick";
@@ -18,6 +23,29 @@ const attempt = (state: AutoRotationAttempt["state"], minutes: number): AutoRota
   startedAt: at(minutes), tokens: 610_000, windowTokens: 1_000_000, thresholdPercent: 60, state, told: { report: true, card: true } });
 
 describe("context auto-rotation decision", () => {
+  test.each([50, 60, 90])("Codex provider totals govern a threshold of %i percent", thresholdPercent => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-rotation-"));
+    const transcript = path.join(directory, "context.jsonl");
+    try {
+      for (const delta of [-1, 0, 1]) {
+        const row = structuredClone(CODEX_TOKEN_COUNT);
+        const total = row.payload.info.model_context_window * thresholdPercent / 100 + delta;
+        const record = { ...row, payload: { ...row.payload, info: { ...row.payload.info,
+          last_token_usage: { ...row.payload.info.last_token_usage, input_tokens: total - 420, total_tokens: total },
+        } } };
+        fs.writeFileSync(transcript, JSON.stringify(record) + "\n");
+        const reading = contextReading({ policy: null, facts: readOrchestratorTranscriptFacts(transcript, null) });
+        const result = autoRotationStep({ ...base,
+          settings: { ...settings, autoRotate: { ...settings.autoRotate!, thresholdPercent } },
+          usage: { engine: "codex", model: "gpt-6.1-sol", tokens: reading.tokens, windowTokens: reading.limit, estimated: reading.estimated },
+        });
+        expect(result.kind).toBe(delta < 0 ? "none" : "rotate");
+        expect(reading.tokens).toBe(total);
+      }
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
   test("absent setting is off and leaves state untouched", () => {
     const state = { ...base.state, autoRotation: { lastAttempt: attempt("failed", -10) } };
     const result = autoRotationStep({ ...base, state, settings: effectiveSeatTickSettings(defaultSeatTickSettings("fixture"), NOW, AUTO_ROTATE_COOLDOWN_MS) });
