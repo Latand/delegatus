@@ -1,3 +1,4 @@
+import type { AgentRegistry, SpawnReceipt } from "./registry";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { withSpawnDiagnostics, bindSpawnDiagnostics, spawnDiagnosticError } from "./spawnDiagnostics";
 import fs from "node:fs";
@@ -30,7 +31,7 @@ import { ENGINE_NOT_CONNECTED, engineNotConnectedDetails, engineNotConnectedMess
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { spawnAdmissionBodyDigest, spawnContentDigest, spawnParentSelector, spawnRequestDigests } from "@/lib/agent/spawnIdentity";
 import { sessionKeyFromTranscript, sessionKeyId } from "@/lib/agent/sessionKey";
-import { resolveSpawnLineage, SpawnParentError } from "@/lib/agent/spawnParent";
+import { resolveSpawnLineageOffLoop, SpawnParentError } from "@/lib/agent/spawnParent";
 import { LaunchMembershipError } from "@/lib/tasks/launchMembership";
 import {
   SpawnAdmissionError,
@@ -622,7 +623,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     const requestProfileTitle = identityWaveTitleReplay
       ? durableSemanticTitle(existingAttempt.launchProfile.title, 120) ?? launchTitle
       : launchTitle;
-    const lineage = resolveSpawnLineage(spawnLineageSelectorForCaller(authenticatedCaller, {
+    const lineage = await resolveSpawnLineageOffLoop(spawnLineageSelectorForCaller(authenticatedCaller, {
       ...body,
       role: role.value?.role,
     }), registry);
@@ -1203,33 +1204,6 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         pipelineSourceConversationId,
       }, queuedTitle)));
     }
-    const recordActualLaunchAccount = (
-      receipt: typeof begun.receipt,
-      actualAccountId: string,
-      agentPath: string | null,
-    ): void => {
-      if (!agentPath || receipt.accountId === actualAccountId) return;
-      const snapshot = registry.readOnlySnapshot();
-      const materialized = snapshot.receipts[receipt.launchId];
-      if (!materialized?.key || materialized.artifactPath !== agentPath) return;
-      const entry = snapshot.entries[sessionKeyId(materialized.key)];
-      const conversation = snapshot.conversations[materialized.conversationId];
-      if (!entry || !conversation) return;
-      registry.reconcileConversations([{
-        engine: materialized.engine,
-        path: agentPath,
-        accountId: actualAccountId,
-        launchProfile: materialized.launchProfile,
-        turn: {
-          state: conversation.turn.state,
-          source: conversation.turn.source,
-          terminalAt: conversation.turn.terminalAt,
-        },
-        expectedTurnObservedAt: conversation.turn.observedAt,
-        observedAt: new Date().toISOString(),
-      }]);
-      registry.upsert({ ...entry, accountId: actualAccountId });
-    };
     const adoptMaterializedAttempt = async (receipt: typeof begun.receipt, agentPath: string): Promise<void> => {
       if (!pipelineSourceConversationId || !dependencies.adoptPipelineAttemptFromSource) return;
       const materialized = registry.readOnlySnapshot().receipts[receipt.launchId] ?? receipt;
@@ -1284,7 +1258,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
             client: runtimeClient,
             authorize: dependencies.authorizeAutonomousLaunch,
           });
-          recordActualLaunchAccount(receipt, account.accountId, response.path);
+          await recordActualSpawnAccountOffLoop(registry, receipt, account.accountId, response.path);
         } catch (error) {
           spawnDiagnosticError("[spawn] structured launch failed", {
             launchId: receipt.launchId,
@@ -1466,7 +1440,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       pendingAction: "spawn",
     })));
     if (settled.kind === "conflict") return NextResponse.json(withAccountOverride(spawnResponseForReceipt(settled.receipt)));
-    recordActualLaunchAccount(settled.receipt, account.accountId, childPath);
+    await recordActualSpawnAccountOffLoop(registry, settled.receipt, account.accountId, childPath);
     await adoptMaterializedAttempt(settled.receipt, childPath);
     if (runtimeClient && operationId) {
       try {
@@ -1535,4 +1509,42 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     }
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
+}
+
+export async function recordActualSpawnAccountOffLoop(
+  registry: AgentRegistry,
+  receipt: SpawnReceipt,
+  actualAccountId: string,
+  agentPath: string | null,
+): Promise<void> {
+  if (!agentPath || receipt.accountId === actualAccountId) return;
+  const observed = registry.spawnRecoverySnapshot([receipt.launchId]);
+  const prior = observed.receipts[receipt.launchId];
+  const priorEntry = prior?.key ? observed.entries[sessionKeyId(prior.key)] : null;
+  const custody = (entry: typeof priorEntry) => JSON.stringify([entry?.claimEpoch, entry?.claimOwner,
+    entry?.structuredHostOperationId, entry?.structuredHost?.writerClaimEpoch, entry?.structuredHost?.process]);
+  const expectedCustody = custody(priorEntry);
+  await registry.deliveryWriteBatchOrBusy({ label: "registry.spawn-actual-account", operationId: receipt.launchId }, () => {
+    const snapshot = registry.readOnlySnapshot();
+    const materialized = snapshot.receipts[receipt.launchId];
+    if (!materialized?.key || materialized.artifactPath !== agentPath) return;
+    const entry = snapshot.entries[sessionKeyId(materialized.key)];
+    const conversation = snapshot.conversations[materialized.conversationId];
+    if (!entry || !conversation || conversation.generations.at(-1)?.path !== agentPath
+      || materialized.conversationId !== prior?.conversationId || custody(entry) !== expectedCustody) return;
+    registry.reconcileConversations([{
+      engine: materialized.engine,
+      path: agentPath,
+      accountId: actualAccountId,
+      launchProfile: materialized.launchProfile,
+      turn: {
+        state: conversation.turn.state,
+        source: conversation.turn.source,
+        terminalAt: conversation.turn.terminalAt,
+      },
+      expectedTurnObservedAt: conversation.turn.observedAt,
+      observedAt: new Date().toISOString(),
+    }]);
+    registry.upsert({ ...entry, accountId: actualAccountId });
+  });
 }

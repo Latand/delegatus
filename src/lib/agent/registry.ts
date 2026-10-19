@@ -5655,6 +5655,18 @@ export class AgentRegistry {
     return written.value;
   }
 
+  /** A synchronous multi-mutation callback keeps the admitted SQLite writer
+   * through every member. Successful members retain their ordinary failure
+   * semantics if a later member throws; the callback is never retried. */
+  async deliveryWriteBatchOrBusy<T>(correlation: { label: string; operationId?: string | null }, write: () => T): Promise<T> {
+    return this.deliveryWriteOrBusy(correlation, () => this.withMutationBatch(write));
+  }
+
+  private withMutationBatch<T>(write: () => T): T {
+    return this.sqliteMode === "read" || this.sqliteMode === "sqlite"
+      ? this.sqliteStore!.withMutationBatch(write) : write();
+  }
+
   /**
    * {@link deliveryWrite} for a caller that may not wait at all, because it
    * runs inside another synchronous lock (account retirement holds the
@@ -6338,6 +6350,7 @@ export class AgentRegistry {
     operationId?: string | null;
     correlate?: (value: T) => BlockingWaitCorrelation | null;
     waitMs?: number;
+    batch?: boolean;
   } = {}): Promise<{ acquired: true; value: T } | { acquired: false }> {
     const inherited = accountMutationHeld();
     const startedAt = performance.now();
@@ -6354,7 +6367,7 @@ export class AgentRegistry {
             guard?.();
             // Publish one correlated wait after admission supplies its operation
             // id; individual failed probes are part of this same wait.
-            return this.deliveryWriteNow(correlation, () => { acquiredAt = performance.now(); refused = false; return write(); }, { recordRefusal: false });
+            return this.deliveryWriteNow(correlation, () => { acquiredAt = performance.now(); refused = false; return options.batch ? this.withMutationBatch(write) : write(); }, { recordRefusal: false });
           }, {
             holder: label, caller: label,
             waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
@@ -6373,13 +6386,13 @@ export class AgentRegistry {
           durationMs: (acquiredAt ?? performance.now()) - startedAt, correlation, subject: "agent-registry", refused });
       }
     };
-    if (inherited) return run(totalWaitMs);
-    return this.withWriterAdmissionQueue(run, totalWaitMs, () => {
+    if (inherited) return withViewerOperation("registry.write", () => run(totalWaitMs));
+    return withViewerOperation("registry.write", () => this.withWriterAdmissionQueue(run, totalWaitMs, () => {
       refused = true;
       recordBlockingWait({ site: "registry-lock-async", synchronous: false,
         durationMs: performance.now() - startedAt, correlation, subject: "agent-registry", refused: true });
       return { acquired: false };
-    });
+    }));
   }
 
   private reserveSpawnRequest(input: SpawnRequest): SpawnBeginResult {

@@ -520,7 +520,7 @@ export class AccountLoginPendingError extends Error {
   }
 }
 
-type RoutingStore = Pick<AgentRegistry, "engineRouting" | "setEngineRouting">;
+type RoutingStore = Pick<AgentRegistry, "engineRouting" | "setEngineRouting"> & Partial<Pick<AgentRegistry, "accountMutationWrite">>;
 
 /** Keeps the compatibility catalog and launch-routing registry aligned. */
 function selectAccountLocked(engine: "claude" | "codex", id: string, routing: RoutingStore, account: ReturnType<typeof listClaudeAccounts>[number] | CodexAccount): void {
@@ -574,11 +574,15 @@ export async function selectAccount(engine: AccountEngineName, id: string, routi
       if (!account) throw engine === "claude" ? new UnknownClaudeAccountError(id) : new UnknownAccountError(id);
       return account;
     }, { caller: "account select", holder: "account selection preparation" });
-    const committed = await withAccountMutationLockAsync(() => {
+    const commit = () => {
       if (accountsCollectionRevision() !== snapshot.revision || accountProbeIdentity(snapshot.account) !== snapshot.identity) return false;
       selectAccountLocked(engine, id, routing, snapshot.account);
       return true;
-    }, { caller: "account select", holder: "account selection commit" });
+    };
+    const admission = routing.accountMutationWrite
+      ? await routing.accountMutationWrite("registry.account-select", commit, undefined, { batch: true })
+      : { acquired: true, value: await withAccountMutationLockAsync(commit, { caller: "account select", holder: "account selection commit" }) };
+    const committed = admission.acquired && admission.value;
     if (committed) return summary(engine, id);
   }
   throw new AccountAdmissionChangedError();

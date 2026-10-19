@@ -1,4 +1,3 @@
-import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import { isDeepStrictEqual } from "node:util";
 
@@ -120,7 +119,7 @@ interface HostDependencies extends TranscriptHostObservationDependencies {
   argv: (pid: number) => string[];
   parentPid: (pid: number) => number | null;
   spawn: (spec: ResumeSpec, text: string, receipt?: SpawnReceipt) => Promise<SpawnedPane>;
-  beginResume?: (entry: FileEntry, spec: ResumeSpec) => { receipt: SpawnReceipt; spec: ResumeSpec } | null;
+  beginResume?: (entry: FileEntry, spec: ResumeSpec, guard?: DeliveryAdmissionGuard) => { receipt: SpawnReceipt; spec: ResumeSpec } | null | Promise<{ receipt: SpawnReceipt; spec: ResumeSpec } | null>;
   remember: (pathname: string, spec: ResumeSpec, pane: SpawnedPane) => Promise<void>;
   deliver: (paneId: string, text: string, authorityGuard?: DeliveryAdmissionGuard) => Promise<void>;
   confirmAlive?: (host: TranscriptHost) => void | Promise<void>;
@@ -506,10 +505,7 @@ export function createTranscriptHostResolver(
       if (valid) return { host, resumed: false };
     }
 
-    const prepared = await withAccountMutationLockAsync(
-      () => dependencies.beginResume?.(input.entry, input.spec) ?? null,
-      { holder: "resume admission", caller: "resume admission" },
-    );
+    const prepared = await dependencies.beginResume?.(input.entry, input.spec, input.authorityGuard) ?? null;
     assertAuthority();
     const resumeSpec = prepared?.spec ?? input.spec;
     let spawnFailure: unknown = null;
@@ -637,10 +633,50 @@ function tmuxEvidenceForHost(host: TranscriptHost): TmuxHostEvidence {
   };
 }
 
-function confirmRegistryHostAlive(host: TranscriptHost): void {
-  if (host.launchId) {
-    agentRegistry().confirmSpawnPaneAlive(host.launchId, tmuxEvidenceForHost(host), { engine: host.engine, cwd: host.cwd });
+async function confirmRegistryHostAlive(host: TranscriptHost): Promise<void> {
+  if (!host.launchId) return;
+  const evidence = tmuxEvidenceForHost(host);
+  await agentRegistry().deliveryWriteOrBusy({ label: "registry.transcript-confirm" }, () => {
+    assertTranscriptHostsCurrent([host]);
+    if (!isDeepStrictEqual(evidence, tmuxEvidenceForHost(host))) throw new Error("transcript host evidence changed during registry admission");
+    agentRegistry().confirmSpawnPaneAlive(host.launchId!, tmuxEvidenceForHost(host), { engine: host.engine, cwd: host.cwd });
+  });
+}
+
+function assertTranscriptHostsCurrent(hosts: readonly TranscriptHost[]): void {
+  for (const host of hosts) {
+    if (!host.agentIdentity || procBackend.processIdentity(host.agentPid) !== host.agentIdentity
+      || !isDescendantOf(host.agentPid, host.panePid, readPpid)
+      || !isDeepStrictEqual(readArgv(host.agentPid), host.agentArgv)) {
+      throw new Error("transcript host changed during registry admission");
+    }
   }
+}
+
+export async function reconcileObservedTranscriptHostsOffLoop(
+  hosts: TranscriptHost[], registry = agentRegistry(),
+  assertCurrent?: () => void,
+  evidenceForHost = tmuxEvidenceForHost,
+): Promise<HostReconciliation> {
+  const observed = structuredClone(hosts);
+  const revision = registry.storageDiagnostics().revision;
+  const evidence = observed.map(evidenceForHost);
+  return registry.deliveryWriteBatchOrBusy({ label: "registry.transcript-hosts" }, () => {
+    // An empty census proves absence only at its original registry revision.
+    // A peer's new pane must survive a reconciliation that waited for it.
+    if (registry.storageDiagnostics().revision !== revision) throw new Error("transcript registry changed during admission");
+    if (assertCurrent) assertCurrent(); else assertTranscriptHostsCurrent(observed);
+    if (!isDeepStrictEqual(evidence, observed.map(evidenceForHost))) throw new Error("transcript host evidence changed during registry admission");
+    return reconcileObservedTranscriptHosts(observed, { registry, evidenceForHost });
+  });
+}
+
+export async function beginRegistryResumeOffLoop(
+  entry: FileEntry, spec: ResumeSpec, guard?: DeliveryAdmissionGuard, registry = agentRegistry(),
+): Promise<ReturnType<typeof beginRegistryResume>> {
+  const written = await registry.accountMutationWrite("registry.transcript-resume", () => beginRegistryResume(entry, spec, registry), guard, { batch: true });
+  if (!written.acquired) throw new Error("agent registry is busy");
+  return written.value;
 }
 
 function upsertChangesEntry(
@@ -899,12 +935,12 @@ const runtimeResolver = createTranscriptHostResolver({
   writesPath: pidWritesPath,
   launchId: paneLaunchId,
   conversationIdForPath: (pathname) => agentRegistry().conversationForPath(pathname)?.id ?? null,
-  beginResume: beginRegistryResume,
+  beginResume: beginRegistryResumeOffLoop,
   spawn: spawnAgentWithPrompt,
   remember: rememberRegistryResume,
   deliver: sendText,
   confirmAlive: confirmRegistryHostAlive,
-  reconcile: reconcileObservedTranscriptHosts,
+  reconcile: reconcileObservedTranscriptHostsOffLoop,
   serializeDelivery: serializeRegistryDelivery,
 }, globalStore.__llvTranscriptHostDecisions ??= new Map());
 

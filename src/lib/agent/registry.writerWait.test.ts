@@ -24,6 +24,61 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-writer-wait-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 beforeEach(() => resetBlockingWaitsForTests(() => {}));
 
+for (const prepared of [false, true]) test(`an admitted group keeps every mutation under its writer and preserves successful members on failure (prepared=${prepared})`, async () => {
+  const directory = fs.mkdtempSync(path.join(root, "writer-group-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new Database(path.join(directory, "registry.sqlite"));
+  const first = "/sessions/group-first.jsonl";
+  const second = "/sessions/group-second.jsonl";
+  try {
+    registry.readOnlySnapshot();
+    if (prepared) await registry.prepareReadOnlySnapshot();
+    await expect(registry.deliveryWriteBatchOrBusy({ label: "registry.group-fixture" }, () => {
+      const a = registry.ensureConversation("codex", first, null);
+      expect(registry.conversationForPath(first)?.id).toBe(a.id);
+      expect(registry.readOnlySnapshot().conversations[a.id]?.generations[0]?.path).toBe(first);
+      peer.exec("PRAGMA busy_timeout = 0");
+      expect(() => peer.exec("BEGIN IMMEDIATE")).toThrow();
+      registry.ensureConversation("codex", second, null);
+      expect(() => registry.setStructuredHost({ engine: "codex", sessionId: "missing" }, null)).toThrow("missing");
+      throw new Error("later group member refused");
+    })).rejects.toThrow("later group member refused");
+    expect(registry.conversationForPath(first)).not.toBeNull();
+    expect(registry.conversationForPath(second)).not.toBeNull();
+    expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
+    peer.exec("BEGIN IMMEDIATE");
+    peer.exec("ROLLBACK");
+    registry.close();
+    const reopened = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    try {
+      expect(reopened.conversationForPath(first)).not.toBeNull();
+      expect(reopened.conversationForPath(second)).not.toBeNull();
+    } finally { reopened.close(); }
+  } finally { peer.close(); registry.close(); }
+});
+
+test("a failed batch member rolls back its draft and subsequent members still commit", async () => {
+  const f = store("batch-savepoint");
+  try {
+    await f.store.withWriter(() => f.store.withMutationBatch(() => {
+      f.store.mutate(file => { file.engineRouting.codex.activeAccountId = "first"; }, false);
+      expect(() => f.store.mutate(file => {
+        file.engineRouting.codex.activeAccountId = "refused";
+        file.engineRouting.claude.activeAccountId = "refused";
+        throw new Error("batch member refused");
+      }, false)).toThrow("batch member refused");
+      expect(f.store.readOnlySnapshot().file.engineRouting.codex.activeAccountId).toBe("first");
+      expect(f.store.readOnlySnapshot().file.engineRouting.claude.activeAccountId).not.toBe("refused");
+      f.store.mutate(file => { file.engineRouting.claude.activeAccountId = "last"; }, false);
+    }));
+    expect(f.store.snapshot().file.engineRouting).toMatchObject({ codex: { activeAccountId: "first" }, claude: { activeAccountId: "last" } });
+  } finally { f.store.close(); }
+  const reopened = new SqliteAgentRegistryStore(f.filename, { initialSnapshot: () => { throw new Error("already initialized"); }, normalize: normalizeRegistry });
+  try {
+    expect(reopened.snapshot().file.engineRouting).toMatchObject({ codex: { activeAccountId: "first" }, claude: { activeAccountId: "last" } });
+  } finally { reopened.close(); }
+});
+
 function store(name: string): { store: SqliteAgentRegistryStore; filename: string } {
   const registry = new AgentRegistry(path.join(root, `${name}.json`), undefined, undefined, { sqliteMode: "off" });
   registry.reconcileConversations([{ engine: "codex", path: `/sessions/${name}.jsonl`, accountId: "default",

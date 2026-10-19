@@ -208,3 +208,17 @@ export function runIdentityWaveMigrationAtStartup(
   });
   return result;
 }
+
+/** The startup retry may run after serving begins. Take both writers without spinning. */
+export async function runIdentityWaveMigrationAtStartupOffLoop(
+  overrides: Partial<IdentityWaveStartupDependencies> = {},
+): Promise<IdentityWaveMigrationResult> {
+  const env = overrides.env ?? process.env;
+  if (env.LLV_IDENTITY_WAVE_DRY_RUN === "1") return runIdentityWaveMigrationAtStartup(overrides);
+  const registry = overrides.registry ?? agentRegistry();
+  if (!("accountMutationWrite" in registry)) return runIdentityWaveMigrationAtStartup(overrides);
+  const written = await (registry as AgentRegistry).accountMutationWrite("registry.identity-migration", () =>
+    runIdentityWaveMigrationAtStartup({ ...overrides, registry }));
+  if (!written.acquired) throw new Error("agent registry is busy");
+  return written.value;
+}

@@ -29,7 +29,7 @@ import {
   adoptCodexRegistryHosts,
   detachCodexHostForViewerRestart,
   demoteSkippedStructuredRegistryHosts,
-  reconcileDeadStructuredRegistryHosts,
+  reconcileDeadStructuredRegistryHostsOffLoop,
   type AdoptedClaudeHost,
   type AdoptedCodexHost,
   type StructuredHostAdoptionFilter,
@@ -2169,12 +2169,12 @@ async function adoptStructuredHostsPass(
     /* Pending work makes a terminal conversation adoption-eligible. Clear any
        provably dead wrapper before that decision so its stale writer fence
        cannot block the startup recovery path. */
-    reconcileDeadStructuredRegistryHosts(registry, (entry) => orchestratorHostKeys.has(sessionKeyId(entry.key))
+    await reconcileDeadStructuredRegistryHostsOffLoop(registry, (entry) => orchestratorHostKeys.has(sessionKeyId(entry.key))
       || interruptionHostKeys.has(sessionKeyId(entry.key))
       || (resumeDeferred !== null && !resumeDeferred.has(sessionKeyId(entry.key)))
       || deferredHostKeys.has(sessionKeyId(entry.key))
       || delayedRows.has(sessionKeyId(entry.key))
-      || evidenceMoved(entry));
+      || evidenceMoved(entry), assertActive);
     const signals = await structuredStartupSignals(
       registry,
       client,
@@ -2500,7 +2500,12 @@ async function adoptStructuredHostsPass(
           skippedHostKeys.add(sessionKeyId(entry.key));
           return;
         }
-        return mutation();
+        return registry.deliveryWriteOrBusy({ label: "registry.startup-demote" }, () => {
+          assertActive();
+          const latest = startupSnapshot(registry).entries[sessionKeyId(entry.key)];
+          if (!latest || evidenceMoved(latest)) return undefined;
+          return mutation();
+        });
       }, "reconciling structured hosts"));
     const publicationSnapshot = startupSnapshot(registry);
     orchestratorHostKeys = currentOrchestratorRestartRecoveryHostKeys(

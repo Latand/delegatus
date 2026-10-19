@@ -8,7 +8,7 @@ import { AgentRegistry, type AgentRegistryEntry, type StructuredHostColumns } fr
 import type { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
 import type { CodexAppServerHost } from "./codexAppServerHost";
 import type { HostState } from "./engineHost";
-import { bindClaudeHostPersistence, bindCodexHostPersistence, DEFAULT_CURSOR_DEBOUNCE_MS } from "./registry";
+import { bindClaudeHostPersistence, bindCodexHostPersistence, DEFAULT_CURSOR_DEBOUNCE_MS, type StructuredHostPersistenceStop } from "./registry";
 import { beginLegacySpawnReceiptFixture } from "@/lib/agent/registryTestFixtures";
 
 const KEY = { engine: "codex" as const, sessionId: "coalesced-host" };
@@ -31,6 +31,8 @@ function hostState(overrides: Partial<HostState> = {}): HostState {
 }
 
 class RecordingRegistry {
+  async deliveryWriteOrBusy<T>(_correlation: unknown, write: () => T): Promise<T> { return write(); }
+
   readonly writes: Array<{ columns: StructuredHostColumns; status: string; releaseClaim: boolean }> = [];
   readonly releases: number[] = [];
   acceptWrites = true;
@@ -81,7 +83,7 @@ type Binder = (
   registry: AgentRegistry,
   host: RecordingHost,
   options?: { cursorDebounceMs: number },
-) => Promise<() => void>;
+) => Promise<StructuredHostPersistenceStop>;
 
 const binders: Array<[string, Binder]> = [
   ["Codex", (registry, host, options) => bindCodexHostPersistence(
@@ -126,7 +128,7 @@ for (const [engine, bind] of binders) {
       await Bun.sleep(35);
       expect(lanes.reduce((sum, lane) => sum + lane.registry.writes.length, 0)).toBe(20);
       expect(lanes.every((lane) => lane.registry.writes.at(-1)?.columns.eventCursor === 100)).toBeTrue();
-      for (const lane of lanes) lane.stop();
+      for (const lane of lanes) await lane.stop();
     });
 
     test("coalesces cursor-only events into one trailing registry mutation", async () => {
@@ -140,28 +142,32 @@ for (const [engine, bind] of binders) {
       await Bun.sleep(35);
       expect(registry.writes).toHaveLength(2);
       expect(registry.writes.at(-1)?.columns.eventCursor).toBe(20);
-      stop();
+      await stop();
     });
 
     test("persists material and terminal changes immediately with the latest cursor", async () => {
       const registry = new RecordingRegistry();
       const host = new RecordingHost();
-      await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 100 });
+      const stop = await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 100 });
 
       host.emit({ eventCursor: 1 });
       host.emit({ eventCursor: 2, status: "active", activeTurnRef: "turn-1" });
+      await stop.flush();
       expect(registry.writes).toHaveLength(2);
+      await stop.flush();
       expect(registry.writes.at(-1)).toMatchObject({
         columns: { eventCursor: 2, activeTurnRef: "turn-1" },
         status: "live",
       });
 
       host.emit({ eventCursor: 3, status: "attention", pendingAttention: ["approval-1"] });
+      await stop.flush();
       expect(registry.writes.at(-1)).toMatchObject({
         columns: { eventCursor: 3, pendingAttention: ["approval-1"] },
         status: "live",
       });
       host.emit({ eventCursor: 4, status: "active", pendingAttention: [], activeFlags: ["waiting"] });
+      await stop.flush();
       expect(registry.writes.at(-1)).toMatchObject({
         columns: { eventCursor: 4, activeFlags: ["waiting"] },
         status: "live",
@@ -177,13 +183,16 @@ for (const [engine, bind] of binders) {
         processStartIdentity: "4242:100",
         activeTurnRef: null,
       });
+      await stop.flush();
       expect(registry.writes).toHaveLength(5);
+      await stop.flush();
       expect(registry.writes.at(-1)).toMatchObject({
         columns: { eventCursor: 6, process: null },
         status: "unhosted",
         releaseClaim: true,
       });
       await Bun.sleep(120);
+      await stop.flush();
       expect(registry.writes).toHaveLength(5);
     });
 
@@ -194,7 +203,7 @@ for (const [engine, bind] of binders) {
 
       host.emit({ eventCursor: 8 });
       host.emit({ eventCursor: 9 });
-      stop();
+      await stop();
 
       expect(registry.writes.map((write) => write.columns.eventCursor)).toEqual([0, 9]);
       expect(registry.releases).toEqual([7]);
@@ -205,7 +214,7 @@ for (const [engine, bind] of binders) {
     test("releases the host when a trailing write loses its claim", async () => {
       const registry = new RecordingRegistry();
       const host = new RecordingHost();
-      await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 10 });
+      const stop = await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 10 });
 
       registry.acceptWrites = false;
       host.emit({ eventCursor: 1 });
@@ -236,22 +245,24 @@ for (const [engine, bind] of binders) {
       registry.acceptWrites = true;
       registry.heldByTermination = false;
       await Bun.sleep(25);
+      await stop.flush();
       expect(registry.writes.at(-1)).toMatchObject({ columns: { eventCursor: 2, activeTurnRef: "turn-1" }, status: "live" });
       expect(host.releaseCalls).toBe(0);
-      stop();
+      await stop();
       expect(registry.releases).toEqual([7]);
     });
 
     test("a terminal write refused under a captured tree still ends the binding", async () => {
       const registry = new RecordingRegistry();
       const host = new RecordingHost();
-      await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 10 });
+      const stop = await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: 10 });
 
       registry.acceptWrites = false;
       registry.heldByTermination = true;
       host.emit({ eventCursor: 3, status: "unhosted", endpoint: "stdio:released", pid: null, processStartIdentity: null });
 
       // The guard keeps the row's process and survivors; the writer gives up its claim as before.
+      await stop.flush();
       expect(registry.writes.at(-1)).toMatchObject({ status: "unhosted", releaseClaim: true });
       expect(registry.releases).toEqual([7]);
       expect(host.releaseCalls).toBe(1);
@@ -324,6 +335,7 @@ test("production-sized ten-lane persistence coalesces cursors and orders materia
     pendingAttention: [],
   });
 
+  await Promise.all(lanes.map(lane => lane.stop.flush()));
   expect(registry.storageDiagnostics().revision! - revisionBeforeEvents).toBe(40);
   for (const lane of lanes) {
     expect(registry.snapshot().entries[`${lane.key.engine}:${lane.key.sessionId}`]).toMatchObject({
@@ -331,7 +343,7 @@ test("production-sized ten-lane persistence coalesces cursors and orders materia
       claimOwner: null,
       structuredHost: { eventCursor: 103, activeTurnRef: null, pendingAttention: [] },
     });
-    lane.stop();
+    await lane.stop();
   }
 }, 30_000);
 
@@ -342,10 +354,12 @@ for (const [engine, bind] of binders) test(`${engine} persists memory kills imme
   const memory: NonNullable<HostState["memory"]> = { mechanism: "scope", unit: "delegatus-agent-test-row.scope", limitBytes: 15 * 2 ** 30, kills: 1,
     lastKill: { at: new Date().toISOString(), limitBytes: 15 * 2 ** 30, limit: "agent", fatal: false, process: null } };
   host.emit({ memory });
+  await stop.flush();
   expect(registry.writes.at(-1)?.columns.memory?.kills).toBe(1);
   host.emit({ status: "dead", memory: { ...memory, lastKill: { ...memory.lastKill!, fatal: true } } });
+  await stop.flush();
   expect(registry.writes.at(-1)?.columns.memory?.lastKill?.fatal).toBe(true);
-  stop();
+  await stop();
 });
 
 test("memory evidence round-trips through the durable registry and malformed shapes are dropped", () => {

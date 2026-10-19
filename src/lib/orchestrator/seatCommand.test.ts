@@ -64,6 +64,36 @@ const AT = "2026-07-29T00:00:00.000Z";
 const NEW_ID = "conversation_33333333-3333-4333-8333-333333333333";
 const OLD_ID = "conversation_44444444-4444-4444-8444-444444444444";
 
+test("completed seat replay awaits registry identity publication without blocking the Viewer", async () => {
+  const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const registry = new AgentRegistry(path.join(sandbox, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const transcript = path.join(sandbox, "seat.jsonl");
+  const conversation = registry.ensureConversation("codex", transcript, null);
+  setAgentRegistryForTests(registry);
+  const { deps } = dependencies({
+    conversationTarget: () => ({ kind: "eligible", conversationId: conversation.id, path: transcript, cwd: sandbox, project: "proj-a", engine: "codex" }),
+    stampRegistryIdentity: seat => { registry.stampOrchestratorSeatIdentity(seat); },
+  });
+  const request = { project: "proj-a", mandate: "Own the fixture board", clientRequestId: "registry-seat-replay", conversationId: conversation.id };
+  const holder = registryLockHolder(path.join(sandbox, "registry.sqlite"));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    expect((await executeOrchestratorSeatRequest(request, deps)).status).toBe(200);
+    await holder.hold(180);
+    const start = performance.now();
+    let finished = false;
+    const tick = new Promise<{ elapsed: number; pending: boolean }>(resolve => {
+      timer = setTimeout(() => resolve({ elapsed: performance.now() - start, pending: !finished }), 10);
+    });
+    const replay = await executeOrchestratorSeatRequest(request, deps).finally(() => { finished = true; });
+    const sample = await tick;
+    expect(sample.pending).toBe(true);
+    expect(sample.elapsed).toBeLessThan(50);
+    expect(replay.status).toBe(200);
+    expect(registry.conversation(conversation.id)?.agentRole).toBe("orchestrator");
+  } finally { clearTimeout(timer); await holder.close(); registry.close(); }
+});
+
 test("seat activation waits for runtime evidence outside the lease and preserves a racing designation", async () => {
   const { deps, recorded } = dependencies();
   let enter!: () => void, release!: () => void;
