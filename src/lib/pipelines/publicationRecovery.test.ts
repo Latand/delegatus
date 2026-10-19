@@ -24,7 +24,7 @@ const stages = [
 ];
 const current = () => loadPipelines()[0]!;
 
-async function fixture() {
+async function fixture(prelaunchPrefix?: "unrecorded" | "hooks-off" | "foreign") {
   savePipelines([]);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "publication-recovery-"));
   const repo = path.join(root, "repo"), remote = path.join(root, "remote.git"), hooks = path.join(root, "hooks");
@@ -62,6 +62,25 @@ async function fixture() {
     const result = await spawn(input, async reservation => {
       await reserved({ ...reservation, launchId });
       lane = input.cwd;
+      if (prelaunchPrefix && input.clientAttemptId.endsWith("_build_1")) {
+        let prefix: string;
+        if (prelaunchPrefix === "foreign") {
+          const foreign = path.join(root, "prelaunch-foreign-prefix");
+          await git(lane, "worktree", "add", "--detach", foreign, "HEAD");
+          const made = await execute("git", ["-c", "core.hooksPath=", "commit", "--allow-empty", "-m", "prelaunch foreign prefix"], foreign, clean);
+          expect(made.code, made.stderr).toBe(0);
+          prefix = await git(foreign, "rev-parse", "HEAD");
+          await git(lane, "merge", "--ff-only", prefix);
+        } else {
+          const args = ["commit", "--allow-empty", "-m", `prelaunch ${prelaunchPrefix} prefix`];
+          const made = await execute("git", prelaunchPrefix === "hooks-off" ? ["-c", "core.hooksPath=", ...args] : args, lane, clean);
+          expect(made.code, made.stderr).toBe(0);
+          prefix = await git(lane, "rev-parse", "HEAD");
+        }
+        const pushed = await execute("git", ["-c", "core.hooksPath=", "push", "origin", `HEAD:${current().delivery!.target.branch}`], lane, clean);
+        expect(pushed.code, pushed.stderr).toBe(0);
+        expect(await git(remote, "rev-parse", current().delivery!.target.branch)).toBe(prefix);
+      }
       const guard = await prepareStageGitGuard(launchId, lane, execute, h.ports.now());
       agentEnv = { ...clean, ...guard, ...agentPublicationIdentityEnv({ ...process.env, ...clean, ...guard }) };
     });
@@ -233,6 +252,29 @@ for (const proof of ["proved", "unrecorded", "hooks-off", "foreign"] as const) {
         expect(current().stateDetail).toContain(prefix);
         expect(current().publishedCommit).toBeNull();
       }
+    } finally { f.close(); }
+  });
+}
+
+for (const proof of ["unrecorded", "hooks-off", "foreign"] as const) {
+  test(`a replacement refuses an unaccepted ${proof} prefix already in its predecessor's starting head`, async () => {
+    const f = await fixture(proof);
+    try {
+      const old = current().runs[0]!.attempts[0]!;
+      const prefix = await f.git(f.lane(), "rev-parse", "HEAD");
+      expect(fs.existsSync(path.join(stageGitReceiptDirectory(old.launchId!), "commits", prefix))).toBe(false);
+      f.h.durableTurns.set(old.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(old.startedAt!) + 1 });
+      f.h.advanceWallClock(600_000);
+      f.h.ports.conversationTurnInterrupted = async () => "dead";
+      await tickPipelines([entry(old.agentPath!)], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      expect(current().runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "host-lost" });
+      const suffix = await f.commit("replacement suffix after unaccepted starting prefix");
+      await f.finish(2);
+      expect(current().state).toBe("needs_decision");
+      expect(current().stateDetail).toContain(prefix);
+      expect(current().publishedCommit).toBeNull();
+      expect(current().lastPassedCommit).not.toBe(suffix);
     } finally { f.close(); }
   });
 }

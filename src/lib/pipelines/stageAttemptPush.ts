@@ -226,10 +226,14 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       if ((await exec("git", ["merge-base", "--is-ancestor", parentStart.head, anchor], pipeline.worktreeDir)).code !== 0)
         return refuse("the replacement dropped its starting history");
       directories.push(parentDirectory);
-      const acceptedBoundary = pipeline.lastPassedCommit;
-      const boundaryIsValid = parent.verdict?.status === "pass" && /^[0-9a-f]{40}$/.test(acceptedBoundary)
-        && (await exec("git", ["merge-base", "--is-ancestor", acceptedBoundary, start.head], pipeline.worktreeDir)).code === 0;
-      if (decision && boundaryIsValid) acceptedProofBoundary = acceptedBoundary;
+      const acceptedBoundaries = [pipeline.lastPassedCommit, pipeline.publishedCommit]
+        .filter((sha): sha is string => typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha));
+      for (const boundary of acceptedBoundaries) {
+        if ((await exec("git", ["merge-base", "--is-ancestor", boundary, parentStart.head], pipeline.worktreeDir)).code === 0) {
+          acceptedProofBoundary = boundary;
+          break;
+        }
+      }
       anchor = acceptedProofBoundary ?? parentStart.head;
       child = parent;
     }
