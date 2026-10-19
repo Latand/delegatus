@@ -3151,7 +3151,7 @@ test("create_pipeline batches every invalid stage model with each engine catalog
     src: path.join(sandbox, "creator.jsonl"),
     stages: [
       { id: "build", kind: "run", engine: "codex", model: "gpt-5.6-codex", prompt: "build", next: "review" },
-      { id: "review", kind: "review-loop", engine: "claude", model: "claude-fable-5", prompt: "review", next: null },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, engine: "claude", model: "claude-fable-5", prompt: "review", next: null },
     ],
   }, { signal: undefined, deadlineAt: Date.now() + 30_000 } as never).then(
     () => null,

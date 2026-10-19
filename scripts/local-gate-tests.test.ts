@@ -26,6 +26,7 @@ const source = (pass: boolean) => `import { test, expect, describe } from "bun:t
 test("review evidence names the exact base and head without changing repository refs", async () => {
   const f = fixture(source(false));
   // The fixture's private run environment may acquire Bun cache files.
+  mkdirSync(path.join(f.dir, ".git/info"), { recursive: true });
   writeFileSync(path.join(f.dir, ".git/info/exclude"), "env/\n");
   writeFileSync(path.join(f.dir, "example.test.ts"), `${source(false)}\ntest("added passing case", () => {});`);
   f.git("add", "example.test.ts"); f.git("commit", "-m", "reviewed change");
@@ -393,6 +394,62 @@ ${extra}
 ${message === null ? "" : `describe("broken", () => { test("inner", () => {}); throw new Error(${JSON.stringify(message)}); });`}`;
 const cliAt = (f: ReturnType<typeof fixture>, base: string, files = ["./example.test.ts"]) => spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, ...files], { cwd: f.dir, env: f.env, encoding: "utf8" });
 const SAME_WAY = "(the base run of this file is broken the same way)";
+
+test.each(["recovers", "changes", "repeats"] as const)("a head-only between-tests error gets one isolated full-file retry: %s", mode => {
+  const f = fixture(source(true));
+  const marker = path.join(f.dir, "diagnostic-runs");
+  writeFileSync(path.join(f.dir, "example.test.ts"), `import { test, describe } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+const marker = ${JSON.stringify(marker)};
+const n = existsSync(marker) ? Number(readFileSync(marker, "utf8")) + 1 : 1;
+writeFileSync(marker, String(n));
+test("whole file still runs", () => {});
+describe("diagnostic", () => {
+  if (n === 1 || ${JSON.stringify(mode)} === "repeats") throw new Error("first diagnostic");
+  if (${JSON.stringify(mode)} === "changes") throw new Error("second diagnostic");
+});`);
+  const outcome = cliAt(f, f.base);
+  expect(outcome.stderr).not.toContain("gate error");
+  expect(readFileSync(marker, "utf8")).toBe("2");
+  expect(outcome.status, outcome.stdout + outcome.stderr).toBe(mode === "recovers" ? 0 : 1);
+  if (mode === "repeats") expect(outcome.stdout).toContain("NEW example.test.ts: <between-tests error> error: first diagnostic");
+  else expect(outcome.stdout).toContain("FLAKY example.test.ts: <between-tests error> error: first diagnostic");
+  if (mode === "changes") expect(outcome.stdout).toContain("NEW example.test.ts: <between-tests error> error: second diagnostic");
+  // A fresh comparator process must resample rather than reuse the prior pass.
+  writeFileSync(marker, "0");
+  const restarted = cliAt(f, f.base);
+  expect(restarted.status).toBe(outcome.status);
+  expect(readFileSync(marker, "utf8")).toBe("2");
+});
+
+test("diagnostic retry preserves extra occurrences beyond the base across comparator restarts", () => {
+  const f = fixture(source(true));
+  const marker = path.join(f.dir, "diagnostic-multiplicity");
+  const scheduled = `import { test, describe } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const side = basename(process.cwd()) === "baseline" ? "base" : "head";
+const counter = ${JSON.stringify(marker)} + "-" + side;
+const run = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
+writeFileSync(counter, String(run));
+test("passing test", () => {});
+const errors = side === "base" ? ["A"] : run === 1 ? ["A", "B"] : ["A", "A"];
+for (const [index, message] of errors.entries()) describe("diagnostic " + index, () => { throw new Error(message); });`;
+  writeFileSync(path.join(f.dir, "example.test.ts"), scheduled);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "diagnostic multiplicity schedule");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, "example.test.ts"), `${scheduled}\n// reviewed head`);
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    writeFileSync(marker + "-base", "0");
+    writeFileSync(marker + "-head", "0");
+    const result = cliAt(f, base);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("NEW example.test.ts: <between-tests error> error: A");
+    expect(result.stdout).toContain("FLAKY example.test.ts: <between-tests error> error: B");
+    expect(result.stdout).toContain("1 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+  }
+});
 
 test("a between-tests error present on both sides is PRE-EXISTING from the CLI and never blocks", async () => {
   const f = fixture(betweenTests("describe boom"));

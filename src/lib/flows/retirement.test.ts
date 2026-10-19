@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { Database } from "bun:sqlite";
 import { NextRequest } from "next/server";
 import type { Flow, FlowDecisionRequest, PatchFlowRequest } from "./types";
-import type { PipelineStage, PipelineStageAttempt, PatchPipelineRequest } from "@/lib/pipelines/types";
+import type { PipelineMerge, PipelineStage, PipelineStageAttempt, PatchPipelineRequest } from "@/lib/pipelines/types";
 import type { RuntimeEvent } from "@/lib/runtime/contracts";
 import { FLOW_RETIREMENT, STAGE_RETIREMENT } from "./retirement";
 
@@ -18,7 +18,7 @@ const { loadFlows, saveFlows, reconcileFlowConversationOwnership, reconcileFlowC
 const { createFlowFromRequest, patchFlow, cancelRound, closeFlow } = await import("./commands");
 const { tickFlows, enforceHeadlessAccountCreditGuard } = await import("./engine");
 const { submitFlowDecision } = await import("./decisions");
-const { savePipelines, loadPipelines, buildPipeline } = await import("@/lib/pipelines/store");
+const { savePipelines, loadPipelines, buildPipeline, pipelineIdentity } = await import("@/lib/pipelines/store");
 const { createPipelineFromRequest, patchPipeline, normalizeStages, tickPipelines, defaultPipelinePorts, reconcileEmbeddedReviewFlows, preparePipelineReviewRepair, reportStageCompletion, pipelineAttemptTargetForSource, adoptAttempt } = await import("@/lib/pipelines/engine");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
 const { viewerMcpBindings, productionDomainDependencies } = await import("@/lib/mcp/bindings");
@@ -259,6 +259,40 @@ test("pipeline controller cannot launch or reconcile a stored legacy lane (#2015
   expect(pipelineAttemptTargetForSource(owner)).toBeNull();
   expect(adoptAttempt(lane, "review", {} as never)).toBeNull();
   expect(rows()).toBe(before);
+});
+
+test.each(["blocked", "queued"] as const)("a native parent's merge retry refuses its %s retired successor without changing either row", async state => {
+  const { setMergeOnReview, resetProjectSettingsForTests } = await import("@/lib/projects/settings");
+  const settings = path.join(process.env.LLV_STATE_DIR!, "project-settings.json");
+  const prior = fs.existsSync(settings) ? fs.readFileSync(settings) : null;
+  const parent = legacyLane(); parent.id = "native-parent"; parent.stages[1]!.kind = "run";
+  Object.assign(parent, pipelineIdentity(parent.id, parent.task, parent.repoDir));
+  const child = legacyLane();
+  for (const lane of [parent, child]) { lane.state = "completed"; lane.cursor = null; lane.closedAt = date; }
+  const base = "a".repeat(40);
+  const merge = (state: "blocked" | "queued"): PipelineMerge => ({
+    state, by: null, repository: "example/project", prNumber: 1, policyChangedAt: date, reviewedHead: base,
+    chain: [base], updates: [], seenChecks: [], head: null, headSeenAt: null, lastChecks: null,
+    readAt: null, nextReadAt: null, requestedAt: date, mergedHead: null, mergeCommit: null, method: null,
+    mergedAt: null, attempts: 0, reason: "Historical merge", blockedAt: date, updatedAt: date,
+  });
+  parent.merge = { ...merge("blocked"), refresh: { attempt: 0, base, head: base, key: "retired-successor", digest: "c".repeat(64), requestedAt: date, pipelineId: child.id } };
+  child.merge = merge(state); child.refreshOf = { pipelineId: parent.id, base };
+  child.runs[1]!.attempts.push({ n: 1, state: "passed", effectiveRole: child.stages[1]!.effectiveRole,
+    launchId: null, conversationId: owner, sessionId: null, agentPath: flow().implementerPath, paneId: null,
+    flowId: flow().id, startedAt: date, completedAt: date, input: null, activatedBy: null, output: null,
+    verdict: { status: "pass", findings: [] }, error: null } as PipelineStageAttempt);
+  try {
+    expect(setMergeOnReview("fixture", true, "fixture", date)?.enabled).toBe(true);
+    savePipelines([parent, child]);
+    expect(loadPipelines()).toHaveLength(2);
+    const before = rows();
+    expect(await patchPipeline(parent.id, { action: "retry-merge" }, { ...defaultPipelinePorts(), exec: unreachable })).toMatchObject(STAGE_RETIREMENT);
+    expect(rows()).toBe(before);
+  } finally {
+    if (prior) fs.writeFileSync(settings, prior); else fs.rmSync(settings, { force: true });
+    resetProjectSettingsForTests();
+  }
 });
 
 test("scanner/controller/host scheduling, runtime readiness, workflow callbacks and provider wakes leave history untouched", async () => {

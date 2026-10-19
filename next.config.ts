@@ -34,7 +34,9 @@ const nextConfig: NextConfig = {
       ".next/server/transcript-search-index-worker.js",
       ".next/server/transcript-search-query-worker.js",
       ".next/server/relay-attachment-stage-worker.js",
+      ".next/server/relay-pdf-validation-worker.js",
       ".next/server/mcp-task-worker.js",
+      ".next/server/memory-import-worker.js",
       ".next/server/chunks/**",
     ],
   },
@@ -59,10 +61,12 @@ const nextConfig: NextConfig = {
         "state-backup-worker": "./src/lib/stateBackup.worker.ts",
         "worktree-sweep-worker": "./src/lib/worktreeSweep.worker.ts",
         "retention-worker": "./src/lib/retention.worker.ts",
+        "memory-import-worker": "./src/lib/memoryImport.worker.ts",
         "self-update-work-worker": "./src/lib/selfUpdateWork.worker.ts",
         "transcript-search-index-worker": "./src/lib/transcriptSearchIndex.worker.ts",
         "transcript-search-query-worker": "./src/lib/transcriptSearchQuery.worker.ts",
         "relay-attachment-stage-worker": "./src/lib/externalRelay/attachmentStage.worker.ts",
+        "relay-pdf-validation-worker": "./src/lib/externalRelay/pdfValidation.worker.ts",
         // The shared MCP graph imports App Router APIs, including after().
         "mcp-task-worker": { import: "./src/lib/mcpTask.worker.ts", layer: "rsc" },
       });
@@ -80,7 +84,13 @@ export default function configureNext(phase: string): NextConfig {
     const heap = Math.max(6144, ...limits.map(match => Number(match[1])));
     process.env.NODE_OPTIONS = `${options} --max-old-space-size=${heap}`.trim();
     // Keep the full repository check in tsconfig.json for development and gates.
-    return { ...nextConfig, typescript: { tsconfigPath: "tsconfig.production.json" } };
+    return { ...nextConfig,
+      // Heavy gates have a three-CPU quota. Next otherwise sees the host's
+      // online CPUs and starts 23 page-data workers in each lane. Leave one
+      // CPU for their coordinator and bound their aggregate memory demand.
+      experimental: { ...nextConfig.experimental, cpus: 2 },
+      typescript: { tsconfigPath: "tsconfig.production.json" },
+    };
   }
   return nextConfig;
 }

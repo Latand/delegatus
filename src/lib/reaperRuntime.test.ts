@@ -1980,7 +1980,7 @@ test("Viewer flow deliveries are discounted from transcript authorship", async (
       actuation: { loadFlows: () => [flow], now: () => now },
     });
 
-    expect(report.agents[0]).toMatchObject({ class: "flow-worker", eligible: true, protectedReasons: [] });
+    expect(report.agents[0]).toMatchObject({ class: "flow-worker", eligible: false, protectedReasons: ["flow-not-merged"] });
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -2186,7 +2186,7 @@ test("an idle candidate that becomes busy inside the operation lock is retained"
   }
 });
 
-test("a delivery created during merge revalidation fences the final reap decision", async () => {
+test("retirement prevents merge revalidation and flow-funded reap decisions", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reaper-delivery-fence-"));
   const pathname = path.join(directory, "missing-019f4906-3f67-\x37b72-9fbc-9ec3b5ad1342.jsonl");
   const now = Date.now();
@@ -2282,9 +2282,9 @@ test("a delivery created during merge revalidation fences the final reap decisio
       },
     });
 
-    expect(report.agents[0]).toMatchObject({ class: "flow-worker", eligible: true, action: "kill-failed" });
-    expect(probes).toBe(2);
-    expect(observations).toBe(2);
+    expect(report.agents[0]).toMatchObject({ class: "flow-worker", eligible: false, protectedReasons: ["flow-not-merged"] });
+    expect(probes).toBe(0);
+    expect(observations).toBe(0);
     expect(kills).toBe(0);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
