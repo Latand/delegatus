@@ -2459,8 +2459,9 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
 
 - **Evidence.** Suspect 1.
 - **Change.** `retainReleases` (`src/lib/selfUpdate/retention.ts:63`) scans
-  `/proc` once per pass (it now calls `scan()` per candidate at `:160`, 87
-  kept releases here) and runs `bytesOf` (`:32`, called at `:164`) in a helper.
+  `/proc` once per pass; the pre-L10 path called `scan()` per candidate (88
+  inventories for 87 kept releases) and counted `bytesOf` on the Viewer loop.
+  The candidate path now runs `bytesOf` in a helper.
 - **Acceptance.** A fixture of 87 release directories triggers one scan per
   pass and keeps the Viewer loop within 50 ms during the pass.
   The focused 10 ms probe compares main-loop turns with an independent worker
@@ -2526,16 +2527,16 @@ record is `evidence/release-retention-replay.json`.
 
 Six alternating pairs under Bun 1.4.0 visited 3,982,014 entries across the
 same 87 read-only release copies and returned identical keep reasons and
-90,565,795,840 allocated bytes. The shared gate bounded CPU to three cores;
+91,987,001,344 allocated bytes. The shared gate bounded CPU to three cores;
 load averages, CPU pressure, and cgroup counters accompany every sample.
 
 | Full keep pass | Before | After |
 | --- | ---: | ---: |
 | Process inventories | 88 | 1 |
-| Median duration | 11,235.5 ms | 7,097.7 ms |
-| Duration range | 11,040.2–12,135.1 ms | 6,945.9–7,599.9 ms |
-| Median maximum 10 ms timer gap | 11,235.8 ms | 67.6 ms |
-| Maximum timer-gap range | 11,040.5–12,135.4 ms | 63.7–72.1 ms |
+| Median duration | 11,906.6 ms | 7,452.2 ms |
+| Duration range | 11,109.7–13,076.6 ms | 6,938.0–7,796.7 ms |
+| Median maximum 10 ms timer gap | 11,907.0 ms | 80.0 ms |
+| Maximum timer-gap range | 11,110.0–13,080.0 ms | 65.1–91.0 ms |
 
 The remaining replay gap includes the injected synchronous legacy collector.
 Production moves that inventory to the helper too. The separate 87-release
