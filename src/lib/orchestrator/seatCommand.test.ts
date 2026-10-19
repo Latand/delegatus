@@ -78,18 +78,32 @@ for (const shared of [false, true]) test(`completed seat replay awaits registry 
   const request = { project: "proj-a", mandate: "Own the fixture board", clientRequestId: "registry-seat-replay", conversationId: conversation.id };
   const holder = registryLockHolder(sqliteFilename);
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const identityAdmission = Promise.withResolvers<void>();
+  const accountMutationWrite = registry.accountMutationWrite.bind(registry);
+  registry.accountMutationWrite = async (label, write, guard, options) => {
+    if (label === "registry.seat-identity") identityAdmission.resolve();
+    return accountMutationWrite(label, write, guard, options);
+  };
   try {
     expect((await executeOrchestratorSeatRequest(request, deps)).status).toBe(200);
-    await holder.hold(180);
-    const start = performance.now();
+    await holder.hold();
     let finished = false;
-    const tick = new Promise<{ elapsed: number; pending: boolean }>(resolve => {
-      timer = setTimeout(() => resolve({ elapsed: performance.now() - start, pending: !finished }), 10);
-    });
-    const replay = await executeOrchestratorSeatRequest(request, deps).finally(() => { finished = true; });
-    const sample = await tick;
-    expect(sample.pending).toBe(true);
-    expect(sample.elapsed).toBeLessThan(50);
+    let lastTick = performance.now();
+    let maxLoopGapMs = 0;
+    const sampleLoop = () => {
+      const now = performance.now();
+      maxLoopGapMs = Math.max(maxLoopGapMs, now - lastTick);
+      lastTick = now;
+      if (!finished) timer = setTimeout(sampleLoop, 5);
+    };
+    timer = setTimeout(sampleLoop, 5);
+    const replayWork = executeOrchestratorSeatRequest(request, deps);
+    await identityAdmission.promise;
+    await holder.release();
+    const replay = await replayWork;
+    finished = true;
+    await new Promise(resolve => { timer = setTimeout(resolve, 10); });
+    expect(maxLoopGapMs).toBeLessThan(50);
     expect(replay.status).toBe(200);
     expect(registry.conversation(conversation.id)?.agentRole).toBe("orchestrator");
   } finally { clearTimeout(timer); await holder.close(); registry.close(); }
