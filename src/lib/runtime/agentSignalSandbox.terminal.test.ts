@@ -1,13 +1,14 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { terminalSignalSandboxCommand } from "./agentSignalSandbox";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 
 const binary = process.env.LLV_TMUX_TEST_BINARY;
 test.skipIf(!binary)("a private tmux pane retains raw input, controlling tty, resize, Ctrl-C and native exit status", async () => {
-  const root = fs.mkdtempSync(path.join("/tmp", "signal-tty-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-tty-"));
   const socket = path.join(root, "tmux.sock");
   const marker = path.join(root, "tty.json"), done = path.join(root, "exit");
   const script = path.join(root, "terminal.py");

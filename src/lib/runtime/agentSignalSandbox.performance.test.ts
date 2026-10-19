@@ -11,6 +11,7 @@ import { materializeStructuredHostAccess } from "./structuredSpawn";
 import { AgentMemoryCell, GIB, viewerUnitFromCgroup, type AgentMemoryPlan } from "./agentMemory";
 import type { EngineHost } from "./engineHost";
 import { spawnSignalSandbox, signalAgentDomain } from "./agentSignalSandbox";
+import { registerSignalFixtureMcp } from "./agentSignalSandbox.fixture";
 import { once } from "node:events";
 
 const enabled = process.env.LLV_SIGNAL_SANDBOX_PERFORMANCE_TEST === "1";
@@ -149,6 +150,7 @@ if (process.env.PARALLEL_EVENTS) {
 test.skipIf(!enabled || !process.env.LLV_CLAUDE_BINARY).each(profiles)("30 paired native Claude launches: %s", async profile => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-signal-performance-"));
   const config = path.join(root, ".claude"); fs.mkdirSync(config);
+  registerSignalFixtureMcp(config);
   fs.writeFileSync(path.join(root, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true }));
   const api = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     if (new URL(request.url).pathname.endsWith("count_tokens")) return Response.json({ input_tokens: 10 });

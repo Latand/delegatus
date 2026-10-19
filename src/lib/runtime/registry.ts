@@ -26,7 +26,7 @@ import { StructuredHostAdoptionCleanupError, type HostState } from "./engineHost
 import { structuredHostsEnabled } from "./flags";
 import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
 import { restartCutEvidenceHolds } from "./restartCutHold";
-import { normalizeAgentSignalDomain, verifiedSignalDomainProcesses } from "./agentSignalSandbox";
+import { verifiedSignalDomainProcesses } from "./agentSignalSandbox";
 import { isDeepStrictEqual } from "node:util";
 import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
@@ -661,17 +661,6 @@ async function endRecordedStructuredTree(
     ...dependencies,
   });
   if (outcome.ok) return true;
-  // The bound host can finish this same retirement while the termination
-  // ladder awaits process exit. Accept that completed outcome only for the
-  // captured domain, with no remaining process or writer custody.
-  if (recordedDomain) {
-    const completed = registry.readOnlySnapshot().entries[sessionKeyId(key)];
-    const retired = normalizeAgentSignalDomain(completed?.structuredHost?.signalDomain);
-    if (completed?.status === "dead" && !completed.claimOwner && !completed.structuredHost?.process
-      && retired?.retired === true
-      && isDeepStrictEqual(retired, { ...normalizeAgentSignalDomain(recordedDomain), retired: true })
-      && [retired.monitor, retired.bubblewrap, retired.init, retired.native].every(identity => processIdentityStatus(identity) === "dead")) return true;
-  }
   if (outcome.terminationStarted && outcome.survivors.length > 0) {
     (await registry.deliveryWriteOrBusy({ label: "registry.recordStructuredTerminationSurvivors" }, registry.recordStructuredTerminationSurvivors.bind(registry, key, root, outcome.survivors)));
   }

@@ -370,7 +370,7 @@ backend retains fields in current writers and requires a current release for
 protected-domain adoption. The guard does not make old JSON writers aware of
 new fields.
 
-### Implementation measurements
+### Historical implementation measurements, 2026-10-15
 
 The recorded measurements are in `evidence/agent-signal-sandbox.json`.
 Each native launch row contains 30 baseline and 30 protected samples, alternated
@@ -407,7 +407,7 @@ release. Its `setStructuredHost`, `upsert`, `claimStructuredHost`,
 active domain. The current reader retained every identity and refused
 retirement while its recorded supervisor was still alive.
 
-### Implementation verification
+### Historical implementation verification, 2026-10-15
 
 The kernel suite passed three consecutive runs with eleven cases per run.
 The separate built-image cases passed normal completion and container
@@ -440,3 +440,29 @@ The two built-image cases were skipped in this replay; their separate earlier
 results remain recorded above. That replay preceded #2930 and still reproduced
 the stdio receipt blocker. The continuation described above removes that
 blocker through Viewer routing. No MCP writer files were changed.
+
+### Continuation, 2026-10-19
+
+The branch integrates main through `dcefdaf67`, including #2930 and the
+main-thread audit. The two real stdio-MCP recovery cases pass with 34
+assertions: neither held claim persists a private PID, becomes `not_executed`
+while its owner lives, or loses its original dispatch.
+
+The new default persistent Codex socket transport now launches inside the
+same signal boundary. Its real reconnect test preserves the original domain,
+runs the foreign/own signal proof and bounded gate, and then exercises the
+registry's orphan cleanup while the adopted host is still alive. Missing
+tooling and failed listener startup retain explicit errors and reap the
+recorded namespace processes.
+
+Temporary roots can be symbolic links. Launch receipts use their physical
+path so Bubblewrap binds the intended directory, and nested gates compare the
+physical lock directory while retaining the kernel-held descriptor proof.
+The kernel symlink case preserves both its sentinel and the supplied link;
+all seven gate integration cases pass after this correction.
+
+Native Claude fixtures register this checkout's real stdio MCP entry with
+their own home, config, temporary root, state and inert control endpoint.
+This prevents the mandatory Viewer registration from choosing the installed
+runtime during an isolated native test. The production registration and
+MCP routing behavior are unchanged.

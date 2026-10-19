@@ -192,7 +192,7 @@ kernelTest("production signal domain refuses foreign syscalls and utilities, sto
 }, 30_000);
 
 test.skipIf(process.env.LLV_SIGNAL_SANDBOX_KERNEL_TEST !== "1" || !process.env.LLV_SIGNAL_SANDBOX_IMAGE).each(["completion", "interruption"] as const)("the built image enters the host, drops UID and confines its host CLI and bundled gate: %s", async mode => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-container-"));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "signal-container-")));
   const home = path.join(root, "home"); fs.mkdirSync(path.join(home, ".bun/bin"), { recursive: true });
   fs.symlinkSync(fs.realpathSync(process.execPath), path.join(home, ".bun/bin/bun"));
   const temporary = path.join(root, "tmp"); fs.mkdirSync(temporary);

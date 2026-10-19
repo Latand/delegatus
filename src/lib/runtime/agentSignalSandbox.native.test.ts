@@ -12,6 +12,7 @@ import type { EngineHost } from "./engineHost";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { launchDetached, reviewerCommand, headlessRuns, type BuiltHeadlessCommand } from "@/lib/agent/headless";
 import { headlessFixtureTransport, setHeadlessSpawnForTests, signalDomain, spawnManagedEngine } from "./agentSignalSandbox";
+import { registerSignalFixtureMcp } from "./agentSignalSandbox.fixture";
 import { CodexSocketTransport } from "./codexSocketTransport";
 import { setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -60,14 +61,15 @@ open(sys.argv[2],'w').write(json.dumps({'foreignRefused':True,'ownStopped':True,
 print('native proof complete')
 `;
 
-async function prove(host: EngineHost, marker: string, trigger: () => Promise<unknown>, waitForTurn = false): Promise<void> {
+async function prove(host: EngineHost, marker: string, trigger: () => Promise<unknown>, waitForTurn = false, release = true): Promise<void> {
   const state = await host.health();
   expect(state.signalDomain?.native.pid).toBe(state.pid!);
   let failure: Error | undefined;
   let turnEnded = false;
   const trace: string[] = [];
-  const reader = host.attach(state.eventCursor)[Symbol.asyncIterator]();
+  const reader = release ? host.attach(state.eventCursor)[Symbol.asyncIterator]() : null;
   const pump = (async () => {
+    if (!reader) return;
     for (;;) {
       const next = await reader.next();
       if (next.done) return;
@@ -87,7 +89,7 @@ async function prove(host: EngineHost, marker: string, trigger: () => Promise<un
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}\n${trace.slice(-8).join("\n")}\n${String((host as unknown as { stderrTail?: string }).stderrTail ?? "")}`, { cause: error });
   } finally {
-    await host.release();
+    if (release) await host.release();
     await pump;
   }
 }
@@ -239,7 +241,7 @@ test.skipIf(!enabled || !process.env.LLV_CODEX_BINARY)("real Codex socket adopti
       const result = await (current as unknown as { rpc(method: string, params: unknown): Promise<{ exitCode: number; stderr: string }> }).rpc("command/exec", {
         command: ["python3", script, String(foreign.pid), marker, path.resolve("scripts/gate-slot.sh")], sandboxPolicy: { type: "dangerFullAccess" }, timeoutMs: 10_000 });
       expect(result.exitCode, result.stderr).toBe(0);
-    });
+    }, false, false);
     const entry = registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
     registry.upsert({ ...entry, claimOwner: null, status: "dead" });
     const stopped = await stopTerminalStructuredOrphan(registry, key, { graceMs: 100, deadlineMs: 3_000 });
@@ -266,6 +268,7 @@ test.skipIf(!enabled || !process.env.LLV_CODEX_BINARY)("real Codex socket adopti
 test.skipIf(!enabled || !process.env.LLV_CLAUDE_BINARY).each(profiles)("real structured Claude signal domain with loopback provider, fresh and resumed: %s", async profile => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-signal-native-"));
   const config = path.join(root, ".claude"); fs.mkdirSync(config);
+  registerSignalFixtureMcp(config);
   fs.writeFileSync(path.join(root, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true }));
   const script = path.join(root, "proof.py"); fs.writeFileSync(script, source);
   const foreign = spawn("/bin/sleep", ["90"], { stdio: "ignore" });

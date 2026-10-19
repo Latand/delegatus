@@ -62,8 +62,8 @@ export function normalizeAgentSignalDomain(value: unknown): AgentSignalDomain | 
   const identities = [domain.monitor, domain.bubblewrap, domain.init, domain.native];
   if (new Set(identities.map(identity => identity.pid)).size !== identities.length
     || identities.some(identity => identity.bootEpoch !== domain.monitor.bootEpoch)) throw new Error("agent signal sandbox identity is contradictory");
-  // Collection readers expose immutable proxies. Copy the validated fields
-  // rather than asking structuredClone to clone a reader's proxy.
+  // Collection readers expose immutable proxies. Rebuild the validated fields
+  // as plain objects so they can be copied and persisted.
   const copy = (identity: ProcessIdentity): ProcessIdentity => ({ pid: identity.pid,
     startIdentity: identity.startIdentity, bootEpoch: identity.bootEpoch });
   return { policyVersion: 1, monitor: copy(domain.monitor), bubblewrap: copy(domain.bubblewrap),
