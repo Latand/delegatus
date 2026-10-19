@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { ORCHESTRATOR_WITHOUT_MANDATE_RULES, ROLE_DEFAULTS, WORKING_RULES } from "@/lib/roles/defaults";
+import { ORCHESTRATOR_WITHOUT_MANDATE_RULES, ROLE_DEFAULTS, WORKING_RULES, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
 import { FRONTEND_GUIDANCE, resolveRole } from "@/lib/roles/registry";
 import { ROLE_VARIANT_IDS } from "@/lib/roles/types";
 import { VARIANT_PARAMS } from "@/lib/roles/paramConfig";
@@ -17,6 +17,18 @@ const REGISTRY_LOOKUP = (roleId: string) => {
   if (roleId === "reviewer") return { engine: "codex" as const, model: "gpt-5.6-sol", effort: "xhigh", access: "read-only" as const, promptScaffold: "Reviewer guidance" };
   return null;
 };
+
+test("builder isolation keeps edits and commits in its assigned worktree", () => {
+  const variants: Record<string, string>[] = [{}, { mode: "apply-fixes" }];
+  for (const params of variants) {
+    const scaffold = pipelineRoleLookup("builder", params)?.promptScaffold ?? "";
+    expect(scaffold).toContain("Edit, stage and commit in the assigned worktree");
+    expect(scaffold).toContain("Use scratch exports for builds, tests, probes and renders");
+    expect(scaffold).not.toContain("work, build, probe and render in a scratch export");
+  }
+  expect(WORKING_RULES_SHORT).toContain("Edit, stage and commit in the assigned worktree");
+  expect(WORKING_RULES_SHORT).not.toContain("work in a scratch export");
+});
 
 test("role references resolve registry defaults and stage overrides", () => {
   const lookup = () => ({
@@ -120,7 +132,7 @@ test("stage model overrides enumerate the selected engine catalog when invalid",
   expect(resolvePipelineRole({ engine: "codex", model: "gpt-5.6-codex" }, "run", REGISTRY_LOOKUP).error)
     .toBe("invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
   expect(resolvePipelineRole({ engine: "claude", model: "claude-fable-5" }, "run", REGISTRY_LOOKUP).error)
-    .toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
+    .toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku, claude-haiku-5-5, claude-haiku-4-5");
 });
 
 test("review-loop roles default to read-only access", () => {

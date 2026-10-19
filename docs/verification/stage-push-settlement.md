@@ -1,5 +1,64 @@
 # Stage push settlement and pull request delivery
 
+## Stage worktree and published integration recovery (2026-10-19)
+
+The task evidence identifies three occurrences on 2026-10-18. The investigation
+read each retained pipeline's full prompt and its attempt's messages; the times
+below are the messages' action observations in UTC, rather than the task's
+later approximate report times. No live installation state was changed.
+
+| Occurrence | Evidence and cause |
+| --- | --- |
+| Refresh lane `31c13470`, PR #3034 | At 10:11 the attempt described a scratch-clone commit and push; by 10:12 the native stage guard had refused the different Git repository. Its later in-worktree commits could not erase that permanent refusal. The generated refresh brief named the delivery branch without naming the committing checkout, the working rule sent builders to scratch exports, and the wrapper instructed a push. |
+| Refresh lane `261bb2e6`, PR #3060 | At 20:19 the attempt reported its delivery push, and by 20:25 its checks were green. Settlement refused `9e450476` for missing in-worktree creation evidence. The same generated refresh brief, working rule and push instruction applied. A green report could not supply that receipt. |
+| Fix lane `1228112e`, PR #3063 | At 20:21 the attempt described preparing a scratch-clone commit; at 20:22 it described fast-forwarding that commit into the pipeline checkout. Settlement refused `bdedbcb9`. Its build brief already said to commit in the stage worktree and never push, while the shared working rule still directed all work into a scratch export. It created no remote delivery to adopt. |
+
+The originating requirement is that stage agents commit only in their stage
+worktree and leave pushes to the pipeline. `src/lib/roles/defaults.ts` now
+limits scratch exports to builds, tests, probes and renders.
+`src/lib/pipelines/prompts.ts` names the stage worktree as the only place for
+edits, staging and commits and reserves publication to the pipeline. This
+launch instruction overrides older stored scaffolds and brief instructions.
+The assembled refresh and fix prompts from `src/lib/forge/autoRefresh.ts`
+receive the same instruction without changing merge-queue refresh ownership.
+
+The narrow recovery in `src/lib/pipelines/stageAttemptPush.ts` permits an
+unreceipted integration only when it is already on the owned delivery branch.
+It fetches and verifies the base against that remote, confirms it is origin's
+default branch in the same GitHub repository, and reconstructs every introduced
+merge with `verifyPassedHeadIntegration`. The candidate must preserve starting
+and accepted history and exactly match Git's clean merge trees. Extra commits,
+extra merge content, conflicts, a different merge source, an unpublished result
+and recorded Git refusals remain refused. The local checkout must be clean and
+on its owned branch. Both the local and remote heads are reread before and after
+fast-forward adoption.
+
+The forge must report the exact candidate head on an open PR targeting the
+same base, with a nonempty green rollup and every configured required context.
+Pending or unavailable checks defer settlement for a fresh read; no receipt is
+manufactured and no new pass is transferred to arbitrary foreign work.
+`commitAndAdoptStageBranch` records the accepted report provenance; the existing
+stage settlement and publication paths persist and publish that accepted SHA.
+A remote that already holds it requires no push. No persisted schema changes.
+
+| Contract path | Producers and consumers checked |
+| --- | --- |
+| Working rules | Full and short defaults, builder plain/fix variants, registry resolution, stored effective roles, assembled stage prompts and role previews. |
+| Stage prompt | Ordinary builders, generated refresh/fix stages, role-less writable stages, local-only and comparison delivery; read-only stages retain their commit prohibition. |
+| Integration proof | Explicit `publish acceptedSha` retains its existing tracking-ref read; automatic settlement supplies a freshly fetched, verified base SHA. Both use the same isolated clean-tree comparison. |
+| Settlement | `commitAndAdoptStageBranch` invokes receipt verification; the writable passed-stage path accepts its result, updates provenance and queues normal publication. Producer repair keeps its stricter local receipt requirement. |
+
+`src/lib/pipelines/prompts.test.ts` and `src/lib/pipelines/roles.test.ts` pin
+the instructions, including a generated refresh and its fix stage.
+`src/lib/pipelines/stageAttemptPush.test.ts` uses real isolated Git repositories
+and native hooks, with fixture forge responses. It covers local and remote-only
+adoption, a fresh-process replay, extra work, altered merge trees, non-main
+parents, absent publication, check failures and local/remote races. The existing
+receipt and explicit publication tests remain the other consumers' coverage.
+This change claims no performance gain.
+
+The historical diagnosis and verification below describe earlier revisions.
+
 ## A. Read-only diagnosis
 
 The investigation read the two refused build attempts, their native HEAD

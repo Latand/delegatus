@@ -274,7 +274,7 @@ On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
 a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
-Touched tests run the branch first, up to three explicit files at once, each
+Touched tests run the branch first, up to four explicit head files at once, each
 in its own owned process and isolated roots. A green branch skips the baseline
 entirely. For a red branch, only failing files run on the merge base, filtered
 to failing assertions; runner diagnostics need the whole file. The three verdicts read as follows.
@@ -285,7 +285,7 @@ sample, and then gave mixed results on at least one side. It is listed with the
 file, suite/test name and pass/fail counts for both sides, and permits the push.
 `NEW`: the assertion fails every head sample and never fails on base. It
 refuses the push.
-Only an assertion that could end as `NEW` is confirmed: it runs three more
+Only an assertion that could end as `NEW` is confirmed: it runs up to three more
 times on each side, filtered by its full test name in its file. A failure on
 any base retry or a pass on any head retry makes it `FLAKY`. New tests have
 zero base observations. Missing, skipped or incomplete retry results are gate
@@ -302,8 +302,11 @@ private sandbox path replaced by placeholders. That covers an error between
 tests and a run that did not finish (no complete report, a timeout, a runner
 exit that disagrees with its report). Such a diagnostic prints as
 `PRE-EXISTING ... (the base run of this file is broken the same way)`. A
-diagnostic only the head shows, or one whose error line differs, is `NEW` and
-refuses the push. A base file that did not finish while the head finished it,
+between-tests diagnostic only the head shows gets one isolated full-file
+retry. If it disappears, it is `FLAKY`; if it repeats, it stays `NEW`. A
+different diagnostic is retained as `NEW`; a new assertion still refuses the push.
+Incomplete reports, ownership failures and failed cleanup retain their strict
+verdict without this retry. A base file that did not finish while the head finished it,
 or failed to finish differently, remains a gate error. During confirmation a
 side may repeat the between-tests errors of its own initial sample; any other
 runner or between-tests error in a retry is a gate error.
@@ -314,14 +317,29 @@ evidence and the initial base/head comparison preserve their occurrence numbers;
 a recovered occurrence is `FIXED` while a separately failing head occurrence
 remains `NEW`.
 
+When a complete comparison still reports new between-tests diagnostics and
+also labels flakiness, the hook reruns that check phase once in fresh isolation
+before parking the lane. Its new-failure count must match the diagnostic rows.
+A new assertion, a runner failure, an incomplete comparison or failed ownership
+cleanup vetoes this retry. A retry without a verdict preserves the first
+refusal. Both attempts share the push execution budget and existing admission;
+the retry never starts another push or repeats publication effects.
+
 Clean head samples and failures already present in the initial base sample
-incur no reruns. The three rounds share a five-minute
-budget across all candidate files and both sides, including baseline checkout
-and dependency setup. Each child command is capped by the
-remaining budget; exhausting it blocks with a gate error. This adds at most
+incur no reruns. An occurrence with a complete passing head retry or failing
+base retry is already `FLAKY` and leaves the later confirmation selections.
+Unresolved occurrences still receive up to three rounds per side. The base and
+head of a round run concurrently in separate sandboxes, with at most three
+files per side. Both sides settle before evidence is judged, including when
+one refuses. Duplicate names retain their occurrence identities; filtering one name can still execute
+its other occurrences. The rounds share a five-minute budget across all
+candidate files and both sides, including baseline checkout and dependency setup.
+Counts on a `FLAKY` row stop at its classification. Each child command is capped
+by the remaining budget; exhausting it blocks with a gate error. This adds at most
 five minutes of subprocess execution/setup, plus ordinary report parsing and
-sandbox cleanup. After an initially passing base sample, three independent
-reruns detect a one-in-ten base failure with probability `1 - 0.9^3 = 27.1%`.
+sandbox cleanup. For an unresolved occurrence after an initially passing
+base sample, three independent reruns detect a one-in-ten base failure with
+probability `1 - 0.9^3 = 27.1%`.
 Four independent base samples detect it with probability `34.39%` overall;
 rare or correlated failures can still evade this bounded sampling. Head
 recovery supplies a separate opportunity to identify intermittency.
@@ -353,7 +371,12 @@ stage, a branch that only trails `origin/main`) runs privacy with
 `.txt` files skips types. Any other changed file keeps every scoped check.
 The native Codex phase runs the files that start the Codex executable once per
 supported version (`verify-native-codex-runtime.ts --engine-only`) and the rest
-once (`--shared-only`), all three at the same time. A caller that kills the
+once (`--shared-only`), all three at the same time. Local publication gives the
+shared selection its merge base through `LLV_GATE_COMPARE_BASE`; it uses the
+same isolated comparator and bounded retries as touched tests. Hosted shared
+verification keeps its absolute verdict. Both modes isolate every file's
+roots and preserve nested service CPU placement and admission accounting.
+A caller that kills the
 push at a limit of its own hands the hook a Unix-millisecond deadline in
 `LLV_GATE_PUSH_DEADLINE`; the controller's publication sets it a minute before
 its fifteen-minute limit. The fetch of `origin/main`, a cold-cache Bun or Codex
@@ -394,7 +417,12 @@ independent identity-bound guardian with best-effort execution and one warning
 per owning run; a detached child can escape between guardian polls. The strong
 lifetime guarantee applies to Linux native containment, as recorded in
 `docs/verification/test-child-lifetime.md`.
-An existing `NODE_OPTIONS` is preserved.
+An existing `NODE_OPTIONS` is preserved. Production builds cap page-data
+workers at two to fit the gate's three-CPU quota. The Viewer build and its
+runtime consumers share a private source tree with read-only dependencies;
+they neither contend on another build's `.next/lock` nor consume its output.
+The hook labels CPU admission for publication checks and prints its measured
+queue wait, excluded from the execution budget.
 
 Run an individual test as `bash scripts/gate-slot.sh bun test <file>` with an
 isolated home, config, state and temporary root. The preload registers real

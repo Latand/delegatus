@@ -16,6 +16,9 @@ const owner = globalThis as typeof globalThis & { __llvPipelineControllerPass?: 
 export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: PipelinePorts): Promise<{ changed: boolean; pendingWork: number; readyWork: boolean }> {
   if (owner.__llvPipelineControllerPass) return owner.__llvPipelineControllerPass;
   const pass = withViewerOperation("pipelines.controller-schedule", async () => {
+    // Let the caller's reader work finish its turn before scheduler admission.
+    // Capture changes, deadlines and ownership only after this checkpoint.
+    await yieldToRuntime();
     const jobChanged = takePipelineControllerJobChanges();
     const now = suppliedPorts ? Date.parse(suppliedPorts.now()) : Date.now();
     const admitted = await admitQueuedPipelineCreations();

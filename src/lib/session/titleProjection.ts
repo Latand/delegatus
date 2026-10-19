@@ -353,6 +353,12 @@ function sessionTitleProjector(
   };
 }
 
+/** Pin one registry/override view for a catalog search. Eligibility and full
+ * project metadata are applied only to the returned page. */
+export function searchSessionTitleProjector(): (entry: FileEntry) => void {
+  return sessionTitleProjector(false, undefined, false);
+}
+
 /** Applies the canonical title projection to a full search index while
  * yielding between batches so a cold global search does not monopolize the
  * server event loop. */

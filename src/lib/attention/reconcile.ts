@@ -1,3 +1,4 @@
+import { conversationHasHost, finishedWorkIndex } from "./finishedWork";
 import { attentionReason } from "@/components/attention";
 import type { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import type { Pipeline, PipelineAttemptState } from "@/lib/pipelines/types";
@@ -15,9 +16,9 @@ import type { ConversationReasonKind } from "./dismissalTypes";
  * writes each clear attributed to Delegatus with its rule, so the card says
  * who cleared it and why and Undo brings it back.
  *
- * A rule clears only on evidence about the exact reason: a stale hint (a done
- * task, a quiet conversation, elapsed time, an unrelated message) is never
- * enough, and a source this pass could not read clears nothing.
+ * A rule clears only on evidence about the exact reason: a terminal container
+ * settles its dead conversations’ earlier asks; a quiet conversation, elapsed
+ * time or an unrelated message proves nothing, and a source this pass could not read clears nothing.
  */
 
 export interface ReconcileFacts {
@@ -32,6 +33,7 @@ export interface ReconcileFacts {
   pipeline(id: string): Pipeline | null;
   /** Absent when the task source could not be read. */
   tasks?: readonly BoardTask[];
+  pipelines?: readonly Pipeline[];
 }
 
 type OrchestratorSeatFile = NonNullable<ReturnType<typeof readOrchestratorSeatFileOrNull>>;
@@ -81,6 +83,10 @@ function stageAttemptSettledSince(file: FileEntry, reason: { raisedAt: number; c
     that proves it. */
 export function attentionSystemClears(files: readonly FileEntry[], now: number, facts: ReconcileFacts): SystemAttentionClear[] {
   const clears: SystemAttentionClear[] = [];
+  const finished = finishedWorkIndex(facts.tasks ?? [], facts.pipelines ?? [...new Set(files.flatMap(file => (file.durableLineage?.memberships ?? []).flatMap(member => {
+    const lane = member.kind === "pipeline" ? facts.pipeline(member.containerId) : null;
+    return lane ? [lane] : [];
+  })))], facts.canonicalConversationId, [], facts.tasks !== undefined && facts.pipelines !== undefined);
   for (const file of files) {
     if (file.supersededBy || file.migratedTo) continue;
     const reason = attentionReason(file, now);
@@ -89,6 +95,12 @@ export function attentionSystemClears(files: readonly FileEntry[], now: number, 
     const canonical = conversationId ? facts.canonicalConversationId(conversationId) : null;
     const base = { conversationId, path: file.path, reason: reason.kind, raisedAt: reason.raisedAt,
       title: reason.report?.body?.split("\n", 1)[0] || cleanTitle(file.title ?? "", 90), project: file.project };
+    const finishedAt = finished.conversationFinishedAt(file);
+    if (reason.kind !== "delivery" && reason.kind !== "launch" && reason.clocked
+      && !conversationHasHost(file) && finishedAt !== null && reason.raisedAt * 1000 <= finishedAt) {
+      clears.push({ ...base, reasonId: reason.id, rule: "container-finished" });
+      continue;
+    }
     if (reason.kind === "launch") {
       const launchId = file.path.slice("spawn:".length);
       const sameLaunch = (assignment: BoardTask["assignments"][number]) => assignment.launchId
@@ -127,7 +139,7 @@ export function attentionSystemClears(files: readonly FileEntry[], now: number, 
     }
     /* The stage attempt that asked has settled: its lane carries whatever is
        left to decide, under its own reason. */
-    if (STAGE_KINDS.has(reason.kind) && stageAttemptSettledSince(file, reason, facts)) {
+    if (STAGE_KINDS.has(reason.kind) && file.proc !== "running" && file.activity !== "live" && stageAttemptSettledSince(file, reason, facts)) {
       clears.push({ ...base, reasonId: reason.id, rule: "stage-settled" });
     }
   }

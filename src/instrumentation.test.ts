@@ -85,6 +85,29 @@ test("identity-wave evidence failure leaves later startup phases available", () 
   expect(scheduled).toHaveLength(1);
 });
 
+test("identity-wave async admission rejection retries once and a successful retry clears the failure", async () => {
+  const scheduled: Array<() => void> = [];
+  const events: unknown[][] = [];
+  let reject!: (error: Error) => void;
+  let attempts = 0;
+  const refused = new Promise<void>((_resolve, fail) => { reject = fail; });
+  runIdentityWaveMigrationWithoutBlockingStartup(() => ++attempts === 1 ? refused : Promise.resolve(),
+    (...args) => { events.push(args); }, {
+      schedule: callback => { scheduled.push(callback); return { unref() {} }; },
+    });
+  expect(attempts).toBe(1);
+  expect(scheduled).toHaveLength(0);
+  reject(new Error("registry admission refused"));
+  await refused.catch(() => {});
+  await Promise.resolve();
+  expect(scheduled).toHaveLength(1);
+  scheduled[0]!();
+  await Promise.resolve();
+  expect(attempts).toBe(2);
+  expect(events).toHaveLength(1);
+  expect(scheduled).toHaveLength(1);
+});
+
 test("deployment candidates stay passive until their endpoint owns the durable release target", () => {
   const target = JSON.stringify({ endpoint: "http://127.0.0.1:19892" });
   expect(viewerReleaseOwnsTraffic({ PORT: "19892" }, () => target)).toBe(true);

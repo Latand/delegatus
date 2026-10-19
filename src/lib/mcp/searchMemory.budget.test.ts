@@ -96,3 +96,34 @@ test("discovery and indexing refuse a hit whose source metadata alone exceeds th
   expect(Buffer.byteLength(await response.text())).toBeLessThanOrEqual(16_000);
   expect(index.offers(id)).toEqual([]);
 });
+
+
+test("live role-rule search and open share the complete escaped-response budget", async () => {
+  const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
+  const store = roleMemoryCollection(true)!;
+  const scope = "role:project-budget:builder";
+  const ids = Array.from({ length: 20 }, (_, n) => `r_9${String(n).padStart(15, "0")}`);
+  const at = "2026-10-19T00:00:00.000Z";
+  try {
+    store.boundedPatch(30, tx => {
+      tx.put({ kind: "scope", scope, revision: 1, active: ids, history: [] });
+      for (const id of ids) tx.put({ kind: "rule", id, scope, rule: `Check rolebudget receipts ${"\u0001".repeat(270)}`, why: "An escaped fixture exceeded the response budget.", state: "active", hints: [], source: { project: "project-budget", pipelineId: "seed", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_seed" }, createdAt: at, changedAt: at });
+    });
+    const result = await service.callTool("search_memory", { clientRequestId: `r${"\u0002".repeat(255)}`, query: "rolebudget", limit: 999 });
+    expect(result).toMatchObject({ ok: true, truncated: true });
+    if (!result.ok) throw Error("role search failed");
+    expect((result.items as unknown[]).length).toBeGreaterThan(0);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(16000);
+    for (const id of [ids[0], ids[0].toUpperCase()]) {
+      const response = await POST(new Request("http://viewer/api/search/memory", { method: "POST", body: JSON.stringify({ id, requestId: "role-budget-open", maxBytes: 512 }) }));
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(512);
+      expect(JSON.parse(text)).toMatchObject({ item: { id: ids[0], truncated: true } });
+    }
+    expect(index.offers(ids[0])).toHaveLength(1);
+    expect(index.offers(ids[0].toUpperCase())).toEqual([]);
+  } finally {
+    store.boundedPatch(30, tx => { tx.delete(`s:${scope}`); for (const id of ids) tx.delete(`r:${id}`); });
+  }
+});

@@ -825,7 +825,8 @@ function isRefreshOf(value: unknown): boolean {
 function isMergeRefresh(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const refresh = value as Record<string, unknown>;
-  return Number.isSafeInteger(refresh.attempt) && (refresh.attempt as number) >= 0
+  return (refresh.baseBranch === undefined || typeof refresh.baseBranch === "string" && !!refresh.baseBranch)
+    && Number.isSafeInteger(refresh.attempt) && (refresh.attempt as number) >= 0
     && typeof refresh.base === "string" && /^[0-9a-f]{40}$/i.test(refresh.base)
     && typeof refresh.head === "string" && /^[0-9a-f]{40}$/i.test(refresh.head)
     && typeof refresh.key === "string" && !!refresh.key
@@ -1999,6 +2000,20 @@ export function loadArchivedPipelines(): Pipeline[] {
 
 export function selectArchivedPipelines(select: (pipeline: Pipeline) => boolean, limit: number): Promise<Pipeline[]> {
   return archiveStore().selectReadonlyAsync(select, limit);
+}
+
+/** Narrow attention reconciliation to archived owners named by the current
+ * conversation memberships. The closed-lanes list remains the paged reader. */
+export function loadArchivedPipelinesForOwnership(ids: readonly string[]): Pipeline[] {
+  return [...new Set(ids)].flatMap(id => {
+    const pipeline = archiveStore().get(id);
+    return pipeline ? [pipeline] : [];
+  });
+}
+
+/** Collection revision for rechecking a narrow archived-owner observation after admission. */
+export function archivedPipelinesRevision(): number {
+  return archiveStore().revision();
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {

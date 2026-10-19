@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 export { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
@@ -382,7 +383,7 @@ export async function startCurrentReleaseControllers(
      anything from them. A failure leaves the file as it was. */
   try {
     const retirements = await loaders.loadRoleMappingRetirements?.();
-    const outcome = retirements?.applyRoleMappingRetirements() as { state?: string; reset?: string[] } | undefined;
+    const outcome = await waitForStateLock("roles.retirements", () => retirements?.applyRoleMappingRetirements() as { state?: string; reset?: string[] } | undefined);
     if (outcome?.state === "written" && outcome.reset?.length) console.error(`[roles] reset stale mapping rows to their defaults: ${outcome.reset.join(", ")}`);
   } catch (error) {
     console.error("[roles] mapping retirement failed", error instanceof Error ? error.name : "unknown");
@@ -593,19 +594,21 @@ export function runIdentityWaveMigrationWithoutBlockingStartup(
   const initialRetryMs = Math.max(0, options.initialRetryMs ?? 5_000);
   const schedule = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   let attempts = 0;
+  const failed = (error: unknown) => {
+    if (attempts >= maxAttempts) {
+      log("[identity-wave] registry migration failed; retry limit reached", { attempt: attempts, error });
+      return;
+    }
+    const retryInMs = initialRetryMs * (2 ** (attempts - 1));
+    log("[identity-wave] registry migration failed; retry scheduled", { attempt: attempts, retryInMs, error });
+    schedule(attempt, retryInMs).unref?.();
+  };
   const attempt = () => {
     attempts += 1;
     try {
-      run();
-    } catch (error) {
-      if (attempts >= maxAttempts) {
-        log("[identity-wave] registry migration failed; retry limit reached", { attempt: attempts, error });
-        return;
-      }
-      const retryInMs = initialRetryMs * (2 ** (attempts - 1));
-      log("[identity-wave] registry migration failed; retry scheduled", { attempt: attempts, retryInMs, error });
-      schedule(attempt, retryInMs).unref?.();
-    }
+      const result = run();
+      if (result && typeof (result as PromiseLike<unknown>).then === "function") void Promise.resolve(result).catch(failed);
+    } catch (error) { failed(error); }
   };
   attempt();
 }
@@ -970,6 +973,9 @@ export async function registerViewerRuntime(): Promise<void> {
     const { agentRegistry } = await import("@/lib/agent/registry");
     await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", () => agentRegistry().prepareReadOnlySnapshot(startupAbort.signal)));
     assertStartupActive();
+    const { cleanupFinishedWorkAtStartup } = await import("@/lib/attention/finishedWorkCleanup");
+    await startupBarrier.run(() => cleanupFinishedWorkAtStartup(undefined, assertStartupActive));
+    assertStartupActive();
     let activatedAuthority: HotStateAuthority | null = null;
     const { retireCuratorPlaceholdersAtStartup } = await import("@/lib/memory/curation/cleanup");
     await startupBarrier.run(() => retireCuratorPlaceholdersAtStartup(undefined, assertStartupActive));
@@ -987,8 +993,8 @@ export async function registerViewerRuntime(): Promise<void> {
         await recoverClaudeLoginsAtStartup();
       },
       runIdentityMigration: async () => {
-        const { runIdentityWaveMigrationAtStartup } = await import("@/lib/agent/identityWaveStartup");
-        runIdentityWaveMigrationWithoutBlockingStartup(runIdentityWaveMigrationAtStartup);
+        const { runIdentityWaveMigrationAtStartupOffLoop } = await import("@/lib/agent/identityWaveStartup");
+        runIdentityWaveMigrationWithoutBlockingStartup(runIdentityWaveMigrationAtStartupOffLoop);
       },
       startStructuredHosts: structuredHostsEnabled()
         ? () => {
@@ -1005,6 +1011,9 @@ export async function registerViewerRuntime(): Promise<void> {
       prepareBoard: async () => {
         assertStartupActive();
         await startupBarrier.run(() => prepareBoardSummary(true));
+        const { reconcileAttentionOnce } = await import("@/lib/attention/reconcileController");
+        assertStartupActive();
+        await startupBarrier.run(() => reconcileAttentionOnce(undefined, assertStartupActive));
         assertStartupActive();
       },
       startControllers: startCurrentReleaseControllers,

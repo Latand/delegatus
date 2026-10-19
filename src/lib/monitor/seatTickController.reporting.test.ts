@@ -606,6 +606,37 @@ test("a deploy admitted before a lost reply still wakes its idle seat exactly on
 });
 
 
+test("a matching busy deploy records its seat and delivers the deploy-settled wake once", async () => {
+  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const { seatDeploymentsFor } = await import("@/lib/orchestrator/seatDeployments");
+  const f = childFixture("matching-busy-deploy");
+  let clock = f.now;
+  f.seed();
+  const rig = idleWakeRig(f, () => clock);
+  const revision = "e".repeat(40);
+  const status = { deploymentId: "same-sha-building", revision, phase: "building", terminal: false,
+    error: null, updatedAt: new Date(clock).toISOString() };
+  const binding = viewerMcpBindings(undefined, { post: async () => ({
+    state: "busy", deploymentId: status.deploymentId, revision,
+  }) }, {
+    callerAttribution: () => ({ kind: "manager", conversationId: f.seat.conversationId, role: null }),
+    callerProject: () => f.project, viewerProjects: () => [f.project],
+    authorizedSeats: () => [{ ...f.seat, project: f.project }],
+  } as never);
+  expect(await binding.deploy_exact_sha({ revision, clientRequestId: "join-same-sha" }))
+    .toMatchObject({ state: "accepted", deploymentId: status.deploymentId, wakeOnSettle: true });
+  rig.deps.sources!.seatDeployments = seatDeploymentsFor;
+  rig.deps.sources!.deployment = () => ({ state: "ok", value: status }) as never;
+  status.phase = "succeeded";
+  status.terminal = true;
+  clock += MINUTE;
+  expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).toContain("deploy-settled");
+  expect(rig.sent).toHaveLength(1);
+  clock += 5 * MINUTE;
+  expect((await runSeatTickCheck(f.project, rig.deps))!.reasons).not.toContain("deploy-settled");
+  expect(rig.sent).toHaveLength(1);
+});
+
 test("a fresh controller recovers pending original-key deployments without borrowing another admission (#2346)", async () => {
   const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
   const { seatDeploymentsFor } = await import("@/lib/orchestrator/seatDeployments");
@@ -623,7 +654,7 @@ test("a fresh controller recovers pending original-key deployments without borro
     const binding = viewerMcpBindings(undefined, { post: async () => {
       admissions++;
       if (reply === "lost") throw new Error("Viewer control did not reconnect");
-      return { state: reply, deploymentId: status.deploymentId, revision };
+      return { state: reply, deploymentId: status.deploymentId, revision: reply === "busy" ? "c".repeat(40) : revision };
     } }, {
       callerAttribution: () => ({ kind: "manager", conversationId: f.seat.conversationId, role: null }),
       callerProject: () => f.project, viewerProjects: () => [f.project],

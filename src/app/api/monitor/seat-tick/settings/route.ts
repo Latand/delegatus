@@ -2,7 +2,8 @@ import { releaseControlChange } from "@/lib/release/store";
 import { NextRequest, NextResponse } from "next/server";
 
 import { agentRegistry } from "@/lib/agent/registry";
-import { callerConversationId } from "@/lib/agent/operatorAuthority";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { callerConversationId, operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
 import {
   changeSeatTickSettings,
   type SeatTickSettingsActor,
@@ -19,13 +20,12 @@ export const dynamic = "force-dynamic";
 /**
  * One project's seat tick, read and changed from the browser (#1681).
  *
- * A thin route over the authoritative module, and deliberately nothing more:
+ * A thin route over the authoritative module:
  * every rule, every refusal's wording, the redaction and the prompt limit are
  * `applySeatTickSettingsChange`'s, exactly as they are for the
- * `seat_tick_settings` tool. There is no second settings model here, and no
- * validation of its own beyond the two things the tool's argument schema
- * covers instead — a project has to be named, and `untilMinutes` has to be a
- * positive number of minutes.
+ * `seat_tick_settings` tool. There is no second settings model here. The
+ * route also owns the UI-only removal action for legacy lines whose author is
+ * unknown, and admits it only for the operator's same-origin browser request.
  *
  * Two properties worth stating:
  *
@@ -40,7 +40,9 @@ export const dynamic = "force-dynamic";
  *   caller that named itself with the target project's active seat records as
  *   `manager` with that seat's epoch, and any other identified caller records
  *   as `agent` with its conversation. Nothing in the body can name who made a
- *   change. The perimeter is `rejectCrossOrigin`, which runs first on the
+ *   change. Instruction authorship separately requires an identified session
+ *   or a browser fetch; unverified scripts cannot author lines. The perimeter
+ *   is `rejectCrossOrigin`, which runs first on the
  *   write, as it does on every other mutating route here.
  */
 
@@ -125,6 +127,12 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
   if (body.wakeIntervalMinutes !== undefined) change.wakeIntervalMinutes = body.wakeIntervalMinutes as number | null;
   if (body.reason !== undefined) change.reason = body.reason as string | null;
   if (body.monitorPrompt !== undefined) change.monitorPrompt = body.monitorPrompt as string | null;
+  if (body.clearUnknownInstructions !== undefined && typeof body.clearUnknownInstructions !== "boolean") {
+    return NextResponse.json({ error: "clearUnknownInstructions must be a boolean" }, { status: 400 });
+  }
+  if (body.replaceOtherInstructions !== undefined && typeof body.replaceOtherInstructions !== "boolean") {
+    return NextResponse.json({ error: "replaceOtherInstructions must be a boolean" }, { status: 400 });
+  }
   /* Converted exactly as the tool converts it: an expiry is offered in minutes
      from now, because that is the form the caller decided in. */
   if (body.untilMinutes !== undefined) {
@@ -141,10 +149,24 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
     /* Inside the try: attribution reads the seat file, and an unreadable one
        must answer as a failure rather than as an uncaught throw. */
     const actor = settingsActor(req, project);
+    if (body.clearUnknownInstructions === true) {
+      if (actor.kind !== "gateway" || !operatorBrowserRequest(req) || req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) {
+        return NextResponse.json({ error: "only the operator browser can remove instructions with unknown authors" }, { status: 403 });
+      }
+      change.clearUnknownInstructions = true;
+    }
+    if (body.replaceOtherInstructions === true) {
+      if (actor.kind !== "gateway" || !operatorBrowserRequest(req) || req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) {
+        return NextResponse.json({ error: "only the operator browser can replace other authors’ instructions" }, { status: 403 });
+      }
+      change.replaceOtherInstructions = true;
+    }
     if (Object.keys(change).length === 0) {
       return NextResponse.json(seatTickSettingsAnswer(project, false, actor), { headers: NO_STORE });
     }
-    const applied = changeSeatTickSettings(project, change, { at: new Date().toISOString(), actor });
+    const instructionActor = actor.kind === "gateway" && (req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER) || !operatorBrowserRequest(req))
+      ? { ...actor, kind: "unidentified" as const } : actor;
+    const applied = changeSeatTickSettings(project, change, { at: new Date().toISOString(), actor, instructionActor });
     if (!applied.ok) return NextResponse.json({ error: applied.error }, { status: 400 });
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
     return NextResponse.json({ ...seatTickSettingsAnswer(project, true, actor), ...(applied.notes ? { notes: applied.notes } : {}) }, { headers: NO_STORE });

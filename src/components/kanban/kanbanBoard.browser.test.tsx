@@ -1,3 +1,4 @@
+import type { FileEntry } from "@/lib/types";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { BoardEncoder } from "@/lib/boardEncoding";
 import { NATIVE_ASSOCIATION_AUTHORIZATION_ERROR } from "@/lib/attention/nativeAssociationForm";
@@ -18470,7 +18471,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
 
   const tickAnswer = (reason = "a release afternoon") => ({
     project: "atlas", changed: false, at: new Date().toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
-    settings: { project: "atlas", enabled: true, wakeIntervalMinutes: 30, reason, monitorPrompt: null, until: stamp(-120), updatedAt: stamp(45), setBy: null },
+    settings: { project: "atlas", enabled: true, wakeIntervalMinutes: 30, reason, instructionLines: [{ text: reason, author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, at: "2026-10-01T12:00:00.000Z" }], monitorPrompt: null, until: stamp(-120), updatedAt: stamp(45), setBy: null },
     effective: { enabled: true, wakeIntervalMinutes: 30, reason, monitorPrompt: null, until: stamp(-120), isDefault: false, configured: true, lapsed: false, updatedAt: stamp(45) },
     defaults: {}, defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, cardText: null,
     policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
@@ -18492,6 +18493,255 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
   };
 
+  browserTest("instruction authors are readable on desktop and 390px in both locales and themes", async () => {
+    const out = path.resolve(".artifacts/seat-tick-authors");
+    fs.mkdirSync(out, { recursive: true });
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const at = "2026-10-01T12:00:00.000Z";
+    const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    const instructionLines = [
+      { text: "Keep  operator wording.", author: operator, at },
+      { text: "Check the release before resuming the paused lane.", author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 7 }, at },
+      { text: "A legacy note with no author recorded.", author: null, at: null },
+    ];
+    const initial = { ...defaultSeatTickSettings("atlas"), wakeIntervalMinutes: 30, reason: instructionLines.map(line => line.text).join("\n"), instructionLines, updatedAt: at };
+    let stored = structuredClone(initial);
+    const response = () => ({ ...tickAnswer(stored.reason!), settings: stored });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT") {
+          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-02T12:00:00.000Z", actor: operator });
+          if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
+          stored = result.settings as typeof stored;
+        }
+        return Response.json(response());
+      },
+      "/api/roles": rolesAnswer,
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
+        stored = structuredClone(initial);
+        const label = `${phone ? "phone-390" : "desktop"}-${lang}-${theme}`;
+        const texts = cardTexts(lang);
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-kanban-tab="inbox"]').click();
+            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+            await page.locator("[data-phone-task-tick-open]").click();
+          } else {
+            const fold = page.locator("[data-seat-collapse]");
+            if (await fold.count()) await fold.first().click();
+            await page.locator("[data-open-seat-tick]").click();
+          }
+          const entries = page.locator("[data-seat-tick-instruction-line]");
+          await entries.first().waitFor();
+          expect(await entries.count()).toBe(3);
+          expect(await entries.nth(0).textContent()).toContain(lang === "en" ? "Operator" : "Оператор");
+          expect(await entries.nth(1).textContent()).toContain(lang === "en" ? "Seat epoch 7" : "Сидіння, епоха 7");
+          expect(await entries.nth(2).textContent()).toContain(lang === "en" ? "author unknown" : "автор невідомий");
+          expect(await entries.nth(0).locator("time").getAttribute("datetime")).toBe(at);
+          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe(instructionLines[0]!.text);
+          await page.locator("[data-seat-tick-reason]").fill("Updated operator instruction.");
+          await page.locator("[data-seat-tick-save]").click();
+          await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
+          expect(stored.instructionLines.slice(1)).toEqual(instructionLines.slice(1));
+          await page.locator("[data-seat-tick-instruction-lines]").scrollIntoViewIfNeeded();
+          const geometry = await entries.evaluateAll(nodes => nodes.map(node => ({ width: node.clientWidth, scrollWidth: node.scrollWidth, text: node.textContent })));
+          expect(geometry.every(row => row.scrollWidth <= row.width + 1)).toBe(true);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${label}.png`) });
+          await page.locator("[data-seat-tick-instruction-lines]").screenshot({ path: path.join(out, `${label}-lines.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ label, geometry, operatorDate: stored.instructionLines[0]!.at, preservedSeatAndLegacy: true, pageErrors });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+  }, 180_000);
+
+  browserTest("the operator can replace a full unknown legacy field without changing the schedule on desktop and phone", async () => {
+    const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "legacy-removal");
+    fs.mkdirSync(out, { recursive: true });
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const at = "2026-10-19T12:00:00.000Z";
+    const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    const legacyText = `${"u".repeat(484)}\nKeep seat note.`;
+    const seatLine = {
+      text: "Keep seat note.", author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 6 },
+      at: "2026-10-18T12:00:00.000Z",
+    };
+    const scheduleCases = [
+      { label: "disabled", enabled: false, wakeIntervalMinutes: null },
+      { label: "custom-cadence", enabled: true, wakeIntervalMinutes: 30 },
+    ] as const;
+    const makeInitial = (schedule: typeof scheduleCases[number]) => ({
+      ...defaultSeatTickSettings("atlas"),
+      enabled: schedule.enabled,
+      wakeIntervalMinutes: schedule.wakeIntervalMinutes,
+      reason: legacyText,
+      instructionLines: [{ text: legacyText.split("\n")[0]!, author: null, at: null }, seatLine],
+      updatedAt: at,
+    });
+    expect(legacyText.length).toBe(500);
+    const initial = makeInitial(scheduleCases[0]);
+    let stored: ReturnType<typeof defaultSeatTickSettings> = structuredClone(initial);
+    const answer = () => {
+      const base = tickAnswer(stored.reason ?? "");
+      return {
+        ...base,
+        settings: stored,
+        effective: {
+          ...base.effective,
+          enabled: stored.enabled,
+          wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60,
+          reason: stored.reason,
+          until: stored.until,
+          isDefault: stored.enabled && stored.wakeIntervalMinutes === null,
+        },
+      };
+    };
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT") {
+          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-19T12:01:00.000Z", actor: operator });
+          if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
+          stored = result.settings as typeof stored;
+        }
+        return Response.json(answer());
+      },
+      "/api/roles": rolesAnswer,
+    });
+    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
+    fs.mkdirSync(browserHome, { recursive: true });
+    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
+    try {
+      for (const schedule of scheduleCases) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
+        stored = structuredClone(makeInitial(schedule));
+        const label = `${phone ? "phone-390" : "desktop"}-${schedule.label}-${lang}-${theme}`;
+        const texts = cardTexts(lang);
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-kanban-tab="inbox"]').click();
+            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+            await page.locator("[data-phone-task-tick-open]").click();
+          } else {
+            const fold = page.locator("[data-seat-collapse]");
+            if (await fold.count()) await fold.first().click();
+            await page.locator("[data-open-seat-tick]").click();
+          }
+          const legacyLine = page.locator("[data-seat-tick-instruction-line]");
+          await legacyLine.first().waitFor();
+          expect(await legacyLine.first().textContent()).toContain(lang === "en" ? "author unknown" : "автор невідомий");
+          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
+          const removeUnknown = page.locator("[data-seat-tick-clear-unknown]");
+          expect(await removeUnknown.innerText()).toBe(lang === "en" ? "Replace unattributed legacy instructions" : "Замінити старі вказівки без автора");
+          expect(await removeUnknown.isDisabled()).toBe(true);
+          await removeUnknown.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${label}-legacy-removal-control.png`) });
+          await page.locator("[data-seat-tick-reason]").fill("New operator instruction.");
+          expect(await removeUnknown.isDisabled()).toBe(false);
+          await removeUnknown.click();
+          await page.locator("[data-seat-tick-clear-unknown]").waitFor({ state: "detached" });
+          expect(stored.reason).toBe("Keep seat note.\nNew operator instruction.");
+          expect(stored.instructionLines).toEqual([
+            seatLine,
+            { text: "New operator instruction.", author: operator, at: "2026-10-19T12:01:00.000Z" },
+          ]);
+          expect(stored.enabled).toBe(schedule.enabled);
+          expect(stored.wakeIntervalMinutes).toBe(schedule.wakeIntervalMinutes);
+          await page.screenshot({ path: path.join(out, `${label}-legacy-cleared-and-replaced.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
+  }, 180_000);
+
+  browserTest("the operator can replace a full seat note without changing the schedule on desktop and phone", async () => {
+    const out = path.resolve(process.env.LLV_SEAT_TICK_SHOTS_DIR ?? ".artifacts/seat-tick-shots", "full-seat-note-replacement");
+    fs.mkdirSync(out, { recursive: true });
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const at = "2026-10-19T12:00:00.000Z";
+    const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    const seatLine = {
+      text: "s".repeat(500), author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 6 }, at,
+    };
+    const scheduleCases = [
+      { label: "disabled", enabled: false, wakeIntervalMinutes: null },
+      { label: "custom-cadence", enabled: true, wakeIntervalMinutes: 30 },
+    ] as const;
+    const makeInitial = (schedule: typeof scheduleCases[number]) => ({
+      ...defaultSeatTickSettings("atlas"), enabled: schedule.enabled, wakeIntervalMinutes: schedule.wakeIntervalMinutes,
+      reason: seatLine.text, instructionLines: [seatLine], updatedAt: at,
+    });
+    let stored: ReturnType<typeof defaultSeatTickSettings> = structuredClone(makeInitial(scheduleCases[0]));
+    const answer = () => {
+      const base = tickAnswer(stored.reason ?? "");
+      return {
+        ...base, settings: stored,
+        effective: { ...base.effective, enabled: stored.enabled, wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60,
+          reason: stored.reason, until: stored.until, isDefault: stored.enabled && stored.wakeIntervalMinutes === null },
+      };
+    };
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT") {
+          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-19T12:01:00.000Z", actor: operator });
+          if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
+          stored = result.settings as typeof stored;
+        }
+        return Response.json(answer());
+      },
+      "/api/roles": rolesAnswer,
+    });
+    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
+    fs.mkdirSync(browserHome, { recursive: true });
+    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tick-"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
+    try {
+      for (const schedule of scheduleCases) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
+        stored = structuredClone(makeInitial(schedule));
+        const label = `${phone ? "phone-390" : "desktop"}-${schedule.label}-${lang}-${theme}`;
+        const texts = cardTexts(lang);
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-kanban-tab="inbox"]').click();
+            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+            await page.locator("[data-phone-task-tick-open]").click();
+          } else {
+            const fold = page.locator("[data-seat-collapse]");
+            if (await fold.count()) await fold.first().click();
+            await page.locator("[data-open-seat-tick]").click();
+          }
+          await page.locator("[data-seat-tick-instruction-line]").first().waitFor();
+          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("");
+          const replaceOther = page.locator("[data-seat-tick-replace-other]");
+          expect(await replaceOther.innerText()).toBe(lang === "en" ? "Replace seat notes with operator instructions" : "Замінити нотатки агента на вказівки оператора");
+          expect(await replaceOther.isDisabled()).toBe(true);
+          await page.locator("[data-seat-tick-reason]").fill("Operator replacement.");
+          await replaceOther.click();
+          await page.locator("[data-seat-tick-replace-other]").waitFor({ state: "detached" });
+          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe("Operator replacement.");
+          expect(stored.reason).toBe("Operator replacement.");
+          expect(stored.instructionLines).toEqual([{ text: "Operator replacement.", author: operator, at: "2026-10-19T12:01:00.000Z" }]);
+          expect(stored.enabled).toBe(schedule.enabled);
+          expect(stored.wakeIntervalMinutes).toBe(schedule.wakeIntervalMinutes);
+          expect(await page.locator("[data-seat-tick-instruction-line]").count()).toBe(1);
+          await page.screenshot({ path: path.join(out, `${label}-replacement.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
+  }, 180_000);
+
   browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
     fs.mkdirSync(SHOTS, { recursive: true });
     const out = path.resolve(".artifacts/seat-tick-instructions");
@@ -18502,7 +18752,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     let frozenAnswer = tickAnswer(storedReason);
     const answerWith = (reason: string) => ({
       ...frozenAnswer,
-      settings: { ...frozenAnswer.settings, reason },
+      settings: { ...frozenAnswer.settings, reason, instructionLines: reason.split("\n").map(text => ({ text, author: frozenAnswer.actor, at: frozenAnswer.settings.instructionLines[0]!.at })) },
       effective: { ...frozenAnswer.effective, reason },
     });
     let putRequests = 0;
@@ -18661,8 +18911,8 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     await field.scrollIntoViewIfNeeded();
     const label = lang === "en" ? "Instructions for every wake" : "Вказівки на кожне пробудження";
     const helper = lang === "en"
-      ? "The agent receives these instructions on every wake: what to do next and when to stop."
-      : "Агент отримує ці вказівки на кожне пробудження: що робити далі й коли зупинитися.";
+      ? "The agent receives these instructions on every wake."
+      : "Агент отримує ці вказівки на кожне пробудження.";
     expect(await field.getAttribute("aria-describedby")).toBeTruthy();
     expect(await field.locator("..").textContent()).toContain(label);
     const hint = page.locator("[data-seat-tick-instructions-hint]");
@@ -34422,4 +34672,86 @@ describe("relay reply-chain conversation list", () => {
       }
     } finally { await browser?.close(); if (tempFd !== null) fs.closeSync(tempFd); fixture.stop(); }
   }, 60000);
+});
+
+
+describe("finished work leaves In progress", () => {
+  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1")("terminal containers withdraw stale asks and retain the live ask", async () => {
+    const before = process.env.FINISHED_WORK_STAMP === "before";
+    const out = path.resolve(".artifacts/finished-work", before ? "before" : "after"); fs.mkdirSync(out, { recursive: true });
+    const now = Date.parse("2026-10-19T06:00:00Z");
+    const at = "2026-10-12T06:00:00Z", ended = "2026-10-12T07:00:00Z";
+    const files = ["finished", "done", "live"].map(name => ({
+      root: "claude-projects", name, path: `/fixture/${name}.jsonl`, conversationId: `conversation_${name}`, project: "atlas", title: `${name} conversation`, kind: "session", engine: "claude", fmt: "claude", mtime: name === "live" ? now / 1000 : Date.parse(at) / 1000, size: 1,
+      proc: name === "live" ? "running" : "killed", pid: name === "live" ? 1234 : null, parent: null, model: "fable", activity: "idle", pendingQuestion: null, waitingInput: null,
+      lastTurn: { startedAt: Date.parse(at), endedAt: null }, pendingPermission: { id: `permission-${name}`, since: at, tool: "Bash", command: "make" },
+    })) as FileEntry[];
+    const tasks = files.map(file => ({ id: `t-${file.name}`, project: "atlas", status: file.name === "done" ? "done" : "assigned", text: file.name === "finished" ? "Finished lane" : file.name === "done" ? "Done task" : "Live approval", placement: "unplaced", createdAt: at, updatedAt: at,
+      ...(file.name === "done" ? { doneAt: "2026-10-19T05:00:00Z", prototypeReview: { latestReviewId: "review-done", waitingReviewId: "review-done", title: "Release choice", rounds: 1, createdAt: at, asks: "questions" } } : {}), assignments: [{ path: file.path, conversationId: file.conversationId, panePid: null, state: "linked", error: null, at }],
+    }));
+    const ghost: FileEntry = { ...files[0]!, name: "hostless", path: "/fixture/hostless.jsonl", conversationId: "conversation_hostless", proc: null, activity: "live", activityReason: "structured_spawn_host_gone_turn_open", pendingPermission: null };
+    files.push(ghost);
+    tasks[0]!.assignments.push({ path: ghost.path, conversationId: ghost.conversationId, panePid: null, state: "linked", error: null, at });
+    const pipelines = [{ id: "finished-lane", project: "atlas", repoDir: "/fixture", worktreeDir: "/fixture-lane", branch: "pipeline/finished", baseBranch: "main", baseRef: "", lastPassedCommit: "", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null, task: "Finished lane", taskIds: ["t-finished"], state: "completed", createdAt: at, closedAt: ended, stages: [],
+      runs: [{ stageId: "review", attempts: [{ n: 1, state: "needs_decision", effectiveRole: { roleId: "reviewer", engine: "codex" }, conversationId: "conversation_finished", agentPath: files[0]!.path, startedAt: at, completedAt: ended }] }], cursor: null,
+    }];
+    if (!before) {
+      /* Match the production response after its task projection settles the
+         assignment and omits the closed owner from visible pipelines. */
+      tasks[0]!.status = "inbox";
+      pipelines.length = 0;
+      for (const file of files.filter(entry => entry.name === "finished" || entry.name === "done")) {
+        file.attentionDismissal = { at: ended, by: { kind: "system", rule: "container-finished" } } as FileEntry["attentionDismissal"];
+      }
+    }
+    const payload = { files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 3, smt: now / 1000 }], projectCwds: { atlas: "/fixture" }, systemHealth: { tmux: { status: "healthy" } } };
+    const server = await serveEvidenceFixture(out, undefined, { "/api/files": payload, "/api/tasks": { tasks } });
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    let browser: Browser | null = null;
+    const readings: unknown[] = [];
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+        ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }) });
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1440]) {
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, colorScheme: theme, reducedMotion: "reduce", ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
+        const page = await context.newPage(); const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+        try {
+          await context.addInitScript(({ lang, theme }) => { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme); localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })); }, { lang, theme });
+          await page.clock.install({ time: new Date(now) });
+          await page.goto(`${server.base}?scenario=finished-work`);
+          await page.evaluate(theme => document.documentElement.setAttribute("data-theme", theme), theme);
+          const assigned = page.locator(width === 390 ? '[data-phone-kanban-column="assigned"]' : '.column[data-status="assigned"]');
+          // Both layouts expose their card's stable task id.
+          await page.locator('[data-id="task:t-live"], [data-phone-card="task:t-live"]').first().waitFor();
+          const card = (id: string) => page.locator(`[data-id="task:${id}"], [data-phone-card="task:${id}"]`).first();
+          expect(await card("t-finished").count()).toBe(1);
+          const inProgress = await page.evaluate(() => {
+            const card = document.querySelector('[data-id="task:t-finished"], [data-phone-card="task:t-finished"]');
+            return card?.closest('[data-status], [data-phone-kanban-column]')?.getAttribute('data-status') ?? card?.closest('[data-phone-kanban-column]')?.getAttribute('data-phone-kanban-column');
+          });
+          expect(inProgress).toBe(before ? "assigned" : "inbox");
+          const attention = await page.evaluate(() => {
+            const phone = document.querySelector("[data-mobile2-attention-count]");
+            return Number(phone ? phone.getAttribute("data-mobile2-attention-count") : document.querySelector("[data-attention-count] .tabular-nums")?.textContent);
+          });
+          expect(attention).toBe(before ? 4 : 1);
+          const working = await page.evaluate(() => {
+            const phone = document.querySelector('[data-phone-kanban-tab="assigned"] [data-phone-tab-working]');
+            return Number(phone?.getAttribute("data-phone-tab-working") ?? document.querySelector('.column[data-status="assigned"] .live[data-count]')?.getAttribute("data-count") ?? 0);
+          });
+          expect(working).toBe(before ? 1 : 0);
+          const assignedCards = await assigned.locator('[data-phone-card], .card[data-id^="task:"]').count();
+          expect(assignedCards).toBe(before ? 2 : 1);
+          expect(errors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}.png`), fullPage: true });
+          readings.push({ lang, theme, width, finishedColumn: inProgress, assignedColumns: await assigned.count(), assignedCards, attention, working, pageErrors: errors });
+        } catch (error) {
+          await page.screenshot({ path: path.join(out, `failure-${lang}-${theme}-${width}.png`), fullPage: true });
+          fs.writeFileSync(path.join(out, "failure.json"), JSON.stringify({ errors, message: String(error) }));
+          throw error;
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser?.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 120_000);
 });

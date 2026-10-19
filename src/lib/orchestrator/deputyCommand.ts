@@ -93,7 +93,7 @@ export interface DeputyCommandPorts {
   seatBusy(project: string): Promise<boolean>;
   seatGeneration(seatConversationId: string): SeatGeneration | null;
   fork(input: { sourcePath: string; destination: string; sourceSessionId: string; sessionId: string; operationId: string }): { path: string; records: number | null; size?: number };
-  registerConversation(input: { artifactPath: string; accountId: string | null; launchProfile: Partial<LaunchProfile> }): string;
+  registerConversation(input: { artifactPath: string; accountId: string | null; launchProfile: Partial<LaunchProfile>; assertCurrent?: () => void }): string | Promise<string>;
   joinSeatTask(input: { project: string; seatConversationId: string; seatPath: string | null; deputyConversationId: string; artifactPath: string; accountId: string | null }): void | Promise<void>;
   workContext(project: string): DeputyWorkContext;
   deliver(input: { conversationId: string; path: string; clientMessageId: string; text: string; images: RuntimeImageUpload[]; origin: DeputyAskOrigin }): Promise<{ ok: true; outcome?: string; operationId?: string } | { ok: false; error: string; operationId?: string; uncertain?: true }>;
@@ -361,7 +361,10 @@ async function askOnce(input: AskInParallelInput, ports: DeputyCommandPorts): Pr
       goal: null,
       plan: null,
     };
-    const deputyConversationId = ports.registerConversation({ artifactPath: forked.path, accountId: generation.accountId, launchProfile });
+    const deputyConversationId = await ports.registerConversation({ artifactPath: forked.path, accountId: generation.accountId, launchProfile, assertCurrent: () => {
+      const current = ports.activeSeat(project);
+      if (current?.conversationId !== deputy.seatConversationId || current.seatEpoch !== deputy.seatEpoch) throw new Error("orchestrator seat changed before deputy registration");
+    } });
     const forkRecordCount = forked.records;
     deputy = await withAccountMutationLockAsync(() => store.recordFork(deputy.askId, { deputyConversationId, artifactPath: forked.path, forkRecordCount, forkBytes: forked.size ?? null }), { caller: "deputy commit" }) ?? deputy;
   }

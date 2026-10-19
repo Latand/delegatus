@@ -93,7 +93,7 @@ whitespace, privacy with the committed fingerprints, and eslint. Pre-push checks
 commit publication, types, changed-file lint, touched tests, and scoped Linux,
 pinned Bun runtime, native Codex and supply-chain gates. Tests and builds use
 isolated state roots; heavy commands go through `scripts/gate-slot.sh`.
-Touched tests run the branch first, up to three explicit files at once, each
+Touched tests run the branch first, up to four explicit head files at once, each
 with fresh state, HOME and TMPDIR under the OS temp root. Only files failing on
 the branch are sampled on the merge base with `origin/main`, filtered to the
 failing assertions; runner errors require the full file. A green branch needs

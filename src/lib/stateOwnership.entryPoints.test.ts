@@ -55,12 +55,12 @@ function operatorEnvironment(): Record<string, string> {
   return env;
 }
 
-function runEntryPoint(command: string[], env: Record<string, string | undefined> = operatorEnvironment()): RunResult {
+function runEntryPoint(command: string[], env: Record<string, string | undefined> = operatorEnvironment(), input?: string): RunResult {
   const result = Bun.spawnSync({
     cmd: [process.execPath, "--preload", OWNERSHIP_PRELOAD, ...command],
     cwd: process.cwd(),
     env,
-    stdin: "ignore",
+    stdin: input === undefined ? "ignore" : Buffer.from(input),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -155,6 +155,17 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
       expect(result.output).toContain(marker);
     }, 60_000);
   }
+
+  test("the memory import helper claims its state before loading the job graph", () => {
+    const at = "2026-10-19T00:00:00.000Z";
+    fs.writeFileSync(path.join(STATE_DIRECTORY, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "importing", importId: "ownership-fixture", changedAt: at }));
+    const result = runEntryPoint(["src/lib/memoryImport.worker.ts"], operatorEnvironment(), JSON.stringify({ importId: "ownership-fixture", previous: null, at, roots: { claudeHomes: [], codexHomes: [] } }) + "\n");
+    expectNoRefusal(result);
+    expect(result.status, result.output).toBe(0);
+    const reply = JSON.parse(result.stdout.trim().split("\n").at(-1)!);
+    expect(reply.result.state).toBe("ready");
+    expect(fs.existsSync(path.join(STATE_DIRECTORY, "backups", "engine-memory", "ownership-fixture", "manifest.json"))).toBe(true);
+  }, 60_000);
 
   test("the runtime host starts and keeps its journal in the operator's state directory", async () => {
     /* A long-lived server, so it is started, observed listening and stopped

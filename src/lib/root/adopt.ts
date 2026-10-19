@@ -1,5 +1,4 @@
-import { headSession } from "./lineage";
-import { readRootLineage, recordRootSession, rootLineageFile } from "./store";
+import { readRootHead, recordRootSession, rootLineageFile } from "./store";
 import type { RootAdoption } from "./types";
 
 /**
@@ -81,7 +80,7 @@ export function liveRootSession(source: RootSessionSource): RootSessionCandidate
 /**
  * Record the live root session, or do nothing when it is already the head.
  *
- * The unchanged case is answered from a plain read, before the file
+ * The unchanged case is answered from a plain read, before a write
  * transaction: this runs on the path that raises a request, and taking a lock
  * to conclude that nothing moved would put a serialized write in front of every
  * one of them.
@@ -93,7 +92,7 @@ export function adoptLiveRootSession(
   const candidate = liveRootSession(source);
   if (!candidate) return null;
   const filePath = options.filePath ?? rootLineageFile();
-  const head = headSession(readRootLineage(filePath));
+  const head = readRootHead(filePath);
   if (head?.conversationId === candidate.conversationId && (candidate.path === null || head.path === candidate.path)) {
     return null;
   }

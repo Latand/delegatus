@@ -2,7 +2,7 @@ import { performanceSpans, performanceProcess } from "@/lib/performanceSpans";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { accountMutationHeld, AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
 import { recordBlockingWait, currentWaitCorrelation } from "@/lib/blockingWaits";
-import { FileTransactionBusyError } from "./fileTransaction";
+import { FileTransactionAdmissionError, FileTransactionBusyError } from "./fileTransaction";
 import { isMainThread } from "node:worker_threads";
 
 /** Only acquisition failures carry this type. Never wrap an error raised after
@@ -23,6 +23,7 @@ export function stateLockDeferral(error: unknown): StateLockDeferredError | null
   // callbacks consume that type before returning an error to their caller.
   for (let depth = 0; depth < 4 && error instanceof Error; depth++) {
     if (error instanceof StateLockDeferredError) return error;
+    if (error instanceof FileTransactionAdmissionError) return new StateLockDeferredError(error.callSite, "lease");
     error = error.cause;
   }
   return null;

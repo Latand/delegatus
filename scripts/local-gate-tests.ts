@@ -22,9 +22,22 @@ const key = (site: TestSite) => JSON.stringify([site.file, site.suite,
     : diagnosticName(site), site.kind]);
 const occurrenceKey = (site: TestSite) => JSON.stringify([key(site), site.occurrence ?? 0]);
 const comparisonKey = (site: TestSite) => site.kind === "test" && site.occurrence !== undefined ? occurrenceKey(site) : key(site);
+const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite[]) => {
+  const merged = [...first];
+  const counts = new Map<string, number>();
+  for (const site of first) counts.set(comparisonKey(site), (counts.get(comparisonKey(site)) ?? 0) + 1);
+  const retryCounts = new Map<string, number>();
+  for (const site of retry) retryCounts.set(comparisonKey(site), (retryCounts.get(comparisonKey(site)) ?? 0) + 1);
+  for (const [identity, count] of retryCounts) {
+    const missing = count - (counts.get(identity) ?? 0);
+    if (missing > 0) merged.push(...retry.filter(site => comparisonKey(site) === identity).slice(0, missing));
+  }
+  return merged;
+};
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const RUN_BUDGET_MS = 15 * 60 * 1000;
 const FILE_BUDGET_MS = 5 * 60 * 1000;
+const HEAD_FILE_WORKERS = 4;
 export const FLAKY_RERUNS = 3;
 export const FLAKY_BUDGET_MS = 5 * 60 * 1000;
 const RUNNER_ERROR = "<runner error> ";
@@ -36,13 +49,41 @@ const occurrenceCount = (sites: readonly TestSite[], site: TestSite) => sites.fi
  * first base sample: those alone can refuse the push. A failure the base sample
  * already showed stays PRE-EXISTING on that one sample per side and costs no
  * reruns, since neither label it could end with blocks. Mixed results on either
- * side make a confirmed assertion non-blocking FLAKY; runner and between-tests
- * errors keep their comparison by identity. Never treat absence as a pass.
+ * side make a confirmed assertion non-blocking FLAKY and retire that occurrence
+ * from later rounds; runner and between-tests errors keep their comparison by
+ * identity. Never treat absence as a pass.
  */
 export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "base" | "head", sites: readonly TestSite[]) => TestRun | Promise<TestRun>) {
   const comparison = compareTests(base, head);
-  const candidates = [...new Map(comparison.introduced.filter(site => site.kind === "test").map(site => [occurrenceKey(site), site])).values()];
   const flaky: FlakySite[] = [];
+  // A completed file can still report an unhandled rejection after a timed-out
+  // test. Re-run that entire file once before a transient diagnostic parks a
+  // lane. Ownership, incomplete reports and failed cleanup remain decisive.
+  const diagnostics = comparison.introduced.filter(site => site.kind === "error" && site.name.startsWith("<between-tests error> "));
+  if (diagnostics.length) {
+    const retry = await rerun("head", diagnostics);
+    const files = new Set(diagnostics.map(site => site.file));
+    if ([...files].some(file => !retry.completed.includes(file))) throw new Error("head diagnostic retry: incomplete file");
+    const recovered = new Set<string>();
+    for (const site of diagnostics) {
+      if (retry.failures.some(other => key(other) === key(site))) continue;
+      recovered.add(key(site));
+      flaky.push({ ...site, base: { pass: base.completed.includes(site.file) ? 1 : 0, fail: 0 }, head: { pass: 1, fail: 1 } });
+    }
+    comparison.introduced = comparison.introduced.filter(site => !recovered.has(key(site)));
+    // Compare the complete retry against the base so base occurrences are
+    // consumed once. Merge the two samples by maximum multiplicity: repeated
+    // observations do not inflate evidence, while an extra retry occurrence
+    // remains visible even when its identity appeared in the first sample.
+    const retried = compareTests(base, retry);
+    comparison.introduced = mergeObservedSites(comparison.introduced, retried.introduced);
+    comparison.preexisting = mergeObservedSites(comparison.preexisting, retried.preexisting);
+    comparison.fixed = mergeObservedSites(comparison.fixed, retried.fixed);
+    comparison.absent = mergeObservedSites(comparison.absent, retried.absent);
+  }
+  // Only assertions in the initial sample have the occurrence counts required
+  // for filtered confirmation. New retry failures above remain blocking.
+  const candidates = [...new Map(comparison.introduced.filter(site => site.kind === "test" && head.failures.some(other => comparisonKey(other) === comparisonKey(site))).map(site => [occurrenceKey(site), site])).values()];
   if (!candidates.length) return { ...comparison, flaky };
   const evidence = candidates.map(site => ({ site,
     base: { pass: occurrenceCount(base.passed, site), fail: occurrenceCount(base.failures, site) },
@@ -51,14 +92,25 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
     headRetryPassed: false,
   }));
   for (let round = 0; round < FLAKY_RERUNS; round++) {
-    for (const side of ["base", "head"] as const) {
-      const run = await rerun(side, candidates);
+    // One complete recovery proves intermittency under the existing verdict
+    // rule. Spend later rounds only on occurrences still able to refuse.
+    const pending = evidence.filter(item => !item.baseRetryFailed && !item.headRetryPassed);
+    if (!pending.length) break;
+    const sites = pending.map(item => item.site);
+    const sides = ["base", "head"] as const;
+    // The two isolated sides owe the same samples and share one deadline.
+    // Await both even on refusal so no owned runner outlives this round.
+    const samples = await Promise.allSettled(sides.map(async side => rerun(side, sites)));
+    for (const [index, side] of sides.entries()) {
+      const sample = samples[index]!;
+      if (sample.status === "rejected") throw sample.reason;
+      const run = sample.value;
       // A between-tests error the same side already showed in its first sample
       // is that file's known state; only a diagnostic the first sample lacked
       // leaves the retry without usable evidence.
       const known = new Set((side === "base" ? base : head).failures.filter(site => site.kind === "error").map(key));
       if (run.failures.some(site => site.kind === "error" && !known.has(key(site)))) throw new Error(`${side} rerun: incomplete runner or between-tests error`);
-      for (const item of evidence) {
+      for (const item of pending) {
         const fail = occurrenceCount(run.failures, item.site), pass = occurrenceCount(run.passed, item.site);
         if (side === "base" && fail + pass !== occurrenceCount(base.passed, item.site) + occurrenceCount(base.failures, item.site)) throw new Error(`base rerun: missing or skipped test ${item.site.file}: ${item.site.name}`);
         if (side === "base" && fail) item.baseRetryFailed = true;
@@ -202,15 +254,16 @@ export function testNameFilter(sites: readonly TestSite[]): string[] {
 
 interface TestBudgets { fileMs: number; runMs: number }
 const DEFAULT_TEST_BUDGETS: TestBudgets = { fileMs: FILE_BUDGET_MS, runMs: RUN_BUDGET_MS };
-async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; now?: () => number; budgets?: TestBudgets } = {}): Promise<TestRun> {
+async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; now?: () => number; budgets?: TestBudgets; log?: (line: string) => void; workers?: number } = {}): Promise<TestRun> {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
   const now = options.now ?? (() => performance.now());
   const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
   const results: TestRun[] = new Array(files.length);
   let next = 0;
-  const workers = await Promise.allSettled(Array.from({ length: Math.min(3, files.length) }, async () => {
+  const workers = await Promise.allSettled(Array.from({ length: Math.min(options.workers ?? 3, files.length) }, async () => {
   while (next < files.length) {
     const index = next++, file = files[index]!;
+    const fileStarted = performance.now();
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
     if (remaining <= 0) throw new Error(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget`);
@@ -258,6 +311,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       if (options.sites) throw new Error(`${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`);
       failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.split(root).join("<checkout>")}`, kind: "error" });
     } finally { rmSync(privateRoot, { recursive: true, force: true }); }
+    options.log?.(`touched-tests: ${label} file ${file}: ${(performance.now() - fileStarted).toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}`);
     results[index] = { failures, passed, completed, elapsedMs: 0 };
   }
   }));
@@ -292,13 +346,18 @@ function dependencyGraph(root: string) {
 }
 
 export async function touchedTests(root: string, baseRef: string, selected: readonly string[], options: { env?: NodeJS.ProcessEnv; log?: (line: string) => void; budgets?: TestBudgets } = {}) {
+  const started = performance.now();
   const sandbox = mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-test-comparison-"));
   const log = options.log ?? console.log;
   const budget = cpuWaitBudget(options.env ?? process.env);
   const inherited = budget.env;
   const budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
   const now = () => performance.now() - budget.elapsed();
-  const runOptions = { now, budgets };
+  const runOptions = { now, budgets, log };
+  const logTiming = () => {
+    const wall = performance.now() - started, wait = budget.elapsed();
+    log(`touched-tests: timing ${wall.toFixed(0)}ms wall; ${wait.toFixed(0)}ms CPU admission; ${Math.max(0, wall - wait).toFixed(0)}ms execution`);
+  };
   const env = isolatedEnvironment(sandbox, inherited);
   const git = (...args: string[]) => command(["git", ...args], root, env);
   try {
@@ -309,9 +368,10 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const files = [...new Set(selected.map(file => path.relative(root, path.resolve(root, file))))].sort();
     if (!files.length) throw new Error("refusing an empty test list");
     for (const file of files) if (file.startsWith("../") || path.isAbsolute(file) || !/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes(".browser.test.") || !statSync(path.join(root, file)).isFile()) throw new Error(`missing or invalid test path: ${file}`);
-    const head = await runFiles(root, files, sandbox, inherited, "head", runOptions);
+    const head = await runFiles(root, files, sandbox, inherited, "head", { ...runOptions, workers: HEAD_FILE_WORKERS });
     log(`touched-tests: head ${head.elapsedMs.toFixed(0)}ms`);
     if (!head.failures.length) {
+      logTiming();
       log("touched-tests: green head; no baseline checkout or sample needed");
       return { ...compareTests({ failures: [], passed: [], completed: [], elapsedMs: 0 }, head), flaky: [] as FlakySite[] };
     }
@@ -324,6 +384,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     let checkout: string | undefined;
     const prepareBaseline = (deadline = Infinity) => {
       if (checkout) return checkout;
+      const setupStarted = performance.now();
       const target = path.join(sandbox, "baseline");
       const execute = (args: string[], cwd = root) => {
         const remaining = Math.floor(Math.min(budgets.fileMs, deadline - now()));
@@ -337,9 +398,11 @@ export async function touchedTests(root: string, baseRef: string, selected: read
       execute(["git", "config", "remote.origin.url", remote], target);
       const baseGraph = dependencyGraph(target);
       const sameGraph = graph.shareable && baseGraph.shareable && JSON.stringify(baseGraph.fingerprint) === JSON.stringify(graph.fingerprint);
-      if (sameGraph && existsSync(path.join(root, "node_modules"))) symlinkSync(path.join(root, "node_modules"), path.join(target, "node_modules"), "dir");
+      const sharedDependencies = sameGraph && existsSync(path.join(root, "node_modules"));
+      if (sharedDependencies) symlinkSync(path.join(root, "node_modules"), path.join(target, "node_modules"), "dir");
       else if (existsSync(path.join(target, "bun.lock"))) execute([process.execPath, "install", "--frozen-lockfile", "--ignore-scripts"], target);
       checkout = target;
+      log(`touched-tests: baseline setup ${(performance.now() - setupStarted).toFixed(0)}ms (${sharedDependencies ? "shared dependencies" : "separate dependencies"})`);
       return target;
     };
     // Runner diagnostics require the whole file; assertions need only their
@@ -358,18 +421,21 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const headErrors = new Set(head.failures.filter(site => site.kind === "error").map(key));
     for (const site of baseline.failures) if (site.kind === "error" && site.name.startsWith(RUNNER_ERROR) && !headErrors.has(key(site))) throw new Error(`baseline: ${site.file}: ${diagnosticName(site).slice(RUNNER_ERROR.length)}`);
     const retryStarted = performance.now(), deadline = retryStarted - budget.elapsed() + FLAKY_BUDGET_MS;
-    let reruns = 0;
+    let reruns = 0, diagnosticReruns = 0;
     const comparison = await confirmFailures(baseline, head, async (side, sites) => {
-      reruns++;
+      if (sites.some(site => site.kind === "error")) diagnosticReruns++;
+      else reruns++;
       const retryFiles = [...new Set(sites.map(site => site.file))].filter(file => side === "head" || baseFiles.has(file));
       if (!retryFiles.length) return { failures: [], passed: [], completed: [], elapsedMs: 0 };
-      return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, sites, deadline });
+      return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, ...(sites.some(site => site.kind === "error") ? {} : { sites }), deadline });
     });
-    if (reruns) log(`touched-tests: flaky confirmation ${FLAKY_RERUNS} reruns per side, ${(performance.now() - retryStarted).toFixed(0)}ms (shared budget ${FLAKY_BUDGET_MS}ms)`);
+    if (diagnosticReruns) log(`touched-tests: between-tests diagnostic retry: ${diagnosticReruns} isolated full-file run (shared budget ${FLAKY_BUDGET_MS}ms)`);
+    if (reruns) log(`touched-tests: flaky confirmation ${reruns / 2} round${reruns === 2 ? "" : "s"} per side (maximum ${FLAKY_RERUNS}), ${(performance.now() - retryStarted).toFixed(0)}ms (shared budget ${FLAKY_BUDGET_MS}ms)`);
     for (const site of comparison.flaky) log(`FLAKY ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)} (base ${site.base.pass} pass/${site.base.fail} fail; head ${site.head.pass} pass/${site.head.fail} fail)`);
     for (const [label, sites] of [["NEW", comparison.introduced], ["PRE-EXISTING", comparison.preexisting], ["FIXED", comparison.fixed], ["REMOVED/SKIPPED", comparison.absent]] as const) {
       for (const site of sites) log(`${label} ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)}${label === "PRE-EXISTING" && site.kind === "error" ? " (the base run of this file is broken the same way)" : ""}`);
     }
+    logTiming();
     log(`touched-tests: ${comparison.introduced.length} new failures, ${comparison.preexisting.length} pre-existing failures, ${comparison.fixed.length} fixed, ${comparison.absent.length} removed/skipped, ${comparison.flaky.length} flaky`);
     return comparison;
   } finally { budget.close(); rmSync(sandbox, { recursive: true, force: true }); }

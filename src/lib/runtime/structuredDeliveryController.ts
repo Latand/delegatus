@@ -1,15 +1,16 @@
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
-import { detachCodexHostForViewerRestart } from "./registry";
+import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { creditGuardBlock } from "@/lib/accounts/creditGuard";
 import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountCreditGuard";
 import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 import { ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
-import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
-import { pipelineHostHasLiveWork, providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
+import { findPipelineRecord } from "@/lib/pipelines/store";
+import { pipelineRetirementReader, type RetirementTarget } from "@/lib/pipelines/retirementEvidence";
+import { providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { runtimeIdleKillMatches } from "./contracts";
@@ -1120,22 +1121,28 @@ export async function bindStructuredDeliveryQueue(
       }
       let capturedRetirement: { root: ProcessIdentity; claimEpoch: number } | null = null;
       let recoveryStartedAt: string | null = null;
+      let pipelineReader: Awaited<ReturnType<typeof pipelineRetirementReader>> | null = null;
       const recoveryTarget = () => ({ conversationId, sessionId: expectedKey.sessionId, engine: expectedKey.engine,
         agentPath: registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.artifactPath ?? null });
       const durableAuthority = async (): Promise<boolean> => {
         if (!onlyIfIdle) return true;
         if (!authority || stopped || state.activeQueue !== queue) return false;
-        const result = await client.operationStatus(authority.operationId).catch(() => null);
         recoveryStartedAt = null;
+        try { pipelineReader = await pipelineRetirementReader(); }
+        catch { pipelineReader = null; return false; }
         if (providerRecovery) {
           try {
             const snapshot = registry.readOnlySnapshot();
-            const attempt = providerRecoveryAttempt(loadPipelinesForRetirement(), providerRecovery, recoveryTarget(),
+            const pipeline = findPipelineRecord(providerRecovery.pipelineId);
+            const attempt = providerRecoveryAttempt(pipeline ? [pipeline] : [], providerRecovery, recoveryTarget(),
               id => resolveConversationAlias(snapshot, id as ViewerConversationId));
             if (!attempt || !await providerRecoveryTurnProven(attempt, providerRecovery)) return false;
             recoveryStartedAt = attempt.startedAt;
           } catch { return false; }
         }
+        // Read the operation after preparation and native proof. Neither wait
+        // may carry a superseded executor claim into the signal boundary.
+        const result = await client.operationStatus(authority.operationId).catch(() => null);
         // Rebind may have happened while the socket read was pending.
         return !stopped && state.activeQueue === queue && result?.receipt.status === "delivering"
           && result.receipt.retirementClaim?.executorId === authority.claim.executorId
@@ -1156,14 +1163,17 @@ export async function bindStructuredDeliveryQueue(
         const conversation = registry.conversation(conversationId as ViewerConversationId);
         const generation = conversation?.generations.at(-1);
         try {
-          const pipelines = loadPipelinesForRetirement();
+          if (!pipelineReader) return false;
           const resolve = (id: string) => resolveConversationAlias(snapshot, id as ViewerConversationId);
+          const pipeline = providerRecovery ? findPipelineRecord(providerRecovery.pipelineId) : null;
           const recoveryAttempt = providerRecovery
-            ? providerRecoveryAttempt(pipelines, providerRecovery, recoveryTarget(), resolve) : null;
+            ? providerRecoveryAttempt(pipeline ? [pipeline] : [], providerRecovery, recoveryTarget(), resolve) : null;
           if (providerRecovery && (!recoveryAttempt || !recoveryStartedAt || recoveryAttempt.startedAt !== recoveryStartedAt)) return false;
-          if (pipelineHostHasLiveWork(pipelines, {
-            conversationId, sessionId: expectedKey.sessionId, agentPath: entry?.artifactPath ?? null, paneId: null,
-          }, resolve, recoveryAttempt ?? undefined)) return false;
+          const target: RetirementTarget = {
+            conversations: conversationIdsResolvingTo(snapshot, resolve(conversationId) as ViewerConversationId),
+            sessionId: expectedKey.sessionId, agentPath: entry?.artifactPath ?? null,
+          };
+          if (pipelineReader(target, recoveryAttempt ? providerRecovery : undefined)) return false;
         } catch { return false; }
         // Turn idleness cannot release a seat. Read designation and revocation
         // epochs together, afresh before each signal; silence defers retirement.
@@ -1266,16 +1276,20 @@ export async function bindStructuredDeliveryQueue(
           // The automatic path uses the signal ladder's synchronous authority
           // recheck rather than the operator's unconditional release method.
           ...(onlyIfIdle ? { terminateOwnedHost: async () => false } : {}),
-          persistCapturedTree: identities => {
+          persistCapturedTree: identities => registry.deliveryWriteOrBusy({ label: "registry.controller-stop-capture" }, () => {
+            if (authorize()) return false;
+            const current = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)];
+            if (!current || current.claimOwner !== retirementCustody?.claimOwner || current.claimEpoch !== retirementCustody?.claimEpoch
+              || current.structuredHost?.writerClaimEpoch !== retirementCustody?.writerClaimEpoch) return false;
             const persisted = registry.recordStructuredTerminationSurvivors(expectedKey, ref, identities);
             if (persisted && onlyIfIdle) {
               const entry = registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]!;
               capturedRetirement = { root: ref, claimEpoch: entry.claimEpoch };
             }
             return persisted;
-          },
+          }),
           retireRegistryEntry: (key, expected, confirmed, custody) =>
-            registry.terminateStructuredHost(key, expected, confirmed, custody),
+            registry.deliveryWriteOrBusy({ label: "registry.controller-stop-settle" }, () => registry.terminateStructuredHost(key, expected, confirmed, custody)),
         });
         if (!outcome.ok) {
           if (outcome.terminationStarted && outcome.survivors.length > 0) {
@@ -1908,6 +1922,7 @@ export async function bindStructuredDeliveryQueue(
       await detachRegistration(id, registered);
     } finally {
       await registered.host.release();
+      await flushStructuredHostPersistence(registered.host);
     }
     return true;
   };
@@ -2272,7 +2287,11 @@ export async function releaseStructuredDeliveryHost(key: SessionKey): Promise<bo
   // runtime projection whose outage prevented publication in the first place.
   unpublishedLaunchHosts.delete(id);
   const release = Promise.resolve().then(async () => {
-    try { await pending.release(); return true; }
+    try {
+      await pending.release();
+      await flushStructuredHostPersistence(pending.host);
+      return true;
+    }
     catch (error) {
       if (!unpublishedLaunchHosts.has(id)) unpublishedLaunchHosts.set(id, pending);
       throw error;
@@ -2290,17 +2309,19 @@ export interface DemotionInterruptionOptions {
   store?: InterruptionObligationStore;
   /** The active orchestrator seats. Defaults to the durable seat file. */
   seats?: () => readonly Pick<OrchestratorSeat, "project" | "seatEpoch" | "conversationId">[];
+  /** Keep the evidence check and continuation record in one admitted step. */
+  admitRecord?: (record: () => boolean) => Promise<boolean>;
 }
 
 /** The seat holding `conversationId`. A seat may still name an alias of the
     conversation after a migration or rebind, so both sides are compared
     canonically, as the successor's discharge check compares them. */
-async function orchestratorSeatFor(
+function orchestratorSeatFor(
   registry: AgentRegistry,
   conversationId: ViewerConversationId,
-  seats: DemotionInterruptionOptions["seats"],
-): Promise<{ project: string; seatEpoch: number } | null> {
-  const active = seats ? seats() : (await import("@/lib/orchestrator/seats")).activeOrchestratorSeats();
+  seats: NonNullable<DemotionInterruptionOptions["seats"]>,
+): { project: string; seatEpoch: number } | null {
+  const active = seats();
   const seat = active.find((candidate) => candidate.conversationId?.startsWith("conversation_")
     && registry.canonicalConversationId(candidate.conversationId as ViewerConversationId) === conversationId);
   return seat ? { project: seat.project, seatEpoch: seat.seatEpoch } : null;
@@ -2337,45 +2358,57 @@ export async function recordDemotionInterruption(
   /* Interruption obligations re-drive Claude and Codex turns a release cut;
      a Copilot turn cut the same way is resumed by the operator (slice 1). */
   if (conversation.engine === "copilot") return true;
+  const engine = conversation.engine;
   const turnRef = current.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
   if (turnRef === null && conversation.turn.state !== "busy" && backgroundTasks.length === 0 && !selfStartedWork) return true;
   const conversationId = registry.canonicalConversationId(conversation.id);
   const generation = conversation.generations.at(-1)!;
   const transcript = await readTranscriptCutEvidence(conversation.engine, generation.path).catch(() => null);
-  let seat: { project: string; seatEpoch: number } | null = null;
-  try {
-    seat = await orchestratorSeatFor(registry, conversationId, options.seats);
-  } catch (error) {
-    controllerDiagnosticError("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error });
-  }
+  const seats = options.seats ?? (await import("@/lib/orchestrator/seats")).activeOrchestratorSeats;
   const store = options.store ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
-  if (!evidenceStands()) return false;
-  const { obligation, created } = store.record({
-    conversationId,
-    engine: conversation.engine,
-    hostKey,
-    path: generation.path,
-    owner: current.pid === null ? null : { pid: current.pid, startIdentity: current.processStartIdentity },
-    claimEpoch: entry.claimEpoch,
-    turnRef,
-    boundary: options.boundary ?? "viewer-release",
-    reason: "viewer-release",
-    checkpoint: {
-      lastEventKind: transcript?.lastWork?.kind ?? null,
-      lastEventAt: transcript?.lastWork?.at ?? null,
-      ...(backgroundTasks.length > 0 ? { backgroundTasks: [...backgroundTasks] } : {}),
-    },
-    seat,
-    /* Still owed: the stage stays held until the successor boots and hands
-       the cut to the stage's controller instead of continuing it. */
-    stage: interruptionStageOf(snapshot.memberships, conversationId),
-  });
-  if (created) {
-    controllerDiagnosticError("[viewer release] recorded an interrupted turn owed one continuation", {
-      conversationId, hostKey, turnRef, obligation: obligation.id,
+  const custody = (row: typeof entry, owner: typeof conversation) => JSON.stringify([
+    row.claimOwner, row.claimEpoch, row.structuredHost?.writerClaimEpoch, row.structuredHost?.process,
+    owner.generations.at(-1), owner.turn, owner.supersededBy,
+  ]);
+  const expected = custody(entry, conversation);
+  const record = () => {
+    let seat: { project: string; seatEpoch: number } | null = null;
+    try { seat = orchestratorSeatFor(registry, conversationId, seats); }
+    catch (error) { controllerDiagnosticError("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error }); }
+    // Seat discovery can observe a completion. Validate after every evidence
+    // source, immediately before marking custody and recording the cut.
+    const fresh = registry.readOnlySnapshot();
+    const currentEntry = fresh.entries[hostKey];
+    const currentConversation = fresh.conversations[conversation.id];
+    if (!currentEntry || !currentConversation || custody(currentEntry, currentConversation) !== expected || !evidenceStands()) return false;
+    const { obligation, created } = store.record({
+      conversationId,
+      engine,
+      hostKey,
+      path: generation.path,
+      owner: current.pid === null ? null : { pid: current.pid, startIdentity: current.processStartIdentity },
+      claimEpoch: entry.claimEpoch,
+      turnRef,
+      boundary: options.boundary ?? "viewer-release",
+      reason: "viewer-release",
+      checkpoint: {
+        lastEventKind: transcript?.lastWork?.kind ?? null,
+        lastEventAt: transcript?.lastWork?.at ?? null,
+        ...(backgroundTasks.length > 0 ? { backgroundTasks: [...backgroundTasks] } : {}),
+      },
+      seat,
+      /* Still owed: the stage stays held until the successor boots and hands
+         the cut to the stage's controller instead of continuing it. */
+      stage: interruptionStageOf(fresh.memberships, conversationId),
     });
-  }
-  return true;
+    if (created) {
+      controllerDiagnosticError("[viewer release] recorded an interrupted turn owed one continuation", {
+        conversationId, hostKey, turnRef, obligation: obligation.id,
+      });
+    }
+    return true;
+  };
+  return options.admitRecord ? options.admitRecord(record) : record();
 }
 
 /** How many times a release reads a live CLI's transcript before it gives
@@ -2500,9 +2533,15 @@ export async function handOverHostForDemotion(
 ): Promise<boolean> {
   if (current.pid == null || current.processStartIdentity == null) return false;
   const owner = captureProcessIdentity(current.pid, undefined, current.processStartIdentity);
+  const observed = registry.readOnlySnapshot().entries[sessionKeyId(key)];
   let marked = false;
   const markHandoff = () => {
     if (marked) return;
+    const latest = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    if (!latest || latest.claimOwner !== observed?.claimOwner || latest.claimEpoch !== observed?.claimEpoch
+      || latest.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) {
+      throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+    }
     if (!registry.markStructuredHostHandoff(key, owner)) {
       throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
     }
@@ -2530,17 +2569,24 @@ export async function handOverHostForDemotion(
     if (!evidenceStands() || !idle.evidenceStands()) continue;
     if (!inFlight && idle.backgroundTasks.length === 0 && !idle.selfStartedWork) return marked;
     if (await recordDemotionInterruption(
-      registry, key, current, options, idle.backgroundTasks, idle.selfStartedWork,
+      registry, key, current, {
+        ...options,
+        admitRecord: record => registry.deliveryWriteOrBusy({ label: "registry.demotion-handoff" }, record),
+      }, idle.backgroundTasks, idle.selfStartedWork,
       () => {
         if (!evidenceStands() || !idle.evidenceStands()) return false;
-        /* The handoff itself can authorize Codex continuation. Publish it
-           only after the awaited reads still prove this cut. */
         markHandoff();
         return true;
       },
     )) {
-      markHandoff();
-      return true;
+      if (marked) return true;
+      // A conversation with no owed continuation still needs its handoff.
+      const published = await registry.deliveryWriteOrBusy({ label: "registry.demotion-handoff" }, () => {
+        if (!evidenceStands() || !idle.evidenceStands()) return false;
+        markHandoff();
+        return true;
+      });
+      if (published) return true;
     }
   }
   throw new Error(`structured host ${sessionKeyId(key)} evidence kept moving before Viewer demotion`);

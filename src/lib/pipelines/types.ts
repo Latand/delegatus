@@ -1181,7 +1181,9 @@ export type PipelineTaskFinishWait = {
     `waiting-checks`, `updating` and `merging` belong to the runner; `merged`
     is final; `blocked` waits for `retry-merge`; `cancelled` means the setting
     was turned off while the merge only waited. `refreshing` belongs to a
-    successor pipeline and stays outside the runner's queue. */
+    successor pipeline and stays outside the runner's queue. Once that successor
+    completes, its merge progress is reflected here; the record with
+    `refresh.pipelineId` remains delegated and never enters the queue itself. */
 export type PipelineMergeState = "refreshing" | "queued" | "checking" | "waiting-checks" | "updating" | "merging" | "merged" | "blocked" | "cancelled";
 
 export const PIPELINE_MERGE_LIVE_STATES: ReadonlySet<PipelineMergeState> = new Set(["queued", "checking", "waiting-checks", "updating", "merging"]);
@@ -1194,6 +1196,8 @@ export type PipelineRefreshOf = {
 };
 
 export type PipelineRefresh = {
+  /** Forge base captured with the tip; absent on older reservations. */
+  baseBranch?: string;
   attempt: number;
   base: string;
   head: string;

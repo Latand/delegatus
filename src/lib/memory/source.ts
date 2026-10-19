@@ -1,7 +1,12 @@
+import { withFileTransaction } from "@/lib/state/fileTransaction";
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { importCollection } from "./importStore";
 import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { waitForStateLock } from "@/lib/state/lockWait";
 
 export type MemorySource = "delegatus" | "engines";
 export type MemoryPhase = "importing" | "draining" | "active";
@@ -79,13 +84,59 @@ export function engineMemoryOff({ cleanMemory = false }: { cleanMemory?: boolean
   return choice === "delegatus" && (phase === "draining" || phase === "active");
 }
 
-/** Slice 3 owns the import and first flip. Until then no request can start it. */
-export function setMemorySource(source: MemorySource, now = new Date().toISOString()): "import_unavailable" | "first_choice_delegatus" | null {
-  if (source === "delegatus") return "import_unavailable";
+/** The route supplies async state admission; this bounded write never reads an engine home. */
+export function setMemorySource(source: MemorySource, now = new Date().toISOString()): "first_choice_delegatus" | null {
   const current = readMemorySourceFile();
-  if (!current) return "first_choice_delegatus";
-  if (current.source === source) return null;
-  withViewerOperation("memory.source-write", () => writeJsonDurably(statePath("memory-source.json"), { ...current, source, changedAt: now }));
-  host.__delegatusMemorySource = undefined;
+  if (current?.source === source) return null;
+  if (source === "engines" && !current) return "first_choice_delegatus";
+  if (source === "delegatus") {
+    const id = `import_${randomUUID()}`;
+    importCollection(true)!.boundedPatch(2, tx => tx.put({ kind: "import", id, state: "copying", at: now, previous: current,
+      backup: statePath(path.join("backups", "engine-memory", id)), files: 0, candidates: 0, parts: 0 }));
+    writeSource({ schemaVersion: 1, source, phase: "importing", changedAt: now, importId: id, importStartedAt: now });
+  } else writeSource({ ...current!, source, changedAt: now });
   return null;
+}
+function writeSource(row: MemorySourceFile) {
+  withViewerOperation("memory.source-write", () => writeJsonDurably(statePath("memory-source.json"), row));
+  host.__delegatusMemorySource = undefined;
+}
+function sourceTransaction<T>(operation: () => T | Promise<T>) {
+  const file = statePath("memory-source.json");
+  for (const [target, directory] of [[`${file}.write-locks`, true], [`${file}.write-lock`, false]] as const) {
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(target); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+    if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1)) throw Error("memory source lock unavailable");
+  }
+  return withFileTransaction(file, "memory source busy", operation);
+}
+export async function selectMemorySource(source: MemorySource, now = new Date().toISOString()) {
+  return withViewerOperation("memory.source-write", () => sourceTransaction(() => waitForStateLock("memory.source.select", () => setMemorySource(source, now))));
+}
+export async function advanceMemorySource(importId: string, phase: "draining" | "active", at?: string, guard: () => boolean = () => true) {
+  return sourceTransaction(() => waitForStateLock("memory.import.flip", () => {
+    const current = readMemorySourceFile();
+    const expected = phase === "draining" ? "importing" : "draining";
+    if (!guard() || current?.source !== "delegatus" || current.importId !== importId || current.phase !== expected) return false;
+    at ??= new Date().toISOString();
+    writeSource({ ...current, phase, ...(phase === "draining" ? { flippedAt: at } : { drainedAt: at }) });
+    return true;
+  }));
+}
+
+/** Restore only while this import still owns the importing choice. UI choices
+ * already have a lock queue. Legacy preflight recovery creates no sidecars. */
+export async function restoreMemorySourceAfterImport(importId: string, previous: MemorySourceFile | null): Promise<void> {
+  const restore = () => waitForStateLock("memory.import.restore", () => withViewerOperation("memory.source-write", () => {
+    const current = readMemorySourceFile();
+    if (current?.source !== "delegatus" || current.phase !== "importing" || current.importId !== importId) return;
+    if (previous) writeJsonDurably(statePath("memory-source.json"), previous);
+    else fs.unlinkSync(statePath("memory-source.json"));
+    host.__delegatusMemorySource = undefined;
+  }));
+  let queued = false;
+  try { fs.lstatSync(statePath("memory-source.json.write-locks")); queued = true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  if (queued) await sourceTransaction(restore); else await restore();
 }

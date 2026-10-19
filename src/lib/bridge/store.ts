@@ -1222,8 +1222,9 @@ export function acknowledgeBridgeReports(
  * too, answers and parked answers are unioned, and the trim marks take the
  * higher value.
  */
-function mergeLegacyLog(legacyPath: string, body: BridgeReportLogV1, options: { fenceOwner: boolean }): LegacyReconcileSummary {
+function mergeLegacyLog(legacyPath: string, body: BridgeReportLogV1, options: { fenceOwner: boolean; consumedSha256?: string }): LegacyReconcileSummary {
   const collection = openCollection(legacyDatabasePath(legacyPath), REPORTS_COLLECTION);
+  const consumedSha256 = options.consumedSha256;
   const summary: LegacyReconcileSummary = { added: 0, replaced: 0, removed: 0, kept: 0, keys: [], conflicts: [], spared: [] };
   collection.patchSync(() => {
     const rows = collection.snapshot();
@@ -1266,7 +1267,14 @@ function mergeLegacyLog(legacyPath: string, body: BridgeReportLogV1, options: { 
     trimToCapacity(log, readBridgeChannel()?.managerReportCursor ?? 0);
     log.retired = log.retired.slice(-BRIDGE_RETIRED_ID_CAPACITY);
     return diffRows(rows, rowsFromLog(log));
-  }, { fenceOwner: options.fenceOwner });
+  }, {
+    fenceOwner: options.fenceOwner,
+    ...(consumedSha256 ? { afterPersist: (db) => {
+      const result = db.query("UPDATE state_imports SET reconciled_sha256 = ? WHERE collection = ?")
+        .run(consumedSha256, REPORTS_COLLECTION);
+      if (result.changes !== 1) throw new Error(`missing import evidence for ${REPORTS_COLLECTION} reconciliation`);
+    } } : {}),
+  });
   return summary;
 }
 

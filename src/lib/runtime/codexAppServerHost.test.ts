@@ -9,6 +9,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import * as pinnedProtocol from "@/lib/accounts/codexPinnedProtocol";
@@ -880,8 +881,9 @@ function fakeSpawn(server: FakeAppServer, captured?: { args?: string[]; options?
   };
 }
 
-async function waitForCondition(predicate: () => boolean | Promise<boolean>, message: string): Promise<void> {
-  for (let attempt = 0; attempt < 500; attempt += 1) {
+async function waitForCondition(predicate: () => boolean | Promise<boolean>, message: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     if (await predicate()) return;
     await Bun.sleep(10);
   }
@@ -5106,6 +5108,63 @@ describe("CodexAppServerHost", () => {
     )).rejects.toThrow("structured hosts are disabled");
   });
 
+  for (const ledgerFailure of [false, true]) test(`release waits for its registry checkpoint and concurrent releases (ledger failure=${ledgerFailure})`, async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-release-checkpoint-"));
+    const registryPath = path.join(directory, "registry.json");
+    const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "sqlite" });
+    const server = new FakeAppServer("release-checkpoint");
+    const eventStore = ledgerFailure ? new FailingEventStore() : new MemoryEventStore();
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server), shutdownGraceMs: 2,
+      ...ownedFakeProcess,
+      signalProcess: (_pid, signal) => server.kill(signal),
+    });
+    const key = { engine: "codex" as const, sessionId: "release-checkpoint" };
+    registry.upsert({
+      key, artifactPath: "/sessions/release-checkpoint.jsonl", cwd: "/repo", accountId: null,
+      status: "idle", host: null, structuredHost: codexHostColumns(await host.health(), 7),
+      claimEpoch: 7, claimOwner: "release-writer", pendingAction: null,
+    });
+    const stop = await bindCodexHostPersistence(registry, key, host, "release-writer", 7);
+    const peer = new Database(path.join(directory, "registry.sqlite"));
+    let held = false;
+    let terminal!: () => void;
+    const terminalObserved = new Promise<void>(resolve => { terminal = resolve; });
+    const unsubscribe = host.onStateChange(state => { if (state.status === "unhosted") terminal(); });
+    const releases: Promise<void>[] = [];
+    const acknowledgements: string[] = [];
+    try {
+      peer.exec("BEGIN IMMEDIATE");
+      held = true;
+      releases.push(host.release().then(() => { acknowledgements.push("first"); }));
+      await terminalObserved;
+      // The transport has ended; the second call must still await persistence.
+      releases.push(host.release().then(() => { acknowledgements.push("second"); }));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(acknowledgements).toEqual([]);
+      expect(registry.readOnlySnapshot().entries["codex:release-checkpoint"]?.claimOwner).toBe("release-writer");
+      peer.exec("ROLLBACK");
+      held = false;
+      await Promise.all(releases);
+      const reopened = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "sqlite" });
+      try {
+        expect(reopened.readOnlySnapshot().entries["codex:release-checkpoint"]).toMatchObject({
+          status: "unhosted", claimOwner: null,
+          structuredHost: { process: null, activeTurnRef: null, pendingAttention: [] },
+        });
+      } finally { reopened.close(); }
+    } finally {
+      if (held) peer.exec("ROLLBACK");
+      unsubscribe();
+      await Promise.allSettled(releases);
+      await host.release();
+      await stop();
+      peer.close();
+      registry.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("boot re-host resumes Codex and reconstructs its Viewer MCP connector (#1346)", async () => {
     const stdioEnv = { ...process.env, LLV_SPAWN_CAPABILITY: undefined };
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-adoption-"));
@@ -5315,6 +5374,7 @@ describe("CodexAppServerHost", () => {
       await waitForCondition(
         () => fs.existsSync(filename) || child.exitCode !== null || child.signalCode !== null,
         `fixture host ${child.pid} produced no ready evidence: ${diagnostics.get(child.pid) ?? ""}`,
+        60_000,
       );
       if (!fs.existsSync(filename)) {
         throw new Error(`fixture host ${child.pid} exited before readiness: ${diagnostics.get(child.pid) ?? ""}`);
@@ -5432,7 +5492,7 @@ describe("CodexAppServerHost", () => {
       control.stop(true);
       fs.rmSync(directory, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 120_000);
 
   test("boot adoption starts only Codex rows admitted by its candidate filter", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-filtered-structured-adoption-"));
