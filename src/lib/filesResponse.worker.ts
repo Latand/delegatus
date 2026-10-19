@@ -155,10 +155,10 @@ async function seatSource(request: SeatSourceWorkerRequest): Promise<Record<stri
     const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
     value = seatAgendaAsks(JSON.parse(await fs.promises.readFile(request.bodyFile, "utf8")), request.now, request.project);
   } else if (request.type === "seat-reports") {
-    const { seatTickReportRows } = await import("@/lib/monitor/seatTickSources");
+    const { seatTickReportRows } = await import("@/lib/monitor/seatTickReports");
     value = seatTickReportRows(request.project);
   } else {
-    const { recordSeatRuleReports } = await import("@/lib/monitor/seatTickSources");
+    const { recordSeatRuleReports } = await import("@/lib/monitor/seatTickReports");
     recordSeatRuleReports(request.project, request.at);
   }
   const directory = statePath("files-response-results");

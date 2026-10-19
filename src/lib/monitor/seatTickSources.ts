@@ -17,8 +17,6 @@ import type { SeatContextUsage } from "./seatAutoRotation";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { memoryProblemSignals, prepareMemoryProblemRead } from "@/lib/memory/roleProblems";
-import { ruleReports } from "./ruleReports";
-import { readAttentionDismissals } from "@/lib/attention/dismissals";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -44,9 +42,9 @@ import { readAuto, type AutoState } from "@/lib/selfUpdate/auto";
 import { readJsonCache } from "@/lib/state/durableJson";
 import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
-import { appendBridgeReports, readBridgeReportLog, scopedReportId } from "@/lib/bridge/store";
+import { scopedReportId } from "@/lib/bridge/store";
 import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
-import type { BridgeReportV1 } from "@/lib/bridge/types";
+import type { SeatTickReportRow } from "./seatTickReports";
 import { operatorLocale } from "@/lib/operator/settings";
 import { bridgeReportsEnabled } from "@/lib/projects/settings";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
@@ -54,7 +52,7 @@ import viewerPackageManifest from "../../../package.json";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/prompt";
 import { canonicalOrchestratorProject, orchestratorSeatEverHeld, orchestratorSeatFor } from "@/lib/orchestrator/seats";
-import { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
+import { activeSeatsByCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { pipelineCompletedUnreviewed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import { loadArchivedPipelinesForList, loadArchivedPipelinesForListAsync, loadPipelinesForList, loadPipelinesForListAsync } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
@@ -460,14 +458,6 @@ export async function wakeStateFromRecord(wake: SeatTickOutstandingWake, ports: 
  */
 export { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 
-export type SeatTickReportRow = Pick<BridgeReportV1, "id" | "project" | "origin" | "at" | "covers" | "coversOwedAt">;
-
-export function seatTickReportRows(project: string): SeatTickReportRow[] {
-  return readBridgeReportLog().reports.filter(row => row.origin?.kind === "manager" && !!row.project
-    && canonicalOrchestratorProject(row.project) === project)
-    .map(({ id, project, origin, at, covers, coversOwedAt }) => ({ id, project, origin, at, covers, coversOwedAt }));
-}
-
 export interface SeatTickSources {
   prepareRead?: () => Promise<void>;
   memoryProblems?: (project: string, shown: readonly string[], recipient: { conversationId: string; seatEpoch: number } | null) => SeatTickSignalInput[];
@@ -654,21 +644,6 @@ export async function settleRecordFromJournal(
 function seatProjectResolver(): (project: string) => string {
   const resolve = projectAliasResolver();
   return project => resolve(project.trim());
-}
-
-export function recordSeatRuleReports(project: string, at: string): void {
-  const seat = orchestratorSeatForCurrentProject(project).active;
-  if (!seat?.conversationId) return;
-  const registry = agentRegistry().readOnlySnapshot();
-  const log = readBridgeReportLog();
-  appendBridgeReports(ruleReports({ project, at, seatConversationId: seat.conversationId, locale: operatorLocale() === "en" ? "en" : "uk",
-    tasks: loadTasksForList(), pipelines: loadPipelinesForList().map(lane => ({ ...lane, project: canonicalOrchestratorProject(lane.project) })), deliveries: Object.values(registry.heldDeliveries),
-    maintenance: maintenanceRuns(project), dismissals: readAttentionDismissals().records, bridgeLog: { ...log, reports: log.reports.map(row => row.project ? { ...row, project: canonicalOrchestratorProject(row.project) } : row) },
-    deliveryLost: delivery => registry.deliveryOperationOwners[delivery.command.operationId]?.terminalDisposition === "lost",
-    deliveryProject: delivery => {
-      const held = delivery.command.origin?.project ?? registry.conversations[delivery.conversationId]?.projectOwnership?.project;
-      return held ? canonicalOrchestratorProject(held) : null;
-    } }));
 }
 
 export function defaultSeatTickSources(): SeatTickSources {

@@ -610,3 +610,33 @@ test("seat liveness uses the certified inventory generation and observes replace
     expect((await read(3)).map(row => row.title)).toEqual(["Recovered inventory"]);
   } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
 }, 15_000);
+
+
+test("seat report worker persists outcomes once, filters foreign projects, and recovers after refusal and restart", async () => {
+  const { runSeatSourceInWorker } = await import("./filesResponseWorker");
+  const { buildPipeline, PIPELINES_SCHEMA_VERSION } = await import("@/lib/pipelines/store");
+  const state = scratchState(), runtime = runtimeFor(state);
+  runtime.env!.LLV_AGENT_REGISTRY_SQLITE = undefined;
+  const at = "2026-10-18T12:00:00Z";
+  const seat = { project: "fixture", seatEpoch: 1, conversationId: "conversation_fixture", path: null, mandate: "Run checks", state: "active",
+    intent: { clientRequestId: "fixture-intent", mode: "existing" }, designatedAt: at, activatedAt: at };
+  fs.writeFileSync(path.join(state, "orchestrator-seats.json"), JSON.stringify({ schemaVersion: 1, nextSeatEpoch: 2, seats: { fixture: seat }, pending: {} }));
+  const lane = (id: string, project: string) => ({ ...buildPipeline({ id, task: "Check work", project, repoDir: state, stages: [], srcPath: null, srcConversationId: null, now: at, state: "draft" }),
+    dismissedAt: at, dismissedBy: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  fs.writeFileSync(path.join(state, "pipelines.json"), JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION,
+    pipelines: [lane("pipeline_first", "fixture"), lane("pipeline_foreign", "elsewhere"), lane("pipeline_second", "fixture")] }));
+  const produce = () => runSeatSourceInWorker({ type: "seat-rule-reports", project: "fixture", at }, runtime);
+  const read = async (project: string) => JSON.parse((await runSeatSourceInWorker({ type: "seat-reports", project }, runtime)).body);
+  try {
+    await expect(runSeatSourceInWorker({ type: "seat-rule-reports", project: "fixture", at: "invalid" }, runtime)).rejects.toThrow("invalid request");
+    await produce();
+    const first = await read("fixture");
+    expect(first).toHaveLength(2);
+    expect(first.map((row: { origin: { conversationId: string } }) => row.origin.conversationId)).toEqual(["conversation_fixture", "conversation_fixture"]);
+    expect(await read("elsewhere")).toEqual([]);
+    await produce();
+    expect(await read("fixture")).toEqual(first);
+    await drainFilesResponseWorker("restart report reader");
+    expect(await read("fixture")).toEqual(first);
+  } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+}, 15_000);

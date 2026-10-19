@@ -147,7 +147,9 @@ export async function prepareSeatTickProbe() {
         seatRecovery: { rotate: rotation as never }, seatAutoRotation: { rotate: rotation as never },
         seatAuth: { rotate: rotation as never, telegram: async () => ({ ok: false }) as never }, proposalIssues: async () => [] });
       return { case: "T9-check", run: index, at: new Date().toISOString(), load: os.loadavg(),
-        verdict: result?.verdict, reasons: result?.reasons, items: result?.items, sources: times };
+        verdict: result?.verdict, reasons: result?.reasons, items: result?.items,
+        failureCode: result?.verdict !== "error" ? null : /ledger/i.test(result.detail ?? "") ? "ledger-gap"
+          : /bridge report log is busy/i.test(result.detail ?? "") ? "report-log-busy" : "other", sources: times };
     },
     async cleanup() {
       await worker.drainFilesResponseWorker("probe complete");
