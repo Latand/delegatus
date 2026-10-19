@@ -68,7 +68,7 @@ the deployed revision under live load.
 
 ## Recorded results
 
-The final replay ran on 2026-10-19, 08:23:48–08:24:47 UTC, under Bun 1.4.0.
+The final replay ran on 2026-10-19, 12:46:39–12:47:34 UTC, under Bun 1.4.0.
 Each side used identical corpus, registry and dependency digests at its lane
 count. The data contains approximately 166.94 MB of pipeline JSON and 14.32 MB
 of role-memory scope JSON. The owned command had a three-CPU quota and an
@@ -78,8 +78,8 @@ driver fingerprints, cold observations and six passes per side are in
 
 | Open lanes | Before p95 / max loop delay | After p95 / max loop delay | Selected pipelines per tick |
 | --- | --- | --- | --- |
-| 15 | 1243.4 / 1925.6 ms | 36.6 / 264.4 ms | 4 on all six passes, both sides |
-| 30 | 1364.1 / 1943.9 ms | 40.0 / 253.4 ms | 4 on all six passes, both sides |
+| 15 | 1200.3 / 1366.7 ms | 38.8 / 343.6 ms | 4 on all six passes, both sides |
+| 30 | 1217.9 / 1748.6 ms | 25.7 / 254.6 ms | 4 on all six passes, both sides |
 
 The p95 uses every recorded interval across the cold observation and six
 passes. Per-pass tails remain in the artifact; cold setup and fingerprinting
@@ -87,13 +87,13 @@ are outside measurement. The first controller pass is observed.
 
 | Repeated reader, median wall time | 15 lanes before / after | 30 lanes before / after |
 | --- | --- | --- |
-| Curator authority | 77.43 / 0.60 ms | 71.52 / 0.67 ms |
-| Curator display counts | 69.53 / 0.78 ms | 68.85 / 0.66 ms |
-| Registry retirement | 52.73 / 2.90 ms | 57.68 / 3.79 ms |
-| Startup membership selection | 17.55 / 31.44 ms | 16.72 / 37.95 ms |
-| Idle-retirement ownership | 401.43 / 0.40 ms | 472.98 / 0.52 ms |
-| Ownership after one pipeline edit | 409.50 / 7.78 ms | 433.66 / 7.19 ms |
-| Archive insert/delete and ownership checks | 823.58 / 19.02 ms | 939.59 / 17.83 ms |
+| Curator authority | 55.28 / 0.62 ms | 72.37 / 0.53 ms |
+| Curator display counts | 49.80 / 0.86 ms | 58.52 / 0.73 ms |
+| Registry retirement | 43.40 / 2.73 ms | 54.16 / 3.43 ms |
+| Startup membership selection | 12.58 / 37.24 ms | 17.36 / 26.76 ms |
+| Idle-retirement ownership | 349.25 / 0.42 ms | 473.77 / 0.26 ms |
+| Ownership after one pipeline edit | 378.98 / 9.62 ms | 390.45 / 4.43 ms |
+| Archive insert/delete and ownership checks | 757.86 / 21.35 ms | 763.27 / 11.10 ms |
 
 Authority reads decode 473 bytes of pass metadata on each repeated call,
 versus 14,317,348 bytes before. A fresh ownership check decodes no pipeline
@@ -110,35 +110,20 @@ in these passes; cache hits reduce decoding when selected rows repeat.
 
 ## Verification
 
-The Node TypeScript check passed. Explicit-path comparisons for curator,
-registry-reader, retirement, and evidence-index tests introduced no failures.
-The comparator reproduced two base failures: the curator fixture's helper
-cleanup and the synchronous-initialization contention assertion. The separate
-production termination callback file passed all 42 cases.
+After merging main `9cda6155`, the explicit startup test ran separately on
+both revisions in identical isolated environments. The candidate completed
+149 cases with 146 passes and three failed assertions. Main completed 149
+cases with 144 passes and five failed assertions. All three candidate failures
+also failed on main; neither run emitted a between-tests error. The candidate's
+historical-host fixture completed within its explicit 30-second timeout and
+closed its registry in `finally`.
 
-The runtime-host rehearsal under Bun 1.4.0 completed succession in 507 ms and
+The runtime-host rehearsal under Bun 1.4.0 completed succession in 508 ms and
 answered 27/27 stable-listener and 27/27 runtime-socket probes over 15 seconds.
 It used private state and ephemeral endpoints.
 
-The final pre-push gate passed on the committed source: privacy, TypeScript,
-changed-file ESLint, touched tests, Linux backend and Linux tests. Its touched
-comparison sampled the six failing files on base `f090bde7` and reported zero
-new failures, 37 pre-existing failures and no flaky cases. Those baseline
-failures include spawn/connector fixtures, curator helper cleanup, a CPU-ticket
-fixture, startup fixtures and the synchronous-initialization assertion. The new
-scheduler checkpoint case and both new reader test files introduced no failure.
-TypeScript completed in 237 seconds; the touched comparison in 153 seconds.
-Every check used private state, home, config and temporary roots and a closed
-Viewer control port.
-
-The final gate command was `bash scripts/gate-slot.sh bun
-scripts/local-gate.ts pre-push`, executed from a scratch copy of the commit;
-its origin was the publication remote. No push or deployment was performed.
-
-
-Main advanced during verification. Its additional loop-monitor label shared a
-line with this branch's type union addition. Relocating this branch's label
-removes that textual conflict. The artifact records measured and final source
-fingerprints and a byte-identical Bun-transpiled JavaScript digest for that
-file; all other production source bytes match the replay. This final type-only
-edit cannot change the measured runtime work.
+The replay measurements above were regenerated after the merge. The artifact
+records the archived candidate tree and its complete production-source digest;
+both candidate runs have the same source digest. Each lane count has matching
+corpus, registry, driver and dependency digests across the two sides. Later
+report and artifact edits change no production source.

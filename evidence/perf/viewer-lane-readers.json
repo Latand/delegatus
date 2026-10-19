@@ -4,8 +4,8 @@
   "protocol": "docs/perf/viewer-lane-readers.md#replay-procedure",
   "measurements": [
     {
-      "startedAt": "2026-10-19T08:23:48.265Z",
-      "finishedAt": "2026-10-19T08:24:02.528Z",
+      "startedAt": "2026-10-19T12:46:39.655Z",
+      "finishedAt": "2026-10-19T12:46:51.686Z",
       "limits": [
         {
           "level": 0,
@@ -80,55 +80,55 @@
       "sourceSha256": "cfc9732cb570169cab07b323cbf65c3174709defc71538848de5d8d58bf93482",
       "load": {
         "before": [
-          26.53,
-          25.44,
-          24.2
+          19.93,
+          21.07,
+          19.63
         ],
         "after": [
-          26.8,
-          25.58,
-          24.27
+          21.08,
+          21.27,
+          19.71
         ],
         "cpus": 24
       },
       "cold": {
         "curator": {
-          "wallMs": 89.73483699999997,
+          "wallMs": 43.20062400000006,
           "collectionDecodedBytes": 14317348,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "display": {
-          "wallMs": 68.44870599999922,
+          "wallMs": 49.84964200000013,
           "collectionDecodedBytes": 14317348,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "ownership": {
-          "wallMs": 487.568002,
+          "wallMs": 315.37042500000007,
           "collectionDecodedBytes": 0,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "registry": {
-          "wallMs": 1031.148846,
+          "wallMs": 655.0182639999994,
           "collectionDecodedBytes": 0,
           "registryPayloadReads": 12015,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "startup": {
-          "wallMs": 177.55745799999931,
+          "wallMs": 157.84184000000005,
           "collectionDecodedBytes": 0,
           "registryPayloadReads": 3985,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "controller": {
-          "wallMs": 276.0457380000007,
+          "wallMs": 120.68623300000036,
           "collectionDecodedBytes": 531452,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
@@ -137,68 +137,68 @@
       },
       "coldLoop": {
         "samples": 10,
-        "p95Ms": 1925.6068139999988,
-        "maxMs": 1925.6068139999988
+        "p95Ms": 1265.1262040000001,
+        "maxMs": 1265.1262040000001
       },
       "loop": {
-        "samples": 65,
-        "p95Ms": 1243.444982000001,
-        "maxMs": 1925.6068139999988
+        "samples": 67,
+        "p95Ms": 1200.2525019999994,
+        "maxMs": 1366.656771
       },
       "samples": [
         {
           "sample": 0,
           "curator": {
-            "wallMs": 68.5126339999988,
+            "wallMs": 48.904389000000265,
             "collectionDecodedBytes": 14317348,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 77.74590499999977,
+            "wallMs": 46.24604199999976,
             "collectionDecodedBytes": 14317348,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 70.09840600000098,
+            "wallMs": 34.97983199999999,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 17.395274000000427,
+            "wallMs": 9.044699000000037,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 657.91489,
+            "wallMs": 351.17522799999915,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 125.38579600000048,
+            "wallMs": 71.4672099999998,
             "collectionDecodedBytes": 531460,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 402.91873300000043,
+            "wallMs": 292.6378530000002,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 892.6242020000009,
+            "wallMs": 562.2138709999999,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
@@ -206,255 +206,63 @@
           },
           "loop": {
             "samples": 9,
-            "p95Ms": 1307.1694459999999,
-            "maxMs": 1307.1694459999999
+            "p95Ms": 857.4167989999996,
+            "maxMs": 857.4167989999996
           }
         },
         {
           "sample": 1,
           "curator": {
-            "wallMs": 110.20178599999963,
+            "wallMs": 55.39386200000081,
             "collectionDecodedBytes": 14317348,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 55.700840999999855,
+            "wallMs": 40.91266299999916,
             "collectionDecodedBytes": 14317348,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 36.7712360000005,
+            "wallMs": 27.86790800000017,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 10.620058999998946,
+            "wallMs": 9.22896799999944,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 395.6465470000003,
+            "wallMs": 280.71573999999964,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 75.83876400000008,
+            "wallMs": 57.82500400000026,
             "collectionDecodedBytes": 531460,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 429.94645799999853,
+            "wallMs": 285.3530460000002,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 1003.2308360000006,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "loop": {
-            "samples": 9,
-            "p95Ms": 1441.3966540000001,
-            "maxMs": 1441.3966540000001
-          }
-        },
-        {
-          "sample": 2,
-          "curator": {
-            "wallMs": 113.30943000000116,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "display": {
-            "wallMs": 80.11822700000084,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "registry": {
-            "wallMs": 57.700912000000244,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "startup": {
-            "wallMs": 23.56560399999944,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "ownership": {
-            "wallMs": 470.54343100000006,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "controller": {
-            "wallMs": 161.89203700000144,
-            "collectionDecodedBytes": 531619,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 4
-          },
-          "refreshed": {
-            "wallMs": 469.5846190000011,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "lifecycle": {
-            "wallMs": 595.3440850000006,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "loop": {
-            "samples": 9,
-            "p95Ms": 1073.5757150000027,
-            "maxMs": 1073.5757150000027
-          }
-        },
-        {
-          "sample": 3,
-          "curator": {
-            "wallMs": 73.795560999999,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "display": {
-            "wallMs": 40.414041,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "registry": {
-            "wallMs": 34.086129999999685,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "startup": {
-            "wallMs": 10.192555999998149,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "ownership": {
-            "wallMs": 348.33235799999966,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "controller": {
-            "wallMs": 68.71008000000074,
-            "collectionDecodedBytes": 398703,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 4
-          },
-          "refreshed": {
-            "wallMs": 324.1306619999996,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "lifecycle": {
-            "wallMs": 809.0705259999995,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "loop": {
-            "samples": 9,
-            "p95Ms": 1141.1796020000002,
-            "maxMs": 1141.1796020000002
-          }
-        },
-        {
-          "sample": 4,
-          "curator": {
-            "wallMs": 81.06822000000102,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "display": {
-            "wallMs": 77.4859460000007,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "registry": {
-            "wallMs": 50.65069399999993,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "startup": {
-            "wallMs": 17.70712099999946,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "ownership": {
-            "wallMs": 407.2071309999992,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "controller": {
-            "wallMs": 87.45991700000013,
-            "collectionDecodedBytes": 132871,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 4
-          },
-          "refreshed": {
-            "wallMs": 416.07519299999694,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "lifecycle": {
-            "wallMs": 719.7078489999985,
+            "wallMs": 765.5826859999997,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
@@ -462,63 +270,127 @@
           },
           "loop": {
             "samples": 10,
-            "p95Ms": 1134.4230749999988,
-            "maxMs": 1134.4230749999988
+            "p95Ms": 1049.4470629999996,
+            "maxMs": 1049.4470629999996
           }
         },
         {
-          "sample": 5,
+          "sample": 2,
           "curator": {
-            "wallMs": 66.10789799999839,
+            "wallMs": 55.162327999998524,
             "collectionDecodedBytes": 14317348,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 61.5700059999981,
+            "wallMs": 53.361823999999615,
             "collectionDecodedBytes": 14317348,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 54.813867000000755,
+            "wallMs": 51.822910999999294,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 18.15145400000256,
+            "wallMs": 15.779125000000931,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 382.54588899999726,
+            "wallMs": 301.71769099999983,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 111.74625100000048,
-            "collectionDecodedBytes": 132871,
+            "wallMs": 60.50088599999981,
+            "collectionDecodedBytes": 531619,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 399.52932800000053,
+            "wallMs": 359.89528599999903,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 838.0902970000025,
+            "wallMs": 587.3128350000006,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "loop": {
+            "samples": 10,
+            "p95Ms": 945.5755630000003,
+            "maxMs": 945.5755630000003
+          }
+        },
+        {
+          "sample": 3,
+          "curator": {
+            "wallMs": 54.848344,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "display": {
+            "wallMs": 44.49272699999892,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "registry": {
+            "wallMs": 32.017110000000685,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "startup": {
+            "wallMs": 9.782710999999836,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "ownership": {
+            "wallMs": 347.3280709999999,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "controller": {
+            "wallMs": 135.27736399999958,
+            "collectionDecodedBytes": 398703,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 4
+          },
+          "refreshed": {
+            "wallMs": 423.96196300000156,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "lifecycle": {
+            "wallMs": 906.8656480000009,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
@@ -526,15 +398,143 @@
           },
           "loop": {
             "samples": 9,
-            "p95Ms": 1243.444982000001,
-            "maxMs": 1243.444982000001
+            "p95Ms": 1339.3052049999988,
+            "maxMs": 1339.3052049999988
+          }
+        },
+        {
+          "sample": 4,
+          "curator": {
+            "wallMs": 76.88510999999926,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "display": {
+            "wallMs": 78.97202599999946,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "registry": {
+            "wallMs": 53.36807299999964,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "startup": {
+            "wallMs": 15.368572999999742,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "ownership": {
+            "wallMs": 446.6003039999996,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "controller": {
+            "wallMs": 158.86616400000094,
+            "collectionDecodedBytes": 132871,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 4
+          },
+          "refreshed": {
+            "wallMs": 617.5978180000002,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "lifecycle": {
+            "wallMs": 750.1329000000005,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "loop": {
+            "samples": 10,
+            "p95Ms": 1366.656771,
+            "maxMs": 1366.656771
+          }
+        },
+        {
+          "sample": 5,
+          "curator": {
+            "wallMs": 60.846352999999,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "display": {
+            "wallMs": 68.68397800000093,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "registry": {
+            "wallMs": 60.96952599999895,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "startup": {
+            "wallMs": 18.203671999999642,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "ownership": {
+            "wallMs": 422.56074700000136,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "controller": {
+            "wallMs": 111.8733800000009,
+            "collectionDecodedBytes": 132871,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 4
+          },
+          "refreshed": {
+            "wallMs": 398.0587579999992,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "lifecycle": {
+            "wallMs": 794.1243649999997,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "loop": {
+            "samples": 9,
+            "p95Ms": 1200.2525019999994,
+            "maxMs": 1200.2525019999994
           }
         }
       ]
     },
     {
-      "startedAt": "2026-10-19T08:24:09.540Z",
-      "finishedAt": "2026-10-19T08:24:11.540Z",
+      "startedAt": "2026-10-19T12:47:00.248Z",
+      "finishedAt": "2026-10-19T12:47:02.687Z",
       "limits": [
         {
           "level": 0,
@@ -606,58 +606,58 @@
       ],
       "corpusSha256": "78d756e4bb5ec241773642810cf4a2cae8a7da89e27dcec28c6874bc1d9c6e16",
       "registrySha256": "016b17d8b3995f43246ba8fc8f8215b4df379b96a48d7afc59c93e4a70a1edb8",
-      "sourceSha256": "4724ba5bbc3603b88c240311028c02ec357dac55d82a520aa59519df10137a6d",
+      "sourceSha256": "aecea4d916386d54d485329b8416ff6dcdf09cc3fa308cd08f624b5d9cc9b6e0",
       "load": {
         "before": [
-          25.61,
-          25.35,
-          24.2
+          23.49,
+          21.76,
+          19.89
         ],
         "after": [
-          25.32,
-          25.3,
-          24.19
+          23.49,
+          21.76,
+          19.89
         ],
         "cpus": 24
       },
       "cold": {
         "curator": {
-          "wallMs": 4.825667000000067,
+          "wallMs": 17.154891999998654,
           "collectionDecodedBytes": 473,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "display": {
-          "wallMs": 50.11441100000047,
+          "wallMs": 74.99374499999976,
           "collectionDecodedBytes": 14317776,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "ownership": {
-          "wallMs": 403.534216,
+          "wallMs": 632.6717380000009,
           "collectionDecodedBytes": 0,
           "registryPayloadReads": 0,
-          "rawDecodedBytes": 67789999,
+          "rawDecodedBytes": 66458304,
           "pipelineCopies": 0
         },
         "registry": {
-          "wallMs": 187.85024900000008,
+          "wallMs": 245.85481299999992,
           "collectionDecodedBytes": 0,
           "registryPayloadReads": 60,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "startup": {
-          "wallMs": 27.361731999999392,
+          "wallMs": 34.8393300000007,
           "collectionDecodedBytes": 0,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "controller": {
-          "wallMs": 130.57531999999992,
+          "wallMs": 182.02103999999963,
           "collectionDecodedBytes": 531452,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
@@ -665,133 +665,133 @@
         }
       },
       "coldLoop": {
-        "samples": 82,
-        "p95Ms": 6.491692999999941,
-        "maxMs": 264.43925299999955
+        "samples": 109,
+        "p95Ms": 12.29440699999941,
+        "maxMs": 343.6451369999995
       },
       "loop": {
-        "samples": 148,
-        "p95Ms": 36.57299400000011,
-        "maxMs": 264.43925299999955
+        "samples": 177,
+        "p95Ms": 38.76197900000079,
+        "maxMs": 343.6451369999995
       },
       "samples": [
         {
           "sample": 0,
           "curator": {
-            "wallMs": 0.5920780000005834,
+            "wallMs": 0.5619249999999738,
             "collectionDecodedBytes": 473,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 0.6623079999999391,
+            "wallMs": 0.6212159999995492,
             "collectionDecodedBytes": 901,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 2.9319070000001375,
+            "wallMs": 2.7068949999993492,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 29.548235999999633,
+            "wallMs": 36.70102299999962,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 2.5879580000000715,
+            "wallMs": 5.220341999998709,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 68.21262999999999,
+            "wallMs": 108.72655000000123,
             "collectionDecodedBytes": 531460,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 7.13253800000075,
+            "wallMs": 21.641661999999997,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132871,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 21.06880700000056,
+            "wallMs": 58.713152000000264,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132969,
             "pipelineCopies": 0
           },
           "loop": {
-            "samples": 11,
-            "p95Ms": 39.40230100000008,
-            "maxMs": 39.40230100000008
+            "samples": 13,
+            "p95Ms": 50.94657499999994,
+            "maxMs": 50.94657499999994
           }
         },
         {
           "sample": 1,
           "curator": {
-            "wallMs": 0.5522430000000895,
+            "wallMs": 0.5478610000009212,
             "collectionDecodedBytes": 473,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 0.7990449999997509,
+            "wallMs": 0.9126329999999143,
             "collectionDecodedBytes": 901,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 3.406969000000572,
+            "wallMs": 10.015621999998984,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 34.664941,
+            "wallMs": 59.421029000001,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 0.4034780000001774,
+            "wallMs": 0.3637399999988702,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 108.49127800000042,
+            "wallMs": 104.82718100000056,
             "collectionDecodedBytes": 531460,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 8.394489999999678,
+            "wallMs": 10.11119300000064,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132871,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 19.26547600000049,
+            "wallMs": 23.117379000001165,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132969,
@@ -799,63 +799,63 @@
           },
           "loop": {
             "samples": 11,
-            "p95Ms": 41.44339200000013,
-            "maxMs": 41.44339200000013
+            "p95Ms": 72.9241920000004,
+            "maxMs": 72.9241920000004
           }
         },
         {
           "sample": 2,
           "curator": {
-            "wallMs": 1.1745190000001458,
+            "wallMs": 0.4482950000001438,
             "collectionDecodedBytes": 473,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 0.8243280000006052,
+            "wallMs": 0.5856459999995423,
             "collectionDecodedBytes": 901,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 2.8593550000005052,
+            "wallMs": 2.706973000000289,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 32.17153700000017,
+            "wallMs": 37.237677999999505,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 0.3407900000001973,
+            "wallMs": 0.3972520000006625,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 84.21938199999931,
+            "wallMs": 85.4761150000013,
             "collectionDecodedBytes": 531619,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 7.896955999998681,
+            "wallMs": 9.134659000001193,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132871,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 18.764601000000766,
+            "wallMs": 24.47883499999989,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132969,
@@ -863,63 +863,63 @@
           },
           "loop": {
             "samples": 11,
-            "p95Ms": 37.76328999999987,
-            "maxMs": 37.76328999999987
+            "p95Ms": 43.09408099999928,
+            "maxMs": 43.09408099999928
           }
         },
         {
           "sample": 3,
           "curator": {
-            "wallMs": 0.5272910000003321,
+            "wallMs": 0.7944430000006832,
             "collectionDecodedBytes": 473,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 0.7566820000010921,
+            "wallMs": 1.0077229999988049,
             "collectionDecodedBytes": 901,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 2.9628130000000965,
+            "wallMs": 2.6688839999987977,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 37.200160000000324,
+            "wallMs": 33.73264500000005,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 0.49100499999985914,
+            "wallMs": 0.337204000001293,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 73.3632409999991,
+            "wallMs": 96.32982499999889,
             "collectionDecodedBytes": 398703,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 7.6674349999993865,
+            "wallMs": 8.854443000000174,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132871,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 17.377932000001238,
+            "wallMs": 15.40228500000012,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132969,
@@ -927,63 +927,63 @@
           },
           "loop": {
             "samples": 11,
-            "p95Ms": 44.72392000000036,
-            "maxMs": 44.72392000000036
+            "p95Ms": 38.76197900000079,
+            "maxMs": 38.76197900000079
           }
         },
         {
           "sample": 4,
           "curator": {
-            "wallMs": 0.6502199999995355,
+            "wallMs": 0.6727969999992638,
             "collectionDecodedBytes": 473,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 0.8601130000006378,
+            "wallMs": 0.8171729999994568,
             "collectionDecodedBytes": 901,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 2.466129999998884,
+            "wallMs": 2.7472450000004756,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 30.71462900000006,
+            "wallMs": 37.235522999999375,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 0.29052799999954004,
+            "wallMs": 0.4494830000003276,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 71.59000200000082,
+            "wallMs": 91.44308699999965,
             "collectionDecodedBytes": 132871,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 6.089235000001281,
+            "wallMs": 18.228327000000718,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132871,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 16.965994000000137,
+            "wallMs": 18.144256000001405,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132969,
@@ -991,63 +991,63 @@
           },
           "loop": {
             "samples": 11,
-            "p95Ms": 37.609661999998934,
-            "maxMs": 37.609661999998934
+            "p95Ms": 43.377722000001086,
+            "maxMs": 43.377722000001086
           }
         },
         {
           "sample": 5,
           "curator": {
-            "wallMs": 0.6040570000004664,
+            "wallMs": 0.673705000001064,
             "collectionDecodedBytes": 473,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 0.6883230000003095,
+            "wallMs": 1.1988650000002963,
             "collectionDecodedBytes": 901,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 2.3568909999994503,
+            "wallMs": 4.4922739999983605,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 27.559447999999975,
+            "wallMs": 39.39477000000079,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 0.39043299999866576,
+            "wallMs": 0.4442030000009254,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 83.17228800000157,
+            "wallMs": 109.22753199999897,
             "collectionDecodedBytes": 132871,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 9.708673000001,
+            "wallMs": 8.916404000001421,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132871,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 23.318795999999566,
+            "wallMs": 19.574579000000085,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132969,
@@ -1055,15 +1055,15 @@
           },
           "loop": {
             "samples": 11,
-            "p95Ms": 32.18414699999994,
-            "maxMs": 32.18414699999994
+            "p95Ms": 47.995552000000316,
+            "maxMs": 47.995552000000316
           }
         }
       ]
     },
     {
-      "startedAt": "2026-10-19T08:24:19.979Z",
-      "finishedAt": "2026-10-19T08:24:35.459Z",
+      "startedAt": "2026-10-19T12:47:12.336Z",
+      "finishedAt": "2026-10-19T12:47:26.027Z",
       "limits": [
         {
           "level": 0,
@@ -1138,55 +1138,55 @@
       "sourceSha256": "cfc9732cb570169cab07b323cbf65c3174709defc71538848de5d8d58bf93482",
       "load": {
         "before": [
-          25.06,
-          25.24,
-          24.17
+          25.62,
+          22.26,
+          20.07
         ],
         "after": [
-          27.53,
-          25.77,
-          24.37
+          25.02,
+          22.3,
+          20.12
         ],
         "cpus": 24
       },
       "cold": {
         "curator": {
-          "wallMs": 81.72967199999948,
+          "wallMs": 60.919825999999375,
           "collectionDecodedBytes": 14317348,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "display": {
-          "wallMs": 85.2931009999993,
+          "wallMs": 57.71185900000091,
           "collectionDecodedBytes": 14317348,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "ownership": {
-          "wallMs": 440.93435299999874,
+          "wallMs": 424.5212900000006,
           "collectionDecodedBytes": 0,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "registry": {
-          "wallMs": 595.5142570000007,
+          "wallMs": 992.0754489999999,
           "collectionDecodedBytes": 0,
           "registryPayloadReads": 12030,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "startup": {
-          "wallMs": 93.66077799999948,
+          "wallMs": 151.60127199999988,
           "collectionDecodedBytes": 0,
           "registryPayloadReads": 3970,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "controller": {
-          "wallMs": 169.45073599999887,
+          "wallMs": 179.50666399999864,
           "collectionDecodedBytes": 531452,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
@@ -1195,388 +1195,132 @@
       },
       "coldLoop": {
         "samples": 10,
-        "p95Ms": 1364.1252399999994,
-        "maxMs": 1364.1252399999994
+        "p95Ms": 1748.5969010000008,
+        "maxMs": 1748.5969010000008
       },
       "loop": {
-        "samples": 66,
-        "p95Ms": 1364.1252399999994,
-        "maxMs": 1943.8866680000028
+        "samples": 65,
+        "p95Ms": 1217.9284799999987,
+        "maxMs": 1748.5969010000008
       },
       "samples": [
         {
           "sample": 0,
           "curator": {
-            "wallMs": 66.43785600000047,
+            "wallMs": 63.29835099999946,
             "collectionDecodedBytes": 14317348,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 65.83907999999974,
+            "wallMs": 80.58706300000085,
             "collectionDecodedBytes": 14317348,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 58.643152000000555,
+            "wallMs": 53.8901709999991,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 16.21351499999946,
+            "wallMs": 26.471276000000216,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 431.47685999999885,
+            "wallMs": 577.894268,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 110.81599500000084,
+            "wallMs": 105.76560300000165,
             "collectionDecodedBytes": 531460,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 401.41098500000044,
+            "wallMs": 358.0138530000004,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 860.8723649999993,
+            "wallMs": 710.3887949999989,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "loop": {
-            "samples": 10,
-            "p95Ms": 1260.9839940000002,
-            "maxMs": 1260.9839940000002
+            "samples": 9,
+            "p95Ms": 1073.831893999999,
+            "maxMs": 1073.831893999999
           }
         },
         {
           "sample": 1,
           "curator": {
-            "wallMs": 75.46572699999888,
+            "wallMs": 76.42856800000118,
             "collectionDecodedBytes": 14317348,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 62.99962600000072,
+            "wallMs": 59.84781699999985,
             "collectionDecodedBytes": 14317348,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 39.05695700000069,
+            "wallMs": 54.42137100000036,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 13.368662999999287,
+            "wallMs": 16.732245000001058,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 396.8234970000012,
+            "wallMs": 407.67403300000115,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 142.98305499999879,
+            "wallMs": 92.43951500000003,
             "collectionDecodedBytes": 531460,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 437.44926400000077,
+            "wallMs": 359.15754600000037,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 839.307526999999,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "loop": {
-            "samples": 9,
-            "p95Ms": 1284.8887460000005,
-            "maxMs": 1284.8887460000005
-          }
-        },
-        {
-          "sample": 2,
-          "curator": {
-            "wallMs": 119.20504499999879,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "display": {
-            "wallMs": 71.86416100000133,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "registry": {
-            "wallMs": 67.37893199999962,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "startup": {
-            "wallMs": 34.24232699999993,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "ownership": {
-            "wallMs": 602.2551039999998,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "controller": {
-            "wallMs": 172.96357699999862,
-            "collectionDecodedBytes": 531619,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 4
-          },
-          "refreshed": {
-            "wallMs": 427.3465150000011,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "lifecycle": {
-            "wallMs": 902.361132,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "loop": {
-            "samples": 9,
-            "p95Ms": 1338.7944910000006,
-            "maxMs": 1338.7944910000006
-          }
-        },
-        {
-          "sample": 3,
-          "curator": {
-            "wallMs": 73.6506759999993,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "display": {
-            "wallMs": 62.77781200000027,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "registry": {
-            "wallMs": 45.73063900000125,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "startup": {
-            "wallMs": 12.921230999996624,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "ownership": {
-            "wallMs": 514.4779630000012,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "controller": {
-            "wallMs": 131.66746200000125,
-            "collectionDecodedBytes": 531619,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 4
-          },
-          "refreshed": {
-            "wallMs": 429.86823600000207,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "lifecycle": {
-            "wallMs": 976.8240789999982,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "loop": {
-            "samples": 9,
-            "p95Ms": 1415.3497229999994,
-            "maxMs": 1415.3497229999994
-          }
-        },
-        {
-          "sample": 4,
-          "curator": {
-            "wallMs": 58.18701499999952,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "display": {
-            "wallMs": 71.9660330000006,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "registry": {
-            "wallMs": 56.718809000001784,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "startup": {
-            "wallMs": 17.233900999999605,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "ownership": {
-            "wallMs": 545.5274160000008,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "controller": {
-            "wallMs": 192.87431800000195,
-            "collectionDecodedBytes": 531619,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 4
-          },
-          "refreshed": {
-            "wallMs": 473.83326300000044,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "lifecycle": {
-            "wallMs": 1051.5255450000004,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "loop": {
-            "samples": 9,
-            "p95Ms": 1535.8615140000002,
-            "maxMs": 1535.8615140000002
-          }
-        },
-        {
-          "sample": 5,
-          "curator": {
-            "wallMs": 69.39293499999985,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "display": {
-            "wallMs": 78.8301930000016,
-            "collectionDecodedBytes": 14317348,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "registry": {
-            "wallMs": 63.864362000000256,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "startup": {
-            "wallMs": 17.987059999999474,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "ownership": {
-            "wallMs": 398.2922409999992,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "controller": {
-            "wallMs": 99.55758900000001,
-            "collectionDecodedBytes": 531619,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 4
-          },
-          "refreshed": {
-            "wallMs": 450.8444099999979,
-            "collectionDecodedBytes": 0,
-            "registryPayloadReads": 0,
-            "rawDecodedBytes": 0,
-            "pipelineCopies": 0
-          },
-          "lifecycle": {
-            "wallMs": 1494.116646999999,
+            "wallMs": 750.8626869999989,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
@@ -1584,15 +1328,271 @@
           },
           "loop": {
             "samples": 10,
-            "p95Ms": 1943.8866680000028,
-            "maxMs": 1943.8866680000028
+            "p95Ms": 1108.5129959999995,
+            "maxMs": 1108.5129959999995
+          }
+        },
+        {
+          "sample": 2,
+          "curator": {
+            "wallMs": 46.93268999999964,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "display": {
+            "wallMs": 57.195010999999795,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "registry": {
+            "wallMs": 53.50404100000014,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "startup": {
+            "wallMs": 16.09375,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "ownership": {
+            "wallMs": 460.6156119999996,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "controller": {
+            "wallMs": 75.13369100000091,
+            "collectionDecodedBytes": 531619,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 4
+          },
+          "refreshed": {
+            "wallMs": 467.46518599999945,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "lifecycle": {
+            "wallMs": 850.2139190000016,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "loop": {
+            "samples": 9,
+            "p95Ms": 1325.5244440000024,
+            "maxMs": 1325.5244440000024
+          }
+        },
+        {
+          "sample": 3,
+          "curator": {
+            "wallMs": 68.69347500000003,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "display": {
+            "wallMs": 67.27843900000153,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "registry": {
+            "wallMs": 58.527852999999595,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "startup": {
+            "wallMs": 17.99765800000023,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "ownership": {
+            "wallMs": 495.40681400000176,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "controller": {
+            "wallMs": 77.42688599999747,
+            "collectionDecodedBytes": 531619,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 4
+          },
+          "refreshed": {
+            "wallMs": 358.5209020000002,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "lifecycle": {
+            "wallMs": 688.1386619999976,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "loop": {
+            "samples": 9,
+            "p95Ms": 1055.2671320000009,
+            "maxMs": 1055.2671320000009
+          }
+        },
+        {
+          "sample": 4,
+          "curator": {
+            "wallMs": 81.19046600000001,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "display": {
+            "wallMs": 53.13482099999965,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "registry": {
+            "wallMs": 40.19207000000097,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "startup": {
+            "wallMs": 12.47156200000245,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "ownership": {
+            "wallMs": 382.5993070000004,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "controller": {
+            "wallMs": 87.90553599999839,
+            "collectionDecodedBytes": 531619,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 4
+          },
+          "refreshed": {
+            "wallMs": 433.74686400000064,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "lifecycle": {
+            "wallMs": 775.6701460000004,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "loop": {
+            "samples": 9,
+            "p95Ms": 1217.9284799999987,
+            "maxMs": 1217.9284799999987
+          }
+        },
+        {
+          "sample": 5,
+          "curator": {
+            "wallMs": 76.03947499999776,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "display": {
+            "wallMs": 49.86648100000093,
+            "collectionDecodedBytes": 14317348,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "registry": {
+            "wallMs": 67.1207570000006,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "startup": {
+            "wallMs": 19.398928999999043,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "ownership": {
+            "wallMs": 486.93243900000016,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "controller": {
+            "wallMs": 79.94427299999734,
+            "collectionDecodedBytes": 531619,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 4
+          },
+          "refreshed": {
+            "wallMs": 421.74783599999864,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "lifecycle": {
+            "wallMs": 930.1393099999987,
+            "collectionDecodedBytes": 0,
+            "registryPayloadReads": 0,
+            "rawDecodedBytes": 0,
+            "pipelineCopies": 0
+          },
+          "loop": {
+            "samples": 9,
+            "p95Ms": 1359.982345999997,
+            "maxMs": 1359.982345999997
           }
         }
       ]
     },
     {
-      "startedAt": "2026-10-19T08:24:45.965Z",
-      "finishedAt": "2026-10-19T08:24:47.833Z",
+      "startedAt": "2026-10-19T12:47:32.868Z",
+      "finishedAt": "2026-10-19T12:47:34.478Z",
       "limits": [
         {
           "level": 0,
@@ -1664,58 +1664,58 @@
       ],
       "corpusSha256": "21ce1fb797b0c472218116e2503a9d88cdd6389acc7f9212fd63850355867c42",
       "registrySha256": "82aca6ea0d72aa10b61195c647be9f6c3b8d9ea76eeff36c7ae986b3a4748566",
-      "sourceSha256": "4724ba5bbc3603b88c240311028c02ec357dac55d82a520aa59519df10137a6d",
+      "sourceSha256": "aecea4d916386d54d485329b8416ff6dcdf09cc3fa308cd08f624b5d9cc9b6e0",
       "load": {
         "before": [
-          28.49,
-          26.11,
-          24.5
+          24.38,
+          22.21,
+          20.1
         ],
         "after": [
-          28.49,
-          26.11,
-          24.5
+          23.87,
+          22.14,
+          20.09
         ],
         "cpus": 24
       },
       "cold": {
         "curator": {
-          "wallMs": 6.094126000001779,
+          "wallMs": 5.993263000000297,
           "collectionDecodedBytes": 473,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "display": {
-          "wallMs": 74.7550969999993,
+          "wallMs": 66.75279899999987,
           "collectionDecodedBytes": 14317776,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "ownership": {
-          "wallMs": 400.290653,
+          "wallMs": 427.012522,
           "collectionDecodedBytes": 0,
           "registryPayloadReads": 0,
-          "rawDecodedBytes": 68055297,
+          "rawDecodedBytes": 67790476,
           "pipelineCopies": 0
         },
         "registry": {
-          "wallMs": 157.0473550000006,
+          "wallMs": 190.81258400000024,
           "collectionDecodedBytes": 0,
           "registryPayloadReads": 120,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "startup": {
-          "wallMs": 34.54347600000074,
+          "wallMs": 23.875020999999833,
           "collectionDecodedBytes": 0,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
           "pipelineCopies": 0
         },
         "controller": {
-          "wallMs": 149.60230799999954,
+          "wallMs": 107.73424200000045,
           "collectionDecodedBytes": 531452,
           "registryPayloadReads": 0,
           "rawDecodedBytes": 0,
@@ -1723,69 +1723,69 @@
         }
       },
       "coldLoop": {
-        "samples": 79,
-        "p95Ms": 13.083942000001116,
-        "maxMs": 253.37320100000034
+        "samples": 84,
+        "p95Ms": 8.335879000000205,
+        "maxMs": 254.57219600000008
       },
       "loop": {
-        "samples": 145,
-        "p95Ms": 39.99239299999863,
-        "maxMs": 253.37320100000034
+        "samples": 150,
+        "p95Ms": 25.699524999999994,
+        "maxMs": 254.57219600000008
       },
       "samples": [
         {
           "sample": 0,
           "curator": {
-            "wallMs": 0.6267699999989418,
+            "wallMs": 0.5403120000000854,
             "collectionDecodedBytes": 473,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 0.6443579999995563,
+            "wallMs": 0.8967329999995854,
             "collectionDecodedBytes": 901,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 4.210700999999972,
+            "wallMs": 5.19466199999988,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 38.3517299999985,
+            "wallMs": 38.11661499999991,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 5.637504000000263,
+            "wallMs": 3.8581739999999627,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 83.37879099999918,
+            "wallMs": 75.49004199999945,
             "collectionDecodedBytes": 531460,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 7.646524000001591,
+            "wallMs": 6.921708000000763,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132871,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 22.20945599999868,
+            "wallMs": 17.355486000000383,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132969,
@@ -1793,63 +1793,63 @@
           },
           "loop": {
             "samples": 11,
-            "p95Ms": 57.886271000001216,
-            "maxMs": 57.886271000001216
+            "p95Ms": 51.55206300000009,
+            "maxMs": 51.55206300000009
           }
         },
         {
           "sample": 1,
           "curator": {
-            "wallMs": 0.8283420000007027,
+            "wallMs": 0.47999199999958364,
             "collectionDecodedBytes": 473,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 0.682675999998537,
+            "wallMs": 0.7455109999991691,
             "collectionDecodedBytes": 901,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 3.362069999999221,
+            "wallMs": 3.82501400000001,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 46.31540599999971,
+            "wallMs": 30.092007999999623,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 0.5017669999997452,
+            "wallMs": 0.42393900000024587,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 84.70805199999995,
+            "wallMs": 82.47895700000026,
             "collectionDecodedBytes": 531460,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 8.532530000000406,
+            "wallMs": 6.09863200000018,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132871,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 17.82575700000052,
+            "wallMs": 11.100096000000121,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132969,
@@ -1857,63 +1857,63 @@
           },
           "loop": {
             "samples": 11,
-            "p95Ms": 55.192596000000776,
-            "maxMs": 55.192596000000776
+            "p95Ms": 36.71433900000011,
+            "maxMs": 36.71433900000011
           }
         },
         {
           "sample": 2,
           "curator": {
-            "wallMs": 0.4112089999998716,
+            "wallMs": 0.3232130000005782,
             "collectionDecodedBytes": 473,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 0.47593400000005204,
+            "wallMs": 0.5109000000002197,
             "collectionDecodedBytes": 901,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 2.9804349999994884,
+            "wallMs": 2.256040999999641,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 32.35504800000126,
+            "wallMs": 22.546220999999605,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 0.34319800000048417,
+            "wallMs": 0.22686400000020512,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 72.3023749999993,
+            "wallMs": 52.28134299999965,
             "collectionDecodedBytes": 531619,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 5.40777800000069,
+            "wallMs": 3.9908379999997123,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132871,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 17.83247300000039,
+            "wallMs": 11.106923999999708,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132969,
@@ -1921,63 +1921,63 @@
           },
           "loop": {
             "samples": 11,
-            "p95Ms": 42.519616999999926,
-            "maxMs": 42.519616999999926
+            "p95Ms": 25.699524999999994,
+            "maxMs": 25.699524999999994
           }
         },
         {
           "sample": 3,
           "curator": {
-            "wallMs": 0.6358049999998912,
+            "wallMs": 0.5116119999993316,
             "collectionDecodedBytes": 473,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 0.7927070000005187,
+            "wallMs": 0.721744999999828,
             "collectionDecodedBytes": 901,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 2.8598870000005263,
+            "wallMs": 3.2968040000005203,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 34.76103300000068,
+            "wallMs": 25.067599999999402,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 0.422537000000375,
+            "wallMs": 0.2811540000002424,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 72.85563299999922,
+            "wallMs": 45.81140400000004,
             "collectionDecodedBytes": 531619,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 6.967228999999861,
+            "wallMs": 4.234007999999449,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132871,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 16.965188000000126,
+            "wallMs": 10.582994999999755,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132969,
@@ -1985,63 +1985,63 @@
           },
           "loop": {
             "samples": 11,
-            "p95Ms": 39.99239299999863,
-            "maxMs": 39.99239299999863
+            "p95Ms": 30.071977000000516,
+            "maxMs": 30.071977000000516
           }
         },
         {
           "sample": 4,
           "curator": {
-            "wallMs": 1.0443220000015572,
+            "wallMs": 0.5631199999997989,
             "collectionDecodedBytes": 473,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 1.2196120000007795,
+            "wallMs": 0.6025079999999434,
             "collectionDecodedBytes": 901,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 5.03921900000023,
+            "wallMs": 2.987377999999808,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 45.45545199999833,
+            "wallMs": 25.777728000000025,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 0.5423869999995077,
+            "wallMs": 0.2469730000002528,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 95.4320659999994,
+            "wallMs": 57.68405799999982,
             "collectionDecodedBytes": 531619,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 6.783903999999893,
+            "wallMs": 3.823349999999664,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132871,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 20.596505000001343,
+            "wallMs": 10.525674999999865,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132969,
@@ -2049,63 +2049,63 @@
           },
           "loop": {
             "samples": 11,
-            "p95Ms": 54.83476299999893,
-            "maxMs": 54.83476299999893
+            "p95Ms": 30.386703999999554,
+            "maxMs": 30.386703999999554
           }
         },
         {
           "sample": 5,
           "curator": {
-            "wallMs": 0.7031599999991158,
+            "wallMs": 0.6289799999995012,
             "collectionDecodedBytes": 473,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "display": {
-            "wallMs": 0.5333339999997406,
+            "wallMs": 0.9263279999995575,
             "collectionDecodedBytes": 901,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "registry": {
-            "wallMs": 4.585052999998879,
+            "wallMs": 3.566955999998754,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "startup": {
-            "wallMs": 37.54474599999958,
+            "wallMs": 27.746141000001444,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "ownership": {
-            "wallMs": 0.5301779999990686,
+            "wallMs": 0.24232300000039686,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 0
           },
           "controller": {
-            "wallMs": 86.90654100000029,
+            "wallMs": 58.62586899999951,
             "collectionDecodedBytes": 531619,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 0,
             "pipelineCopies": 4
           },
           "refreshed": {
-            "wallMs": 7.412825999999768,
+            "wallMs": 4.632041999999274,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132871,
             "pipelineCopies": 0
           },
           "lifecycle": {
-            "wallMs": 15.48077000000012,
+            "wallMs": 14.062751999999819,
             "collectionDecodedBytes": 0,
             "registryPayloadReads": 0,
             "rawDecodedBytes": 132969,
@@ -2113,22 +2113,14 @@
           },
           "loop": {
             "samples": 11,
-            "p95Ms": 45.25848699999915,
-            "maxMs": 45.25848699999915
+            "p95Ms": 33.30701200000112,
+            "maxMs": 33.30701200000112
           }
         }
       ]
     }
   ],
-  "sourceEquivalence": {
-    "measuredSourceSha256": "4724ba5bbc3603b88c240311028c02ec357dac55d82a520aa59519df10137a6d",
-    "finalSourceSha256": "d4d5f97bb18798f866078b0a52c6df5a860cf7526060db9a839ac06af2b5ddcc",
-    "changedFiles": [
-      {
-        "path": "src/lib/viewerLoopMonitor.ts",
-        "emittedJavaScriptSha256": "39bad85ebcb55e3f9a51d6ae9b1848f7ccc018ff26f0f62911c2c3b2f90f93d8",
-        "reason": "Relocate an operation-label type union member away from a concurrently changed line; emitted JavaScript is byte-identical."
-      }
-    ]
-  }
+  "candidateSourceTree": "d6a63fe98aa6af7710841c5269e55865949f4ce0",
+  "candidateSourceSha256": "aecea4d916386d54d485329b8416ff6dcdf09cc3fa308cd08f624b5d9cc9b6e0",
+  "comparisonBaseRevision": "9cda615537b3ef39a444cb6f8c80e2329d2f2599"
 }
