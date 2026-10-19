@@ -209,6 +209,12 @@ export class LegacyDocumentStore<D> {
     });
   }
 
+  /** Remove every row from a document collection. Used by owners whose legacy
+      contract distinguishes an absent document from a saved empty one. */
+  clear(filePath: string): void {
+    this.guard(() => this.collection(filePath, "write")!.replaceSync([]));
+  }
+
   /** The rows to write for `next` over `committed`: changed rows, deleted
       keys, and the changed rows that move behind rows they used to precede
       (a set replaced for its conversation becomes the newest). */

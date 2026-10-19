@@ -257,9 +257,9 @@ function preserveUnreadable<P>(spec: LegacyCollectionSpec<P>): string {
 
 /**
  * Import `spec.legacyPath` once, verified, then retire the file behind a
- * tombstone directory. Runs under the legacy store's own file lock, which
- * every legacy writer (old releases included) also takes, so no legacy write
- * can interleave with the import.
+ * tombstone directory. The file lock serializes writers that honor it. Older
+ * releases may not, so the bytes moved aside at retirement are checked and
+ * reconciled on this pass or the next one.
  */
 export function importLegacyCollection<P>(
   spec: LegacyCollectionSpec<P>,
@@ -339,7 +339,11 @@ export function importLegacyCollection<P>(
         message: `${path.basename(spec.legacyPath)} imported after a repair: ${repaired}`,
       });
     }
-    retire(spec, "keep", hooks);
+    const preservedAs = retire(spec, "keep", hooks);
+    // Older releases may publish with an atomic rename without taking the
+    // import lock. The rename above moves the exact bytes that won that race
+    // out of the way; reconcile that copy before reporting the import done.
+    if (preservedAs) incident = reconcileKeptCopy(spec, record, preservedAs) ?? incident;
     return { state: "imported", record, incident };
   });
 }
@@ -351,11 +355,14 @@ function finishImported<P>(
   reconcile: boolean,
   hooks: LegacyImportHooks,
 ): LegacyImportOutcome {
-  if (legacy.kind === "tombstone") return { state: "already-imported", record, incident: null };
+  if (legacy.kind === "tombstone") {
+    return { state: "already-imported", record, incident: reconcile ? reconcileKeptCopy(spec, record) : null };
+  }
   if (legacy.kind === "missing") {
     // A crash between the rename and the tombstone.
+    const incident = reconcile ? reconcileKeptCopy(spec, record) : null;
     writeTombstone(spec);
-    return { state: "already-imported", record, incident: null };
+    return { state: "already-imported", record, incident };
   }
   if (!reconcile) return { state: "reconcile-deferred", record, incident: null };
   if (strayImportRecord(spec.databasePath ?? spec.legacyPath, record)) {
@@ -506,6 +513,54 @@ function reconcileChangedLegacy<P>(
   });
 }
 
+/** Merge the bytes captured by retirement when an older atomic-rename writer
+    replaced the source after the import transaction committed. */
+function reconcileRetiredLegacy<P>(
+  spec: LegacyCollectionSpec<P>,
+  record: StateImportRecord,
+  bytes: Buffer,
+  preservedAs: string,
+): StateIncident | null {
+  const parsed = parseJsonBytes(bytes);
+  if (!parsed.ok) {
+    return raise({
+      kind: "legacy-unreadable",
+      collection: spec.collection,
+      preservedAs,
+      message: `${path.basename(spec.legacyPath)} changed during import and its retired bytes are unreadable; kept as ${path.basename(preservedAs)}`,
+    });
+  }
+  const body = spec.parse(parsed.value);
+  const summary = spec.reconcile(body, record, { fenceOwner: false });
+  const repaired = spec.repairs?.(body) ?? null;
+  if (!summary.added && !summary.replaced && !summary.removed && !summary.conflicts.length && !repaired) return null;
+  return raise({
+    kind: "legacy-reconciled",
+    collection: spec.collection,
+    summary,
+    preservedAs,
+    message: `${path.basename(spec.legacyPath)} changed during import (an older atomic-rename writer); `
+      + `merged ${summary.added} added, ${summary.replaced} replaced and ${summary.removed} removed rows, `
+      + `kept ${summary.kept} SQLite rows changed since the mirror`
+      + (summary.spared.length ? `; ${summary.spared.length} rows absent from the file were kept` : "")
+      + (repaired ? `; ${repaired}` : ""),
+  });
+}
+
+/** A process may stop after moving the source aside and before merging it. */
+function reconcileKeptCopy<P>(spec: LegacyCollectionSpec<P>, record: StateImportRecord, knownCopy?: string): StateIncident | null {
+  const kept = knownCopy ?? newestKeptCopy(spec.legacyPath);
+  if (!kept) return null;
+  let bytes: Buffer;
+  try { bytes = fs.readFileSync(kept); }
+  catch (error) {
+    throw new FileTransactionBusyError(`kept legacy state is unreadable for now: ${(error as Error).message}`);
+  }
+  const digest = sha256(bytes);
+  if (digest === record.sourceSha256 || digest === record.mirrorSha256) return null;
+  return reconcileRetiredLegacy(spec, record, bytes, kept);
+}
+
 /**
  * Write the legacy file from one SQLite revision so a rollback release that
  * predates the move runs on its JSON (§6.4). The tombstone is removed and the
@@ -531,6 +586,12 @@ export function writeLegacyRollbackMirror<P>(spec: LegacyCollectionSpec<P>): voi
       }
     }
     const { body, revision } = spec.mirrorBody();
+    if (body === undefined) {
+      fs.rmSync(spec.legacyPath, { recursive: true, force: true });
+      fsyncDirectory(path.dirname(spec.legacyPath));
+      recordStateImportMirror(database, spec.collection, null, revision);
+      return;
+    }
     const text = `${JSON.stringify(body, null, 2)}\n`;
     const directory = path.dirname(spec.legacyPath);
     const temp = path.join(directory, `.${path.basename(spec.legacyPath)}.${process.pid}.${crypto.randomUUID()}.tmp`);

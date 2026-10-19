@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { slice5bCases } from "./slice5b.fixture";
 import { initializeStateCollections, readStateImport } from "./sqliteStateStore";
 import { resetLegacyDocumentStoresForTests, setLegacyDocumentWriteHookForTests } from "./legacyDocumentStore";
-import { changeRoleMapping, hasRoleOverrides, loadRoleOverrides, saveRoleOverrides } from "@/lib/roles/store";
+import { changeRoleMapping, clearRoleOverrides, hasRoleOverrides, loadRoleOverrides, saveRoleOverrides } from "@/lib/roles/store";
 import { clearTelegramReports, readTelegramReports, saveReportText, reportTextPath, updateTelegramReports } from "@/lib/telegram/reportStore";
 import { StateLockDeferredError, waitForStateLock } from "./lockWait";
 import { FileTransactionAdmissionError, withFileTransactionAttempt } from "./fileTransaction";
@@ -169,6 +169,59 @@ test("role presence comes from SQLite after import even if its tombstone disappe
   fs.rmSync(file, { recursive: true });
   expect(hasRoleOverrides()).toBe(true);
   expect(loadRoleOverrides().overrides.builder?.config?.model).toBe("gpt-fixture");
+});
+
+test("clearing the role fixture removes SQLite rows and restores absent-registry semantics", () => {
+  process.env.LLV_STATE_DIR = sandbox();
+  saveRoleOverrides({ builder: { config: { model: "gpt-fixture" } } });
+  expect(hasRoleOverrides()).toBe(true);
+  clearRoleOverrides();
+  expect(hasRoleOverrides()).toBe(false);
+  expect(loadRoleOverrides().overrides).toEqual({});
+});
+
+test("a prior atomic preset writer that lands after COMMIT is reconciled before retirement", async () => {
+  const root = sandbox();
+  process.env.LLV_STATE_DIR = root;
+  const [, store, original] = slice5bCases.find(([name]) => name === "review-loop-presets.json")!;
+  const file = seed(root, "review-loop-presets.json", original) as string;
+  const updated = structuredClone(original) as { presets: unknown[] };
+  updated.presets.push({ name: "Writer B", implementer: { engine: "codex", model: "writer-b", effort: "high" }, reviewer: { engine: "codex", model: "writer-b", effort: "high" } });
+
+  expect(() => store.importLegacy(file, { reconcile: true, hooks: {
+    afterCommit: () => {
+      const temp = `${file}.old-writer.tmp`;
+      fs.writeFileSync(temp, JSON.stringify(updated), { mode: 0o600 });
+      fs.renameSync(temp, file);
+    },
+    afterRename: () => { throw new Error("interrupted after retirement"); },
+  } })).toThrow("interrupted after retirement");
+  const outcome = store.importLegacy(file, { reconcile: true });
+  expect(outcome.state).toBe("already-imported");
+  expect(outcome.incident?.kind).toBe("legacy-reconciled");
+  expect((store.read(file) as { name: string }[]).map(preset => preset.name)).toContain("Writer B");
+  const expected = slice5bCases.map(([name, otherStore]) => ({ name, state: "already-imported", value: otherStore.read(path.join(root, name)) }));
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "slice5b.fixture.ts"), root], {
+    env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(stderr).toBe("");
+  expect(code).toBe(0);
+  expect(JSON.parse(stdout)).toEqual(expected);
+});
+
+test("a prior direct push writer that lands after COMMIT is reconciled before retirement", () => {
+  const root = sandbox();
+  const [name, store, original] = slice5bCases.find(([name]) => name === "push-subscriptions.json")!;
+  const file = seed(root, name, original);
+  const written = [{ endpoint: "https://push.example.invalid/late-writer", expirationTime: null }];
+
+  const outcome = store.importLegacy(file, { reconcile: true, hooks: { afterCommit: () => {
+    fs.writeFileSync(file, JSON.stringify(written), { mode: 0o600 });
+  } } });
+
+  expect(outcome.incident?.kind).toBe("legacy-reconciled");
+  expect((store.read(file) as { endpoint: string }[]).map(subscription => subscription.endpoint)).toContain(written[0]!.endpoint);
 });
 
 test("an audit refusal rolls back every role row and preserves retirements", () => {

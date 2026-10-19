@@ -73,7 +73,9 @@ export const rootLineageStore = smallStore<RootLineageV1 | null>({
     const { head: _head, ...lineage } = meta.value as RootLineageV1 & { head?: RootSessionV1 | null };
     return parseLineage({ ...lineage, sessions: rows.filter(row => row.key !== "meta").map(row => row.value) });
   },
-  toFile: document => document,
+  // Older releases distinguish an empty lineage by ENOENT. Keep that wire
+  // representation when demoting rather than writing JSON null.
+  toFile: document => document ?? undefined,
   error: (message, cause) => new RootLineageStoreError(message, { cause }),
   readLegacy: file => {
     try { return parseLineage(JSON.parse(fs.readFileSync(file, "utf8"))); }

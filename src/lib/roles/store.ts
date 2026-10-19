@@ -210,6 +210,11 @@ export function saveRoleOverrides(
   else rolePresetStore.mutate(overridesFile(), current => ({ next: next(current), result: undefined }));
 }
 
+/** Clear the saved registry while retaining its SQLite import record. */
+export function clearRoleOverrides(): void {
+  rolePresetStore.clear(overridesFile());
+}
+
 /** The mapping row key a retirement names: `builder`, `builder:frontend`. */
 export function mappingRowKey(roleId: RoleId, variant?: RoleVariantId | null): string {
   return variant ? `${roleId}:${variant}` : roleId;

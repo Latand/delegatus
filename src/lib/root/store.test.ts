@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { continuityMarker, headSession } from "./lineage";
-import { readRootLineage, recordRootSession, RootLineageStoreError, rootIdentity, rootLineageFile } from "./store";
+import { readRootLineage, recordRootSession, RootLineageStoreError, rootIdentity, rootLineageFile, rootLineageStore } from "./store";
 
 let sandbox = "";
 let previousStateDir: string | undefined;
@@ -59,6 +59,23 @@ test("the root identity is minted once and is stable across later sessions", () 
   recordRootSession({ conversationId: "conversation_a" });
   recordRootSession({ conversationId: "conversation_b" });
   expect(rootIdentity()).toBe(minted);
+});
+
+test("demoting an empty imported lineage preserves the absent-file format", () => {
+  expect(readRootLineage()).toBeNull();
+  rootLineageStore.checkpointRollbackMirror(rootLineageFile());
+  expect(fs.existsSync(rootLineageFile())).toBe(false);
+  expect(readRootLineage()).toBeNull();
+  expect(rootIdentity()).not.toBe("");
+});
+
+test("demoting an empty collection from a torn source also leaves no lineage file", () => {
+  fs.mkdirSync(path.dirname(rootLineageFile()), { recursive: true });
+  fs.writeFileSync(rootLineageFile(), "{ truncated", { mode: 0o600 });
+  expect(readRootLineage()).toBeNull();
+  rootLineageStore.checkpointRollbackMirror(rootLineageFile());
+  expect(fs.existsSync(rootLineageFile())).toBe(false);
+  expect(fs.readdirSync(sandbox).some(name => name.startsWith("root-lineage.json.unreadable-"))).toBe(true);
 });
 
 test("a torn lineage is preserved with an import gap", () => {
