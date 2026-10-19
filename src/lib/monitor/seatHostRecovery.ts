@@ -42,6 +42,8 @@ export function seatHostRecoveryCard(record: SeatHostRecovery, locale: "uk" | "e
       rotated: "Revival failed. The orchestrator was replaced; undelivered work remains owed.",
       failed: "Revival and rotation failed. Operator help is needed; undelivered work is preserved.",
       superseded: "The orchestrator changed during recovery. Undelivered work is preserved." };
-  return { ref: "seat-host-recovery", kind: "host-recovery", instance: record.id, state: "open",
+  // A successful revival is already recorded in seat state. Resolving its
+  // notice creates no task; failures still need an actionable board card.
+  return { ref: "seat-host-recovery", kind: "host-recovery", instance: record.id, state: record.state === "revived" ? "resolved" : "open",
     detail: `${title}\n${states[record.state]}`, record: `${record.at}: ${record.state}; ${record.detail}` };
 }
