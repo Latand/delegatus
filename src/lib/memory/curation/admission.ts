@@ -12,6 +12,7 @@ import { roleMemoryEnabled } from "../settings";
 import { machinePassAuthority, patchPass, readPass, readPassAuthority, passIsLive, type CuratorPass } from "./store";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { curatorCallerOf } from "./guard";
+import { importBatchAccountingGap } from "../importCuration";
 
 /** Shared launch and recovery admission, also loaded by the scanner worker. */
 export interface CurationAdmissionPorts {
@@ -104,10 +105,12 @@ function archive(pass: CuratorPass, sources: SeatTickAdmissionSources) {
 export function settle(pass: CuratorPass, ports: CurationAdmissionPorts, failure: string | null, finalText?: string | null) {
   const current = readPassAuthority(pass.id);
   if (!current || !passIsLive(current)) return current?.failure?.startsWith("abandoned:") ? `curation: failed, ${current.failure}` : null;
+  const accountingGap = !failure ? importBatchAccountingGap(current) : null;
+  const settledFailure = failure ?? (accountingGap ? `import-accounting: ${accountingGap}` : null);
   // Final state releases the machine claim even if archive placement is unavailable.
-  const next = patchPass(pass.id, { state: failure ? "failed" : "succeeded", failure, endedAt: new Date(ports.sources.now()).toISOString(), ...(finalText ? { finalText } : {}) })!;
+  const next = patchPass(pass.id, { state: settledFailure ? "failed" : "succeeded", failure: settledFailure, endedAt: new Date(ports.sources.now()).toISOString(), ...(finalText ? { finalText } : {}) })!;
   const counts = readPass(next.id)?.counts ?? next.counts;
-  const detail = `curation: ${failure ? `failed, ${failure}` : `settled ${pass.id}, ${counts.calls} calls, ${counts.changed} rules changed`}`;
+  const detail = `curation: ${settledFailure ? `failed, ${settledFailure}` : `settled ${pass.id}, ${counts.calls} calls, ${counts.changed} rules changed`}`;
   try { (ports.archive ?? (p => archive(p, ports.sources)))(next); }
   catch { return `${detail}; archive placement pending`; }
   return detail;

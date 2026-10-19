@@ -30,6 +30,11 @@ export class FileTransactionBusyError extends Error {
   }
 }
 
+/** Legacy-file admission failed before its callback could run. */
+export class FileTransactionAdmissionError extends FileTransactionBusyError {
+  constructor(readonly callSite: string) { super(`state admission is busy at ${callSite}`); }
+}
+
 /**
  * A store lock refusal raised BEFORE the operation was admitted (#1766).
  *
@@ -160,6 +165,18 @@ function tryAcquire(ticket: LockTicket): number | null {
 function release(ticket: LockTicket, descriptor: number): void {
   fs.closeSync(descriptor);
   removeIfOwned(ticket.lockPath, ticket.owner.token);
+}
+
+/** One nonblocking legacy-file admission attempt. The caller's async state
+ * admission owns retries; the callback never ran when this defers. */
+export function withFileTransactionAttempt<T>(filePath: string, busyMessage: string, operation: () => T): T {
+  const ticket = enqueue(filePath);
+  try {
+    const descriptor = tryAcquire(ticket);
+    if (descriptor === null) throw new FileTransactionAdmissionError(busyMessage);
+    try { return operation(); }
+    finally { release(ticket, descriptor); }
+  } finally { removeIfOwned(ticket.ticketPath, ticket.owner.token); }
 }
 
 /**

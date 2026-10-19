@@ -248,6 +248,8 @@ import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import { loadTasks, loadTasksForList, taskSelectionSource, mutateTasks, mutateTasksAsync, mutateTasksFile } from "@/lib/tasks/store";
+import { refreshCurationKnownValuesAsync } from "@/lib/memory/privacy";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { TASK_PRIORITIES, taskPriority, type BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -4947,7 +4949,7 @@ async function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainD
     });
   } catch (error) {
     if (error instanceof RoleStoreError || error instanceof FileTransactionBusyError) throw error;
-    /* The store put the file back when the record failed, so nothing changed. */
+    /* The store rolled the SQLite transaction back when the record failed. */
     throw new McpToolRefusal(
       `the role mapping was not changed: it could not be written together with its audit record (${error instanceof Error ? error.message : String(error)})`,
       { code: "role_presets_audit_unavailable" },
@@ -7989,7 +7991,17 @@ export function viewerMcpBindings(
         const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
         if (typeof assertAdmission === "function") assertAdmission();
         const pass = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
-        if (args.action !== "read") return applyCuration(pass, args as unknown as CurationApply);
+        if (args.action !== "read") {
+          const result = await withViewerOperation("memory.import.curation", () => waitForStateLock("memory.import.curate", () => {
+            if (typeof assertAdmission === "function") assertAdmission();
+            const fresh = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+            return applyCuration(fresh, args as unknown as CurationApply, undefined, { refreshKnownValues: !fresh.importBatch });
+          }));
+          if (pass.importBatch) await refreshCurationKnownValuesAsync();
+          if (typeof assertAdmission === "function") assertAdmission();
+          curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+          return result;
+        }
         const result = await readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined);
         if (typeof assertAdmission === "function") assertAdmission();
         curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
@@ -8066,7 +8078,7 @@ export function viewerMcpBindings(
     seat_tick_settings: orchestratorProjectBinding(domainDependencies, (args) => seatTickSettingsTool(args, domainDependencies), true),
     /* Async bindings expose synchronous refusals as rejected promises. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
-    role_presets: async (args) => rolePresetsTool(args, domainDependencies),
+    role_presets: async (args) => waitForStateLock("mcp.role-presets", () => rolePresetsTool(args, domainDependencies)),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)), false, false),

@@ -401,6 +401,7 @@ describe("rollback mirror", () => {
     expect(fs.statSync(bridgeReportLogPath()).isDirectory()).toBe(true);
     expect(fs.statSync(bridgeChannelPath(SCOPE)).isDirectory()).toBe(true);
     expect(readStateImport(db, "bridge_reports")?.mirrorRevision).not.toBeNull();
+    expect(readStateImport(db, "bridge_reports")?.reconciledSha256).toBeTruthy();
   });
 
   test("an untouched channel mirror is deleted on roll-forward, never kept as a second copy", () => {

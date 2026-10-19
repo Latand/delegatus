@@ -71,6 +71,52 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     importAtActivation: async () => (await import("@/lib/monitor/seatTickSettings")).importLegacySeatTickSettings(undefined, { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/monitor/seatTickSettings")).checkpointSeatTickSettingsRollbackMirrorForDemotion(),
   },
+  // Slice 5b; the inventory is docs/design/state-sqlite-slice-5b.md.
+  {
+    collection: "push_subscriptions",
+    importAtActivation: async () => (await import("@/lib/push")).pushSubscriptionStore.importLegacy(statePath("push-subscriptions.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/push")).pushSubscriptionStore.checkpointRollbackMirror(statePath("push-subscriptions.json")),
+  },
+  {
+    collection: "push_sent",
+    importAtActivation: async () => (await import("@/lib/push")).pushSentStore.importLegacy(statePath("push-sent.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/push")).pushSentStore.checkpointRollbackMirror(statePath("push-sent.json")),
+  },
+  {
+    collection: "review_loop_presets",
+    importAtActivation: async () => (await import("@/lib/flows/store")).presetStore.importLegacy(statePath("review-loop-presets.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/flows/store")).presetStore.checkpointRollbackMirror(statePath("review-loop-presets.json")),
+  },
+  {
+    collection: "workflow_templates",
+    importAtActivation: async () => (await import("@/lib/workflows/store")).templateStore.importLegacy(statePath("workflow-templates.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/workflows/store")).templateStore.checkpointRollbackMirror(statePath("workflow-templates.json")),
+  },
+  {
+    collection: "role_presets",
+    importAtActivation: async () => (await import("@/lib/roles/store")).rolePresetStore.importLegacy(statePath("role-presets.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/roles/store")).rolePresetStore.checkpointRollbackMirror(statePath("role-presets.json")),
+  },
+  {
+    collection: "spawn_nesting",
+    importAtActivation: async () => (await import("@/lib/agent/nestingPolicy")).nestingPolicyStore.importLegacy(statePath("spawn-nesting.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/agent/nestingPolicy")).nestingPolicyStore.checkpointRollbackMirror(statePath("spawn-nesting.json")),
+  },
+  {
+    collection: "root_lineage",
+    importAtActivation: async () => (await import("@/lib/root/store")).rootLineageStore.importLegacy(statePath("root-lineage.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/root/store")).rootLineageStore.checkpointRollbackMirror(statePath("root-lineage.json")),
+  },
+  {
+    collection: "telegram_reports",
+    importAtActivation: async () => (await import("@/lib/telegram/reportStore")).telegramReportStore.importLegacy(statePath("telegram/reports.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/telegram/reportStore")).telegramReportStore.checkpointRollbackMirror(statePath("telegram/reports.json")),
+  },
+  {
+    collection: "telegram_registrations",
+    importAtActivation: async () => (await import("@/lib/telegram/hostRegistration")).telegramRegistrationStore.importLegacy(statePath("telegram/registrations.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/telegram/hostRegistration")).telegramRegistrationStore.checkpointRollbackMirror(statePath("telegram/registrations.json")),
+  },
   /* The conversation-migration journal roots: a directory of per-operation
      files rather than one file, so the entry names the root and the store keys
      its collection off the root's basename. */

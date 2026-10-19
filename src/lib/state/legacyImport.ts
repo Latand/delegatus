@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { assertStateStartupMutation, isOperatorOwnedDirectory, ownsStateStartupMutation } from "@/lib/stateOwnership";
 
-import { FileTransactionBusyError, withFileTransactionSync } from "./fileTransaction";
+import { FileTransactionBusyError, withFileTransactionSync, withFileTransactionAttempt } from "./fileTransaction";
 import { assertStateMutationAllowed, stateMutationRefusal } from "./stateMutationBarrier";
 import { hotStateSqliteWriterReady, hotStateWriterRevision, readHotStateReleaseTarget } from "./hotStateAuthority";
 import {
@@ -26,8 +26,12 @@ export interface LegacyCollectionSpec<P> {
   collection: string;
   schemaVersion: number;
   migrationId: string;
-  /** The legacy file. The database is `state.sqlite` beside it. */
+  /** The legacy file; defaults to the `state.sqlite` beside it. */
   legacyPath: string;
+  /** Nested legacy stores still join the root state database. */
+  databasePath?: string;
+  nonBlockingLock?: boolean;
+  validateLegacyPath?(): void;
   /** Validate parsed JSON. Throwing refuses the import and leaves the file untouched. */
   parse(raw: unknown): P;
   toRows(parsed: P): StateImportRow[];
@@ -40,7 +44,7 @@ export interface LegacyCollectionSpec<P> {
       `baseline` names the revision the file was last written from, so a row
       SQLite has not rewritten since is the file's to change or delete.
       `fenceOwner` admits the write during this release's own rollback fence. */
-  reconcile(parsed: P, baseline: StateImportRecord, options: { fenceOwner: boolean }): LegacyReconcileSummary;
+  reconcile(parsed: P, baseline: StateImportRecord, options: { fenceOwner: boolean; consumedSha256?: string }): LegacyReconcileSummary;
   /** The whole collection as the legacy file body, for a rollback mirror. */
   mirrorBody(): { body: unknown; revision: number };
 }
@@ -121,18 +125,18 @@ export function legacyDatabasePath(legacyPath: string): string {
  * run" and falls back to the legacy file, which is what every reader did
  * before the store existed.
  */
-export function legacyImportAllowed(legacyPath: string): boolean {
+export function legacyImportAllowed(legacyPath: string, databasePath = legacyDatabasePath(legacyPath)): boolean {
   const directory = path.dirname(legacyPath);
   if (stateMutationRefusal(directory) !== null) return false;
   if (!ownsStateStartupMutation() && isOperatorOwnedDirectory(directory)) return false;
-  return hotStateSqliteWriterReady(directory);
+  return hotStateSqliteWriterReady(path.dirname(databasePath));
 }
 
 /** A reconcile renames the legacy file away. Only the activation of a release,
     or an install with no release target, may do that: under a rollback the
     older release is running on that file. */
-export function lazyReconcileAllowed(legacyPath: string): boolean {
-  return readHotStateReleaseTarget(path.dirname(legacyPath)) === null;
+export function lazyReconcileAllowed(legacyPath: string, databasePath = legacyDatabasePath(legacyPath)): boolean {
+  return readHotStateReleaseTarget(path.dirname(databasePath)) === null;
 }
 
 function sha256(bytes: Buffer): string {
@@ -200,7 +204,7 @@ function writeTombstone<P>(spec: LegacyCollectionSpec<P>): void {
   if (!fs.existsSync(readme)) {
     fs.writeFileSync(readme, [
       `${path.basename(spec.legacyPath)} moved into SQLite.`,
-      `It now lives in the "${spec.collection}" collection of ${path.basename(legacyDatabasePath(spec.legacyPath))} in this directory.`,
+      `It now lives in the "${spec.collection}" collection of ${path.relative(spec.legacyPath, spec.databasePath ?? legacyDatabasePath(spec.legacyPath))} (relative to this directory).`,
       "This directory stands in its place so that an older release fails visibly instead of writing a file nothing reads.",
       "",
     ].join("\n"), { mode: 0o600 });
@@ -216,7 +220,7 @@ function retire<P>(spec: LegacyCollectionSpec<P>, mode: "keep" | "delete", hooks
     if (mode === "delete") {
       fs.rmSync(spec.legacyPath, { force: true });
     } else {
-      preservedAs = freeName(`${spec.legacyPath}.imported-${releaseTag(spec.legacyPath) ?? stamp()}`);
+      preservedAs = freeName(`${spec.legacyPath}.imported-${releaseTag(spec.databasePath ?? spec.legacyPath) ?? stamp()}`);
       fs.renameSync(spec.legacyPath, preservedAs);
     }
     fsyncDirectory(path.dirname(spec.legacyPath));
@@ -251,18 +255,29 @@ function preserveUnreadable<P>(spec: LegacyCollectionSpec<P>): string {
   return preservedAs;
 }
 
+/** Preserve the exact bytes observed during import without renaming a path
+    that an unlocked predecessor may already have replaced. */
+function preserveUnreadableBytes<P>(spec: LegacyCollectionSpec<P>, bytes: Buffer): string {
+  const preservedAs = freeName(`${spec.legacyPath}.unreadable-${stamp()}`);
+  const descriptor = fs.openSync(preservedAs, "wx", 0o600);
+  try { fs.writeFileSync(descriptor, bytes); fs.fsyncSync(descriptor); }
+  finally { fs.closeSync(descriptor); }
+  fsyncDirectory(path.dirname(spec.legacyPath));
+  return preservedAs;
+}
+
 /**
  * Import `spec.legacyPath` once, verified, then retire the file behind a
- * tombstone directory. Runs under the legacy store's own file lock, which
- * every legacy writer (old releases included) also takes, so no legacy write
- * can interleave with the import.
+ * tombstone directory. The file lock serializes writers that honor it. Older
+ * releases may not, so the bytes moved aside at retirement are checked and
+ * reconciled on this pass or the next one.
  */
 export function importLegacyCollection<P>(
   spec: LegacyCollectionSpec<P>,
   options: { reconcile: boolean; hooks?: LegacyImportHooks },
 ): LegacyImportOutcome {
   const hooks = options.hooks ?? {};
-  const database = legacyDatabasePath(spec.legacyPath);
+  const database = (spec.databasePath ?? legacyDatabasePath(spec.legacyPath));
   /* The first-boot import is the state-mutating startup step that #1905 was
      filed for: a lane's `next build` loaded a route module, the module reached
      a store, and this ran against the operator's live account files. Both
@@ -272,8 +287,10 @@ export function importLegacyCollection<P>(
      still being a module load that may never rename live state away. */
   assertStateMutationAllowed(path.dirname(spec.legacyPath));
   assertStateStartupMutation(path.dirname(spec.legacyPath), `${spec.collection} import`);
-  return withFileTransactionSync(spec.legacyPath, `${spec.collection} import is busy`, () => {
+  spec.validateLegacyPath?.();
+  return (spec.nonBlockingLock ? withFileTransactionAttempt : withFileTransactionSync)(spec.legacyPath, `${spec.collection} import is busy`, () => {
     const held = readStateImport(database, spec.collection);
+    spec.validateLegacyPath?.();
     const legacy = readLegacy(spec.legacyPath);
     if (held) return finishImported(spec, held, legacy, options.reconcile, hooks);
 
@@ -281,6 +298,7 @@ export function importLegacyCollection<P>(
     let gap: string | null = null;
     let incident: StateIncident | null = null;
     let unreadable = false;
+    let unreadableCopy: string | null = null;
     let repaired: string | null = null;
     if (legacy.kind === "tombstone") {
       gap = "tombstone-without-import";
@@ -301,6 +319,9 @@ export function importLegacyCollection<P>(
       } else {
         gap = "legacy-unreadable";
         unreadable = true;
+        // Save the observed torn bytes before a post-COMMIT predecessor can
+        // replace the live path. This copy is durable recovery evidence.
+        unreadableCopy = preserveUnreadableBytes(spec, legacy.bytes);
       }
     }
     const { record } = importStateCollection(database, {
@@ -312,12 +333,12 @@ export function importLegacyCollection<P>(
       sourceSha256: legacy.kind === "file" ? sha256(legacy.bytes) : null,
       sourceBytes: legacy.kind === "file" ? legacy.bytes.length : 0,
       gap,
-      release: releaseTag(spec.legacyPath),
+      release: releaseTag(spec.databasePath ?? spec.legacyPath),
       ...(hooks.beforeVerify ? { beforeVerify: hooks.beforeVerify } : {}),
     });
     hooks.afterCommit?.();
     if (unreadable) {
-      const preservedAs = preserveUnreadable(spec);
+      const preservedAs = unreadableCopy!;
       incident = raise({
         kind: "legacy-unreadable",
         collection: spec.collection,
@@ -333,7 +354,11 @@ export function importLegacyCollection<P>(
         message: `${path.basename(spec.legacyPath)} imported after a repair: ${repaired}`,
       });
     }
-    retire(spec, "keep", hooks);
+    const preservedAs = retire(spec, "keep", hooks);
+    // Older releases may publish with an atomic rename without taking the
+    // import lock. The rename above moves the exact bytes that won that race
+    // out of the way; reconcile that copy before reporting the import done.
+    if (preservedAs) incident = reconcileKeptCopy(spec, record, preservedAs) ?? incident;
     return { state: "imported", record, incident };
   });
 }
@@ -345,14 +370,17 @@ function finishImported<P>(
   reconcile: boolean,
   hooks: LegacyImportHooks,
 ): LegacyImportOutcome {
-  if (legacy.kind === "tombstone") return { state: "already-imported", record, incident: null };
+  if (legacy.kind === "tombstone") {
+    return { state: "already-imported", record, incident: reconcile ? reconcileKeptCopy(spec, record) : null };
+  }
   if (legacy.kind === "missing") {
     // A crash between the rename and the tombstone.
+    const incident = reconcile ? reconcileKeptCopy(spec, record) : null;
     writeTombstone(spec);
-    return { state: "already-imported", record, incident: null };
+    return { state: "already-imported", record, incident };
   }
   if (!reconcile) return { state: "reconcile-deferred", record, incident: null };
-  if (strayImportRecord(spec.legacyPath, record)) {
+  if (strayImportRecord(spec.databasePath ?? spec.legacyPath, record)) {
     return replaceStaleImport(spec, record, legacy.bytes, hooks);
   }
   const digest = sha256(legacy.bytes);
@@ -360,9 +388,9 @@ function finishImported<P>(
     retire(spec, "delete", hooks);
     return { state: "already-imported", record, incident: null };
   }
-  if (digest === record.sourceSha256) {
+  if (digest === record.sourceSha256 || digest === record.reconciledSha256) {
     // A crash between COMMIT and the rename: the file is what was imported.
-    if (record.gap === "legacy-unreadable") preserveUnreadable(spec);
+    if (digest === record.sourceSha256 && record.gap === "legacy-unreadable") preserveUnreadable(spec);
     retire(spec, "keep", hooks);
     return { state: "already-imported", record, incident: null };
   }
@@ -431,7 +459,7 @@ function replaceStaleImport<P>(
   const body = spec.parse(parsed.value);
   const rows = spec.toRows(body);
   const repaired = spec.repairs?.(body) ?? null;
-  const { record } = reimportStateCollection(legacyDatabasePath(spec.legacyPath), {
+  const { record } = reimportStateCollection((spec.databasePath ?? legacyDatabasePath(spec.legacyPath)), {
     collection: spec.collection,
     schemaVersion: spec.schemaVersion,
     migrationId: spec.migrationId,
@@ -440,7 +468,7 @@ function replaceStaleImport<P>(
     sourceSha256: sha256(bytes),
     sourceBytes: bytes.length,
     gap: null,
-    release: releaseTag(spec.legacyPath),
+    release: releaseTag(spec.databasePath ?? spec.legacyPath),
     ...(hooks.beforeVerify ? { beforeVerify: hooks.beforeVerify } : {}),
   });
   hooks.afterCommit?.();
@@ -473,7 +501,8 @@ function reconcileChangedLegacy<P>(
 ): StateIncident {
   const parsed = parseJsonBytes(bytes);
   if (!parsed.ok) {
-    const preservedAs = preserveUnreadable(spec);
+    const preservedAs = preserveUnreadableBytes(spec, bytes);
+    retire(spec, "keep", hooks);
     return raise({
       kind: "legacy-unreadable",
       collection: spec.collection,
@@ -482,7 +511,7 @@ function reconcileChangedLegacy<P>(
     });
   }
   const body = spec.parse(parsed.value);
-  const summary = spec.reconcile(body, record, options);
+  const summary = spec.reconcile(body, record, { ...options, consumedSha256: sha256(bytes) });
   const repaired = spec.repairs?.(body) ?? null;
   const preservedAs = retire(spec, "keep", hooks);
   return raise({
@@ -500,6 +529,54 @@ function reconcileChangedLegacy<P>(
   });
 }
 
+/** Merge the bytes captured by retirement when an older atomic-rename writer
+    replaced the source after the import transaction committed. */
+function reconcileRetiredLegacy<P>(
+  spec: LegacyCollectionSpec<P>,
+  record: StateImportRecord,
+  bytes: Buffer,
+  preservedAs: string,
+): StateIncident | null {
+  const parsed = parseJsonBytes(bytes);
+  if (!parsed.ok) {
+    return raise({
+      kind: "legacy-unreadable",
+      collection: spec.collection,
+      preservedAs,
+      message: `${path.basename(spec.legacyPath)} changed during import and its retired bytes are unreadable; kept as ${path.basename(preservedAs)}`,
+    });
+  }
+  const body = spec.parse(parsed.value);
+  const summary = spec.reconcile(body, record, { fenceOwner: false, consumedSha256: sha256(bytes) });
+  const repaired = spec.repairs?.(body) ?? null;
+  if (!summary.added && !summary.replaced && !summary.removed && !summary.conflicts.length && !repaired) return null;
+  return raise({
+    kind: "legacy-reconciled",
+    collection: spec.collection,
+    summary,
+    preservedAs,
+    message: `${path.basename(spec.legacyPath)} changed during import (an older atomic-rename writer); `
+      + `merged ${summary.added} added, ${summary.replaced} replaced and ${summary.removed} removed rows, `
+      + `kept ${summary.kept} SQLite rows changed since the mirror`
+      + (summary.spared.length ? `; ${summary.spared.length} rows absent from the file were kept` : "")
+      + (repaired ? `; ${repaired}` : ""),
+  });
+}
+
+/** A process may stop after moving the source aside and before merging it. */
+function reconcileKeptCopy<P>(spec: LegacyCollectionSpec<P>, record: StateImportRecord, knownCopy?: string): StateIncident | null {
+  const kept = knownCopy ?? newestKeptCopy(spec.legacyPath);
+  if (!kept) return null;
+  let bytes: Buffer;
+  try { bytes = fs.readFileSync(kept); }
+  catch (error) {
+    throw new FileTransactionBusyError(`kept legacy state is unreadable for now: ${(error as Error).message}`);
+  }
+  const digest = sha256(bytes);
+  if (digest === record.sourceSha256 || digest === record.mirrorSha256 || digest === record.reconciledSha256) return null;
+  return reconcileRetiredLegacy(spec, record, bytes, kept);
+}
+
 /**
  * Write the legacy file from one SQLite revision so a rollback release that
  * predates the move runs on its JSON (§6.4). The tombstone is removed and the
@@ -507,22 +584,30 @@ function reconcileChangedLegacy<P>(
  * mirror from one the rollback release changed.
  */
 export function writeLegacyRollbackMirror<P>(spec: LegacyCollectionSpec<P>): void {
-  const database = legacyDatabasePath(spec.legacyPath);
+  const database = (spec.databasePath ?? legacyDatabasePath(spec.legacyPath));
   if (!readStateImport(database, spec.collection)) return;
   assertStateMutationAllowed(path.dirname(spec.legacyPath));
-  withFileTransactionSync(spec.legacyPath, `${spec.collection} import is busy`, () => {
+  spec.validateLegacyPath?.();
+  (spec.nonBlockingLock ? withFileTransactionAttempt : withFileTransactionSync)(spec.legacyPath, `${spec.collection} import is busy`, () => {
     /* A writable legacy file outlives a fence that was withdrawn, and an older
        release's MCP process may have written it since. Fold those writes in
        before the new mirror replaces the file. */
     const record = readStateImport(database, spec.collection)!;
+    spec.validateLegacyPath?.();
     const legacy = readLegacy(spec.legacyPath);
     if (legacy.kind === "file") {
       const digest = sha256(legacy.bytes);
-      if (digest !== record.mirrorSha256 && digest !== record.sourceSha256) {
+      if (digest !== record.mirrorSha256 && digest !== record.sourceSha256 && digest !== record.reconciledSha256) {
         reconcileChangedLegacy(spec, record, legacy.bytes, { fenceOwner: true }, {});
       }
     }
     const { body, revision } = spec.mirrorBody();
+    if (body === undefined) {
+      fs.rmSync(spec.legacyPath, { recursive: true, force: true });
+      fsyncDirectory(path.dirname(spec.legacyPath));
+      recordStateImportMirror(database, spec.collection, null, revision);
+      return;
+    }
     const text = `${JSON.stringify(body, null, 2)}\n`;
     const directory = path.dirname(spec.legacyPath);
     const temp = path.join(directory, `.${path.basename(spec.legacyPath)}.${process.pid}.${crypto.randomUUID()}.tmp`);

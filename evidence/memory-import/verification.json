@@ -1,0 +1,1027 @@
+{
+  "schemaVersion": 1,
+  "specification": "docs/design/memory-source-switch.md#7-build-plan",
+  "pinnedBase": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+  "sourceRevision": "b2052c53ea3cfd70ac80d130c10c96be0ed3b60c",
+  "mergeBase": "e16513f8b2bdae618fcce8697be82cd07db0150d",
+  "isolation": {
+    "perCommand": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "LLV_VIEWER_CONTROL_URL": "http://127.0.0.1:1",
+    "gateSlot": "scripts/gate-slot.sh at the pinned base; heavy commands sequential"
+  },
+  "newBehaviour": [
+    {
+      "file": "src/lib/memory/curation/import.test.ts",
+      "pinnedBase": {
+        "name": "base-red-0",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/memory/curation/import.test.ts"
+        ],
+        "exit": 1,
+        "expected": 1,
+        "startedAt": "2026-10-19T14:58:25.422379+00:00",
+        "elapsedSeconds": 0.315,
+        "source": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+        "logSha256": "2b926643ed0b4c4b7f75ecfee55743572fb82fbd92e7fd2c0a38724b979fe880",
+        "tests": [
+          {
+            "outcome": "fail",
+            "name": "import refuses an unaccounted candidate and stores no rules or receipts"
+          },
+          {
+            "outcome": "fail",
+            "name": "import refuses an unaccounted part and stores no rules or receipts"
+          },
+          {
+            "outcome": "fail",
+            "name": "import refuses an unaccounted occurrence and stores no rules or receipts"
+          },
+          {
+            "outcome": "fail",
+            "name": "a disposition requires a read of that part; an unread tail keeps a 16 KB file pending"
+          },
+          {
+            "outcome": "fail",
+            "name": "adopt writes an active curated rule with every occurrence and import provenance"
+          },
+          {
+            "outcome": "fail",
+            "name": "equal bodies in two projects keep both narrow scopes and refuse adoption beyond their reach"
+          },
+          {
+            "outcome": "fail",
+            "name": "undo of an adoption merged into pre-existing text re-pends its candidate and preserves that text"
+          },
+          {
+            "outcome": "fail",
+            "name": "one occurrence can be adopted and another dropped; explicit defer permits another call"
+          },
+          {
+            "outcome": "fail",
+            "name": "a host pass counts and undoes a seatless folder's own scope"
+          },
+          {
+            "outcome": "fail",
+            "name": "completed redispositions after Undo cannot starve the next pending batch"
+          },
+          {
+            "outcome": "fail",
+            "name": "pass undo derives candidate state after later rewrite and prevents duplicate adoption"
+          },
+          {
+            "outcome": "fail",
+            "name": "pass undo derives candidate state after later ranking and prevents duplicate adoption"
+          },
+          {
+            "outcome": "fail",
+            "name": "pass undo derives candidate state after later merge and prevents duplicate adoption"
+          },
+          {
+            "outcome": "fail",
+            "name": "pass undo derives candidate state after later split and prevents duplicate adoption"
+          },
+          {
+            "outcome": "fail",
+            "name": "pass undo derives candidate state after later none and prevents duplicate adoption"
+          },
+          {
+            "outcome": "fail",
+            "name": "successful import batches bypass cooldown while a failed batch keeps it, across process restart"
+          },
+          {
+            "outcome": "fail",
+            "name": "a commit refusal rolls back imported rules and dispositions together, then the same read can retry"
+          },
+          {
+            "outcome": "fail",
+            "name": "groups longer than a page continue in bounded same-project passes without losing a byte"
+          }
+        ]
+      },
+      "head": "Passed in the full pre-push selection; no new-case failures."
+    },
+    {
+      "file": "src/lib/memory/importLifecycle.test.ts",
+      "pinnedBase": {
+        "name": "base-red-1",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/memory/importLifecycle.test.ts"
+        ],
+        "exit": 1,
+        "expected": 1,
+        "startedAt": "2026-10-19T14:58:25.740981+00:00",
+        "elapsedSeconds": 0.316,
+        "source": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+        "logSha256": "4e6aaf5040989e0aa36a30faa81ba2f5732c9c4b5f91847ee954a80a2f59e235",
+        "tests": [
+          {
+            "outcome": "fail",
+            "name": "seatless folders join the installation project from its configured remote outside a checkout"
+          },
+          {
+            "outcome": "fail",
+            "name": "seatless folders join the installation project from its manifest remote outside a checkout"
+          },
+          {
+            "outcome": "fail",
+            "name": "the flip waits for every loaded part and happens once; active follows the committed final scan"
+          },
+          {
+            "outcome": "fail",
+            "name": "a legacy Claude writer holds the drain and its retirement scan imports the note written after the first scan"
+          },
+          {
+            "outcome": "fail",
+            "name": "a retirement during a scan owes another final scan; failed scans never start the trial"
+          },
+          {
+            "outcome": "fail",
+            "name": "the fallback scan is durable across a fresh helper process and reversal leaves stores intact"
+          },
+          {
+            "outcome": "fail",
+            "name": "generation evidence counts only live non-clean Claude starts before the flip; Codex never holds the drain"
+          },
+          {
+            "outcome": "fail",
+            "name": "a second import skips dispositioned hashes, but fully undone drops are offered again"
+          },
+          {
+            "outcome": "fail",
+            "name": "the orchestrator target rises only after its project's completed import records a seat room drop"
+          },
+          {
+            "outcome": "fail",
+            "name": "an operator reversal or undo after the legacy await prevents a stale flip"
+          },
+          {
+            "outcome": "fail",
+            "name": "a reversal after an awaited host lookup preserves the operator's later choice"
+          },
+          {
+            "outcome": "fail",
+            "name": "a day-old drain asks only its host project's seat for a decision and never rotates a process"
+          },
+          {
+            "outcome": "fail",
+            "name": "a room drop after the trial opened keeps the pre-trial budget"
+          }
+        ]
+      },
+      "head": "Passed in the full pre-push selection; no new-case failures."
+    },
+    {
+      "file": "src/lib/memory/curation/curator.eval.test.ts",
+      "pinnedBase": {
+        "name": "base-red-2",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/memory/curation/curator.eval.test.ts"
+        ],
+        "exit": 1,
+        "expected": 1,
+        "startedAt": "2026-10-19T14:58:26.060159+00:00",
+        "elapsedSeconds": 0.416,
+        "source": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+        "logSha256": "1a38db33ba430743942f52cbc6a38f7800263bd14b5884072d6b5c40bef95d35",
+        "tests": [
+          {
+            "outcome": "skip",
+            "name": "real curator classifies the twelve level and currency cases in an isolated store"
+          },
+          {
+            "outcome": "fail",
+            "name": "import curator case: seat"
+          },
+          {
+            "outcome": "fail",
+            "name": "import curator case: preference"
+          },
+          {
+            "outcome": "fail",
+            "name": "import curator case: narration"
+          },
+          {
+            "outcome": "fail",
+            "name": "import curator case: defect"
+          }
+        ]
+      },
+      "head": "Passed in the full pre-push selection; no new-case failures."
+    },
+    {
+      "file": "src/lib/memory/source.import.test.ts",
+      "pinnedBase": {
+        "name": "base-red-3",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/memory/source.import.test.ts"
+        ],
+        "exit": 1,
+        "expected": 1,
+        "startedAt": "2026-10-19T14:58:26.480489+00:00",
+        "elapsedSeconds": 2.392,
+        "source": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+        "logSha256": "827cdcdf53c375f8fd69e55d04e71febe953ee9f691d51505c797387792ec084",
+        "tests": [
+          {
+            "outcome": "fail",
+            "name": "Delegatus selection is accepted and starts importing with the engines still on"
+          },
+          {
+            "outcome": "fail",
+            "name": "apply refuses a batch's missing candidate"
+          },
+          {
+            "outcome": "fail",
+            "name": "apply refuses a batch's missing part"
+          },
+          {
+            "outcome": "fail",
+            "name": "apply refuses a batch's missing occurrence"
+          },
+          {
+            "outcome": "fail",
+            "name": "a pass cannot drop a candidate part its read never returned"
+          },
+          {
+            "outcome": "fail",
+            "name": "the curator receives the final decisive bytes of a 16 KB import group"
+          },
+          {
+            "outcome": "fail",
+            "name": "adopt creates a curated rule with import origin and every source occurrence"
+          },
+          {
+            "outcome": "fail",
+            "name": "an adoption outside the named scopes is refused even when the ordinary partition is empty"
+          },
+          {
+            "outcome": "fail",
+            "name": "a production helper flips only after its backed-up loaded candidates have dispositions"
+          },
+          {
+            "outcome": "fail",
+            "name": "the import disposition contract handles seat"
+          },
+          {
+            "outcome": "fail",
+            "name": "the import disposition contract handles preference"
+          },
+          {
+            "outcome": "fail",
+            "name": "the import disposition contract handles narration"
+          },
+          {
+            "outcome": "fail",
+            "name": "the import disposition contract handles defect"
+          }
+        ]
+      },
+      "head": "Passed in the full pre-push selection; no new-case failures."
+    },
+    {
+      "file": "src/lib/memory/source.test.ts",
+      "pinnedBase": {
+        "name": "base-red-4",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/memory/source.test.ts"
+        ],
+        "exit": 1,
+        "expected": 1,
+        "startedAt": "2026-10-19T14:58:28.875662+00:00",
+        "elapsedSeconds": 0.41,
+        "source": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+        "logSha256": "29b012c8a95b5f19e21cd1aa09b8fe320098015d8a0676cae4e2c03d5c76d46a",
+        "tests": [
+          {
+            "outcome": "pass",
+            "name": "source unchosen keeps clean and role decisions separate"
+          },
+          {
+            "outcome": "pass",
+            "name": "source importing keeps clean and role decisions separate"
+          },
+          {
+            "outcome": "pass",
+            "name": "source draining keeps clean and role decisions separate"
+          },
+          {
+            "outcome": "pass",
+            "name": "source active keeps clean and role decisions separate"
+          },
+          {
+            "outcome": "pass",
+            "name": "source engines keeps clean and role decisions separate"
+          },
+          {
+            "outcome": "pass",
+            "name": "missing, malformed, unsupported and oversized files remain unchosen"
+          },
+          {
+            "outcome": "pass",
+            "name": "cached reads return copies, follow peer writes and root replacement, and retain import metadata"
+          },
+          {
+            "outcome": "fail",
+            "name": "the first choice starts a deferred import, an idempotent choice preserves it, and reselecting creates a new import"
+          },
+          {
+            "outcome": "pass",
+            "name": "warm reads reuse one small parsed file; a fresh process follows durable choices"
+          },
+          {
+            "outcome": "fail",
+            "name": "failed-import recovery waits asynchronously behind a later operator choice"
+          }
+        ]
+      },
+      "head": "Passed in the full pre-push selection; no new-case failures."
+    },
+    {
+      "file": "src/app/api/memory/source/route.test.ts",
+      "pinnedBase": {
+        "name": "base-red-5",
+        "command": [
+          "bun",
+          "test",
+          "./src/app/api/memory/source/route.test.ts"
+        ],
+        "exit": 1,
+        "expected": 1,
+        "startedAt": "2026-10-19T14:58:29.289651+00:00",
+        "elapsedSeconds": 0.46,
+        "source": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+        "logSha256": "ede24471498e0fb566d26bb071e02dcf81a8e880902973a75a64d770cfc5ca0e",
+        "tests": [
+          {
+            "outcome": "fail",
+            "name": "GET is uncached and an operator PUT starts importing without accepting a supplied phase or roots"
+          },
+          {
+            "outcome": "pass",
+            "name": "only the operator's same-origin write can select engines; import evidence survives"
+          },
+          {
+            "outcome": "pass",
+            "name": "invalid bodies and an engines-first choice change nothing"
+          },
+          {
+            "outcome": "pass",
+            "name": "a durable write failure reports an error and leaves the selected source intact"
+          }
+        ]
+      },
+      "head": "Passed in the full pre-push selection; no new-case failures."
+    },
+    {
+      "file": "src/lib/memory/importService.test.ts",
+      "pinnedBase": {
+        "name": "base-red-6",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/memory/importService.test.ts"
+        ],
+        "exit": 1,
+        "expected": 1,
+        "startedAt": "2026-10-19T14:58:29.752456+00:00",
+        "elapsedSeconds": 1.315,
+        "source": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+        "logSha256": "896a8ab5281c80c059e792bf9863cd869a8ad540ea576a3a02681e5a2eaab0b5",
+        "tests": [
+          {
+            "outcome": "pass",
+            "name": "the production job reports labeled operations while the serving loop turns during held import work"
+          },
+          {
+            "outcome": "pass",
+            "name": "the helper refuses a stale import and clears its single-flight slot for a later valid job"
+          },
+          {
+            "outcome": "fail",
+            "name": "large private root inventories stay in state while the leased helper returns bounded metadata"
+          }
+        ]
+      },
+      "head": "Passed in the full pre-push selection; no new-case failures."
+    },
+    {
+      "file": "src/lib/mcp/curateRules.test.ts",
+      "pinnedBase": {
+        "name": "base-red-7",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/mcp/curateRules.test.ts"
+        ],
+        "exit": 1,
+        "expected": 1,
+        "startedAt": "2026-10-19T14:58:31.070579+00:00",
+        "elapsedSeconds": 1.113,
+        "source": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+        "logSha256": "59ae4d048a7061705ab143c82376509cfc64b37bf1c40bcb64b3688d13318ee4",
+        "tests": [
+          {
+            "outcome": "pass",
+            "name": "real MCP binding checks the live pass before dispatch and receipt replay"
+          },
+          {
+            "outcome": "pass",
+            "name": "MCP schema keeps read and apply fields separate and requires widening notes at apply"
+          },
+          {
+            "outcome": "fail",
+            "name": "the real import binding refreshes known values through the worker and operator Undo is durable and replayable"
+          }
+        ]
+      },
+      "head": "Passed in the full pre-push selection; no new-case failures."
+    }
+  ],
+  "regressionControl": {
+    "name": "before-lineage-fix",
+    "command": [
+      "bun",
+      "test",
+      "./src/lib/memory/curation/import.test.ts",
+      "-t",
+      "undo of an adoption merged into pre-existing text"
+    ],
+    "exit": 1,
+    "expected": 1,
+    "startedAt": "2026-10-19T14:41:06.982475+00:00",
+    "elapsedSeconds": 0.532,
+    "source": "a594fbf19d49f0ea79d6d05ee5aa963d3f9cb0eb",
+    "logSha256": "adca63a8650f7729aedaaab2980f0611ea230df5cc8dbf3a4b9c50cfbfbfef5c",
+    "tests": [
+      {
+        "outcome": "fail",
+        "name": "undo of an adoption merged into pre-existing text re-pends its candidate and preserves that text"
+      }
+    ]
+  },
+  "existingFailureComparisons": [
+    {
+      "case": "bindings",
+      "base": {
+        "name": "base-existing-bindings",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/mcp/bindings.test.ts",
+          "-t",
+          "task placement bindings require atomic guards|MCP task writes normalize holds"
+        ],
+        "exit": 1,
+        "expected": null,
+        "startedAt": "2026-10-19T14:58:32.186788+00:00",
+        "elapsedSeconds": 3.071,
+        "source": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+        "logSha256": "97ff77e7c72f8e4be2c450a004993a321973d6c66821e042598e4a9be53f5fc4",
+        "tests": [
+          {
+            "outcome": "fail",
+            "name": "task placement bindings require atomic guards and classify field refusals as non-retryable"
+          },
+          {
+            "outcome": "pass",
+            "name": "MCP task writes normalize holds, preserve step operator reasons and server provenance"
+          }
+        ]
+      },
+      "head": {
+        "name": "head-existing-bindings",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/mcp/bindings.test.ts",
+          "-t",
+          "task placement bindings require atomic guards|MCP task writes normalize holds"
+        ],
+        "exit": 1,
+        "expected": null,
+        "startedAt": "2026-10-19T14:58:35.261073+00:00",
+        "elapsedSeconds": 3.201,
+        "source": "b2052c53ea3cfd70ac80d130c10c96be0ed3b60c",
+        "logSha256": "b57526dd22752ca31d478e1fbf4c14bdc7189934aaf3ef431ffe876929421d2f",
+        "tests": [
+          {
+            "outcome": "fail",
+            "name": "task placement bindings require atomic guards and classify field refusals as non-retryable"
+          },
+          {
+            "outcome": "pass",
+            "name": "MCP task writes normalize holds, preserve step operator reasons and server provenance"
+          }
+        ]
+      }
+    },
+    {
+      "case": "problems",
+      "base": {
+        "name": "base-existing-problems",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/memory/roleProblems.test.ts"
+        ],
+        "exit": 1,
+        "expected": null,
+        "startedAt": "2026-10-19T14:58:38.465611+00:00",
+        "elapsedSeconds": 2.41,
+        "source": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+        "logSha256": "e30c719dd2a7b80e9660a3539dd2a3364603e582a9836f9a5c5f8e4964fdba6e",
+        "tests": [
+          {
+            "outcome": "pass",
+            "name": "a problem reaches the designated seat's agenda, retries until landing and survives seat succession"
+          },
+          {
+            "outcome": "pass",
+            "name": "the production controller credits a landed problem before losing the seat epoch"
+          },
+          {
+            "outcome": "pass",
+            "name": "concrete file paths are steered to problem on Unix and Windows"
+          },
+          {
+            "outcome": "pass",
+            "name": "leave_lesson accepts generic runtime and framework guidance while concrete paths remain guarded"
+          },
+          {
+            "outcome": "pass",
+            "name": "capitalized component filenames are refused before the lesson request is consumed"
+          },
+          {
+            "outcome": "pass",
+            "name": "a curator problem in machine scope belongs to its author's project and disappears when restored"
+          },
+          {
+            "outcome": "pass",
+            "name": "a new curator transfer after Undo is offered again even when the calls share a timestamp"
+          },
+          {
+            "outcome": "pass",
+            "name": "a summarized problem points to a complete local report even after delivery"
+          },
+          {
+            "outcome": "fail",
+            "name": "(unnamed)"
+          }
+        ]
+      },
+      "head": {
+        "name": "head-existing-problems",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/memory/roleProblems.test.ts"
+        ],
+        "exit": 1,
+        "expected": null,
+        "startedAt": "2026-10-19T14:58:40.879410+00:00",
+        "elapsedSeconds": 2.645,
+        "source": "b2052c53ea3cfd70ac80d130c10c96be0ed3b60c",
+        "logSha256": "f0ae89595999b50d33b6330b7d040d7162c307343957e9dc327c3dd46141fbdf",
+        "tests": [
+          {
+            "outcome": "pass",
+            "name": "a problem reaches the designated seat's agenda, retries until landing and survives seat succession"
+          },
+          {
+            "outcome": "pass",
+            "name": "the production controller credits a landed problem before losing the seat epoch"
+          },
+          {
+            "outcome": "pass",
+            "name": "concrete file paths are steered to problem on Unix and Windows"
+          },
+          {
+            "outcome": "pass",
+            "name": "leave_lesson accepts generic runtime and framework guidance while concrete paths remain guarded"
+          },
+          {
+            "outcome": "pass",
+            "name": "capitalized component filenames are refused before the lesson request is consumed"
+          },
+          {
+            "outcome": "pass",
+            "name": "a curator problem in machine scope belongs to its author's project and disappears when restored"
+          },
+          {
+            "outcome": "pass",
+            "name": "a new curator transfer after Undo is offered again even when the calls share a timestamp"
+          },
+          {
+            "outcome": "pass",
+            "name": "a summarized problem points to a complete local report even after delivery"
+          },
+          {
+            "outcome": "fail",
+            "name": "(unnamed)"
+          }
+        ]
+      }
+    },
+    {
+      "case": "store",
+      "base": {
+        "name": "base-existing-store",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/memory/roleStore.test.ts",
+          "-t",
+          "the ordinary history window and curator records survive seed"
+        ],
+        "exit": 0,
+        "expected": null,
+        "startedAt": "2026-10-19T14:58:43.527840+00:00",
+        "elapsedSeconds": 0.967,
+        "source": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+        "logSha256": "854974a75fc06ec05b79a3f0c289ffafa74b21dc58c6dc9f0609f550e7b45fd5",
+        "tests": [
+          {
+            "outcome": "pass",
+            "name": "the ordinary history window and curator records survive seed, fresh writer and fresh reader processes"
+          }
+        ]
+      },
+      "head": {
+        "name": "head-existing-store",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/memory/roleStore.test.ts",
+          "-t",
+          "the ordinary history window and curator records survive seed"
+        ],
+        "exit": 0,
+        "expected": null,
+        "startedAt": "2026-10-19T14:58:44.499230+00:00",
+        "elapsedSeconds": 0.93,
+        "source": "b2052c53ea3cfd70ac80d130c10c96be0ed3b60c",
+        "logSha256": "6ba19c2c9bc0d78bc1a93c9104914308133ed289c32578fdb7e6ecac07bcf7e8",
+        "tests": [
+          {
+            "outcome": "pass",
+            "name": "the ordinary history window and curator records survive seed, fresh writer and fresh reader processes"
+          }
+        ]
+      }
+    },
+    {
+      "case": "service",
+      "base": {
+        "name": "base-existing-service",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/memory/service.test.ts",
+          "-t",
+          "complete refresh attributes project resolution"
+        ],
+        "exit": 1,
+        "expected": null,
+        "startedAt": "2026-10-19T14:58:45.431817+00:00",
+        "elapsedSeconds": 0.295,
+        "source": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+        "logSha256": "b53771b6ed1ea04b5d1b930aff13ef4be2cff810b04a15f4fc58232e8b2f389e",
+        "tests": [
+          {
+            "outcome": "fail",
+            "name": "complete refresh attributes project resolution, resumed reads, and pruning as synchronous memory work"
+          }
+        ]
+      },
+      "head": {
+        "name": "head-existing-service",
+        "command": [
+          "bun",
+          "test",
+          "./src/lib/memory/service.test.ts",
+          "-t",
+          "complete refresh attributes project resolution"
+        ],
+        "exit": 1,
+        "expected": null,
+        "startedAt": "2026-10-19T14:58:45.729762+00:00",
+        "elapsedSeconds": 0.43,
+        "source": "b2052c53ea3cfd70ac80d130c10c96be0ed3b60c",
+        "logSha256": "45fa7d57d61f44f272a428136ad8f2329736f85f6250edb71dec3d13a69c265f",
+        "tests": [
+          {
+            "outcome": "fail",
+            "name": "complete refresh attributes project resolution, resumed reads, and pruning as synchronous memory work"
+          }
+        ]
+      }
+    }
+  ],
+  "checks": {
+    "pre-push": {
+      "name": "pre-push",
+      "command": [
+        "bash",
+        ".githooks/pre-push"
+      ],
+      "exit": 0,
+      "expected": 0,
+      "startedAt": "2026-10-19T14:58:46.162526+00:00",
+      "elapsedSeconds": 60.385,
+      "source": "b2052c53ea3cfd70ac80d130c10c96be0ed3b60c",
+      "logSha256": "bfaebad11c9d0ec0c5935fbcffaff9af9ee4b7c02094ee6471c8b2be9af804b4",
+      "output": [
+        "pre-push: privacy",
+        "pre-push: CPU admission for publication checks",
+        "pre-push: push checks",
+        "pre-push: types: passed in 34 s",
+        "pre-push: eslint: passed in 9 s",
+        "PRIVACY GATE: PASS",
+        "touched-tests: base commit e16513f8b2bdae618fcce8697be82cd07db0150d",
+        "touched-tests: reviewed head commit b2052c53ea3cfd70ac80d130c10c96be0ed3b60c (head sample runs the working tree)",
+        "touched-tests: head 43178ms",
+        "touched-tests: baseline run 5821ms (tests 5010ms; 4 failing file(s))",
+        "touched-tests: 3 new file(s), judged on head alone",
+        "touched-tests: flaky confirmation 3 reruns per side, 5515ms (shared budget 300000ms)",
+        "FLAKY src/lib/memory/roleStore.test.ts: the ordinary history window and curator records survive seed, fresh writer and fresh reader processes (base 4 pass/0 fail; head 2 pass/2 fail)",
+        "PRE-EXISTING src/lib/mcp/bindings.test.ts: task placement bindings require atomic guards and classify field refusals as non-retryable",
+        "PRE-EXISTING src/lib/memory/roleProblems.test.ts: <hook error> owned test children survived teardown; guardian=kernel (the base run of this file is broken the same way)",
+        "PRE-EXISTING src/lib/memory/service.test.ts: complete refresh attributes project resolution, resumed reads, and pruning as synchronous memory work",
+        "touched-tests: 0 new failures, 3 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky",
+        "pre-push: touched tests: passed in 55 s",
+        "pre-push: Linux backend: passed in 0 s",
+        "touched-tests: base commit e16513f8b2bdae618fcce8697be82cd07db0150d",
+        "touched-tests: reviewed head commit b2052c53ea3cfd70ac80d130c10c96be0ed3b60c (head sample runs the working tree)",
+        "touched-tests: head 3541ms",
+        "touched-tests: green head; no baseline checkout or sample needed",
+        "pre-push: Linux tests: passed in 4 s",
+        "pre-push: publication checks CPU wait: 0 ms (excluded from execution budget)"
+      ],
+      "selectedTests": [
+        [
+          "./src/app/api/memory/source/route.test.ts",
+          "./src/lib/mcp/curateRules.test.ts",
+          "./src/lib/memory/curation/curator.eval.test.ts",
+          "./src/lib/memory/curation/import.test.ts",
+          "./src/lib/memory/importLifecycle.test.ts",
+          "./src/lib/memory/importService.test.ts",
+          "./src/lib/memory/source.import.test.ts",
+          "./src/lib/memory/source.test.ts",
+          "./src/app/api/role-memory/route.test.ts",
+          "./src/lib/mcp/bindings.test.ts",
+          "./src/lib/mcp/server.test.ts",
+          "./src/lib/memory/importJob.test.ts",
+          "./src/lib/memory/privacy.test.ts",
+          "./src/lib/memory/roleProblems.test.ts",
+          "./src/lib/memory/roleStore.test.ts",
+          "./src/lib/memory/service.test.ts",
+          "./src/lib/memory/source.launch.test.ts",
+          "./src/lib/viewerLoopMonitor.test.ts"
+        ],
+        [
+          "./src/lib/proc/memory.test.ts",
+          "./src/lib/proc/portable.test.ts",
+          "./src/lib/proc/darwinIdentity.test.ts",
+          "./src/lib/proc/index.test.ts",
+          "./src/lib/proc/windowsSnapshot.test.ts",
+          "./src/lib/proc/windowsIdentity.test.ts",
+          "./src/lib/proc/windowsCwd.test.ts",
+          "./src/lib/proc/windows.test.ts",
+          "./src/lib/processGroup.test.ts",
+          "./src/lib/platformHome.test.ts",
+          "./src/lib/runtime/localEndpoint.test.ts",
+          "./src/lib/scanner/describe.test.ts",
+          "./src/lib/state/durableJson.test.ts",
+          "./src/runtime-host/socket.test.ts",
+          "./src/runtime-host/runtimeHostFence.test.ts",
+          "./bin/server-runtime.test.ts",
+          "./bin/bind-guard.test.ts"
+        ]
+      ]
+    },
+    "runtime-host": {
+      "name": "runtime-host",
+      "command": [
+        "bun",
+        "scripts/verify-runtime-host.ts",
+        "--runtime",
+        "<pinned Bun>"
+      ],
+      "exit": 0,
+      "expected": 0,
+      "startedAt": "2026-10-19T14:43:42.709740+00:00",
+      "elapsedSeconds": 18.141,
+      "source": "a5928fc0ad38a3bcf5bc8cb4cba2cbc9346a60a5",
+      "reusedBecause": "Only test code changed; production inputs are identical.",
+      "unchangedProductionInputsComparedWith": "b2052c53ea3cfd70ac80d130c10c96be0ed3b60c",
+      "logSha256": "1fa915a6d97bba4e37880075123a5bd589531f84d78831cdd37beeb787a77b71",
+      "result": {
+        "runtime": "bun 1.4.0",
+        "succession": {
+          "predecessorReadyMs": 1028,
+          "successorTookOverMs": 1035,
+          "completed": true
+        },
+        "listener": {
+          "windowMs": 15000,
+          "polls": 27,
+          "answered": 27,
+          "abandoned": 13
+        },
+        "socket": {
+          "polls": 27,
+          "answered": 27,
+          "abandoned": 13
+        },
+        "ok": true
+      }
+    },
+    "build": {
+      "name": "build",
+      "command": [
+        "bun",
+        "run",
+        "build"
+      ],
+      "exit": 0,
+      "expected": 0,
+      "startedAt": "2026-10-19T14:44:00.860345+00:00",
+      "elapsedSeconds": 294.886,
+      "source": "a5928fc0ad38a3bcf5bc8cb4cba2cbc9346a60a5",
+      "reusedBecause": "Only test code changed; production inputs are identical.",
+      "unchangedProductionInputsComparedWith": "b2052c53ea3cfd70ac80d130c10c96be0ed3b60c",
+      "logSha256": "95453a479398c4716edf839036a51544f88f25baa0721a43d49194c8687ce89b"
+    },
+    "viewer-runtime": {
+      "name": "viewer-runtime",
+      "command": [
+        "bun",
+        "scripts/verify-viewer-runtime.ts"
+      ],
+      "exit": 0,
+      "expected": 0,
+      "startedAt": "2026-10-19T14:48:55.794326+00:00",
+      "elapsedSeconds": 8.607,
+      "source": "a5928fc0ad38a3bcf5bc8cb4cba2cbc9346a60a5",
+      "reusedBecause": "Only test code changed; production inputs are identical.",
+      "unchangedProductionInputsComparedWith": "b2052c53ea3cfd70ac80d130c10c96be0ed3b60c",
+      "logSha256": "59d9b12dba894ea93ec189348fcfae9832900eae3d1358fb900126b6766405fb",
+      "result": {
+        "runtime": "bun 1.4.0",
+        "modules": {
+          "probed": 32,
+          "loaded": 32,
+          "failures": []
+        },
+        "served": {
+          "status": 200,
+          "bytes": 82546,
+          "readyMs": 6766
+        },
+        "ok": true
+      }
+    },
+    "built-workers": {
+      "name": "built-workers",
+      "command": [
+        "bun",
+        "--eval",
+        "<probeSource>"
+      ],
+      "exit": 0,
+      "expected": 0,
+      "startedAt": "2026-10-19T14:49:04.404506+00:00",
+      "elapsedSeconds": 1.723,
+      "source": "a5928fc0ad38a3bcf5bc8cb4cba2cbc9346a60a5",
+      "reusedBecause": "Only test code changed; production inputs are identical.",
+      "unchangedProductionInputsComparedWith": "b2052c53ea3cfd70ac80d130c10c96be0ed3b60c",
+      "logSha256": "f16a7379efb12df13521a111237e128e1ccce0640a9f40eca8c2a48e51ce03b4",
+      "probeSource": "import fs from \"node:fs/promises\";\nimport path from \"node:path\";\nimport assert from \"node:assert/strict\";\nconst cwd=process.cwd(), state=process.env.LLV_STATE_DIR!, at=\"2026-10-19T00:00:00.000Z\";\nconst load=(name:string)=>import(path.join(cwd,\"src/lib\",name));\nconst home=path.join(process.env.TMPDIR!,\"compiled-home\"), memory=path.join(home,\"projects\",\"compiled-fixture\",\"memory\");\nawait fs.mkdir(memory,{recursive:true});\nconst body=\"Inspect ownership before changing a retained worker.\\n\";\nawait fs.writeFile(path.join(memory,\"MEMORY.md\"),\"- [Topic](topic.md)\\n\");await fs.writeFile(path.join(memory,\"topic.md\"),body);\nconst id=\"compiled-import-fixture\";\nawait fs.writeFile(path.join(state,\"memory-source.json\"),JSON.stringify({schemaVersion:1,source:\"delegatus\",phase:\"importing\",importId:id,changedAt:at}));\nasync function worker(name:string, frame:unknown){\n const child=Bun.spawn([process.execPath,path.join(cwd,\".next/server\",name)],{env:{...process.env},stdin:\"pipe\",stdout:\"pipe\",stderr:\"pipe\"});\n const deadline=setTimeout(()=>child.kill(\"SIGTERM\"),60000);\n try {\n  child.stdin.write(JSON.stringify(frame)+\"\\n\"); child.stdin.end();\n  const [out,err,exit]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);\n  assert.equal(exit,0,`compiled worker failed: ${err} ${out}`);\n  return out.trim().split(\"\\n\").map(line=>JSON.parse(line));\n }finally{clearTimeout(deadline);}\n}\nconst request={importId:id,previous:null,roots:{claudeHomes:[home],codexHomes:[]},at};\nassert.equal((await worker(\"memory-import-worker.js\",request)).at(-1).result.state,\"ready\");\nconst {readImportCandidates,writeImportRows}=await load(\"memory/importStore.ts\");\nconst rows=readImportCandidates(id).candidates;assert.equal(rows.length,1);\nawait writeImportRows(rows.map((row:any)=>({...row,dispositions:[{at,pass:\"compiled-disposition\",kind:\"drop\",ruleIds:[],occurrences:row.occurrences.map((o:any)=>o.id),reason:\"task-specific\",note:\"The fixture narrates one task.\"}]})));\nawait worker(\"memory-import-worker.js\",{...request,advance:true});\nassert.equal(JSON.parse(await fs.readFile(path.join(state,\"memory-source.json\"),\"utf8\")).phase,\"active\");\nassert.equal(await fs.readFile(path.join(memory,\"topic.md\"),\"utf8\"),body);\nconst {seedImport,importCandidate,IMPORT_AT,IMPORT_PROJECT}=await load(\"memory/fixtures/import.ts\");\nconst candidate=importCandidate(1);await seedImport([candidate]);\nconst {claimPass,patchPass}=await load(\"memory/curation/store.ts\");\nconst {readCuration}=await load(\"memory/curation/read.ts\");\nconst {applyCuration}=await load(\"memory/curation/apply.ts\");\nconst pass=claimPass({project:IMPORT_PROJECT,repoDir:null,now:Date.parse(IMPORT_AT)});assert.ok(pass);\nawait readCuration(pass,\"imports\");\napplyCuration(pass,{scopes:[{scope:candidate.suggestedScope,revision:0,order:[`adopt:${candidate.id}:0`]}],adopt:[{candidate:candidate.id,occurrences:candidate.occurrences.map((o:any)=>o.id),parts:[{to:candidate.suggestedScope,rule:\"Inspect ownership before changing a retained worker.\",why:\"This condition applies to recurring ownership changes.\"}],note:\"Retain the ownership check.\"}]},IMPORT_AT);\nconst live=await worker(\"task-page-worker.js\",{id:1,request:{kind:\"curation-undo\",passId:pass.id}});assert.equal(live.at(-1).curationRefusal,\"CURATE_LIVE\");\npatchPass(pass.id,{state:\"succeeded\",endedAt:\"2026-10-19T00:00:00.001Z\"});\nconst undo=await worker(\"task-page-worker.js\",{id:2,request:{kind:\"curation-undo\",passId:pass.id}});\nassert.equal(undo.at(-1).result.value.importUndo.state,\"undone\");\nconsole.log(JSON.stringify({compiledImport:true,compiledAdvance:true,sourceUnchanged:true,compiledUndo:true,liveUndoRefused:true}));\n",
+      "probeSourceSha256": "30e98b364fb8b47468550359555f1b6ad1d2e4f3de3a685b2f08e7d0bb7055a1",
+      "procedure": [
+        "Create private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR; set the Viewer control URL to a closed port.",
+        "Create one Claude index linking one topic in a fixture engine home; send a JSON request to .next/server/memory-import-worker.js through stdin.",
+        "Disposition the backed-up fixture candidate through writeImportRows, then run the compiled worker with advance:true. Require active and unchanged source bytes.",
+        "Use src/lib/memory/fixtures/import.ts, readCuration and applyCuration to create one imported rule. Require the compiled task-page worker to refuse a live Undo, then undo the completed pass."
+      ],
+      "result": {
+        "compiledImport": true,
+        "compiledAdvance": true,
+        "sourceUnchanged": true,
+        "compiledUndo": true,
+        "liveUndoRefused": true
+      }
+    }
+  },
+  "paidModelRuns": 0,
+  "sourceFilesSha256": {
+    "src/app/api/memory/source/route.test.ts": "31ad6c2b72c66c44282205d5513c54590f712c018220a5f7baf21a8cda61a83d",
+    "src/app/api/memory/source/route.ts": "1f69e3f3bd22c05caa1a9f06fbebec42c0159372c04ac598a9164b0e77243f2d",
+    "src/app/api/role-memory/route.ts": "8b68082fc5f8ab4d8d1ed590eaf4e7c3187b984a1a57d04ee14bf5caf16aa211",
+    "src/lib/links/taskPageWorker.ts": "eb6328347a50e5ce302bc15bf476b4cada6fe955f039d15291d87f9ff30bd158",
+    "src/lib/mcp/bindings.ts": "476d5abae82523057cacf981e517d30d923722222507f39dbbf958b8306701fe",
+    "src/lib/mcp/curateRules.test.ts": "a1d0535554a9004d64338b47e7644fe1abdc009db8629f06c658d9273c8ab457",
+    "src/lib/mcp/server.ts": "bab9ad79971dbf1be457ebdf12e818c5beab9791496998653e8ccb94973759d9",
+    "src/lib/memory/curation/apply.ts": "779c549b32d99eb570cf8a5f7c0771267d668a96bab5efd06dc7390950fb611f",
+    "src/lib/memory/curation/brief.ts": "851a209320db6aac6354ca5361147f2cef33b799ba6fbc25ffd7b6f5f1e13667",
+    "src/lib/memory/curation/curator.eval.test.ts": "72355adbabfccdd4c903a345044e56d2e2854771aceed045facc56a70ba9ba7c",
+    "src/lib/memory/curation/import.test.ts": "6347989908e64637e23c273d1c5d47d77bcaa53d4197af76c394c4608651def8",
+    "src/lib/memory/curation/importApply.ts": "736c4e858f76a3e1d3fe19a58380516a40b86dfe964d152660ed7c7ca5caf199",
+    "src/lib/memory/curation/read.ts": "51b006054aa702244dbf72e377d11c6f49faac4b0d133c56a6199ae768747928",
+    "src/lib/memory/curation/store.ts": "f45b25f7fbe8a6e45f7be3b96648988167878122811f27035ceacad9d5c2d0ef",
+    "src/lib/memory/fixtures/import.ts": "7080618bb94f2b10e9e14e6c22e39353b9f7b564180988e20520062980ad58dd",
+    "src/lib/memory/importController.ts": "c562e94d1c5b1dcabfd6ddcd9e78c94cc8aeb68415c7e29d0579aa7fa80f4790",
+    "src/lib/memory/importCuration.ts": "c3f5d205148638d2091f11173c48d9f5c1abe1011f3b26719009bcfca6834856",
+    "src/lib/memory/importHistory.ts": "779b1a536dcd1a860d0c577df6d7e11e9c6c563435e637f15751331f399391d1",
+    "src/lib/memory/importJob.ts": "9cf7c590b9e548ca8cf69cfcb7ebfdca8277162248b57fd1b36d21b2a6c5b51c",
+    "src/lib/memory/importLifecycle.test.ts": "7478b0492e4a9aa7c7c98323af083af18c66abb6b5ec072f8dd49031b441651f",
+    "src/lib/memory/importLifecycle.ts": "1f021db6eef2cac7f81883a7764bf2fb69b56579c9a5ee8c8d47112b2b154dcc",
+    "src/lib/memory/importService.test.ts": "350f92de4e54d64015e5369aaa4e6b712956383102b4ad7762c75469192a5cb2",
+    "src/lib/memory/importStatus.ts": "a61da05cb35153298da4c96ca9acdf1549d02ff452860d2a89c8757461cf0c7b",
+    "src/lib/memory/importStore.ts": "8b2a3e1ce3d7c90a6ea27c5caea18a88b14f74b10a669d47c87ddf65668d7a0c",
+    "src/lib/memory/importTypes.ts": "fa9dd3ffbe31994c12e50b52e6e0c8ca90462769390c3f425159cf7bedc4bb07",
+    "src/lib/memory/importWork.ts": "fb49acb24db48f17de515a14871f2298aa8ccbd8bdf55db5ae2f525587848614",
+    "src/lib/memory/privacy.ts": "94d817381af8c0deb02470a60b91a1ed35b50ba286c4a1d877f12d69b12b289b",
+    "src/lib/memory/privacyWork.ts": "2176e5712f2175115ead07cc975e36871a40b1e9d203bb14bb740a85ccaf3dbc",
+    "src/lib/memory/roleProblems.ts": "508dfeec4f5365e3ab453d362db7e7f619e31ddc15fc73b0ca26fec95d7d336d",
+    "src/lib/memory/roleStore.ts": "80e83d079d8958c0ea7d9c7659575e63a7cc40d756f256326480975e73925354",
+    "src/lib/memory/roleTypes.ts": "44456fd255491a64a3aaf04be56443a22261d61dcedcee37113797d05a7007f5",
+    "src/lib/memory/service.ts": "88c93d59f87986bc44cbcc8333dfca4004047f40507d77c7cf4cdf3606a79891",
+    "src/lib/memory/source.import.test.ts": "20ebb9067a87b0b60cc957843f3cc9b1d537bf29d6d1cb090a7c6a4008bc3af1",
+    "src/lib/memory/source.test.ts": "5afadfbac47e1e39ed97cad1b0be89d13d05f16e9026652d66c78a8494660247",
+    "src/lib/memory/source.ts": "16e3f6dec9a3b1b1dcc061a09fe516cd524445a8b190a889f5294f5ca98199b3",
+    "src/lib/memoryImport.worker.ts": "91a263daa234f68f2c9a19f123dd041153dfb456941ed077c02f655466bf4e3c",
+    "src/lib/taskPage.worker.ts": "d450dd4d7f30c09e0ff53d37af004aaa9cf6f4302f54ae6baba6d2491b6f744d",
+    "src/lib/viewerLoopMonitor.ts": "14e8f6d7bf90381aa18b5b3b9fde9d6ef7735d479bbf97e9d3c38e3350aaa542"
+  },
+  "dependencyLockSha256": "3ae798ca5037e503d4f0937eb27e83a824191723c7ad1cd606d545a16774c6ea",
+  "earlierPinnedBindingComparison": [
+    {
+      "name": "base-existing-bindings",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/mcp/bindings.test.ts",
+        "-t",
+        "task placement bindings require atomic guards|MCP task writes normalize holds"
+      ],
+      "exit": 1,
+      "expected": null,
+      "startedAt": "2026-10-19T14:15:57.706943+00:00",
+      "elapsedSeconds": 2.632,
+      "source": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+      "logSha256": "d9e472a6a2ee3f3779b3cf59c85c4aebeb758b4115d36315976cefff2ffbd24a",
+      "tests": [
+        {
+          "outcome": "fail",
+          "name": "task placement bindings require atomic guards and classify field refusals as non-retryable"
+        },
+        {
+          "outcome": "pass",
+          "name": "MCP task writes normalize holds, preserve step operator reasons and server provenance"
+        }
+      ]
+    },
+    {
+      "name": "head-existing-bindings",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/mcp/bindings.test.ts",
+        "-t",
+        "task placement bindings require atomic guards|MCP task writes normalize holds"
+      ],
+      "exit": 1,
+      "expected": null,
+      "startedAt": "2026-10-19T14:16:00.342318+00:00",
+      "elapsedSeconds": 2.702,
+      "source": "344c41c9e303a0733a8ccdea5ed4f0ea2606ee1c",
+      "logSha256": "95b33362fb119b3ca1e17d18920a89d9b63a353b25a58214c21cbbfd38d9fabc",
+      "tests": [
+        {
+          "outcome": "fail",
+          "name": "task placement bindings require atomic guards and classify field refusals as non-retryable"
+        },
+        {
+          "outcome": "pass",
+          "name": "MCP task writes normalize holds, preserve step operator reasons and server provenance"
+        }
+      ]
+    }
+  ]
+}

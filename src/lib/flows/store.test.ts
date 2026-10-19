@@ -213,28 +213,34 @@ test("flow row patches hold the latest-row merge and commit under one process-sh
     closedAt: null,
   } satisfies Flow;
   const resultFile = path.join(sandbox, "writer-result.json");
-  const childState: { exit: Promise<number> | null } = { exit: null };
+  const readyFile = path.join(sandbox, "writer-ready");
+  const releaseFile = path.join(sandbox, "writer-release");
+  let child: ReturnType<typeof Bun.spawn> | null = null;
   try {
     saveFlows([flow]);
-    patchFlowRows([flow.id], (current) => {
-      const child = Bun.spawn({
-        cmd: [process.execPath, path.join(import.meta.dir, "../state/hotStateAuthority.sqliteChild.ts"), resultFile, "write"],
-        cwd: process.cwd(),
-        env: { ...process.env, LLV_STATE_DIR: sandbox },
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      childState.exit = child.exited;
-      Bun.sleepSync(100);
+    child = Bun.spawn({
+      cmd: [process.execPath, path.join(import.meta.dir, "../state/hotStateAuthority.sqliteChild.ts"), resultFile, "write", readyFile, releaseFile],
+      cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: sandbox }, stdout: "pipe", stderr: "pipe",
+    });
+    const deadline = performance.now() + 4_000;
+    while (!fs.existsSync(readyFile)) {
+      if (child.exitCode !== null || performance.now() >= deadline) throw new Error("cross-process writer did not finish its read");
+      await Bun.sleep(5);
+    }
+    patchFlowRows([flow.id], current => {
+      // The peer holds the previous committed generation and can only save
+      // after this collection lease is released.
+      fs.writeFileSync(releaseFile, "write");
       expect(fs.existsSync(resultFile)).toBe(false);
       current[0]!.stateDetail = "atomic-patch";
       return current;
     });
-    const childExit = childState.exit;
-    if (!childExit) throw new Error("cross-process writer did not start");
-    expect(await childExit).toBe(0);
+    expect(await child.exited).toBe(0);
+    expect(JSON.parse(fs.readFileSync(resultFile, "utf8"))).toMatchObject({ ok: true });
     expect(loadFlows()[0]!.stateDetail).toBe("atomic-patch");
   } finally {
+    if (child?.exitCode === null) child.kill();
+    if (child) await child.exited;
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousState;
     fs.rmSync(sandbox, { recursive: true, force: true });

@@ -455,7 +455,8 @@ const stateSchema = [
     release TEXT,
     imported_at TEXT NOT NULL,
     mirror_sha256 TEXT,
-    mirror_revision INTEGER
+    mirror_revision INTEGER,
+    reconciled_sha256 TEXT
   )`,
 ];
 const stateSchemaNames = stateSchema.map(sql => /^CREATE (?:UNIQUE )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)/.exec(sql)![1]!);
@@ -476,7 +477,8 @@ function openRawDatabase(filename: string): Database {
           && pipelineControllerReferencesReady(db, names)
           && pipelineEvidenceIndexReady(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
-          && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")) return db;
+          && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")
+          && db.query<{ name: string }, []>("PRAGMA table_info(state_imports)").all().some(row => row.name === "reconciled_sha256")) return db;
         // The readiness check above is read-only. Any path below can mutate
         // the shared database, so an older or partial schema may only be
         // repaired by the release that currently owns SQLite writes.
@@ -489,6 +491,10 @@ function openRawDatabase(filename: string): Database {
         const collectionColumns = db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all();
         if (!collectionColumns.some((column) => column.name === "change_floor")) {
           db.exec("ALTER TABLE state_collections ADD COLUMN change_floor INTEGER NOT NULL DEFAULT 0");
+        }
+        const importColumns = db.query<{ name: string }, []>("PRAGMA table_info(state_imports)").all();
+        if (!importColumns.some((column) => column.name === "reconciled_sha256")) {
+          db.exec("ALTER TABLE state_imports ADD COLUMN reconciled_sha256 TEXT");
         }
         installPipelineControllerIndex(db, path.dirname(filename));
         installPipelineControllerSchedule(db, path.dirname(filename));
@@ -673,6 +679,7 @@ export interface StateImportRecord {
   importedAt: string;
   mirrorSha256: string | null;
   mirrorRevision: number | null;
+  reconciledSha256: string | null;
 }
 
 export interface StateImportRow {
@@ -700,6 +707,7 @@ type StateImportDbRow = {
   imported_at: string;
   mirror_sha256: string | null;
   mirror_revision: number | null;
+  reconciled_sha256: string | null;
 };
 
 function stateImportRecord(row: StateImportDbRow): StateImportRecord {
@@ -715,6 +723,7 @@ function stateImportRecord(row: StateImportDbRow): StateImportRecord {
     importedAt: row.imported_at,
     mirrorSha256: row.mirror_sha256,
     mirrorRevision: row.mirror_revision,
+    reconciledSha256: row.reconciled_sha256,
   };
 }
 
@@ -1481,6 +1490,22 @@ export class SqliteStateCollection<T> {
     `).all(project, findingKey).map(row => row.row_key);
   }
 
+  /** Release an evicted document owner's connection. */
+  close(): void {
+    this.readDb.close();
+    this.localCache = null;
+    this.revisionCache = null;
+  }
+
+  /** Keyset page over a collection's primary key; no unrelated payload reads. */
+  keyPage(after: string, limit: number): T[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 512) throw new Error("invalid state page limit");
+    return this.readDb.query<{ value_json: string }, [string, string, number]>(`
+      SELECT value_json FROM state_rows
+      WHERE collection = ? AND row_key > ? ORDER BY row_key LIMIT ?
+    `).all(this.options.collection, after, limit).map(row => this.decodeRow(row.value_json)).filter((row): row is T => row !== null).map(row => this.options.clone(row));
+  }
+
   get(rowKey: string): T | null {
     const row = this.readDb.query<Pick<CollectionRow, "value_json">, [string, string]>(
       "SELECT value_json FROM state_rows WHERE collection = ? AND row_key = ?",
@@ -2003,7 +2028,7 @@ export class SqliteStateCollection<T> {
       order instead of keeping their held position. */
   patchSync<C = never>(
     prepare: () => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[]; companion?: CompanionPatch<C> },
-    options: { fenceOwner?: boolean; companion?: SqliteStateCollection<C> } = {},
+    options: { fenceOwner?: boolean; companion?: SqliteStateCollection<C>; afterPersist?: (db: Database) => void } = {},
   ): void {
     const authorize = options.fenceOwner
       ? () => assertSqliteInitializationAuthority(this.filename, true)
@@ -2031,6 +2056,7 @@ export class SqliteStateCollection<T> {
             : undefined;
           this.persistReplacement(ownLease!, patch.records, true, patch.deleteKeys ?? [], authorize, new Set(patch.appendKeys ?? []),
             companionWrite as (CompanionPatch<unknown> & { collection: SqliteStateCollection<unknown>; lease: string }) | undefined, db);
+          options.afterPersist?.(db);
         }, this.options.collection);
       } finally { db.close(); }
     } finally {

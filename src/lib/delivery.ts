@@ -18,7 +18,7 @@ import {
 import { deliveryFence } from "@/lib/accounts/migration/coordinator";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { deliverToTranscriptHost, readTranscriptHosts, type HostDeliveryOutcome, type TranscriptHost } from "@/lib/agent/transcriptHost";
-import { admitTranscriptConversation } from "@/lib/conversation/transcriptAdmission";
+import { admitTranscriptConversationOffLoop } from "@/lib/conversation/transcriptAdmission";
 import { listFiles } from "@/lib/scanner";
 import { pathAllowed } from "@/lib/scanner/roots";
 import { transcriptLiveOwnership, type TranscriptLiveOwnership } from "@/lib/scanner/transcripts";
@@ -467,7 +467,7 @@ interface ResumeConversationOverrides {
   resumeEligibility?: typeof resumeEligibility;
   registry?: AgentRegistry;
   recover?: typeof recoverDeadStructuredConversation;
-  admit?: typeof admitTranscriptConversation;
+  admit?: (registry: Parameters<typeof admitTranscriptConversationOffLoop>[0], entry: Parameters<typeof admitTranscriptConversationOffLoop>[1], dependencies: Parameters<typeof admitTranscriptConversationOffLoop>[2]) => Awaited<ReturnType<typeof admitTranscriptConversationOffLoop>> | ReturnType<typeof admitTranscriptConversationOffLoop>;
   livePaneHost?: typeof livePaneHost;
   liveOwnership?: (entry: FileEntry) => TranscriptLiveOwnership | null;
   deliver?: typeof deliverToTranscriptHost;
@@ -563,8 +563,8 @@ export async function resumeConversation(
      bridge take it; a refusal the bridge can name does not consume the legacy
      ladder's turn, unless something outside the viewer owns the session. */
   let admissionRefusal: string | null = null;
-  /* Liveness is decided once, by the uncapped destructive-operation probe the
-     delete routes use: the scanner's `entry.proc` misses an idle or aged-out
+  /* Liveness uses the uncapped destructive-operation probe the delete routes
+     use: the scanner's `entry.proc` misses an idle or aged-out
      terminal owner, which is this population exactly. The evidence class
      travels with it — admission refuses differently for a process that names
      this session than for one merely sitting in its directory. */
@@ -576,8 +576,8 @@ export async function resumeConversation(
      foreign terminal admission refuses. */
   const paneHosted = ownership !== null && await (overrides.livePaneHost ?? livePaneHost)(filePath) !== null;
   if (!known && !paneHosted) {
-    const admitted = (overrides.admit ?? admitTranscriptConversation)(registry, entry, {
-      liveOwnership: () => ownership,
+    const admitted = await (overrides.admit ?? admitTranscriptConversationOffLoop)(registry, entry, {
+      liveOwnership: overrides.liveOwnership ?? transcriptLiveOwnership,
     });
     if (!admitted.ok && admitted.blocking) return failure(admitted.reason, 409);
     if (!admitted.ok) admissionRefusal = admitted.reason;
