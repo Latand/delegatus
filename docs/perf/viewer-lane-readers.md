@@ -119,3 +119,11 @@ The runtime-host rehearsal under Bun 1.4.0 completed succession in 507 ms and
 answered 27/27 stable-listener and 27/27 runtime-socket probes over 15 seconds.
 It used private state and ephemeral endpoints. The final pre-push gate also
 checks the scheduler checkpoint regression and adjacent startup/store tests.
+
+
+Main advanced during verification. Its additional loop-monitor label shared a
+line with this branch's type union addition. Relocating this branch's label
+removes that textual conflict. The artifact records measured and final source
+fingerprints and a byte-identical Bun-transpiled JavaScript digest for that
+file; all other production source bytes match the replay. This final type-only
+edit cannot change the measured runtime work.

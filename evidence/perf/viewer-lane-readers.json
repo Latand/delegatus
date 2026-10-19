@@ -2119,5 +2119,16 @@
         }
       ]
     }
-  ]
+  ],
+  "sourceEquivalence": {
+    "measuredSourceSha256": "4724ba5bbc3603b88c240311028c02ec357dac55d82a520aa59519df10137a6d",
+    "finalSourceSha256": "d4d5f97bb18798f866078b0a52c6df5a860cf7526060db9a839ac06af2b5ddcc",
+    "changedFiles": [
+      {
+        "path": "src/lib/viewerLoopMonitor.ts",
+        "emittedJavaScriptSha256": "39bad85ebcb55e3f9a51d6ae9b1848f7ccc018ff26f0f62911c2c3b2f90f93d8",
+        "reason": "Relocate an operation-label type union member away from a concurrently changed line; emitted JavaScript is byte-identical."
+      }
+    ]
+  }
 }
