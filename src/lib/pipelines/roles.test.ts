@@ -19,7 +19,8 @@ const REGISTRY_LOOKUP = (roleId: string) => {
 };
 
 test("builder isolation keeps edits and commits in its assigned worktree", () => {
-  for (const params of [{}, { mode: "apply-fixes" }]) {
+  const variants: Record<string, string>[] = [{}, { mode: "apply-fixes" }];
+  for (const params of variants) {
     const scaffold = pipelineRoleLookup("builder", params)?.promptScaffold ?? "";
     expect(scaffold).toContain("Edit, stage and commit in the assigned worktree");
     expect(scaffold).toContain("Use scratch exports for builds, tests, probes and renders");
