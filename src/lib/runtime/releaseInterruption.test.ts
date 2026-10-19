@@ -2037,8 +2037,11 @@ test("a transcript that ends on a partial record holds its row, and the re-probe
     /* The record is finished: the same process decides the row before it
        adopts it, records the cut and continues it. */
     fs.writeFileSync(cut.artifactPath, whole);
-    await runScheduledProbe(() => ledger.writes.length > 0);
-    await settle(() => ledger.writes.length > 0);
+    // Delivery can start before the awaited startup pass publishes completion.
+    // Keep its registry alive until both serving outcomes have arrived.
+    const recovered = () => ledger.writes.length > 0 && structuredStartupDeferral() === null;
+    await runScheduledProbe(recovered);
+    await settle(recovered);
     expect(restartContinuations(ledger)).toHaveLength(1);
     expect(restartCuts(cut.registryFile)).toHaveLength(1);
     expect(structuredStartupDeferral()).toBeNull();
@@ -2790,8 +2793,9 @@ test.each([
     expect(structuredStartupDeferral()?.hostKeys).toEqual([cut.hostKey]);
 
     repair();
-    await runScheduledProbe(() => ledger.writes.length > 0, continuations > 0 ? 400 : 150);
-    await settle(() => ledger.writes.length > 0, continuations > 0 ? 400 : 150);
+    const recovered = () => ledger.writes.length > 0 && structuredStartupDeferral() === null;
+    await runScheduledProbe(recovered, continuations > 0 ? 400 : 150);
+    await settle(recovered, continuations > 0 ? 400 : 150);
     expect(restartContinuations(ledger)).toHaveLength(continuations);
     expect(restartCuts(cut.registryFile).map(({ checkpoint }) => checkpoint.backgroundTasks))
       .toEqual(continuations > 0 ? [["background task gatetask1"]] : []);
