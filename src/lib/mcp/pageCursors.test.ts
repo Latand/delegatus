@@ -38,11 +38,13 @@ test("unidentified HTTP adapters can page while handles remain isolated by conne
   const call = (caller: Parameters<typeof runAsMcpHttpCaller>[0], cursor?: unknown) =>
     runAsMcpHttpCaller(caller, () => service.callTool("search_transcripts", { query: "quartz", cursor }).then(payload));
 
-  // Compatibility probes with no identity retain pagination within that adapter.
   const first = await call({});
-  expect((await call({}, first.nextCursor)).items).toEqual(["private-adapter-state"]);
-  // Real HTTP compatibility adapters carry the negotiated connection id.
-  expect(await call({ paginationIdentity: "other-connection" }, first.nextCursor)).toMatchObject({ cursorReset: true, items: ["first"] });
+  // Missing connection identities receive distinct caller scopes, never one shared compatibility scope.
+  expect(await call({}, first.nextCursor)).toMatchObject({ cursorReset: true, items: ["first"] });
+  const compatibilityConnection = { paginationIdentity: "connection-a" };
+  const connected = await call(compatibilityConnection);
+  expect((await call({ paginationIdentity: "connection-a" }, connected.nextCursor)).items).toEqual(["private-adapter-state"]);
+  expect(await call({ paginationIdentity: "other-connection" }, connected.nextCursor)).toMatchObject({ cursorReset: true, items: ["first"] });
 });
 
 test("the byte bound evicts oldest state and refuses oversized entries without discarding valid ones", () => {
@@ -165,7 +167,8 @@ const families = [
 ] as const;
 
 for (const [tool, field] of families) test(`${tool}/${field}: round-trip, caller/tool/filter refusal, expiry and FIFO eviction`, async () => {
-  let now = 1000, serial = 0, calls = 0;
+  const now = 1000;
+  let serial = 0, calls = 0;
   const store = new McpPageCursorStore({ now: () => now, maxEntries: 2,
     token: () => String(++serial).padStart(22, "0") });
   const service = withMcpPageCursors({ async callTool(toolName, args) {
@@ -192,8 +195,22 @@ for (const [tool, field] of families) test(`${tool}/${field}: round-trip, caller
     expect(refused.rows).toEqual(["first"]);
   }
   expect(calls).toBe(before + 4);
-  now += MCP_CURSOR_TTL_MS;
-  expect(await call({ query: "one", cursor })).toMatchObject({ ok: true, cursorReset: true, rows: ["first"] });
+  let expiryNow = 1000;
+  const expiryStore = new McpPageCursorStore({ now: () => expiryNow, token: () => "e".repeat(22) });
+  const expiryService = withMcpPageCursors({ async callTool(toolName, args) {
+    return { ok: true, toolName: toolName as McpToolName, clientRequestId: null, replayed: false,
+      rows: [args.cursor ? "private-state-one" : "first"], [field]: args.cursor ? null : "private-state-one" };
+  } }, expiryStore);
+  const expiryCall = (args: Record<string, unknown>) => runAsMcpHttpCaller({ capability: "expiry-caller" },
+    () => expiryService.callTool(tool, args).then(payload));
+  const expiryFirst = await expiryCall({ query: "one" });
+  const expiryHandle = expiryFirst[field];
+  // The same retained handle resumes before expiry, with no intervening insertions.
+  expect(await expiryCall({ query: "one", cursor: expiryHandle })).toMatchObject({ rows: ["private-state-one"] });
+  expiryNow += MCP_CURSOR_TTL_MS;
+  const expired = await expiryCall({ query: "one", cursor: expiryHandle });
+  expect(expired).toMatchObject({ ok: true, cursorReset: true, rows: ["first"] });
+  expect(JSON.stringify(expired)).not.toContain("private-state-one");
   const held = await call({ query: "two" });
   await call({ query: "three" });
   // Reading/replaying the first entry does not move it to the end of FIFO.
@@ -217,7 +234,8 @@ test("owner history retains its cursor-only continuation contract", async () => 
 });
 
 test("nested relay tool cursors bind caller and subtool, retain empty continuation arguments, expire and evict", async () => {
-  let now = 0, serial = 0, calls = 0;
+  const now = 0;
+  let serial = 0, calls = 0;
   const service = withMcpPageCursors({ async callTool(toolName, args) {
     calls++;
     const requested = args.calls as Array<{ tool: string; arguments: Record<string, unknown>; cursor?: string }>;
@@ -239,8 +257,27 @@ test("nested relay tool cursors bind caller and subtool, retain empty continuati
     expect(JSON.stringify(reply)).not.toContain("relay-state-read");
   }
   expect(calls).toBe(before + 3);
-  now = MCP_CURSOR_TTL_MS;
-  expect(await call("read", {}, handle)).toMatchObject({ cursorReset: true });
+  let expiryNow = 0;
+  let expirySerial = 0;
+  const expiryStore = new McpPageCursorStore({ now: () => expiryNow, maxEntries: 2,
+    token: () => `expiry${String(++expirySerial).padStart(16, "0")}` });
+  const expiryService = withMcpPageCursors({ async callTool(toolName, args) {
+    const requested = args.calls as Array<{ tool: string; arguments: Record<string, unknown>; cursor?: string }>;
+    return { ok: true, toolName: toolName as McpToolName, clientRequestId: null, replayed: false,
+      results: requested.map(call => ({ tool: call.tool, ...(call.cursor ? { page_of: call.cursor } : { arguments: call.arguments }),
+        next_cursor: call.cursor ? null : `relay-state-${call.tool}`, output: call.cursor ? `relay-state-${call.tool}` : "first" })) };
+  } }, expiryStore);
+  const expiryCall = (tool: string, argumentsValue: Record<string, unknown>, cursor?: unknown) => runAsMcpHttpCaller({ capability: "relay-expiry-caller" },
+    () => expiryService.callTool("relay_service_tools", { op: "call", calls: [{ tool, arguments: argumentsValue, ...(cursor ? { cursor } : {}) }] }).then(payload));
+  const expiryFirst = await expiryCall("read", { query: "one" });
+  const expiryHandle = ((expiryFirst.results as Array<Record<string, unknown>>)[0]!).next_cursor;
+  expect((await expiryCall("read", {}, expiryHandle)).results).toEqual([
+    { tool: "read", page_of: expiryHandle, next_cursor: null, output: "relay-state-read" },
+  ]);
+  expiryNow = MCP_CURSOR_TTL_MS;
+  const expired = await expiryCall("read", {}, expiryHandle);
+  expect(expired).toMatchObject({ cursorReset: true, results: [{ output: "first" }] });
+  expect(JSON.stringify(expired)).not.toContain("relay-state-read");
   const held = await call("one", {});
   await call("two", {}); await call("three", {});
   expect(await call("one", {}, (held.results as Array<Record<string, unknown>>)[0]!.next_cursor)).toMatchObject({ cursorReset: true });

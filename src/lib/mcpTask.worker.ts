@@ -104,7 +104,8 @@ async function httpTaskCall(request: TaskExecutorRequest, signal: AbortSignal): 
     const response = await transport.handleRequest(new Request(url, { method: "POST", headers, signal }), {
       parsedBody: body,
       authInfo: { token: request.caller.capability ?? "local-peer", clientId: MCP_HTTP_CLIENT_ID, scopes: [],
-        extra: { nativePeer: request.caller.nativePeer, unidentified: !request.caller.capability && !request.caller.nativePeer, cancelSignal: () => signal } },
+        extra: { nativePeer: request.caller.nativePeer, unidentified: !request.caller.capability && !request.caller.nativePeer,
+          paginationIdentity: request.caller.paginationIdentity, cancelSignal: () => signal } },
     });
     return await serialized(response);
   } finally { await server.close().catch(() => undefined); }

@@ -79,9 +79,16 @@ export function mcpPageCursorCaller(): string | null {
   const caller = currentMcpHttpCaller();
   if (caller) return caller.capability ? hash(["capability", caller.capability])
     : caller.nativePeer?.startIdentity && caller.nativePeer.bootEpoch ? hash(["native", caller.nativePeer])
-      : hash(["unidentified-http-adapter", caller.paginationIdentity ?? "compatibility"]);
+      : hash(["unidentified-http-adapter", caller.paginationIdentity ?? unidentifiedCallerIdentity(caller)]);
   // Candidate probes and local stdio services have one caller per process.
   return hash(["local", process.pid, process.env.LLV_SPAWN_CAPABILITY ?? null]);
+}
+
+const unidentifiedCallerIds = new WeakMap<object, string>();
+function unidentifiedCallerIdentity(caller: object): string {
+  let identity = unidentifiedCallerIds.get(caller);
+  if (!identity) { identity = randomBytes(16).toString("base64url"); unidentifiedCallerIds.set(caller, identity); }
+  return identity;
 }
 
 const RECEIPT_OWNER = "__mcpPageCaller";

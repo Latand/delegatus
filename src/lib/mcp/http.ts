@@ -242,7 +242,7 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
         // Keep ingress parsing and executor admission on separate loop turns.
         await new Promise<void>(resolve => setImmediate(resolve));
         return await viewerTaskExecutor().callHttpTool(requested, body, request,
-          nativePeer ? { nativePeer } : unidentified ? {} : { capability }, {
+          nativePeer ? { nativePeer } : unidentified ? { paginationIdentity: connectionId || crypto.randomUUID() } : { capability }, {
             signal: registered.get(inflightKey(capability, connectionId, messages[0]?.id))?.signal ?? request.signal,
           });
       } catch (error) {
@@ -260,7 +260,7 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
         token: capability,
         clientId: MCP_HTTP_CLIENT_ID,
         scopes: [],
-        extra: { nativePeer, unidentified, paginationIdentity: unidentified ? connectionId : undefined,
+        extra: { nativePeer, unidentified, paginationIdentity: unidentified ? connectionId || crypto.randomUUID() : undefined,
           cancelSignal: (requestId: unknown) => registered.get(inflightKey(capability, connectionId, requestId))?.signal ?? null },
       },
     });
