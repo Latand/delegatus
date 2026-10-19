@@ -72,8 +72,11 @@ export type AttentionCallerAuthority =
  * native admission reason and the route to continue under a Delegatus host.
  */
 export function attentionCallerAuthority(sources: AttentionCallerSources): AttentionCallerAuthority {
-  const hosted = sources.hosted();
   const capabilityConversationId = sources.capabilityCallerConversationId?.() ?? null;
+  if (sources.capabilityPresented?.() && !capabilityConversationId) {
+    return { kind: "unidentified", admission: nativeCallerRefusal("capability-unresolved") };
+  }
+  const hosted = sources.hosted();
 
   const byPid = new Map<number, HostedConversation>();
   const byId = new Map<string, HostedConversation>();
@@ -103,10 +106,6 @@ export function attentionCallerAuthority(sources: AttentionCallerSources): Atten
      stale or tampered with — every reading fails closed. */
   if (pidMatch && capabilityConversationId && pidMatch.conversationId !== capabilityConversationId) {
     return { kind: "unidentified", ...(sources.nativeCaller ? { admission: nativeCallerRefusal("capability-conflict") } : {}) };
-  }
-
-  if (sources.capabilityPresented?.() && !capabilityConversationId) {
-    return { kind: "unidentified", admission: nativeCallerRefusal("capability-unresolved") };
   }
 
   /* The pid walk is physical and ephemeral; the capability is admission
