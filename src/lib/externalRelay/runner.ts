@@ -1,3 +1,5 @@
+import { hasInboundMedia, prepareInboundMedia, writeInboundAgentInput } from "./mediaInput";
+import { validateAnswerComposition } from "./composition";
 import { answerCapabilities, checkedAnswerV2, checkedRoundV2, withAnswerParts, answerFiles, type AnswerDrop } from "./answerV2";
 import { stageGeneratedAttachments, uploadAnswerAttachments, type StagedAttachment } from "./attachments";
 import { openOwnerAnswer } from "./ownerAnswer";
@@ -172,11 +174,17 @@ export async function completeRelayRequest(
       if (isUnknownFeatureRefusal(error)) await onUnknownFeature?.();
       if (error instanceof ExternalRelayError) {
         const v2 = body.outcome === "answered" && body.answer.format !== undefined;
+        if (v2 && body.outcome === "answered" && (
+          error.status === 400 && error.code === "malformed" && body.answer.mentions?.length
+          || error.status === 422 && (body.answer.attachments?.some(file => file.kind === "photo") || /!\[/.test(body.answer.text))))
+          return { body, delivery: "refused" };
         if (v2 && error.status === 409 && error.code === "already_completed") return { body: failed(body.lease_id, "invalid_answer"), delivery: "refused" };
         if (v2 && !downgraded && (error.status === 422 && ["invalid_format", "attachment_not_ready"].includes(error.code) || error.status === 415 || error.status === 400 && error.code === "malformed")) {
           downgraded = true;
           if (body.outcome === "answered" && body.answer.text.trim() && error.status === 422 && error.code === "attachment_not_ready") {
             const answer = { ...body.answer }; delete answer.attachments;
+            // Explicit source refs cannot outlive the selected uploads.
+            if (/!\[/.test(answer.text)) { body = failed(body.lease_id, "invalid_answer"); continue; }
             body = { ...body, answer };
           } else if (body.outcome === "answered" && body.answer.text.trim() && [...body.answer.text].length <= plainMax) {
             const { action, text, reply_to } = body.answer;
@@ -295,6 +303,7 @@ export async function runClaimedRequest(
   let finishing: Promise<ExternalRelayCompletion | null> | null = null;
   let ownerParts: ReturnType<typeof openOwnerAnswer> | null = null;
   let stagedAttachments: StagedAttachment[] = [];
+  let inbound: Awaited<ReturnType<typeof prepareInboundMedia>> | null = null;
   const answerDrops: AnswerDrop[] = [];
   const generatedFiles: string[] = [];
   const generatedSources = new Map<string, Set<string>>();
@@ -314,6 +323,10 @@ export async function runClaimedRequest(
       // Persist the local decision before any delivery wait: a restart must
       // leave the generated answer and early declines inspectable.
       if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
+      if (body.outcome === "answered" && caps?.rich && request) {
+        try { validateAnswerComposition(body.answer, request, stagedAttachments.map(file => ({ attachment_id: file.id, kind: file.kind }))); }
+        catch (error) { answerDrops.push({ part: "answer", reason: error instanceof ExternalRelayError ? error.code : "malformed" }); body = failed(body.lease_id, "invalid_answer"); }
+      }
       recorder?.finish({
         outcome:
           body.outcome === "answered"
@@ -342,6 +355,10 @@ export async function runClaimedRequest(
           if (allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
         }
         if (body.outcome === "answered" && !body.answer.text.trim() && !body.answer.attachments?.length) body = failed(body.lease_id, "invalid_answer");
+      }
+      if (body.outcome === "answered" && caps?.rich && request) {
+        try { validateAnswerComposition(body.answer, request, stagedAttachments.map(file => ({ attachment_id: file.id, kind: file.kind })), body.answer.attachments ?? []); }
+        catch (error) { answerDrops.push({ part: "answer", reason: error instanceof ExternalRelayError ? error.code : "malformed" }); body = failed(body.lease_id, "invalid_answer"); }
       }
       if (body.outcome === "answered" && body.answer.action === "reply" && caps?.rich && !body.answer.text.trim() && !body.answer.attachments?.length) body = failed(body.lease_id, "invalid_answer");
       if (caps?.rich) recorder?.annotateV2({ drops: answerDrops, attachments: stagedAttachments.map(({id,kind,filename,size,sha256}) => ({attachment_id:id,kind,filename,bytes:size,sha256})), ...(body.outcome === "answered" ? { answer: body.answer } : {outcome:`${body.outcome}:${body.reason}`}) });
@@ -692,6 +709,12 @@ export async function runClaimedRequest(
         return acked && !leaseUnavailable;
       },
     };
+    if (hasInboundMedia(request)) {
+      if (!await lease.ack()) return null;
+      inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at,
+        authorize: () => { if (leaseUnavailable || releaseRequested || allowOwnerReply && !allowOwnerReply()) throw new ExternalRelayError("lease_lost", 409); } });
+      callAbort.signal.throwIfAborted();
+    }
     const hydrated = await hydrateToolIndex(relay, request, lease, runtime, deadline.at);
     request.input = hydrated.request.input;
     callAbort.signal.throwIfAborted();
@@ -737,6 +760,16 @@ export async function runClaimedRequest(
           await releaseConversationAsync(conversation.id, { state: "running", runningRequestId: requestId,
             pendingCursor: { operationId: `relay-owner-${requestId}`, seen: turn.seen, staticDigest: turn.digest } }, Date.now() + 5000);
         }
+        const agentPrompt = (conversation ? persistentPrompt : roundPrompt) + (inbound?.prompt ? "\n" + inbound.prompt : "");
+        const roundDirectory = loop ? path.join(runDir, `round-${rounds}`) : runDir;
+        let inputFile: string | undefined;
+        if (!owner && target.engine === "claude" && inbound?.files.length) {
+          await fs.promises.mkdir(roundDirectory, { recursive: true, mode: 0o700 });
+          callAbort.signal.throwIfAborted();
+          inputFile = await writeInboundAgentInput(inbound.files, agentPrompt, roundDirectory, callAbort.signal,
+            () => { if (leaseUnavailable || releaseRequested) throw new ExternalRelayError("lease_lost", 409); });
+          callAbort.signal.throwIfAborted();
+        }
         steps?.observe({});
         stepLog = path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "stdout.log");
         run = prototype ? runPrototypeAnswer(prototype, owner!.messageId, () => {
@@ -745,6 +778,7 @@ export async function runClaimedRequest(
           ...(conversation?.conversationId ? { continuation: { conversationId: conversation.conversationId, prompt: turn!.prompt } } : {}),
           authorize: () => { if (leaseUnavailable || callAbort.signal.aborted || !allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
           credentials: [relay.credential],
+          inboundContext: inbound?.prompt,
           request, owner, target, deadline, accountId: selectedAccount().accountId,
           hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
           onConversation: async (conversationId, initialPrompt) => {
@@ -769,14 +803,16 @@ export async function runClaimedRequest(
           model: target.model,
           effort: target.effort,
           account: selectedAccount(),
-          ["prompt"]: conversation ? persistentPrompt : roundPrompt,
+          ["prompt"]: agentPrompt,
+          ...(inputFile ? { inputFile } : {}),
+          ...(inbound?.files.length ? { inputImages: inbound.files.filter(file => file.mime_type.startsWith("image/")).map(file => file.path) } : {}),
           schema: withAnswerParts(loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent }))
             : ownerTools ? (ownerTools.sawUnknown ? replyAnswerSchema : ownerTools.actionSent ? answerSchema : offersHandoff(request) ? handoffAnswerSchema : answerSchema)
               : offersHandoff(request) ? handoffAnswerSchema : answerSchema, caps!),
           runDir: loop ? path.join(runDir, `round-${rounds}`) : runDir,
           hardCapMs: target.hardCapMinutes * 60_000,
           webSearch: profile.webSearch,
-          ...(caps?.generate ? { imageGeneration: { readableRoot: conversation?.cwd ?? path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "cwd") } } : {}),
+          ...(caps?.generate ? { imageGeneration: { readableRoot: conversation?.cwd ?? path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "cwd"), ...(inbound?.files.length ? { readableMediaRoot: path.dirname(inbound.files[0]!.path) } : {}) } } : {}),
           runtime,
           onEvent: (event) => {
             if (steps) return;
@@ -928,6 +964,7 @@ export async function runClaimedRequest(
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     callAbort.abort();
     await ownerParts?.dispose();
+    await inbound?.dispose();
     for (const file of generatedFiles) { try { await fs.promises.rm(file, {force:true}); } catch { console.error("Relay generated image cleanup failed"); } }
     await ownerTools?.dispose();
     let releasePin = true;

@@ -266,6 +266,7 @@ export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
   const rich = switches.rich_media && relay?.features?.includes("relay_rich_messages");
   const features = [...CLAIM_FEATURES,
     ...(relay?.features?.includes(RELAY_TOOLS_ON_DEMAND) ? [RELAY_TOOLS_ON_DEMAND] : []),
+    ...(relay?.features?.includes("relay_media_in") ? ["relay_media_in"] : []),
     ...(rich ? ["relay_rich_messages", ...(relay?.features?.includes("relay_media_out") ? ["relay_media_out"] : [])] : [])];
   return { kinds: switches.compact ? ["answer", "compact"] : ["answer"],
     features: switches.owner_tools && relay?.features?.includes(RELAY_OWNER_TOOLS)
