@@ -725,7 +725,7 @@ export async function reconcileStructuredSpawnReplay(
       claimOwner: null,
       pendingAction: null,
     } : undefined;
-    const recovered = registry.recoverStructuredSpawnFromEvidence(launchId, evidence);
+    const recovered = (await registry.deliveryWriteOrBusy({ label: "registry.recoverStructuredSpawnFromEvidence" }, registry.recoverStructuredSpawnFromEvidence.bind(registry, launchId, evidence)));
     if (recovered.kind === "settled") {
       return { ...recovered.receipt, initialMessage: "delivered" };
     }
@@ -890,8 +890,8 @@ async function actuateQueuedPinnedSpawn(
     return failQueuedPinnedSpawn(registry, receipt, structuredSpawnFailureReason(error));
   }
   const admissionClaim = receipt.transport === "tmux"
-    ? registry.claimTmuxSpawnActuation(receipt.launchId)
-    : registry.claimStartingStructuredSpawn(receipt.launchId);
+    ? (await registry.deliveryWriteOrBusy({ label: "registry.claimTmuxSpawnActuation" }, registry.claimTmuxSpawnActuation.bind(registry, receipt.launchId)))
+    : (await registry.deliveryWriteOrBusy({ label: "registry.claimStartingStructuredSpawn" }, registry.claimStartingStructuredSpawn.bind(registry, receipt.launchId)));
   if (!admissionClaim.claimed || !admissionClaim.receipt.admissionOwner) return admissionClaim.receipt;
   const releaseIfCancelled = async () => {
     try { assertActive(); }
@@ -944,12 +944,12 @@ async function actuateQueuedPinnedSpawn(
       return failQueuedPinnedSpawn(registry, admissionClaim.receipt, "pinned account retry deadline did not advance");
     }
     const nextRetryAt = new Date(nextRetryMs).toISOString();
-    const refreshed = registry.queuePinnedSpawn(receipt.launchId, {
+    const refreshed = (await registry.deliveryWriteOrBusy({ label: "registry.queuePinnedSpawn" }, registry.queuePinnedSpawn.bind(registry, receipt.launchId, {
       ...claimedQueue,
       retryAt: nextRetryAt,
-    }, queuedPinnedSpawnTitle(claimedQueue.locale, nextRetryAt));
+    }, queuedPinnedSpawnTitle(claimedQueue.locale, nextRetryAt))));
     return refreshed.admissionOwner
-      ? registry.releaseSpawnActuation(refreshed.launchId, refreshed.admissionOwner).receipt
+      ? (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, refreshed.launchId, refreshed.admissionOwner))).receipt
       : refreshed;
   }
   if (admission.kind === "unavailable") {
@@ -987,7 +987,7 @@ async function actuateQueuedPinnedSpawn(
       assertActive();
       const launched = registry.readOnlySnapshot().receipts[receipt.launchId];
       if (launched?.state === "prompt-delivered" || launched?.state === "host-verified") {
-        registry.markSpawnPathPending(receipt.launchId);
+        (await registry.deliveryWriteOrBusy({ label: "registry.markSpawnPathPending" }, registry.markSpawnPathPending.bind(registry, receipt.launchId)));
       }
     } else {
       if (!client) {
@@ -1017,13 +1017,13 @@ async function actuateQueuedPinnedSpawn(
       const failed = registry.readOnlySnapshot().receipts[receipt.launchId] ?? admissionClaim.receipt;
       if (!failed.pane) deleteInboxImages(tmuxImagePaths);
       if (failed.queuedPinnedSpawn && failed.admissionOwner) {
-        return registry.releaseSpawnActuation(failed.launchId, failed.admissionOwner).receipt;
+        return (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, failed.launchId, failed.admissionOwner))).receipt;
       }
       return failed;
     }
     const current = registry.readOnlySnapshot().receipts[receipt.launchId];
     if (current?.queuedPinnedSpawn && current.admissionOwner) {
-      registry.releaseSpawnActuation(current.launchId, current.admissionOwner);
+      (await registry.deliveryWriteOrBusy({ label: "registry.releaseSpawnActuation" }, registry.releaseSpawnActuation.bind(registry, current.launchId, current.admissionOwner)));
     }
     throw error;
   }
@@ -1641,7 +1641,7 @@ async function recoverPendingStructuredSpawnPass(
       if (identity) {
         const entry = registry.readOnlySnapshot().entries[sessionKeyId(identity.key)];
         if (entry?.structuredHost) {
-          claimed = registry.claimStructuredHost(identity.key, captureProcessIdentity(process.pid), { allowUnhosted: true });
+          claimed = (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, identity.key, captureProcessIdentity(process.pid), { allowUnhosted: true })));
           if (!claimed?.claimOwner) continue;
         }
         try {
@@ -1688,7 +1688,7 @@ async function recoverPendingStructuredSpawnPass(
       let recoveryClaim: AgentRegistryEntry | null = null;
       let releasedOwnedHost = false;
       if (entry?.structuredHost && !ownedByFailedOperation) {
-        recoveryClaim = registry.claimStructuredHost(receipt.key, captureProcessIdentity(process.pid), { allowUnhosted: true });
+        recoveryClaim = (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, receipt.key, captureProcessIdentity(process.pid), { allowUnhosted: true })));
         if (!recoveryClaim?.claimOwner) {
           await registry.failSpawnOffLoop(
             receipt.launchId,
@@ -1702,7 +1702,7 @@ async function recoverPendingStructuredSpawnPass(
         const releasedHost = await releaseStructuredDeliveryHost(receipt.key);
         releasedOwnedHost = ownedByFailedOperation && releasedHost;
         if (entry?.structuredHost && ownedByFailedOperation && !releasedHost) {
-          recoveryClaim = registry.claimStructuredHost(receipt.key, captureProcessIdentity(process.pid), { allowUnhosted: true });
+          recoveryClaim = (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, receipt.key, captureProcessIdentity(process.pid), { allowUnhosted: true })));
           if (!recoveryClaim?.claimOwner) {
             throw new Error(`structured spawn failed host is still owned for ${receipt.launchId}`);
           }
@@ -1735,7 +1735,7 @@ async function recoverPendingStructuredSpawnPass(
         && entry.status !== "dead"
         && entry.status !== "unhosted";
       if (hostReady) {
-        const finalized = registry.finalizeStructuredSpawn(receipt.launchId);
+        const finalized = (await registry.deliveryWriteOrBusy({ label: "registry.finalizeStructuredSpawn" }, registry.finalizeStructuredSpawn.bind(registry, receipt.launchId)));
         if (finalized.kind === "conflict") throw new Error(`structured spawn recovery conflict: ${finalized.code}`);
       } else {
         if (!entry) throw new Error(`structured spawn recovery identity is unavailable for ${receipt.launchId}`);
@@ -1747,7 +1747,7 @@ async function recoverPendingStructuredSpawnPass(
           `structured-spawn-delivered-host-dead:${receipt.launchId}`,
         );
         assertActive();
-        const settled = registry.recoverDeliveredStructuredSpawn(receipt.launchId);
+        const settled = (await registry.deliveryWriteOrBusy({ label: "registry.recoverDeliveredStructuredSpawn" }, registry.recoverDeliveredStructuredSpawn.bind(registry, receipt.launchId)));
         if (settled.kind === "conflict") throw new Error(`structured spawn recovery conflict: ${settled.code}`);
       }
       continue;
@@ -1790,7 +1790,7 @@ async function recoverPendingStructuredSpawnPass(
     if (!structuredTranscriptIsReadable(receipt.artifactPath)) continue;
     await client.transitionOperation(receipt.launchId, "delivered");
     assertActive();
-    const finalized = registry.finalizeStructuredSpawn(receipt.launchId);
+    const finalized = (await registry.deliveryWriteOrBusy({ label: "registry.finalizeStructuredSpawn" }, registry.finalizeStructuredSpawn.bind(registry, receipt.launchId)));
     if (finalized.kind === "conflict") throw new Error(`structured spawn recovery conflict: ${finalized.code}`);
   }
   if (previous) spawnRecoveryCursors.set(registry, previous);
@@ -2318,7 +2318,7 @@ export async function recoverStagedStructuredLaunch(
           launchProfile: receipt.launchProfile, status: "dead" as const, host: null, structuredHost: null,
           claimEpoch: 0, claimOwner: null, pendingAction: null,
         } : undefined;
-        const recovered = registry.recoverStructuredSpawnFromEvidence(launchId, evidence);
+        const recovered = (await registry.deliveryWriteOrBusy({ label: "registry.recoverStructuredSpawnFromEvidence" }, registry.recoverStructuredSpawnFromEvidence.bind(registry, launchId, evidence)));
         if (recovered.kind === "settled") stagedContinuations.delete(launchId);
         return read();
       }
@@ -2425,7 +2425,7 @@ export async function recoverStagedStructuredLaunch(
         const entry = receipt.key ? registry.readOnlySnapshot().entries[sessionKeyId(receipt.key)] : null;
         const live = entry?.structuredHost?.process && entry.claimOwner && entry.status !== "dead" && entry.status !== "unhosted";
         if (!live && (entry?.structuredHost?.process || entry?.claimOwner)) return read();
-        const result = registry.recoverStructuredSpawnFromEvidence(launchId);
+        const result = (await registry.deliveryWriteOrBusy({ label: "registry.recoverStructuredSpawnFromEvidence" }, registry.recoverStructuredSpawnFromEvidence.bind(registry, launchId)));
         if (result.kind === "conflict") return stop(`staged launch settlement conflict: ${result.code}`);
         stagedContinuations.delete(launchId);
         return read();
@@ -2615,9 +2615,8 @@ export async function spawnStructuredConversation(
     input = admittedStructuredLaunchInput(input);
     assertResumeSurvivorsRetired();
     await input.authorize?.();
-    const capability = input.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
-    input.registry.setReceiptViewerMcpTransport(input.receipt.launchId,
-      viewerMcpTransportForLaunch({ ...input.account.env, LLV_SPAWN_CAPABILITY: capability }));
+    const capability = (await input.registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForReceipt" }, input.registry.rotateSpawnCapabilityForReceipt.bind(input.registry, input.receipt.launchId)));
+    (await input.registry.deliveryWriteOrBusy({ label: "registry.setReceiptViewerMcpTransport" }, input.registry.setReceiptViewerMcpTransport.bind(input.registry, input.receipt.launchId, viewerMcpTransportForLaunch({ ...input.account.env, LLV_SPAWN_CAPABILITY: capability }))));
     const durableSetupTimeoutMs = dependencies.durableSetupTimeoutMs
       ?? STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS;
     durableSetupDeadline = now() + durableSetupTimeoutMs;
@@ -2645,7 +2644,7 @@ export async function spawnStructuredConversation(
       }
     }, () => {});
     host = await withinDurableSetup(startingHost);
-    if (host.viewerMcpTransport) input.registry.setReceiptViewerMcpTransport(input.receipt.launchId, host.viewerMcpTransport);
+    if (host.viewerMcpTransport) (await input.registry.deliveryWriteOrBusy({ label: "registry.setReceiptViewerMcpTransport" }, input.registry.setReceiptViewerMcpTransport.bind(input.registry, input.receipt.launchId, host.viewerMcpTransport)));
     const identity = hostIdentity(input.engine, host, input);
     key = identity.key;
     if (resumeKey && sessionKeyId(key) !== sessionKeyId(resumeKey)) {
@@ -2653,7 +2652,7 @@ export async function spawnStructuredConversation(
     }
     const stagedClaimEpoch = adoptionClaim?.claimEpoch ?? 0;
     const stagedClaimOwner = adoptionClaim?.claimOwner ?? null;
-    const staged = input.registry.stageStructuredSpawn(input.receipt.launchId, {
+    const staged = (await input.registry.deliveryWriteOrBusy({ label: "registry.stageStructuredSpawn" }, input.registry.stageStructuredSpawn.bind(input.registry, input.receipt.launchId, {
       key,
       artifactPath: identity.path,
       cwd: input.spec.cwd,
@@ -2669,14 +2668,14 @@ export async function spawnStructuredConversation(
       claimEpoch: stagedClaimEpoch,
       claimOwner: stagedClaimOwner,
       pendingAction: "spawn",
-    });
+    })));
     if (staged.kind === "conflict") throw new Error(`structured spawn registry conflict: ${staged.code}`);
     const stagedPath = identityMaterializationFence().allowsReceipt(staged.receipt, { structured: true })
       ? identity.path
       : null;
     const claimed = adoptionClaim
       ? staged.entry
-      : input.registry.claimStructuredHost(key, processIdentity(), { allowUnhosted: true });
+      : (await input.registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, input.registry.claimStructuredHost.bind(input.registry, key, processIdentity(), { allowUnhosted: true })));
     if (!claimed?.claimOwner) throw new Error("structured spawn host claim is unavailable");
     adoptionClaimTransferred = adoptionClaim !== null;
     binding.stopPersistence = await withinDurableSetup(
@@ -2768,10 +2767,7 @@ export async function spawnStructuredConversation(
         continuation.deliver = () => defaultDeliverFirst(input, identity.path);
       }
       clearDurableSetupTimeout();
-      input.registry.releaseStructuredSpawnAdmissionOwner(
-        input.receipt.launchId,
-        input.receipt.admissionOwner ?? processIdentity(),
-      );
+      (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, input.receipt.launchId, input.receipt.admissionOwner ?? processIdentity())));
       return {
         ok: true,
         target: null,
@@ -2791,10 +2787,7 @@ export async function spawnStructuredConversation(
     writeStagedRecovery(input.registry, operationId, { ...recovery, phase: "delivered", reason: "transcript publication pending" });
     if (!content && !structuredTranscriptIsReadable(identity.path)) {
       clearDurableSetupTimeout();
-      input.registry.releaseStructuredSpawnAdmissionOwner(
-        input.receipt.launchId,
-        input.receipt.admissionOwner ?? processIdentity(),
-      );
+      (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, input.receipt.launchId, input.receipt.admissionOwner ?? processIdentity())));
       return {
         ok: true,
         target: null,
@@ -2838,7 +2831,7 @@ export async function spawnStructuredConversation(
     await withinDurableSetup(
       withRuntimeAdmissionRetry(() => input.client.transitionOperation(operationId, "delivered"), admissionRetry),
     );
-    const settled = input.registry.finalizeStructuredSpawn(input.receipt.launchId);
+    const settled = (await input.registry.deliveryWriteOrBusy({ label: "registry.finalizeStructuredSpawn" }, input.registry.finalizeStructuredSpawn.bind(input.registry, input.receipt.launchId)));
     stagedContinuations.delete(operationId);
     if (settled.kind === "conflict") throw new Error(`structured spawn registry conflict: ${settled.code}`);
     clearDurableSetupTimeout();
@@ -2865,7 +2858,7 @@ export async function spawnStructuredConversation(
     const recovery = stagedLaunchRecovery(pending);
     if (host && key && recovery && !durableSetupTimedOut && isTransientStagedLaunchFailure(error)) {
       writeStagedRecovery(input.registry, operationId, { ...recovery, reason: stagedRecoveryFailureReason(error) });
-      input.registry.releaseStructuredSpawnAdmissionOwner(operationId, input.receipt.admissionOwner ?? processIdentity());
+      (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, operationId, input.receipt.admissionOwner ?? processIdentity())));
       return { ok: true, target: null, path: null, launchId: operationId, conversationId: input.receipt.conversationId,
         launched: true, retrySafe: false, initialMessage: "queued", state: "path-pending", transport: "structured" };
     }

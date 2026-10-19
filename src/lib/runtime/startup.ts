@@ -1485,7 +1485,7 @@ async function refreshStructuredTranscriptState(
   assertActive();
   /* The refreshed rows are read back through the next snapshot; asking for a
      copy of the whole registry here cost a retained history seconds (#2761). */
-  if (observations.length > 0) registry.reconcileConversations(observations, { snapshot: false });
+  if (observations.length > 0) (await registry.deliveryWriteOrBusy({ label: "registry.reconcileConversations" }, registry.reconcileConversations.bind(registry, observations, { snapshot: false })));
   return unreadable;
 }
 
@@ -2266,7 +2266,7 @@ async function adoptStructuredHostsPass(
         if (!current || !shouldAdopt(current)) return null;
         const socketOwner = current.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
           ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process } : undefined;
-        return registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner });
+        return (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner })));
       }, "claiming startup host");
     const codexCandidateCount = adoptionCandidates.filter((entry) => entry.key.engine === "codex").length;
     const claudeCandidateCount = adoptionCandidates.length - codexCandidateCount;
@@ -2305,7 +2305,10 @@ async function adoptStructuredHostsPass(
       async (entry) => {
         const memoryCell = adoptionCell(entry);
         const conversation = registry.conversationForPath(entry.artifactPath) ?? await withViewerOperation("memory.engine-start", () =>
-          waitForStateLock("memory.start-identity", () => registry.ensureConversation(entry.key.engine, entry.artifactPath, entry.accountId)));
+          waitForStateLock("memory.start-identity", () => registry.deliveryWriteOrBusy({ label: "registry.ensureConversation" }, () => {
+            assertActive();
+            return registry.ensureConversation(entry.key.engine, entry.artifactPath, entry.accountId);
+          })));
         const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
           ? conversation.agentRole
           : null;
@@ -2326,7 +2329,7 @@ async function adoptStructuredHostsPass(
         if (entry.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: entry.structuredHost.endpoint, process: entry.structuredHost.process })) {
           return { cwd: entry.cwd, codexHome: owner?.home, memoryCell, env: startupEnvironment };
         }
-        const capability = registry.rotateSpawnCapabilityForPath(entry.artifactPath);
+        const capability = (await registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForPath" }, registry.rotateSpawnCapabilityForPath.bind(registry, entry.artifactPath)));
         const access = materializeStructuredHostAccess(
           structuredHostAccessPolicy(launchProfile),
           startupEnvironment,
@@ -2375,7 +2378,10 @@ async function adoptStructuredHostsPass(
       async (entry) => {
         const memoryCell = adoptionCell(entry);
         const conversation = registry.conversationForPath(entry.artifactPath) ?? await withViewerOperation("memory.engine-start", () =>
-          waitForStateLock("memory.start-identity", () => registry.ensureConversation(entry.key.engine, entry.artifactPath, entry.accountId)));
+          waitForStateLock("memory.start-identity", () => registry.deliveryWriteOrBusy({ label: "registry.ensureConversation" }, () => {
+            assertActive();
+            return registry.ensureConversation(entry.key.engine, entry.artifactPath, entry.accountId);
+          })));
         const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
           ? conversation.agentRole
           : null;
@@ -2394,7 +2400,7 @@ async function adoptStructuredHostsPass(
           ...await claudeStartupHostOptions(
             { ...entry, launchProfile },
             resolveClaudeOwner(entry),
-            registry.rotateSpawnCapabilityForPath(entry.artifactPath),
+            (await registry.deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForPath" }, registry.rotateSpawnCapabilityForPath.bind(registry, entry.artifactPath))),
             startupEnvironment,
             registry.conversationForPath(entry.artifactPath)?.agentRole,
             memoryStartIdentity(registry, conversation.id),

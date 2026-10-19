@@ -810,7 +810,7 @@ async function registryResumeRecords(): ReturnType<typeof resumePaneRecords> {
   if (!snapshot.importedResumePanes) {
     const legacy = await resumePaneRecords();
     if (legacy) {
-      registry.importResumePanes(legacy.serverPid, legacy.records);
+      (await registry.deliveryWriteOrBusy({ label: "registry.importResumePanes" }, registry.importResumePanes.bind(registry, legacy.serverPid, legacy.records)));
       return {
         serverPid,
         records: legacy.serverPid === serverPid ? new Map(legacy.records) : new Map(),
@@ -828,7 +828,7 @@ async function rememberRegistryResume(pathname: string, spec: ResumeSpec, pane: 
   await rememberResumePane(pathname, spec, pane);
   if (!pane.panePid) return;
   const serverPid = await tmuxServerPid();
-  if (serverPid !== null) agentRegistry().rememberResumePane(serverPid, pathname, { paneId: pane.paneId, panePid: pane.panePid, windowName: spec.windowName, engine: spec.engine });
+  if (serverPid !== null) (await agentRegistry().deliveryWriteOrBusy({ label: "registry.rememberResumePane" }, agentRegistry().rememberResumePane.bind(agentRegistry(), serverPid, pathname, { paneId: pane.paneId, panePid: pane.panePid, windowName: spec.windowName, engine: spec.engine })));
 }
 
 export function beginRegistryResume(

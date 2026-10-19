@@ -1,5 +1,6 @@
 import { liveRootSession } from "@/lib/root/adopt";
 import { StateLockDeferredError, waitForStateLock } from "@/lib/state/lockWait";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
@@ -217,6 +218,13 @@ export interface AgentRegistryEntry {
   pendingAction: "spawn" | "resume" | "handoff" | null;
   structuredHostOperationId?: string | null;
   updatedAt: string;
+}
+
+export interface StructuredHostCustody {
+  claimEpoch: number;
+  claimOwner: string | null;
+  writerClaimEpoch: number | null;
+  process: Readonly<ProcessIdentity> | null;
 }
 
 function hasCompleteProcessIdentity(identity: ProcessIdentity | null): identity is ProcessIdentity & {
@@ -4629,6 +4637,7 @@ export class RegistryWriterBusyError extends Error {
 export class AgentRegistry {
   private readonly sqliteMode: AgentRegistrySqliteMode;
   private readonly writerDeadlineMs: number | undefined;
+  private writerAdmissionTail: Promise<void> = Promise.resolve();
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
   private lastDeliveryCompactionChangeId: number | null = null;
@@ -5547,6 +5556,64 @@ export class AgentRegistry {
     operation: () => T,
     correlate?: (value: T) => { label: string; operationId?: string | null } | null,
   ): Promise<{ acquired: true; value: T } | { acquired: false }> {
+    const startedAt = performance.now();
+    return withViewerOperation("registry.write", () => this.withWriterAdmissionQueue(
+      remaining => this.whenWriterAdmitted(correlation, operation, correlate, remaining),
+      this.writerDeadlineMs ?? 5_000,
+      () => {
+        recordBlockingWait({ site: "registry-lock-async", synchronous: false,
+          durationMs: performance.now() - startedAt, correlation, subject: "agent-registry", refused: true });
+        return { acquired: false };
+      },
+    ));
+  }
+
+  /** One FIFO covers every SQLite writer admission, including account mutations.
+   * Its callback must acquire external leases only after its turn and release
+   * them before any retry wait. */
+  private async withWriterAdmissionQueue<T>(
+    operation: (remainingMs: number) => Promise<T>,
+    deadlineMs: number,
+    expired: () => T,
+  ): Promise<T> {
+    if (accountMutationHeld() || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) {
+      return operation(deadlineMs);
+    }
+    const queuedAt = performance.now();
+    const deadlineAt = queuedAt + deadlineMs;
+    const previous = this.writerAdmissionTail;
+    let release!: () => void;
+    this.writerAdmissionTail = new Promise<void>((resolve) => { release = resolve; });
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const hasTurn = await Promise.race([
+      previous.then(() => true),
+      new Promise<false>(resolve => {
+        timeout = setTimeout(() => resolve(false), Math.max(0, deadlineAt - performance.now()));
+        timeout.unref?.();
+      }),
+    ]);
+    if (timeout) clearTimeout(timeout);
+    if (!hasTurn) {
+      // Keep this expired ticket in FIFO order until its predecessor finishes;
+      // later writers must not pass the writer whose turn they followed.
+      void previous.then(release);
+      return expired();
+    }
+    try {
+      const remainingMs = deadlineAt - performance.now();
+      if (remainingMs <= 0) return expired();
+      return await operation(remainingMs);
+    } finally {
+      release();
+    }
+  }
+
+  private async whenWriterAdmitted<T>(
+    correlation: { label: string; operationId?: string | null },
+    operation: () => T,
+    correlate?: (value: T) => { label: string; operationId?: string | null } | null,
+    deadlineMs?: number,
+  ): Promise<{ acquired: true; value: T } | { acquired: false }> {
     if (accountMutationHeld()) return this.deliveryWriteNow(correlation, operation);
     if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
       return { acquired: true, value: withWaitCorrelation(correlation, operation) };
@@ -5554,7 +5621,7 @@ export class AgentRegistry {
     const waitStartedAt = performance.now();
     const written = await withWaitCorrelation(correlation, () => this.sqliteStore!.withWriter(operation, {
       ...(correlate ? { correlate } : {}),
-      ...(this.writerDeadlineMs !== undefined ? { deadlineMs: this.writerDeadlineMs } : {}),
+      deadlineMs: deadlineMs ?? this.writerDeadlineMs,
     }));
     if (!written.acquired) {
       console.warn(`[registry] ${correlation.label}${correlation.operationId ? ` for ${correlation.operationId}` : ""} `
@@ -6272,35 +6339,45 @@ export class AgentRegistry {
   } = {}): Promise<{ acquired: true; value: T } | { acquired: false }> {
     const inherited = accountMutationHeld();
     const startedAt = performance.now();
-    const deadline = startedAt + (options.waitMs ?? this.writerDeadlineMs ?? 2_000);
+    const totalWaitMs = options.waitMs ?? this.writerDeadlineMs ?? 2_000;
     let waited = false;
     let refused = false;
     let acquiredAt: number | undefined;
     let correlation: BlockingWaitCorrelation = { label, operationId: options.operationId };
-    try {
-      for (;;) {
-        const result = await withAccountMutationLockAsync(() => {
-          guard?.();
-          // Publish one correlated wait after admission supplies its operation
-          // id; individual failed probes are part of this same wait.
-          return this.deliveryWriteNow(correlation, () => { acquiredAt = performance.now(); refused = false; return write(); }, { recordRefusal: false });
-        }, {
-          holder: label, caller: label,
-          waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
-        });
-        if (result.acquired) {
-          correlation = options.correlate?.(result.value) ?? correlation;
-          return result;
+    const run = async (remainingMs: number): Promise<{ acquired: true; value: T } | { acquired: false }> => {
+      const deadline = performance.now() + remainingMs;
+      try {
+        for (;;) {
+          const result = await withAccountMutationLockAsync(() => {
+            guard?.();
+            // Publish one correlated wait after admission supplies its operation
+            // id; individual failed probes are part of this same wait.
+            return this.deliveryWriteNow(correlation, () => { acquiredAt = performance.now(); refused = false; return write(); }, { recordRefusal: false });
+          }, {
+            holder: label, caller: label,
+            waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
+          });
+          if (result.acquired) {
+            correlation = options.correlate?.(result.value) ?? correlation;
+            return result;
+          }
+          refused = true;
+          if (inherited || performance.now() >= deadline) return result;
+          waited = true;
+          await new Promise<void>(resolve => setTimeout(resolve, 5));
         }
-        refused = true;
-        if (inherited || performance.now() >= deadline) return result;
-        waited = true;
-        await new Promise<void>(resolve => setTimeout(resolve, 5));
+      } finally {
+        if (waited || refused) recordBlockingWait({ site: "registry-lock-async", synchronous: false,
+          durationMs: (acquiredAt ?? performance.now()) - startedAt, correlation, subject: "agent-registry", refused });
       }
-    } finally {
-      if (waited || refused) recordBlockingWait({ site: "registry-lock-async", synchronous: false,
-        durationMs: (acquiredAt ?? performance.now()) - startedAt, correlation, subject: "agent-registry", refused });
-    }
+    };
+    if (inherited) return run(totalWaitMs);
+    return this.withWriterAdmissionQueue(run, totalWaitMs, () => {
+      refused = true;
+      recordBlockingWait({ site: "registry-lock-async", synchronous: false,
+        durationMs: performance.now() - startedAt, correlation, subject: "agent-registry", refused: true });
+      return { acquired: false };
+    });
   }
 
   private reserveSpawnRequest(input: SpawnRequest): SpawnBeginResult {
@@ -7856,12 +7933,20 @@ export class AgentRegistry {
     key: SessionKey,
     expected?: Readonly<ProcessIdentity>,
     confirmedSurvivors: readonly ProcessIdentity[] = [],
+    expectedCustody?: StructuredHostCustody | null,
   ): boolean {
     return this.mutate((file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry) return false;
       const current = entry.structuredHost?.process ?? null;
+      if (expectedCustody !== undefined) {
+        if (!expectedCustody || entry.claimEpoch !== expectedCustody.claimEpoch
+          || entry.claimOwner !== expectedCustody.claimOwner
+          || (entry.structuredHost?.writerClaimEpoch ?? null) !== expectedCustody.writerClaimEpoch
+          || ((current === null) !== (expectedCustody.process === null))
+          || (current && expectedCustody.process && !sameRecordedProcessIdentity(current, expectedCustody.process))) return false;
+      }
       if (expected && current && !sameRecordedProcessIdentity(current, expected)) return false;
       const retained = entry.structuredTerminationSurvivors ?? [];
       if (retained.length > 0 && (!expected || !current || !sameRecordedProcessIdentity(current, expected))) return false;
@@ -10067,8 +10152,15 @@ export class AgentRegistry {
       changes: the auto-balance sustain window and policy revision are the
       controller's, and an operator looking at one card must not reset them. */
   recordQuotaObservation(observation: DurableQuotaObservation): void {
+    this.recordQuotaObservations([observation]);
+  }
+
+  /** One admitted commit for all observations from the same quota probe. */
+  recordQuotaObservations(observations: readonly DurableQuotaObservation[]): void {
     this.mutate((file) => {
-      file.quotaObservations[observation.engine][observation.accountId] = clone(observation);
+      for (const observation of observations) {
+        file.quotaObservations[observation.engine][observation.accountId] = clone(observation);
+      }
     });
   }
 

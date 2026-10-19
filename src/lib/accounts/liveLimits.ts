@@ -30,7 +30,7 @@ import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySig
 export type LiveReadPhase = "operator-refresh" | "reset-credit-redeem" | "spawn-admission" | "login-complete";
 
 export interface LiveLimitsDeps {
-  registry?: Pick<AgentRegistry, "recordQuotaObservation"> & Partial<Pick<AgentRegistry, "quotaObservations">>;
+  registry?: Pick<AgentRegistry, "recordQuotaObservation"> & Partial<Pick<AgentRegistry, "quotaObservations" | "deliveryWriteOrBusy">>;
   probe?: QuotaProbePort;
   now?: number;
   timeoutMs?: number;
@@ -79,6 +79,19 @@ export function recordLiveObservation(
   return durable;
 }
 
+/** Re-read the prior observation only after asynchronous writer admission. */
+export async function recordLiveObservationOffLoop(
+  observation: QuotaObservation,
+  accountKind: "legacy" | "managed",
+  deps: LiveLimitsDeps = {},
+): Promise<DurableQuotaObservation> {
+  const registry = deps.registry ?? agentRegistry();
+  const write = () => recordLiveObservation(observation, accountKind, { ...deps, registry });
+  return registry.deliveryWriteOrBusy
+    ? registry.deliveryWriteOrBusy({ label: "quota.live-observation" }, write)
+    : write();
+}
+
 export async function refreshAccountLimits(engine: MigrationEngine, accountId: string, deps: LiveLimitsDeps = {}): Promise<LimitsRefreshResult> {
   const probe = deps.probe ?? liveQuotaProbe;
   const now = deps.now ?? Date.now();
@@ -90,7 +103,7 @@ export async function refreshAccountLimits(engine: MigrationEngine, accountId: s
       probe.probe(engine, account, now, { force: true }),
       probeTimeout(deps.timeoutMs ?? PROBE_TIMEOUT_MS),
     ]);
-    return { kind: "refreshed", account, observation: recordLiveObservation(observation, account.kind, deps) };
+    return { kind: "refreshed", account, observation: await recordLiveObservationOffLoop(observation, account.kind, deps) };
   } catch (error) {
     const detail = redactAppServerDetail(error instanceof Error ? error.message : String(error));
     logQuotaEvent({

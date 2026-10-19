@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
@@ -121,6 +121,44 @@ function ref(over: Partial<StructuredHostKillRef> & Pick<StructuredHostKillRef, 
 
 afterEach(async () => {
   for (const child of fixtures.splice(0)) await stopFixtureTree(child);
+});
+
+test("process-tree retirement preserves a replacement claim acquired during final writer admission", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-retirement-custody-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const key = { engine: "claude" as const, sessionId: CLAUDE_SESSION };
+  const process = { pid: 424_242, startIdentity: "424242:host", bootEpoch: BOOT_EPOCH };
+  const initial = entry({ key, claimEpoch: 1, claimOwner: "structured-host:old",
+    structuredHost: { kind: "claude-broker", endpoint: "stdio:old", process, eventCursor: 1,
+      protocolVersion: null, writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  registry.upsert(initial as never);
+  setAgentRegistryForTests(registry);
+  const original = registry.deliveryWriteOrBusy.bind(registry);
+  const admission = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, write) => {
+    if (correlation.label !== "termination.retire") return original(correlation, write);
+    return original(correlation, () => {
+      const current = registry.readOnlySnapshot().entries[`claude:${CLAUDE_SESSION}`]!;
+      registry.upsert({ ...current, status: "live", claimEpoch: 2, claimOwner: "structured-host:replacement",
+        structuredHost: { ...current.structuredHost!, endpoint: "stdio:replacement", writerClaimEpoch: 2 } });
+      return write();
+    });
+  });
+  try {
+    const outcome = await terminateStructuredHostTree(ref({
+      pid: process.pid, startIdentity: process.startIdentity, bootEpoch: process.bootEpoch,
+      engine: "claude", sessionId: CLAUDE_SESSION,
+    }), { processIdentity: () => null, pidAlive: () => false, protectedPids: () => new Set() });
+    expect(outcome).toMatchObject({ ok: false, status: 409 });
+    expect(registry.readOnlySnapshot().entries[`claude:${CLAUDE_SESSION}`]).toMatchObject({
+      status: "live", claimEpoch: 2, claimOwner: "structured-host:replacement",
+      structuredHost: { endpoint: "stdio:replacement", writerClaimEpoch: 2, process },
+    });
+  } finally {
+    admission.mockRestore();
+    setAgentRegistryForTests(null);
+    registry.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("the inventory carries role, model, stage and ownership for every structured host", () => {
@@ -488,6 +526,7 @@ for (const retained of [false, true]) {
           { engine: "claude", sessionId: CLAUDE_SESSION },
           { pid: 424_242, startIdentity: "424242:start", bootEpoch: BOOT_EPOCH },
           survivors,
+          null,
         ]]);
         if (result === "rejection") reject(failure);
         else resolve(result === "success");

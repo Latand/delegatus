@@ -6,7 +6,7 @@ import { accountProjection } from "@/lib/accounts/accountProjection";
 import { listCodexAccounts, type CodexAccount } from "@/lib/accounts/codex";
 import { redactAppServerDetail } from "@/lib/accounts/codexAppServerProtocol";
 import { managedCodexRuntime, type CodexResetCreditRedemption } from "@/lib/accounts/codexRuntime";
-import { recordLiveObservation, refreshAccountLimits } from "@/lib/accounts/liveLimits";
+import { recordLiveObservationOffLoop, refreshAccountLimits } from "@/lib/accounts/liveLimits";
 import { codexObservationFromProbe } from "@/lib/accounts/migration/quotaController";
 import { appendResetCreditJournal, governingWindowSummary, readResetCreditJournal, type ResetCreditActor, type ResetCreditJournalEntry } from "@/lib/accounts/resetCreditJournal";
 import { callerConversationId } from "@/lib/agent/operatorAuthority";
@@ -126,7 +126,7 @@ export async function POST(req: NextRequest) {
 
   /* The post-redemption reading is recorded exactly like the controller's own,
      so the dialog, the capacity gate and the footer all see the new window. */
-  const observation = recordLiveObservation(
+  const observation = await recordLiveObservationOffLoop(
     await codexObservationFromProbe(account, redemption.after, now),
     account.kind,
     { phase: "reset-credit-redeem", now },
