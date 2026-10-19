@@ -611,5 +611,99 @@
       },
       "note": "Earlier continuation image qualification; the final local pre-push gate re-verifies the working tree under the pin."
     }
+  },
+  "publicationRepair": {
+    "measuredOn": "2026-10-19",
+    "source": "525e9eb77",
+    "base": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+    "buildComparison": {
+      "command": "bun run build",
+      "isolation": "Separate source exports, private HOME/config/temp/state, one admitted owned runner.",
+      "heldLock": {
+        "baseExit": 1,
+        "branchExit": 1,
+        "diagnostic": "Another next build process is already running",
+        "lockReleasedBeforeCleanBuild": true
+      },
+      "clean": {
+        "baseExit": 0,
+        "baseSeconds": 286.64,
+        "branchExit": 0,
+        "branchSeconds": 381.21
+      },
+      "interpretation": "The retained diagnostic is reproducible under a held Next lock on both trees. Both clean builds passed; no branch-specific build defect was reproduced."
+    },
+    "focused": {
+      "metadata": {
+        "pass": 9,
+        "fail": 0
+      },
+      "kernel": {
+        "pass": 12,
+        "skip": 2,
+        "fail": 0
+      },
+      "viewerReceiptRecovery": {
+        "pass": 2,
+        "assertions": 34,
+        "fail": 0,
+        "heldStages": [
+          "claimed",
+          "dispatching"
+        ],
+        "privatePidPersisted": false,
+        "livingOwnerMarkedNotExecuted": false,
+        "effectsPerReleasedRequest": 1
+      },
+      "gateRunner": {
+        "pass": 7,
+        "fail": 0
+      },
+      "nativeEngines": {
+        "pass": 9,
+        "fail": 0,
+        "assertions": 107,
+        "profiles": [
+          "full",
+          "restricted",
+          "read-only"
+        ],
+        "engines": [
+          "Codex",
+          "Claude"
+        ],
+        "freshAndResumed": true,
+        "headless": true,
+        "persistentSocketAdoptionAndCleanup": true
+      },
+      "terminal": {
+        "pass": 1,
+        "fail": 0,
+        "assertions": 6,
+        "binary": "tmux",
+        "controllingTty": true,
+        "rawInput": true,
+        "resize": true,
+        "interrupt": true,
+        "exitStatus": true
+      },
+      "totalPassed": 40
+    },
+    "fixtureNotes": [
+      "The first lock helper lacked Next native-binding initialization; it was corrected before either build was judged.",
+      "An initial native test run hit the existing Unix socket path limit under the long stage scratch path. Short aliases to the same owned scratch are used for native and terminal qualification. The rerun passed all nine native cases and the terminal case; the aliases were removed after use.",
+      "The two container cases were not enabled in this host replay; prior image qualification remains recorded separately."
+    ],
+    "finalIntegratedMain": "12e2fae5ecefb7f5445744b33851615f0c58d231",
+    "finalFocusedSource": "84fe47ad6",
+    "postRefreshTypecheck": {
+      "command": "bun node_modules/typescript/bin/tsc --noEmit",
+      "exit": 0
+    },
+    "postRefreshFocused": {
+      "pass": 40,
+      "fail": 0,
+      "containerCasesNotEnabled": 2
+    }
   }
 }

@@ -509,3 +509,34 @@ receipt recovery windows, all three native profiles for both engines,
 persistent socket adoption and retirement, nested gate cleanup and terminal
 behavior. The continuation's rebuilt-image bridge cases and runtime-host
 rehearsal are recorded separately from this host-side replay.
+
+### Publication repair, 2026-10-19
+
+The continuation integrates main through `12e2fae5e`. The registry merge
+preserves main's startup initialization cleanup and the active signal-domain
+guards. Ordinary stdio MCP still uses #2930's Viewer routing.
+
+The build comparison pins base `9cda615537b3` and branch `525e9eb77`.
+The retained Viewer build failure says that another Next build holds the
+build lock. An owned lock reproduced that exact refusal on both the pinned
+base and the merged branch. After releasing each lock, separate clean source
+exports passed `bun run build`: 286.6 seconds on the base and 381.2 seconds on
+the branch. No branch-specific build defect was reproduced.
+
+Fresh explicit-path runs passed nine metadata cases, twelve kernel cases,
+seven gate cases and both Viewer receipt recovery cases. The recovery cases
+made 34 assertions across the claimed and dispatching windows: the shared
+receipt retains the outer Viewer owner, recovery leaves its living claim
+open, and the released request dispatches exactly once. The two container
+cases remain covered by the separately recorded image qualification.
+
+The final native replay passed nine cases, including both real engines in
+all three profiles, fresh/resumed and headless execution, persistent socket
+adoption, setup refusals and owned cleanup. The real tmux terminal case passed
+input, controlling tty, resize, interrupt and exit-status checks. These runs
+use short aliases to the stage's owned scratch because the original long
+temporary path exceeds Unix socket limits; the aliases were removed after use.
+The completed focused replay has forty passing cases and no failures.
+After integrating the subsequent main commits, including #3094's private
+runtime build tree and worker cap, types passed and all forty cases passed
+again on `84fe47ad6`.
