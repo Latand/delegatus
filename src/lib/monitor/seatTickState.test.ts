@@ -32,6 +32,7 @@ const row = {
   seatEpoch: 7,
   lastCheckAt: "2026-08-28T12:00:00.000Z",
   lastWakeAt: "2026-08-28T11:00:00.000Z",
+  deployResumeThrough: "2026-08-28T10:00:00.000Z",
   lastWakeReasons: ["stalled" as const],
   wakesWithoutChange: { stalled: 2 },
   stalledSeen: ["pipeline_a1"],

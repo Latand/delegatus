@@ -7,6 +7,7 @@ import path from "node:path";
 import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
+import { isReminderVersion } from "./seatTickReminders";
 
 import {
   emptySeatTickState,
@@ -302,6 +303,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
        settled deploy nobody announced is announced. */
     announcedMaintenance: conversationIds(raw.announcedMaintenance).slice(-SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
     announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
+    ...(isoOrNull(raw.deployResumeThrough) ? { deployResumeThrough: isoOrNull(raw.deployResumeThrough)! } : {}),
     /* Absent on every row from before #2030: a seat remembered as having been
        shown no note is shown it. */
     ...(typeof raw.autonomyShown === "string" ? { autonomyShown: raw.autonomyShown } : {}),
@@ -390,6 +392,8 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     diskPressureShown: row.diskPressureShown,
     eventsThrough: row.eventsThrough,
     lastWakeAt: row.lastWakeAt,
+    ...(row.deployResumeThrough ? { deployResumeThrough: row.deployResumeThrough } : {}),
+    ...(row.itemsShown?.some(isReminderVersion) ? { itemsShown: row.itemsShown.filter(isReminderVersion) } : {}),
     lastProposalAt: row.lastProposalAt,
     outstandingWake: row.outstandingWake,
     retiredWakes: row.retiredWakes ?? [],

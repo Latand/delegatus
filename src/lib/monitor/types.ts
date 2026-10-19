@@ -252,6 +252,7 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
+  reminderKind?: "task" | "pause";
   occurredAt?: string | null;
   /** Journal identity of a merge this visible line announces on delivery. */
   mergeEventSeq?: number;
@@ -507,6 +508,10 @@ export interface SeatTickSeatInput {
  * running stage holds is still progressing.
  */
 export interface SeatTickPipelineInput {
+  pausedAt?: string | null;
+  pause?: import("@/lib/pipelines/pauseMetadata").PipelinePause;
+  /** True only from a fresh cached observation; unknown remains unproven. */
+  pauseConditionMet?: boolean;
   id: string;
   title: string;
   /** `terminal` closed or completed, `inert` parked, `active` otherwise. */
@@ -523,11 +528,11 @@ export interface SeatTickPipelineInput {
   /**
    * Who paused the lane, read off its pause record (#2063); absent when it is
    * not paused. `seat` is the seat this check is about: a lane it paused, for a
-   * deploy or anything else, is owed work until it is resumed. Its first wake
-   * and each later deploy settlement list it. `operator` is excluded from the seat's work altogether: the
+   * deploy or anything else, is owed work until it is resumed. A met condition,
+   * an unconditioned pause's bound, or a deploy settlement lists it.
+   * `operator` is excluded from the seat's work altogether: the
    * operator stopped it, and only the operator's resume starts it again.
-   * `other` is anyone else, a predecessor seat among them, and is read as any
-   * parked lane is.
+   * `other` includes predecessor seats; their pauses use the same reminder bound.
    */
   pausedBy?: "seat" | "operator" | "other";
 }
@@ -600,12 +605,16 @@ export interface SeatTickOwnLaneInput {
 }
 
 export interface SeatTickTaskInput {
+  /** Explicitly chosen work, including a submitted continuation. */
+  accepted?: boolean;
+  waitingSince?: string;
+  hold?: import("@/lib/tasks/types").TaskHold;
   id: string;
   title: string;
   status: "inbox" | "assigned" | "blocked" | "done";
-  /** A linked pipeline or a live assignment already owns it. */
+  /** An open lane owns accepted work; legacy tasks also count assignments. */
   owned: boolean;
-  /** When the card last moved. An assigned card nobody started is only an
+  /** When the card last moved. A legacy assigned card nobody started is only an
       unstarted TASK while this is recent; past the backlog bound it is
       backlog, and a wake reason nothing can discharge (#1262). Because it
       decides that, it is also part of the change fingerprint: moving the card
@@ -1100,6 +1109,8 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  /** Last delivered deployment wake's cutoff for draining its pause instructions. */
+  deployResumeThrough?: string;
   /** First identity-checked gone-host observation; cleared by a landed wake. */
   unreachableSince?: string | null;
   /** Last confirmed wake bounding the backlog held for that host loss. */
