@@ -534,7 +534,7 @@ test("an archived finished ask is durably cleared and stays restored after Undo 
     pipeline: (id: string) => id === lane.id ? lane : null, tasks: [task], pipelines: [lane] };
   const dismissalHarness = harness();
   dismissalHarness.clock.now = now;
-  const dismissalPorts = { ...dismissalHarness.ports, resolveConversation: () => ({ conversationId: stale.conversationId, path: stale.path }) };
+  const dismissalPorts = { ...dismissalHarness.ports, resolveConversation: () => ({ conversationId: stale.conversationId!, path: stale.path }) };
   const ports: AttentionReconcilePorts = {
     now: () => now,
     board: async () => { const files = [{ ...stale }]; overlayAttentionDismissals(files); return { files, pipelines: [], tasks: [task] }; },

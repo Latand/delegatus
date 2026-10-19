@@ -45,7 +45,7 @@ export function pipelineOwnershipIds(
 export interface AttentionReconcilePorts {
   now(): Date;
   board(): Promise<Pick<NeedsYouBody, "files" | "pipelines"> & Partial<Pick<NeedsYouBody, "tasks">>>;
-  facts(body: Pick<NeedsYouBody, "pipelines"> & Partial<Pick<NeedsYouBody, "tasks">>): ReconcileFacts;
+  facts(body: Pick<NeedsYouBody, "files" | "pipelines"> & Partial<Pick<NeedsYouBody, "tasks">>): ReconcileFacts;
   write(clears: readonly SystemAttentionClear[], now: Date): SystemAttentionClear[];
   /** Rechecked inside admission, immediately before the first effect. */
   current?(): boolean;
