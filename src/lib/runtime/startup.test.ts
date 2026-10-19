@@ -3999,12 +3999,19 @@ test("startup transcript refresh skips historical structured hosts", async () =>
       ],
     }).conversation));
 
-  expect(await startupAdoptionAttempts(registry)).toEqual([]);
-  expect(registry.conversation(live.conversation.id)?.turn.state).toBe("terminal");
-  expect(historical.every((conversation) => registry.conversation(conversation.id)?.turn.state === "busy")).toBeTrue();
-
-  fs.rmSync(directory, { recursive: true, force: true });
-});
+  try {
+    expect(await startupAdoptionAttempts(registry)).toEqual([]);
+    expect(registry.conversation(live.conversation.id)?.turn.state).toBe("terminal");
+    expect(historical.every((conversation) => registry.conversation(conversation.id)?.turn.state === "busy")).toBeTrue();
+  } finally {
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+  // This 65-row integration fixture includes reconciliation and publication.
+  // Let its awaited startup and controller teardown finish before the next
+  // test replaces the process-wide publication. Bun's default five seconds
+  // expires while that work is still running under the gate's CPU quota.
+}, 30_000);
 
 test.each(["codex", "claude"] as const)(
   "startup adopts a persisted terminal %s conversation whose transcript starts a new turn before restart",
