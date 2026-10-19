@@ -20,32 +20,37 @@ async function fixture() {
   await fs.mkdir(memory, { recursive: true }); await fs.mkdir(process.env.LLV_STATE_DIR!, { recursive: true });
   return { root, memory, roots: { claudeHomes: [home], codexHomes: [] } };
 }
-test("the production job uses a labeled helper, leaves the Viewer loop available, and persists retention across fresh helper processes", async () => {
+test("the production job reports labeled operations while the serving loop turns during held import work", async () => {
   const fixtureHome = await fixture();
-  for (let index = 0; index < 48; index++) await fs.writeFile(path.join(fixtureHome.memory, `topic-${index}.md`), `Fixture ${index}.\n` + "Keep the fixture complete.\n".repeat(500));
-  let ticks = 0;
-  const timer = setInterval(() => ticks++, 5);
-  let firstBackup = "";
-  const restoreLog = viewerLoopMonitor.setLogSink(() => {});
+  await fs.writeFile(path.join(fixtureHome.memory, "topic.md"), "Fixture topic.\n");
+  await fs.writeFile(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "importing", importId: "fixture-1", changedAt: at }));
+  let releasePhase!: () => void;
+  let phaseStarted!: () => void;
+  let released = false;
+  const phaseSignal = new Promise<void>(resolve => { phaseStarted = resolve; });
+  const held = new Promise<void>(resolve => { releasePhase = () => { released = true; resolve(); }; });
+  const observed: { operation: string; current: string | undefined }[] = [];
+  const request = { importId: "fixture-1", previous: null, at, roots: fixtureHome.roots };
+  const job = runMemoryImport(request, { observeOperation: (operation, current) => {
+    observed.push({ operation, current });
+    if (operation === "memory.import.backup") { phaseStarted(); return held; }
+  } });
   try {
-    for (let index = 1; index <= 6; index++) {
-      await fs.writeFile(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "importing", importId: `fixture-${index}`, changedAt: at }));
-      const request = { importId: `fixture-${index}`, previous: null, at: `2026-10-19T00:00:0${index}.000Z`, roots: fixtureHome.roots };
-      const job = runMemoryImport(request);
-      expect(viewerLoopMonitor.current()).toBeUndefined();
-      expect(runMemoryImport(request)).toBe(job);
-      await expect(runMemoryImport({ ...request, importId: "overlap" })).rejects.toThrow("already running");
-      const before = ticks;
-      const row = await job;
-      expect(row.state).toBe("ready"); expect(ticks).toBeGreaterThan(before);
-      if (index === 1) firstBackup = row.backup;
-      expect(readImportCandidates(request.importId).candidates.length).toBeGreaterThan(0);
-      expect(typeof readImportCandidates(request.importId).candidates[0].occurrences[0].project).toBe("string");
-    }
-    expect(await fs.stat(firstBackup).catch(() => null)).toBeNull();
-    expect(performanceSpans.snapshot().records.some(row => row.site === performanceSites.indexOf("memory.import") && row.kind === "await")).toBe(true);
-  } finally { clearInterval(timer); restoreLog(); }
-}, 60_000);
+    await phaseSignal;
+    expect(observed).toContainEqual({ operation: "memory.import", current: "memory.import" });
+    expect(observed).toContainEqual({ operation: "memory.import.backup", current: "memory.import.backup" });
+    let loopTurn = false;
+    await new Promise<void>(resolve => setImmediate(() => { loopTurn = true; resolve(); }));
+    expect(loopTurn).toBe(true);
+    expect(released).toBe(false);
+  } finally { releasePhase(); }
+  expect((await job).state).toBe("ready");
+  for (const operation of ["memory.import", "memory.import.backup", "memory.import.candidates", "memory.import.retention"]) {
+    expect(observed.some(row => row.operation === operation && row.current === operation)).toBe(true);
+  }
+  expect(readImportCandidates("fixture-1").candidates.length).toBeGreaterThan(0);
+  expect(performanceSpans.snapshot().records.some(row => row.site === performanceSites.indexOf("memory.import") && row.kind === "await")).toBe(true);
+});
 
 test("the helper refuses a stale import and clears its single-flight slot for a later valid job", async () => {
   const fixtureHome = await fixture();

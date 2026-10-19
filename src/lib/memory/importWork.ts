@@ -7,7 +7,7 @@ import { pipeline } from "node:stream/promises";
 import { stateDir } from "@/lib/configDir";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { readMemorySourceFile, restoreMemorySourceAfterImport } from "./source";
-import { readImportRecord, writeImportRows } from "./importStore";
+import { assertPrivateImportDatabaseFiles, readImportRecord, writeImportRows } from "./importStore";
 import { validateImportId } from "./importTypes";
 import type { ImportCandidate, ImportManifest, ImportManifestFile, ImportRecord, ImportRequest, ImportRoots, ImportWriter } from "./importTypes";
 import { ImportCandidates, topicMetadata } from "./importCandidates";
@@ -20,6 +20,12 @@ const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === "E
 const within = (root: string, file: string) => { const relative = path.relative(root, file); return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)); };
 export class MemoryImportError extends Error {
   constructor(readonly reason: NonNullable<ImportRecord["reason"]>) { super(`memory import: ${reason}`); }
+}
+export class MemoryImportRecoveryError extends AggregateError {
+  constructor(readonly reason: NonNullable<ImportRecord["reason"]>, readonly statusPersistenceFailed: boolean, readonly sourceRestorationFailed: boolean, errors: unknown[]) {
+    super(errors, `memory import: ${reason};${statusPersistenceFailed ? " status persistence failed;" : ""}${sourceRestorationFailed ? " memory source restoration failed" : ""}`);
+    this.name = "MemoryImportRecoveryError";
+  }
 }
 type Ports = {
   projectForSlug?: (slug: string) => string | Promise<string>;
@@ -40,11 +46,38 @@ async function privateDirectory(directory: string) {
   await fs.chmod(directory, 0o700);
 }
 async function outsideCheckout(directory: string) {
-  for (let current = await fs.realpath(directory); ; current = path.dirname(current)) {
+  let lexical = path.resolve(directory);
+  try {
+    const own = await fs.lstat(lexical);
+    const isDirectory = own.isSymbolicLink() ? (await fs.stat(lexical).catch(error => { if (missing(error)) return null; throw error; }))?.isDirectory() : own.isDirectory();
+    if (!isDirectory) lexical = path.dirname(lexical);
+  }
+  catch (error) { if (!missing(error)) throw error; }
+  for (let current = lexical; ; current = path.dirname(current)) {
     try { await fs.lstat(path.join(current, ".git")); throw new MemoryImportError("backup_refused"); }
     catch (error) { if (!missing(error)) throw error; }
     if (path.dirname(current) === current) break;
   }
+  let existing = lexical;
+  for (;;) {
+    try { await fs.lstat(existing); break; }
+    catch (error) { if (!missing(error)) throw error; existing = path.dirname(existing); }
+  }
+  let physical = await fs.realpath(existing);
+  if (!(await fs.stat(physical)).isDirectory()) physical = path.dirname(physical);
+  for (let current = physical; ; current = path.dirname(current)) {
+    try { await fs.lstat(path.join(current, ".git")); throw new MemoryImportError("backup_refused"); }
+    catch (error) { if (!missing(error)) throw error; }
+    if (path.dirname(current) === current) break;
+  }
+}
+async function rejectPreflight(error: unknown, request: ImportRequest): Promise<never> {
+  try { await restoreMemorySourceAfterImport(request.importId, request.previous); }
+  catch (restoreError) {
+    const reason = error instanceof MemoryImportError ? error.reason : "backup_refused";
+    throw new MemoryImportRecoveryError(reason, false, true, [error, restoreError]);
+  }
+  throw error;
 }
 async function defaultRoots(): Promise<ImportRoots> {
   if (guardedContext()) throw new MemoryImportError("backup_refused");
@@ -61,13 +94,15 @@ function assertCurrent(id: string) {
 }
 
 async function inventory(roots: ImportRoots, projectForSlug: (slug: string) => string | Promise<string>) {
-  const files: (Omit<ImportManifestFile, "copy" | "sha256"> & { source: string; store: string })[] = [];
+  const files: (Omit<ImportManifestFile, "copy" | "sha256"> & { source: string; store: string; physical: string })[] = [];
+  const stores = new Set<string>();
   const seenStores = new Set<string>(), seenFiles = new Set<string>();
   async function store(engine: "claude" | "codex", home: string, directory: string, project: string | null) {
     let real: string;
     try { real = await fs.realpath(directory); } catch (error) { if (missing(error)) return; throw error; }
     if (seenStores.has(real)) return;
     seenStores.add(real);
+    stores.add(real);
     const seen = new Set<string>();
     async function walk(current: string, depth: number) {
       if (depth > 64) throw new MemoryImportError("backup_refused");
@@ -85,7 +120,7 @@ async function inventory(roots: ImportRoots, projectForSlug: (slug: string) => s
           const relative = path.relative(directory, source);
           const kind = engine === "claude" ? name === "MEMORY.md" ? "claude_index" : name.endsWith(".md") && !["CLAUDE.md", "AGENTS.md", "SKILL.md"].includes(name) && !relative.split(path.sep).some(segment => ["rules", "skills", ".git"].includes(segment)) ? "claude_topic" : "history"
             : relative === "memory_summary.md" ? "codex_summary" : "history";
-          files.push({ source, store: directory, home, file: path.relative(home, source), engine, kind, size: stat.size, modifiedAt: stat.mtime.toISOString(), project, loadedAtStart: kind === "codex_summary" || kind === "claude_index" && relative === "MEMORY.md" });
+          files.push({ source, store: directory, physical: resolved, home, file: path.relative(home, source), engine, kind, size: stat.size, modifiedAt: stat.mtime.toISOString(), project, loadedAtStart: kind === "codex_summary" || kind === "claude_index" && relative === "MEMORY.md" });
         } else if (!stat.isDirectory() && !stat.isFile()) throw new MemoryImportError("backup_refused");
       }
     }
@@ -97,15 +132,38 @@ async function inventory(roots: ImportRoots, projectForSlug: (slug: string) => s
     for (const slug of slugs) await store("claude", home, path.join(home, "projects", slug, "memory"), canonicalProject(await projectForSlug(slug)));
   }
   for (const home of [...roots.codexHomes].sort()) await store("codex", home, path.join(home, "memories"), null);
-  return files;
+  return { files, stores: [...stores] };
 }
 
 /** Disk and hashing work is called by the leased job helper, never by a route. */
 export async function runMemoryImportWork(request: ImportRequest, ports: Ports = {}): Promise<ImportRecord> {
   validateImportId(request.importId);
   const directory = stateDir();
-  await privateDirectory(directory); await outsideCheckout(directory);
   const backups = path.join(directory, "backups"), parent = path.join(backups, "engine-memory");
+  let files: Awaited<ReturnType<typeof inventory>>["files"], stores: string[];
+  try {
+    await outsideCheckout(directory);
+    await outsideCheckout(path.join(directory, "state.sqlite"));
+    assertPrivateImportDatabaseFiles(path.join(directory, "state.sqlite"));
+    if (!request.roots && guardedContext()) throw new MemoryImportError("backup_refused");
+    const roots = request.roots ?? await defaultRoots();
+    ({ files, stores } = await inventory(roots, ports.projectForSlug ?? (await import("@/lib/scanner/describe")).projectForClaudeMemorySlug));
+  }
+  catch (error) { return rejectPreflight(error, request); }
+  const resolvedDestination = async (target: string) => {
+    let existing = path.resolve(target);
+    const suffix: string[] = [];
+    for (;;) {
+      try { await fs.lstat(existing); break; }
+      catch (error) { if (!missing(error)) throw error; suffix.unshift(path.basename(existing)); existing = path.dirname(existing); }
+    }
+    return path.resolve(await fs.realpath(existing), ...suffix);
+  };
+  for (const target of [directory, backups, parent, path.join(directory, "state.sqlite")]) {
+    const resolved = await resolvedDestination(target);
+    if (stores.some(store => within(store, resolved))) throw new MemoryImportError("backup_refused");
+  }
+  await privateDirectory(directory);
   await privateDirectory(backups); await privateDirectory(parent); await outsideCheckout(parent);
   return withFileTransaction(path.join(parent, "import-job"), "memory import busy", async () => {
     assertCurrent(request.importId);
@@ -115,8 +173,6 @@ export async function runMemoryImportWork(request: ImportRequest, ports: Ports =
     await writeImportRows([record], () => assertCurrent(request.importId));
     try {
       ports.phase?.("backup");
-      const { projectForClaudeMemorySlug } = await import("@/lib/scanner/describe");
-      const files = await inventory(request.roots ?? await defaultRoots(), ports.projectForSlug ?? projectForClaudeMemorySlug);
       try { await fs.mkdir(record.backup, { mode: 0o700 }); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new MemoryImportError("interrupted"); throw error; }
       const manifest: ImportManifest = { schemaVersion: 1, importId: record.id, createdAt: record.at, files: [] };
@@ -139,20 +195,24 @@ export async function runMemoryImportWork(request: ImportRequest, ports: Ports =
       // All copies pass before the first candidate is committed.
       ports.phase?.("candidates");
       const loaded = new Set<string>();
-      for (const file of manifest.files.filter(file => file.kind === "claude_index" && file.loadedAtStart)) {
-        const index = await fs.readFile(path.join(record.backup, file.copy), "utf8");
-        for (const match of index.matchAll(/\[[^\]]*\]\(([^)]+\.md)(?:#[^)]*)?\)/g)) {
-          loaded.add(`${file.home}\0${path.normalize(path.join(path.dirname(file.file), match[1]))}`);
+      for (let index = 0; index < manifest.files.length; index++) {
+        const file = manifest.files[index]!;
+        if (file.kind !== "claude_index" || !file.loadedAtStart) continue;
+        const text = await fs.readFile(path.join(record.backup, file.copy), "utf8");
+        for (const match of text.matchAll(/\[[^\]]*\]\(([^)]+\.md)(?:#[^)]*)?\)/g)) {
+          try { loaded.add(await fs.realpath(path.resolve(path.dirname(files[index]!.source), match[1]))); }
+          catch (error) { if (!missing(error)) throw error; }
         }
       }
       const builder = new ImportCandidates(record.id);
       let resolveWriter = ports.writer;
-      for (const file of manifest.files) {
+      for (let index = 0; index < manifest.files.length; index++) {
+        const file = manifest.files[index]!;
         if (file.kind !== "claude_topic" && file.kind !== "codex_summary") continue;
         const bytes = await fs.readFile(path.join(record.backup, file.copy));
         const body = bytes.toString("utf8");
         if (!Buffer.from(body).equals(bytes)) throw new MemoryImportError("integrity");
-        file.loadedAtStart ||= loaded.has(`${file.home}\0${file.file}`);
+        file.loadedAtStart ||= loaded.has(files[index]!.physical);
         const session = file.engine === "claude" ? topicMetadata(body).session : undefined;
         if (session && !resolveWriter) resolveWriter = await (await import("./importWriter")).productionImportWriter();
         builder.add(file, body, session ? await resolveWriter!(session) : undefined);
@@ -161,7 +221,7 @@ export async function runMemoryImportWork(request: ImportRequest, ports: Ports =
       // Recheck the complete snapshot after all asynchronous copies and writer
       // lookups, before publishing any candidate. Engine stores remain read-only.
       for (let index = 0; index < files.length; index++) {
-        if (await digest(files[index].source) !== manifest.files[index].sha256 || await digest(path.join(record.backup, manifest.files[index].copy)) !== manifest.files[index].sha256) throw new MemoryImportError("integrity");
+        if (await digest(files[index]!.source) !== manifest.files[index]!.sha256 || await digest(path.join(record.backup, manifest.files[index]!.copy)) !== manifest.files[index]!.sha256) throw new MemoryImportError("integrity");
       }
       assertCurrent(record.id);
       commitImportManifest(record.backup, manifest);
@@ -173,8 +233,13 @@ export async function runMemoryImportWork(request: ImportRequest, ports: Ports =
       return record;
     } catch (error) {
       record.state = "failed"; record.reason = error instanceof MemoryImportError ? error.reason : "failed";
-      await writeImportRows([record]);
-      await restoreMemorySourceAfterImport(record.id, record.previous);
+      let statusFailure: unknown, restoreFailure: unknown;
+      try { await writeImportRows([record]); } catch (caught) { statusFailure = caught; }
+      try { await restoreMemorySourceAfterImport(record.id, record.previous); } catch (caught) { restoreFailure = caught; }
+      if (statusFailure || restoreFailure) {
+        const cause = error instanceof MemoryImportError ? error.reason : "failed";
+        throw new MemoryImportRecoveryError(cause, Boolean(statusFailure), Boolean(restoreFailure), [error, ...[statusFailure, restoreFailure].filter(Boolean)]);
+      }
       throw error;
     }
   });

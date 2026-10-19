@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { stateDir } from "@/lib/configDir";
 import { spawnLeasedHelper, leasedHelperInput, endLeasedHelper } from "@/lib/helperLease";
-import { withViewerOperation, type ViewerOperation } from "@/lib/viewerLoopMonitor";
+import { withViewerOperation, viewerLoopMonitor, type ViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import type { ImportRecord, ImportRequest } from "./importTypes";
 import { validateImportId } from "./importTypes";
@@ -21,13 +21,14 @@ export async function memoryImportLaunch(cwd = process.cwd()) {
 /** Explicit background operation for slice 3. No request handler starts an
  * import in slice 2. The shared owner admits one job, sends only a small
  * request and receives counts; candidate text never crosses this pipe. */
-export function runMemoryImport(request: ImportRequest): Promise<ImportRecord> {
+export function runMemoryImport(request: ImportRequest, ports: { observeOperation?: (operation: ViewerOperation, current: ViewerOperation | undefined) => void | Promise<void> } = {}): Promise<ImportRecord> {
   validateImportId(request.importId);
   const directory = stateDir(), active = host.__delegatusMemoryImport;
   if (active) return active.directory === directory && active.id === request.importId ? active.done : Promise.reject(Error("memory import already running"));
   const frame = JSON.stringify(request) + "\n";
   if (Buffer.byteLength(frame) > 64 * 1024) return Promise.reject(Error("memory import request exceeds its bound"));
   const done = withViewerOperation("memory.import", () => performanceSpans.wait("memory.import", async () => {
+    await ports.observeOperation?.("memory.import", viewerLoopMonitor.current());
     const launch = await memoryImportLaunch();
     return await new Promise<ImportRecord>((resolve, reject) => {
       const child = spawnLeasedHelper("memory.import", { command: launch.executable, args: [launch.entry], cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: directory, LLV_STATE_OWNER: "viewer" } }, directory, { input: true, stdout: "pipe", stderr: "ignore" });
@@ -48,7 +49,15 @@ export function runMemoryImport(request: ImportRequest): Promise<ImportRecord> {
             const value = JSON.parse(line);
             if (value.phase && Object.hasOwn(phases, value.phase)) {
               endPhase?.();
-              void withViewerOperation(phases[value.phase as keyof typeof phases], () => new Promise<void>(settle => { endPhase = settle; }));
+              const phaseComplete = new Promise<void>(settle => { endPhase = settle; });
+              void withViewerOperation(phases[value.phase as keyof typeof phases], async () => {
+                await ports.observeOperation?.(phases[value.phase as keyof typeof phases], viewerLoopMonitor.current());
+                await phaseComplete;
+              });
+            } else if (value.recovery && value.error === "failed" && ["integrity", "backup_refused", "source_changed", "interrupted", "failed"].includes(value.recovery.reason)
+              && typeof value.recovery.statusPersistenceFailed === "boolean" && typeof value.recovery.sourceRestorationFailed === "boolean") {
+              const { reason, statusPersistenceFailed, sourceRestorationFailed } = value.recovery;
+              fail(Error(`memory import: ${reason};${statusPersistenceFailed ? " status persistence failed;" : ""}${sourceRestorationFailed ? " memory source restoration failed" : ""}`));
             } else if (value.result?.id === request.importId && value.result.state === "ready" && Number.isSafeInteger(value.result.parts)) result = value.result;
             else if (["integrity", "backup_refused", "source_changed", "interrupted", "failed"].includes(value.error)) fail(Error(`memory import: ${value.error}`));
             else throw Error("memory import helper refused");

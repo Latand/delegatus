@@ -36,18 +36,20 @@ export class ImportCandidates {
 
   add(file: ImportManifestFile, text: string, writer = unknown) {
     const topic = topicMetadata(text);
-    const occurrence: ImportOccurrence = { id: `o_${hash(`${file.engine}\0${file.home}\0${file.file}\0${file.sha256}`).slice(0, 16)}`, file: file.file, sha256: file.sha256,
+    const occurrenceId = (anchor?: string) => `o_${hash(`${file.engine}\0${file.home}\0${file.file}\0${file.sha256}${file.kind === "codex_summary" ? `\0${anchor ?? ""}` : ""}`).slice(0, 16)}`;
+    const occurrence: ImportOccurrence = { id: occurrenceId(), file: file.file, sha256: file.sha256,
       type: file.engine === "codex" ? "summary" : topic.type, writtenAt: topic.modified && Number.isFinite(Date.parse(topic.modified)) ? topic.modified : file.modifiedAt, writer, project: file.project };
     if (file.kind === "claude_topic") this.group(file, occurrence, "topic", topic.title ?? file.file.split(/[\\/]/).at(-1)!, text, topic.normalized);
     if (file.kind === "codex_summary") {
       for (const bullet of parseMemory({ engine: "codex", path: file.file, sourceKind: "codex_summary" }, text)) {
-        this.group({ ...file, project: bullet.project ?? null }, { ...occurrence, project: bullet.project ?? null }, bullet.anchor, bullet.title, bullet.body, bullet.body.trim().replace(/\s+/gu, " "));
+        this.group({ ...file, project: bullet.project ?? null }, { ...occurrence, id: occurrenceId(bullet.anchor), project: bullet.project ?? null }, bullet.anchor, bullet.title, bullet.body, bullet.body.trim().replace(/\s+/gu, " "));
       }
     }
   }
   private group(file: ImportManifestFile, occurrence: ImportOccurrence, anchor: string, title: string, body: string, normalized: string) {
     const contentSha256 = hash(normalized);
-    const identity = JSON.stringify([file.engine, contentSha256, occurrence.project, occurrence.type, occurrence.writer.kind, occurrence.writer.roleId]);
+    const identity = JSON.stringify([file.engine, contentSha256, occurrence.project, occurrence.type, occurrence.writer.kind, occurrence.writer.roleId,
+      file.kind === "codex_summary" ? anchor : null]);
     const existing = this.groups.get(identity);
     if (existing) {
       for (const candidate of existing) {

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
-import { runMemoryImportWork } from "./importWork";
+import { MemoryImportRecoveryError, runMemoryImportWork } from "./importWork";
 import { readImportCandidates, readImportRecord } from "./importStore";
 import type { ImportRoots } from "./importTypes";
 import { memorySource, readMemorySourceFile } from "./source";
@@ -25,9 +25,9 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 const memory = () => path.join(roots.claudeHomes[0], "projects", "project-a", "memory");
-async function run(id = "fixture-1", ports: Parameters<typeof runMemoryImportWork>[1] = {}) {
+async function run(id = "fixture-1", ports: Parameters<typeof runMemoryImportWork>[1] = {}, previous: Parameters<typeof runMemoryImportWork>[0]["previous"] = null) {
   await write(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "importing", importId: id, changedAt: at }));
-  return runMemoryImportWork({ importId: id, previous: null, roots, at }, { projectForSlug: slug => slug, ...ports });
+  return runMemoryImportWork({ importId: id, previous, roots, at }, { projectForSlug: slug => slug, ...ports });
 }
 
 test("linked account homes back up each physical file once with exact private copies and source hashes unchanged", async () => {
@@ -188,13 +188,160 @@ test("a changed source after copying refuses the import; a newer operator choice
 test("backup destinations within checkouts, including symlinked backup parents, are refused", async () => {
   const checkout = path.join(root, "checkout");
   await fs.mkdir(path.join(checkout, ".git"), { recursive: true });
+  await fs.writeFile(path.join(checkout, ".git", "HEAD"), "ref: refs/heads/main\n");
   process.env.LLV_STATE_DIR = path.join(checkout, "state");
   await expect(run()).rejects.toThrow("backup_refused");
   expect(await fs.readdir(process.env.LLV_STATE_DIR!)).not.toContain("backups");
+  expect(() => readImportCandidates("fixture-1")).toThrow("backup_refused");
   process.env.LLV_STATE_DIR = path.join(root, "outside-state");
   await fs.mkdir(process.env.LLV_STATE_DIR!, { recursive: true });
   await fs.symlink(checkout, path.join(process.env.LLV_STATE_DIR!, "backups"));
   await expect(run()).rejects.toThrow("backup_refused");
+});
+
+test.each(["symlink", "hardlink"] as const)("an aliased state database is refused before importing through a %s", async alias => {
+  const state = process.env.LLV_STATE_DIR!;
+  const engineStore = path.join(root, "engine-store", "history.sqlite");
+  await fs.mkdir(path.dirname(engineStore), { recursive: true });
+  const { Database } = await import("bun:sqlite");
+  const database = new Database(engineStore);
+  database.exec("CREATE TABLE history (body TEXT); INSERT INTO history VALUES ('fixture history');");
+  database.close();
+  await fs.mkdir(state, { recursive: true });
+  const stateDatabase = path.join(state, "state.sqlite");
+  if (alias === "symlink") await fs.symlink(engineStore, stateDatabase);
+  else await fs.link(engineStore, stateDatabase);
+  const before = sha(await fs.readFile(engineStore));
+  await write(path.join(memory(), "topic.md"), "Fixture candidate.");
+
+  const previous = { schemaVersion: 1 as const, source: "engines" as const, changedAt: at };
+  await expect(run("fixture-1", {}, previous)).rejects.toThrow("backup_refused");
+  expect(sha(await fs.readFile(engineStore))).toBe(before);
+  expect(readMemorySourceFile()).toEqual(previous);
+  expect((await fs.readdir(state)).sort()).toEqual(["memory-source.json", "state.sqlite"].sort());
+  await expect(Promise.resolve().then(() => readImportCandidates("fixture-1"))).rejects.toThrow("backup_refused");
+});
+
+test.each([
+  { suffix: "-wal", alias: "symlink" }, { suffix: "-wal", alias: "hardlink" },
+  { suffix: "-shm", alias: "symlink" }, { suffix: "-shm", alias: "hardlink" },
+  { suffix: "-journal", alias: "symlink" }, { suffix: "-journal", alias: "hardlink" },
+])("an aliased SQLite $suffix sidecar is refused through a $alias", async ({ suffix, alias }) => {
+  const state = process.env.LLV_STATE_DIR!;
+  const engineStore = path.join(root, "engine-store", `history.sqlite${suffix}`);
+  await write(engineStore, "Fixture engine store bytes.");
+  await fs.mkdir(state, { recursive: true });
+  const stateSidecar = path.join(state, `state.sqlite${suffix}`);
+  if (alias === "symlink") await fs.symlink(engineStore, stateSidecar);
+  else await fs.link(engineStore, stateSidecar);
+  const before = sha(await fs.readFile(engineStore));
+  const previous = { schemaVersion: 1 as const, source: "engines" as const, changedAt: at };
+
+  await expect(run("fixture-1", {}, previous)).rejects.toThrow("backup_refused");
+  expect(sha(await fs.readFile(engineStore))).toBe(before);
+  expect(readMemorySourceFile()).toEqual(previous);
+  expect(await fs.stat(path.join(state, "backups")).catch(() => null)).toBeNull();
+});
+
+test("a public symlink destination inside a checkout is refused before creating state or backups", async () => {
+  await write(path.join(memory(), "topic.md"), "Fixture candidate.");
+  const checkout = path.join(root, "checkout");
+  const publicDirectory = path.join(checkout, "public");
+  const external = path.join(root, "external");
+  await fs.mkdir(path.join(checkout, ".git"), { recursive: true });
+  await fs.mkdir(publicDirectory, { recursive: true });
+  await fs.mkdir(external, { recursive: true });
+  const publicLink = path.join(publicDirectory, "linked");
+  await fs.symlink(external, publicLink);
+  const previous = { schemaVersion: 1 as const, source: "engines" as const, changedAt: at };
+  await write(path.join(external, "state", "memory-source.json"), JSON.stringify({ ...previous, source: "delegatus", phase: "importing", importId: "fixture-1" }));
+  const mode = (await fs.stat(path.join(external, "state"))).mode & 0o777;
+  process.env.LLV_STATE_DIR = path.join(publicLink, "state");
+
+  await expect(runMemoryImportWork({ importId: "fixture-1", previous, roots, at }, { projectForSlug: slug => slug })).rejects.toThrow("backup_refused");
+  expect(await fs.readdir(path.join(external, "state"))).toEqual(["memory-source.json"]);
+  expect(JSON.parse(await fs.readFile(path.join(external, "state", "memory-source.json"), "utf8"))).toEqual(previous);
+  expect((await fs.stat(path.join(external, "state"))).mode & 0o777).toBe(mode);
+  expect(await fs.readdir(publicDirectory)).toEqual(["linked"]);
+  expect(readImportCandidates("fixture-1").candidates).toEqual([]);
+});
+
+test("a state symlink resolving into a checkout is refused before creating backups", async () => {
+  const checkout = path.join(root, "checkout");
+  const physical = path.join(checkout, "public", "state");
+  const external = path.join(root, "external");
+  await fs.mkdir(path.join(checkout, ".git"), { recursive: true });
+  await fs.writeFile(path.join(checkout, ".git", "HEAD"), "ref: refs/heads/main\n");
+  const previous = { schemaVersion: 1 as const, source: "engines" as const, changedAt: at };
+  await write(path.join(physical, "memory-source.json"), JSON.stringify({ ...previous, source: "delegatus", phase: "importing", importId: "fixture-1" }));
+  const mode = (await fs.stat(physical)).mode & 0o777;
+  await fs.mkdir(external, { recursive: true });
+  await fs.symlink(path.join(checkout, "public"), path.join(external, "state-link"));
+  process.env.LLV_STATE_DIR = path.join(external, "state-link", "state");
+
+  await expect(runMemoryImportWork({ importId: "fixture-1", previous, roots, at }, { projectForSlug: slug => slug })).rejects.toThrow("backup_refused");
+  expect((await fs.readdir(physical)).sort()).toEqual(["memory-source.json"]);
+  expect(JSON.parse(await fs.readFile(path.join(physical, "memory-source.json"), "utf8"))).toEqual(previous);
+  expect((await fs.stat(physical)).mode & 0o777).toBe(mode);
+  expect(await fs.readdir(path.join(checkout, "public"))).toEqual(["state"]);
+});
+
+test("state and backup destinations overlapping a source store are refused before any source mutation", async () => {
+  const source = memory();
+  await write(path.join(source, "existing.data"), "Keep source store exact.");
+  await write(path.join(source, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "importing", importId: "fixture-1", changedAt: at }));
+  const mode = (await fs.stat(source)).mode & 0o777;
+  const before = new Map(await Promise.all((await fs.readdir(source)).map(async name => [name, sha(await fs.readFile(path.join(source, name)))] as const)));
+  process.env.LLV_STATE_DIR = source;
+
+  await expect(runMemoryImportWork({ importId: "fixture-1", previous: null, roots, at }, { projectForSlug: slug => slug })).rejects.toThrow("backup_refused");
+  expect((await fs.readdir(source)).sort()).toEqual([...before.keys()].sort());
+  expect((await fs.stat(source)).mode & 0o777).toBe(mode);
+  expect(await Promise.all([...before].map(async ([name, digest]) => sha(await fs.readFile(path.join(source, name))) === digest))).toEqual([...before.keys()].map(() => true));
+  expect(readImportCandidates("fixture-1").candidates).toEqual([]);
+});
+
+test("root index links retain reachability when an earlier alias wins physical-file deduplication", async () => {
+  await write(path.join(memory(), "MEMORY.md"), "- [Topic](z-listed.md)\n");
+  await write(path.join(memory(), "topic.md"), "Reachable fixture topic.\n");
+  await fs.symlink(path.join(memory(), "topic.md"), path.join(memory(), "z-listed.md"));
+
+  await run();
+  const { candidates } = readImportCandidates("fixture-1");
+  expect(candidates).toHaveLength(1);
+  expect(candidates[0]).toMatchObject({ body: "Reachable fixture topic.\n", loadedAtStart: true });
+});
+
+test.each([null, { schemaVersion: 1 as const, source: "engines" as const, changedAt: at }])("a status-write failure still restores the prior memory choice and withholds candidates: %j", async previous => {
+  const { injectStateWriteFaultForTests } = await import("../state/sqliteStateStore");
+  await write(path.join(memory(), "topic.md"), "Integrity fixture.\n");
+  await write(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "importing", importId: "fixture-1", changedAt: at }));
+  try {
+    const failure = await runMemoryImportWork({ importId: "fixture-1", previous, roots, at }, {
+      projectForSlug: slug => slug,
+      afterCopy: async file => {
+        await fs.writeFile(file, "Corrupted fixture copy.\n");
+        injectStateWriteFaultForTests({ site: "commit", collection: "role_memory_import", times: 1, error: Error("status write failed") });
+      },
+    }).then(() => null, error => error);
+    expect(failure).toBeInstanceOf(MemoryImportRecoveryError);
+    expect(failure).toMatchObject({ reason: "integrity", statusPersistenceFailed: true, sourceRestorationFailed: false });
+    expect((failure as Error).message).toMatch(/integrity.*status persistence failed/);
+  } finally { injectStateWriteFaultForTests(null); }
+  expect(readMemorySourceFile()).toEqual(previous);
+  expect(readImportCandidates("fixture-1").candidates).toEqual([]);
+});
+
+test("equal Codex bullets under different headings retain independent anchors and occurrences", async () => {
+  const codex = path.join(roots.codexHomes[0], "memories");
+  await write(path.join(codex, "memory_summary.md"), "v1\n## User preferences\n- Keep fixture data private.\n## General Tips\n- Keep fixture data private.\n");
+
+  await run();
+  const { candidates } = readImportCandidates("fixture-1");
+  expect(candidates).toHaveLength(2);
+  expect(candidates.map(row => row.anchor).sort()).toEqual(["General Tips\0preference\0Keep fixture data private.", "User preferences\0preference\0Keep fixture data private."].sort());
+  expect(candidates.every(row => row.occurrences.length === 1)).toBe(true);
+  expect(candidates.every(row => row.occurrences[0]?.file === "memories/memory_summary.md")).toBe(true);
 });
 
 test("an interrupted import directory is preserved, never reused or overwritten, and returns to the prior choice", async () => {
