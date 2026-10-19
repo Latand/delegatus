@@ -2362,13 +2362,15 @@ export async function recordDemotionInterruption(
   ]);
   const expected = custody(entry, conversation);
   const record = () => {
+    let seat: { project: string; seatEpoch: number } | null = null;
+    try { seat = orchestratorSeatFor(registry, conversationId, seats); }
+    catch (error) { controllerDiagnosticError("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error }); }
+    // Seat discovery can observe a completion. Validate after every evidence
+    // source, immediately before marking custody and recording the cut.
     const fresh = registry.readOnlySnapshot();
     const currentEntry = fresh.entries[hostKey];
     const currentConversation = fresh.conversations[conversation.id];
     if (!currentEntry || !currentConversation || custody(currentEntry, currentConversation) !== expected || !evidenceStands()) return false;
-    let seat: { project: string; seatEpoch: number } | null = null;
-    try { seat = orchestratorSeatFor(registry, conversationId, seats); }
-    catch (error) { controllerDiagnosticError("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error }); }
     const { obligation, created } = store.record({
       conversationId,
       engine,
