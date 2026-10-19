@@ -29,6 +29,22 @@ test("search page state round-trips through a short caller-bound handle", async 
   expect(observed).toEqual([undefined, upstream]);
 });
 
+test("unidentified HTTP adapters can page while handles remain isolated by connection", async () => {
+  let serial = 0;
+  const service = withMcpPageCursors({ async callTool(toolName, args) {
+    return { ok: true, toolName: toolName as McpToolName, clientRequestId: null, replayed: false,
+      items: [args.cursor ?? "first"], nextCursor: args.cursor ? null : "private-adapter-state" };
+  } }, new McpPageCursorStore({ token: () => String(++serial).padStart(22, "0") }));
+  const call = (caller: Parameters<typeof runAsMcpHttpCaller>[0], cursor?: unknown) =>
+    runAsMcpHttpCaller(caller, () => service.callTool("search_transcripts", { query: "quartz", cursor }).then(payload));
+
+  // Compatibility probes with no identity retain pagination within that adapter.
+  const first = await call({});
+  expect((await call({}, first.nextCursor)).items).toEqual(["private-adapter-state"]);
+  // Real HTTP compatibility adapters carry the negotiated connection id.
+  expect(await call({ paginationIdentity: "other-connection" }, first.nextCursor)).toMatchObject({ cursorReset: true, items: ["first"] });
+});
+
 test("the byte bound evicts oldest state and refuses oversized entries without discarding valid ones", () => {
   let id = 0;
   const store = new McpPageCursorStore({ maxBytes: 700, token: () => String(++id).padStart(22, "0") });
@@ -55,7 +71,7 @@ test("a real serving-process restart resets handles", async () => {
   };
   const first = await child();
   expect(String(first.nextCursor).length).toBe(22);
-  expect(await child(first.nextCursor)).toMatchObject({ ok: false, cursorReset: true });
+  expect(await child(first.nextCursor)).toMatchObject({ ok: true, cursorReset: true });
 });
 
 test("two independently compiled bundles resolve through the same global owner", async () => {
@@ -171,19 +187,19 @@ for (const [tool, field] of families) test(`${tool}/${field}: round-trip, caller
     await call({ query: "one", cursor }, "caller-a", tool === "list_tasks" ? "list_flows" : "list_tasks"),
     await call({ query: "one", cursor: "private-state-one" }),
   ]) {
-    expect(refused).toMatchObject({ ok: false, cursorReset: true });
+    expect(refused).toMatchObject({ ok: true, cursorReset: true });
     expect(JSON.stringify(refused)).not.toContain("private-state-one");
-    expect(refused.rows).toBeUndefined();
+    expect(refused.rows).toEqual(["first"]);
   }
-  expect(calls).toBe(before);
+  expect(calls).toBe(before + 4);
   now += MCP_CURSOR_TTL_MS;
-  expect(await call({ query: "one", cursor })).toMatchObject({ ok: false, cursorReset: true });
+  expect(await call({ query: "one", cursor })).toMatchObject({ ok: true, cursorReset: true, rows: ["first"] });
   const held = await call({ query: "two" });
   await call({ query: "three" });
   // Reading/replaying the first entry does not move it to the end of FIFO.
   await call({ query: "two", cursor: held[field] });
   const newest = await call({ query: "four" });
-  expect(await call({ query: "two", cursor: held[field] })).toMatchObject({ cursorReset: true });
+  expect(await call({ query: "two", cursor: held[field] })).toMatchObject({ ok: true, cursorReset: true, rows: ["first"] });
   expect((await call({ query: "four", cursor: newest[field] })).rows).toEqual(["private-state-four"]);
 });
 
@@ -219,13 +235,39 @@ test("nested relay tool cursors bind caller and subtool, retain empty continuati
   expect(second.results).toEqual([{ tool: "read", page_of: handle, next_cursor: null, output: "relay-state-read" }]);
   const before = calls;
   for (const reply of [await call("read", {}, handle, "foreign"), await call("other", {}, handle), await call("read", { query: "changed" }, handle)]) {
-    expect(reply).toMatchObject({ ok: false, cursorReset: true });
-    expect(reply.results).toBeUndefined();
+    expect(reply).toMatchObject({ ok: true, cursorReset: true, results: [{ output: "first" }] });
+    expect(JSON.stringify(reply)).not.toContain("relay-state-read");
   }
-  expect(calls).toBe(before);
+  expect(calls).toBe(before + 3);
   now = MCP_CURSOR_TTL_MS;
   expect(await call("read", {}, handle)).toMatchObject({ cursorReset: true });
   const held = await call("one", {});
   await call("two", {}); await call("three", {});
   expect(await call("one", {}, (held.results as Array<Record<string, unknown>>)[0]!.next_cursor)).toMatchObject({ cursorReset: true });
+});
+
+test("relay pages correlate full original arguments before displayed ids are shortened", async () => {
+  const { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES } = await import("./server");
+  const ids = ["a".repeat(64), "a".repeat(8) + "b".repeat(56)];
+  const received: Array<Record<string, unknown>> = [];
+  const binding = async (args: Record<string, unknown>) => {
+    const calls = args.calls as Array<{ tool: string; arguments: Record<string, unknown>; cursor?: string }>;
+    received.push(...calls.map(call => ({ ...call.arguments, cursor: call.cursor })));
+    return { status: "completed", results: calls.map(call => ({ tool: call.tool, arguments: call.arguments,
+      ...(call.cursor ? { page_of: call.cursor } : {}), next_cursor: call.cursor ? null : `state-${call.arguments.id}` })) };
+  };
+  const service = createMcpToolService(Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, binding])) as never, new MemoryMcpReceiptStore());
+  const call = (calls: Array<{ tool: string; arguments: Record<string, unknown>; cursor?: string }>) =>
+    runAsMcpHttpCaller({ capability: "relay-correspondence-caller" }, () => service.callTool("relay_service_tools", { op: "call", calls }).then(payload));
+
+  const first = await call(ids.map(id => ({ tool: "read", arguments: { id } })));
+  const rows = first.results as Array<Record<string, unknown>>;
+  expect(rows.map(row => row.next_cursor)).toEqual([expect.any(String), expect.any(String)]);
+  expect(rows[0]!.arguments).toMatchObject({ id: "aaaaaaaa" });
+  expect(rows[1]!.arguments).toMatchObject({ id: "aaaaaaaa" });
+  expect((rows[0]!.arguments as Record<string, unknown>).id).toBe((rows[1]!.arguments as Record<string, unknown>).id);
+  const next = await call(rows.map((row, index) => ({ tool: "read", arguments: { id: ids[index]! }, cursor: row.next_cursor as string })));
+  expect(next.results).toHaveLength(2);
+  expect((next.results as Array<Record<string, unknown>>).map(row => row.page_of)).toEqual(rows.map(row => row.next_cursor));
+  expect(received.slice(2).map(row => row.id)).toEqual(ids);
 });

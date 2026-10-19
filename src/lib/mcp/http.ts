@@ -260,7 +260,8 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
         token: capability,
         clientId: MCP_HTTP_CLIENT_ID,
         scopes: [],
-        extra: { nativePeer, unidentified, cancelSignal: (requestId: unknown) => registered.get(inflightKey(capability, connectionId, requestId))?.signal ?? null },
+        extra: { nativePeer, unidentified, paginationIdentity: unidentified ? connectionId : undefined,
+          cancelSignal: (requestId: unknown) => registered.get(inflightKey(capability, connectionId, requestId))?.signal ?? null },
       },
     });
     if (response.ok && messages.length === 1 && messages[0]?.method === "initialize") {

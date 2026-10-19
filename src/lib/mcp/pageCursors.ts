@@ -12,6 +12,7 @@ export const MCP_PAGE_CURSOR_TOOLS = new Set([
   "telegram_bot_messages", "relay_owner_history", "relay_service_tools",
 ]);
 export const MCP_PAGE_CURSOR_DESCRIPTION = "Page cursors are opaque 22-character handles, bound to this tool, caller and query/options. They expire after five minutes or eviction; a serving-process restart invalidates them. cursorReset:true means restart without cursor.";
+export const MCP_PAGE_CURSOR_RAW_RELAY_RESULTS: unique symbol = Symbol.for("delegatus.mcp.pageCursors.rawRelayResults") as never;
 
 type Held = { key: string; scope: string; state: string; expires: number; bytes: number };
 
@@ -77,7 +78,8 @@ function filters(args: McpToolArgs) {
 export function mcpPageCursorCaller(): string | null {
   const caller = currentMcpHttpCaller();
   if (caller) return caller.capability ? hash(["capability", caller.capability])
-    : caller.nativePeer?.startIdentity && caller.nativePeer.bootEpoch ? hash(["native", caller.nativePeer]) : null;
+    : caller.nativePeer?.startIdentity && caller.nativePeer.bootEpoch ? hash(["native", caller.nativePeer])
+      : hash(["unidentified-http-adapter", caller.paginationIdentity ?? "compatibility"]);
   // Candidate probes and local stdio services have one caller per process.
   return hash(["local", process.pid, process.env.LLV_SPAWN_CAPABILITY ?? null]);
 }
@@ -109,16 +111,26 @@ function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function reset(toolName: string, args: McpToolArgs): McpToolResult {
+function withoutCursor(args: McpToolArgs): McpToolArgs {
+  const { cursor: _cursor, ...rest } = args;
+  return rest;
+}
+
+async function restartPage(service: McpToolService, toolName: string, args: McpToolArgs, context?: Parameters<McpToolService["callTool"]>[2]): Promise<McpToolResult> {
+  const fresh = await service.callTool(toolName, withoutCursor(args), context);
+  return { ...fresh, cursorReset: true };
+}
+
+function invalidInput(toolName: string, args: McpToolArgs): McpToolResult {
   return { ok: false, toolName, clientRequestId: typeof args.clientRequestId === "string" ? args.clientRequestId : null,
     replayed: false, cursorReset: true, code: "cursor_reset", retryable: true,
     error: "Page cursor expired or does not match this caller, tool or filters; restart without cursor." };
 }
 
 /** Wrap outside receipts: a saved result holds upstream state, never durable handles.
- * Resolve before dispatch so foreign, expired and pre-restart handles disclose nothing. */
+ * Resolve before resuming so rejected handles expose no held continuation. */
 export function withMcpPageCursors(service: McpToolService, store = mcpPageCursorStore()): McpToolService {
-  return { callTool: (toolName, args, context) => {
+  const wrapped: McpToolService = { callTool: (toolName, args, context) => {
     if (!MCP_PAGE_CURSOR_TOOLS.has(toolName)) return service.callTool(toolName, args, context);
     return withViewerOperation("mcp.page-cursors", async () => {
       const caller = mcpPageCursorCaller();
@@ -126,18 +138,26 @@ export function withMcpPageCursors(service: McpToolService, store = mcpPageCurso
       let resolved = args;
       if (args.cursor !== undefined && args.cursor !== null && args.cursor !== "") {
         const held = continuation(store, args.cursor, scope, caller);
-        if (!held || !matches(filters(args), held.filters, toolName === "relay_owner_history")) return reset(toolName, args);
+        if (!held || !matches(filters(args), held.filters, toolName === "relay_owner_history")) return restartPage(wrapped, toolName, args, context);
         resolved = { ...held.filters, ...args, cursor: held.cursor };
       }
       const relayCalls: Array<{ tool: unknown; arguments: unknown; cursor?: unknown; handle?: unknown }> = [];
       if (toolName === "relay_service_tools" && Array.isArray(args.calls)) {
         for (const call of args.calls) {
-          if (!record(call)) return reset(toolName, args);
+          if (!record(call)) return invalidInput(toolName, args);
           let item = { tool: call.tool, arguments: call.arguments, cursor: call.cursor, handle: call.cursor };
           if (call.cursor) {
             const held = continuation(store, call.cursor, scope, caller);
             if (!held || held.filters.op !== args.op || held.filters.tool !== call.tool
-              || !matches(record(call.arguments) ? call.arguments : {}, held.filters.arguments as Record<string, unknown>, true)) return reset(toolName, args);
+              || !matches(record(call.arguments) ? call.arguments : {}, held.filters.arguments as Record<string, unknown>, true)) {
+              const calls = (args.calls as unknown[]).map(value => {
+                if (!record(value)) return value;
+                const { cursor: _cursor, ...callWithoutCursor } = value;
+                return callWithoutCursor;
+              });
+              const fresh = await wrapped.callTool(toolName, { ...args, calls }, context);
+              return { ...fresh, cursorReset: true };
+            }
             item = { ...item, arguments: held.filters.arguments, cursor: held.cursor };
           }
           relayCalls.push(item);
@@ -146,10 +166,10 @@ export function withMcpPageCursors(service: McpToolService, store = mcpPageCurso
       }
       const result = await service.callTool(toolName, resolved, context);
       if (!result.ok) return result;
-      if (mcpPageCursorCaller() !== caller) return reset(toolName, args);
+      if (mcpPageCursorCaller() !== caller) return invalidInput(toolName, args);
       const owner = result[RECEIPT_OWNER];
       if ((owner !== undefined && owner !== ownerStamp(caller))
-        || (result.replayed && hasPageCursor(result) && owner === undefined)) return reset(toolName, args);
+        || (result.replayed && hasPageCursor(result) && owner === undefined)) return invalidInput(toolName, args);
       const answer = { ...result };
       delete answer[RECEIPT_OWNER];
       const issue = (state: string, query: Record<string, unknown>) => store.issue(scope, JSON.stringify({ filters: query, cursor: state }));
@@ -157,25 +177,27 @@ export function withMcpPageCursors(service: McpToolService, store = mcpPageCurso
         const state = result[field];
         if (typeof state !== "string" || !state) continue;
         const handle = issue(state, filters(resolved));
-        if (!handle) return reset(toolName, args);
+        if (!handle) return invalidInput(toolName, args);
         answer[field] = handle;
       }
       if (toolName === "relay_service_tools" && Array.isArray(result.results)) {
         const rows: unknown[] = [];
-        for (const row of result.results) {
+        const rawRows = (result as McpToolResult & { [MCP_PAGE_CURSOR_RAW_RELAY_RESULTS]?: unknown })[MCP_PAGE_CURSOR_RAW_RELAY_RESULTS];
+        for (const [index, row] of result.results.entries()) {
           if (!record(row)) { rows.push(row); continue; }
           const copy = { ...row };
-          const call = relayCalls.find(call => call.tool === row.tool && (row.page_of
-            ? call.cursor === row.page_of : canonical(call.arguments) === canonical(row.arguments)))
+          const rawRow = Array.isArray(rawRows) && record(rawRows[index]) ? rawRows[index] as Record<string, unknown> : row;
+          const call = relayCalls.find(call => call.tool === rawRow.tool && (rawRow.page_of
+            ? call.cursor === rawRow.page_of : canonical(call.arguments) === canonical(rawRow.arguments)))
             ?? (relayCalls.filter(call => call.tool === row.tool).length === 1 ? relayCalls.find(call => call.tool === row.tool) : undefined);
-          if (row.page_of) {
-            if (!call?.handle) return reset(toolName, args);
+          if (rawRow.page_of) {
+            if (!call?.handle) return invalidInput(toolName, args);
             copy.page_of = call.handle;
           }
-          if (typeof row.next_cursor === "string" && row.next_cursor) {
-            if (!call) return reset(toolName, args);
-            const handle = issue(row.next_cursor, { op: args.op, tool: call.tool, arguments: call.arguments });
-            if (!handle) return reset(toolName, args);
+          if (typeof rawRow.next_cursor === "string" && rawRow.next_cursor) {
+            if (!call) return invalidInput(toolName, args);
+            const handle = issue(rawRow.next_cursor, { op: args.op, tool: call.tool, arguments: call.arguments });
+            if (!handle) return invalidInput(toolName, args);
             copy.next_cursor = handle;
           }
           rows.push(copy);
@@ -185,4 +207,5 @@ export function withMcpPageCursors(service: McpToolService, store = mcpPageCurso
       return answer;
     });
   } };
+  return wrapped;
 }

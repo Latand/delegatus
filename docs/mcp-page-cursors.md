@@ -5,7 +5,9 @@ unchanged as `cursor` with the same tool, caller and query/options. Each handle
 expires five minutes after issuance. Reading it or replaying the page does not
 extend its lifetime. Invalid, expired, evicted, foreign and mismatched handles
 return `cursorReset:true` with no saved page data; restart without the cursor.
-Legacy base64 cursors also reset.
+Legacy base64 cursors also reset. A reset reruns the requested page using the
+current caller and submitted filters, then returns the tool's normal page with
+`cursorReset:true`; it never returns the held continuation or its page data.
 
 The MCP service owns the translation outside receipt storage. Receipts retain
 the underlying continuation, and an ordinary receipt replay reuses its live
@@ -20,7 +22,10 @@ including when Next.js puts the service in multiple bundles. The task executor
 owns task-list handles; the Viewer owns its inline tools' handles. A Viewer or
 task-executor restart discards that process's handles: resumption returns
 `cursorReset:true`. Handle mappings are never written to disk or shared between processes.
-An unidentified shared HTTP caller cannot resume a handle.
+An unidentified compatibility adapter can resume pages through its negotiated
+HTTP connection identity. Its operations retain the existing unidentified
+authority; the identity scopes pagination only, and a different connection
+cannot replay its handle.
 
 The store retains at most 2,048 handles and 8 MiB of accounted continuation
 state, including fixed metadata overhead per entry. Insertion evicts the oldest
@@ -61,6 +66,7 @@ conversation per page with `full:true`. The unchanged binding's page is compared
 with the MCP service's answer, including its envelope; the test verifies that
 only the cursor differs and that the next page still reads the same snapshot.
 
-Three repetitions each measured **1,282 → 941 JSON response bytes** (341 bytes,
-26.6% less). The underlying cursor was 363 characters; its handle was 22.
-These numbers describe this fixture, without a latency or aggregate-token claim.
+Three repetitions in the isolated run measured **1,294 → 953 JSON response
+bytes**, saving 341 bytes each (26.4%). Totals vary with the generated fixture
+path. The underlying cursor was 363 characters; its handle was 22. This is a
+fixture measurement, without a latency or aggregate-token claim.
