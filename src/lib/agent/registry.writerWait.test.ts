@@ -440,7 +440,8 @@ test("Viewer policy writes commit in admission order when the writer is released
     this: SqliteAgentRegistryStore, ...args: Parameters<SqliteAgentRegistryStore["withWriter"]>
   ) {
     if (this.filename === holder.sqliteFilename) firstWaiting();
-    return originalWithWriter.apply(this, args);
+    const [operation, options] = args;
+    return originalWithWriter.call(this, operation, { ...options, probeMs: 100 });
   }) as typeof originalWithWriter);
   setAgentRegistryForTests(registry);
   try {
@@ -455,6 +456,47 @@ test("Viewer policy writes commit in admission order when the writer is released
   } finally {
     withWriter.mockRestore();
     await holder.close();
+    setAgentRegistryForTests(null);
+    registry.close();
+  }
+});
+
+test("a later quota commit cannot overtake an earlier pending Viewer policy write", async () => {
+  const { NextRequest } = await import("next/server");
+  const { PATCH } = await import("@/app/api/accounts/claude/policy/route");
+  const directory = fs.mkdtempSync(path.join(root, "viewer-policy-quota-order-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const holder = registryLockHolder(path.join(directory, "registry.sqlite"));
+  const originalWithWriter = SqliteAgentRegistryStore.prototype.withWriter;
+  let firstWaiting!: () => void;
+  const observedFirstWait = new Promise<void>(resolve => { firstWaiting = resolve; });
+  const withWriter = spyOn(SqliteAgentRegistryStore.prototype, "withWriter").mockImplementation((async function (
+    this: SqliteAgentRegistryStore, ...args: Parameters<SqliteAgentRegistryStore["withWriter"]>
+  ) {
+    if (this.filename === holder.sqliteFilename) firstWaiting();
+    const [operation, options] = args;
+    return originalWithWriter.call(this, operation, { ...options, probeMs: 100 });
+  }) as typeof originalWithWriter);
+  setAgentRegistryForTests(registry);
+  try {
+    await holder.hold();
+    const earlier = PATCH(new NextRequest("http://localhost/api/accounts/claude/policy", {
+      method: "PATCH", headers: { host: "localhost", "content-type": "application/json" },
+      body: JSON.stringify({ automaticSwitching: false, expectedRevision: 0 }),
+    }));
+    await observedFirstWait;
+    const laterQuotaCommit = registry.accountMutationWrite("quota.commit", () => registry.recordQuotaEvaluation({
+      engine: "claude", observations: [], signature: null, bootId: "quota-order", now: "2026-10-19T00:00:00.000Z", minimumGapMs: 0,
+    }));
+    await holder.release();
+    const response = await earlier;
+    const quota = await laterQuotaCommit;
+    expect(response.status).toBe(200);
+    expect(quota.acquired).toBe(true);
+    expect(registry.autoBalancePolicy("claude")).toMatchObject({ enabled: false, revision: 2 });
+  } finally {
+    await holder.close();
+    withWriter.mockRestore();
     setAgentRegistryForTests(null);
     registry.close();
   }

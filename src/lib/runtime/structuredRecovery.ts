@@ -117,6 +117,8 @@ export interface StructuredRecoveryDependencies {
     operationId: string;
     revision: number;
     owns: () => Promise<boolean>;
+    /** Synchronous durable recheck for destructive writes after admission. */
+    assertCurrent?: () => void;
     releaseHost: (key: SessionKey) => Promise<boolean>;
     /** Throws when the operation's owner no longer allows the account the
         successor host would start on. A recorded account resumes through
@@ -435,6 +437,7 @@ async function recoverCandidate(
       await assertOwnership();
       await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
         request.authorityGuard?.();
+        ownership.assertCurrent?.();
         assertPipelineTurnAllowed(candidate.conversationId, registry);
         if (registry.readOnlySnapshot().entries[sessionKeyId(releasedKey)]?.claimEpoch !== releasedEpoch) return false;
         return registry.terminateStructuredHost(releasedKey);
@@ -605,6 +608,9 @@ async function recoverCandidate(
       if (ownsSuccessor()) {
         await ownership?.releaseHost(current.key);
         await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" }, () => {
+          request.authorityGuard?.();
+          ownership?.assertCurrent?.();
+          assertPipelineTurnAllowed(current!.conversationId, registry);
           if (ownsSuccessor()) registry.terminateStructuredHost(current!.key);
         });
       }

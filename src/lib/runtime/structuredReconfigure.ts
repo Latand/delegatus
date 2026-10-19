@@ -228,6 +228,12 @@ export async function applyStructuredReconfigure(
     operationId: effect.operationId,
     revision: effect.eventSeq,
     owns: () => ownsDurableReconfigure(status),
+    assertCurrent: () => {
+      const owner = registry.conversation(conversationId)?.reconfigure;
+      if (owner?.operationId !== effect.operationId || owner.revision !== effect.eventSeq || owner.status !== status) {
+        throw new StructuredReconfigureSupersededError();
+      }
+    },
     releaseHost: release,
     /* The project may drop an account while a host is being released: every
        recovery this operation asks for, the restorations after a failure

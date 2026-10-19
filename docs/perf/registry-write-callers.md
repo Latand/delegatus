@@ -327,3 +327,25 @@ final checks and repeated samples; production throughput is unmeasured.
 The synchronous store remains available to CLI/helper processes and the
 callback exceptions above. This change does not claim that every synchronous
 registry contract has become asynchronous.
+
+## Post-admission ownership audit
+
+Audit verdict: **PASS** for every caller row marked `async admission in L7` in
+the caller inventory above. Each row's revision, receipt, claim, or operation
+identity is checked by its atomic registry mutator or repeated inside the
+admitted callback. The complete site list remains in the `Callers` table.
+
+The review found and fixed these termination sites, where an asynchronous
+admission had introduced a gap between the prior authority check and the
+destructive registry write:
+
+| Sites | Verdict and guard |
+| --- | --- |
+| `src/lib/runtime/structuredReconfigure.ts` `terminateStructuredHost` calls at lines 222, 240, 245, 311, 339, 358 | **PASS** — all six use `terminateReleasedHost`, which rechecks the current operation and captured claim epoch, owner, writer epoch, and process identity inside the admitted callback. |
+| `src/lib/runtime/structuredRecovery.ts` `terminateStructuredHost` at line 434 | **PASS** — the admitted callback rechecks request authority, recovery operation ownership, pipeline permission, and captured claim epoch. |
+| `src/lib/runtime/structuredRecovery.ts` `terminateStructuredHost` at line 600 | **PASS** — the admitted cleanup callback rechecks request authority, recovery operation ownership, pipeline permission, and the successor claim. |
+
+`src/lib/agent/registry.ts` also gives `accountMutationWrite` the same FIFO
+admission queue as `deliveryWrite*`. Its retry waits run after the account
+lease is released, and both paths retain their invocation deadline. The mixed
+policy/quota race and the existing policy/policy ordering case pass.

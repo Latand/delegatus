@@ -5549,27 +5549,30 @@ export class AgentRegistry {
     operation: () => T,
     correlate?: (value: T) => { label: string; operationId?: string | null } | null,
   ): Promise<{ acquired: true; value: T } | { acquired: false }> {
-    return withViewerOperation("registry.write", async () => {
-      if (accountMutationHeld() || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) {
-        return await this.whenWriterAdmitted(correlation, operation, correlate);
-      }
+    return withViewerOperation("registry.write", () => this.withWriterAdmissionQueue(
+      remaining => this.whenWriterAdmitted(correlation, operation, correlate, remaining),
+      this.writerDeadlineMs ?? 5_000,
+    ));
+  }
 
-      /* SQLite polls are individually nonblocking, so a later caller could
-         grab the writer during the earlier caller's next poll interval. Keep
-         those admissions in invocation order while every wait remains async. */
-      const queuedAt = performance.now();
-      const previous = this.writerAdmissionTail;
-      let release!: () => void;
-      this.writerAdmissionTail = new Promise<void>((resolve) => { release = resolve; });
-      await previous;
-      try {
-        const totalDeadlineMs = this.writerDeadlineMs ?? 5_000;
-        const remainingDeadlineMs = Math.max(0, totalDeadlineMs - (performance.now() - queuedAt));
-        return await this.whenWriterAdmitted(correlation, operation, correlate, remainingDeadlineMs);
-      } finally {
-        release();
-      }
-    });
+  /** One FIFO covers every SQLite writer admission, including account mutations.
+   * Its callback must acquire external leases only after its turn and release
+   * them before any retry wait. */
+  private async withWriterAdmissionQueue<T>(operation: (remainingMs: number) => Promise<T>, deadlineMs: number): Promise<T> {
+    if (accountMutationHeld() || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) {
+      return operation(deadlineMs);
+    }
+    const queuedAt = performance.now();
+    const previous = this.writerAdmissionTail;
+    let release!: () => void;
+    this.writerAdmissionTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      const remainingMs = Math.max(0, deadlineMs - (performance.now() - queuedAt));
+      return await operation(remainingMs);
+    } finally {
+      release();
+    }
   }
 
   private async whenWriterAdmitted<T>(
@@ -6303,35 +6306,40 @@ export class AgentRegistry {
   } = {}): Promise<{ acquired: true; value: T } | { acquired: false }> {
     const inherited = accountMutationHeld();
     const startedAt = performance.now();
-    const deadline = startedAt + (options.waitMs ?? this.writerDeadlineMs ?? 2_000);
+    const totalWaitMs = options.waitMs ?? this.writerDeadlineMs ?? 2_000;
     let waited = false;
     let refused = false;
     let acquiredAt: number | undefined;
     let correlation: BlockingWaitCorrelation = { label, operationId: options.operationId };
-    try {
-      for (;;) {
-        const result = await withAccountMutationLockAsync(() => {
-          guard?.();
-          // Publish one correlated wait after admission supplies its operation
-          // id; individual failed probes are part of this same wait.
-          return this.deliveryWriteNow(correlation, () => { acquiredAt = performance.now(); refused = false; return write(); }, { recordRefusal: false });
-        }, {
-          holder: label, caller: label,
-          waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
-        });
-        if (result.acquired) {
-          correlation = options.correlate?.(result.value) ?? correlation;
-          return result;
+    const run = async (remainingMs: number): Promise<{ acquired: true; value: T } | { acquired: false }> => {
+      const deadline = performance.now() + remainingMs;
+      try {
+        for (;;) {
+          const result = await withAccountMutationLockAsync(() => {
+            guard?.();
+            // Publish one correlated wait after admission supplies its operation
+            // id; individual failed probes are part of this same wait.
+            return this.deliveryWriteNow(correlation, () => { acquiredAt = performance.now(); refused = false; return write(); }, { recordRefusal: false });
+          }, {
+            holder: label, caller: label,
+            waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
+          });
+          if (result.acquired) {
+            correlation = options.correlate?.(result.value) ?? correlation;
+            return result;
+          }
+          refused = true;
+          if (inherited || performance.now() >= deadline) return result;
+          waited = true;
+          await new Promise<void>(resolve => setTimeout(resolve, 5));
         }
-        refused = true;
-        if (inherited || performance.now() >= deadline) return result;
-        waited = true;
-        await new Promise<void>(resolve => setTimeout(resolve, 5));
+      } finally {
+        if (waited || refused) recordBlockingWait({ site: "registry-lock-async", synchronous: false,
+          durationMs: (acquiredAt ?? performance.now()) - startedAt, correlation, subject: "agent-registry", refused });
       }
-    } finally {
-      if (waited || refused) recordBlockingWait({ site: "registry-lock-async", synchronous: false,
-        durationMs: (acquiredAt ?? performance.now()) - startedAt, correlation, subject: "agent-registry", refused });
-    }
+    };
+    if (inherited) return run(totalWaitMs);
+    return this.withWriterAdmissionQueue(run, totalWaitMs);
   }
 
   private reserveSpawnRequest(input: SpawnRequest): SpawnBeginResult {
