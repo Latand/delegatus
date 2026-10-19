@@ -18,12 +18,12 @@ All values are milliseconds. Wall time includes asynchronous work. Loop interval
 
 | Run | Before wall | After wall | Before loop | After loop | Before largest sync entry | After largest sync entry |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0 | 8,978.17 | 8,122.11 | 1,251.56 | 80.12 | 771.10 | 34.60 |
-| 1 | 1,397.85 | 794.98 | 721.75 | 48.95 | 239.54 | 18.65 |
-| 2 | 1,629.16 | 752.32 | 763.91 | 49.64 | 331.12 | 17.90 |
-| 3 | 1,883.78 | 748.24 | 1,121.69 | 48.55 | 219.06 | 18.28 |
-| 4 | 1,389.55 | 731.71 | 719.73 | 52.82 | 215.21 | 18.76 |
-| 5 | 1,373.43 | 751.38 | 723.46 | 65.21 | 221.75 | 16.55 |
+| 0 | 9,114.22 | 8,410.70 | 1,208.91 | 66.68 | 747.96 | 30.66 |
+| 1 | 1,411.29 | 791.16 | 703.16 | 68.68 | 243.44 | 17.89 |
+| 2 | 1,403.54 | 917.44 | 703.05 | 67.96 | 236.89 | 27.04 |
+| 3 | 1,388.23 | 820.68 | 734.54 | 53.52 | 223.35 | 24.30 |
+| 4 | 1,454.82 | 784.85 | 792.79 | 56.64 | 213.37 | 20.59 |
+| 5 | 1,458.57 | 805.85 | 804.76 | 63.36 | 219.51 | 20.97 |
 
 ## Sources
 
@@ -31,36 +31,36 @@ Maximum synchronous entry per source across the six runs. Async waits are also c
 
 | Source | Before ms | After ms |
 | --- | ---: | ---: |
-| `appendRecord` | 0.800 | 0.858 |
-| `archivedPipelines` / `archivedPipelinesAsync` | 771.103 | 5.286 |
-| `diskPressure` | 0.087 | 0.089 |
-| `latestDeployment` | 0.172 | 0.161 |
-| `lifecycleJournal` | 5.564 | 3.620 |
-| `liveness.conversation` | 19.187 | 20.945 |
-| `liveness.project` | 1.241 | 0.167 |
-| `maintenanceRuns` | 4.963 | 5.566 |
-| `memoryProblems` | 277.083 | 0.508 |
-| `now` | 0.009 | 0.008 |
-| `openPullRequests` | 0.028 | 0.019 |
-| `pipelines` | 244.791 | 0.399 |
-| `prepareRead` | — | 23.639 |
-| `readState` | 4.631 | 3.585 |
-| `recordDeploySnapshots` | 0.267 | 0.470 |
-| `recordRuleReports` | 346.138 | 0.148 |
-| `refreshLifecycle` | 27.500 | 24.538 |
-| `registry` | 0.010 | 0.009 |
-| `reports.log` | 21.356 | 0.134 |
-| `retirementJournal` | 9.617 | 9.621 |
-| `retirementReport` | 0.037 | 0.030 |
-| `seatContextUsage` | 0.006 | 0.019 |
-| `seatDeployments` | 0.061 | 0.042 |
-| `seatFor` | 11.183 | 12.461 |
-| `seatTurnOutcome` | 0.013 | 0.014 |
-| `settings` | 1.603 | 0.374 |
-| `tasks` | 156.491 | 0.350 |
-| `workerAsks` | 0.106 | 0.106 |
-| `workerCounts` | 33.594 | 34.598 |
-| `writeState` | 9.664 | 8.126 |
+| `appendRecord` | 1.024 | 0.780 |
+| `archivedPipelines` / `archivedPipelinesAsync` | 747.963 | 4.710 |
+| `diskPressure` | 0.096 | 0.095 |
+| `latestDeployment` | 0.171 | 0.196 |
+| `lifecycleJournal` | 4.708 | 4.384 |
+| `liveness.conversation` | 20.216 | 15.687 |
+| `liveness.project` | 0.823 | 0.193 |
+| `maintenanceRuns` | 8.917 | 5.008 |
+| `memoryProblems` | 271.091 | 0.662 |
+| `now` | 0.014 | 0.008 |
+| `openPullRequests` | 0.041 | 0.030 |
+| `pipelines` | 194.219 | 0.427 |
+| `prepareRead` | — | 20.996 |
+| `readState` | 4.857 | 4.188 |
+| `recordDeploySnapshots` | 0.320 | 0.269 |
+| `recordRuleReports` | 368.409 | 0.196 |
+| `refreshLifecycle` | 23.833 | 23.952 |
+| `registry` | 0.014 | 0.012 |
+| `reports.log` | 23.236 | 0.134 |
+| `retirementJournal` | 7.162 | 8.259 |
+| `retirementReport` | 0.035 | 0.039 |
+| `seatContextUsage` | 0.005 | 0.023 |
+| `seatDeployments` | 0.047 | 0.042 |
+| `seatFor` | 12.280 | 10.989 |
+| `seatTurnOutcome` | 0.012 | 0.013 |
+| `settings` | 1.659 | 0.440 |
+| `tasks` | 170.121 | 0.318 |
+| `workerAsks` | 0.097 | 0.134 |
+| `workerCounts` | 27.338 | 30.660 |
+| `writeState` | 8.450 | 18.221 |
 
 ## Changes and contracts
 
