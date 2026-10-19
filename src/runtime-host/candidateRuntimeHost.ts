@@ -39,6 +39,7 @@ export function candidateHostLoopRecords() {
       if (!prefix) return;
       try {
         const row = JSON.parse(line.slice(prefix.length));
+        if (typeof row.role !== "string" || !row.role.trim() || !Number.isSafeInteger(row.pid) || row.pid <= 0) { malformed++; return; }
         if (row.role !== "runtime-host" || row.pid !== pid) return;
         const at = Date.parse(row.utc);
         const gap = prefix === "[viewer loop-gap] " ? row.gapMs : 0;

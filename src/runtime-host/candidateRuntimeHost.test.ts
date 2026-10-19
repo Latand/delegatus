@@ -25,6 +25,24 @@ test("a quiet host's minute summary proves its loop diagnostics were read", () =
   expect(records.window(1000, 76000)).toEqual({ records: 1, malformed: 0, maxMs: 0 });
 });
 
+test.each([
+  ["pid", { pid: undefined }],
+  ["role", { role: undefined }],
+])("a valid host summary does not mask a gap missing %s", (_field, identity) => {
+  const records = candidateHostLoopRecords();
+  records.read(line(800, 4000, identity), 42);
+  records.read(`[performance summary] ${JSON.stringify({ role: "runtime-host", pid: 42, utc: new Date(60000).toISOString(), logDropped: 0 })}`, 42);
+  const reading = records.window(1000, 76000);
+  expect(reading).toEqual({ records: 1, malformed: 1, maxMs: 0 });
+
+  const measured = passingCandidatePerformanceMeasurements();
+  measured.hostLoop = reading;
+  const report = candidatePerformanceEvidence({ checkedAt: "2026-10-01T00:00:00.000Z", runtime: `bun ${Bun.version}`,
+    bounds: CANDIDATE_PERFORMANCE_BOUNDS, measurements: measured, breaches: [], ok: true });
+  expect(report.ok).toBe(false);
+  expect(report.detail).toContain("malformed");
+});
+
 test("unreadable, dropped and overflowing loop evidence fails closed", () => {
   const records = candidateHostLoopRecords();
   records.read("[viewer loop-gap] {", 42);
