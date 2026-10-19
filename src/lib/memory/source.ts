@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { waitForStateLock } from "@/lib/state/lockWait";
 
 export type MemorySource = "delegatus" | "engines";
 export type MemoryPhase = "importing" | "draining" | "active";
@@ -88,4 +89,16 @@ export function setMemorySource(source: MemorySource, now = new Date().toISOStri
   withViewerOperation("memory.source-write", () => writeJsonDurably(statePath("memory-source.json"), { ...current, source, changedAt: now }));
   host.__delegatusMemorySource = undefined;
   return null;
+}
+
+/** Recovery is conditional on the failed import still owning the choice. A
+ * later operator write or phase transition always wins. Slice 3 starts imports. */
+export async function restoreMemorySourceAfterImport(importId: string, previous: MemorySourceFile | null): Promise<void> {
+  await waitForStateLock("memory.import.restore", () => withViewerOperation("memory.source-write", () => {
+    const current = readMemorySourceFile();
+    if (current?.source !== "delegatus" || current.phase !== "importing" || current.importId !== importId) return;
+    if (previous) writeJsonDurably(statePath("memory-source.json"), previous);
+    else fs.unlinkSync(statePath("memory-source.json"));
+    host.__delegatusMemorySource = undefined;
+  }));
 }
