@@ -18,6 +18,7 @@ export function lastAssistantMessageFromRecords(
   source: Record<string, unknown>[],
   root: FileEntry["root"],
   fallbackTs: number,
+  options: { preserveWhitespace?: boolean } = {},
 ): { text: string; ts: number } | null {
   for (const obj of [...source].reverse()) {
     const ts = Date.parse(String(obj.timestamp ?? "")) || fallbackTs;
@@ -25,25 +26,26 @@ export function lastAssistantMessageFromRecords(
       const payload = recordValue(obj.payload) ?? {};
       const type = stringValue(payload.type);
       if (type === "task_complete") {
-        const text = stringValue(payload.last_agent_message)?.trim();
-        if (text) return { text, ts };
+        const source = stringValue(payload.last_agent_message);
+        const text = options.preserveWhitespace ? source : source?.trim();
+        if (text?.trim()) return { text, ts };
       }
       if (type === "agent_message") return { text: stringValue(payload.message) ?? "", ts };
       if (type === "message" && payload.role === "assistant") {
-        const text = recordsValue(payload.content)
+        const source = recordsValue(payload.content)
           .map((part) => stringValue(part.text) ?? stringValue(part.input_text) ?? "")
-          .join("\n")
-          .trim();
-        if (text) return { text, ts };
+          .join("\n");
+        const text = options.preserveWhitespace ? source : source.trim();
+        if (text.trim()) return { text, ts };
       }
     }
     if (root === "claude-projects" && obj.type === "assistant") {
-      const text = recordsValue(recordValue(obj.message)?.content)
+      const source = recordsValue(recordValue(obj.message)?.content)
         .filter((part) => part.type === "text")
         .map((part) => stringValue(part.text) ?? "")
-        .join("\n")
-        .trim();
-      if (text) return { text, ts };
+        .join("\n");
+      const text = options.preserveWhitespace ? source : source.trim();
+      if (text.trim()) return { text, ts };
     }
   }
   return null;

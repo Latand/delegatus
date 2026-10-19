@@ -42,7 +42,9 @@ export type EphemeralAgentRequest = {
   hardCapMs: number;
   /** The engine's own native web search, the one tool a relay answer may use (relay.md §B.6). */
   webSearch?: boolean;
-  imageGeneration?: { readableRoot: string };
+  inputImages?: readonly string[];
+  inputFile?: string;
+  imageGeneration?: { readableRoot: string; readableMediaRoot?: string };
   onEvent?: (event: EphemeralAgentEvent) => void;
   /** A test runtime may shorten the timer without weakening the configured cap. */
   runtime?: HeadlessReviewRuntime & { timeoutMs?: number };
@@ -70,6 +72,7 @@ export type EphemeralCommand = {
   args: string[];
   env: NodeJS.ProcessEnv;
   stdin: string;
+  stdinFile?: string;
   outputPath: string | null;
   sessionId: null;
   reviewerPath: null;
@@ -173,6 +176,7 @@ export function buildEphemeralCommand(
       "-p",
       "--output-format",
       "stream-json",
+      ...(request.inputFile ? ["--input-format", "stream-json"] : []),
       "--verbose",
       "--restricted",
       "--safe-mode",
@@ -193,7 +197,8 @@ export function buildEphemeralCommand(
       command: resolveBinary("claude"),
       args,
       env: answerEnvironment(baseEnv),
-      stdin: request.prompt,
+      stdin: request.inputFile ? "" : request.prompt,
+      ...(request.inputFile ? { stdinFile: request.inputFile } : {}),
       outputPath: null,
       sessionId: null,
       reviewerPath: null,
@@ -212,6 +217,7 @@ export function buildEphemeralCommand(
     "exec",
     ...(request.session?.mode === "resume" ? ["resume", request.session.id!] : []),
     ...codexSubagentArgs(binary, false, request.account.env),
+    ...(request.inputImages ?? []).flatMap(file => ["--image", file]),
     "--disable",
     "shell_tool",
     "--disable",
@@ -243,7 +249,7 @@ export function buildEphemeralCommand(
     schemaPath,
     "--output-last-message",
     output,
-    ...(request.imageGeneration ? ["-c", 'default_permissions="relay"', "-c", `permissions.relay.filesystem={${JSON.stringify(request.imageGeneration.readableRoot)}="read"}`] : request.session?.mode === "resume" ? ["-c", 'sandbox_mode="read-only"'] : ["-s", "read-only"]),
+    ...(request.imageGeneration ? ["-c", 'default_permissions="relay"', "-c", `permissions.relay.filesystem={${JSON.stringify(request.imageGeneration.readableRoot)}="read"${request.imageGeneration.readableMediaRoot ? `,${JSON.stringify(request.imageGeneration.readableMediaRoot)}="read"` : ""}}`] : request.session?.mode === "resume" ? ["-c", 'sandbox_mode="read-only"'] : ["-s", "read-only"]),
     "-c",
     "cli_auth_credentials_store=file",
     "-c",

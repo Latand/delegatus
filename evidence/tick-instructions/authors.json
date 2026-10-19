@@ -1,0 +1,351 @@
+{
+  "sourceRevision": "d46246d19e33ef1372a2e4d0d8694286903815b7",
+  "sourceState": "Scratch source verified byte for byte against the recorded revision.",
+  "capturedAt": "2026-10-19T08:22:31.236207+00:00",
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "command": "bash \"$GATE_SLOT\" bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"instruction authors are readable|standing instructions fit\"",
+  "gateWrapper": "The pipeline-provided gate-slot.sh",
+  "isolation": {
+    "HOME": true,
+    "XDG_CONFIG_HOME": true,
+    "TMPDIR": true,
+    "LLV_STATE_DIR": true,
+    "viewerControl": "closed loopback port",
+    "chromeTemp": "owned scratch directory through a short proc-fd alias"
+  },
+  "result": {
+    "testsPassed": 2,
+    "testsFailed": 0,
+    "assertions": 178
+  },
+  "visualReview": {
+    "framesReviewed": 8,
+    "result": "Operator, seat epoch and unknown authors are readable with their write dates. The operator editor contains only operator lines. No horizontal clipping was observed in either locale or theme."
+  },
+  "sourceSha256": {
+    "src/components/orchestrator/SeatTickBody.tsx": "e3671e9926cc199949c053a08ac73d47e5705170722fb9b790b5083540b95256",
+    "src/lib/monitor/seatTickInstructions.ts": "3cba678b5156eaf65977814532ca1b9e790fe578b18553db813d71180e96bd91",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "4f8f203ae5fa3752d3ed81dfbbd0db2991f068f0d227b6b00f6b039ab401c69f",
+    "src/components/kanban/issue1695BrowserHarness.ts": "98b422f7c0f310d1f4a1aabadec390ee45d08a4c416c204db2a4ec2580c631b7",
+    "src/components/kanban/issue1695Evidence.fixture.tsx": "19ef85db71548f043e487742cde3303a292e042192cab80cf3ba9197bf0aca6d",
+    "src/lib/i18n/en.ts": "8c37e30885859105929c73d546bf2c11f77e552fb5db28bd30c60b9d3b497512",
+    "src/lib/i18n/uk.ts": "143ca2f37e012a502bd39972795085a681e8ea40ea5c33906dc0db813c70dbf4",
+    "src/app/globals.css": "46cece0a546dffe434248bc8378e958d4169caa449e98ed96e63aa62e33fa53e"
+  },
+  "frames": [
+    {
+      "file": "desktop-en-light.png",
+      "sha256": "84f9af5b7a8f3461d348456d5e61f6510e77771f9bab6e357bdcd33d484c3372",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "label": "desktop-en-light",
+      "geometry": [
+        {
+          "width": 279,
+          "scrollWidth": 279,
+          "text": "Operator · 10/2/2026, 3:00:00 PMUpdated operator instruction."
+        },
+        {
+          "width": 279,
+          "scrollWidth": 279,
+          "text": "Seat epoch 7 · 10/1/2026, 3:00:00 PMCheck the release before resuming the paused lane."
+        },
+        {
+          "width": 279,
+          "scrollWidth": 279,
+          "text": "author unknown · date unknownA legacy note with no author recorded."
+        }
+      ],
+      "operatorDate": "2026-10-02T12:00:00.000Z",
+      "preservedSeatAndLegacy": true,
+      "pageErrors": []
+    },
+    {
+      "file": "phone-390-en-light.png",
+      "sha256": "ec0cf5954db02d6f71c50f1a2739ce7336f0799fcde0b7f43293c1a507303af1",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "label": "phone-390-en-light",
+      "geometry": [
+        {
+          "width": 358,
+          "scrollWidth": 358,
+          "text": "Operator · 10/2/2026, 3:00:00 PMUpdated operator instruction."
+        },
+        {
+          "width": 358,
+          "scrollWidth": 358,
+          "text": "Seat epoch 7 · 10/1/2026, 3:00:00 PMCheck the release before resuming the paused lane."
+        },
+        {
+          "width": 358,
+          "scrollWidth": 358,
+          "text": "author unknown · date unknownA legacy note with no author recorded."
+        }
+      ],
+      "operatorDate": "2026-10-02T12:00:00.000Z",
+      "preservedSeatAndLegacy": true,
+      "pageErrors": []
+    },
+    {
+      "file": "desktop-en-dark.png",
+      "sha256": "672b5130998968d9c5213c397ce75903b60e36ef6f7472bb4b1c4f63ca0f204f",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "label": "desktop-en-dark",
+      "geometry": [
+        {
+          "width": 279,
+          "scrollWidth": 279,
+          "text": "Operator · 10/2/2026, 3:00:00 PMUpdated operator instruction."
+        },
+        {
+          "width": 279,
+          "scrollWidth": 279,
+          "text": "Seat epoch 7 · 10/1/2026, 3:00:00 PMCheck the release before resuming the paused lane."
+        },
+        {
+          "width": 279,
+          "scrollWidth": 279,
+          "text": "author unknown · date unknownA legacy note with no author recorded."
+        }
+      ],
+      "operatorDate": "2026-10-02T12:00:00.000Z",
+      "preservedSeatAndLegacy": true,
+      "pageErrors": []
+    },
+    {
+      "file": "phone-390-en-dark.png",
+      "sha256": "27e5aeb603c0a7f66c94536fa307bf3ce774907269c7a306142d543509b2b5bd",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "label": "phone-390-en-dark",
+      "geometry": [
+        {
+          "width": 358,
+          "scrollWidth": 358,
+          "text": "Operator · 10/2/2026, 3:00:00 PMUpdated operator instruction."
+        },
+        {
+          "width": 358,
+          "scrollWidth": 358,
+          "text": "Seat epoch 7 · 10/1/2026, 3:00:00 PMCheck the release before resuming the paused lane."
+        },
+        {
+          "width": 358,
+          "scrollWidth": 358,
+          "text": "author unknown · date unknownA legacy note with no author recorded."
+        }
+      ],
+      "operatorDate": "2026-10-02T12:00:00.000Z",
+      "preservedSeatAndLegacy": true,
+      "pageErrors": []
+    },
+    {
+      "file": "desktop-uk-light.png",
+      "sha256": "ede4224fb993fe7adce309786da01501739ff2b9f77a83fdccbbfeeca364b5da",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "label": "desktop-uk-light",
+      "geometry": [
+        {
+          "width": 279,
+          "scrollWidth": 279,
+          "text": "Оператор · 02.10.2026, 15:00:00Updated operator instruction."
+        },
+        {
+          "width": 279,
+          "scrollWidth": 279,
+          "text": "Сидіння, епоха 7 · 01.10.2026, 15:00:00Check the release before resuming the paused lane."
+        },
+        {
+          "width": 279,
+          "scrollWidth": 279,
+          "text": "автор невідомий · дата невідомаA legacy note with no author recorded."
+        }
+      ],
+      "operatorDate": "2026-10-02T12:00:00.000Z",
+      "preservedSeatAndLegacy": true,
+      "pageErrors": []
+    },
+    {
+      "file": "phone-390-uk-light.png",
+      "sha256": "4a0162502ee470b87b61e64d1e9b61363426d8c00cf13e5f21be759d26aa0907",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "label": "phone-390-uk-light",
+      "geometry": [
+        {
+          "width": 358,
+          "scrollWidth": 358,
+          "text": "Оператор · 02.10.2026, 15:00:00Updated operator instruction."
+        },
+        {
+          "width": 358,
+          "scrollWidth": 358,
+          "text": "Сидіння, епоха 7 · 01.10.2026, 15:00:00Check the release before resuming the paused lane."
+        },
+        {
+          "width": 358,
+          "scrollWidth": 358,
+          "text": "автор невідомий · дата невідомаA legacy note with no author recorded."
+        }
+      ],
+      "operatorDate": "2026-10-02T12:00:00.000Z",
+      "preservedSeatAndLegacy": true,
+      "pageErrors": []
+    },
+    {
+      "file": "desktop-uk-dark.png",
+      "sha256": "b986831f088c80a2e2be3a55ae9d227ddbede941f26c117487ec1016984f3dab",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "label": "desktop-uk-dark",
+      "geometry": [
+        {
+          "width": 279,
+          "scrollWidth": 279,
+          "text": "Оператор · 02.10.2026, 15:00:00Updated operator instruction."
+        },
+        {
+          "width": 279,
+          "scrollWidth": 279,
+          "text": "Сидіння, епоха 7 · 01.10.2026, 15:00:00Check the release before resuming the paused lane."
+        },
+        {
+          "width": 279,
+          "scrollWidth": 279,
+          "text": "автор невідомий · дата невідомаA legacy note with no author recorded."
+        }
+      ],
+      "operatorDate": "2026-10-02T12:00:00.000Z",
+      "preservedSeatAndLegacy": true,
+      "pageErrors": []
+    },
+    {
+      "file": "phone-390-uk-dark.png",
+      "sha256": "68826577f277c38a094b87b3b26cb250422a457b0855daa245b03794b3a925a1",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "label": "phone-390-uk-dark",
+      "geometry": [
+        {
+          "width": 358,
+          "scrollWidth": 358,
+          "text": "Оператор · 02.10.2026, 15:00:00Updated operator instruction."
+        },
+        {
+          "width": 358,
+          "scrollWidth": 358,
+          "text": "Сидіння, епоха 7 · 01.10.2026, 15:00:00Check the release before resuming the paused lane."
+        },
+        {
+          "width": 358,
+          "scrollWidth": 358,
+          "text": "автор невідомий · дата невідомаA legacy note with no author recorded."
+        }
+      ],
+      "operatorDate": "2026-10-02T12:00:00.000Z",
+      "preservedSeatAndLegacy": true,
+      "pageErrors": []
+    }
+  ],
+  "longInstructionChecks": [
+    {
+      "label": "desktop-1440-en",
+      "edited": {
+        "scrollHeight": 228,
+        "clientHeight": 228
+      },
+      "saved": {
+        "scrollHeight": 228,
+        "clientHeight": 228
+      },
+      "overLimit": "501 / 500 characters · Over limit by 1",
+      "putRequests": 3
+    },
+    {
+      "label": "desktop-1440-en",
+      "reopened": {
+        "scrollHeight": 228,
+        "clientHeight": 228
+      }
+    },
+    {
+      "label": "phone-390-en",
+      "edited": {
+        "scrollHeight": 300,
+        "clientHeight": 300
+      },
+      "saved": {
+        "scrollHeight": 300,
+        "clientHeight": 300
+      },
+      "overLimit": "501 / 500 characters · Over limit by 1",
+      "putRequests": 6
+    },
+    {
+      "label": "phone-390-en",
+      "reopened": {
+        "scrollHeight": 300,
+        "clientHeight": 300
+      }
+    },
+    {
+      "label": "desktop-1440-uk",
+      "edited": {
+        "scrollHeight": 264,
+        "clientHeight": 264
+      },
+      "saved": {
+        "scrollHeight": 264,
+        "clientHeight": 264
+      },
+      "overLimit": "501 / 500 символів · Ліміт перевищено на 1",
+      "putRequests": 9
+    },
+    {
+      "label": "desktop-1440-uk",
+      "reopened": {
+        "scrollHeight": 264,
+        "clientHeight": 264
+      }
+    },
+    {
+      "label": "phone-390-uk",
+      "edited": {
+        "scrollHeight": 348,
+        "clientHeight": 348
+      },
+      "saved": {
+        "scrollHeight": 348,
+        "clientHeight": 348
+      },
+      "overLimit": "501 / 500 символів · Ліміт перевищено на 1",
+      "putRequests": 12
+    },
+    {
+      "label": "phone-390-uk",
+      "reopened": {
+        "scrollHeight": 348,
+        "clientHeight": 348
+      }
+    }
+  ]
+}
