@@ -2779,7 +2779,7 @@ export async function spawnStructuredConversation(
     };
     const recovery: StagedLaunchRecovery = { phase: "unpublished", startedAt: now(), checks: 0, nextTryAt: now(), reason: "host publication pending" };
     await writeStagedRecovery(input.registry, operationId, recovery);
-    const deliverCurrentFirst = async (): Promise<void | "held"> => {
+    const deliverCurrentFirst = async (deliver: typeof deliverFirst = deliverFirst): Promise<void | "held"> => {
       await input.authorize?.();
       let deliveryInput = input;
       if (input.preparePrompt) {
@@ -2793,7 +2793,7 @@ export async function spawnStructuredConversation(
         await input.authorize?.();
         if (revision && roleMemoryRevisionToken() !== revision) throw new RoleMemoryChanged();
       };
-      return await deliverFirst({ ...deliveryInput, authorize: authorizeDispatch }, identity.path);
+      return await deliver({ ...deliveryInput, authorize: authorizeDispatch }, identity.path);
     };
     const continuation: StagedContinuation = {
       host,
@@ -2841,8 +2841,9 @@ export async function spawnStructuredConversation(
     if (initialMessage === "held") {
       if (!uncertainFirstMessage) {
         await writeStagedRecovery(input.registry, operationId, { ...recovery, reason: "first message held before dispatch" });
-        // The continuation refreshes the prompt and revision before retrying
-        // the same durable first-message identity.
+        // The injected delivery seam reports the hold; recovery retries via
+        // the real durable queue while refreshing the prompt and revision.
+        continuation.deliver = () => deliverCurrentFirst(defaultDeliverFirst);
       }
       clearDurableSetupTimeout();
       (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, input.receipt.launchId, input.receipt.admissionOwner ?? processIdentity())));
