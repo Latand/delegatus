@@ -591,6 +591,37 @@ test.each([0,1000])("resident terminal hosts and stale flow cleanup use indexed 
   } finally { loads.mockRestore(); }
 });
 
+test.each([64, 4096])("closed-lane cleanup keeps eligibility checks bounded with %s unlaunched attempts", async history => {
+  const { h, lane } = await committing();
+  const original = lane.runs[0]!.attempts[0]!;
+  lane.state = "closed"; lane.cursor = null; lane.closedAt = h.ports.now();
+  lane.runs[0]!.attempts = Array.from({ length: history }, (_, index) => ({ ...structuredClone(original), n: index + 1,
+    historical: true, state: "failed", verdict: { status: "fail" }, completedAt: lane.closedAt,
+    conversationId: null, agentPath: null, paneId: null, launchId: null }));
+  lane.runs[0]!.attempts.push({ ...structuredClone(original), n: history + 1, historical: true,
+    state: "running", verdict: null, completedAt: null, conversationId: "late-host", agentPath: "late-host-transcript", launchId: null });
+  for (const attempt of lane.runs[0]!.attempts) delete attempt.activation;
+  lane.terminalReap = { rounds: 0, stopped: 0, lastAt: lane.closedAt!, settledAt: null,
+    settledAttempts: Array.from({ length: history }, (_, n) => `build:${n + 1}`) };
+  lane.pendingReviewFlowCleanup = ["cleanup-flow"];
+  savePipelines([lane]);
+  const closed: string[] = [];
+  h.ports.closeFlow = async id => { closed.push(id); return {}; };
+  h.ports.conversationAgentActive = async () => true;
+  let visits = 0;
+  const some = Array.prototype.some;
+  Array.prototype.some = function (predicate, thisArg) {
+    const count = this.length > 0 && this[0] && typeof this[0] === "object" && "n" in this[0] && "effectiveRole" in this[0];
+    return some.call(this, (value, index, array) => { if (count) visits++; return predicate.call(thisArg, value, index, array); });
+  };
+  try { await tickPipelinesController([], h.ports); }
+  finally { Array.prototype.some = some; }
+  expect(closed).toEqual(["cleanup-flow"]);
+  expect(visits).toBeLessThanOrEqual(256);
+  expect(loadPipelines()[0]!.pendingReviewFlowCleanup ?? []).toEqual([]);
+  expect((await selectPipelineControllerWork(Number.MAX_SAFE_INTEGER, [])).some(work => work.row_key === lane.id)).toBe(true);
+}, 30_000);
+
 test.each(["paused", "running"] as const)("complete warmed %s phases keep attempt visits and copies bounded as one lane grows", async state => {
   const { h, lane } = await committing();
   const exec = h.ports.exec;

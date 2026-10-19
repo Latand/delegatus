@@ -1594,9 +1594,11 @@ function pipelineHasRecordedHost(pipeline: Pipeline): boolean {
 function pipelineControllerActive(pipeline: Pipeline): boolean {
   if (pipeline.closeTeardown) return pipeline.closeTeardown.phase !== "settled";
   if (pipeline.activationCloseRequested) return true;
-  if (pipeline.state === "closed" && !pipelineHasRecordedHost(pipeline)) return Boolean(pipeline.unconfirmedHosts?.length);
   if (pipeline.state === "completed" || pipeline.state === "closed") {
-    return Boolean(pipeline.unconfirmedHosts?.length) || !pipeline.terminalReap?.settledAt;
+    // A scoped controller holds an attempt window. Keep its eligibility
+    // conservative; the scheduler checks host identity in the stored row.
+    return Boolean(pipeline.unconfirmedHosts?.length) || (!pipeline.terminalReap?.settledAt
+      && (pipeline.state === "completed" || controllerPipelineKeys()?.includes(pipeline.id) || pipelineHasRecordedHost(pipeline)));
   }
   return true;
 }
