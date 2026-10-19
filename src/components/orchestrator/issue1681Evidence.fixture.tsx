@@ -116,7 +116,7 @@ function baseAnswer(): SeatTickSettingsAnswer {
       updatedAt: ago(20), setBy: { kind: "gateway" as const, project: PROJECT, conversationId: null, seatEpoch: null }, why: null,
       status: { live: null, lastRun: { key: "fixture-release", at: Date.now() - 86400000, outcome: "published" as const, cut: "fixture-cut" }, request: null,
         hold: { reason: "An installation incident is being investigated.", at: ago(20), by: { kind: "gateway" as const, project: PROJECT, conversationId: null, seatEpoch: null } }, blocked: null,
-        observation: { state: "blocked" as const, blocker: 10, reason: params.get("release") === "unknown" ? "unknown-value" : "capture-tools: tesseract", cut: { revision: "fixture-cut", at: 0 }, count: 45, at: Date.now(), lastTag: "v1.0.0", nextEligibleAt: Date.now() } }
+        observation: { state: "blocked" as const, blocker: 10, reason: params.get("release") === "unknown" ? "unknown-value" : "capture-tools: pdftocairo", cut: { revision: "fixture-cut", at: 0 }, count: 45, at: Date.now(), lastTag: "v1.0.0", nextEligibleAt: Date.now() } }
     } } : {}),
     maintenance: maintenance(),
     project: PROJECT,

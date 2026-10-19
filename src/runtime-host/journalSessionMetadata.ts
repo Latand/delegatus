@@ -1,4 +1,11 @@
+import path from "node:path";
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import type { Database } from "bun:sqlite";
+
+const sessionHostIndexes = declaredIndexes([
+  "CREATE INDEX IF NOT EXISTS session_host_activity ON session_host_metadata(inactive, id, updated_at)",
+  "CREATE INDEX IF NOT EXISTS session_host_inactive_recency ON session_host_metadata(checkpoint_seq DESC, id DESC) WHERE inactive = 1",
+]);
 
 /** Companion scalars avoid rewriting the large entity records. Both indexes are
  * created while the new table is empty; backfill grows them a few rows at a time.
@@ -22,6 +29,7 @@ export class SessionHostMetadata {
     const read = this.db.query<{ value: string }, [string]>("SELECT value FROM journal_meta WHERE key = ?");
     if (read.get("session_host_metadata_schema_version")?.value === "1"
       && read.get("session_host_metadata_ready")?.value === "1") {
+      sessionHostIndexes.install(this.db, path.dirname(this.db.filename));
       this.ready = true;
       this.initialized = true;
       return;
@@ -118,15 +126,16 @@ export class SessionHostMetadata {
     const version = this.db.query<{ value: string }, []>(
       "SELECT value FROM journal_meta WHERE key = 'session_host_metadata_schema_version'",
     ).get()?.value;
-    if (version === "1") return;
+    if (version === "1") {
+      sessionHostIndexes.install(this.db, path.dirname(this.db.filename));
+      return;
+    }
     if (version !== undefined) throw new Error("unsupported session metadata schema version");
     this.db.exec(`
       CREATE TABLE session_host_metadata (
         id TEXT PRIMARY KEY, host, inactive INTEGER NOT NULL,
         checkpoint_seq INTEGER NOT NULL, updated_at INTEGER
       );
-      CREATE INDEX session_host_activity ON session_host_metadata(inactive, id, updated_at);
-      CREATE INDEX session_host_inactive_recency ON session_host_metadata(checkpoint_seq DESC, id DESC) WHERE inactive = 1;
       CREATE TRIGGER session_host_insert AFTER INSERT ON entities WHEN NEW.kind = 'session' BEGIN
         INSERT INTO session_host_metadata(id, host, inactive, checkpoint_seq, updated_at)
         VALUES (NEW.id, json_extract(NEW.state_json, '$.host'),
@@ -149,6 +158,7 @@ export class SessionHostMetadata {
         DELETE FROM session_host_metadata WHERE id = OLD.id;
       END;
     `);
+    sessionHostIndexes.install(this.db, path.dirname(this.db.filename));
     this.set("session_host_metadata_schema_version", "1");
   }
 }

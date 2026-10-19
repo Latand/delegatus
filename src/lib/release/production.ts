@@ -24,7 +24,7 @@ export async function captureTools(repoDir: string, run: typeof command = comman
   const probe = String.raw`
     const fs = require("node:fs"), path = require("node:path"), os = require("node:os");
     const executable = p => { try { fs.accessSync(p, fs.constants.X_OK); return true; } catch { return false; } };
-    const missing = ["tesseract", "pdftocairo"].filter(tool => !Bun.which(tool));
+    const missing = ["pdftocairo"].filter(tool => !Bun.which(tool));
     let chrome = process.env.CHROME_BIN || ["/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"].find(executable);
     if (!chrome) { try { chrome = require("playwright-core").chromium.executablePath(); } catch {} }
     if (!chrome || !executable(chrome)) {
@@ -37,7 +37,7 @@ export async function captureTools(repoDir: string, run: typeof command = comman
     console.log(JSON.stringify({ missing, chrome }));
   `;
   const value = JSON.parse(await run("bun", ["-e", probe], repoDir)) as { missing: string[]; chrome: string | null };
-  if (!Array.isArray(value.missing) || value.missing.some(tool => !["tesseract", "pdftocairo", "Chrome"].includes(tool))
+  if (!Array.isArray(value.missing) || value.missing.some(tool => !["pdftocairo", "Chrome"].includes(tool))
     || value.chrome !== null && typeof value.chrome !== "string" || !value.chrome && !value.missing.includes("Chrome")) throw new Error("capture tools could not be read");
   return value;
 }

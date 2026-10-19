@@ -1999,6 +1999,20 @@ export function selectArchivedPipelines(select: (pipeline: Pipeline) => boolean,
   return archiveStore().selectReadonlyAsync(select, limit);
 }
 
+/** Narrow attention reconciliation to archived owners named by the current
+ * conversation memberships. The closed-lanes list remains the paged reader. */
+export function loadArchivedPipelinesForOwnership(ids: readonly string[]): Pipeline[] {
+  return [...new Set(ids)].flatMap(id => {
+    const pipeline = archiveStore().get(id);
+    return pipeline ? [pipeline] : [];
+  });
+}
+
+/** Collection revision for rechecking a narrow archived-owner observation after admission. */
+export function archivedPipelinesRevision(): number {
+  return archiveStore().revision();
+}
+
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
   if (!pipelineActivitySettled(pipeline)) return false;
   /* Closed records archive on closedAt. A discarded draft now closes like

@@ -1,5 +1,5 @@
 import { loadFlows } from "@/lib/flows/store";
-import { loadPipelinesForProjection } from "@/lib/pipelines/store";
+import { loadArchivedPipelinesForOwnership, loadPipelinesForProjection } from "@/lib/pipelines/store";
 import { filterPipelinesForFileScan } from "@/lib/pipelines/visibility";
 import { loadTasksForList } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -10,6 +10,9 @@ import { tmuxEndpointHealth } from "@/lib/tmux";
 export interface FilesResponseDependencies {
   loadFlows: typeof loadFlows;
   loadPipelinesForProjection: typeof loadPipelinesForProjection;
+  /** Terminal ownership stays authoritative when a lane is archived and
+      absent from the board's visible pipeline projection. */
+  loadArchivedPipelinesForOwnership: typeof loadArchivedPipelinesForOwnership;
   filterPipelinesForFileScan: typeof filterPipelinesForFileScan;
   /** The shared, frozen task list: the route reconciles and overlays it by
       copying the tasks it changes, so it never needs a copy of every row. */
@@ -22,6 +25,7 @@ export interface FilesResponseDependencies {
 const productionDependencies: FilesResponseDependencies = {
   loadFlows,
   loadPipelinesForProjection,
+  loadArchivedPipelinesForOwnership,
   filterPipelinesForFileScan,
   loadTasks: loadTasksForList,
   loadWorkflows,

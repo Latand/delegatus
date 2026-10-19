@@ -1,0 +1,187 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "case": "terminal containers withdraw stale asks and retain the live ask",
+  "clock": "2026-10-19T06:00:00Z",
+  "baseline": "f090bde76d6d",
+  "before": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "finishedColumn": "assigned",
+      "assignedColumns": 1,
+      "assignedCards": 2,
+      "attention": 4,
+      "working": 1,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1440,
+      "finishedColumn": "assigned",
+      "assignedColumns": 1,
+      "assignedCards": 2,
+      "attention": 4,
+      "working": 1,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "finishedColumn": "assigned",
+      "assignedColumns": 1,
+      "assignedCards": 2,
+      "attention": 4,
+      "working": 1,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "finishedColumn": "assigned",
+      "assignedColumns": 1,
+      "assignedCards": 2,
+      "attention": 4,
+      "working": 1,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 390,
+      "finishedColumn": "assigned",
+      "assignedColumns": 1,
+      "assignedCards": 2,
+      "attention": 4,
+      "working": 1,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 1440,
+      "finishedColumn": "assigned",
+      "assignedColumns": 1,
+      "assignedCards": 2,
+      "attention": 4,
+      "working": 1,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "finishedColumn": "assigned",
+      "assignedColumns": 1,
+      "assignedCards": 2,
+      "attention": 4,
+      "working": 1,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "finishedColumn": "assigned",
+      "assignedColumns": 1,
+      "assignedCards": 2,
+      "attention": 4,
+      "working": 1,
+      "pageErrors": []
+    }
+  ],
+  "after": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 390,
+      "finishedColumn": "inbox",
+      "assignedColumns": 1,
+      "assignedCards": 1,
+      "attention": 1,
+      "working": 0,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "width": 1440,
+      "finishedColumn": "inbox",
+      "assignedColumns": 1,
+      "assignedCards": 1,
+      "attention": 1,
+      "working": 0,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 390,
+      "finishedColumn": "inbox",
+      "assignedColumns": 1,
+      "assignedCards": 1,
+      "attention": 1,
+      "working": 0,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "width": 1440,
+      "finishedColumn": "inbox",
+      "assignedColumns": 1,
+      "assignedCards": 1,
+      "attention": 1,
+      "working": 0,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 390,
+      "finishedColumn": "inbox",
+      "assignedColumns": 1,
+      "assignedCards": 1,
+      "attention": 1,
+      "working": 0,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "width": 1440,
+      "finishedColumn": "inbox",
+      "assignedColumns": 1,
+      "assignedCards": 1,
+      "attention": 1,
+      "working": 0,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 390,
+      "finishedColumn": "inbox",
+      "assignedColumns": 1,
+      "assignedCards": 1,
+      "attention": 1,
+      "working": 0,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "width": 1440,
+      "finishedColumn": "inbox",
+      "assignedColumns": 1,
+      "assignedCards": 1,
+      "attention": 1,
+      "working": 0,
+      "pageErrors": []
+    }
+  ],
+  "changedSourceSha256": "fe2804c8d7ed3e1dfc5cbbcd3388124bd531b908f390526774900999baa1a56b"
+}

@@ -1,3 +1,4 @@
+import { declaredIndexes } from "./declaredIndexes";
 import path from "node:path";
 import { hotStateSqliteWriterReady, hotStatePreparingWriterReady } from "./hotStateAuthority";
 import { FileTransactionBusyError } from "./fileTransaction";
@@ -22,10 +23,21 @@ const triggers = [
   `CREATE TRIGGER history_delete AFTER DELETE ON state_rows WHEN ${tracked("OLD")} BEGIN ${enqueue("OLD")} END`,
 ];
 
+const historyProjectionIndexes = declaredIndexes([
+  "CREATE INDEX IF NOT EXISTS history_conversation ON history_attempts(conversationId,collection,historical)",
+  "CREATE INDEX IF NOT EXISTS history_path ON history_attempts(agentPath,collection,historical)",
+  "CREATE INDEX IF NOT EXISTS history_project ON history_inputs(project,collection,row_key)",
+  "CREATE INDEX IF NOT EXISTS history_started ON history_attempts(startedMs,collection,row_key)",
+  "CREATE INDEX IF NOT EXISTS history_reviewer ON history_rounds(reviewerPid)",
+  "CREATE INDEX IF NOT EXISTS history_reviewer_conversation ON history_rounds(reviewerConversationId,row_key,round)",
+  "CREATE INDEX IF NOT EXISTS history_reviewer_path ON history_rounds(reviewerPath,row_key,round)",
+]);
+
 export function historyProjectionReady(db: Database): boolean {
   const rows = db.query<{ name: string; sql: string }, []>("SELECT name,sql FROM sqlite_master WHERE name LIKE 'history_%'").all();
   const names = new Set(rows.map(row => row.name));
-  return ["history_meta", "history_flow_meta", "history_flow_changes", "history_count_meta", "history_count_roles", "history_pending", "history_inputs", "history_runs", "history_attempts", "history_rounds", "history_projects", "history_count_projects", "history_conversation", "history_path", "history_project", "history_reviewer", "history_reviewer_conversation", "history_reviewer_path", "history_started"].every(name => names.has(name))
+  return ["history_meta", "history_flow_meta", "history_flow_changes", "history_count_meta", "history_count_roles", "history_pending", "history_inputs", "history_runs", "history_attempts", "history_rounds", "history_projects", "history_count_projects"].every(name => names.has(name))
+    && historyProjectionIndexes.ready(names)
     && triggers.every(sql => rows.some(row => row.sql === sql));
 }
 
@@ -33,6 +45,11 @@ export function historyProjectionReady(db: Database): boolean {
  * cooperatively on demand; neither startup nor a request decodes them in JS.
  * Every writer, including an older release, queues changes transactionally. */
 export function installHistoryProjection(db: Database, directory: string): void {
+  const objects = new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master").all().map(row => row.name));
+  if (["history_attempts", "history_inputs", "history_rounds"].every(name => objects.has(name))
+    && !historyProjectionIndexes.ready(objects) && mayRunStateStartupMutation(directory)) {
+    historyProjectionIndexes.install(db, directory);
+  }
   if (historyProjectionReady(db) || !mayRunStateStartupMutation(directory)) return;
   for (const sql of triggers) db.exec(`DROP TRIGGER IF EXISTS ${sql.split(" ")[2]!}`);
   for (const table of ["history_meta","history_flow_meta","history_flow_changes","history_count_meta","history_count_roles","history_pending","history_inputs","history_projects","history_count_projects","history_runs","history_attempts","history_rounds"]) db.exec(`DROP TABLE IF EXISTS ${table}`);
@@ -53,18 +70,12 @@ export function installHistoryProjection(db: Database, directory: string): void 
     `CREATE TABLE history_attempts(collection TEXT NOT NULL,row_key TEXT NOT NULL,run INTEGER NOT NULL,attempt INTEGER NOT NULL,
       stageId TEXT,n INTEGER,state TEXT,historical INTEGER,conversationId TEXT,agentPath TEXT,paneId TEXT,startedAt TEXT,startedMs INTEGER,role TEXT,providerWait TEXT,
       PRIMARY KEY(collection,row_key,run,attempt))`,
-    "CREATE INDEX history_conversation ON history_attempts(conversationId,collection,historical)",
-    "CREATE INDEX history_path ON history_attempts(agentPath,collection,historical)",
-    "CREATE INDEX history_project ON history_inputs(project,collection,row_key)",
-    "CREATE INDEX history_started ON history_attempts(startedMs,collection,row_key)",
     `CREATE TABLE history_rounds(row_key TEXT NOT NULL,round INTEGER NOT NULL,reviewerPath TEXT,reviewerConversationId TEXT,
       reviewerPid INTEGER,reviewerIdentity TEXT,PRIMARY KEY(row_key,round))`,
-    "CREATE INDEX history_reviewer ON history_rounds(reviewerPid)",
-    "CREATE INDEX history_reviewer_conversation ON history_rounds(reviewerConversationId,row_key,round)",
-    "CREATE INDEX history_reviewer_path ON history_rounds(reviewerPath,row_key,round)",
     ...triggers,
     "INSERT INTO history_pending SELECT collection,row_key FROM state_rows WHERE collection IN ('pipelines','pipelines_archive','flows')",
   ]) db.exec(sql);
+  historyProjectionIndexes.install(db, directory);
 }
 
 // Compact inputs omit prompts, output, scaffolds, reports, decisions and journals.

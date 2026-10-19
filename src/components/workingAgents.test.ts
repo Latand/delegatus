@@ -11,7 +11,7 @@ import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 
 import { buildProjectSummaries, projectKey } from "./projectModel";
-import { isWorkingAgent, overviewWorkingTotal, workingAgentCount, workingAgentCounts } from "./workingAgents";
+import { HOSTLESS_WORKING_GRACE_SECONDS, isWorkingAgent, overviewWorkingTotal, workingAgentCount, workingAgentCounts } from "./workingAgents";
 
 /* The sidebar said 38 while the board said 12 for the same project at the same
    moment (2026-10-07). Both now count agents whose turn is running, with one
@@ -175,4 +175,13 @@ test("the Overview counts one scope: its top line and the rail's Overview row le
   expect(shown.reduce((total, summary) => total + summary.liveCount, 0)).toBe(topLine);
   /* The archived row keeps its own count in the rail's archive section. */
   expect(rows.find((summary) => summary.project === ARCHIVED)?.liveCount).toBe(1);
+});
+
+
+test("a cached live turn without a host expires at the bound; a verified running host keeps working", () => {
+  const stale = file("hostless", { ...open, proc: null, activityReason: "structured_spawn_host_gone_turn_open", mtime: NOW - 15 });
+  expect(isWorkingAgent(stale, NOW)).toBe(true);
+  expect(isWorkingAgent(stale, NOW + HOSTLESS_WORKING_GRACE_SECONDS)).toBe(false);
+  expect(isWorkingAgent({ ...stale, proc: "done" }, NOW)).toBe(false);
+  expect(isWorkingAgent({ ...stale, proc: "running" }, NOW + 7 * 86400)).toBe(true);
 });

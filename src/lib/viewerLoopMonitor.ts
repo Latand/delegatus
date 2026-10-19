@@ -5,12 +5,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 import type { createLoopProfiler, LoopGapProfile } from "./loopProfiler";
 
-export type ViewerOperation = "temp.sweep" | "resources.read" | "worktrees.sweep" | "history.prepare" | "history.read" | "history.project-row" | "memory.curation-admission" | "pipelines.repository-initialization" | "memory.curation-panel" | "tasks.note" | "mcp.receipts" | "mcp.tasks.executor" | "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
+export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.read" | "worktrees.sweep" | "history.prepare" | "history.read" | "history.project-row" | "memory.curation-admission" | "pipelines.repository-initialization" | "memory.curation-panel" | "tasks.note" | "mcp.receipts" | "mcp.tasks.executor" | "memory.engine-start" | "memory.curation-status" | "runtime.startup-row" | "controller.account-migration" | "orchestrator.deputy" | "voice.orchestrator-read" | "telegram.review-polls" | "accounts.migration-target" | "pipelines.startup-admission" | "pipelines.mutation" | "pipelines.controller-mutation" | "runtime.delivery.deputy-authority"
   | "loop-profiler.collect" | "loop-profiler.trim" | "loop-profiler.settings"
   | "transcript.index" | "memory.discovery" | "memory.refresh"
   | "memory.privacy.compile" | "memory.privacy.match" | "memory.privacy.worker"
   | "memory.source-read" | "memory.source-write"
-  | "tasks.system-run" | "telegram.report-task-settle" | "memory.curation-cleanup"
+  | "tasks.seat-recovery-cleanup" | "tasks.system-run" | "telegram.report-task-settle" | "memory.curation-cleanup"
   | "delivery.inbox-batch"
   | "http.render" | "links.task-export" | "role-memory.view"
   | "registry.write" | "registry.prepare" | "runtime.startup" | "runtime.spawn-recovery" | "agent.deferred-spawn" | "state.rollback-checkpoint"
@@ -23,12 +23,12 @@ export type ViewerOperation = "temp.sweep" | "resources.read" | "worktrees.sweep
   | "external-relay.owner-history" | "mcp.project-prefix" | "issue-report.resolve" | "self-update.revision-prefix"
   | "relay.owner-continuation.send" | "relay.owner-turn.observe" | "external-relay.chains" | "relay.service-tools" | "relay.tool-index"
   | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
-  | "attention.reconcile" | "temp.sweep" | "forge.auto-merge" | "forge.sweep" | "asks.sweep"
+  | "attention.finished-cleanup" | "attention.finished-cleanup.archive" | "attention.reconcile" | "temp.sweep" | "forge.auto-merge" | "forge.sweep" | "asks.sweep"
   | "hosts.retirement" | "self-update.retention" | "spawn-notice.prune" | "delivery-progress.prune"
   | "resources.read" | "seat.panel" | "attention.read" | "pipelines.revalidate" | "runtime-journal.receipt-sweep"
   | "done.sweep" | "done.media" | "done.frame-source"
   | "seat-tick.prepare" | "seat-tick.liveness" | "seat-tick.children" | "seat-tick.reports" | "seat-tick.worker-asks" | "seat-tick.rule-reports" | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
-  | "codex.protocol-admission"
+  | "codex.protocol-admission" | "mcp.page-cursors"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"
   | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel";
 type Operation = { name: ViewerOperation; start: number; end?: number };

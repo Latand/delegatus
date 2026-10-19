@@ -722,7 +722,10 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     delete updated.boardAutoHidden;
     updated.boardChoice = true;
   }
-  if (updated.status !== task.status) {
+  const reaffirmedAssignment = patch.status === "assigned" && task.status === "assigned"
+    && options.statusActor?.kind === "operator"
+    && Object.keys(input).every(key => ["status", "expectedProject", "expectedRevision"].includes(key));
+  if (updated.status !== task.status || reaffirmedAssignment) {
     if (options.statusActor) updated.statusBy = { actor: structuredClone(options.statusActor), from: task.status, at: now };
     else delete updated.statusBy;
   }
