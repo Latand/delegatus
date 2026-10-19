@@ -5233,19 +5233,13 @@ describe("CodexAppServerHost", () => {
     const control = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
-      async fetch(request) {
+      fetch(request) {
         controlRequests += 1;
         const url = new URL(request.url);
-        expect(url.pathname).toBe("/api/mcp");
-        const call = await request.json() as { id: string; method: string; params: { name: string; arguments: { clientRequestId: string } } };
-        expect(call.method).toBe("tools/call");
-        expect(call.params.name).toBe("deployment_status");
-        expect(call.params.arguments.clientRequestId).toBe("seat-successor-deployment-status");
-        const result = { ok: true, toolName: "deployment_status", clientRequestId: call.params.arguments.clientRequestId,
-          replayed: false, count: 1, deployments: [deployment] };
-        return Response.json({ jsonrpc: "2.0", id: call.id, result: {
-          content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result,
-        } });
+        expect(request.method).toBe("GET");
+        expect(url.pathname).toBe("/api/runtime/deployments");
+        expect(url.searchParams.get("limit")).toBe("25");
+        return Response.json({ count: 1, deployments: [deployment] });
       },
     });
     if (control.port === 8898) {
@@ -5401,6 +5395,7 @@ describe("CodexAppServerHost", () => {
       expect(successorReady.proof?.structuredContent).toMatchObject({
         ok: true,
         toolName: "deployment_status",
+        clientRequestId: "seat-successor-deployment-status",
         count: 1,
         deployments: [deployment],
       });
