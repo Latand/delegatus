@@ -2370,7 +2370,7 @@ export async function recoverStagedStructuredLaunch(
     }
     // Downtime before the first probe is not sixteen failed checks. Start its
     // bounded observation window once, persisted before the first I/O.
-    if (!ownsHost && recovery.checks === 0 && now() - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
+    if (recovery.checks === 0 && now() - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
       recovery = { ...recovery, startedAt: now() };
     }
     let observedError = receipt.error;

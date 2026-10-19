@@ -308,6 +308,8 @@ export interface PipelinePorts {
       The eligibility callback is checked after each read, outside the pipeline lease. */
   originalLaunchOperations?(launchId: string, conversationId: string, eligible: () => boolean): Promise<"matched" | "rejected" | "conflict" | "unknown">;
   failStageLaunch?(launchId: string, conversationId: string, reason: string): boolean;
+  /** After identity-confirmed termination, fence the original first delivery. */
+  failStoppedStageLaunch?(launchId: string, conversationId: string, reason: string, eligible: () => boolean): Promise<boolean>;
   claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict" | Promise<"claimed" | "settled" | "conflict">;
   /** Original launch/message journal evidence, freshly fenced by the failed
       receipt. An unavailable read never proves that a prompt was absent. */
@@ -328,7 +330,7 @@ export interface PipelinePorts {
   paneAgentAlive(paneId: string): Promise<boolean>;
   /** Terminates the host that owns a stage attempt's agent. `not-running` means
       no host was resident, so a close can tell an idle lane from one it stopped. */
-  stopStageAgent(target: PipelineStageHostRef, options?: { onlyIfIdle?: true; operationId?: string; automatic?: true;
+  stopStageAgent(target: PipelineStageHostRef, options?: { onlyIfIdle?: true; operationId?: string; automatic?: true; recordedIdentity?: true; eligible?: () => boolean;
     providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
     recordedSurvivors?: readonly ProcessIdentity[] }): Promise<PipelineStageStopResult>;
   /** Null means newer working-host evidence withdrew the automatic stop. */
@@ -980,6 +982,18 @@ export function recordedHostTreeStillRunning(entry: AgentRegistryEntry | undefin
     return `its engine process ${engine.pid} is still running with no stream`;
   }
   return null;
+}
+
+/** Undefined means unreadable, null means absent. A changed artifact withdraws
+ * a stop before its first signal and a receipt failure before its write. */
+function stageArtifactStamp(pathname: string | null | undefined): string | null | undefined {
+  if (!pathname) return null;
+  try {
+    const stat = fs.statSync(pathname);
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+  } catch (error) {
+    return ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "") ? null : undefined;
+  }
 }
 
 async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostProbe | null> {
@@ -1684,6 +1698,37 @@ export function defaultPipelinePorts(
       invalidateRegistryProjection();
       return failed;
     },
+    failStoppedStageLaunch: (launchId, conversationId, reason, eligible) => withViewerOperation("pipelines.evidence", async () => {
+      const before = registry.spawnReceipt(launchId);
+      if (!before || before.conversationId !== conversationId || (before.engine !== "codex" && before.engine !== "claude")) return false;
+      const stamp = stageArtifactStamp(before.artifactPath);
+      if (stamp === undefined) return false;
+      if (stamp !== null) {
+        const evidence = await durableStageTurnEvidence(before.engine, before.artifactPath!);
+        if (!evidence?.launchOnly || stageArtifactStamp(before.artifactPath) !== stamp) return false;
+      }
+      const safe = (file: RegistryFile, receipt: RegistryFile["receipts"][string]) => {
+        if (!eligible() || receipt.conversationId !== conversationId || receipt.error !== before.error
+          || receipt.artifactPath !== before.artifactPath || receipt.key?.sessionId !== before.key?.sessionId
+          || receipt.transport !== "structured" || receipt.purpose !== "launch" || receipt.pane
+          || (receipt.admissionOwner && processIdentityStatus(receipt.admissionOwner) !== "dead")) return false;
+        const conversation = file.conversations[resolveConversationAlias(file, receipt.conversationId)];
+        const generation = conversation?.generations.at(-1);
+        const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
+        if (!receipt.key && conversation?.generations.length) return false;
+        if (receipt.key && (!entry || !stageLaunchGenerationMatches(receipt,
+          conversation && generation ? { engine: conversation.engine, path: generation.path } : null, entry))) return false;
+        if (entry && (entry.claimOwner || capturedTreeMayRun(entry)
+          || entry.structuredHost?.process && processIdentityStatus(entry.structuredHost.process) !== "dead")) return false;
+        // Late native work wins at the write boundary too.
+        return stageArtifactStamp(receipt.artifactPath) === stamp
+          && (conversation?.generations ?? []).every(g => g.path === receipt.artifactPath || stageArtifactStamp(g.path) === null);
+      };
+      if (before.state === "failed") return safe(registry.readOnlySnapshot(), before);
+      const failed = await registry.failStructuredSpawnOffLoop(launchId, reason, { announce: false, recoveryFence: safe });
+      invalidateRegistryProjection();
+      return failed.claimed && failed.receipt?.state === "failed";
+    }),
     unpublishedLaunchRetrySafe: async (launchId) => {
       const before = registry.readOnlySnapshot().receipts[launchId];
       if (before?.state !== "failed" || !isPrepublicationSpawnFailure(before.error ?? "")) return false;
@@ -1746,7 +1791,28 @@ export function defaultPipelinePorts(
       if (observation.kind === "failure") return true;
       return [...observation.panes.values()].some(pane => pane.paneId === paneId);
     },
-    stopStageAgent: (target, options) => options?.onlyIfIdle
+    stopStageAgent: async (target, options) => options?.recordedIdentity
+      ? withViewerOperation("pipelines.evidence", async () => {
+        const receipt = target.launchId ? registry.spawnReceipt(target.launchId) : null;
+        const stamp = stageArtifactStamp(receipt?.artifactPath);
+        if (!receipt || stamp === undefined || (receipt.engine !== "codex" && receipt.engine !== "claude")) return { outcome: "failed", error: "stage launch artifact is unreadable" };
+        if (stamp !== null) {
+          const evidence = await durableStageTurnEvidence(receipt.engine, receipt.artifactPath!);
+          if (!evidence?.launchOnly) return { outcome: "failed", error: "stage launch already has native turn evidence" };
+        }
+        const probe = await stageHostProbe(target);
+        if (!probe || !probe.resident()) return { outcome: "not-running" };
+        return stopStageHostByRecordedIdentity(target, probe, dependencies.termination ?? {}, () => {
+          const current = target.launchId ? registry.spawnReceipt(target.launchId) : null;
+          if (options.eligible?.() === false || !receipt || current?.conversationId !== target.conversationId || current.error !== receipt.error
+            || current.artifactPath !== receipt.artifactPath || current.state !== receipt.state
+            || stageArtifactStamp(receipt.artifactPath) !== stamp) {
+            return { status: 409, error: "stage launch changed or wrote its transcript before termination" };
+          }
+          return null;
+        });
+      })
+      : options?.onlyIfIdle
       ? retirePipelineStageAgent(target, { providerRecovery: options.providerRecovery })
       : stopPipelineStageAgent(target, { operationId: options?.operationId, automatic: options?.automatic,
         ...(options?.recordedSurvivors ? { recordedSurvivors: options.recordedSurvivors } : {}) }),
@@ -8741,31 +8807,98 @@ async function settleNeverStartedLaunch(pipeline: Pipeline, attempt: PipelineSta
   return true;
 }
 
-/** How often a stage whose host is alive is looked at again once spawn
-    recovery has spent its budget on it. */
-const STAGED_ALIVE_WATCH_MS = 30_000;
+const UNANSWERED_STAGE_PREFIX = "stage spawn first message remained unanswered";
 
-/** The pid of a launch whose host process is verified running, when spawn
-    recovery's only claim against it is a spent budget. A probe that stopped on
-    a concrete failure keeps its settlement, and so does a host that is gone or
-    that nothing can verify: an unverified host earns no longer wait than the
-    budget it already had. */
-async function liveHostOfSpentLaunch(attempt: PipelineStageAttempt, recovery: StagedLaunchRecovery | null, ports: PipelinePorts): Promise<number | null> {
-  const budgetSpent = recovery
-    ? !recovery.stopped || recovery.reason.startsWith(STAGED_RECOVERY_EXHAUSTED)
-    : attempt.error?.startsWith(`${SPAWN_RECOVERY_PARK_PREFIX}${STAGED_RECOVERY_EXHAUSTED}`) === true;
-  if (!budgetSpent || !attempt.conversationId || !ports.conversationHostProcess) return null;
-  const host = await ports.conversationHostProcess(attempt.conversationId);
-  return host.state === "alive" ? host.pid : null;
+/** The receipt failure can commit before the pipeline replacement. Resume that
+ * handoff after a controller restart without spending another replacement. */
+function unansweredLaunchRecovery(attempt: PipelineStageAttempt, receipt: PipelineSpawnReceipt | null): StagedLaunchRecovery | null {
+  const recovery = stagedLaunchRecovery(receipt);
+  if (recovery) return recovery;
+  const settled = receipt?.state === "failed" && receipt.error?.startsWith(UNANSWERED_STAGE_PREFIX);
+  // Older controllers sometimes retained the spent budget only on the attempt.
+  const legacy = attempt.error?.startsWith(`${SPAWN_RECOVERY_PARK_PREFIX}${STAGED_RECOVERY_EXHAUSTED}`)
+    && receipt && ["starting", "path-pending"].includes(receipt.state);
+  const checks = legacy ? Number(attempt.error?.match(/after (\d+) checks/)?.[1] ?? 0) : settled ? 1 : 0;
+  return checks > 0 ? { phase: "uncertain", startedAt: unixMs(attempt.startedAt), checks, nextTryAt: 0, stopped: true,
+    reason: `${STAGED_RECOVERY_EXHAUSTED}; recorded silent launch settlement pending` } : null;
 }
 
-/** The controller's pass over an open lane's never-started launches. A
-    launch whose host is verified alive is still starting, so it stays the
-    attempt's and is watched by `waitForStagedLaunch`. */
+/** One automatic replacement per unanswered chain, recorded in attempt history
+ * rather than a process-local counter. A manual retry authorizes a fresh chain. */
+async function replaceUnansweredStageLaunch(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  recovery: StagedLaunchRecovery, ports: PipelinePorts, manual = false,
+): Promise<boolean> {
+  if ((!["running", "needs_decision"].includes(pipeline.state) && !(manual && pipeline.state === "paused"))
+    || !ports.failStoppedStageLaunch || !attempt.launchId || !attempt.conversationId || attempt.report || attempt.verdict || attempt.completedAt
+    || attempt.activation || attempt.paneId || openRuntimeSwitch(attempt) || pipelineSurvivorRefusal(pipeline)
+    || (recovery.stopped && !recovery.reason.startsWith(STAGED_RECOVERY_EXHAUSTED))
+    || (!recovery.stopped && (recovery.checks === 0 || unixMs(ports.now()) - recovery.startedAt < STAGED_RECOVERY_BUDGET_MS))) return false;
+  const observedState = pipeline.state;
+  const eligible = () => {
+    const current = findPipelineRecord(pipeline.id);
+    const latest = current && currentAttempt(current, stage.id);
+    return current?.state === observedState && current.cursor?.stageId === stage.id
+      && latest?.n === attempt.n && latest.launchId === attempt.launchId && latest.conversationId === attempt.conversationId
+      && !latest.report && !latest.verdict && !latest.completedAt && !pipelineSurvivorRefusal(current);
+  };
+  const receipt = ports.spawnReceipt(attempt.launchId);
+  if (!receipt || receipt.conversationId !== attempt.conversationId || receipt.staged && receipt.currentGeneration === false
+    || !["starting", "path-pending", "failed"].includes(receipt.state)) return false;
+  const pathname = receipt.stagedTranscript ?? receipt.transcript ?? attempt.agentPath;
+  const stillUnanswered = async () => {
+    if (!pathname || ports.transcriptPresent?.(pathname) === false) return true;
+    if (!ports.sourcePathAllowed(pathname)) return false;
+    return (await ports.durableTurnEvidence(attempt.effectiveRole.engine, pathname))?.launchOnly === true;
+  };
+  if (!await stillUnanswered()) return false;
+  const host = await ports.conversationHostProcess?.(attempt.conversationId);
+  if ((!host || host.state === "unknown") && (receipt.staged || recovery.phase !== "unpublished"
+    || !neverStartedLaunch(pipeline, attempt, ports, true))) return false;
+  const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
+    conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: null }, { automatic: true, recordedIdentity: true, eligible });
+  if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
+  if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
+    const turn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
+    if (turn?.pathname) { reopenDeliveredAttempt(pipeline, attempt, turn.pathname); return true; }
+    await park(pipeline, `${UNANSWERED_STAGE_PREFIX}; termination was not confirmed; retry-stage after resolving host ownership`, attempt);
+    return true;
+  }
+  // Native work or a report that arrived during teardown retains this attempt.
+  const turn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
+  if (turn?.pathname) { reopenDeliveredAttempt(pipeline, attempt, turn.pathname); return true; }
+  if (attempt.report || turn?.operationConflict || !await stillUnanswered()) return false;
+  if (!await ports.failStoppedStageLaunch?.(attempt.launchId, attempt.conversationId,
+    `${UNANSWERED_STAGE_PREFIX}; recorded host stopped after bounded spawn recovery`, eligible)) {
+    await park(pipeline, `${UNANSWERED_STAGE_PREFIX}; original launch settlement is pending; retry-stage to reconcile it`, attempt);
+    return true;
+  }
+  const previous = attempt.restartContext?.previousAttempt;
+  const prior = runFor(pipeline, stage.id)?.attempts.find(a => a.n === previous);
+  if (!manual && prior?.error?.startsWith(UNANSWERED_STAGE_PREFIX)) {
+    await park(pipeline, `${UNANSWERED_STAGE_PREFIX} in the automatic replacement; retry-stage to start another attempt`, attempt);
+    return true;
+  }
+  await startReplacementAttempt(pipeline, stage, attempt, host?.state === "alive" ? "engine-stop" : "host-lost",
+    { bootId: ports.restartRecoveryBootId?.() ?? PIPELINE_RECOVERY_BOOT_ID, requestedAt: ports.now(), lastRecordAt: null }, null, ports);
+  attempt.error = `${UNANSWERED_STAGE_PREFIX}; recorded host stopped; replaced by a fresh stage attempt`;
+  if (manual) {
+    attempt.error = `manual retry: ${attempt.error}`;
+    pipeline.pausedState = null;
+  }
+  ports.scheduleTick?.(0);
+  return true;
+}
+
+/** Reconcile old never-started parks through the same bounded replacement. */
 async function settleAbandonedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<boolean> {
+  const stage = currentStage(pipeline);
+  if (pipeline.state !== "closed" && stage?.kind === "run" && currentAttempt(pipeline, stage.id) === attempt) {
+    const recovery = unansweredLaunchRecovery(attempt, attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null);
+    if (recovery && await replaceUnansweredStageLaunch(pipeline, stage, attempt, recovery, ports)) return true;
+  }
   const settlement = neverStartedLaunch(pipeline, attempt, ports, false);
   if (!settlement) return false;
-  if (pipeline.state !== "closed" && await liveHostOfSpentLaunch(attempt, settlement.recovery, ports) !== null) return false;
   return await settleNeverStartedLaunch(pipeline, attempt, ports);
 }
 
@@ -8774,8 +8907,8 @@ async function settleAbandonedLaunch(pipeline: Pipeline, attempt: PipelineStageA
     message landed 110 s in, after every probe had read it queued, and the lane
     parked while its agent committed the fix). Before a spent budget settles
     the launch, the agent itself is asked: a native turn of this attempt in its
-    transcript adopts the attempt as running, and a live host keeps it watched.
-    Only a launch with neither settles as before. */
+    transcript adopts the attempt as running. A silent host is stopped before a
+    bounded replacement; unverified ownership retains the original launch. */
 async function waitForStagedLaunch(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   recovery: StagedLaunchRecovery, ports: PipelinePorts,
@@ -8797,7 +8930,7 @@ async function waitForStagedLaunch(
       return;
     }
   }
-  if (recovery.stopped || unixMs(ports.now()) - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
+  if (recovery.stopped || recovery.checks > 0 && unixMs(ports.now()) - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
     const turn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
     if (turn?.operationConflict) {
       await park(pipeline, "runtime operation identity conflicts with the staged launch; original launch retained", attempt);
@@ -8808,19 +8941,7 @@ async function waitForStagedLaunch(
       reopenDeliveredAttempt(pipeline, attempt, turn.pathname);
       return;
     }
-    // The host's own process bounds the watch: the tick it is gone, or can no
-    // longer be verified, the launch settles as before.
-    const livePid = await liveHostOfSpentLaunch(attempt, recovery, ports);
-    if (livePid !== null) {
-      attempt.state = "spawning";
-      attempt.error = null;
-      pipeline.state = "running";
-      setCursorState(pipeline, stage.id, "spawning");
-      const next = new Date(unixMs(ports.now()) + STAGED_ALIVE_WATCH_MS).toISOString();
-      pipeline.stateDetail = `the stage host (pid ${livePid}) is alive and has not answered its first message yet; spawn recovery spent its ${STAGED_RECOVERY_BUDGET_MS / 60_000}-minute budget after ${recovery.checks} checks and keeps watching, next check at ${next}`;
-      ports.scheduleTick?.(STAGED_ALIVE_WATCH_MS);
-      return;
-    }
+    if (await replaceUnansweredStageLaunch(pipeline, stage, attempt, recovery, ports)) return;
     const reason = recovery.stopped ? recovery.reason
       : `${STAGED_RECOVERY_EXHAUSTED} after ${recovery.checks} checks; original launch and first-message operation retained; last result: ${recovery.reason}`;
     if (!await settleNeverStartedLaunch(pipeline, attempt, ports, true)) {
@@ -11519,8 +11640,10 @@ function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | 
  */
 function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest): PipelinePatchResult | null {
   if (req.expectedStageId === undefined) return null;
-  const waiting = pipeline.state === "needs_decision" || (pipeline.state === "running" && req.action === "retry-stage"
-    && pipeline.cursor?.state === "running" && currentAttempt(pipeline, pipeline.cursor.stageId)?.state === "running")
+  const waiting = pipeline.state === "needs_decision" || (req.action === "retry-stage"
+    && (pipeline.state === "running" && ["running", "spawning"].includes(pipeline.cursor?.state ?? "")
+      || pipeline.state === "paused" && pipeline.cursor?.state === "spawning")
+    && ["running", "spawning"].includes(currentAttempt(pipeline, pipeline.cursor!.stageId)?.state ?? ""))
     ? pipeline.cursor?.stageId ?? null : null;
   if (waiting !== req.expectedStageId) {
     return {
@@ -13631,6 +13754,15 @@ export async function patchPipeline(
         if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
           await persist();
           return { error: "the host of the attempt parked by turn recovery has not confirmed termination", status: 409 };
+        }
+      }
+      if (stage?.kind === "run" && attempt && (attempt.state === "spawning" || isStructuredSpawnPark(pipeline, attempt)) && !attempt.report
+        && ["running", "paused", "needs_decision"].includes(pipeline.state)) {
+        const recovery = unansweredLaunchRecovery(attempt, attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null);
+        if (recovery && await replaceUnansweredStageLaunch(pipeline, stage, attempt, recovery, ports, true)) {
+          await persist(); requestPipelineTick();
+          return currentAttempt(pipeline, stage.id)?.n !== attempt.n ? { pipeline }
+            : { error: pipeline.stateDetail ?? "stage launch could not be replaced", status: 409 };
         }
       }
       if (pipeline.state === "running") {
