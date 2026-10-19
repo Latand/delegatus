@@ -3339,7 +3339,7 @@ export class SqliteAgentRegistryStore {
       let changes: RegistryChanges;
       let result: T;
       try {
-        if (pessimistic && !writerHeld) this.noteWriterWait(performance.now() - waitStartedAt, operationName);
+        if (pessimistic && !writerHeld) this.noteWriterWait(performance.now() - waitStartedAt, operationName, options.noWait);
         current = this.loadLazyInTransaction();
         result = operation(current.file);
         changes = current.changes();
@@ -3354,7 +3354,7 @@ export class SqliteAgentRegistryStore {
       let stamps = { before: "", after: "" };
       const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0;
       try {
-        if (!pessimistic) this.noteWriterWait(performance.now() - optimisticWaitStartedAt, operationName);
+        if (!pessimistic) this.noteWriterWait(performance.now() - optimisticWaitStartedAt, operationName, options.noWait);
         if (!pessimistic && Number(this.meta("revision") ?? 0) !== current.revision) {
           this.db.exec("ROLLBACK");
           operationName ||= new Error().stack?.split("\n")[2]?.trim() ?? "anonymous";
@@ -3363,7 +3363,7 @@ export class SqliteAgentRegistryStore {
           recordBlockingWait({
             site: "registry-revision-retry",
             durationMs: performance.now() - waitStartedAt,
-            synchronous: true,
+            synchronous: !options.noWait,
             subject: operationName,
           });
           if (attempt >= this.maxMutationAttempts) {
@@ -3412,9 +3412,11 @@ export class SqliteAgentRegistryStore {
     throw new RegistryMutationRetryLimitError(operationName || "anonymous", this.maxMutationAttempts);
   }
 
-  private noteWriterWait(durationMs: number, operationName: string): void {
+  private noteWriterWait(durationMs: number, operationName: string, noWait = false): void {
     this.onWriterWait?.(durationMs);
-    recordBlockingWait({ site: "registry-lock", durationMs, synchronous: true, subject: operationName || "anonymous" });
+    // Account admission retries outside its lease. This probe has SQLite's
+    // busy timeout disabled; attribute it to that asynchronous admission.
+    recordBlockingWait({ site: noWait ? "registry-lock-async" : "registry-lock", durationMs, synchronous: !noWait, subject: operationName || "anonymous" });
   }
 
   /**

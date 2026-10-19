@@ -89,13 +89,17 @@ test("operator termination awaits captured-tree persistence while a child holds 
   const holder = registryLockHolder(path.join(directory, "registry.sqlite"));
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await holder.hold(180);
+    await holder.hold(1_500);
     let finished = false;
+    const work = POST(post({ action: "kill", target, intent: "row" })).finally(() => { finished = true; });
+    // The process census precedes registry admission and scales with the host's
+    // process table. Observe the registry wait after that preparation yields.
+    await new Promise<void>(resolve => setImmediate(resolve));
     const start = performance.now();
     const tick = new Promise<{ elapsed: number; pending: boolean }>(resolve => {
       timer = setTimeout(() => resolve({ elapsed: performance.now() - start, pending: !finished }), 10);
     });
-    const response = await POST(post({ action: "kill", target, intent: "row" })).finally(() => { finished = true; });
+    const response = await work;
     const sample = await tick;
     expect(sample.pending).toBe(true);
     expect(sample.elapsed).toBeLessThan(50);

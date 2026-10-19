@@ -24,6 +24,43 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-writer-wait-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 beforeEach(() => resetBlockingWaitsForTests(() => {}));
 
+for (const revoked of [false, true]) test(`a mixed account callback retries a rival writer outside custody and repeats its guard (revoked=${revoked})`, async () => {
+  const directory = fs.mkdtempSync(path.join(root, "mixed-writer-"));
+  const filename = path.join(directory, "registry.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new Database(path.join(directory, "registry.sqlite"));
+  let attempts = 0;
+  let current = true;
+  let rivalHeld = false;
+  try {
+    const work = registry.accountMutationWrite("registry.mixed-fixture", () => {
+      attempts++;
+      if (attempts === 1) {
+        peer.exec("BEGIN IMMEDIATE");
+        rivalHeld = true;
+        setImmediate(() => {
+          if (revoked) current = false;
+          peer.exec("ROLLBACK");
+          rivalHeld = false;
+        });
+      }
+      registry.setEngineRouting("codex", "mixed-account");
+    }, () => { if (!current) throw new Error("mixed custody replaced"); }, { releaseBeforeWrite: true });
+    if (revoked) await expect(work).rejects.toThrow("mixed custody replaced");
+    else expect((await work).acquired).toBe(true);
+    expect(attempts).toBe(revoked ? 1 : 2);
+    expect(registry.engineRouting("codex").activeAccountId).toBe(revoked ? null : "mixed-account");
+    expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
+    registry.close();
+    const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+    try { expect(reopened.engineRouting("codex").activeAccountId).toBe(revoked ? null : "mixed-account"); }
+    finally { reopened.close(); }
+  } finally {
+    if (rivalHeld) peer.exec("ROLLBACK");
+    peer.close(); registry.close();
+  }
+});
+
 for (const prepared of [false, true]) test(`an admitted group keeps every mutation under its writer and preserves successful members on failure (prepared=${prepared})`, async () => {
   const directory = fs.mkdtempSync(path.join(root, "writer-group-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });

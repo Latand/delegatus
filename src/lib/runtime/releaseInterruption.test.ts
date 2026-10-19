@@ -3150,15 +3150,15 @@ test("published release awaits the terminal registry checkpoint before acknowled
     structuredHost: { kind: "claude-broker", endpoint: state.endpoint, process: { pid: state.pid!, startIdentity: state.processStartIdentity },
       eventCursor: 1, protocolVersion: "test", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
   const holder = registryLockHolder(path.join(directory, "terminal-checkpoint.sqlite"));
-  let listener: ((state: HostState) => void) | null = null;
+  const listeners = new Set<(state: HostState) => void>();
   let enter!: () => void;
   const entered = new Promise<void>(resolve => { enter = resolve; });
   const host = Object.assign(new FakeEngineHost(createFakeDeliveryLedger(), state), {
     setWriterFence: () => {},
-    onStateChange: (next: (state: HostState) => void) => { listener = next; return () => { listener = null; }; },
+    onStateChange: (next: (state: HostState) => void) => { listeners.add(next); return () => { listeners.delete(next); }; },
     release: async () => {
       await holder.hold(180);
-      listener?.({ ...state, status: "unhosted", pid: null, endpoint: "stdio:released", eventCursor: 2 });
+      for (const listener of listeners) listener({ ...state, status: "unhosted", pid: null, endpoint: "stdio:released", eventCursor: 2 });
       enter();
     },
   });

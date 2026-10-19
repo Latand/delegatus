@@ -24,7 +24,7 @@ import { allowedAccountIdsForProject, projectAccountRefusalDetail } from "@/lib/
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { deliverToTranscriptHost } from "@/lib/agent/transcriptHost";
-import { agentRegistry, type AgentRegistry, type RegistryConversation, type SpawnBeginResult, type SpawnReceipt, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, type AgentRegistry, type RegistryConversation, type SpawnBeginResult, type SpawnRequest, type SpawnReceipt, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { sessionKeyFromTranscript, sessionKeyId } from "@/lib/agent/sessionKey";
 import { resolveSpawnedTranscriptPath } from "@/lib/agent/spawnedTranscript";
 import { headCwd } from "@/lib/agent/transcript";
@@ -233,8 +233,12 @@ function commitReviewerSpawn(
     : null;
   const owner = implementer ?? registry.ensureConversation(flow.roles.implementer.engine, flow.implementerPath, null);
   flow.implementerConversationId = owner.id;
-  const parentPath = owner.generations.at(-1)?.path ?? flow.implementerPath;
-  registry.rememberMembership(owner.id, {
+  registry.rememberMembership(owner.id, flowImplementerMembership(flow));
+  return applyReviewerReservation(round, registry.beginSpawnRequest(reviewerSpawnRequest(flow, round, role, accountId, registry, owner)));
+}
+
+function flowImplementerMembership(flow: Flow): Parameters<AgentRegistry["rememberMembership"]>[1] {
+  return {
     kind: "flow",
     containerId: flow.id,
     role: "implementer",
@@ -243,7 +247,11 @@ function commitReviewerSpawn(
     stageOrder: 0,
     round: null,
     parentConversationId: null,
-  });
+  };
+}
+
+function reviewerSpawnRequest(flow: Flow, round: Round, role: RoleConfig, accountId: string | null, registry: AgentRegistry, owner: RegistryConversation): SpawnRequest {
+  const parentPath = owner.generations.at(-1)?.path ?? flow.implementerPath;
   const reviewerBindingId = round.reviewerBindingId ?? crypto.randomUUID();
   round.reviewerBindingId = reviewerBindingId;
   const correlation = crypto.createHash("sha256")
@@ -260,7 +268,7 @@ function commitReviewerSpawn(
     ?? semanticTitle(flow.project, 80)
     ?? "Review flow";
   const reviewerTitle = reservedTitle ?? cleanTitle(`${flowTitle} · review round ${round.n}`, 120);
-  const begun = registry.beginSpawnRequest({
+  return {
     engine: role.engine,
     cwd: flow.cwd,
     accountId,
@@ -301,7 +309,10 @@ function commitReviewerSpawn(
       accountId,
       reviews: owner.id,
     })).digest("hex"),
-  });
+  };
+}
+
+function applyReviewerReservation(round: Round, begun: SpawnBeginResult): Exclude<SpawnBeginResult, { kind: "conflict" }> {
   if (begun.kind === "conflict") throw new Error("reviewer spawn conflicts with its durable reservation");
   round.launchId = begun.receipt.launchId;
   round.reviewerConversationId = begun.receipt.conversationId;
@@ -1896,15 +1907,54 @@ export function getFlowsWithPresets(): { flows: Flow[]; presets: FlowPreset[] } 
   return { flows: loadFlows(), presets: loadPresets() };
 }
 
-/** Reserve only while both the account and registry writers are held. */
+class FlowSpawnAdmissionChanged extends Error {}
+
+/** Registry writes are admitted separately from task membership work. */
 export async function reserveReviewerSpawnOffLoop(
   flow: Flow, round: Round, role: RoleConfig, accountId: string | null,
   registry = agentRegistry(), current: () => boolean = () => true,
 ): Promise<Exclude<SpawnBeginResult, { kind: "conflict" }> | null> {
-  const written = await registry.accountMutationWrite("registry.flow-reservation", () => {
+  agentPublicationIdentityEnv(process.env);
+  const prepared = await registry.accountMutationWrite("registry.flow-owner", () => {
     if (!current()) return null;
-    return reserveReviewerSpawn(flow, round, role, accountId, registry);
-  }, undefined, { batch: true });
-  if (!written.acquired) throw new Error("agent registry is busy");
-  return written.value;
+    const owner = flow.implementerConversationId?.startsWith("conversation_")
+      ? registry.conversation(flow.implementerConversationId as `conversation_${string}`) : null;
+    return owner ?? registry.ensureConversation(flow.roles.implementer.engine, flow.implementerPath, null);
+  });
+  if (!prepared.acquired) throw new Error("agent registry is busy");
+  const owner = prepared.value;
+  if (!owner) return null;
+  const identity = (value: RegistryConversation | null) => JSON.stringify([value?.id, value?.engine, value?.generations.at(-1)]);
+  const expected = identity(owner);
+  const guard = () => {
+    if (!current() || identity(registry.conversation(owner.id)) !== expected) throw new FlowSpawnAdmissionChanged("flow changed during reviewer admission");
+  };
+  await new Promise<void>(resolve => setImmediate(resolve));
+  let request: SpawnRequest | null = null;
+  try {
+    const membership = await registry.accountMutationWrite("registry.flow-membership", () => {
+      guard();
+      flow.implementerConversationId = owner.id;
+      registry.rememberMembership(owner.id, flowImplementerMembership(flow));
+      return reviewerSpawnRequest(flow, round, role, accountId, registry, owner);
+    });
+    if (!membership.acquired) throw new Error("agent registry is busy");
+    request = membership.value;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const begun = await registry.beginSpawnRequestAsync(request, guard);
+    guard();
+    return applyReviewerReservation(round, begun);
+  } catch (error) {
+    if (!(error instanceof FlowSpawnAdmissionChanged)) throw error;
+    const receipt = request?.clientAttemptId ? registry.spawnReceiptForClientAttempt(request.clientAttemptId) : null;
+    if (receipt?.state === "starting" && !receipt.key && !receipt.pane && !receipt.admissionOwner) {
+      try {
+        await registry.failSpawnOffLoop(receipt.launchId, "flow changed before reviewer dispatch", () => {
+          const fresh = registry.spawnRecoverySnapshot([receipt.launchId]).receipts[receipt.launchId];
+          if (!fresh || fresh.state !== "starting" || fresh.key || fresh.pane || fresh.admissionOwner) throw new FlowSpawnAdmissionChanged();
+        });
+      } catch (cleanup) { if (!(cleanup instanceof FlowSpawnAdmissionChanged)) throw cleanup; }
+    }
+    return null;
+  }
 }

@@ -595,25 +595,33 @@ async function reconcileAuthorityProjections(
   dependencies: SeatCommandDependencies,
 ): Promise<OrchestratorSeat> {
   if (!seat.conversationId) throw new Error("active orchestrator seat is missing its conversation identity");
-  const written = await agentRegistry().accountMutationWrite("registry.seat-identity", () => {
-    const current = orchestratorSeatFor(seat.project).active;
-    if (current?.seatEpoch !== seat.seatEpoch || current.conversationId !== seat.conversationId) {
-      throw new Error("orchestrator seat changed before identity publication");
-    }
-    const durableRuntime = current.engine && current.model
+  const registry = agentRegistry();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const revision = registry.storageDiagnostics().revision;
+    // Discovery can take another state lease. Prepare outside both writers,
+    // then fence that registry version and the seat epoch inside admission.
+    const durableRuntime = seat.engine && seat.model
       ? { engine: null, model: null }
-      : dependencies.runtimeIdentity(current.conversationId!);
-    const repaired = repairOrchestratorSeatRuntimeIdentity({
-      project: seat.project,
-      conversationId: seat.conversationId!,
-      engine: durableRuntime.engine,
-      model: durableRuntime.model,
-    }) ?? current;
-    dependencies.stampRegistryIdentity(repaired);
-    return repaired;
-  });
-  if (!written.acquired) throw new Error("agent registry is busy");
-  return written.value;
+      : dependencies.runtimeIdentity(seat.conversationId);
+    const written = await registry.accountMutationWrite("registry.seat-identity", () => {
+      const current = orchestratorSeatFor(seat.project).active;
+      if (current?.seatEpoch !== seat.seatEpoch || current.conversationId !== seat.conversationId) {
+        throw new Error("orchestrator seat changed before identity publication");
+      }
+      if (registry.storageDiagnostics().revision !== revision) return null;
+      const repaired = repairOrchestratorSeatRuntimeIdentity({
+        project: seat.project,
+        conversationId: seat.conversationId!,
+        engine: durableRuntime.engine,
+        model: durableRuntime.model,
+      }) ?? current;
+      dependencies.stampRegistryIdentity(repaired);
+      return repaired;
+    }, undefined, { releaseBeforeWrite: true });
+    if (!written.acquired) throw new Error("agent registry is busy");
+    if (written.value) return written.value;
+  }
+  throw new AccountAdmissionChangedError();
 }
 
 async function reconcileCompletedSeatReplay(

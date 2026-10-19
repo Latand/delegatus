@@ -218,7 +218,7 @@ export async function runIdentityWaveMigrationAtStartupOffLoop(
   const registry = overrides.registry ?? agentRegistry();
   if (!("accountMutationWrite" in registry)) return runIdentityWaveMigrationAtStartup(overrides);
   const written = await (registry as AgentRegistry).accountMutationWrite("registry.identity-migration", () =>
-    runIdentityWaveMigrationAtStartup({ ...overrides, registry }));
+    runIdentityWaveMigrationAtStartup({ ...overrides, registry }), undefined, { releaseBeforeWrite: true });
   if (!written.acquired) throw new Error("agent registry is busy");
   return written.value;
 }

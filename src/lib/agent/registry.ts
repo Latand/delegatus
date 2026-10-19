@@ -1,5 +1,5 @@
 import { liveRootSession } from "@/lib/root/adopt";
-import { StateLockDeferredError, waitForStateLock } from "@/lib/state/lockWait";
+import { StateLockDeferredError, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
@@ -6321,6 +6321,7 @@ export class AgentRegistry {
     if (!written.acquired) throw new RegistryWriterBusyError(`${caller} admission`);
     const result = written.value;
     if (result.kind === "created" || result.kind === "replay") {
+      await new Promise<void>(resolve => setImmediate(resolve));
       // Reservation is durable. Retry only its idempotent prerequisite, with
       // no registry writer held while the task store takes its own writer.
       const admission = await waitForStateLock(`${caller}.membership`, async () => {
@@ -6335,6 +6336,7 @@ export class AgentRegistry {
         }
       }, { waitMs: remaining(), subject: result.receipt.launchId });
       if (admission.ok) {
+        await new Promise<void>(resolve => setImmediate(resolve));
         const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
           this.recordSpawnMembership(result.receipt, admission.taskIds);
         }, guard, { waitMs: remaining() });
@@ -6350,7 +6352,11 @@ export class AgentRegistry {
     operationId?: string | null;
     correlate?: (value: T) => BlockingWaitCorrelation | null;
     waitMs?: number;
-    batch?: boolean;
+    /** Mixed account/state writers share state.sqlite with this registry.
+     * Probe first, then release SQLite before their callback; account custody
+     * remains held and every registry mutation still makes a zero-wait probe.
+     * These callbacks must roll back or be idempotent on a deferred write. */
+    releaseBeforeWrite?: boolean;
   } = {}): Promise<{ acquired: true; value: T } | { acquired: false }> {
     const inherited = accountMutationHeld();
     const startedAt = performance.now();
@@ -6363,20 +6369,34 @@ export class AgentRegistry {
       const deadline = performance.now() + remainingMs;
       try {
         for (;;) {
-          const result = await withAccountMutationLockAsync(() => {
-            guard?.();
-            // Publish one correlated wait after admission supplies its operation
-            // id; individual failed probes are part of this same wait.
-            return this.deliveryWriteNow(correlation, () => { acquiredAt = performance.now(); refused = false; return options.batch ? this.withMutationBatch(write) : write(); }, { recordRefusal: false });
-          }, {
-            holder: label, caller: label,
-            waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
-          });
+          let result: { acquired: true; value: T } | { acquired: false };
+          try {
+            result = await withAccountMutationLockAsync(() => {
+              guard?.();
+              // Publish one correlated wait after admission supplies its operation
+              // id; individual failed probes are part of this same wait.
+              const invoke = () => { acquiredAt = performance.now(); refused = false; return write(); };
+              if (options.releaseBeforeWrite) {
+                const probe = this.deliveryWriteNow(correlation, () => undefined, { recordRefusal: false });
+                return probe.acquired ? { acquired: true, value: withWaitCorrelation(correlation, invoke) } : probe;
+              }
+              return this.deliveryWriteNow(correlation, invoke, { recordRefusal: false });
+            }, {
+              holder: label, caller: label,
+              waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
+            });
+          } catch (error) {
+            const registryBusy = error instanceof RegistryWriterBusyError
+              || (error instanceof Error && (error as { code?: string }).code === "SQLITE_BUSY");
+            if (!options.releaseBeforeWrite || !(registryBusy || error instanceof AccountMutationBusyError || stateLockDeferral(error))) throw error;
+            result = { acquired: false };
+          }
           if (result.acquired) {
             correlation = options.correlate?.(result.value) ?? correlation;
             return result;
           }
           refused = true;
+          acquiredAt = undefined;
           if (inherited || performance.now() >= deadline) return result;
           waited = true;
           await new Promise<void>(resolve => setTimeout(resolve, 5));

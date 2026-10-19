@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { listCodexAccounts } from "@/lib/accounts/codex";
+import { listCodexAccounts, codexSessionRoots } from "@/lib/accounts/codex";
 import { loadTasks } from "@/lib/tasks/store";
 import { createManagedClaudeAccount, activeClaudeAccountId, listClaudeAccounts } from "@/lib/accounts/claude";
 import { selectAccount } from "@/lib/accounts/manager";
@@ -39,14 +39,15 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function fixture() {
+function fixture(shared = false) {
   // Serving commands have already resolved their account and board catalogs.
   // Initialize those prerequisites in this private installation, before timing
   // the registry wait and its recovery; no measured registry operation is warmed.
   listClaudeAccounts(); listCodexAccounts(); loadTasks();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "registry-serving-"));
   roots.push(root);
-  const registry = new AgentRegistry(path.join(root, "registry.json"), () => false, undefined, { sqliteMode: "sqlite" });
+  const sqliteFilename = shared ? path.join(process.env.LLV_STATE_DIR!, "state.sqlite") : path.join(root, "registry.sqlite");
+  const registry = new AgentRegistry(path.join(root, "registry.json"), () => false, undefined, { sqliteMode: "sqlite", sqliteFilename });
   setAgentRegistryForTests(registry);
   const artifactPath = `/sessions/${SESSION}.jsonl`;
   const profile = emptyLaunchProfile({ cwd: "/repo", title: "Registry admission fixture" });
@@ -54,13 +55,13 @@ function fixture() {
     engine: "codex", path: artifactPath, accountId: null, launchProfile: profile,
     turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: AT,
   }]);
-  return { root, registry, artifactPath, profile, seed };
+  return { root, registry, sqliteFilename, artifactPath, profile, seed };
 }
 
 /** The child releases independently, so a synchronous regression cannot deadlock
  * its own release timer. Include the timer after recovery in the measurement. */
 async function held<T>(f: ReturnType<typeof fixture>, operation: () => Promise<T>, revoke?: () => void): Promise<T> {
-  const holder = registryLockHolder(path.join(f.root, "registry.sqlite"));
+  const holder = registryLockHolder(f.sqliteFilename);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let tick: ReturnType<typeof setTimeout> | undefined;
   let pulse: ReturnType<typeof setInterval> | undefined;
@@ -100,7 +101,7 @@ async function held<T>(f: ReturnType<typeof fixture>, operation: () => Promise<T
 
 test("spawn lineage repeats transcript provenance after a child-held writer", async () => {
   const f = fixture();
-  const transcript = path.join(os.homedir(), ".codex", "sessions", `rollout-${SESSION}.jsonl`);
+  const transcript = path.join(codexSessionRoots()[0]!, `rollout-${SESSION}.jsonl`);
   fs.mkdirSync(path.dirname(transcript), { recursive: true });
   fs.writeFileSync(transcript, "{}\n");
   try {
@@ -156,10 +157,10 @@ test("deputy registration repeats seat authority inside admission", async () => 
   } finally { f.registry.close(); }
 });
 
-test("flow reservation rechecks its revision after registry and account admission", async () => {
-  const f = fixture(); f.seed();
+for (const shared of [false, true]) test(`flow reservation rechecks its revision after registry and account admission (shared=${shared})`, async () => {
+  const f = fixture(shared); f.seed();
   const owner = f.registry.conversationForPath(f.artifactPath)!;
-  const flow = { id: "admitted-flow", project: "fixture", cwd: "/repo", implementerPath: f.artifactPath,
+  const flow = { id: shared ? "admitted-flow-shared" : "admitted-flow-isolated", project: "fixture", cwd: "/repo", implementerPath: f.artifactPath,
     implementerConversationId: owner.id, roles: { reviewer: { engine: "codex", model: null, effort: "high" } }, rounds: [] } as unknown as Flow;
   const round = newRound(flow, "button", null); round.reviewerBindingId = "fixed-reviewer-binding";
   let current = true;
@@ -172,8 +173,8 @@ test("flow reservation rechecks its revision after registry and account admissio
   } finally { f.registry.close(); }
 });
 
-test("account selection keeps catalog and routing aligned through a child-held registry writer", async () => {
-  const f = fixture();
+for (const shared of [false, true]) test(`account selection keeps catalog and routing aligned through a child-held writer (shared=${shared})`, async () => {
+  const f = fixture(shared);
   const account = createManagedClaudeAccount("Registry selection fixture");
   fs.writeFileSync(path.join(account.home, ".credentials.json"), "{}", { mode: 0o600 });
   try {

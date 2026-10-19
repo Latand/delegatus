@@ -580,7 +580,7 @@ export async function selectAccount(engine: AccountEngineName, id: string, routi
       return true;
     };
     const admission = routing.accountMutationWrite
-      ? await routing.accountMutationWrite("registry.account-select", commit, undefined, { batch: true })
+      ? await routing.accountMutationWrite("registry.account-select", commit, undefined, { releaseBeforeWrite: true })
       : { acquired: true, value: await withAccountMutationLockAsync(commit, { caller: "account select", holder: "account selection commit" }) };
     const committed = admission.acquired && admission.value;
     if (committed) return summary(engine, id);
