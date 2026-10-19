@@ -1,3 +1,5 @@
+import { deepFreeze } from "@/lib/deepFreeze";
+import { forEachCooperatively } from "@/lib/cooperative";
 import { controllerPipelineKeys, controllerReferences, inheritControllerGuards } from "./controllerScope";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import crypto from "node:crypto";
@@ -1718,6 +1720,16 @@ export function loadPipelinesForList(): readonly Pipeline[] {
   return pipelines;
 }
 
+/** Seat startup fills and freezes the shared list with timer opportunities. */
+export async function loadPipelinesForListAsync(): Promise<readonly Pipeline[]> {
+  const rows = await pipelineStore().loadReadonlyAsync();
+  if (!Object.isFrozen(rows)) {
+    await forEachCooperatively(rows, row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
+    Object.freeze(rows);
+  }
+  return loadPipelinesForList();
+}
+
 /** How long a pipeline mutation waits for the registry lease before it refuses
     (#1766). The default is the cap the attempt loop in the state store already
     imposed; `LLV_PIPELINE_LOCK_WAIT_MS` bounds it lower, which is what lets a
@@ -1958,6 +1970,15 @@ const SETTLED_PIPELINE_ARCHIVE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 export function loadArchivedPipelinesForList(): readonly Pipeline[] {
   const rows = archiveStore().loadReadonly();
   freezeArchive(rows);
+  return rows;
+}
+
+export async function loadArchivedPipelinesForListAsync(): Promise<readonly Pipeline[]> {
+  const rows = await archiveStore().loadReadonlyAsync();
+  if (!Object.isFrozen(rows)) {
+    await forEachCooperatively(rows, row => { deepFreeze(row); }, { batchSize: 1, timeBudgetMs: 8 });
+    Object.freeze(rows);
+  }
   return rows;
 }
 

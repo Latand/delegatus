@@ -2532,3 +2532,100 @@ test("a retirement signal names undetermined subjects and puts the seat's own la
   expect(wake).toMatchObject({ kind: "wake" });
   expect(wake.kind === "wake" && wake.items.some(item => item.kind === "signal" && item.id === "host-retirement" && item.label.includes("Lost builder"))).toBe(true);
 });
+
+
+test("seat check keeps wake ordering and zero decoded or copied rows with tenfold warm history", async () => {
+  const { defaultSeatTickSources } = await import("./seatTickSources");
+  const { saveTasks, loadTasksForList } = await import("@/lib/tasks/store");
+  const { savePipelines, loadPipelinesForList } = await import("@/lib/pipelines/store");
+  const { spyOn } = await import("bun:test");
+  const { buildPipeline } = await import("@/lib/pipelines/store");
+  const persistedLane = (id: string, project: string) => buildPipeline({ id, task: "Check work", project, repoDir: "/srv/repo", stages: [], srcPath: null, srcConversationId: null, now: new Date(NOW).toISOString(), state: "draft" });
+  const production = defaultSeatTickSources();
+  const results = [];
+  const counts = [];
+  for (const size of [10, 100]) {
+    saveTasks([boardCard({ id: "task-flat-own", status: "inbox" }), ...Array.from({ length: size }, (_, i) => boardCard({ id: `task-flat-${i}`, project: "elsewhere" }))] as never);
+    savePipelines([persistedLane("lane-flat-own", PROJECT), ...Array.from({ length: size }, (_, i) => persistedLane(`lane-flat-${i}`, "elsewhere"))]);
+    const expectedPorts = sources({ tasks: [...loadTasksForList()] as never, pipelines: [...loadPipelinesForList()] as never });
+    const expected = seatTickDecision(await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, expectedPorts));
+    production.tasks(); production.pipelines(); // the revision is warm, as between seat checks
+    let decoded = 0, copied = 0;
+    const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+    const prototype = SqliteStateCollection.prototype as unknown as { decodeRow: (text: string, ...args: unknown[]) => unknown };
+    const decodeRow = prototype.decodeRow, clone = globalThis.structuredClone;
+    const parsing = spyOn(prototype, "decodeRow").mockImplementation(function (this: unknown, text, ...args) {
+      if (/"id":"(?:task-flat-|lane-flat-)/.test(text)) decoded++;
+      return Reflect.apply(decodeRow, this, [text, ...args]);
+    });
+    const copying = spyOn(globalThis, "structuredClone").mockImplementation((value, ...args) => { if (value && typeof value === "object" && "id" in value && /^(?:task-flat-|lane-flat-)/.test(String(value.id))) copied++; return clone(value, ...args); });
+    try {
+      const ports = { ...sources({}), tasks: production.tasks, pipelines: production.pipelines };
+      const actual = seatTickDecision(await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports));
+      expect(actual.verdict).toEqual(expected.verdict);
+      results.push(actual.verdict);
+      counts.push({ decoded, copied });
+    } finally { parsing.mockRestore(); copying.mockRestore(); }
+  }
+  expect(results[1]).toEqual(results[0]);
+  expect(counts).toEqual([{ decoded: 0, copied: 0 }, { decoded: 0, copied: 0 }]);
+});
+
+
+test("unchanged frozen lane evidence serializes no retained body and replacement invalidates the key", async () => {
+  const { refreshSeatTickEvidence } = await import("./seatTickSources");
+  const { spyOn } = await import("bun:test");
+  const { deepFreeze } = await import("@/lib/deepFreeze");
+  let current = deepFreeze(lane({ spec: "retained evidence".repeat(1000) }));
+  const ports = sources({}); ports.pipelines = () => [current] as never;
+  const first = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  const stringify = JSON.stringify;
+  let bodies = 0;
+  const serializing = spyOn(JSON, "stringify").mockImplementation((value, ...args) => {
+    if (value === current || Array.isArray(value) && value.flat().includes(current)) bodies++;
+    return Reflect.apply(stringify, JSON, [value, ...args]);
+  });
+  try {
+    expect((await refreshSeatTickEvidence(first, ports)).pullRequestEvidenceKey).toBe(first.pullRequestEvidenceKey);
+    expect(bodies).toBe(0);
+    current = deepFreeze(lane({ spec: "replacement evidence" }));
+    const replaced = await refreshSeatTickEvidence(first, ports);
+    expect(replaced.pullRequestEvidenceKey).not.toBe(first.pullRequestEvidenceKey);
+    expect(bodies).toBe(1);
+  } finally { serializing.mockRestore(); }
+});
+
+
+test("project liveness rejects a replaced inventory after the worker await and labels the wait", async () => {
+  const { spyOn } = await import("bun:test");
+  const scan = await import("@/lib/scanner/scanCache");
+  const worker = await import("@/lib/scanner/filesResponseWorker");
+  const { viewerLoopMonitor } = await import("@/lib/viewerLoopMonitor");
+  const { defaultSeatTickSources } = await import("./seatTickSources");
+  let descriptor: ReturnType<typeof scan.completedFileScanDescriptor> = { epoch: "fixture", generation: 1, snapshotFile: statePath("fixture-inventory.json") };
+  let release!: () => void, entered!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const descriptors = spyOn(scan, "completedFileScanDescriptor").mockImplementation(() => descriptor);
+  let calls = 0;
+  const reading = spyOn(worker, "runSeatSourceInWorker").mockImplementation(async () => {
+    calls++;
+    entered();
+    expect(viewerLoopMonitor.current()).toBe("seat-tick.liveness");
+    await held;
+    return { body: "[]" } as never;
+  });
+  try {
+    const source = defaultSeatTickSources();
+    const pending = source.liveness({ project: PROJECT, stallAfterMs: 60_000, limit: 20, reconcileStructuredIdle: false });
+    const refused = pending.then(() => null, error => error);
+    await Promise.race([ready, pending.then(() => { throw new Error("worker was not called"); })]);
+    descriptor = { ...descriptor!, generation: 2 };
+    release();
+    expect((await refused)?.message).toContain("inventory changed");
+    expect(await source.liveness({ project: PROJECT, stallAfterMs: 60_000, limit: 20, reconcileStructuredIdle: false })).toEqual([]);
+    descriptor = null;
+    await expect(source.liveness({ project: PROJECT, stallAfterMs: 60_000, limit: 20, reconcileStructuredIdle: false })).rejects.toThrow("not published");
+    expect(calls).toBe(2);
+  } finally { release(); reading.mockRestore(); descriptors.mockRestore(); }
+});

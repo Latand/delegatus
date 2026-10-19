@@ -8,7 +8,7 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { stateDir, statePath } from "@/lib/configDir";
 import { diffFilesBodies } from "@/lib/filesDelta";
 import { BoardEncoder } from "@/lib/boardEncoding";
-import type { FilesResponseWorkerRequest } from "@/lib/scanner/filesResponseWorker";
+import type { FilesResponseWorkerRequest, SeatSourceWorkerRequest } from "@/lib/scanner/filesResponseWorker";
 import type { StateWriteHealth } from "@/lib/state/diskFull";
 
 /** One request frame. A whole snapshot can ride inline, so the bound is large. */
@@ -29,7 +29,19 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function workerRequest(value: unknown): FilesResponseWorkerRequest | null {
+function workerRequest(value: unknown): FilesResponseWorkerRequest | SeatSourceWorkerRequest | null {
+  if (record(value) && value.type === "seat-liveness" && record(value.query)
+    && record(value.scan) && typeof value.scan.snapshotFile === "string" && typeof value.scan.epoch === "string" && Number.isInteger(value.scan.generation)
+    && typeof value.query.stallAfterMs === "number" && Number.isFinite(value.query.stallAfterMs)
+    && Number.isInteger(value.query.limit) && (value.query.limit as number) >= 1 && (value.query.limit as number) <= 200
+    && (value.query.reconcileStructuredIdle === undefined || typeof value.query.reconcileStructuredIdle === "boolean")
+    && (value.query.project === undefined || typeof value.query.project === "string")
+    && (value.query.conversationId === undefined || typeof value.query.conversationId === "string")) return value as unknown as SeatSourceWorkerRequest;
+  if (record(value) && typeof value.project === "string") {
+    if (value.type === "seat-reports") return value as unknown as SeatSourceWorkerRequest;
+    if (value.type === "seat-agenda" && typeof value.bodyFile === "string" && typeof value.now === "number" && Number.isFinite(value.now)) return value as unknown as SeatSourceWorkerRequest;
+    if (value.type === "seat-rule-reports" && typeof value.at === "string" && Number.isFinite(Date.parse(value.at))) return value as unknown as SeatSourceWorkerRequest;
+  }
   if (!record(value)
     || value.type !== "project"
     || typeof value.url !== "string"
@@ -126,6 +138,36 @@ async function build(request: FilesResponseWorkerRequest): Promise<Record<string
   };
 }
 
+async function seatSource(request: SeatSourceWorkerRequest): Promise<Record<string, string>> {
+  let value: unknown = null;
+  if (request.type === "seat-liveness") {
+    if (path.dirname(path.resolve(request.scan.snapshotFile)) !== path.resolve(stateDir())) throw new Error("seat liveness inventory is outside its state directory");
+    const persisted = JSON.parse(await fs.promises.readFile(request.scan.snapshotFile, "utf8"));
+    if (persisted.epoch !== request.scan.epoch || persisted.generation !== request.scan.generation
+      || !Array.isArray(persisted.snapshot?.files) || !Array.isArray(persisted.snapshot?.projectCatalog)) throw new Error("seat liveness inventory changed or is incomplete");
+    const { agentLivenessSnapshot, productionLivenessSources } = await import("@/lib/lifecycle/liveness");
+    const completed = async () => ({ snapshot: persisted.snapshot, epoch: persisted.epoch, generation: persisted.generation,
+      targetGeneration: persisted.generation, cacheStatus: "hit" as const, requestCount: 1, cloneDurationMs: 0 });
+    value = (await agentLivenessSnapshot({ ...request.query, ...(request.query.project ? { liveOnly: true } : {}) },
+      productionLivenessSources({ completedFileScan: completed }))).conversations;
+  } else if (request.type === "seat-agenda") {
+    if (path.dirname(path.resolve(request.bodyFile)) !== path.resolve(statePath("files-response-results"))) throw new Error("seat agenda body path is outside the worker result directory");
+    const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
+    value = seatAgendaAsks(JSON.parse(await fs.promises.readFile(request.bodyFile, "utf8")), request.now, request.project);
+  } else if (request.type === "seat-reports") {
+    const { seatTickReportRows } = await import("@/lib/monitor/seatTickSources");
+    value = seatTickReportRows(request.project);
+  } else {
+    const { recordSeatRuleReports } = await import("@/lib/monitor/seatTickSources");
+    recordSeatRuleReports(request.project, request.at);
+  }
+  const directory = statePath("files-response-results");
+  await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
+  const bodyFile = path.join(directory, `${process.pid}-${crypto.randomUUID()}.json`);
+  await fs.promises.writeFile(bodyFile, JSON.stringify(value), { mode: 0o600 });
+  return { bodyFile, contentType: "application/json", etag: "", timing: "" };
+}
+
 /** Base representations kept for deltas: one per board scope in use. */
 const DELTA_BASES_KEPT = 4;
 
@@ -190,7 +232,7 @@ async function handle(frame: string): Promise<void> {
     id = envelope.id;
     const request = workerRequest(envelope.request);
     if (!request) throw new Error("files response worker received an invalid request");
-    reply({ id, ok: true, result: await build(request), rssBytes: residentBytes() });
+    reply({ id, ok: true, result: await (request.type === "project" ? build(request) : seatSource(request)), rssBytes: residentBytes() });
   } catch (error) {
     reply({
       id,
