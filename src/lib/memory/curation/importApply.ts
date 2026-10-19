@@ -63,7 +63,12 @@ export function prepareImportEdits(pass: CuratorPass, input: CurationApply, now:
     }
     row.dispositions.push({ at: now, pass: pass.id, kind: "drop", ruleIds: [], occurrences: item.occurrences, reason: item.reason, note: item.note, ...(item.forRoom ? { forRoom: true } : {}) });
   }
-  for (const item of input.defer ?? []) candidate(item.candidate, item.occurrences, true);
+  for (const item of input.defer ?? []) {
+    const row = candidate(item.candidate, item.occurrences, true);
+    const prior = row.deferred?.find(receipt => receipt.pass === pass.id);
+    const occurrences = new Set([...(prior?.occurrences ?? []), ...item.occurrences]);
+    row.deferred = [...row.deferred?.filter(receipt => receipt.pass !== pass.id) ?? [], { pass: pass.id, occurrences: [...occurrences].sort() }];
+  }
   for (const item of input.problem ?? []) if (pass.importBatch?.candidates.includes(item.id)) {
     const original = assertImportCandidate(pass, item.id);
     const row = candidate(item.id, candidateState(original).pending); context.note(item.note);

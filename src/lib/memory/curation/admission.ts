@@ -12,6 +12,7 @@ import { roleMemoryEnabled } from "../settings";
 import { machinePass, patchPass, readPass, passIsLive, type CuratorPass } from "./store";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { curatorCallerOf } from "./guard";
+import { importBatchAccountingGap } from "../importCuration";
 
 /** Shared launch and recovery admission, also loaded by the scanner worker. */
 export interface CurationAdmissionPorts {
@@ -104,6 +105,10 @@ function archive(pass: CuratorPass, sources: SeatTickAdmissionSources) {
 export function settle(pass: CuratorPass, ports: CurationAdmissionPorts, failure: string | null, finalText?: string | null) {
   const current = readPass(pass.id);
   if (!current || !passIsLive(current)) return current?.failure?.startsWith("abandoned:") ? `curation: failed, ${current.failure}` : null;
+  if (!failure) {
+    const gap = importBatchAccountingGap(current);
+    if (gap) throw new Error(`curation pass cannot succeed: ${gap}`);
+  }
   // Final state releases the machine claim even if archive placement is unavailable.
   const next = patchPass(pass.id, { state: failure ? "failed" : "succeeded", failure, endedAt: new Date(ports.sources.now()).toISOString(), ...(finalText ? { finalText } : {}) })!;
   const detail = `curation: ${failure ? `failed, ${failure}` : `settled ${pass.id}, ${next.counts.calls} calls, ${next.counts.changed} rules changed`}`;

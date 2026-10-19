@@ -44,6 +44,8 @@ export interface ImportCandidate {
   title: string;
   body: string;
   readBy?: string[];
+  /** Durable pass-level acknowledgement that these occurrences were explicitly deferred. */
+  deferred?: { pass: string; occurrences: string[] }[];
   dispositions: { at: string; pass: string; kind: "adopt" | "drop"; ruleIds: string[]; reason?: CuratorReason; note: string; occurrences: string[]; forRoom?: boolean }[];
 }
 export interface ImportRecord {
@@ -82,6 +84,8 @@ export interface ImportManifestFile {
   home: string;
   project: string | null;
   loadedAtStart: boolean;
+  /** Candidate rows for this verified copy have committed to the import collection. */
+  candidatesComplete?: boolean;
 }
 export interface ImportManifest {
   schemaVersion: 1;

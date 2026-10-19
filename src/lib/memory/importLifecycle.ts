@@ -1,7 +1,7 @@
 import { agentRegistry, type RegistryFile } from "@/lib/agent/registry";
 import { processIdentityStatus } from "@/lib/processIdentity";
 import { readMemorySourceFile, advanceMemorySource } from "./source";
-import { importCollection, readImportCandidates, readImportRecord, writeImportRows } from "./importStore";
+import { readImportCandidates, readImportRecord, writeImportRows } from "./importStore";
 import type { ImportCandidate, ImportRecord, ImportRequest } from "./importTypes";
 import { runMemoryImportWork, validateMemoryImportEnvironment, defaultImportRoots, type ImportWorkPorts } from "./importWork";
 import { candidateState, importMemoryRevision } from "./importCuration";
@@ -76,7 +76,10 @@ export async function advanceMemoryImportWork(request: ImportRequest, ports: Imp
   const roots = request.roots ?? record.roots ?? await defaultImportRoots();
   owns(record.id);
   record.roots ??= roots;
-  const stamp = () => `${importCollection()?.revision()}:${importMemoryRevision()}`;
+  // The import record itself is stored in importCollection and changes during
+  // this boundary. Candidate disposition and Undo authority live in the role
+  // memory and curation revisions returned by importMemoryRevision.
+  const stamp = () => importMemoryRevision();
   const changed = record.curationDirty || !record.progress || record.observedMemoryRevision !== importMemoryRevision();
   if (changed) {
     await validateMemoryImportEnvironment(roots);
@@ -113,9 +116,11 @@ export async function advanceMemoryImportWork(request: ImportRequest, ports: Imp
     if (expected !== stamp()) return record;
     record = { ...record, flippedAt: at, legacyGenerations: generations, remainingGenerations: generations };
     // Persist the boundary and exclusions before turning off any new start.
-    await writeImportRows([record], () => owns(record!.id));
-    const prepared = stamp();
-    if (!await advanceMemorySource(record.id, "draining", request.at ? at : undefined, () => prepared === stamp())) return record;
+    await writeImportRows([record], () => {
+      owns(record!.id);
+      if (expected !== stamp()) throw Error("memory import observations changed; retry the advance");
+    });
+    if (!await advanceMemorySource(record.id, "draining", request.at ? at : undefined, () => expected === stamp())) return record;
   }
   const flippedAt = owns(record.id).flippedAt!;
   const generations = await legacy(flippedAt);

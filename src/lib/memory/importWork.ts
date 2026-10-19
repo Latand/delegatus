@@ -8,7 +8,7 @@ import { stateDir } from "@/lib/configDir";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { readMemorySourceFile, restoreMemorySourceAfterImport } from "./source";
 import { assertPrivateImportDatabaseFiles, importCollection, withImportLookups, readImportRecord, writeImportRows } from "./importStore";
-import { candidateKey } from "./importCuration";
+import { candidateById, candidateKey } from "./importCuration";
 import { validateImportId } from "./importTypes";
 import type { ImportCandidate, ImportManifest, ImportManifestFile, ImportRecord, ImportRequest, ImportRoots, ImportWriter } from "./importTypes";
 import { ImportCandidates, topicMetadata } from "./importCandidates";
@@ -236,14 +236,21 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       if (request.rescan) await privateDirectory(record.backup);
       const manifest: ImportManifest = request.rescan ? JSON.parse(await fs.readFile(path.join(record.backup, "manifest.json"), "utf8")) : { schemaVersion: 1, importId: record.id, createdAt: record.at, files: [] };
       if (manifest.schemaVersion !== 1 || manifest.importId !== record.id || !Array.isArray(manifest.files)) throw new MemoryImportError("integrity");
-      const newFiles: { file: typeof files[number]; entry: ImportManifestFile }[] = [];
+      const newFiles: { file: typeof files[number]; entry: ImportManifestFile; copied: boolean }[] = [];
       for (const file of files) {
         assertOwned();
         const { source, store, ...entry } = file;
         const previous = manifest.files.findLast(entry => entry.home === file.home && entry.file === file.file);
-        if (request.rescan && previous?.size === file.size && previous.modifiedAt === file.modifiedAt) continue;
+        const recover = (entry: ImportManifestFile) => entry.kind === "claude_topic" || entry.kind === "codex_summary";
+        if (request.rescan && previous?.size === file.size && previous.modifiedAt === file.modifiedAt) {
+          if (previous.candidatesComplete !== true && recover(previous)) newFiles.push({ file, entry: previous, copied: false });
+          continue;
+        }
         const sourceHash = await digest(source);
-        if (previous?.sha256 === sourceHash) continue;
+        if (previous?.sha256 === sourceHash) {
+          if (request.rescan && previous.candidatesComplete !== true && recover(previous)) newFiles.push({ file, entry: previous, copied: false });
+          continue;
+        }
         const copy = path.join("stores", hash(await fs.realpath(store)).slice(0, 16), ...(request.rescan ? ["versions", sourceHash, randomUUID()] : []), path.relative(store, source));
         const destination = path.join(record.backup, copy);
         const resolved = await resolvedDestination(destination);
@@ -257,7 +264,16 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
         const handle = await fs.open(destination, "r+");
         try { await handle.sync(); } finally { await handle.close(); }
         const copied = { ...entry, copy, sha256: sourceHash };
-        manifest.files.push(copied); newFiles.push({ file, entry: copied });
+        manifest.files.push(copied); newFiles.push({ file, entry: copied, copied: true });
+      }
+      // A worker may stop after the manifest commit or between candidate batches.
+      // Rebuild every unfinished copy from its verified backup even if its source
+      // disappeared or now has a different version.
+      const scheduledCopies = new Set(newFiles.map(item => item.entry.copy));
+      for (const entry of manifest.files) {
+        if (entry.candidatesComplete === true || entry.kind !== "claude_topic" && entry.kind !== "codex_summary" || scheduledCopies.has(entry.copy)) continue;
+        const source = path.join(entry.home, entry.file);
+        newFiles.push({ file: { ...entry, source, store: path.dirname(source), physical: source }, entry, copied: false });
       }
       // All copies pass before the first candidate is committed.
       ports.phase?.("candidates");
@@ -274,20 +290,21 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       }
       const builder = new ImportCandidates(record.id);
       let resolveWriter = ports.writer;
-      for (const { file, entry } of newFiles) {
+      for (const { file, entry, copied } of newFiles) {
         if (entry.kind !== "claude_topic" && entry.kind !== "codex_summary") continue;
         const bytes = await fs.readFile(path.join(record.backup, entry.copy));
         const body = bytes.toString("utf8");
         if (!Buffer.from(body).equals(bytes)) throw new MemoryImportError("integrity");
-        entry.loadedAtStart = !request.rescan && (entry.loadedAtStart || loaded.has(file.physical));
+        entry.loadedAtStart = request.rescan ? !copied && entry.loadedAtStart : entry.loadedAtStart || loaded.has(file.physical);
         const session = entry.engine === "claude" ? topicMetadata(body).session : undefined;
         if (session && !resolveWriter) resolveWriter = await (await import("./importWriter")).productionImportWriter();
         builder.add(entry, body, session ? await resolveWriter!(session) : undefined);
       }
       const candidates: ImportCandidate[] = builder.rows();
+      const missingCandidates = candidates.filter(candidate => !candidateById(record.id, candidate.id));
       // Recheck copied changes after every asynchronous writer lookup.
-      for (const { file, entry } of newFiles) {
-        if (await digest(file.source) !== entry.sha256 || await digest(path.join(record.backup, entry.copy)) !== entry.sha256) throw new MemoryImportError("integrity");
+      for (const { file, entry, copied } of newFiles) {
+        if (copied && await digest(file.source) !== entry.sha256 || await digest(path.join(record.backup, entry.copy)) !== entry.sha256) throw new MemoryImportError("integrity");
       }
       const [{ default: manifestMetadata }, { viewerRepositoryProjects }, { orchestratorSeatFor }] = await Promise.all([
         import("../../../package.json"), import("@/lib/projects/viewerRepository"), import("@/lib/orchestrator/seats"),
@@ -317,11 +334,13 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
           })) };
         });
       }
+      for (const { entry } of newFiles) entry.candidatesComplete = true;
+      commitImportManifest(record.backup, manifest);
       ports.phase?.("retention");
       await pruneMemoryBackups(parent);
       Object.assign(record, { state: "ready", curationDirty: true, files: manifest.files.length,
-        candidates: (request.rescan ? record.candidates : 0) + new Set(candidates.map(row => row.group)).size,
-        parts: (request.rescan ? record.parts : 0) + candidates.length });
+        candidates: (request.rescan ? record.candidates : 0) + new Set(missingCandidates.map(row => row.group)).size,
+        parts: (request.rescan ? record.parts : 0) + missingCandidates.length });
       delete record.reason;
       await writeImportRows([record], assertOwned);
       return record;

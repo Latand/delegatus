@@ -133,6 +133,25 @@ test("a retirement during a scan owes another final scan; failed scans never sta
   expect(readImportCandidates(ID).candidates.some(c => c.body === "A write landed after the scan committed.\n")).toBe(true);
 });
 
+test("a candidate batch failure replays its verified manifest copy before the drain completes", async () => {
+  const { injectStateWriteFaultForTests } = await import("@/lib/state/sqliteStateStore");
+  await backup(); await dispose();
+  await advanceMemoryImportWork(request(10), { ...ports(), legacy: async () => ["legacy-claude"] });
+  const late = "A late write survives candidate persistence failure.\n";
+  await fs.writeFile(path.join(memory, "topic.md"), late);
+  try {
+    await expect(advanceMemoryImportWork(request(20), { ...ports(), legacy: async () => [], phase: phase => {
+      if (phase === "candidates") injectStateWriteFaultForTests({ site: "commit", collection: "role_memory_import", times: 1, error: Error("candidate commit refused") });
+    } })).rejects.toThrow(/candidate commit refused/);
+  } finally { injectStateWriteFaultForTests(null); }
+  expect(readImportCandidates(ID).candidates.some(candidate => candidate.body === late)).toBe(false);
+  expect((await manifest()).files.find(entry => entry.sha256 === sha(Buffer.from(late)))?.candidatesComplete).toBeUndefined();
+  await advanceMemoryImportWork(request(30), { ...ports(), legacy: async () => [] });
+  expect(readImportCandidates(ID).candidates.some(candidate => candidate.body === late)).toBe(true);
+  expect((await manifest()).files.find(entry => entry.sha256 === sha(Buffer.from(late)))?.candidatesComplete).toBe(true);
+  expect(readMemorySourceFile()?.phase).toBe("active");
+});
+
 test("the fallback scan is durable across a fresh helper process and reversal leaves stores intact", async () => {
   await backup(); await dispose();
   await advanceMemoryImportWork(request(10), { ...ports(), legacy: async () => ["legacy-claude"] });
@@ -210,6 +229,28 @@ test("an operator reversal or undo after the legacy await prevents a stale flip"
   await expect(advanceMemoryImportWork(request(20), { ...ports(), legacy: async () => { setMemorySource("engines", at(15)); return []; } })).resolves.toBeDefined();
   // Pending loaded candidates prevent reaching the injected legacy probe.
   expect(readMemorySourceFile()?.source).toBe("delegatus");
+});
+
+test("an undo after the boundary record commit prevents the source flip", async () => {
+  await backup(); const pass = await dispose();
+  const { importCollection } = await import("./importStore");
+  const collection = importCollection()!;
+  const original = collection.boundedPatch.bind(collection);
+  let undone = false;
+  collection.boundedPatch = ((...args: Parameters<typeof collection.boundedPatch>) => {
+    const result = original(...args);
+    if (!undone && readImportRecord(ID)?.flippedAt) {
+      undone = true;
+      revertCuratorPass(pass.id, at(5));
+    }
+    return result;
+  }) as typeof collection.boundedPatch;
+  try {
+    await advanceMemoryImportWork(request(10), { ...ports(), legacy: async () => [] });
+  } finally { collection.boundedPatch = original; }
+  expect(undone).toBe(true);
+  expect(readMemorySourceFile()?.phase).toBe("importing");
+  expect(readImportCandidates(ID).candidates.every(candidate => candidateState(candidate).state === "pending")).toBe(true);
 });
 
 test("a reversal after an awaited host lookup preserves the operator's later choice", async () => {

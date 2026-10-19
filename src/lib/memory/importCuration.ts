@@ -160,6 +160,22 @@ export function assertImportCandidate(pass: CuratorPass, id: string) {
   if (!row.readBy?.includes(pass.id)) return refuse("the pass must read this part before dispositioning it");
   return row;
 }
+
+/** Successful settlement needs a durable disposition or explicit defer for
+ * every offered occurrence. Defer receipts do not alter candidate state. */
+export function importBatchAccountingGap(pass: CuratorPass): string | null {
+  if (!pass.importBatch) return null;
+  for (const id of pass.importBatch.candidates) {
+    const row = candidateById(pass.importBatch.importId, id);
+    if (!row) return `import candidate ${id} is missing`;
+    for (const occurrence of row.occurrences) {
+      const disposed = row.dispositions.some(item => item.pass === pass.id && item.occurrences.includes(occurrence.id));
+      const deferred = row.deferred?.some(item => item.pass === pass.id && item.occurrences.includes(occurrence.id));
+      if (!disposed && !deferred) return `import candidate ${id} occurrence ${occurrence.id} is unaccounted`;
+    }
+  }
+  return null;
+}
 export function adoptionReaches(candidate: ImportCandidate, scope: string) {
   const project = scopeProject(canonicalScope(scope));
   return scope === "machine" || scope.startsWith("role:*:") || !!project && candidate.occurrences.every(item => item.project && canonicalProject(item.project) === project);

@@ -5,6 +5,7 @@ import path from "node:path";
 import { claimPass, patchPass, readPass, type CuratorPass } from "./store";
 import { readCuration } from "./read";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
+import { settle } from "./admission";
 import { readImportCandidates } from "../importStore";
 let importCollection: typeof import("../importStore").importCollection;
 let candidateById: typeof import("../importCuration").candidateById;
@@ -110,6 +111,25 @@ test("one occurrence can be adopted and another dropped; explicit defer permits 
   expect(candidateState(candidateById(IMPORT_ID, a.id)!).state).toBe("adopted");
   applyCuration(p, scopeInput({ machine: [] }, { drop: [drop(b)] }), new Date(NOW + 1).toISOString());
   expect(candidateState(candidateById(IMPORT_ID, b.id)!).state).toBe("dropped");
+});
+
+test("successful settlement refuses a pass with no import accounting", async () => {
+  const candidate = importCandidate(1); await seedImport([candidate]);
+  const p = pass();
+  const ports = { sources: { now: () => NOW } as never, archive: () => {} };
+  expect(() => settle(p, ports, null)).toThrow(/cannot succeed: import candidate/);
+  expect(readPass(p.id)?.state).toBe("claimed");
+});
+
+test("a read batch with explicit durable deferrals can settle successfully", async () => {
+  const candidate = importCandidate(1); await seedImport([candidate]);
+  const p = pass(); await readCuration(p, "imports");
+  applyCuration(p, scopeInput({ machine: [] }, { defer: [{ candidate: candidate.id, occurrences: ids(candidate) }] }), IMPORT_AT);
+  const receipt = candidateById(IMPORT_ID, candidate.id)!;
+  expect(receipt.deferred).toEqual([{ pass: p.id, occurrences: ids(candidate) }]);
+  const result = settle(p, { sources: { now: () => NOW } as never, archive: () => {} }, null);
+  expect(result).toContain("settled");
+  expect(readPass(p.id)?.state).toBe("succeeded");
 });
 
 test("a host pass counts and undoes a seatless folder's own scope", async () => {
