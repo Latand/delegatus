@@ -4,7 +4,9 @@ This change addresses the first three causes ranked by the 2026-10-19
 diagnosis: repeated curator history reconstruction, registry projections, and
 full pipeline reads during idle retirement. The remaining seat/card work,
 registry write admission, and unscoped pipeline mutations remain separate
-work. The ordinary controller's four-lane selection limit is unchanged.
+work. The controller keeps its four-lane selection limit and yields before admission,
+then captures current work. This keeps the caller's reader burst separate from
+the first selected lane.
 
 ## Contracts and callers
 
@@ -50,7 +52,8 @@ conversations, entries, memberships and receipts. It records cold reads and
 six measured passes. Each pass combines curator and registry readers with a
 controller tick, a one-row progress update, and archive insertion/deletion.
 The timer observer remains active through a post-work callback. The candidate
-refuses p95 loop delays above 50 ms, maximum delays above 500 ms, missing timer
+refuses p95 loop delays over the complete cold/warm observation window above
+50 ms, maximum delays above 500 ms, missing timer
 samples, or more than four controller pipeline copies.
 
 The output includes corpus digests, source fingerprints, interpreter version,

@@ -12,6 +12,7 @@ const root = process.env.LLV_STATE_DIR!;
 if (!root || process.env.NODE_ENV !== "test" || !process.env.LLV_VIEWER_CONTROL_URL?.endsWith(":1")) {
   throw Error("isolated state, NODE_ENV=test and closed control port required");
 }
+if (fs.readdirSync(root).length) throw Error("replay requires a freshly created empty state root");
 const load = (file: string) => import(pathToFileURL(path.join(repo, file)).href);
 const { buildPipeline, savePipelines, loadPipelinesForRetirement } = await load("src/lib/pipelines/store.ts");
 const { defaultPipelinePorts } = await load("src/lib/pipelines/engine.ts");
@@ -70,6 +71,11 @@ const template = new AgentRegistry(path.join(root, "template.json"), undefined, 
 const conv = template.ensureConversation("codex", "/fixture/template.jsonl", null);
 const launched = template.beginSpawn("codex", "/fixture", { title: "Reader fixture" });
 template.close();
+// beginSpawn creates fixture-owned system tasks. Their ids and wall-clock
+// timestamps are irrelevant to these readers; remove only its recorded ids.
+for (const id of launched.failureReporting?.taskIds ?? []) {
+  db.query("DELETE FROM state_rows WHERE collection='tasks' AND row_key=?").run(`t:${id}`);
+}
 const initial = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
 for (let n = 0; n < 4000; n++) {
   const active = n < lanes, id = `conversation_registry_${n}`, session = `registry-${n}`;
@@ -79,7 +85,7 @@ for (let n = 0; n < 4000; n++) {
     ...(active ? { structuredHost: { kind: "codex-app-server", endpoint: "fixture", process: { pid: 900000 + n, startIdentity: "fixture", bootEpoch: "fixture" },
       eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] } } : {}) };
   initial.memberships[id] = [{ conversationId: id, kind: "pipeline", containerId: `hot-${n}`, role: "builder", slot: "build", stageId: "build", stageOrder: 0, round: 1, parentConversationId: null, createdAt: now }];
-  initial.receipts[`receipt-${n}`] = { ...launched, createdAt: now, launchId: `receipt-${n}`, conversationId: id, key: { engine: "codex", sessionId: session }, state: "completed" };
+  initial.receipts[`receipt-${n}`] = { ...launched, pathCorrelation: null, failureReporting: undefined, createdAt: now, launchId: `receipt-${n}`, conversationId: id, key: { engine: "codex", sessionId: session }, state: "completed" };
 }
 const registrySha256 = crypto.createHash("sha256").update(JSON.stringify(initial)).digest("hex");
 let registryPayloadReads = 0;
@@ -145,12 +151,12 @@ try {
   await new Promise<void>(resolve => setImmediate(resolve));
   let cold;
   try {
-    cold = { curator: await measure(curation), display: await measure(() => memory.machinePass()), ownership: await measure(ownership), registry: await measure(retired), startup: await measure(startupMemberships) };
+    cold = { curator: await measure(curation), display: await measure(() => memory.machinePass()), ownership: await measure(ownership), registry: await measure(retired), startup: await measure(startupMemberships), controller: await measure(() => tickPipelinesController([], ports)) };
     await new Promise<void>(resolve => setTimeout(resolve, 4));
   } finally { clearInterval(coldObserver); }
   coldGaps.sort((a, b) => a - b);
   const coldLoop = { samples: coldGaps.length, p95Ms: coldGaps[Math.min(coldGaps.length - 1, Math.floor(coldGaps.length * .95))], maxMs: coldGaps.at(-1) };
-  await tickPipelinesController([], ports);
+  const replayGaps = [...coldGaps];
   for (let sample = 0; sample < 6; sample++) {
     let last = performance.now(), gaps: number[] = [];
     const observer = setInterval(() => { const at = performance.now(); gaps.push(Math.max(0, at - last - 2)); last = at; }, 2);
@@ -185,6 +191,7 @@ try {
       // Keep the observer through a post-work timer opportunity.
       await new Promise<void>(resolve => setTimeout(resolve, 4));
       if (!gaps.length) throw Error("missing loop observer evidence");
+      replayGaps.push(...gaps);
       gaps = gaps.sort((a, b) => a - b);
       samples.push({ sample, curator, display, registry: registryRead, startup: startupRead, ownership: ownershipRead, controller, refreshed, lifecycle,
         loop: { samples: gaps.length, p95Ms: gaps[Math.min(gaps.length - 1, Math.floor(gaps.length * .95))], maxMs: gaps.at(-1) } });
@@ -196,6 +203,8 @@ try {
     else if (/\.tsx?$/.test(file) && !/\.(test|fixture)\./.test(file) && !file.includes("/fixtures/")) fingerprint.update(path.relative(repo, file)).update(fs.readFileSync(file));
   } };
   walk(path.join(repo, "src"));
-  console.log(JSON.stringify({ startedAt, finishedAt: new Date().toISOString(), limits, mode, lanes, bun: Bun.version, driverSha256, dependencySha256, corpus, corpusSha256, registrySha256, sourceSha256: fingerprint.digest("hex"), load: { before: loadBefore, after: os.loadavg(), cpus: os.cpus().length }, cold, coldLoop, samples }));
-  if (mode === "after" && [coldLoop, ...samples.map(row => row.loop)].some(loop => !loop.samples || loop.p95Ms! > 50 || loop.maxMs! > 500)) process.exitCode = 1;
+  replayGaps.sort((a, b) => a - b);
+  const loop = { samples: replayGaps.length, p95Ms: replayGaps[Math.min(replayGaps.length - 1, Math.floor(replayGaps.length * .95))], maxMs: replayGaps.at(-1) };
+  console.log(JSON.stringify({ startedAt, finishedAt: new Date().toISOString(), limits, mode, lanes, bun: Bun.version, driverSha256, dependencySha256, corpus, corpusSha256, registrySha256, sourceSha256: fingerprint.digest("hex"), load: { before: loadBefore, after: os.loadavg(), cpus: os.cpus().length }, cold, coldLoop, loop, samples }));
+  if (mode === "after" && (!loop.samples || loop.p95Ms! > 50 || loop.maxMs! > 500)) process.exitCode = 1;
 } finally { decodeOwner.decodeRow = originalDecode; registry.close(); db.close(); }

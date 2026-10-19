@@ -65,6 +65,7 @@ test("retirement and startup membership payload reads stay flat across tenfold r
           expect(Object.keys(selected.memberships)).toEqual(["conversation_reader_0", "conversation_reader_alias", "conversation_reader_pending"]);
           expect(selected.byPipeline.get("lane-pending")).toEqual(["conversation_reader_pending"]);
           expect(selected.resolve("conversation_reader_alias")).toBe("conversation_reader_0");
+          expect([...selected.selectedIds]).toEqual(["conversation_reader_0", "conversation_reader_alias", "conversation_reader_pending"]);
           expect(selected.byPipeline.get("lane-0")).toEqual(["conversation_reader_0", "conversation_reader_alias"]);
           counts.push(reads);
         } finally { store.close(); }

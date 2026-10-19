@@ -915,3 +915,22 @@ test("refused preparations retain their windows and advance the durable fair wal
   try { expect(db.query("SELECT COUNT(*) AS n FROM pipeline_tick_work WHERE dirty=1 AND attempt_cursor=0").get()).toEqual({ n: 20 }); }
   finally { db.close(); }
 });
+
+
+test("a coalesced controller pass captures its deadline after already-ready runtime work", async () => {
+  await settlePipelineControllerJobs();
+  const h = harness();
+  let clock = "2026-10-16T00:00:00.000Z";
+  const captured: string[] = [];
+  h.ports.now = () => { captured.push(clock); return clock; };
+  const runtimeReady = new Promise<void>(resolve => setImmediate(() => {
+    clock = "2026-10-16T00:01:00.000Z";
+    resolve();
+  }));
+  const first = tickPipelinesController([], h.ports);
+  expect(tickPipelinesController([], h.ports)).toBe(first);
+  await first;
+  await runtimeReady;
+  expect(captured.length).toBeGreaterThan(0);
+  expect(captured[0]).toBe("2026-10-16T00:01:00.000Z");
+});

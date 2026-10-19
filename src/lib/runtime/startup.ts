@@ -1769,31 +1769,32 @@ export function pipelineStartupMemberships(registry: AgentRegistry) {
   // lookups keep retained conversations and memberships off the retry loop.
   const snapshot = startupSnapshot(registry);
   const memberships: RegistryFile["memberships"] = {};
+  const canonicalIds = new Map<string, ViewerConversationId>();
+  const take = (conversationId: ViewerConversationId) => {
+    if (canonicalIds.has(conversationId)) return;
+    const canonical = resolveConversationAlias(snapshot, conversationId);
+    for (const id of conversationIdsResolvingTo(snapshot, canonical)) {
+      if (canonicalIds.has(id)) continue;
+      canonicalIds.set(id, canonical);
+      const entries = snapshot.memberships[id];
+      if (entries) memberships[id] = entries;
+    }
+  };
   for (const entry of registryRowsMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp"])) {
     if (!startupHostInScope(registry, sessionKeyId(entry.key))) continue;
-    for (const conversation of registryConversationsForEntryKey(snapshot, sessionKeyId(entry.key))) {
-      const canonical = resolveConversationAlias(snapshot, conversation.id);
-      for (const id of conversationIdsResolvingTo(snapshot, canonical)) {
-        if (snapshot.memberships[id]) memberships[id] = snapshot.memberships[id];
-      }
-    }
+    for (const conversation of registryConversationsForEntryKey(snapshot, sessionKeyId(entry.key))) take(conversation.id);
   }
   // Pending structured spawns can have membership before an entry exists.
   // They need the same unreadable-pipeline fence as resident hosts.
-  for (const receipt of registryRowsMatching(snapshot, "receipts", "state", ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"])) {
-    const canonical = resolveConversationAlias(snapshot, receipt.conversationId);
-    for (const id of conversationIdsResolvingTo(snapshot, canonical)) {
-      if (snapshot.memberships[id]) memberships[id] = snapshot.memberships[id];
-    }
-  }
-  const resolve = (id: string) => resolveConversationAlias(snapshot, id as ViewerConversationId);
+  for (const receipt of registryRowsMatching(snapshot, "receipts", "state", ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"])) take(receipt.conversationId);
+  const resolve = (id: string) => canonicalIds.get(id) ?? resolveConversationAlias(snapshot, id as ViewerConversationId);
   const byPipeline = new Map<string, string[]>();
   for (const [id, entries] of Object.entries(memberships)) for (const entry of entries) {
     if (entry.kind !== "pipeline") continue;
     const ids = byPipeline.get(entry.containerId) ?? [];
     ids.push(id); byPipeline.set(entry.containerId, ids);
   }
-  return { memberships, resolve, byPipeline };
+  return { memberships, resolve, byPipeline, selectedIds: new Set(canonicalIds.keys()) };
 }
 
 /** Pipeline attempts and frozen close hosts determine whether startup may create another writer.
@@ -1820,7 +1821,7 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
     }
     return { settled, deferred };
   }
-  const { memberships, resolve, byPipeline } = pipelineStartupMemberships(registry);
+  const { memberships, resolve, byPipeline, selectedIds } = pipelineStartupMemberships(registry);
   for (const [id, entries] of Object.entries(memberships)) {
     if (entries.some((entry) => entry.kind === "pipeline" && preservedIds.has(entry.containerId))) {
       deferred.add(resolve(id));
@@ -1835,7 +1836,7 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
       for (const id of byPipeline.get(pipeline.id) ?? []) deferred.add(resolve(id));
     }
     for (const attempt of pipeline.attempts) {
-      if (!attempt.conversationId?.startsWith("conversation_")) continue;
+      if (!attempt.conversationId?.startsWith("conversation_") || !selectedIds.has(attempt.conversationId)) continue;
       const id = resolve(attempt.conversationId);
       if (SETTLED_STAGE_ATTEMPT_STATES.has(attempt.state)) settled.add(id);
       if (blocked) deferred.add(id);
