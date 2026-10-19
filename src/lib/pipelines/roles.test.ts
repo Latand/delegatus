@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { ORCHESTRATOR_WITHOUT_MANDATE_RULES, ROLE_DEFAULTS, WORKING_RULES } from "@/lib/roles/defaults";
+import { ORCHESTRATOR_WITHOUT_MANDATE_RULES, ROLE_DEFAULTS, WORKING_RULES, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
 import { FRONTEND_GUIDANCE, resolveRole } from "@/lib/roles/registry";
 import { ROLE_VARIANT_IDS } from "@/lib/roles/types";
 import { VARIANT_PARAMS } from "@/lib/roles/paramConfig";
@@ -17,6 +17,17 @@ const REGISTRY_LOOKUP = (roleId: string) => {
   if (roleId === "reviewer") return { engine: "codex" as const, model: "gpt-5.6-sol", effort: "xhigh", access: "read-only" as const, promptScaffold: "Reviewer guidance" };
   return null;
 };
+
+test("builder isolation keeps edits and commits in its assigned worktree", () => {
+  for (const params of [{}, { mode: "apply-fixes" }]) {
+    const scaffold = pipelineRoleLookup("builder", params)?.promptScaffold ?? "";
+    expect(scaffold).toContain("Edit, stage and commit in the assigned worktree");
+    expect(scaffold).toContain("Use scratch exports for builds, tests, probes and renders");
+    expect(scaffold).not.toContain("work, build, probe and render in a scratch export");
+  }
+  expect(WORKING_RULES_SHORT).toContain("Edit, stage and commit in the assigned worktree");
+  expect(WORKING_RULES_SHORT).not.toContain("work in a scratch export");
+});
 
 test("role references resolve registry defaults and stage overrides", () => {
   const lookup = () => ({

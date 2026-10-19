@@ -14,6 +14,29 @@ import { pipelineRoleLookup, resolvePipelineRole } from "./roles";
 import type { PipelineStage } from "./types";
 import { composeStageInput } from "./stageInput";
 import { seededTemplatesFromRoles } from "@/lib/workflows/store";
+import { refreshRequest } from "@/lib/forge/autoRefresh";
+import type { Pipeline } from "./types";
+
+test("generated refresh and fix prompts keep commits in the stage worktree and publication with the pipeline", () => {
+  const source = { id: "finished", task: "Refresh", repoDir: "/repo", baseBranch: "main",
+    delivery: { target: { branch: "refs/heads/delivery", remote: "origin" } },
+    merge: { prNumber: 42, refresh: { base: "a".repeat(40), head: "b".repeat(40) } } } as Pipeline;
+  const request = refreshRequest(source);
+  const pipeline = buildPipeline({ ...request, id: "refresh-contract", project: "fixture", repoDir: "/repo",
+    stages: request.stages.map(stage => ({ ...stage,
+      effectiveRole: resolvePipelineRole(stage, "run", pipelineRoleLookup).role! })) as PipelineStage[],
+    srcPath: null, srcConversationId: null, now: "now" });
+  for (const id of ["refresh", "fix"]) {
+    const stage = pipeline.stages.find(stage => stage.id === id)!;
+    const prompt = renderStagePrompt(pipeline, stage, stage.effectiveRole, "");
+    expect(prompt).toContain("Edit, stage and commit only in this stage worktree");
+    expect(prompt).toContain("Scratch exports are for builds, tests, probes and renders");
+    expect(prompt).toContain("Never push; the pipeline publishes");
+    expect(prompt).toContain("overrides any instruction to work or commit in a scratch checkout or to push");
+    expect(prompt).not.toContain("Push this branch");
+    expect(prompt).not.toContain("work, build, probe and render in a scratch export");
+  }
+});
 
 test.each(["vitest", "delegatus", "missing"])("assembled test guidance uses installed tooling and project checks: %s", async (kind) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-test-guidance-"));
@@ -118,7 +141,7 @@ test("every run scaffold overrides conflicting branch instructions and names the
     expect(prompt.indexOf("Pipeline branch:")).toBeGreaterThan(prompt.indexOf("Create a new branch"));
     if (access === "read-write") {
       expect(prompt).toContain(`Commit your changes on ${pipeline.branch}`);
-      expect(prompt).toContain("Push this branch");
+      expect(prompt).toContain("Never push; the pipeline publishes");
     }
     else expect(prompt).not.toContain("Commit your changes on");
   }
@@ -422,5 +445,5 @@ test("an owner without a delivery remote gets a local commit instruction", () =>
   expect(local).toContain("keep the commits on this local branch and do not push");
   expect(local).not.toContain("Push this branch");
   pipeline.delivery.target.remote = "https://example.invalid/repo.git";
-  expect(renderStagePrompt(pipeline, stage, stage.effectiveRole, "")).toContain("Push this branch.");
+  expect(renderStagePrompt(pipeline, stage, stage.effectiveRole, "")).toContain("Never push; the pipeline publishes");
 });

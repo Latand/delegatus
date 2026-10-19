@@ -2,11 +2,63 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { rollupChecks } from "@/lib/forge/checkRollup";
 import type { ExecPort } from "@/lib/workflows/provision";
-import { pipelineLiteralGitEnv, type PipelineGitResult } from "./git";
+import { pipelineLiteralGitEnv, verifyPassedHeadIntegration, type PipelineGitResult } from "./git";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 class StagePushRemoteUnavailable extends Error {}
+class StageIntegrationChecksPending extends Error {}
+
+/** A missing creation receipt is excused only for a published, tested clean
+ * integration. Read the forge for this exact head and origin's default branch;
+ * an unverified tracking ref, a report or an old green PR cannot authorize it. */
+async function integrationOrigin(pipeline: Pipeline, main: string, deliveryUrl: string, exec: ExecPort): Promise<string | null> {
+  const origin = await exec("git", ["remote", "get-url", "origin"], pipeline.worktreeDir);
+  const repository = githubRepositoryOfRemote(origin.stdout.trim());
+  if (origin.code !== 0 || !repository || repository !== githubRepositoryOfRemote(deliveryUrl)) return null;
+  const defaultBranch = await exec("git", ["ls-remote", "--symref", "origin", "HEAD"], pipeline.worktreeDir, undefined, { timeoutMs: 5000 });
+  if (defaultBranch.code !== 0) throw new StagePushRemoteUnavailable();
+  const lines = defaultBranch.stdout.trim().split("\n");
+  if (lines.length !== 2 || lines[0] !== `ref: refs/heads/${pipeline.baseBranch}\tHEAD`
+    || lines[1] !== `${main}\tHEAD`) return null;
+  return repository;
+}
+
+async function publishedIntegrationGreen(pipeline: Pipeline, target: string, main: string, deliveryUrl: string, exec: ExecPort): Promise<boolean> {
+  const repository = await integrationOrigin(pipeline, main, deliveryUrl, exec);
+  if (!repository) return false;
+  const read = async (args: string[]): Promise<unknown> => {
+    const result = await exec("gh", args, pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
+    if (result.code !== 0) throw new StageIntegrationChecksPending("the published integration's checks are unavailable");
+    return JSON.parse(result.stdout);
+  };
+  const view = await read(["pr", "view", String(pipeline.delivery!.target.pr ?? pipeline.delivery!.target.branch.replace(/^refs\/heads\//, "")),
+    "--repo", repository, "--json", "state,isDraft,headRefOid,baseRefName,statusCheckRollup"]) as Record<string, unknown>;
+  if (!view || view.state !== "OPEN" || view.isDraft !== false || view.headRefOid !== target || view.baseRefName !== pipeline.baseBranch) return false;
+  if (!Array.isArray(view.statusCheckRollup) || view.statusCheckRollup.some(entry => !entry || typeof entry !== "object"
+    || !(typeof entry.name === "string" || typeof entry.context === "string"))) return false;
+  const checks = rollupChecks(view.statusCheckRollup);
+  if (!checks.length) throw new StageIntegrationChecksPending("the published integration is waiting for checks to register");
+  if (checks.some(check => check.verdict === "red")) return false;
+  const protection = await read(["api", `repos/${repository}/branches/${encodeURIComponent(pipeline.baseBranch)}`]) as {
+    protected?: unknown; protection?: { required_status_checks?: { contexts?: unknown; checks?: unknown } };
+  };
+  if (!protection || typeof protection.protected !== "boolean"
+    || (protection.protected && (!protection.protection || typeof protection.protection !== "object" || Array.isArray(protection.protection)))) return false;
+  const required = protection.protection?.required_status_checks;
+  if (required != null && (typeof required !== "object" || Array.isArray(required))) return false;
+  const contexts = required?.contexts === undefined ? [] : required.contexts;
+  const configured = required?.checks === undefined ? [] : required.checks;
+  if (!Array.isArray(contexts) || !contexts.every(name => typeof name === "string")
+    || !Array.isArray(configured) || !configured.every(check => check && typeof check.context === "string")) return false;
+  if (checks.some(check => check.verdict !== "green")
+    || [...contexts, ...configured.map(check => check.context)].some(name => !checks.some(check => check.name === name && check.verdict === "green"))) {
+    throw new StageIntegrationChecksPending("the published integration is waiting for green checks");
+  }
+  return true;
+}
 
 async function smallFile(file: string): Promise<string | null> {
   try {
@@ -119,6 +171,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       child = parent;
     }
     const remote = delivery.target.remote;
+    if (!remote) return null;
     const ref = delivery.target.branch;
     const remoteHead = async (): Promise<string | null> => {
       const r = await exec("git", ["ls-remote", "--refs", remote, ref], pipeline.worktreeDir, undefined, { timeoutMs: 5000 });
@@ -135,10 +188,19 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const candidates = directory ? await recordedPushesForRef(directory, ref) : [];
     // No agent commit or push exists to adopt. Let the ordinary stage
     // committer preserve dirty output even while publication is offline.
-    if (!repair && directories.length <= 1 && head === start.head && candidates.length === 0 && !await hasCreatedCommits(directory)) return null;
+    if (!repair && directories.length <= 1 && head === start.head && candidates.length === 0 && !await hasCreatedCommits(directory)) {
+      const status = await exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
+      if (status.code !== 0 || status.stdout.trim()) return null;
+      // A scratch push can leave a clean checkout at the original head. Read
+      // its remote before deciding that this stage produced nothing.
+    }
     const tip = repair ? null : await remoteHead();
     const url = await exec("git", ["remote", "get-url", "--push", remote], pipeline.worktreeDir);
     const expectedUrl = url.code === 0 ? url.stdout.trim() : remote;
+    if (tip && tip !== start.head) {
+      const fetched = await exec("git", ["fetch", "--no-tags", remote, ref], pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
+      if (fetched.code !== 0) throw new StagePushRemoteUnavailable();
+    }
     for (const candidate of repair ? [] : candidates) {
       const receipt = await smallFile(path.join(directory!, "pushes", candidate));
       if (receipt !== `${ref}\n${expectedUrl}\n`) return refuse("the push receipt names another delivery target");
@@ -186,6 +248,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       return nativeCreated.has(sha);
     };
     let baseTip: string | null | undefined;
+    let integrationBase: string | null = null;
     const verifiedBase = async (): Promise<string | null> => {
       if (baseTip !== undefined) return baseTip;
       const baseRef = `refs/heads/${pipeline.baseBranch}`;
@@ -201,6 +264,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const verifiedSuffix = async (target: string): Promise<string | null> => {
       const from = repair?.acceptedHead ?? anchor;
       if (target === from) return null;
+      if (target === tip && integrationBase !== null) return null;
       let suffixAnchor = from;
       if ((await exec("git", ["merge-base", "--is-ancestor", suffixAnchor, target], pipeline.worktreeDir)).code !== 0) {
         if (repair || directories.length > 1) return `commit ${target} dropped accepted replacement history`;
@@ -229,6 +293,13 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
           // ancestors belong to the base, so they need no stage receipt.
           const base = await verifiedBase();
           if (base && (await exec("git", ["merge-base", "--is-ancestor", sha, base], pipeline.worktreeDir)).code === 0) continue;
+          if (!repair && directories.length === 1 && target === tip && base) {
+            const integration = await verifyPassedHeadIntegration(pipeline, from, target, exec, base);
+            if (integration.ok && await publishedIntegrationGreen(pipeline, target, base, expectedUrl, exec)) {
+              integrationBase = base;
+              return null;
+            }
+          }
           return `commit ${sha} was not created in the attempt worktree during this attempt and is absent from the verified base branch`;
         }
         if (commits.length < 128) break;
@@ -283,8 +354,6 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       if (current.code !== 0 || current.stdout.trim() !== head) return refuse("the lane head raced the attempt proof");
       return null; // The ordinary committer publishes the proved local suffix.
     }
-    const fetched = await exec("git", ["fetch", "--no-tags", remote, ref], pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
-    if (fetched.code !== 0) return refuse("the pushed commit could not be fetched");
     const ancestor = await exec("git", ["merge-base", "--is-ancestor", start.head, tip], pipeline.worktreeDir);
     if (ancestor.code !== 0) return refuse("the pushed head does not descend from the attempt's starting head");
     for (const accepted of new Set([pipeline.baseRef, pipeline.lastPassedCommit])) {
@@ -293,6 +362,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     }
     const proofError = await verifiedSuffix(tip);
     if (proofError) return refuse(proofError);
+    if (integrationBase && !await integrationOrigin(pipeline, integrationBase, expectedUrl, exec)) return refuse("origin's default branch raced the integration proof");
     const status = await exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
     const branch = await exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
     if (status.code !== 0 || status.stdout.trim() || branch.code !== 0
@@ -304,12 +374,16 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", tip], pipeline.worktreeDir);
       if (merged.code !== 0) return refuse("the proved push could not fast-forward the lane");
     }
+    if (await remoteHead() !== tip
+      || (integrationBase && !await integrationOrigin(pipeline, integrationBase, expectedUrl, exec))) return refuse("the adopted remote moved before acceptance");
     const final = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
     const clean = await exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
+    const finalBranch = await exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
     if (final.code !== 0 || final.stdout.trim() !== tip || clean.code !== 0 || clean.stdout.trim()
-      || await remoteHead() !== tip) return refuse("the adopted worktree or remote moved before acceptance");
+      || finalBranch.code !== 0 || finalBranch.stdout.trim() !== branch.stdout.trim()) return refuse("the adopted worktree moved before acceptance");
     return { ok: true, sha: tip };
   } catch (error) {
+    if (error instanceof StageIntegrationChecksPending) return { ok: false, deferred: true, error: error.message };
     if (error instanceof StagePushRemoteUnavailable) return { ok: false, deferred: true,
       error: "stage push verification is waiting for the delivery remote" };
     return refuse("the attempt's Git evidence could not be verified");
