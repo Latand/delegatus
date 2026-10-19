@@ -116,6 +116,8 @@ export interface StructuredMessageRequest {
       (#2051). The registry honours it only for the launch that created the
       conversation's current generation, on that generation's account. */
   launchId?: string;
+  /** Current role-memory revision for a pipeline's first message. */
+  roleMemoryRevision?: string;
   /** Admission time of the work this message continues (a stage attempt the
       controller follows up on). Kept on the reservation so an update drain
       treats the message as part of that cohort. */
@@ -524,6 +526,7 @@ function commandInput(request: StructuredMessageRequest) {
     ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
     ...(request.origin ? { origin: request.origin } : {}),
     ...(request.cohortAt ? { cohortAt: request.cohortAt } : {}),
+    ...(request.roleMemoryRevision ? { roleMemoryRevision: request.roleMemoryRevision } : {}),
   };
 }
 
@@ -1315,6 +1318,7 @@ async function deliverHeldAttempt(
       /* #1117: the authorship persisted on the held record survives the
          migration hold — the drained message re-attributes exactly as admitted. */
       ...(command.origin ? { origin: command.origin } : {}),
+      ...(command.roleMemoryRevision ? { roleMemoryRevision: command.roleMemoryRevision } : {}),
     }); });
     if ("blocked" in fenced) return fenced.blocked;
     const result = fenced.dispatched;
@@ -2106,6 +2110,7 @@ export async function enqueueStructuredMessage(
         ...(request.runtime ? { runtime: request.runtime } : {}),
         ...(request.selectedContext ? { selectedContext: request.selectedContext } : {}),
         ...(request.origin ? { origin: request.origin } : {}),
+        ...(request.roleMemoryRevision ? { roleMemoryRevision: request.roleMemoryRevision } : {}),
       });
       return commandResult;
     }, dependencies.actuationLease ?? null);

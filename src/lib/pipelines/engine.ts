@@ -134,7 +134,7 @@ import { resolveStageTestGuidance } from "./testGuidance";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
-import { storedLessonRevision } from "@/lib/memory/roleStore";
+import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryRevisionToken, storedLessonRevision } from "@/lib/memory/roleStore";
 import { RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
@@ -844,6 +844,7 @@ async function spawnPipelineAgent(
   }
   let guardedAccount: typeof account;
   let message: string;
+  let roleMemoryRevision = "";
   try {
     const guard = await performanceSpans.wait("pipeline.git-guard-prepare", () =>
       prepareStageGitGuard(begun.receipt.launchId, input.cwd, realExec, new Date().toISOString()));
@@ -852,6 +853,7 @@ async function spawnPipelineAgent(
     // yielded. A pause or ownership change still prevents native dispatch.
     message = await withCurrentRoleMemory(async () => {
       const filtered = await withoutStoredLessonsAsync(preparePrompt ? await preparePrompt() : input.prompt);
+      roleMemoryRevision = roleMemoryRevisionToken();
       await onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
         accountId: begun.receipt.accountId ?? account.accountId });
       return filtered;
@@ -868,10 +870,13 @@ async function spawnPipelineAgent(
       spec,
       account: guardedAccount,
       "prompt": message,
+      ...(preparePrompt ? { preparePrompt } : {}),
+      roleMemoryRevision,
       registry,
       client,
     });
   } catch (error) {
+    if (error instanceof Error && error.message === ROLE_MEMORY_CHANGED_MESSAGE) throw new RoleMemoryChanged();
     if (isRuntimeHostTransportFailure(error)) throw new Error(unavailable, { cause: error });
     throw error;
   }
@@ -6294,6 +6299,13 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
               current.definition = null;
               if (live.cursor?.stageId === run.stageId) live.cursor.state = "pending";
             }
+            // The activation's captured cursor may still say spawning after a
+            // privacy retry was checkpointed. Without launch evidence, keep
+            // that durable wait eligible for the next controller tick.
+            if (current.roleMemoryWait && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
+              current.state = "pending";
+              if (live.cursor?.stageId === run.stageId) live.cursor.state = "pending";
+            }
             delete current.activation;
             await persist([live]);
           });
@@ -6318,6 +6330,18 @@ function restartStagePrompt(prompt: string, attempt: PipelineStageAttempt): stri
   return `${prompt}\n\nThis is a fresh attempt because stage attempt ${context.previousAttempt} ${context.cause ? INTERRUPTION_WORDS[context.cause].handover : "was interrupted"}.${report} Continue the same stage input${context.transcriptPath ? ` and use its transcript for reference: ${context.transcriptPath}` : "; it was cut before it wrote a transcript, so check the worktree for anything it left"}.`;
 }
 
+function nextRoleMemoryWait(attempt: PipelineStageAttempt, ports: PipelinePorts): NonNullable<PipelineStageAttempt["roleMemoryWait"]> {
+  const prior = attempt.roleMemoryFailures;
+  const failures = Math.min(1_000_000, (Number.isSafeInteger(prior) && prior! >= 0 ? prior! : 0) + 1);
+  attempt.roleMemoryFailures = failures;
+  const delayMs = Math.min(30_000, 250 * 2 ** Math.min(failures - 1, 7));
+  return {
+    revision: storedLessonRevision(),
+    observations: 0,
+    retryAfter: new Date(unixMs(ports.now()) + delayMs).toISOString(),
+  };
+}
+
 async function spawnRunStage(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   spawnInput: Parameters<PipelinePorts["spawnAgent"]>[0], activationNow: string,
@@ -6325,7 +6349,52 @@ async function spawnRunStage(
   prepareInput = false,
 ): Promise<void> {
   const recoveringReservation = attempt.activation?.replay === true;
+  let roleMemoryWaitReady = false;
   try {
+    if (attempt.roleMemoryWait) {
+      if (attempt.roleMemoryWait.ready === true) {
+        roleMemoryWaitReady = true;
+      } else {
+        const revision = storedLessonRevision();
+        const wait = attempt.roleMemoryWait;
+        const failureCount = Number.isSafeInteger(attempt.roleMemoryFailures) && attempt.roleMemoryFailures! >= 0
+          ? attempt.roleMemoryFailures! : 0;
+        if (failureCount !== attempt.roleMemoryFailures) attempt.roleMemoryFailures = failureCount;
+        const retryAt = typeof wait.retryAfter === "string" ? Date.parse(wait.retryAfter) : Number.NaN;
+        const validSchedule = Number.isFinite(retryAt) && failureCount > 0;
+        const resetObservation = typeof wait.revision !== "string" || revision !== wait.revision
+          || !Number.isSafeInteger(wait.observations) || wait.observations < 0 || wait.observations >= 2;
+        if (resetObservation) {
+          attempt.roleMemoryWait = { revision, observations: 0, retryAfter: validSchedule ? wait.retryAfter : ports.now() };
+        }
+        const currentWait = attempt.roleMemoryWait;
+        const delay = validSchedule ? Math.max(0, retryAt - unixMs(ports.now())) : 0;
+        if (delay > 0) {
+          attempt.state = "pending";
+          setCursorState(pipeline, stage.id, "pending");
+          pipeline.stateDetail = "stage spawn deferred: waiting before the next role-memory privacy attempt";
+          await persist();
+          ports.scheduleTick?.(delay);
+          return;
+        }
+        if (revision === currentWait.revision && !resetObservation) {
+          currentWait.observations += 1;
+        } else {
+          currentWait.revision = revision;
+          currentWait.observations = 0;
+        }
+        if (currentWait.observations < 2) {
+          attempt.state = "pending";
+          setCursorState(pipeline, stage.id, "pending");
+          pipeline.stateDetail = "stage spawn deferred: waiting for stable role memory";
+          await persist();
+          ports.scheduleTick?.(250);
+          return;
+        }
+        currentWait.ready = true;
+        roleMemoryWaitReady = true;
+      }
+    }
     if (recoveringReservation && attempt.launchId && attempt.conversationId) {
       const nativeTurn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
       if (nativeTurn?.operationConflict) {
@@ -6514,6 +6583,30 @@ async function spawnRunStage(
     const replayReceipt = ports.spawnReceipt(spawned.launchId);
     if (recoveringReservation && replayReceipt?.state === "failed" && replayReceipt.neverBegan
       && replayReceipt.conversationId === attempt.conversationId) {
+      if (replayReceipt.error === ROLE_MEMORY_CHANGED_MESSAGE) {
+        if (await ports.claimSpawnRetry(replayReceipt.launchId, `${pipeline.id}:${stage.id}:${replayReceipt.launchId}`) !== "claimed") {
+          throw new RoleMemoryChanged();
+        }
+        const current = ports.spawnReceipt(replayReceipt.launchId);
+        if (!current || current.state !== "failed" || current.staged || current.transcript
+          || current.launchId !== replayReceipt.launchId || current.error !== replayReceipt.error
+          || current.conversationId !== attempt.conversationId) throw new RoleMemoryChanged();
+        attempt.retiredLaunches = [...attempt.retiredLaunches ?? [], {
+          launchId: current.launchId, conversationId: current.conversationId, error: current.error, retiredAt: ports.now(),
+        }].slice(-RETIRED_LAUNCH_LIMIT);
+        attempt.launchId = null;
+        attempt.conversationId = null;
+        if (attempt.activation) attempt.activation.phase = "settled";
+        delete attempt.activation;
+        attempt.roleMemoryWait = nextRoleMemoryWait(attempt, ports);
+        attempt.state = "pending";
+        attempt.error = null;
+        setCursorState(pipeline, stage.id, "pending");
+        pipeline.stateDetail = "stage spawn deferred: role memory changed during recovery; retrying automatically";
+        await persist();
+        ports.scheduleTick?.(250);
+        return;
+      }
       const now = ports.now();
       const result = await deferRetiredLaunchRetry(pipeline, stage, attempt, replayReceipt, activationNow, now, ports);
       if (result === "waiting") {
@@ -6562,6 +6655,10 @@ async function spawnRunStage(
       } else attempt.effectiveRole.serviceTier = spawned.serviceTier;
     }
     attempt.state = "running";
+    if (roleMemoryWaitReady) {
+      delete attempt.roleMemoryWait;
+      delete attempt.roleMemoryFailures;
+    }
     await clearEngineTaskNote(pipeline);
     setCursorState(pipeline, stage.id, "running");
     if (pipeline.stateDetail?.startsWith("rate limited until ")
@@ -6588,7 +6685,8 @@ async function spawnRunStage(
       }
       attempt.state = "pending";
       attempt.error = null;
-      if (attempt.activation) attempt.activation.phase = "settled";
+      attempt.roleMemoryWait = nextRoleMemoryWait(attempt, ports);
+      delete attempt.activation;
       setCursorState(pipeline, stage.id, "pending");
       pipeline.stateDetail = "stage spawn deferred: role memory is changing; retrying automatically";
       await persist();

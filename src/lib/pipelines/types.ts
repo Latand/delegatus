@@ -662,6 +662,10 @@ export type PipelineStageAttempt = {
       without this count left behind starts it past every id that engine
       could have spent (#1678 review 3). */
   spawnCalls?: number;
+  /** After a privacy revision conflict, require two stable revision
+      observations across persisted ticks before composing again. */
+  roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };
+  roleMemoryFailures?: number;
   /** Launches this attempt reserved and then retired because their receipt
       settled `failed` before any host ran them (#1678): the runtime host was
       unreachable or the account mutation lock was busy. The receipt's own

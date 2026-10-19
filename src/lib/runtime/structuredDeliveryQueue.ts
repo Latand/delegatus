@@ -25,6 +25,7 @@ import { StructuredRecoveryContendedError } from "./structuredRecoveryContention
 import { StructuredRecoveryHeldForUpdateError, type StructuredRecoveryRequest } from "./structuredRecovery";
 import type { DeliveryProgressNote, DeliveryProgressRecord, DeliveryProgressSink } from "./deliveryProgress";
 import { ACTIVE_DELIVERY_PHASES, type DeliveryWaitReason } from "./deliveryWaitReason";
+import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 
 export interface StructuredDeliveryEffect {
   id: string;
@@ -268,6 +269,7 @@ interface SendEffect {
   conversationId: string;
   content: StructuredMessageContent;
   contentDigest: string;
+  roleMemoryRevision?: string;
   turnId?: string | null;
   onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
@@ -468,6 +470,9 @@ function sendEffect(effect: StructuredDeliveryEffect): SendEffect | null {
      independent content and runtime profile. */
   const selectedContext = parseSelectedContextRef(effect.payload.selectedContext);
   const origin = parseMessageOrigin(effect.payload.origin);
+  const roleMemoryRevision = effect.payload.roleMemoryRevision;
+  if (roleMemoryRevision !== undefined
+    && (!operationId.startsWith("spawn_message_") || typeof roleMemoryRevision !== "string" || !/^[a-f0-9]{64}$/.test(roleMemoryRevision))) return null;
   let onlyIfIdle: import("./contracts").RuntimeIdleKillFence | undefined;
   try {
     if (effect.payload.onlyIfIdle !== undefined) onlyIfIdle = parseRuntimeIdleKillFence(effect.payload.onlyIfIdle);
@@ -485,6 +490,7 @@ function sendEffect(effect: StructuredDeliveryEffect): SendEffect | null {
     ...(runtime ? { runtime } : {}),
     ...(selectedContext ? { selectedContext } : {}),
     ...(origin ? { origin } : {}),
+    ...(typeof roleMemoryRevision === "string" ? { roleMemoryRevision } : {}),
     ...(onlyIfIdle ? { onlyIfIdle } : {}),
   };
 }
@@ -1822,6 +1828,10 @@ export class StructuredDeliveryQueue {
         const retired = this.port.conversationRetired?.(first.effect.conversationId);
         if (retired) throw new StructuredSendRefusedError(retired);
         for (const p of selected) {
+          if (p.effect.roleMemoryRevision && roleMemoryRevisionToken() !== p.effect.roleMemoryRevision) {
+            memberRefused = p;
+            throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", ROLE_MEMORY_CHANGED_MESSAGE);
+          }
           try { this.port.authorizeDispatch?.(p.effect.operationId, p.effect.conversationId); }
           catch (error) { memberRefused = p; throw error; }
         }
@@ -2379,6 +2389,9 @@ export class StructuredDeliveryQueue {
         if (seat?.kind === "revoked") throw new StructuredSendRefusedError(seat.reason);
         const retired = this.port.conversationRetired?.(effect.conversationId);
         if (retired) throw new StructuredSendRefusedError(retired);
+        if (effect.roleMemoryRevision && roleMemoryRevisionToken() !== effect.roleMemoryRevision) {
+          throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", ROLE_MEMORY_CHANGED_MESSAGE);
+        }
         this.port.authorizeDispatch?.(effect.operationId, effect.conversationId);
       };
       if (canCoalesce(effect)) {

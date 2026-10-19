@@ -2527,13 +2527,15 @@ function canonicalHeldDeliveryCommand(
   const origin = parseMessageOrigin(value?.origin);
   if (origin) command.origin = origin;
   if (typeof value?.cohortAt === "string" && Number.isFinite(Date.parse(value.cohortAt))) command.cohortAt = value.cohortAt;
+  if (typeof value?.roleMemoryRevision === "string" && /^[a-f0-9]{64}$/.test(value.roleMemoryRevision)
+    && command.operationId.startsWith("spawn_message_")) command.roleMemoryRevision = value.roleMemoryRevision;
   return command;
 }
 
 function heldDeliveryRequestDigest(
   conversationId: ViewerConversationId,
   text: string,
-  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle">,
+  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle" | "roleMemoryRevision">,
 ): string {
   const turnFence = command.turnId === undefined
     ? ["absent"]
@@ -2546,6 +2548,7 @@ function heldDeliveryRequestDigest(
     command.policy,
     turnFence,
     ...(command.onlyIfIdle ? [["idle", command.onlyIfIdle.revision, command.onlyIfIdle.writerClaim]] : []),
+    ...(command.roleMemoryRevision ? [["role-memory-revision", command.roleMemoryRevision]] : []),
   ])).digest("hex");
 }
 

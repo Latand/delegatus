@@ -154,10 +154,8 @@ test.each(["reclassify", "file-reclassify", "churn", "corrupt", "pause"] as cons
         expect(deferred.cursor?.state).toBe("pending");
         expect(deferred.runs[0]!.attempts.at(-1)?.retiredLaunches).toHaveLength(1);
         expect(sent).toHaveLength(0);
+        expect(deferred.runs[0]!.attempts.at(-1)?.roleMemoryWait?.observations).toBe(0);
         changing = false;
-        await tickPipelines([], pending.ports);
-        expect(sent).toHaveLength(1);
-        expect(loadPipelines()[0]!.cursor?.state).toBe("running");
       }
     }
   } finally {
@@ -165,6 +163,87 @@ test.each(["reclassify", "file-reclassify", "churn", "corrupt", "pause"] as cons
     if (priorBinary === undefined) delete process.env.LLV_CODEX_BINARY;
     else process.env.LLV_CODEX_BINARY = priorBinary;
     if (mode === "corrupt") roleMemoryCollection(true)!.boundedPatch(1, tx => tx.delete("r:7"));
+  }
+}, 30_000);
+
+test.each([false, true] as const)("the real structured spawn refreshes role memory after runtime admission (file-backed=%s)", async fileBacked => {
+  savePipelines([]);
+  write(oldRule);
+  const h = harness();
+  let preparePrompt: (() => Promise<string>) | undefined;
+  const fixtureSpawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = (request, reserved, prepare) => {
+    preparePrompt = prepare;
+    return fixtureSpawn(request, reserved, prepare);
+  };
+  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: `Build. ${newRule}`, next: null }] as never,
+    { repoDir: path.join(process.env.LLV_STATE_DIR!, "late-dispatch-repo") });
+  if (fileBacked) {
+    const lane = loadPipelines()[0]!;
+    lane.spec = `${newRule}. ` + "Context ".repeat(5_000);
+    savePipelines([lane]);
+  }
+  await tickPipelines([], h.ports);
+  fs.mkdirSync(loadPipelines()[0]!.worktreeDir!, { recursive: true });
+  await tickPipelines([], h.ports);
+  const input = h.spawnInputs[0]!;
+  input.cwd = path.join(process.env.LLV_STATE_DIR!, `late-dispatch-cwd-${fileBacked}`);
+  fs.mkdirSync(input.cwd, { recursive: true });
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `late-dispatch-registry-${fileBacked}.json`));
+  setAgentRegistryForTests(registry);
+  const clientModule = await import("@/lib/runtime/client");
+  const spawnModule = await import("@/lib/runtime/structuredSpawn");
+  const guardModule = await import("@/lib/git/stageAttemptGuard");
+  const realSpawn = spawnModule.spawnStructuredConversation;
+  const fixtureThreadId = ["00000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture-account", kind: "managed", home: process.env.LLV_STATE_DIR!,
+    transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" },
+  }});
+  const runtime = spyOn(clientModule, "runtimeHostClient").mockReturnValue({
+    command: async () => { write(newRule); return undefined; },
+    transitionOperation: async () => undefined,
+  } as never);
+  const guard = spyOn(guardModule, "prepareStageGitGuard").mockResolvedValue({});
+  const sent: string[] = [];
+  let handedToHost = false;
+  const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockImplementation(async launch => await realSpawn(launch, {
+    startHost: async () => ({ identity: { threadId: fixtureThreadId, path: path.join(input.cwd, "session.jsonl") },
+      health: async () => ({ status: "idle", sessionKey: fixtureThreadId, endpoint: "fixture", pid: process.pid,
+        processStartIdentity: "fixture", eventCursor: 0, protocolVersion: "fixture", activeTurnRef: null,
+        pendingAttention: [], activeFlags: [], account: { type: "chatgpt", planType: "subscription" } }),
+      onStateChange: () => () => {}, release: async () => {} } as never),
+    bindHost: async () => () => {},
+    publishHost: async () => async () => {},
+    deliverFirst: async delivered => {
+      sent.push(delivered.prompt);
+      expect(delivered.prompt).not.toContain(newRule);
+      write(`${newRule} changed while first delivery was held`);
+      let refused = false;
+      try { await delivered.authorize?.(); }
+      catch (error) { refused = error instanceof Error && error.message.includes("Role-memory privacy changed"); }
+      expect(refused).toBe(true);
+      if (!refused) handedToHost = true;
+      return "held";
+    },
+    processIdentity: () => ({ pid: process.pid, startIdentity: "fixture" }),
+    durableSetupTimeoutMs: 2_000,
+  }));
+  try {
+    await defaultPipelinePorts().spawnAgent(input, () => {}, preparePrompt);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).not.toContain(newRule);
+    expect(sent[0]).toContain("[learned rule]");
+    const file = sent[0]!.match(/Full (?:stage prompt|specification) file: (.+)\n/)?.[1];
+    expect(Boolean(file)).toBe(fileBacked);
+    if (file) {
+      const fullPrompt = fs.readFileSync(file, "utf8");
+      expect(fullPrompt).not.toContain(newRule);
+      expect(fullPrompt).toContain("[learned rule]");
+    }
+    expect(handedToHost).toBe(false);
+  } finally {
+    resolve.mockRestore(); runtime.mockRestore(); guard.mockRestore(); spawn.mockRestore(); setAgentRegistryForTests(null);
   }
 }, 30_000);
 
@@ -190,15 +269,99 @@ test("continuous memory writes defer the launch and the next stable tick sends o
   expect(loadPipelines()[0]!.state).toBe("running");
   expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
   expect(h.spawnInputs).toHaveLength(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)?.roleMemoryFailures).toBe(1);
   changing = false;
+  const restartWait = loadPipelines()[0]!;
+  restartWait.runs[0]!.attempts.at(-1)!.roleMemoryWait!.retryAfter = "2099-01-01T00:00:00.000Z";
+  savePipelines([restartWait]);
+  const releaseControllerCustody = () => {
+    const current = loadPipelines()[0]!;
+    const attempt = current.runs[0]!.attempts.at(-1)!;
+    if (attempt.activation) delete attempt.activation.owner;
+    savePipelines([current]);
+  };
+  releaseControllerCustody();
   const resumed = spawnSync(process.execPath, ["test", import.meta.path, "-t", "resume deferred privacy"], {
     cwd: process.cwd(), encoding: "utf8", timeout: 20_000,
-    env: { ...process.env, LLV_ROLE_PRIVACY_RESUME_STATE: process.env.LLV_STATE_DIR },
+    env: { ...process.env, LLV_ROLE_PRIVACY_RESUME_STATE: process.env.LLV_STATE_DIR,
+      LLV_ROLE_PRIVACY_CHURN: "1" },
   });
   expect(resumed.status, resumed.stderr).toBe(0);
   expect(resumed.stderr).toContain("1 pass");
+  expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)?.roleMemoryWait?.observations).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)?.roleMemoryFailures).toBe(1);
+  const retryAfter = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.roleMemoryWait!.retryAfter;
+  write(`${newRule} changed between controller restarts`);
+  releaseControllerCustody();
+  const changedResume = spawnSync(process.execPath, ["test", import.meta.path, "-t", "resume deferred privacy"], {
+    cwd: process.cwd(), encoding: "utf8", timeout: 20_000,
+    env: { ...process.env, LLV_ROLE_PRIVACY_RESUME_STATE: process.env.LLV_STATE_DIR },
+  });
+  expect(changedResume.status, changedResume.stderr).toBe(0);
+  expect(changedResume.stderr).toContain("1 pass");
+  expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)?.roleMemoryWait?.observations).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)?.roleMemoryFailures).toBe(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)?.roleMemoryWait?.retryAfter).toBe(retryAfter);
+  const waiting = loadPipelines()[0]!;
+  waiting.runs[0]!.attempts.at(-1)!.roleMemoryWait!.observations = "1" as never;
+  waiting.runs[0]!.attempts.at(-1)!.roleMemoryWait!.retryAfter = "1970-01-01T00:00:00.000Z";
+  savePipelines([waiting]);
+  releaseControllerCustody();
+  const malformedResume = spawnSync(process.execPath, ["test", import.meta.path, "-t", "resume deferred privacy"], {
+    cwd: process.cwd(), encoding: "utf8", timeout: 20_000,
+    env: { ...process.env, LLV_ROLE_PRIVACY_RESUME_STATE: process.env.LLV_STATE_DIR },
+  });
+  expect(malformedResume.status, malformedResume.stderr).toBe(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)?.roleMemoryWait?.observations).toBe(0);
+  const churnWait = loadPipelines()[0]!;
+  churnWait.runs[0]!.attempts.at(-1)!.roleMemoryWait!.observations = 1;
+  churnWait.runs[0]!.attempts.at(-1)!.roleMemoryWait!.retryAfter = "1970-01-01T00:00:00.000Z";
+  savePipelines([churnWait]);
+  releaseControllerCustody();
+  const churnResume = spawnSync(process.execPath, ["test", import.meta.path, "-t", "resume deferred privacy"], {
+    cwd: process.cwd(), encoding: "utf8", timeout: 20_000,
+    env: { ...process.env, LLV_ROLE_PRIVACY_RESUME_STATE: process.env.LLV_STATE_DIR,
+      LLV_ROLE_PRIVACY_CHURN: "1", LLV_ROLE_PRIVACY_RESUME_TICKS: "4",
+      LLV_ROLE_PRIVACY_NOW_MS: "1000000" },
+  });
+  expect(churnResume.status, churnResume.stderr).toBe(0);
+  expect(churnResume.stderr).toContain("1 pass");
+  const resumedRule = roleMemoryCollection(true)?.get("r:r_launch_race");
+  expect(resumedRule?.kind === "rule" ? resumedRule.rule : "").toContain("resumed version");
+  expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
+  expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)?.roleMemoryFailures).toBe(2);
+  for (let cycle = 0; cycle < 3; cycle++) {
+    const before = loadPipelines()[0]!;
+    const beforeAttempt = before.runs[0]!.attempts.at(-1)!;
+    const wait = beforeAttempt.roleMemoryWait!;
+    const now = Date.parse(wait.retryAfter) + 1;
+    releaseControllerCustody();
+    const restarted = spawnSync(process.execPath, ["test", import.meta.path, "-t", "resume deferred privacy"], {
+      cwd: process.cwd(), encoding: "utf8", timeout: 20_000,
+      env: { ...process.env, LLV_ROLE_PRIVACY_RESUME_STATE: process.env.LLV_STATE_DIR,
+        LLV_ROLE_PRIVACY_CHURN: "1", LLV_ROLE_PRIVACY_RESUME_TICKS: "4", LLV_ROLE_PRIVACY_NOW_MS: String(now) },
+    });
+    expect(restarted.status, restarted.stderr).toBe(0);
+    expect(restarted.stderr).toContain("1 pass");
+    const after = loadPipelines()[0]!;
+    const afterAttempt = after.runs[0]!.attempts.at(-1)!;
+    expect(afterAttempt.roleMemoryFailures).toBe(3 + cycle);
+    expect(Date.parse(afterAttempt.roleMemoryWait!.retryAfter) - now).toBe(Math.min(30_000, 250 * 2 ** (2 + cycle)));
+    expect(after.cursor?.state).toBe("pending");
+  }
+  changing = false;
+  const stableWait = loadPipelines()[0]!;
+  stableWait.runs[0]!.attempts.at(-1)!.roleMemoryWait!.observations = 0;
+  stableWait.runs[0]!.attempts.at(-1)!.roleMemoryWait!.retryAfter = "1970-01-01T00:00:00.000Z";
+  delete stableWait.runs[0]!.attempts.at(-1)!.roleMemoryWait!.ready;
+  savePipelines([stableWait]);
+  for (let pass = 0; pass < 12 && h.spawnInputs.length === 0; pass++) await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.cursor?.state).toBe("running");
-  expect(h.spawnInputs).toHaveLength(0);
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(h.spawnInputs[0]!.prompt).not.toContain(newRule);
+  expect(h.spawnInputs[0]!.learnedRules).toEqual({ project: loadPipelines()[0]!.project, roleId: "builder" });
 }, 30_000);
 
 test.skipIf(!process.env.LLV_ROLE_PRIVACY_RESUME_STATE)("resume deferred privacy after a controller process restart", async () => {
@@ -206,10 +369,35 @@ test.skipIf(!process.env.LLV_ROLE_PRIVACY_RESUME_STATE)("resume deferred privacy
   process.env.LLV_STATE_DIR = process.env.LLV_ROLE_PRIVACY_RESUME_STATE!;
   try {
     const h = harness();
-    expect(loadPipelines()[0]!.cursor?.state).toBe("pending");
-    await tickPipelines([], h.ports);
-    expect(loadPipelines()[0]!.cursor?.state).toBe("running");
-    expect(h.spawnInputs).toHaveLength(1);
+    if (process.env.LLV_ROLE_PRIVACY_NOW_MS) {
+      const now = Number(process.env.LLV_ROLE_PRIVACY_NOW_MS);
+      h.ports.now = () => new Date(now).toISOString();
+    }
+    if (process.env.LLV_ROLE_PRIVACY_CHURN === "1" || process.env.LLV_ROLE_PRIVACY_RETRY_CHURN === "1") {
+      const exec = h.ports.exec;
+      let writes = 0;
+      h.ports.exec = async (...args) => {
+        if (args[1][0] === "rev-parse" && args[1][1] === "--show-toplevel") {
+          write(`${newRule} resumed version ${++writes}`);
+          return { code: 1, stdout: "", stderr: "plain fixture directory" };
+        }
+        return await exec(...args);
+      };
+    }
+    const current = loadPipelines()[0]!;
+    expect(current.cursor?.state, JSON.stringify({ stateDetail: current.stateDetail,
+      attempt: current.runs[0]!.attempts.at(-1), spawnInputs: h.spawnInputs })).toBe("pending");
+    const passes = Number(process.env.LLV_ROLE_PRIVACY_RESUME_TICKS ?? "1");
+    for (let pass = 0; pass < passes; pass++) await tickPipelines([], h.ports);
+    const resumed = loadPipelines()[0]!;
+    if (resumed.cursor?.state === "pending") {
+      expect(h.spawnInputs).toHaveLength(0);
+    } else {
+      expect(resumed.cursor?.state, JSON.stringify({ stateDetail: resumed.stateDetail,
+        attempt: resumed.runs[0]!.attempts.at(-1), spawnInputs: h.spawnInputs })).toBe("spawning");
+      expect(resumed.runs[0]!.attempts.at(-1)?.activation?.phase, JSON.stringify({ stateDetail: resumed.stateDetail,
+        attempt: resumed.runs[0]!.attempts.at(-1), spawnInputs: h.spawnInputs })).toBe("reserved");
+    }
   } finally { process.env.LLV_STATE_DIR = ownState; }
 });
 

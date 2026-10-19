@@ -1,11 +1,11 @@
 import { runPrivacyWork } from "@/lib/links/taskPageWorker";
-import { storedLessonRevision, RoleMemoryRefusal } from "./roleStore";
+import { storedLessonRevision, RoleMemoryRefusal, ROLE_MEMORY_CHANGED_MESSAGE } from "./roleStore";
 import type { PrivacyRequest, RenderReportInput, RenderReportResult, IssueReportFinding } from "./privacyWork";
 import type { PublicDenyList } from "@/lib/bridge/publicSafe";
 
 /** A revision conflict is safe to retry only before dispatch. Never carries text. */
 export class RoleMemoryChanged extends RoleMemoryRefusal {
-  constructor() { super("LESSON_PRIVACY_UNAVAILABLE", "Role-memory privacy changed; retrying before dispatch"); }
+  constructor() { super("LESSON_PRIVACY_UNAVAILABLE", ROLE_MEMORY_CHANGED_MESSAGE); }
 }
 
 /** Restart from original inputs. A failed read of an unchanged store remains

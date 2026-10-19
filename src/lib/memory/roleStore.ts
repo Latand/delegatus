@@ -121,6 +121,13 @@ export class RoleMemoryRefusal extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
 
+export const ROLE_MEMORY_CHANGED_MESSAGE = "Role-memory privacy changed; retrying before dispatch";
+
+/** Opaque token carried with a staged first message to its final dispatcher. */
+export function roleMemoryRevisionToken(): string {
+  return crypto.createHash("sha256").update(storedLessonRevision()).digest("hex");
+}
+
 /** Joins every scope row stored under a project key that has since moved
     into the project's current key, in one transaction: the active rules of
     both in the order they were written, a word-for-word repeat merged into

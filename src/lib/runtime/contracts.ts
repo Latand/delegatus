@@ -394,6 +394,8 @@ export interface RuntimeSendCommand extends RuntimeCommandBase {
   text: string;
   images?: StructuredImageRef[];
   contentDigest?: string;
+  /** Privacy revision that must still be current when a pipeline first prompt dispatches. */
+  roleMemoryRevision?: string;
   policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
   /** Automatic continuation requires this same idle revision and writer at admission and execution. */
@@ -555,6 +557,7 @@ export interface RuntimeSpawnCommand extends RuntimeCommandBase {
   "prompt": string;
   images?: StructuredImageRef[];
   contentDigest?: string;
+  roleMemoryRevision?: string;
   accountId?: string | null;
   parentConversationId?: string | null;
   sessionId?: string | null;

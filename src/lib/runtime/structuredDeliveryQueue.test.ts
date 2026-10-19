@@ -1,4 +1,5 @@
 import { afterEach, expect, setSystemTime, test } from "bun:test";
+import crypto from "node:crypto";
 
 afterEach(() => setSystemTime());
 
@@ -14,6 +15,12 @@ import {
 } from "./structuredDeliveryQueue";
 import { STRUCTURED_IMAGE_CAPABILITY, structuredContentDigest, type StructuredImageRef } from "./structuredContent";
 import { deputySeatNoteRequest } from "@/lib/orchestrator/deputySweep";
+import { roleMemoryCollection, storedLessonRevision } from "@/lib/memory/roleStore";
+
+const privacyFixtureId = "r:delivery-privacy-fence-test";
+afterEach(() => {
+  roleMemoryCollection(true)?.boundedPatch(1, tx => tx.delete(privacyFixtureId));
+});
 
 /**
  * The ownership stamp every message `delivering` write now carries (#1131).
@@ -82,6 +89,42 @@ test("a durable queued turn waits while automatic restart admission is held", as
   held = false;
   await queue.drain();
   expect(sends).toBe(1);
+});
+
+test("a role-memory change during delivery admission prevents first-message dispatch", async () => {
+  const collection = roleMemoryCollection(true)!;
+  collection.boundedPatch(1, tx => tx.put({
+    kind: "rule", id: "delivery-privacy-fence-test", scope: "machine", rule: "old privacy fixture",
+    why: "", state: "active", hints: [], source: { project: "fixture", pipelineId: "fixture", stageId: "build",
+      attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation-one" },
+    createdAt: "2026-10-19T00:00:00Z", changedAt: "2026-10-19T00:00:00Z",
+  }));
+  const revision = crypto.createHash("sha256").update(storedLessonRevision()).digest("hex");
+  let sent = 0;
+  let changed = false;
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:role-privacy", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "spawn_message_privacy_fixture", conversationId: "conversation-one",
+        text: "filtered first message", policy: "queue", roleMemoryRevision: revision } }],
+    status: async () => {
+      if (!changed) {
+        changed = true;
+        collection.boundedPatch(1, tx => tx.put({
+          kind: "rule", id: "delivery-privacy-fence-test", scope: "machine", rule: "new privacy fixture",
+          why: "", state: "active", hints: [], source: { project: "fixture", pipelineId: "fixture", stageId: "build",
+            attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation-one" },
+          createdAt: "2026-10-19T00:00:00Z", changedAt: "2026-10-19T00:00:01Z",
+        }));
+      }
+      return { status: "queued", revision: 1 };
+    },
+    hostClaim: async () => "owner:privacy",
+    transition: async () => {},
+  }, () => host(async () => { sent += 1; return { outcome: "turn-started", turnId: "turn-privacy" }; }));
+
+  await queue.drain();
+  expect(changed).toBe(true);
+  expect(sent).toBe(0);
 });
 
 test("only the first journal admission under a known claim supplies first-dispatch evidence", async () => {
