@@ -2504,13 +2504,16 @@ This replay measures the byte-helper and inventory-reuse changes; it does not
 measure production safety scans during removals.
 
 Use the same immutable seed and Bun for six alternating before/after pairs.
+Immediately before each sample, read the scoped `agent_fleet` summary and pass
+its `observedAt`, `agents.live` and `agents.running` values to the replay driver;
+the emitted sample keeps those workload counts beside its timing and load.
 Export the base and candidate source into scratch, copy this driver to the
 base export, and run each invocation through the admitted gate from its own
 export with isolated HOME, XDG_CONFIG_HOME and LLV_STATE_DIR, a stage-owned
 TMPDIR containing the seed, and a closed Viewer control URL:
 
 ```sh
-bun scripts/measure-release-retention.ts "$TMPDIR/retained-releases" "$OUT" "$SOURCE_REVISION"
+bun scripts/measure-release-retention.ts "$TMPDIR/retained-releases" "$OUT" "$SOURCE_REVISION" "$AGENT_FLEET_OBSERVED_AT" "$LIVE_AGENTS" "$RUNNING_AGENTS"
 ```
 
 The JSON output records the source tree digest and per-file fingerprints,

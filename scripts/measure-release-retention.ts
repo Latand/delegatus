@@ -8,8 +8,13 @@ import type { LauncherRecord } from "../src/lib/selfUpdate/launcher";
 
 // T19 full-pass replay. Only pre-copied, read-only trees below this run's temp
 // root are admitted. The Git port lists these copies and refuses every write.
-const [seedArgument, output, revision] = process.argv.slice(2);
-if (!seedArgument || !output || !revision) throw new Error("usage: measure-release-retention <scratch seed> <output> <source revision>");
+const [seedArgument, output, revision, workloadObservedAt, liveAgentsRaw, runningAgentsRaw] = process.argv.slice(2);
+if (!seedArgument || !output || !revision || !workloadObservedAt || !liveAgentsRaw || !runningAgentsRaw)
+  throw new Error("usage: measure-release-retention <scratch seed> <output> <source revision> <agent_fleet observedAt> <live agents> <running agents>");
+const liveAgents = Number(liveAgentsRaw);
+const runningAgents = Number(runningAgentsRaw);
+if (!Number.isSafeInteger(liveAgents) || liveAgents < 0 || !Number.isSafeInteger(runningAgents) || runningAgents < 0
+  || !Number.isFinite(Date.parse(workloadObservedAt))) throw new Error("retention replay requires valid contemporaneous agent_fleet counts");
 const seed = fs.realpathSync(seedArgument);
 const temp = fs.realpathSync(os.tmpdir());
 if (!seed.startsWith(temp + path.sep)) throw new Error("retention replay requires copies below TMPDIR");
@@ -89,6 +94,7 @@ const afterLoad = load(); const final = inventory();
 if (initial.digest !== final.digest) throw new Error("retention replay changed its seed");
 fs.writeFileSync(output, JSON.stringify({ case: "T19-full-pass", at: new Date().toISOString(), revision, bun: Bun.version, sourceDigest, sourceHashes, measurementSha256: createHash("sha256").update(fs.readFileSync(import.meta.path)).digest("hex"),
   releases: 87, entries: initial.entries, seedDigest: initial.digest, scans, wallMs, maxGapMs, timerSamplesDuringPass: during,
+  workload: { source: "agent_fleet", scope: "project", observedAt: workloadObservedAt, liveAgents, runningAgents },
   kept: report.kept.map(row => ({ release: path.basename(row.dir), reason: row.reason, bytes: row.bytes })), removed: report.removed.length,
   loadBefore: beforeLoad, loadAfter: afterLoad }, null, 2));
 console.log(JSON.stringify({ wallMs, maxGapMs, scans }));

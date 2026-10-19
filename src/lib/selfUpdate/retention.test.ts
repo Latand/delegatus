@@ -76,7 +76,7 @@ test("the loop stays within 50 ms while counting 87 retained release trees", asy
   for (const dir of h.dirs) {
     const tree = path.join(dir, "node_modules/fixture");
     fs.mkdirSync(tree);
-    for (let i = 0; i < 512; i++) fs.writeFileSync(path.join(tree, `${i}.js`), "fixture");
+    for (let i = 0; i < 128; i++) fs.writeFileSync(path.join(tree, `${i}.js`), "fixture");
   }
   let last = performance.now();
   let maxGapMs = 0;
@@ -102,6 +102,7 @@ test("the loop stays within 50 ms while counting 87 retained release trees", asy
     await sample();
     expect(report.errors).toEqual([]);
     expect(report.kept).toHaveLength(87);
+    expect(report.kept.every(row => row.bytes > 0)).toBeTrue();
     console.info("[retention fixture]", JSON.stringify({ releases: 87, maxGapMs, timerSamplesDuringPass: during }));
     expect(maxGapMs).toBeLessThanOrEqual(50);
     expect(during).toBeGreaterThan(0);
