@@ -2463,6 +2463,8 @@ No code. The [follow-up window](#follow-up-measured-window) decides whether
   kept releases here) and runs `bytesOf` (`:32`, called at `:164`) in a helper.
 - **Acceptance.** A fixture of 87 release directories triggers one scan per
   pass and keeps the Viewer loop within 50 ms during the pass.
+  The focused 10 ms probe compares main-loop turns with an independent worker
+  heartbeat to distinguish loop blockage from process-wide scheduling pauses.
 - **Before/after.** `T19` extended to a full pass over copies of retained
   releases (read-only); production: the `self-update.retention` label and
   `self-update.bytes` spans after an apply.
