@@ -69,6 +69,7 @@ import {
 } from "./candidatePerformance";
 import { browserViewPins, candidateBrowserExecutable, measureBoardInBrowser, serverLoopProbe } from "./candidateBrowserRun";
 import { startCandidateRuntimeHost, waitForServerStartup, type CandidateRuntimeHost } from "./candidateRuntimeHost";
+import { CANDIDATE_HISTORY_PROJECT, CANDIDATE_HISTORY_SCOPE, CANDIDATE_HISTORY_PASS } from "./candidateStateDataset";
 import type { CandidateBrowserMeasurements } from "./candidateBrowser";
 
 const SCOPES = 8;
@@ -95,9 +96,9 @@ const BASELINE_SETTLE_MS = 30_000;
 const BUSY = /SQLITE_BUSY|database is locked/i;
 const ENTRY = path.join(import.meta.dir, "candidatePerformanceRun.ts");
 
-type Mode = "gate" | "viewer" | "writer" | "worker";
-type Induced = "worker-kill" | "worker-stall" | "runtime-stall" | "server-stall";
-const INDUCED: readonly Induced[] = ["worker-kill", "worker-stall", "runtime-stall", "server-stall"];
+type Mode = "gate" | "viewer" | "writer" | "worker" | "curator";
+type Induced = "worker-kill" | "worker-stall" | "runtime-stall" | "server-stall" | "host-loop-stall";
+const INDUCED: readonly Induced[] = ["worker-kill", "worker-stall", "runtime-stall", "server-stall", "host-loop-stall"];
 /** How long `--induce server-stall` holds the production server's event loop. */
 const INDUCED_SERVER_STALL_MS = 800;
 
@@ -132,6 +133,7 @@ function lagWindow() {
   const stalls: Array<{ at: number; ms: number }> = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
   let expected = 0;
+  let tickSeen: (() => void) | undefined;
   const tick = () => {
     const now = performance.now();
     const late = Math.max(0, now - expected);
@@ -139,8 +141,13 @@ function lagWindow() {
     if (late >= SLOW_STEP_MS && stalls.length < 20) stalls.push({ at: Date.now(), ms: Math.round(late) });
     expected = now + 10;
     timer = setTimeout(tick, 10);
+    const seen = tickSeen; tickSeen = undefined; seen?.();
   };
   return {
+    nextTick(): Promise<void> {
+      if (tickSeen) throw new Error("loop probe already has a tick waiter");
+      return new Promise(resolve => { tickSeen = resolve; });
+    },
     enable() {
       if (timer) return;
       expected = performance.now() + 10;
@@ -855,6 +862,10 @@ async function browserPhase(input: {
   keys: ReadonlyArray<{ key: string; servers: string[] }>;
   children: ChildProcess[];
   note: (line: string) => void;
+  runtimeHost: CandidateRuntimeHost;
+  servingHistory: CandidatePerformanceMeasurements["servingHistory"];
+  hostLoop: CandidatePerformanceMeasurements["hostLoop"];
+  inducedHostStall?: boolean;
   /** Hold the server's event loop this long once the views operate. */
   inducedStallMs?: number;
 }): Promise<CandidateBrowserMeasurements | null> {
@@ -897,11 +908,37 @@ async function browserPhase(input: {
     await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
     /* The probe must be watching the process that serves, or its reading says nothing. */
     if (probe.pid() !== server.pid) throw new Error("the production server carries no event-loop probe");
+    let readsDoneAt = 0;
+    let rulesWindow: { from: number; to: number } | undefined;
+    let reads: Promise<void> | undefined;
     const result = await measureBoardInBrowser({
       baseUrl,
       executablePath,
       server: probe,
+      // Five seconds of browser warm-up followed by at least 75 seconds.
+      windowMs: 80_000,
       onOperating: (remainingMs) => {
+        reads = (async () => {
+          if (input.inducedHostStall) await input.runtimeHost.holdLoop(800);
+          const curator = child("curator", [], input.env);
+          input.children.push(curator.process);
+          const outcome = await curator.result;
+          if (!outcome.completed) throw new Error(outcome.error ?? "curator history read failed");
+          input.servingHistory.curatorReads = 1;
+          input.servingHistory.curatorMs = Number(outcome.report.ms);
+          input.servingHistory.curatorLoopMaxMs = Number(outcome.report.loopMaxMs);
+          const started = performance.now();
+          const rulesStartedAt = Date.now();
+          const response = await fetch(`${baseUrl}/api/role-memory?project=${CANDIDATE_HISTORY_PROJECT}`, { signal: AbortSignal.timeout(60_000) });
+          const body = await response.json() as { scopes?: { revision: number }[]; curation?: { passes?: unknown[] } };
+          if (!response.ok || body.scopes?.filter(scope => scope.revision > 0).length !== 100 || body.curation?.passes?.length !== 50) throw new Error("rules-window history view was incomplete");
+          input.servingHistory.rulesViews = 1;
+          input.servingHistory.rulesMs = Math.round(performance.now() - started);
+          rulesWindow = { from: rulesStartedAt, to: Date.now() };
+          readsDoneAt = Date.now();
+        })();
+        // Observe failures immediately, then propagate them after the window.
+        void reads.catch(() => {});
         if (!input.inducedStallMs) return;
         setTimeout(() => { probe.stall(input.inducedStallMs!); input.note(`induced: held the production server's event loop for ${input.inducedStallMs}ms`); }, remainingMs / 3);
       },
@@ -911,6 +948,21 @@ async function browserPhase(input: {
         registry: input.registry, keys: input.keys, stopFile: path.join(input.root, "browser-writers-stop"),
       },
     });
+    const window = result.operatingWindow;
+    input.servingHistory.windowMs = window.durationMs;
+    Object.assign(input.hostLoop, input.runtimeHost.loopReading(window.fromUtcMs, window.toUtcMs));
+    await reads?.catch(error => input.note(`history read failed: ${error instanceof Error ? error.message : String(error)}`));
+    if (!readsDoneAt || readsDoneAt > window.toUtcMs) {
+      input.servingHistory.curatorReads = input.servingHistory.rulesViews = 0;
+      input.note("history reads did not finish inside the serving window");
+    } else {
+      // Read sequentially after the browser driver's own probe requests.
+      const rulesLoop = rulesWindow ? await probe.read(rulesWindow.from, rulesWindow.to, window.toUtcMs) : null;
+      input.note(`rules-window loop reading ${JSON.stringify(rulesLoop)}`);
+      if (!rulesLoop?.samples || rulesLoop.pid !== server.pid) input.servingHistory.rulesViews = 0;
+      else input.servingHistory.rulesLoopMaxMs = rulesLoop.maxMs;
+    }
+    input.note(`RG2 serving history ${JSON.stringify(input.servingHistory)}; runtime-host loop ${JSON.stringify(input.hostLoop)}`);
     for (const view of result.diagnostics) {
       input.note(`browser view ${view.view}: slowest ${JSON.stringify(view.slowest.slice(0, 2))}`
         + (view.failures.length ? `; failed ${JSON.stringify(view.failures)}` : ""));
@@ -1017,6 +1069,9 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     /* The dataset is built here, under the sandbox's state directory and
        nothing of the caller's. */
     process.env.LLV_STATE_DIR = env.LLV_STATE_DIR;
+    const { buildCandidateStateDataset } = await import("./candidateStateDataset");
+    const stateHistory = await buildCandidateStateDataset(env.LLV_STATE_DIR!);
+    note(`generated state history ${JSON.stringify(stateHistory)}`);
     const { buildRegistryPerformanceDataset, REGISTRY_PERFORMANCE_SHAPE, scaledRegistryPerformanceShape } = await import("@/lib/agent/registryPerformanceDataset");
     const dataset = buildRegistryPerformanceDataset(
       env.LLV_STATE_DIR!,
@@ -1346,20 +1401,24 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     for (const pid of workerPids) { try { process.kill(pid, "SIGCONT"); process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
     let browser: CandidateBrowserMeasurements | null = null;
     /* A run that holds the server is refused by what the browser half measures, so it runs it. */
-    const serverStall = induced.includes("server-stall");
+    const servingHistory = { windowMs: 0, curatorReads: 0, curatorMs: 0, curatorLoopMaxMs: 0, rulesViews: 0, rulesMs: 0, rulesLoopMaxMs: 0 };
+    const hostLoop = { records: 0, malformed: 0, maxMs: 0 };
+    const serverStall = induced.includes("server-stall") || induced.includes("host-loop-stall");
     if (!serverStall && (scale < 1 || inducedDelayMs || induced.length)) note("browser: skipped, this run is a refusal already");
     else {
       try {
         browser = await browserPhase({
           root, env, registry: dataset.filename, conversations: dataset.conversations,
           keys: entrySubjects.map(({ key, servers }) => ({ key, servers })), children, note,
-          ...(serverStall ? { inducedStallMs: INDUCED_SERVER_STALL_MS } : {}),
+          runtimeHost, servingHistory, hostLoop, inducedHostStall: induced.includes("host-loop-stall"),
+          ...(induced.includes("server-stall") ? { inducedStallMs: INDUCED_SERVER_STALL_MS } : {}),
         });
       } catch (error) {
         note(`browser: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
     const measurements: CandidatePerformanceMeasurements = {
+      stateHistory, servingHistory, hostLoop,
       dataset: { scale, rows: dataset.rows, coldRows: dataset.coldRows, payloadBytes: dataset.payloadBytes, transcripts: dataset.conversations.length, seedMs: Math.round(dataset.seedMs), receipts: dataset.receipts },
       firstBoot: {
         registryOpenMs: finite(aReport.registryOpenMs),
@@ -1479,6 +1538,22 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
   }
 }
 
+async function curatorMain(): Promise<void> {
+  const { readPass } = await import("@/lib/memory/curation/store");
+  const { readCuration } = await import("@/lib/memory/curation/read");
+  const loop = lagWindow(); loop.enable();
+  await loop.nextTick();
+  const started = performance.now();
+  const pass = readPass(CANDIDATE_HISTORY_PASS);
+  if (!pass) throw new Error("generated curator pass is missing");
+  const result = await readCuration(pass, CANDIDATE_HISTORY_SCOPE);
+  if (!("scope" in result)) throw new Error("curator read returned no scope");
+  const ms = Math.round(performance.now() - started);
+  await loop.nextTick();
+  const loopMaxMs = Math.round(loop.summary().maxMs); loop.disable();
+  console.log(JSON.stringify({ completed: true, ms, loopMaxMs }));
+}
+
 if (import.meta.main && option("--seed-census")) {
   const { buildRegistryPerformanceDataset } = await import("@/lib/agent/registryPerformanceDataset");
   const dataset = buildRegistryPerformanceDataset(option("--seed-census")!);
@@ -1491,10 +1566,12 @@ if (import.meta.main && process.argv.includes("--probe-startup")) {
   process.exit(0);
 }
 if (import.meta.main) {
-  const mode: Mode = process.argv.includes("--writer") ? "writer"
+  const mode: Mode = process.argv.includes("--curator") ? "curator" : process.argv.includes("--writer") ? "writer"
     : process.argv.includes("--viewer") ? "viewer"
       : process.argv.includes("--worker") ? "worker" : "gate";
-  if (mode === "worker") {
+  if (mode === "curator") {
+    await curatorMain(); process.exit(0);
+  } else if (mode === "worker") {
     await workerMain();
   } else if (mode === "writer") {
     await writerMain();

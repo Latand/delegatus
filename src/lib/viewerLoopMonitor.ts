@@ -81,7 +81,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
     watchdog?.heartbeat();
     const gapMs = Math.max(0, at - last - 10);
     const memory = heapSignals.sample(last, at, gapMs);
-    if (gapMs > 500) {
+    if (gapMs > (process.env.LLV_STATE_OWNER === "runtime-host" ? 250 : 500)) {
       const named = new Map<ViewerOperation, { name: ViewerOperation; durationMs: number; completed: boolean; count: number }>();
       for (const op of [...completed, ...active]) {
         if ((op.end ?? at) < last) continue;

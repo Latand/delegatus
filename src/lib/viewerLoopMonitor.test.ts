@@ -131,3 +131,21 @@ test.each(["viewer", "runtime-host"])("%s gap identity prefers the serving child
     }
   }
 });
+
+
+test.each(["viewer", "runtime-host"])("%s uses its own gap threshold", role => {
+  const owner = process.env.LLV_STATE_OWNER;
+  let at = 0;
+  const lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, createPerformanceSpans(() => at));
+  try {
+    process.env.LLV_STATE_OWNER = role;
+    at = 260; monitor.tick(); // exactly 250 ms is inside the host bound
+    expect(lines).toEqual([]);
+    at += 261; monitor.tick();
+    expect(lines.length).toBe(role === "runtime-host" ? 1 : 0);
+  } finally {
+    monitor.stop();
+    if (owner === undefined) delete process.env.LLV_STATE_OWNER; else process.env.LLV_STATE_OWNER = owner;
+  }
+});

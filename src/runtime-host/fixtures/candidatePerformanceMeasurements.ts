@@ -7,7 +7,13 @@ export function passingCandidatePerformanceMeasurements(): CandidatePerformanceM
   return structuredClone(PASSING);
 }
 
+export const PASSING_RG2 = {
+  stateHistory: { hotPipelines: 270, hotBytes: 34_000_000, hotMaxBytes: 515_000, archivedPipelines: 950, archiveBytes: 111_000_000, archiveMaxBytes: 1_100_000, tasks: 2450, taskBytes: 9_800_000, memoryRows: 3900, memoryBytes: 16_000_000, scopes: 100, historyBytes: 12_600_000, memoryMaxBytes: 2_901_000, curatorPasses: 50 },
+  servingHistory: { windowMs: 75_000, curatorReads: 1, curatorMs: 80, curatorLoopMaxMs: 20, rulesViews: 1, rulesMs: 90, rulesLoopMaxMs: 30 },
+  hostLoop: { records: 2, malformed: 0, maxMs: 200 },
+};
 const PASSING: CandidatePerformanceMeasurements = {
+  ...PASSING_RG2,
   dataset: { scale: 1, rows: 53_299, coldRows: 51_099, payloadBytes: 214_600_000, transcripts: 320, seedMs: 7_000,
     receipts: { total: 10_971, failedStructured: 892, failedLegacy: 122, conflicted: 133 } },
   firstBoot: { registryOpenMs: 80, firstSnapshotMs: 600, coldProjectionMs: 4_200, firstUsableMs: 4_900, eventLoopMaxMs: 600, coldBuild: { sequence: 1, buildMs: 2_500 } },

@@ -12,7 +12,7 @@ import type {
 
 import { CANDIDATE_PERFORMANCE_BOUNDS, candidatePerformanceBreaches, type CandidatePerformanceEvidence, type CandidatePerformanceMeasurements } from "./candidatePerformance";
 import { HostCommandViewerDeploymentAdapter } from "./deploymentAdapter";
-import { passingCandidatePerformanceMeasurements } from "./fixtures/candidatePerformanceMeasurements";
+import { PASSING_RG2, passingCandidatePerformanceMeasurements } from "./fixtures/candidatePerformanceMeasurements";
 import { promotedViewerReadinessPhase } from "./deploymentHealth";
 import { PROMOTE_ACTION_TIMEOUT_MS } from "./deploymentHotState";
 import type { RuntimeHostHandoffIntent } from "./hostRelease";
@@ -418,6 +418,7 @@ function passingPerformance(): CandidatePerformanceEvidence {
 /* Duration observations cross into the durable record as warnings. */
 test("duration-only candidate observations reach the record without refusing the candidate", async () => {
   const measured: CandidatePerformanceMeasurements = {
+    ...structuredClone(PASSING_RG2),
     ...PASSING_MEASUREMENTS,
     grantWrites: { count: 60, p50Ms: 610, p95Ms: 640, maxMs: 700, mismatches: 0, failures: 0 },
     eventLoop: { p95Ms: 620, maxMs: 700 },

@@ -27,16 +27,45 @@ import path from "node:path";
 const READY_TIMEOUT_MS = 60_000;
 const LOG_LINES = 20;
 
+/** Read the host's own diagnostics, including its heartbeat on a quiet loop.
+ * Retain scalar readings only; never keep full diagnostic payloads. */
+export function candidateHostLoopRecords() {
+  const rows: Array<{ at: number; gap: number }> = [];
+  let malformed = 0;
+  return {
+    reject() { malformed++; },
+    read(line: string, pid: number) {
+      const prefix = ["[viewer loop-gap] ", "[performance summary] "].find(p => line.startsWith(p));
+      if (!prefix) return;
+      try {
+        const row = JSON.parse(line.slice(prefix.length));
+        if (row.role !== "runtime-host" || row.pid !== pid) return;
+        const at = Date.parse(row.utc);
+        const gap = prefix === "[viewer loop-gap] " ? row.gapMs : 0;
+        if (!Number.isFinite(at) || !Number.isFinite(gap) || gap < 0 || row.logDropped !== 0) { malformed++; return; }
+        if (rows.length >= 4096) { malformed++; return; }
+        rows.push({ at, gap });
+      } catch { malformed++; }
+    },
+    window(fromUtcMs: number, toUtcMs: number) {
+      const selected = rows.filter(row => row.at - row.gap >= fromUtcMs && row.at <= toUtcMs);
+      return { records: selected.length, malformed, maxMs: Math.max(0, ...selected.map(row => row.gap)) };
+    },
+  };
+}
+
 export interface CandidateRuntimeHost {
   /** The socket the Viewers are given: the fault proxy when there is one. */
   socket: string;
   pid: number;
   /** Hold every new connection unanswered while on; only with `faults`. */
   stall(on: boolean): void;
+  holdLoop(ms: number): Promise<void>;
   /** Connections the proxy held unanswered. */
   stalled(): number;
   exited(): boolean;
   log(): string[];
+  loopReading(fromUtcMs: number, toUtcMs: number): { records: number; malformed: number; maxMs: number };
   stop(): Promise<void>;
 }
 
@@ -77,20 +106,29 @@ export async function startCandidateRuntimeHost(options: {
   const env = candidateRuntimeHostEnvironment(options.env, options.directory);
   const hostSocket = env.LLV_RUNTIME_HOST_SOCKET!;
   const lines: string[] = [];
+  const loopRecords = candidateHostLoopRecords();
   const child: ChildProcess = spawn(options.runtimeBin, [path.join(options.cwd, "src", "runtime-host", "candidateRuntimeHost.ts"), "--owner", String(process.pid)], {
     cwd: options.cwd,
     env: env as NodeJS.ProcessEnv,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
-  const collect = (chunk: unknown) => {
-    for (const line of String(chunk).split("\n")) {
-      if (!line.trim()) continue;
-      lines.push(line.slice(0, 300));
-      if (lines.length > LOG_LINES) lines.shift();
-    }
+  const collect = () => {
+    let pending = "";
+    return (chunk: unknown) => {
+      pending += String(chunk);
+      const complete = pending.split("\n");
+      pending = complete.pop()!;
+      if (pending.length > 128 * 1024) { loopRecords.reject(); pending = ""; }
+      for (const line of complete) {
+        if (!line.trim()) continue;
+        loopRecords.read(line, child.pid!);
+        lines.push(line.slice(0, 300));
+        if (lines.length > LOG_LINES) lines.shift();
+      }
+    };
   };
-  child.stdout?.on("data", collect);
-  child.stderr?.on("data", collect);
+  child.stdout?.on("data", collect());
+  child.stderr?.on("data", collect());
   let gone = false;
   const exited = new Promise<void>((resolve) => child.once("exit", () => { gone = true; resolve(); }));
 
@@ -103,6 +141,7 @@ export async function startCandidateRuntimeHost(options: {
     for (const socket of open) socket.destroy();
     if (proxy) await new Promise<void>((resolve) => proxy!.close(() => resolve()));
     if (!gone) {
+      if (child.connected) child.disconnect();
       child.kill("SIGTERM");
       const forced = setTimeout(() => child.kill("SIGKILL"), 10_000);
       await exited;
@@ -149,8 +188,20 @@ export async function startCandidateRuntimeHost(options: {
       stalling = on;
     },
     stalled: () => stalledCount,
+    holdLoop(ms) {
+      return new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => { child.off("message", done); reject(new Error("runtime-host loop stall did not recover")); }, 10_000);
+        const done = (message: unknown) => {
+          if (message !== "candidate-loop-recovered") return;
+          clearTimeout(timeout); child.off("message", done); resolve();
+        };
+        child.on("message", done);
+        child.send({ candidateLoopStallMs: ms });
+      });
+    },
     exited: () => gone,
     log: () => [...lines],
+    loopReading: loopRecords.window,
     stop,
   };
 }
@@ -184,4 +235,11 @@ if (import.meta.main) {
     try { process.kill(owner, 0); } catch { process.exit(86); }
   }, 500).unref();
   await import("./main");
+  process.on("message", (message: { candidateLoopStallMs?: number }) => {
+    const ms = message?.candidateLoopStallMs;
+    if (typeof ms !== "number" || ms < 0 || ms > 2000) return;
+    const until = performance.now() + ms;
+    while (performance.now() < until) { /* the gate's deliberate host-loop fault */ }
+    setTimeout(() => process.send?.("candidate-loop-recovered"), 100);
+  });
 }

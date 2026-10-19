@@ -54,6 +54,12 @@ const server = Bun.serve({
     const route = new URL(request.url).pathname;
     if (route === "/") return new Response(page, { headers: { "content-type": "text/html" } });
     if (route === "/api/files") return Response.json({ files: [] });
+    if (route === "/hold") {
+      const from = Date.now();
+      const until = performance.now() + 800;
+      while (performance.now() < until) {}
+      return Response.json({ from, to: Date.now() });
+    }
     if (route === "/api/tmux/targets") {
       if (fault === "stalled-targets") return new Promise(() => {});
       if (fault === "late-targets") return new Promise(resolve => setTimeout(() => resolve(Response.json({ targets: {} })), 18000));
@@ -111,6 +117,21 @@ async function measure(fault: Fault, probed = true) {
   }
 }
 
+test("the request probe includes the first recovery tick when a block leaves no samples inside the request", async () => {
+  const board = await serveBoard("none");
+  try {
+    const response = await fetch(`${board.url}/hold`);
+    const { from, to } = await response.json() as { from: number; to: number };
+    const interior = await board.probe.read(from + 100, to - 100);
+    expect(interior?.samples).toBe(0);
+    const recovered = await board.probe.read(from + 100, to - 100, Date.now());
+    expect(recovered?.pid).toBe(board.pid);
+    expect(recovered?.samples).toBe(1);
+    expect(recovered?.maxMs).toBeGreaterThanOrEqual(780);
+    expect(recovered?.recoveredAt).toBeGreaterThanOrEqual(to);
+  } finally { await board.stop(); }
+}, 30_000);
+
 async function throughCoordinator(measurements: NonNullable<CandidatePerformanceEvidence["measurements"]>) {
   const breaches = candidatePerformanceBreaches(measurements);
   const performance: CandidatePerformanceEvidence = {
@@ -152,6 +173,9 @@ async function throughCoordinator(measurements: NonNullable<CandidatePerformance
 test.skipIf(!browser)("a board fast in every way passes the browser bounds", async () => {
   const result = await measure("none");
   expect(candidateBrowserBreaches(result.measurements)).toEqual([]);
+  expect(result.operatingWindow.fromUtcMs).toBeGreaterThan(0);
+  expect(result.operatingWindow.durationMs).toBeGreaterThanOrEqual(WINDOW_MS - Math.min(5000, WINDOW_MS / 3) - 100);
+  expect(result.operatingWindow.toUtcMs).toBeGreaterThan(result.operatingWindow.fromUtcMs);
   expect(result.measurements).toMatchObject({ apiErrors: 0, apiFirstError: null, apiUnfinished: 0 });
   /* The server's own loop was read over the views' window, a sample every 10 ms. */
   expect(result.measurements.server!.samples).toBeGreaterThan(WINDOW_MS / 40);

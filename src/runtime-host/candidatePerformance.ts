@@ -28,6 +28,8 @@ export const CANDIDATE_PERFORMANCE_IMAGE_BIN = "/usr/local/bin/bun-container";
 export const CANDIDATE_PERFORMANCE_ENTRY = "src/runtime-host/candidatePerformanceRun.ts";
 
 export interface CandidatePerformanceBounds {
+  hostLoop: { maxMs: number };
+  historyRead: { maxMs: number };
   /** First boot, from opening the registry to the first usable board
       projection: each phase, the whole, and the Viewer's event loop, watched
       from before the registry opens. */
@@ -56,6 +58,8 @@ export interface CandidatePerformanceBounds {
 }
 
 export const CANDIDATE_PERFORMANCE_BOUNDS: CandidatePerformanceBounds = Object.freeze({
+  hostLoop: Object.freeze({ maxMs: 250 }),
+  historyRead: Object.freeze({ maxMs: 250 }),
   firstBoot: Object.freeze({ registryOpenMs: 2_000, firstSnapshotMs: 2_000, firstUsableMs: 10_000, eventLoopMaxMs: 1_000 }),
   activation: Object.freeze({ durationMs: 15_000, eventLoopMaxMs: 1_500 }),
   grantWrite: Object.freeze({ p95Ms: 350, maxMs: 500 }),
@@ -69,6 +73,7 @@ export const CANDIDATE_PERFORMANCE_BOUNDS: CandidatePerformanceBounds = Object.f
 
 /** What a run must have measured before its numbers mean anything. */
 export const CANDIDATE_PERFORMANCE_MINIMUMS = Object.freeze({
+  servingMs: 75_000,
   rows: 53_000,
   coldShare: 0.9,
   scopes: 8,
@@ -123,6 +128,9 @@ export function projectionBuildSummary(samples: readonly ProjectionBuildSample[]
 }
 
 export interface CandidatePerformanceMeasurements {
+  stateHistory: import("./candidateStateDataset").StateHistoryCensus;
+  servingHistory: { windowMs: number; curatorReads: number; curatorMs: number; curatorLoopMaxMs: number; rulesViews: number; rulesMs: number; rulesLoopMaxMs: number };
+  hostLoop: { records: number; malformed: number; maxMs: number };
   dataset: { scale: number; rows: number; coldRows: number; payloadBytes: number; transcripts: number; seedMs: number;
     receipts: { total: number; failedStructured: number; failedLegacy: number; conflicted: number } };
   firstBoot: {
@@ -257,6 +265,17 @@ export function candidatePerformanceBreaches(
   if (measured.dataset.rows > 0 && measured.dataset.coldRows / measured.dataset.rows < minimum.coldShare) {
     breaches.push(`only ${measured.dataset.coldRows} of ${measured.dataset.rows} registry rows were cold`);
   }
+  fewer("post-warm-up serving window", measured.servingHistory.windowMs, minimum.servingMs);
+  fewer("runtime-host loop records read", measured.hostLoop.records, 1);
+  if (measured.hostLoop.malformed) breaches.push("runtime-host loop records were malformed");
+  fewer("curator reads during serving", measured.servingHistory.curatorReads, 1);
+  fewer("rules-window views during serving", measured.servingHistory.rulesViews, 1);
+  for (const [key, wanted] of Object.entries({ hotPipelines: 270, hotBytes: 33_999_000, hotMaxBytes: 515_000, archivedPipelines: 950, archiveBytes: 110_999_000, archiveMaxBytes: 1_100_000, tasks: 2450, taskBytes: 9_800_000, memoryRows: 3900, memoryBytes: 15_900_000, scopes: 100, historyBytes: 12_600_000, memoryMaxBytes: 2_900_000, curatorPasses: 50 })) {
+    fewer(`generated state history ${key}`, measured.stateHistory[key as keyof typeof measured.stateHistory], wanted);
+  }
+  over("runtime-host event-loop gap outside boot", measured.hostLoop.maxMs, bounds.hostLoop.maxMs);
+  over("curator history main-loop gap", measured.servingHistory.curatorLoopMaxMs, bounds.historyRead.maxMs);
+  over("rules-window history main-loop gap", measured.servingHistory.rulesLoopMaxMs, bounds.historyRead.maxMs);
   over("registry open at first boot", measured.firstBoot.registryOpenMs, bounds.firstBoot.registryOpenMs);
   over("first registry snapshot", measured.firstBoot.firstSnapshotMs, bounds.firstBoot.firstSnapshotMs);
   over("first boot to a usable board", measured.firstBoot.firstUsableMs, bounds.firstBoot.firstUsableMs);
@@ -402,6 +421,9 @@ export function parseCandidatePerformanceReport(output: string): CandidatePerfor
 type Shape = "n" | "b" | "b?" | "n?" | "s?" | readonly string[] | { readonly [key: string]: Shape };
 const LATENCY = { count: "n", p50Ms: "n", p95Ms: "n", maxMs: "n" } as const;
 const MEASUREMENT_SHAPE: Shape = {
+  stateHistory: { hotPipelines: "n", hotBytes: "n", hotMaxBytes: "n", archivedPipelines: "n", archiveBytes: "n", archiveMaxBytes: "n", tasks: "n", taskBytes: "n", memoryRows: "n", memoryBytes: "n", scopes: "n", historyBytes: "n", memoryMaxBytes: "n", curatorPasses: "n" },
+  servingHistory: { windowMs: "n", curatorReads: "n", curatorMs: "n", curatorLoopMaxMs: "n", rulesViews: "n", rulesMs: "n", rulesLoopMaxMs: "n" },
+  hostLoop: { records: "n", malformed: "n", maxMs: "n" },
   dataset: { scale: "n", rows: "n", coldRows: "n", payloadBytes: "n", transcripts: "n", seedMs: "n",
     receipts: { total: "n", failedStructured: "n", failedLegacy: "n", conflicted: "n" } },
   firstBoot: {

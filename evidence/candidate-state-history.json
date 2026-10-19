@@ -1,0 +1,996 @@
+{
+  "schemaVersion": 1,
+  "purpose": "RG2 generated state history, minute timers and runtime-host loop evidence",
+  "conditions": {
+    "data": "Generated only. Every run creates a fresh private state directory.",
+    "isolation": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR"
+    ],
+    "controlUrl": "http://127.0.0.1:1",
+    "browser": "Google Chrome for Testing 156.0.8078.4",
+    "runner": "scripts/gate-slot.sh",
+    "runnerRevision": "8b363fe0f94d",
+    "runnerConfiguredCpuPercent": 300,
+    "runnerConfiguredMemoryGiB": 8,
+    "load": "Eight browser views, two concurrent registry writers, four live workers handed between two source Viewer generations.",
+    "comparison": "One adoption observation per source revision, using the same harness and generated state shape. No throughput or speedup claim.",
+    "platform": "linux"
+  },
+  "procedure": {
+    "before": "Export a25592be, overlay the harness files below and its measurement fixture, change only the runtime-host loop-report threshold to 250 ms in src/lib/viewerLoopMonitor.ts, install frozen dependencies and run bun run build.",
+    "after": "Export the stage source over its main base, install frozen dependencies and run bun run build.",
+    "run": "With a Chromium supplied as CHROME_BIN, run each command through the declared gate slot with the isolated environment.",
+    "sourceDigest": "SHA-256 over sorted src file entries: repository-relative path, NUL, file SHA-256, newline.",
+    "harnessOverlay": {
+      "src/runtime-host/candidatePerformance.ts": "1eb63a8a43c95c1ea1391ac4f88c919234dcbae180dc6558c3797d4badb76db4",
+      "src/runtime-host/candidatePerformanceRun.ts": "93f51dcf647b96c8943d790bba1aae5b625c803edb3206a18cf92601e2164e3c",
+      "src/runtime-host/candidateRuntimeHost.ts": "7921603a4b087b8bffe451aebfc2b951bdd3731b401b40d7efd1f341bec786d6",
+      "src/runtime-host/candidateStateDataset.ts": "b3763245badddbc70a97519cd47cd432ab228d41e17251aee873dc161c169cfd",
+      "src/runtime-host/candidateBrowserRun.ts": "361c2b9f41806297ca2173551d7f5b3c2e707d16ebae2ed11141a7c867812bee",
+      "src/runtime-host/candidateBrowser.ts": "e938aa7110b37880e8fcb07a47077a8d93db345c5f77b95b1a26bd7febb8163c",
+      "src/runtime-host/candidateServerLoopProbe.ts": "93ce8e832d528af34e6396d90e196558cde99c0fdc2a25283de9d839687b63f3",
+      "src/runtime-host/fixtures/candidatePerformanceMeasurements.ts": "056a657e168b396cfc922892cd5f5e5cb27aa90644b4831068798cfec6150b58"
+    }
+  },
+  "before": {
+    "sourceRevision": "a25592beae64cdac38bceefe8863fe092dcd379b",
+    "sourceTree": {
+      "files": 4514,
+      "sha256": "f71eab1933313e1399b1ac2bf8d09bdac162e15791e89817e929ed28cbd6d9ef"
+    },
+    "loadAtLaunch": {
+      "loadAverage": [
+        8.1328125,
+        6.13134765625,
+        4.44921875
+      ],
+      "cpuCount": 24,
+      "configuredGateCpuPercent": 300,
+      "configuredGateMemoryGiB": 8
+    },
+    "command": "bun src/runtime-host/candidatePerformanceRun.ts",
+    "exitCode": 0,
+    "report": {
+      "checkedAt": "2026-10-19T02:14:47.116Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "hostLoop": {
+          "maxMs": 250
+        },
+        "historyRead": {
+          "maxMs": 250
+        },
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": {
+        "stateHistory": {
+          "hotPipelines": 270,
+          "hotBytes": 33999851,
+          "hotMaxBytes": 515000,
+          "archivedPipelines": 950,
+          "archiveBytes": 110999894,
+          "archiveMaxBytes": 1100000,
+          "tasks": 2450,
+          "taskBytes": 9800000,
+          "memoryRows": 3900,
+          "memoryBytes": 16076756,
+          "scopes": 100,
+          "historyBytes": 12604168,
+          "memoryMaxBytes": 2901685,
+          "curatorPasses": 50
+        },
+        "servingHistory": {
+          "windowMs": 75631,
+          "curatorReads": 1,
+          "curatorMs": 5051,
+          "curatorLoopMaxMs": 5048,
+          "rulesViews": 1,
+          "rulesMs": 4723,
+          "rulesLoopMaxMs": 4833.4
+        },
+        "hostLoop": {
+          "records": 2,
+          "malformed": 0,
+          "maxMs": 1236
+        },
+        "dataset": {
+          "scale": 1,
+          "rows": 53299,
+          "coldRows": 51099,
+          "payloadBytes": 218266028,
+          "transcripts": 320,
+          "seedMs": 10186,
+          "receipts": {
+            "total": 10971,
+            "failedStructured": 892,
+            "failedLegacy": 122,
+            "conflicted": 133
+          }
+        },
+        "firstBoot": {
+          "registryOpenMs": 300,
+          "firstSnapshotMs": 1440,
+          "coldProjectionMs": 4648,
+          "firstUsableMs": 6524,
+          "eventLoopMaxMs": 355,
+          "coldBuild": {
+            "sequence": 1,
+            "buildMs": 2620.7
+          }
+        },
+        "activation": {
+          "incumbentMs": 3034,
+          "successorMs": 3169,
+          "incumbentCompleted": true,
+          "successorCompleted": true,
+          "eventLoopMaxMs": 466
+        },
+        "grantWrites": {
+          "count": 288,
+          "p50Ms": 2.3,
+          "p95Ms": 11.1,
+          "maxMs": 29.6,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "externalWrites": {
+          "count": 546,
+          "p50Ms": 2,
+          "p95Ms": 8.2,
+          "maxMs": 50.8,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedOperationReads": {
+          "count": 126,
+          "p50Ms": 0.7,
+          "p95Ms": 1,
+          "maxMs": 7.7
+        },
+        "eventLoop": {
+          "p95Ms": 4.6,
+          "maxMs": 437.4
+        },
+        "projection": {
+          "warmBuilds": {
+            "count": 63,
+            "p50Ms": 602.2,
+            "p95Ms": 941.7,
+            "maxMs": 1430
+          },
+          "queueWait": {
+            "count": 65,
+            "p50Ms": 3348.4,
+            "p95Ms": 5270.6,
+            "maxMs": 6036.8
+          }
+        },
+        "scopeRequests": {
+          "count": 184,
+          "p50Ms": 174.8,
+          "p95Ms": 2797.5,
+          "maxMs": 5893.8,
+          "scopes": 8,
+          "failures": 0,
+          "maxQueueDepth": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "worker": {
+          "spawns": 1,
+          "timeoutRetirements": 0,
+          "pidStable": true
+        },
+        "stability": {
+          "rounds": 21,
+          "responses": 168,
+          "emptyResponses": 0,
+          "missingRows": 0,
+          "extraRows": 0,
+          "reattributedRows": 0,
+          "missingPins": 0
+        },
+        "handover": {
+          "successor": {
+            "completed": true,
+            "exitCode": 0,
+            "signal": null,
+            "readyMs": 7299,
+            "registryOpenMs": 145,
+            "snapshotMs": 721,
+            "firstProjectionMs": 4394,
+            "archived": 250,
+            "grantMismatches": 0,
+            "adoptionMs": 2297,
+            "adopted": 4
+          },
+          "switched": true,
+          "demotionExitCode": 0,
+          "servingRelease": "successor",
+          "serving": {
+            "requests": 104,
+            "failures": 0
+          }
+        },
+        "workers": {
+          "count": 4,
+          "rehosted": 4,
+          "answering": 4,
+          "progressGapMaxMs": 3600,
+          "lostProgress": 0,
+          "repeatedProgress": 0,
+          "failedPings": 0
+        },
+        "sqliteBusy": 0,
+        "runtimeTimeouts": 0,
+        "runtimeRpc": {
+          "requests": 520,
+          "p95Ms": 20.2,
+          "maxMs": 1526,
+          "timeouts": 0,
+          "failures": 0,
+          "hostAlive": true
+        },
+        "deliveryEvidence": {
+          "pending": 16,
+          "uncertain": 8,
+          "retained": 666,
+          "pendingLaunches": 20,
+          "preserved": true
+        },
+        "browser": {
+          "views": 8,
+          "writes": {
+            "count": 2489,
+            "p95Ms": 12,
+            "maxMs": 161,
+            "failures": 0
+          },
+          "readyMaxMs": 11914,
+          "filesP95Ms": 673,
+          "filesMaxMs": 2322,
+          "filesErrors": 0,
+          "viewsWithoutAnswerDuringWrites": 0,
+          "apiMaxMs": 5177,
+          "apiMaxRoute": "/api/external-relay/conversations",
+          "apiErrors": 0,
+          "apiFirstError": null,
+          "apiUnfinished": 0,
+          "bootLagMaxMs": 520,
+          "lagP95Ms": 5,
+          "lagMaxMs": 231,
+          "inputMaxMs": 123,
+          "inputsMin": 2,
+          "selectionsLost": 0,
+          "staleNotices": 0,
+          "server": {
+            "samples": 4545,
+            "bootMaxMs": 1288.2,
+            "p95Ms": 25.5,
+            "maxMs": 4833.4
+          }
+        }
+      },
+      "breaches": [],
+      "timingWarnings": [
+        "runtime-host event-loop gap outside boot 1236ms exceeds 250ms",
+        "curator history main-loop gap 5048ms exceeds 250ms",
+        "rules-window history main-loop gap 4833.4ms exceeds 250ms",
+        "browser board drawn 11914ms exceeds 10000ms",
+        "server event-loop delay while the browser views opened 1288.2ms exceeds 1000ms",
+        "server event-loop delay max under the browser views 4833.4ms exceeds 500ms"
+      ],
+      "ok": true
+    }
+  },
+  "after": {
+    "sourceBaseRevision": "84c2bb2fafad15fd8abc090bdb799d880dd73dce",
+    "sourceTree": {
+      "files": 4541,
+      "sha256": "a0ba766b77157f92f9ae5ba8af341aee3eeff169f45c537ccd43665b7a437551"
+    },
+    "loadAtLaunch": {
+      "loadAverage": [
+        3.109375,
+        6.5234375,
+        5.8271484375
+      ],
+      "cpuCount": 24,
+      "configuredGateCpuPercent": 300,
+      "configuredGateMemoryGiB": 8
+    },
+    "command": "bun src/runtime-host/candidatePerformanceRun.ts",
+    "exitCode": 0,
+    "report": {
+      "checkedAt": "2026-10-19T02:26:00.668Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "hostLoop": {
+          "maxMs": 250
+        },
+        "historyRead": {
+          "maxMs": 250
+        },
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": {
+        "stateHistory": {
+          "hotPipelines": 270,
+          "hotBytes": 33999851,
+          "hotMaxBytes": 515000,
+          "archivedPipelines": 950,
+          "archiveBytes": 110999894,
+          "archiveMaxBytes": 1100000,
+          "tasks": 2450,
+          "taskBytes": 9800000,
+          "memoryRows": 3900,
+          "memoryBytes": 16076756,
+          "scopes": 100,
+          "historyBytes": 12604168,
+          "memoryMaxBytes": 2901685,
+          "curatorPasses": 50
+        },
+        "servingHistory": {
+          "windowMs": 76097,
+          "curatorReads": 1,
+          "curatorMs": 477,
+          "curatorLoopMaxMs": 192,
+          "rulesViews": 1,
+          "rulesMs": 359,
+          "rulesLoopMaxMs": 163.6
+        },
+        "hostLoop": {
+          "records": 1,
+          "malformed": 0,
+          "maxMs": 0
+        },
+        "dataset": {
+          "scale": 1,
+          "rows": 53299,
+          "coldRows": 51099,
+          "payloadBytes": 218266028,
+          "transcripts": 320,
+          "seedMs": 9878,
+          "receipts": {
+            "total": 10971,
+            "failedStructured": 892,
+            "failedLegacy": 122,
+            "conflicted": 133
+          }
+        },
+        "firstBoot": {
+          "registryOpenMs": 287,
+          "firstSnapshotMs": 1244,
+          "coldProjectionMs": 4433,
+          "firstUsableMs": 6094,
+          "eventLoopMaxMs": 329,
+          "coldBuild": {
+            "sequence": 1,
+            "buildMs": 2540.9
+          }
+        },
+        "activation": {
+          "incumbentMs": 2859,
+          "successorMs": 3037,
+          "incumbentCompleted": true,
+          "successorCompleted": true,
+          "eventLoopMaxMs": 434
+        },
+        "grantWrites": {
+          "count": 294,
+          "p50Ms": 2,
+          "p95Ms": 7,
+          "maxMs": 15.2,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "externalWrites": {
+          "count": 545,
+          "p50Ms": 1.8,
+          "p95Ms": 7.6,
+          "maxMs": 21.1,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedOperationReads": {
+          "count": 126,
+          "p50Ms": 0.5,
+          "p95Ms": 1.6,
+          "maxMs": 7.5
+        },
+        "eventLoop": {
+          "p95Ms": 2.6,
+          "maxMs": 428.7
+        },
+        "projection": {
+          "warmBuilds": {
+            "count": 66,
+            "p50Ms": 571.1,
+            "p95Ms": 883.2,
+            "maxMs": 1343.9
+          },
+          "queueWait": {
+            "count": 68,
+            "p50Ms": 3159.7,
+            "p95Ms": 5059.3,
+            "maxMs": 5583.6
+          }
+        },
+        "scopeRequests": {
+          "count": 184,
+          "p50Ms": 162.2,
+          "p95Ms": 2626.1,
+          "maxMs": 5700.7,
+          "scopes": 8,
+          "failures": 0,
+          "maxQueueDepth": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "worker": {
+          "spawns": 1,
+          "timeoutRetirements": 0,
+          "pidStable": true
+        },
+        "stability": {
+          "rounds": 21,
+          "responses": 168,
+          "emptyResponses": 0,
+          "missingRows": 0,
+          "extraRows": 0,
+          "reattributedRows": 0,
+          "missingPins": 0
+        },
+        "handover": {
+          "successor": {
+            "completed": true,
+            "exitCode": 0,
+            "signal": null,
+            "readyMs": 6728,
+            "registryOpenMs": 90,
+            "snapshotMs": 677,
+            "firstProjectionMs": 4110,
+            "archived": 250,
+            "grantMismatches": 0,
+            "adoptionMs": 2184,
+            "adopted": 4
+          },
+          "switched": true,
+          "demotionExitCode": 0,
+          "servingRelease": "successor",
+          "serving": {
+            "requests": 104,
+            "failures": 0
+          }
+        },
+        "workers": {
+          "count": 4,
+          "rehosted": 4,
+          "answering": 4,
+          "progressGapMaxMs": 2502,
+          "lostProgress": 0,
+          "repeatedProgress": 0,
+          "failedPings": 0
+        },
+        "sqliteBusy": 0,
+        "runtimeTimeouts": 0,
+        "runtimeRpc": {
+          "requests": 521,
+          "p95Ms": 8.4,
+          "maxMs": 435,
+          "timeouts": 0,
+          "failures": 0,
+          "hostAlive": true
+        },
+        "deliveryEvidence": {
+          "pending": 16,
+          "uncertain": 8,
+          "retained": 666,
+          "pendingLaunches": 20,
+          "preserved": true
+        },
+        "browser": {
+          "views": 8,
+          "writes": {
+            "count": 2510,
+            "p95Ms": 8,
+            "maxMs": 220,
+            "failures": 0
+          },
+          "readyMaxMs": 17050,
+          "filesP95Ms": 4279,
+          "filesMaxMs": 4279,
+          "filesErrors": 0,
+          "viewsWithoutAnswerDuringWrites": 0,
+          "apiMaxMs": 4279,
+          "apiMaxRoute": "/api/files",
+          "apiErrors": 0,
+          "apiFirstError": null,
+          "apiUnfinished": 0,
+          "bootLagMaxMs": 1834,
+          "lagP95Ms": 0,
+          "lagMaxMs": 670,
+          "inputMaxMs": 764,
+          "inputsMin": 2,
+          "selectionsLost": 0,
+          "staleNotices": 0,
+          "server": {
+            "samples": 5758,
+            "bootMaxMs": 2569.1,
+            "p95Ms": 7.3,
+            "maxMs": 713.4
+          }
+        }
+      },
+      "breaches": [],
+      "timingWarnings": [
+        "browser board drawn 17050ms exceeds 10000ms",
+        "browser main-thread delay before the board drew 1834ms exceeds 1000ms",
+        "browser main-thread delay max 670ms exceeds 500ms",
+        "browser input answer 764ms exceeds 500ms",
+        "server event-loop delay while the browser views opened 2569.1ms exceeds 1000ms",
+        "server event-loop delay max under the browser views 713.4ms exceeds 500ms"
+      ],
+      "ok": true
+    }
+  },
+  "inducedHostStall": {
+    "sourceTree": {
+      "files": 4541,
+      "sha256": "a0ba766b77157f92f9ae5ba8af341aee3eeff169f45c537ccd43665b7a437551"
+    },
+    "command": "bun src/runtime-host/candidatePerformanceRun.ts --scale 0.1 --induce host-loop-stall",
+    "exitCode": 1,
+    "report": {
+      "checkedAt": "2026-10-19T02:30:16.356Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "hostLoop": {
+          "maxMs": 250
+        },
+        "historyRead": {
+          "maxMs": 250
+        },
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": {
+        "stateHistory": {
+          "hotPipelines": 270,
+          "hotBytes": 33999851,
+          "hotMaxBytes": 515000,
+          "archivedPipelines": 950,
+          "archiveBytes": 110999894,
+          "archiveMaxBytes": 1100000,
+          "tasks": 2450,
+          "taskBytes": 9800000,
+          "memoryRows": 3900,
+          "memoryBytes": 16076756,
+          "scopes": 100,
+          "historyBytes": 12604168,
+          "memoryMaxBytes": 2901685,
+          "curatorPasses": 50
+        },
+        "servingHistory": {
+          "windowMs": 75854,
+          "curatorReads": 1,
+          "curatorMs": 1297,
+          "curatorLoopMaxMs": 394,
+          "rulesViews": 1,
+          "rulesMs": 668,
+          "rulesLoopMaxMs": 203.4
+        },
+        "hostLoop": {
+          "records": 2,
+          "malformed": 0,
+          "maxMs": 794
+        },
+        "dataset": {
+          "scale": 0.1,
+          "rows": 5318,
+          "coldRows": 5043,
+          "payloadBytes": 21646524,
+          "transcripts": 320,
+          "seedMs": 1074,
+          "receipts": {
+            "total": 1097,
+            "failedStructured": 89,
+            "failedLegacy": 12,
+            "conflicted": 14
+          }
+        },
+        "firstBoot": {
+          "registryOpenMs": 92,
+          "firstSnapshotMs": 166,
+          "coldProjectionMs": 1996,
+          "firstUsableMs": 2380,
+          "eventLoopMaxMs": 143,
+          "coldBuild": {
+            "sequence": 1,
+            "buildMs": 1162
+          }
+        },
+        "activation": {
+          "incumbentMs": 1198,
+          "successorMs": 1217,
+          "incumbentCompleted": true,
+          "successorCompleted": true,
+          "eventLoopMaxMs": 95
+        },
+        "grantWrites": {
+          "count": 232,
+          "p50Ms": 2.2,
+          "p95Ms": 3.4,
+          "maxMs": 17.1,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "externalWrites": {
+          "count": 458,
+          "p50Ms": 1.9,
+          "p95Ms": 3.6,
+          "maxMs": 15.1,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedOperationReads": {
+          "count": 100,
+          "p50Ms": 0.6,
+          "p95Ms": 0.9,
+          "maxMs": 9.4
+        },
+        "eventLoop": {
+          "p95Ms": 2.3,
+          "maxMs": 76.6
+        },
+        "projection": {
+          "warmBuilds": {
+            "count": 64,
+            "p50Ms": 520.2,
+            "p95Ms": 698.3,
+            "maxMs": 969.1
+          },
+          "queueWait": {
+            "count": 66,
+            "p50Ms": 2779.5,
+            "p95Ms": 3857.4,
+            "maxMs": 4359.7
+          }
+        },
+        "scopeRequests": {
+          "count": 160,
+          "p50Ms": 139.1,
+          "p95Ms": 2593.7,
+          "maxMs": 4606.8,
+          "scopes": 8,
+          "failures": 0,
+          "maxQueueDepth": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "worker": {
+          "spawns": 1,
+          "timeoutRetirements": 0,
+          "pidStable": true
+        },
+        "stability": {
+          "rounds": 18,
+          "responses": 144,
+          "emptyResponses": 0,
+          "missingRows": 0,
+          "extraRows": 0,
+          "reattributedRows": 0,
+          "missingPins": 0
+        },
+        "handover": {
+          "successor": {
+            "completed": true,
+            "exitCode": 0,
+            "signal": null,
+            "readyMs": 2420,
+            "registryOpenMs": 71,
+            "snapshotMs": 235,
+            "firstProjectionMs": 1703,
+            "archived": 0,
+            "grantMismatches": 0,
+            "adoptionMs": 1136,
+            "adopted": 4
+          },
+          "switched": true,
+          "demotionExitCode": 0,
+          "servingRelease": "successor",
+          "serving": {
+            "requests": 80,
+            "failures": 0
+          }
+        },
+        "workers": {
+          "count": 4,
+          "rehosted": 4,
+          "answering": 4,
+          "progressGapMaxMs": 2181,
+          "lostProgress": 0,
+          "repeatedProgress": 0,
+          "failedPings": 0
+        },
+        "sqliteBusy": 0,
+        "runtimeTimeouts": 0,
+        "runtimeRpc": {
+          "requests": 534,
+          "p95Ms": 5.5,
+          "maxMs": 37,
+          "timeouts": 0,
+          "failures": 0,
+          "hostAlive": true
+        },
+        "deliveryEvidence": {
+          "pending": 16,
+          "uncertain": 8,
+          "retained": 67,
+          "pendingLaunches": 20,
+          "preserved": true
+        },
+        "browser": {
+          "views": 8,
+          "writes": {
+            "count": 2514,
+            "p95Ms": 10,
+            "maxMs": 124,
+            "failures": 0
+          },
+          "readyMaxMs": 11839,
+          "filesP95Ms": 311,
+          "filesMaxMs": 1979,
+          "filesErrors": 0,
+          "viewsWithoutAnswerDuringWrites": 0,
+          "apiMaxMs": 3930,
+          "apiMaxRoute": "/api/files",
+          "apiErrors": 0,
+          "apiFirstError": null,
+          "apiUnfinished": 0,
+          "bootLagMaxMs": 2337,
+          "lagP95Ms": 2,
+          "lagMaxMs": 267,
+          "inputMaxMs": 39,
+          "inputsMin": 2,
+          "selectionsLost": 0,
+          "staleNotices": 0,
+          "server": {
+            "samples": 5649,
+            "bootMaxMs": 1949.7,
+            "p95Ms": 15.9,
+            "maxMs": 845
+          }
+        }
+      },
+      "breaches": [
+        "measured at scale 0.1; only the full dataset is a verdict",
+        "registry rows: measured 5318, at least 53000 required",
+        "retained receipts: measured 1097, at least 10971 required",
+        "failed structured receipts: measured 89, at least 892 required",
+        "failed legacy receipts: measured 12, at least 122 required",
+        "conflicted receipts: measured 14, at least 133 required",
+        "retained deliveries: measured 67, at least 666 required"
+      ],
+      "timingWarnings": [
+        "runtime-host event-loop gap outside boot 794ms exceeds 250ms",
+        "curator history main-loop gap 394ms exceeds 250ms",
+        "browser board drawn 11839ms exceeds 10000ms",
+        "browser main-thread delay before the board drew 2337ms exceeds 1000ms",
+        "server event-loop delay while the browser views opened 1949.7ms exceeds 1000ms",
+        "server event-loop delay max under the browser views 845ms exceeds 500ms"
+      ],
+      "induced": [
+        "host-loop-stall"
+      ],
+      "ok": false,
+      "detail": "measured at scale 0.1; only the full dataset is a verdict"
+    }
+  },
+  "controls": {
+    "reportRefusals": {
+      "file": "src/runtime-host/candidatePerformance.test.ts",
+      "cases": [
+        "zero host-loop records",
+        "74999 ms serving window",
+        "missing or malformed readings",
+        "failed history reads",
+        "incomplete generated census"
+      ],
+      "result": "pass"
+    },
+    "realHostWarnings": {
+      "file": "src/runtime-host/candidateRuntimeHost.test.ts",
+      "case": "Two fresh host generations each hold their real main loop for 800 ms; their own records exceed 780 ms and normalize to a passing report with a timing warning.",
+      "result": "pass"
+    },
+    "recoveryTick": {
+      "file": "src/runtime-host/candidateBrowserRun.test.ts",
+      "case": "An 800 ms synchronous request leaves zero timer samples inside its interior. The recovered read includes one delayed timer sample.",
+      "baseResult": "fails: expected one recovery sample, received zero",
+      "headResult": "pass"
+    }
+  },
+  "projectChecks": {
+    "command": "bun scripts/local-gate.ts pre-push",
+    "sourceTree": {
+      "files": 4541,
+      "sha256": "a0ba766b77157f92f9ae5ba8af341aee3eeff169f45c537ccd43665b7a437551"
+    },
+    "exitCode": 0,
+    "newFailures": 0,
+    "preExistingFailures": [
+      {
+        "file": "src/runtime-host/candidatePerformanceRun.test.ts",
+        "test": "a runtime host that stops answering is refused through the adapter and the coordinator, and the serving release is kept",
+        "baseRevision": "84c2bb2fafad15fd8abc090bdb799d880dd73dce",
+        "observation": "The timeout-count assertion fails on both the working tree and the base. The gate sampled the failing base case and classified it as pre-existing."
+      }
+    ],
+    "passed": [
+      "privacy",
+      "typecheck",
+      "changed-file ESLint",
+      "explicit touched tests",
+      "Linux backend and scoped Linux tests",
+      "runtime verdict tests",
+      "Viewer build",
+      "MCP size budgets",
+      "Viewer runtime",
+      "runtime host under pinned Bun 1.4.0",
+      "runtime negative controls",
+      "native Codex 0.154.0",
+      "native Codex 0.159.0",
+      "native Codex shared contracts"
+    ]
+  }
+}
