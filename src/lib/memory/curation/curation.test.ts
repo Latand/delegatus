@@ -6,6 +6,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AgentRegistry } from "@/lib/agent/registry";
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
+import { stopWorktreeSweepWorker } from "@/lib/pipelines/worktreeSweepWorker";
 import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
 import { input as tickInput } from "@/lib/boardMaintenance/testFixture";
 import { roleIsClean } from "../eligibility";
@@ -47,7 +49,16 @@ beforeEach(() => {
   process.env.LLV_STATE_DIR = dir;
   fs.writeFileSync(path.join(dir, "AGENTS.md"), "Run the repository checks before publication.\n");
 });
-afterEach(() => { process.env.LLV_STATE_DIR = previous; if (previous === undefined) delete process.env.LLV_STATE_DIR; fs.rmSync(dir, { recursive: true, force: true }); resetProjectAliasesForTests(); });
+async function cleanupFixture() {
+  // The inherited disk-pressure source keeps a leased helper between reads.
+  // End this fixture's helper before its state and lease record disappear.
+  await stopWorktreeSweepWorker();
+  process.env.LLV_STATE_DIR = previous;
+  if (previous === undefined) delete process.env.LLV_STATE_DIR;
+  fs.rmSync(dir, { recursive: true, force: true });
+  resetProjectAliasesForTests();
+}
+afterEach(cleanupFixture);
 function row(id: string): RoleMemoryRule {
   const held = roleMemoryCollection()!.get(`r:${id}`);
   if (held?.kind !== "rule") throw Error("rule missing");
@@ -151,6 +162,26 @@ function hostingFixture() {
     observe: async () => ({ state: "running" as const }), archive: () => {} };
   return { sources, seats, lives, bodies, seat, ports, controller: productionCurationController(sources, ports), tick: { ...tickInput(), project: PROJECT, now: NOW } };
 }
+// Helper lease records carry kernel identities on Linux.
+test.skipIf(process.platform !== "linux")("curation fixture cleanup stops its recorded disk-pressure helper", async () => {
+  const f = hostingFixture();
+  await f.sources.diskPressure!();
+  const records = fs.readdirSync(path.join(dir, "helpers")).filter(file => file.endsWith(".json"))
+    .map(file => JSON.parse(fs.readFileSync(path.join(dir, "helpers", file), "utf8")))
+    .filter(record => record.name === "worktree-sweep" && record.ownerPid === process.pid);
+  expect(records).toHaveLength(1);
+  const [record] = records;
+  expect(record.ownerIdentity).toBe(captureProcessIdentity(process.pid).startIdentity);
+  const identities = [captureProcessIdentity(record.pid, undefined, record.identity),
+    captureProcessIdentity(record.group, undefined, record.groupIdentity)];
+  for (const identity of identities) expect(processIdentityStatus(identity)).toBe("alive");
+
+  await cleanupFixture();
+
+  for (const identity of identities) expect(processIdentityStatus(identity)).toBe("dead");
+  expect(fs.existsSync(dir)).toBe(false);
+}, 15_000);
+
 test("curator admission joins a hidden system task without an open board task", async () => {
   fixture(); const f = hostingFixture(); f.seat();
   expect(await f.controller.launchIfDue(f.tick)).toContain("launched");

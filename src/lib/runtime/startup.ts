@@ -27,6 +27,7 @@ import { loadPipelineOwnershipForStartupAsync, pipelineRegistryHealthAsync, with
 import {
   adoptClaudeRegistryHosts,
   adoptCodexRegistryHosts,
+  codexBootAdoptionRetired,
   detachCodexHostForViewerRestart,
   demoteSkippedStructuredRegistryHosts,
   reconcileDeadStructuredRegistryHosts,
@@ -1691,7 +1692,7 @@ async function structuredStartupAdoptionFilter(
   };
   return Object.assign((entry: AgentRegistryEntry) => {
     const conversation = conversationsByCurrentEntry.get(sessionKeyId(entry.key));
-    if (!conversation) return false;
+    if (!conversation || codexBootAdoptionRetired(entry)) return false;
     /* A superseded conversation is terminal (issue #383): a boot can never
        revive a retired round, held work or not — the successor owns it. */
     if (conversation.supersededBy) return false;
@@ -1999,7 +2000,7 @@ async function adoptStructuredHostsPass(
   assertActive();
   const delayedRows = new Set(retryEntries.filter(entry => {
     const key = sessionKeyId(entry.key);
-    return rowRetries.get(key)?.resolved || !rowRetries.due(key);
+    return !codexBootAdoptionRetired(entry) && (rowRetries.get(key)?.resolved || !rowRetries.due(key));
   }).map(entry => sessionKeyId(entry.key)));
   const failures = new Map<string, StartupRowReason>();
   const onFailure = (entry: AgentRegistryEntry, error: unknown) => failures.set(sessionKeyId(entry.key), startupRowReason(error));
@@ -2461,6 +2462,7 @@ async function adoptStructuredHostsPass(
     const candidateHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
     const shouldRetainCandidateOrAdopt: StructuredHostAdoptionFilter = (entry) =>
       candidateHostKeys.has(sessionKeyId(entry.key))
+      || codexBootAdoptionRetired(entry)
       /* A row this boot could not read a transcript for is left exactly as it
          was. The demotion below retires a skipped row — it releases the endpoint,
          clears the active turn and can signal an unclaimable Claude orphan — and
@@ -2667,18 +2669,24 @@ async function adoptStructuredHostsPass(
         : [];
     }));
     const retryHostKeys = new Set(waitingContinuationHostKeys);
-    const blockedRows = new Set([...contestedHostKeys, ...(rowRetry ? [...deferredHostKeys, ...held.keys(), ...waitingContinuationHostKeys] : [])]);
+    const failedRows = [...failures.keys()].filter(key => {
+      const entry = heldEntries[key];
+      return entry?.key.engine === "codex" && !codexBootAdoptionRetired(entry);
+    });
+    const blockedRows = new Set([...contestedHostKeys, ...failedRows, ...(rowRetry ? [...deferredHostKeys, ...held.keys(), ...waitingContinuationHostKeys] : [])]);
     const schedule = dependencies.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     for (const entry of retryEntries) {
       const key = sessionKeyId(entry.key);
-      if (blockedRows.has(key)) {
+      const retired = codexBootAdoptionRetired(heldEntries[key] ?? entry);
+      if (blockedRows.has(key) && !retired) {
         await rowRetries.failed(key, failures.get(key) ?? "incumbent-owned", Date.now(), assertActive);
-      } else if (!delayedRows.has(key) && rowRetries.get(key)) {
+      } else if ((!delayedRows.has(key) && rowRetries.get(key))
+        || retired) {
         try {
           await startupRowNotice(entry, null, assertActive);
           await rowRetries.clear(key, assertActive);
         } catch {
-          await rowRetries.failed(key, rowRetries.get(key)!.reason, Date.now(), assertActive, true);
+          await rowRetries.failed(key, rowRetries.get(key)?.reason ?? "missing-rollout", Date.now(), assertActive, true);
           console.error("[structured hosts] quarantine card resolution deferred", { key });
         }
       }
