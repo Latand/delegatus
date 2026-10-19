@@ -1778,6 +1778,14 @@ export function pipelineStartupMemberships(registry: AgentRegistry) {
       }
     }
   }
+  // Pending structured spawns can have membership before an entry exists.
+  // They need the same unreadable-pipeline fence as resident hosts.
+  for (const receipt of registryRowsMatching(snapshot, "receipts", "state", ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"])) {
+    const canonical = resolveConversationAlias(snapshot, receipt.conversationId);
+    for (const id of conversationIdsResolvingTo(snapshot, canonical)) {
+      if (snapshot.memberships[id]) memberships[id] = snapshot.memberships[id];
+    }
+  }
   const resolve = (id: string) => resolveConversationAlias(snapshot, id as ViewerConversationId);
   const byPipeline = new Map<string, string[]>();
   for (const [id, entries] of Object.entries(memberships)) for (const entry of entries) {

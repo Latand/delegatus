@@ -30,6 +30,9 @@ function seeded(root: string, history: number) {
   const alias = "conversation_reader_alias";
   file.conversationAliases[alias] = "conversation_reader_0";
   file.memberships[alias] = [{ ...file.memberships["conversation_reader_0"]![0]!, conversationId: alias }];
+  const pending = "conversation_reader_pending";
+  file.receipts["pending"] = { ...receipt, createdAt: CREATED, launchId: "pending", conversationId: pending, state: "starting", key: null, transport: "structured" };
+  file.memberships[pending] = [{ ...file.memberships["conversation_reader_0"]![0]!, conversationId: pending, containerId: "lane-pending" }];
   return file;
 }
 test("retirement and startup membership payload reads stay flat across tenfold registry history, cold and reopened", async () => {
@@ -59,7 +62,8 @@ test("retirement and startup membership payload reads stay flat across tenfold r
             structuredHostEntries: () => [snapshot.entries["codex:reader-0"]!] } as AgentRegistry;
           reads = 0;
           const selected = pipelineStartupMemberships(registry);
-          expect(Object.keys(selected.memberships)).toEqual(["conversation_reader_0", "conversation_reader_alias"]);
+          expect(Object.keys(selected.memberships)).toEqual(["conversation_reader_0", "conversation_reader_alias", "conversation_reader_pending"]);
+          expect(selected.byPipeline.get("lane-pending")).toEqual(["conversation_reader_pending"]);
           expect(selected.resolve("conversation_reader_alias")).toBe("conversation_reader_0");
           expect(selected.byPipeline.get("lane-0")).toEqual(["conversation_reader_0", "conversation_reader_alias"]);
           counts.push(reads);
