@@ -50,8 +50,8 @@ export function installPipelineControllerReferences(db: Database, directory: str
     const cte = `WITH controller_source AS MATERIALIZED (SELECT jsonb(${source}) AS payload),
       controller_runs AS MATERIALIZED (SELECT r.key,
         jsonb_object('stageId',json_extract(r.value,'$.stageId'),
-          'attemptCount',json_array_length(r.value,'$.attempts'),
-          'tailHistorical',COALESCE(json_extract(r.value,'$.attempts[#-1].historical'),0)) AS metadata,
+          'lastOperational',(SELECT MAX(CAST(candidate.key AS INTEGER)) FROM json_each(r.value,'$.attempts') candidate
+            WHERE COALESCE(json_extract(candidate.value,'$.historical'),0)=0)) AS metadata,
         jsonb_extract(r.value,'$.attempts') AS attempts FROM controller_source,json_each(payload,'$.runs') r),
       controller_attempts AS MATERIALIZED (SELECT r.key AS run,a.key,jsonb(a.value) AS payload
         FROM controller_runs r,json_each(r.attempts) a),
@@ -60,9 +60,8 @@ export function installPipelineControllerReferences(db: Database, directory: str
         FROM controller_source,json_each(payload,'$.unconfirmedHosts') h)`;
     const field = (name: string) => `json_extract(${value},'$.${name}')`;
     const released = `(COALESCE(json_extract(${attemptValue},'$.historical'),0)=0
-      AND (${field("state")} IN ('completed','closed') OR (
-        json_extract(${runValue},'$.tailHistorical')=0
-        AND CAST(a.key AS INTEGER)<json_extract(${runValue},'$.attemptCount')-1)))`;
+      AND (${field("state")} IN ('completed','closed')
+        OR CAST(a.key AS INTEGER)<json_extract(${runValue},'$.lastOperational')))`;
     const op = field("delivery.operation");
     // Same fail-closed publication custody as pipelineHostHasLiveWork.
     const publishing = `((${op} IS NOT NULL AND (

@@ -95,11 +95,14 @@ export function pipelineHostHasLiveWork(
   let releasedConversation = false, releasedPath = false;
   for (const pipeline of pipelines) {
     if (publicationHasCustody(pipeline)) continue;
-    for (const run of pipeline.runs) for (const attempt of run.attempts) {
-      if (!pipelineAttemptReleased(pipeline, attempt, run.attempts.at(-1))
-        || attempt.activation && attempt.activation.phase !== "settled") continue;
-      releasedConversation ||= sameConversation(attempt.conversationId);
-      releasedPath ||= samePath(attempt.agentPath);
+    for (const run of pipeline.runs) {
+      const latest = run.attempts.findLast(attempt => !attempt.historical);
+      for (const attempt of run.attempts) {
+        if (!pipelineAttemptReleased(pipeline, attempt, latest)
+          || attempt.activation && attempt.activation.phase !== "settled") continue;
+        releasedConversation ||= sameConversation(attempt.conversationId);
+        releasedPath ||= samePath(attempt.agentPath);
+      }
     }
   }
   for (const pipeline of pipelines) {
@@ -108,21 +111,24 @@ export function pipelineHostHasLiveWork(
     if ((publishing && (sourceConversation || sourcePath))
       || (!["completed", "closed"].includes(pipeline.state)
         && ((sourceConversation && !releasedConversation) || (sourcePath && !releasedPath)))) return true;
-    for (const run of pipeline.runs) for (const attempt of run.attempts) {
-      const matches = sameConversation(attempt.conversationId) || samePath(attempt.agentPath)
-        || (!!target.paneId && attempt.paneId === target.paneId)
-        || (!!target.launchId && attempt.launchId === target.launchId)
-        || (!!target.sessionId && attempt.sessionId === target.sessionId);
-      if (!matches) continue;
-      // The production callback supplies this object only after proving the cut
-      // and re-reading the same pipeline snapshot. Publication keeps custody.
-      if (!publishing && attempt === recoveryAttempt) continue;
-      // Completion stamps can survive a restart/resume. A running owner still
-      // holds the host, even with an older verdict on the same attempt.
-      if (publishing || (!pipelineAttemptReleased(pipeline, attempt, run.attempts.at(-1))
-        && (["pending", "spawning", "running", "reviewing", "committing"].includes(attempt.state)
-          || !(attempt.verdict || attempt.completedAt)))
-        || (attempt.activation && attempt.activation.phase !== "settled")) return true;
+    for (const run of pipeline.runs) {
+      const latest = run.attempts.findLast(attempt => !attempt.historical);
+      for (const attempt of run.attempts) {
+        const matches = sameConversation(attempt.conversationId) || samePath(attempt.agentPath)
+          || (!!target.paneId && attempt.paneId === target.paneId)
+          || (!!target.launchId && attempt.launchId === target.launchId)
+          || (!!target.sessionId && attempt.sessionId === target.sessionId);
+        if (!matches) continue;
+        // The production callback supplies this object only after proving the cut
+        // and re-reading the same pipeline snapshot. Publication keeps custody.
+        if (!publishing && attempt === recoveryAttempt) continue;
+        // Completion stamps can survive a restart/resume. A running owner still
+        // holds the host, even with an older verdict on the same attempt.
+        if (publishing || (!pipelineAttemptReleased(pipeline, attempt, latest)
+          && (["pending", "spawning", "running", "reviewing", "committing"].includes(attempt.state)
+            || !(attempt.verdict || attempt.completedAt)))
+          || (attempt.activation && attempt.activation.phase !== "settled")) return true;
+      }
     }
   }
   return false;

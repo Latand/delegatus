@@ -180,17 +180,20 @@ for (const terminal of ["budget-spent", "outside-merge", "closed", "successor"] 
   });
 }
 
-test("a superseded unstamped attempt retires while the current attempt retains its host", async () => {
+test.each([false, true])("a superseded unstamped attempt retires while the current attempt retains its host (adopted tail: %s)", async adoptedTail => {
   const h = harness();
   const record = pipelineRecord({ id: "retire-superseded", state: "paused",
     attempts: [attempt(1, "conversation_superseded", false), attempt(2, "conversation_current", false)] });
+  if (adoptedTail) record.runs[0]!.attempts.push({ ...attempt(3, "conversation_helper", false), historical: true });
   savePipelines([record]);
   for (const id of ["conversation_superseded", "conversation_current"]) h.resident.set(id, true);
   h.active.set("conversation_superseded", false);
   h.active.set("conversation_current", true);
+  if (adoptedTail) { h.resident.set("conversation_helper", true); h.active.set("conversation_helper", true); }
   await tickPipelinesController([], h.ports);
   expect(h.stops).toEqual(["implement:1:conversation_superseded"]);
   expect(h.resident.get("conversation_current")).toBe(true);
+  if (adoptedTail) expect(h.resident.get("conversation_helper")).toBe(true);
 });
 
 test("an open successor does not retain its finished creator's host", async () => {

@@ -104,6 +104,16 @@ test.each(["completed", "closed", "superseded"] as const)("the production idle c
   expect(f.signals).toEqual([987001, 987002]);
 });
 
+test("a superseded operational attempt retires ahead of adopted historical work", async () => {
+  const f = fixture();
+  const current = { ...f.attempt, n: 2, conversationId: "conversation_current", sessionId: "current-session", agentPath: "current-transcript" };
+  const helper = { ...current, n: 3, historical: true, conversationId: "conversation_helper", sessionId: "helper-session", agentPath: "helper-transcript" };
+  f.pipeline.runs[0]!.attempts = [f.attempt, current, helper];
+  expect(await f.retire()).toBe(true);
+  expect(f.signals).toEqual([987001, 987002]);
+  for (const attempt of [current, helper]) expect(pipelineHostHasLiveWork([f.pipeline], attempt)).toBe(true);
+});
+
 test.each([false, true])("terminal adopted work requires an idle turn at production actuation: %s", async resumed => {
   const f = fixture();
   f.pipeline.state = "completed";

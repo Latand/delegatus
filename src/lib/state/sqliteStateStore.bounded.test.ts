@@ -59,6 +59,34 @@ test.each([0, 512])("indexed successor-source custody follows released parents, 
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("indexed superseded operational hosts remain terminal ahead of adopted helpers", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-superseded-helper-"));
+  const filename = path.join(dir, "state.sqlite");
+  const row = { key: "owner", state: "paused", runs: [{ stageId: "build", attempts: [
+    { n: 1, state: "running", historical: false, conversationId: "superseded-host" },
+    { n: 2, state: "running", historical: false, conversationId: "current-host" },
+    { n: 3, state: "running", historical: true, conversationId: "helper-host" },
+  ] }] };
+  const options = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (value: typeof row) => value.key,
+    decode: (raw: unknown) => raw as typeof row, clone: (value: typeof row) => structuredClone(value) };
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "one", loadRecords: () => [row] }]);
+    const store = new SqliteStateCollection(filename, options), peer = new Database(filename);
+    try {
+      const live = (id: string) => store.pipelineOwnerExists([["conversationId", id]], true);
+      expect(live("superseded-host")).toBe(false);
+      expect(store.pipelineOtherTerminalHosts("owner", [])).toBe(true);
+      expect(live("current-host")).toBe(true);
+      expect(live("helper-host")).toBe(true);
+      peer.exec("UPDATE state_rows SET value_json=json_set(value_json,'$.runs[0].attempts[2].historical',json('false')) WHERE row_key='owner'");
+      expect(live("current-host")).toBe(false);
+      expect(live("helper-host")).toBe(true);
+      peer.exec("UPDATE state_rows SET value_json=json_set(value_json,'$.runs[0].attempts[2].historical',json('true')) WHERE row_key='owner'");
+      expect(live("current-host")).toBe(true);
+    } finally { peer.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("retirement upgrade re-enrols a terminal host missed by the old projection across a process restart", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-retirement-upgrade-"));
   const filename = path.join(dir, "state.sqlite");
