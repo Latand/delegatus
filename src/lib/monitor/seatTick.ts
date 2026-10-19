@@ -8,7 +8,7 @@ import { isTerminalHighSignalEvent } from "@/lib/lifecycle/vocabulary";
 
 import { seatTickRetryGuardRef, seatTickSourceGapRef, ORCHESTRATOR_ALERT_REF, SEAT_TICK_SETTINGS_REF } from "./cards";
 import { evidenceStallReason } from "./classify";
-import { seatTickReminders, taskHasBlocker, reminderDeliveredVersion, pauseReminderReady, isReminderVersion, recentReminderVersion } from "./seatTickReminders";
+import { seatTickReminders, taskHasBlocker, reminderDeliveredVersion, pauseReminderReady, recentReminderVersion } from "./seatTickReminders";
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
@@ -2333,7 +2333,7 @@ function mergeAgendaVersions(before: readonly string[], delivered: readonly stri
   const replaced = new Set(delivered.map(key));
   const merged = [...before.filter(token => !replaced.has(key(token))), ...new Set(delivered)];
   const reminders = merged.filter(token => recentReminderVersion(token, now));
-  const ordinary = merged.filter(token => !isReminderVersion(token));
+  const ordinary = merged.filter(token => !recentReminderVersion(token, now));
   if (!activeStallTokens) return [...ordinary.slice(-2000), ...reminders];
   const active = new Set(activeStallTokens.map(token => `stall:${createHash("sha256").update(token).digest("hex")}`));
   const retained = ordinary.filter(token => active.has(token));

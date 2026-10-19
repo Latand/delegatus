@@ -149,6 +149,22 @@ test("accepted reminders drain a deterministic bounded agenda without a retry-gu
   expect(ids).toEqual(Array.from({ length: 7 }, (_, i) => `work-${i}`));
 });
 
+test("an agenda longer than a day names unseen accepted work before repeating old reminders", () => {
+  const tasks = Array.from({ length: 26 }, (_, i) => card({ id: `due-${String(i).padStart(2, "0")}`, accepted: true,
+    status: "inbox", updatedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() }));
+  let state = emptySeatTickState();
+  const shown: string[] = [];
+  for (let i = 0; i < tasks.length; i++) {
+    const now = NOW + i * 61 * MINUTE;
+    const d = seatTickDecision(input({ tasks, now, state, policy: { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 1 } }));
+    expect(d.verdict.kind).toBe("wake");
+    if (d.verdict.kind !== "wake") return;
+    shown.push(...d.verdict.items.map(item => item.id));
+    state = seatTickWakeCommit(d.state, plan(d.verdict, "fp-1", 0), now);
+  }
+  expect(shown).toEqual(tasks.map(task => task.id));
+});
+
 test("unrelated history eviction and seat rotation cannot repeat a reminder early", async () => {
   const task = card({ accepted: true, status: "inbox", updatedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() });
   const first = seatTickDecision(input({ tasks: [task] }));

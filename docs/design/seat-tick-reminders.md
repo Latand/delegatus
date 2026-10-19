@@ -44,10 +44,12 @@ delivered-item ledger stores the stamp, only after the complete item was
 delivered. Failed sends and cropped bullets earn no stamp. Reminder stamps
 survive process restarts and seat rotation. The agenda still has its configured
 item limit and wake interval. The ledger retains its existing bounded history
-and eviction rule for ordinary agenda history. Reminder stamps are retained
-for their 24-hour window independently of that history cap; the next landed
-wake removes expired stamps. Their size is bounded by delivered reminders
-within that window, with one stamp per task or pause episode.
+and eviction rule for ordinary agenda history. Reminder stamps are protected
+for their 24-hour window independently of that history cap, then join its
+bounded history. Their protected size is bounded by delivered reminders
+within that window, with one stamp per task or pause episode. Reminder order
+uses the first wait instant or the last delivery plus the repeat bound, so an
+agenda that spans more than a day can finish naming unseen work.
 
 The composer uses the task and lane projections already gathered for the
 check. Account conditions read cached quota rows once per needed engine, with

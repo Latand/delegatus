@@ -41,7 +41,7 @@ export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
     const [key, stamp] = version.split("@");
     if (Number.isFinite(Number(stamp))) shown.set(key!, Number(stamp));
   }
-  const items: SeatTickItem[] = [];
+  const items: { dueAt: number; item: SeatTickItem }[] = [];
   for (const task of input.tasks) {
     if (!task.accepted || !["inbox", "assigned"].includes(task.status) || task.owned || task.runsOn || taskHasBlocker(task, input.now)) continue;
     const since = Date.parse(task.waitingSince ?? task.updatedAt ?? "");
@@ -49,9 +49,10 @@ export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
     const key = `${PREFIX}task:${createHash("sha256").update(task.id).digest("hex")}`;
     const last = shown.get(key);
     if (last !== undefined && input.now - last < SEAT_REMINDER_REPEAT_MS) continue;
-    items.push({ kind: "task", reminderKind: "task", id: task.id, occurredAt: new Date(since).toISOString(),
+    items.push({ dueAt: last === undefined ? since : Math.max(since, last + SEAT_REMINDER_REPEAT_MS), item: {
+      kind: "task", reminderKind: "task", id: task.id, occurredAt: new Date(since).toISOString(),
       itemVersion: `${key}@${input.now}`,
-      label: `${task.title} — accepted work, no open lane; waited ${Math.floor((input.now - since) / SEAT_REMINDER_AFTER_MS)}h` });
+      label: `${task.title} — accepted work, no open lane; waited ${Math.floor((input.now - since) / SEAT_REMINDER_AFTER_MS)}h` } });
   }
   for (const pipeline of input.pipelines) {
     if (!pauseReminderReady(pipeline, input.now)) continue;
@@ -59,10 +60,13 @@ export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
     const key = `${PREFIX}pause:${createHash("sha256").update(`${pipeline.id}:${pipeline.pauseGeneration ?? since ?? "legacy"}`).digest("hex")}`;
     const last = shown.get(key);
     if (last !== undefined && input.now - last < SEAT_REMINDER_REPEAT_MS) continue;
-    const hours = since && Number.isFinite(Date.parse(since)) ? `${Math.floor((input.now - Date.parse(since)) / SEAT_REMINDER_AFTER_MS)}h` : "an unknown time";
-    items.push({ kind: "pipeline", reminderKind: "pause", id: pipeline.id, occurredAt: since,
+    const parsed = Date.parse(since ?? "");
+    const firstDue = Number.isFinite(parsed) ? parsed : input.now;
+    items.push({ dueAt: last === undefined ? firstDue : Math.max(firstDue, last + SEAT_REMINDER_REPEAT_MS), item: {
+      kind: "pipeline", reminderKind: "pause", id: pipeline.id, occurredAt: since,
       itemVersion: `${key}@${input.now}`,
-      label: `${pipeline.title} — paused for ${hours}; reason: ${pipeline.pause?.reason ?? "not recorded"}; ${pipeline.pause?.resumeCondition ? "resume condition is met" : "no resume condition recorded; review the pause"}; use pipeline_action resume when ready` });
+      label: `${pipeline.title} — paused; reason: ${pipeline.pause?.reason ?? "not recorded"}; ${pipeline.pause?.resumeCondition ? "resume condition is met" : "no resume condition recorded; review the pause"}; use pipeline_action resume when ready` } });
   }
-  return items.sort((a, b) => (a.occurredAt ?? "").localeCompare(b.occurredAt ?? "") || a.id.localeCompare(b.id));
+  return items.sort((a, b) => a.dueAt - b.dueAt || a.item.id.localeCompare(b.item.id) || a.item.kind.localeCompare(b.item.kind))
+    .map(entry => entry.item);
 }
