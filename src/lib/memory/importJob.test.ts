@@ -301,6 +301,56 @@ test("state and backup destinations overlapping a source store are refused befor
   expect(readImportCandidates("fixture-1").candidates).toEqual([]);
 });
 
+test("the import lock cannot delete a stale source ticket through an aliased queue", async () => {
+  const source = path.join(memory(), "history.json");
+  await write(source, "Preserve source history.");
+  const queue = path.join(process.env.LLV_STATE_DIR!, "backups", "engine-memory", "import-job.write-locks");
+  await fs.mkdir(path.dirname(queue), { recursive: true });
+  await fs.symlink(memory(), queue);
+  await fs.utimes(source, new Date(0), new Date(0));
+
+  await expect(run()).rejects.toThrow("backup_refused");
+  expect(await fs.readFile(source, "utf8")).toBe("Preserve source history.");
+  expect(await fs.readdir(memory())).toEqual(["history.json"]);
+  expect(readMemorySourceFile()).toBeNull();
+});
+
+test("an engine source store inside an older backup is refused before retention", async () => {
+  await write(path.join(memory(), "topic.md"), "Keep this live engine source.");
+  const first = await run("fixture-1");
+  const firstManifest = JSON.parse(await fs.readFile(path.join(first.backup, "manifest.json"), "utf8"));
+  const topicEntry = firstManifest.files.find((file: { file: string }) => file.file.endsWith("topic.md"));
+  const copiedStore = path.join(first.backup, path.dirname(topicEntry.copy));
+  await fs.rm(memory(), { recursive: true });
+  await fs.mkdir(path.dirname(memory()), { recursive: true });
+  await fs.symlink(copiedStore, memory());
+
+  await expect(run("fixture-2")).rejects.toThrow("backup_refused");
+  expect(await fs.readFile(path.join(memory(), "topic.md"), "utf8")).toBe("Keep this live engine source.");
+  expect(await fs.readFile(path.join(first.backup, topicEntry.copy), "utf8")).toBe("Keep this live engine source.");
+  expect(readImportRecord("fixture-2")).toBeNull();
+});
+
+test("an index reached first by a topic alias produces no candidate and preserves loaded reachability", async () => {
+  const rootIndex = path.join(memory(), "MEMORY.md");
+  const topic = path.join(memory(), "topic.md");
+  await write(rootIndex, "- [Topic](topic.md)\n");
+  await write(topic, "Root index alias fixture topic.\n");
+  await write(path.join(memory(), "CLAUDE.md"), "Instruction fixture; do not import.\n");
+  await fs.symlink(rootIndex, path.join(memory(), "000-alias.md"));
+  await fs.symlink(path.join(memory(), "CLAUDE.md"), path.join(memory(), "000-instruction.md"));
+
+  const result = await run();
+  const { candidates } = readImportCandidates("fixture-1");
+  expect(candidates).toHaveLength(1);
+  expect(candidates[0]).toMatchObject({ body: "Root index alias fixture topic.\n", loadedAtStart: true });
+  const manifest = JSON.parse(await fs.readFile(path.join(result.backup, "manifest.json"), "utf8"));
+  expect(manifest.files.filter((file: { file: string }) => file.file.endsWith("MEMORY.md"))).toHaveLength(1);
+  expect(manifest.files.filter((file: { file: string }) => file.file.endsWith("000-alias.md"))).toHaveLength(0);
+  expect(manifest.files.filter((file: { file: string }) => file.file.endsWith("CLAUDE.md"))).toHaveLength(1);
+  expect(manifest.files.filter((file: { file: string }) => file.file.endsWith("000-instruction.md"))).toHaveLength(0);
+});
+
 test("root index links retain reachability when an earlier alias wins physical-file deduplication", async () => {
   await write(path.join(memory(), "MEMORY.md"), "- [Topic](z-listed.md)\n");
   await write(path.join(memory(), "topic.md"), "Reachable fixture topic.\n");

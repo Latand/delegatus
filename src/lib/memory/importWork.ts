@@ -96,7 +96,8 @@ function assertCurrent(id: string) {
 async function inventory(roots: ImportRoots, projectForSlug: (slug: string) => string | Promise<string>) {
   const files: (Omit<ImportManifestFile, "copy" | "sha256"> & { source: string; store: string; physical: string })[] = [];
   const stores = new Set<string>();
-  const seenStores = new Set<string>(), seenFiles = new Set<string>();
+  const seenStores = new Set<string>(), seenFiles = new Map<string, number>();
+  const identityPriority = (kind: ImportManifestFile["kind"], relative: string) => kind === "claude_index" ? relative === "MEMORY.md" ? 4 : 3 : kind === "codex_summary" ? 3 : kind === "history" ? 2 : 1;
   async function store(engine: "claude" | "codex", home: string, directory: string, project: string | null) {
     let real: string;
     try { real = await fs.realpath(directory); } catch (error) { if (missing(error)) return; throw error; }
@@ -115,12 +116,21 @@ async function inventory(roots: ImportRoots, projectForSlug: (slug: string) => s
         if (!within(real, resolved)) throw new MemoryImportError("backup_refused");
         const stat = await fs.stat(source);
         if (stat.isDirectory()) await walk(source, depth + 1);
-        else if (stat.isFile() && !seenFiles.has(resolved)) {
-          seenFiles.add(resolved);
+        else if (stat.isFile()) {
           const relative = path.relative(directory, source);
-          const kind = engine === "claude" ? name === "MEMORY.md" ? "claude_index" : name.endsWith(".md") && !["CLAUDE.md", "AGENTS.md", "SKILL.md"].includes(name) && !relative.split(path.sep).some(segment => ["rules", "skills", ".git"].includes(segment)) ? "claude_topic" : "history"
+          const kind: ImportManifestFile["kind"] = engine === "claude" ? name === "MEMORY.md" ? "claude_index" : name.endsWith(".md") && !["CLAUDE.md", "AGENTS.md", "SKILL.md"].includes(name) && !relative.split(path.sep).some(segment => ["rules", "skills", ".git"].includes(segment)) ? "claude_topic" : "history"
             : relative === "memory_summary.md" ? "codex_summary" : "history";
-          files.push({ source, store: directory, physical: resolved, home, file: path.relative(home, source), engine, kind, size: stat.size, modifiedAt: stat.mtime.toISOString(), project, loadedAtStart: kind === "codex_summary" || kind === "claude_index" && relative === "MEMORY.md" });
+          const loadedAtStart = kind === "codex_summary" || kind === "claude_index" && relative === "MEMORY.md";
+          const existing = seenFiles.get(resolved);
+          const current = { source, store: directory, physical: resolved, home, file: path.relative(home, source), engine, kind, size: stat.size, modifiedAt: stat.mtime.toISOString(), project, loadedAtStart };
+          if (existing === undefined) {
+            seenFiles.set(resolved, files.length);
+            files.push(current);
+          } else {
+            const prior = files[existing]!;
+            const priorRelative = path.relative(prior.store, prior.source);
+            if (identityPriority(kind, relative) > identityPriority(prior.kind, priorRelative)) files[existing] = current;
+          }
         } else if (!stat.isDirectory() && !stat.isFile()) throw new MemoryImportError("backup_refused");
       }
     }
@@ -159,9 +169,22 @@ export async function runMemoryImportWork(request: ImportRequest, ports: Ports =
     }
     return path.resolve(await fs.realpath(existing), ...suffix);
   };
-  for (const target of [directory, backups, parent, path.join(directory, "state.sqlite")]) {
-    const resolved = await resolvedDestination(target);
-    if (stores.some(store => within(store, resolved))) throw new MemoryImportError("backup_refused");
+  const transaction = path.join(parent, "import-job");
+  const lockPath = `${transaction}.write-lock`;
+  const queuePath = `${transaction}.write-locks`;
+  try {
+    for (const [target, expected] of [[directory, "directory"], [backups, "directory"], [parent, "directory"], [path.join(directory, "state.sqlite"), "file"], [transaction, "none"], [lockPath, "lock"], [queuePath, "queue"]] as const) {
+      const stat = await fs.lstat(target).catch(error => { if (missing(error)) return null; throw error; });
+      if (stat && (expected === "directory" && (!stat.isDirectory() || stat.isSymbolicLink()) || expected === "file" && (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) || expected === "none" || expected === "lock" && (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) || expected === "queue" && (!stat.isDirectory() || stat.isSymbolicLink()))) throw new MemoryImportError("backup_refused");
+    }
+    for (const target of [directory, backups, parent, path.join(directory, "state.sqlite"), transaction, lockPath, queuePath]) {
+      const resolved = await resolvedDestination(target);
+      if (stores.some(store => within(store, resolved) || within(resolved, store))) throw new MemoryImportError("backup_refused");
+    }
+  } catch (error) {
+    const state = await resolvedDestination(directory);
+    if (stores.some(store => within(store, state) || within(state, store))) throw error;
+    return rejectPreflight(error, request);
   }
   await privateDirectory(directory);
   await privateDirectory(backups); await privateDirectory(parent); await outsideCheckout(parent);
