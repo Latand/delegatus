@@ -95,7 +95,7 @@ test("the loop stays within 50 ms while counting 87 retained release trees", asy
     setInterval(() => Atomics.add(pulses, 0, 1), 10);
     parentPort.postMessage("ready");
   `, { eval: true, workerData: heartbeat });
-  let heartbeatError: Error | undefined;
+  let heartbeatError: unknown;
   worker.on("error", error => { heartbeatError = error; });
   let timer: ReturnType<typeof setInterval> | undefined;
   let lastTicks = 0;
