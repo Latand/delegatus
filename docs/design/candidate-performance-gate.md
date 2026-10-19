@@ -14,6 +14,61 @@ requests at the window boundary and drains the captured in-flight requests for
 up to 30 seconds before deciding whether any went unanswered. Young in-flight
 requests in older reports retain their former within-budget result.
 
+## State-history and minute-timer coverage (RG2)
+
+`src/runtime-host/candidateStateDataset.ts`, called by
+`src/runtime-host/candidatePerformanceRun.ts`, generates
+270 hot pipelines (34 MB; largest 515 KB), 950 archived pipelines (111 MB;
+largest 1.1 MB), 2,450 tasks (9.8 MB), and 3,900 role-memory rows (about
+16 MB). One hundred scope rows carry 12.6 MB of generated history, including
+a 2.9 MB row, and one project retains 50 curator passes. The generator accepts
+a fresh state directory; it reads no installation data. Tasks go through the
+production importer so its receipt accompanies the generated rows.
+
+After the browser warm-up the production Viewer serves for at least 75 seconds.
+The done sweep, attention reconcile and runtime host's minute maintenance run
+on their production timers. One cold curator read and one HTTP rules-window
+view run during this window. The curator read uses a dedicated source process
+over the same state; the rules view uses the production HTTP route. The report
+keeps their durations and main-loop gaps separately: a long cooperative read can finish without a blocking gap.
+The rules probe includes the first timer tick after the response, capped by
+the serving window, so a fully synchronous request cannot appear to have zero
+lag merely because its timer had no turn before the reply. A native regression
+case reproduces that empty interval and requires the recovery sample.
+The loop-gap thresholds for those reads and for the runtime host outside boot
+are 250 ms, reported as `timingWarnings` under the policy from #3058.
+
+The runtime-host collector frames complete diagnostic lines across pipe
+chunks and checks the payload's process identity and role. A minute performance
+summary proves collection on a quiet host. Boot records and gaps crossing the
+warm-up boundary are excluded; malformed, dropped or overflowing diagnostics
+refuse the run. A missing host reading or a serving window below 75 seconds
+refuses as missing evidence. An incomplete generated census or a failed read
+also refuses; durations alone never refuse promotion.
+
+`--induce host-loop-stall` holds the real host loop for 800 ms during the
+serving window. Its own gap record must appear as a timing warning; the induced
+fault keeps that rehearsal refused. The evidence for adoption is recorded in
+`evidence/candidate-state-history.json`.
+
+The adoption pair uses `a25592be` before L1/L2/L4 and the stage's main base
+`84c2bb2f` after those fixes, with the same harness, generated census, eight
+browser views and two writers. Both full runs pass; the old code reports the
+new timing warnings. Commands, source digests and full measurements are in the
+evidence file.
+
+| Observation | Before | After |
+| --- | ---: | ---: |
+| Serving window after warm-up | 75,631 ms | 76,097 ms |
+| Host gap above 250 ms | 1,236 ms | none reported |
+| Curator main-loop gap | 5,048 ms | 192 ms |
+| Rules-window main-loop gap | 4,833.4 ms | 163.6 ms |
+
+The after-run retains unrelated browser timing warnings. The induced host
+control, with the registry reduced to one tenth and the state history still
+full size, records a 794 ms host gap as a warning and refuses the induced run.
+The native recovery-tick test fails on the base and passes with the probe fix.
+
 ## What went wrong
 
 Release 05d66b73 (#2714) moved terminal registry history into an archive

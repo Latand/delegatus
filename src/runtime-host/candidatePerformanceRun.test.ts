@@ -26,7 +26,9 @@ async function runGate(args: string[], env: Record<string, string> = {}): Promis
   });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   if (!stdout.includes(CANDIDATE_PERFORMANCE_REPORT_PREFIX)) throw new Error(`the gate printed no report (exit ${code}): ${stderr.slice(-2_000)}`);
-  return { code, report: parseCandidatePerformanceReport(stdout), stdout };
+  const report = parseCandidatePerformanceReport(stdout);
+  if (!report.measurements) console.error(report.detail);
+  return { code, report, stdout };
 }
 
 /** What a refused candidate must still keep: speed and its own release are the only things it may lose. */

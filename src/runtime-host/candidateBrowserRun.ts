@@ -18,6 +18,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 import type { CandidateBrowserMeasurements, CandidateBrowserServerLoop, CandidateBrowserView } from "./candidateBrowser";
 import { CANDIDATE_BROWSER_STREAM_ROUTES, summarizeBrowserViews } from "./candidateBrowser";
@@ -51,7 +52,7 @@ export interface ServerLoopProbe {
   /** The process the probe is watching, once it has started. */
   pid(): number | null;
   /** The server's event loop between two wall-clock instants; null when it did not answer. */
-  read(from: number, to: number): Promise<ServerLoopWindow | null>;
+  read(from: number, to: number, recoveryTo?: number): Promise<ServerLoopWindow | null>;
   /** Hold the server's event loop once, for the gate's own refusal tests. */
   stall(ms: number): void;
 }
@@ -69,9 +70,9 @@ export function serverLoopProbe(prefix: string): ServerLoopProbe {
     pid() {
       try { return Number(fs.readFileSync(`${prefix}.pid`, "utf8")) || null; } catch { return null; }
     },
-    async read(from, to) {
+    async read(from, to, recoveryTo) {
       const id = `window-${asked += 1}`;
-      fs.writeFileSync(`${prefix}.ask.tmp`, JSON.stringify({ id, from, to }));
+      fs.writeFileSync(`${prefix}.ask.tmp`, JSON.stringify({ id, from, to, recoveryTo }));
       fs.renameSync(`${prefix}.ask.tmp`, `${prefix}.ask`);
       /* The probe looks every 100 ms of its own loop; a server held longer answers late. */
       for (const until = performance.now() + 15_000; performance.now() < until; await Bun.sleep(50)) {
@@ -138,6 +139,8 @@ export interface BrowserViewDiagnostics {
 }
 
 export interface BrowserRunResult {
+  /** The actual operating interval, ending before request drain or cleanup. */
+  operatingWindow: { fromUtcMs: number; toUtcMs: number; durationMs: number };
   views: CandidateBrowserView[];
   diagnostics: BrowserViewDiagnostics[];
   /** The server's event-loop delays of 100 ms or more, with the wall clock each ended at. */
@@ -206,10 +209,19 @@ export async function measureBoardInBrowser(options: {
 }): Promise<BrowserRunResult> {
   const { chromium } = await import("playwright-core");
   const windowMs = options.windowMs ?? CANDIDATE_BROWSER_WINDOW_MS;
+  // Chromium's singleton socket must fit AF_UNIX even under a long stage root.
+  // The descriptor aliases this owned directory without creating another root.
+  const chromeTmp = fs.mkdtempSync(path.join(os.tmpdir(), "candidate-chrome-"));
+  const chromeFd = process.platform === "linux" ? fs.openSync(chromeTmp, "r") : null;
+  const cleanChromeTmp = () => {
+    if (chromeFd !== null) fs.closeSync(chromeFd);
+    fs.rmSync(chromeTmp, { recursive: true, force: true });
+  };
   const browser = await chromium.launch({
     args: ["--no-sandbox", "--disable-dev-shm-usage"],
+    env: { ...process.env, TMPDIR: chromeFd === null ? chromeTmp : `/proc/${process.pid}/fd/${chromeFd}` },
     ...(options.executablePath ? { executablePath: options.executablePath } : {}),
-  });
+  }).catch(error => { cleanChromeTmp(); throw error; });
   let writers: ReturnType<typeof startWriters> | null = null;
   let operating: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -286,8 +298,11 @@ export async function measureBoardInBrowser(options: {
     writers = startWriters(options.writers, process.pid);
     /* The server's operation is read from here on; its opening until here. */
     const settleMs = Math.min(CANDIDATE_BROWSER_SETTLE_MS, windowMs / 3);
-    const operatingAt = Date.now() + settleMs;
-    operating = setTimeout(() => options.onOperating?.(windowMs - settleMs), settleMs);
+    let operatingAt = 0, operatingMono = 0;
+    operating = setTimeout(() => {
+      operatingAt = Date.now(); operatingMono = performance.now();
+      options.onOperating?.(windowMs - settleMs);
+    }, settleMs);
     const input = async (view: (typeof views)[number]) => {
       const inputStarted = performance.now();
       await view.page.mouse.wheel(0, 240);
@@ -312,6 +327,8 @@ export async function measureBoardInBrowser(options: {
       }
       await Bun.sleep(2_000);
     }
+    const operatingWindow = { fromUtcMs: operatingAt, toUtcMs: Date.now(),
+      durationMs: operatingMono ? Math.floor(performance.now() - operatingMono) : 0 };
     // Freeze the measured request set before draining it. Polls started after
     // the observation window cannot keep this drain alive or enter its result.
     for (const view of views) view.tracking.accepting = false;
@@ -424,10 +441,10 @@ export async function measureBoardInBrowser(options: {
       maxMs: Math.round(Math.max(0, ...written.latencies)),
       failures: written.failures,
     };
-    return { views: readings, diagnostics, serverStalls: [...opened?.stalls ?? [], ...operated?.stalls ?? []], measurements: summarizeBrowserViews(readings, writes, server) };
+    return { operatingWindow, views: readings, diagnostics, serverStalls: [...opened?.stalls ?? [], ...operated?.stalls ?? []], measurements: summarizeBrowserViews(readings, writes, server) };
   } finally {
     clearTimeout(operating);
     if (writers) await writers.stop().catch(() => undefined);
-    await browser.close().catch(() => undefined);
+    try { await browser.close().catch(() => undefined); } finally { cleanChromeTmp(); }
   }
 }

@@ -1,3 +1,4 @@
+import { PASSING_RG2 } from "./fixtures/candidatePerformanceMeasurements";
 import { expect, test } from "bun:test";
 
 import {
@@ -19,6 +20,7 @@ const latency = (p95Ms: number, maxMs = p95Ms) => ({ count: 20, p50Ms: p95Ms / 2
 
 function healthy(): CandidatePerformanceMeasurements {
   return {
+    ...structuredClone(PASSING_RG2),
     dataset: { scale: 1, rows: 53_299, coldRows: 51_099, payloadBytes: 214_000_000, transcripts: 320, seedMs: 7_000,
       receipts: { total: 10_971, failedStructured: 892, failedLegacy: 122, conflicted: 133 } },
     firstBoot: { registryOpenMs: 80, firstSnapshotMs: 550, coldProjectionMs: 4_200, firstUsableMs: 4_900, eventLoopMaxMs: 600, coldBuild: { sequence: 1, buildMs: 4_000 } },
@@ -514,4 +516,46 @@ test("a slow server produces a warning and an unmeasured server refuses the cand
   const older = report(healthy(), { ok: true, breaches: [] });
   delete (older.measurements!.browser as unknown as Record<string, unknown>).server;
   expect(candidatePerformanceEvidence(older)).toMatchObject({ ok: false });
+});
+
+
+test("RG2 refuses missing host-loop evidence and a window shorter than the minute timers", () => {
+  const measured = healthy();
+  measured.hostLoop.records = 0;
+  measured.servingHistory.windowMs = 74_999;
+  const parsed = candidatePerformanceEvidence(report(measured));
+  expect(parsed.ok).toBe(false);
+  expect(parsed.breaches).toEqual([
+    "post-warm-up serving window: measured 74999, at least 75000 required",
+    "runtime-host loop records read: measured 0, at least 1 required",
+  ]);
+});
+
+test("RG2 host gaps and history read durations are warnings and permit promotion", () => {
+  const measured = healthy();
+  measured.hostLoop.maxMs = 251;
+  measured.servingHistory.curatorLoopMaxMs = 800;
+  measured.servingHistory.rulesLoopMaxMs = 900;
+  const warnings: string[] = [];
+  expect(candidatePerformanceBreaches(measured, CANDIDATE_PERFORMANCE_BOUNDS, warnings)).toEqual([]);
+  expect(warnings).toEqual([
+    "runtime-host event-loop gap outside boot 251ms exceeds 250ms",
+    "curator history main-loop gap 800ms exceeds 250ms",
+    "rules-window history main-loop gap 900ms exceeds 250ms",
+  ]);
+  expect(candidatePerformanceEvidence(report(measured)).ok).toBe(true);
+});
+
+test("RG2 missing, malformed and failed reads refuse at the report boundary", () => {
+  for (const mutate of [
+    (m: CandidatePerformanceMeasurements) => { m.hostLoop.malformed = 1; },
+    (m: CandidatePerformanceMeasurements) => { m.servingHistory.curatorReads = 0; },
+    (m: CandidatePerformanceMeasurements) => { m.servingHistory.rulesViews = 0; },
+    (m: CandidatePerformanceMeasurements) => { m.stateHistory.curatorPasses = 49; },
+    (m: CandidatePerformanceMeasurements) => { delete (m as Partial<CandidatePerformanceMeasurements>).hostLoop; },
+    (m: CandidatePerformanceMeasurements) => { m.hostLoop.maxMs = Number.NaN; },
+  ]) {
+    const measured = healthy(); mutate(measured);
+    expect(candidatePerformanceEvidence({ ...report(healthy()), measurements: measured }).ok).toBe(false);
+  }
 });
