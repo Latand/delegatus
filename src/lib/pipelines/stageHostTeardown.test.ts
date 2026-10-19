@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 
@@ -418,22 +418,29 @@ test("a recycled pane id is reported unknown and never signalled (#670)", async 
 });
 
 test("an unstamped attempt requires positive idle evidence before retiring a host without a stream", async () => {
-  const processRef = captureProcessIdentity(process.pid);
-  const fixture = hostedConversation({ status: "dead", process: processRef });
-  const { retirePipelineStageAgent } = await import("./engine");
+  const pid = 2_000_000_124;
   const signals: number[] = [];
   let alive = true;
-  const identity = procBackend.processIdentity(process.pid);
-  const result = await retirePipelineStageAgent({ ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId }, {
-    requireIdleEvidence: true,
-    termination: { processIdentity: pid => alive && pid === process.pid ? identity : null, bootEpoch: () => processRef.bootEpoch ?? null,
-      pidAlive: pid => alive && pid === process.pid, ppidMap: () => new Map(), processGroupId: () => null,
-      signal: pid => { signals.push(pid); alive = false; }, sleep: async () => {}, terminateOwnedHost: async () => false,
-      retireRegistryEntry: () => true },
-  });
-  expect(signals).toEqual([]);
-  expect(result).toMatchObject({ outcome: "failed", error: expect.stringContaining("cannot prove an idle turn") });
-  expect(killed).toEqual([]);
+  const originalIdentity = procBackend.processIdentity.bind(procBackend), originalAlive = procBackend.pidAlive.bind(procBackend);
+  const identity = (candidate: number) => candidate === pid ? alive ? "fixture-orphan-root" : null : originalIdentity(candidate);
+  const living = (candidate: number) => candidate === pid ? alive : originalAlive(candidate);
+  const identitySpy = spyOn(procBackend, "processIdentity").mockImplementation(identity);
+  const aliveSpy = spyOn(procBackend, "pidAlive").mockImplementation(living);
+  try {
+    const processRef = captureProcessIdentity(pid);
+    const fixture = hostedConversation({ status: "dead", process: processRef });
+    const { retirePipelineStageAgent } = await import("./engine");
+    const result = await retirePipelineStageAgent({ ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId }, {
+      requireIdleEvidence: true,
+      termination: { processIdentity: identity, bootEpoch: () => processRef.bootEpoch ?? null, pidAlive: living,
+        ppidMap: () => new Map(), processGroupId: () => null,
+        signal: candidate => { signals.push(candidate); alive = false; }, sleep: async () => {}, terminateOwnedHost: async () => false,
+        retireRegistryEntry: () => true },
+    });
+    expect(signals).toEqual([]);
+    expect(result).toMatchObject({ outcome: "failed", error: expect.stringContaining("cannot prove an idle turn") });
+    expect(killed).toEqual([]);
+  } finally { identitySpy.mockRestore(); aliveSpy.mockRestore(); }
 });
 
 test("provider recovery authority survives the engine idle retirement helper", async () => {
