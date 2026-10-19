@@ -215,3 +215,42 @@ export function otherProjectRoleRules(scope: string): RoleMemoryRule[] {
     return row?.kind === "rule" && scopeRole(row.scope) === role && canonicalScope(row.scope) !== scope && !isCrossProjectRoleScope(row.scope) ? [row] : [];
   });
 }
+
+
+/** Search only active membership, projecting rule text before decoding. CROSS
+ * JOIN keeps scopes and active ids ahead of rule lookups; otherwise SQLite can
+ * start from every historical rule. Histories and versions stay out of recall. */
+export function activeRoleRuleRows(input: { project?: string; terms?: string[]; id?: string; limit: number }): Pick<RoleMemoryRule, "id" | "scope" | "rule" | "changedAt">[] {
+  if (!roleMemoryCollection()) return [];
+  const project = input.project ? canonicalProject(input.project) : null;
+  const scopes = roleScopeKeys().filter(scope => !project || scope === "machine" || isCrossProjectRoleScope(scope) || canonicalProject(scopeProject(scope) ?? "") === project);
+  if (!scopes.length) return [];
+  // Succession can leave a rule's original scope on the row after its active
+  // membership has joined the canonical scope. Admit that recorded alias family.
+  const ruleScopes = new Set(scopes.flatMap(scope => [scope, canonicalScope(scope)]));
+  const aliases = Object.keys(projectAliasSnapshot().aliases);
+  for (const scope of [...ruleScopes]) {
+    const owner = scopeProject(scope);
+    if (owner) for (const alias of aliases) if (canonicalProject(alias) === canonicalProject(owner)) ruleScopes.add(scope.replace(`:${owner}`, `:${alias}`));
+  }
+  const terms = input.terms ?? [];
+  const conditions = terms.map(() => `(instr(lower(json_extract(r.value_json, '$.rule')), lower(?)) > 0 OR instr(json_extract(r.value_json, '$.id'), ?) > 0)`);
+  return reader().query<Pick<RoleMemoryRule, "id" | "scope" | "rule" | "changedAt">, SQLQueryBindings[]>(`
+    SELECT DISTINCT json_extract(r.value_json, '$.id') AS id,
+      json_extract(r.value_json, '$.scope') AS scope,
+      json_extract(r.value_json, '$.rule') AS rule,
+      json_extract(r.value_json, '$.changedAt') AS changedAt
+    FROM state_rows s CROSS JOIN json_each(s.value_json, '$.active') a
+    CROSS JOIN state_rows r
+    WHERE r.collection='role_memory' AND r.row_key='r:' || a.value
+      AND s.collection='role_memory' AND s.row_key IN (SELECT 's:' || value FROM json_each(?))
+      AND json_extract(s.value_json, '$.kind')='scope'
+      AND json_extract(r.value_json, '$.kind')='rule'
+      AND json_extract(r.value_json, '$.scope') IN (SELECT value FROM json_each(?))
+      AND json_extract(r.value_json, '$.state')='active'
+      AND json_extract(r.value_json, '$.versionOf') IS NULL
+      ${input.id ? "AND r.row_key=?" : ""}
+      ${conditions.length ? `AND ${conditions.join(" AND ")}` : ""}
+    ORDER BY changedAt DESC, id LIMIT ?
+  `).all(JSON.stringify(scopes), JSON.stringify([...ruleScopes]), ...(input.id ? [`r:${input.id}`] : []), ...terms.flatMap(term => [term, term]), input.limit);
+}

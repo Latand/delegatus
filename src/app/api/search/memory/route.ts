@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { searchUnavailable } from "@/lib/search/unavailable";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { MEMORY_KINDS, type MemoryKind } from "@/lib/memory/parsers";
@@ -24,7 +25,7 @@ export async function GET(request: Request): Promise<Response> {
   const parsedLimit = Number(params.get("limit"));
   const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.max(1, Math.min(20, Math.trunc(parsedLimit))) : 10;
   try {
-    return Response.json(await memoryIndex().search({ query, project: project ? canonicalProject(project) : undefined, kind: kind as MemoryKind | undefined, limit, maxBytes: responseBudget }));
+    return Response.json(await withViewerOperation("memory.search", () => memoryIndex().search({ query, project: project ? canonicalProject(project) : undefined, kind: kind as MemoryKind | undefined, limit, maxBytes: responseBudget })));
   } catch (error) {
     return searchUnavailable("memory", error);
   }
@@ -34,7 +35,7 @@ export async function GET(request: Request): Promise<Response> {
 export async function POST(request: Request): Promise<Response> {
   let body;
   try { body = await request.json(); } catch { return Response.json({ error: "invalid JSON" }, { status: 400 }); }
-  if (!body || typeof body !== "object" || typeof body.id !== "string" || !/^m_[a-f0-9]{7,24}$/i.test(body.id)
+  if (!body || typeof body !== "object" || typeof body.id !== "string" || !/^(?:m_[a-f0-9]{7,24}|r_[a-f0-9]{16})$/i.test(body.id)
     || typeof body.requestId !== "string" || !body.requestId.trim() || body.requestId.length > 256
     || (body.maxBytes !== undefined && (!Number.isInteger(body.maxBytes) || body.maxBytes < 256 || body.maxBytes > 16_000))
     || (body.project !== undefined && (typeof body.project !== "string" || !body.project.trim() || body.project.length > 256))
@@ -42,7 +43,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "id and bounded requestId are required; project and conversationId must be bounded strings" }, { status: 400 });
   }
   try {
-    const item = await memoryIndex().open(body.id, body.requestId, body.conversationId ?? null, body.project ? canonicalProject(body.project.trim()) : undefined, body.maxBytes ?? 16_000);
+    const item = await withViewerOperation("memory.open", () => memoryIndex().open(body.id, body.requestId, body.conversationId ?? null, body.project ? canonicalProject(body.project.trim()) : undefined, body.maxBytes ?? 16_000));
     return item ? Response.json({ item }) : Response.json({ error: "memory entry not found" }, { status: 404 });
   } catch (error) {
     if (error instanceof MemoryIdAmbiguousError) return Response.json({ error: error.message, code: "short_id_ambiguous" }, { status: 409 });

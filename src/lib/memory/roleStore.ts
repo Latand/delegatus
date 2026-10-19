@@ -17,6 +17,7 @@ import { curationRevision, curationView } from "./curation/store";
 import { projectViewRows, projectViewRowsCooperatively, roleScopeKeys, roleViewVersion } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
 import { renderLearnedRulesSelection } from "./roleRender";
+import { closestReadableRuleIds } from "./ruleIds";
 import {
   MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
@@ -296,7 +297,17 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
       const held = tx.get(`s:${scope}`);
       if (target?.kind !== "rule" || target.versionOf || target.state !== "active" || held?.kind !== "scope"
         || !held.active.includes(target.id) || !readableScopes(project, input.source.roleId).includes(scope)) {
-        throw new RoleMemoryRefusal("RULE_NOT_READABLE", "rewrite must name an active readable rule of this stage");
+        // Suggestions use the very same active-scope authority as the write.
+        // A miss never resolves implicitly or consumes the lesson request.
+        const candidates = readableScopes(project, input.source.roleId).flatMap(scope => {
+          const held = tx.get(`s:${scope}`);
+          return held?.kind === "scope" ? held.active.flatMap(id => {
+            const row = tx.get(`r:${id}`);
+            return row?.kind === "rule" && row.state === "active" && !row.versionOf && canonicalScope(row.scope) === scope ? [row.id] : [];
+          }) : [];
+        });
+        const closest = closestReadableRuleIds(input.rewrite.id, candidates);
+        throw new RoleMemoryRefusal("RULE_NOT_READABLE", `rewrite must name an active readable rule of this stage${closest.length ? `; closest readable rule${closest.length > 1 ? "s" : ""}: ${closest.join(", ")}. Retry with an exact id` : ""}`);
       }
       if (sameRule(target.rule, input.rewrite.rule)) throw new RoleMemoryRefusal("LESSON_INVALID", "rewrite must change the rule text");
       const { updated, version } = versionedRule(tx, target, { rule: input.rewrite.rule, why: input.rewrite.why, hints: rulePrivacyHints(`${input.rewrite.rule}\n${input.rewrite.why}`) }, { by: "agent", at: now, source: { ...input.source, project } });
