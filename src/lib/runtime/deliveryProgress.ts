@@ -1,3 +1,4 @@
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
@@ -174,9 +175,6 @@ const SCHEMA = `
     updated_at INTEGER NOT NULL,
     record_json TEXT NOT NULL
   );
-  CREATE INDEX IF NOT EXISTS delivery_progress_conversation ON delivery_progress(conversation_id, updated_at);
-  CREATE INDEX IF NOT EXISTS delivery_progress_original_key ON delivery_progress(original_key);
-  CREATE INDEX IF NOT EXISTS delivery_progress_terminal ON delivery_progress(terminal, updated_at);
   CREATE TABLE IF NOT EXISTS delivery_progress_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -185,6 +183,12 @@ const SCHEMA = `
 
 /** The meta row of the completeness checkpoint (A3). */
 const CHECKED_THROUGH = "checked_through";
+
+const progressIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS delivery_progress_conversation ON delivery_progress(conversation_id, updated_at)`,
+  `CREATE INDEX IF NOT EXISTS delivery_progress_original_key ON delivery_progress(original_key)`,
+  `CREATE INDEX IF NOT EXISTS delivery_progress_terminal ON delivery_progress(terminal, updated_at)`,
+]);
 
 export class DeliveryProgressStore implements DeliveryProgressSink {
   private readonly records = new Map<string, DeliveryProgressRecord>();
@@ -610,7 +614,9 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     const db = observeSqlite(new Database(this.filename!, { create: true, strict: true }), "delivery-progress");
     try {
       db.exec("PRAGMA busy_timeout = 0; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+      progressIndexes.assertRepairAuthority(db, path.dirname(this.filename!));
       db.exec(SCHEMA);
+      progressIndexes.install(db, path.dirname(this.filename!));
       for (const candidate of [this.filename!, `${this.filename}-wal`, `${this.filename}-shm`]) {
         try { fs.chmodSync(candidate, 0o600); } catch { /* not created yet */ }
       }

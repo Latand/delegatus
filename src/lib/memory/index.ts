@@ -1,3 +1,4 @@
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
 import crypto from "node:crypto";
@@ -54,6 +55,13 @@ function displayPath(filename: string): string {
   const home = os.homedir();
   return filename.startsWith(home + path.sep) ? "$HOME/" + path.relative(home, filename) : filename;
 }
+
+const memoryIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS memory_entries_source ON memory_entries(engine, sourceKind, sourcePath)`,
+  `CREATE INDEX IF NOT EXISTS memory_entries_kind ON memory_entries(engine, kind)`,
+  `CREATE INDEX IF NOT EXISTS memory_terminal_pending ON memory_terminal_deliveries(conversation, request, digest)`,
+  `CREATE INDEX IF NOT EXISTS memory_project_scopes_project ON memory_project_scopes(project)`,
+]);
 
 /** A rebuildable, private derivative. Every source is opened read-only. */
 export class MemoryIndex {
@@ -134,6 +142,8 @@ export class MemoryIndex {
     this.db = observeSqlite(new sqlite.Database(filename, { create: true }), "memory-index");
     fsSync.chmodSync(filename, 0o600);
     try {
+      this.db.exec("PRAGMA busy_timeout = 0");
+      memoryIndexes.assertRepairAuthority(this.db, path.dirname(filename));
       this.db.exec(`
         PRAGMA busy_timeout = 0;
         PRAGMA journal_mode = WAL;
@@ -144,8 +154,6 @@ export class MemoryIndex {
           sourcePath TEXT, sourceKind TEXT, title TEXT, summary TEXT, body TEXT, writtenAt TEXT, flags TEXT
         );
         CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(id UNINDEXED, title, summary, body);
-        CREATE INDEX IF NOT EXISTS memory_entries_source ON memory_entries(engine, sourceKind, sourcePath);
-        CREATE INDEX IF NOT EXISTS memory_entries_kind ON memory_entries(engine, kind);
         CREATE TABLE IF NOT EXISTS memory_offers (
           memory_id TEXT NOT NULL, request_id TEXT NOT NULL, conversation_id TEXT,
           at TEXT NOT NULL, channel TEXT NOT NULL, score REAL, outcome TEXT, outcome_at TEXT,
@@ -158,7 +166,6 @@ export class MemoryIndex {
           delivery TEXT PRIMARY KEY, conversation TEXT, transcript TEXT, occurrence TEXT, offset INTEGER,
           UNIQUE(conversation, transcript, occurrence)
         );
-        CREATE INDEX IF NOT EXISTS memory_terminal_pending ON memory_terminal_deliveries(conversation, request, digest);
         CREATE TABLE IF NOT EXISTS memory_native_turns (
           conversation TEXT, request TEXT, transcript TEXT, offset INTEGER, digest TEXT, occurrence TEXT,
           PRIMARY KEY(conversation, request), UNIQUE(conversation, occurrence)
@@ -172,7 +179,7 @@ export class MemoryIndex {
         CREATE TABLE IF NOT EXISTS memory_hook_attempts (conversation TEXT, request TEXT, PRIMARY KEY(conversation, request));
         CREATE TABLE IF NOT EXISTS memory_unmatched_turns (conversation TEXT, request TEXT, at TEXT NOT NULL, PRIMARY KEY(conversation, request));
       `);
-      this.db.exec("CREATE INDEX IF NOT EXISTS memory_project_scopes_project ON memory_project_scopes(project)");
+      memoryIndexes.install(this.db, path.dirname(filename));
       if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_injection_names'").get()) {
         // Migrate once, atomically, without waiting behind a live writer. A hook
         // can abandon a contended first open and retry on a later prompt.

@@ -56,7 +56,7 @@ export const WORKING_RULES = [
   "13. Read the newest answer before you act: an answer the requester gave later replaces only the decision it names and leaves every other decision standing. Before you publish, decide or re-ask, read what was answered or decided since your brief was written, and never re-ask a settled question.",
   "14. Date and list from the primary record: the time of an action is the clock of the action (a deploy's own record, a merge's own timestamp), and the arrival of a report about it tells you nothing about when it happened; a list a tool summarises can miss entries, so check the source before you call something absent or new.",
   "15. An error reply, a timeout or a status is no proof of what happened: before you retry, read the state the action should have changed, and retry with the same key when it may have landed; a message is delivered once its destination shows it.",
-  "16. Leave the checkout as you found it: work, build, probe and render in a scratch export of the commit and leave the live checkout untouched; a read-only stage leaves no new file behind, ignored ones included.",
+  "16. Leave the checkout as you found it: Edit, stage and commit in the assigned worktree. Use scratch exports for builds, tests, probes and renders; never commit in a scratch checkout and import the commit. A read-only stage leaves the assigned worktree untouched, including ignored files.",
 ].join("\n");
 
 /* The same sixteen principles in their short form, for the orchestrator
@@ -85,7 +85,7 @@ export const WORKING_RULES_SHORT = [
   "13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question.",
   "14. Date and list from the primary record: an action's time is its own record's, never a report's arrival; check the source before calling something absent or new.",
   "15. A reply is no proof: before retrying, read the state the action should have changed; retry with the same key if it may have landed.",
-  "16. Leave the checkout as you found it: work in a scratch export; a read-only stage leaves no new file behind.",
+  "16. Leave the checkout as you found it: Edit, stage and commit in the assigned worktree; scratch exports hold builds and probes, never commits. A read-only stage leaves no new file behind.",
 ].join("\n");
 
 /* One judging block for the roles that raise findings (reviewer, verifier,

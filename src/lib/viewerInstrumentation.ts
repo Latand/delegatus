@@ -976,6 +976,8 @@ export async function registerViewerRuntime(): Promise<void> {
     let activatedAuthority: HotStateAuthority | null = null;
     const { retireCuratorPlaceholdersAtStartup } = await import("@/lib/memory/curation/cleanup");
     await startupBarrier.run(() => retireCuratorPlaceholdersAtStartup(undefined, assertStartupActive));
+    const { retireSeatRecoveryPlaceholdersAtStartup } = await import("@/lib/tasks/seatRecoveryCleanup");
+    await startupBarrier.run(() => retireSeatRecoveryPlaceholdersAtStartup(undefined, assertStartupActive));
     assertStartupActive();
     await completeViewerRuntimeActivation({
       initializeOperatorCapability: initializeOperatorSpawnCapabilityAtStartup,
