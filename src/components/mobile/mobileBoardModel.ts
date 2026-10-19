@@ -1,3 +1,4 @@
+import { hostGoneWorkExpired } from "@/components/turnDuration";
 import { fileAgentActivity, type AgentActivity } from "@/lib/lifecycle/agentActivity";
 import { getLocale, translate, type Locale, type TFunction } from "@/lib/i18n";
 import { accountIdFromPath } from "@/lib/accounts/badge";
@@ -152,7 +153,7 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
      finished stage ends: it falls through to the ordinary reading of a
      finished conversation, in the neutral tone, so the alarming word keeps
      meaning something when it does appear. */
-  if (file.proc === "killed" && turnLeftOpen(file)) return bits({ key: "killed", dot: "danger", seconds: Math.max(0, now - file.mtime) });
+  if ((file.proc === "killed" || file.proc === "done" || hostGoneWorkExpired(file, now)) && turnLeftOpen(file)) return bits({ key: "killed", dot: "danger", seconds: Math.max(0, now - file.mtime) });
   /* Right after the kill: a question outranks a quiet turn, because a turn
      that asked something and went quiet is waiting on the answer. A reason
      someone dismissed, or one its project's seat answers first, falls

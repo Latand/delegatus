@@ -71,7 +71,7 @@ export const SYSTEM_CLEAR_CARD_SECONDS = 24 * 3600;
     offers Undo. */
 function systemClearedNeed(file: FileEntry, now: number): { need: NeedReason; cleared: ClearedNeed } | null {
   const mark = file.attentionDismissal;
-  if (!mark?.cleared || mark.by.kind !== "system") return null;
+  if (!mark?.cleared || mark.restoredAt || mark.by.kind !== "system") return null;
   const at = Date.parse(mark.at) / 1000;
   if (!Number.isFinite(at) || now - at > SYSTEM_CLEAR_CARD_SECONDS) return null;
   const snapshot = mark.cleared;

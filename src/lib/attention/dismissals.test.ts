@@ -482,7 +482,7 @@ test("a system clear is recorded with its rule, is a no-op when repeated, and Un
   await dismissAttention({ kind: "conversation", conversationId: "conversation_a" }, OPERATOR, { ports: h.ports, undo: true });
   expect(readAttentionDismissals().records[0]).toMatchObject({ by: { kind: "system", rule: "operator-replied" }, reasonId: "ask-1", restoredAt: "2026-09-24T10:02:00.000Z", restoredBy: OPERATOR });
   overlayAttentionDismissals(files);
-  expect(files[0]!.attentionDismissal).toBeUndefined();
+  expect(files[0]!.attentionDismissal).toMatchObject({ restoredAt: "2026-09-24T10:02:00.000Z" });
   expect(systemClearAttention([clear], new Date("2026-09-24T10:03:00.000Z"))).toEqual([]);
   /* A second Undo has nothing left to bring back. */
   const again = await dismissAttention({ kind: "conversation", conversationId: "conversation_a" }, OPERATOR, { ports: h.ports, undo: true });

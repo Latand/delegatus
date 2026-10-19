@@ -1,3 +1,5 @@
+import { finishedWorkIndex } from "@/lib/attention/finishedWork";
+import { withFinishedAttention } from "@/lib/attention/finishedAttention";
 import { stateWriteHealth } from "@/lib/state/diskFull";
 import { filesReadSummary } from "@/lib/filesReadSummary";
 import { withPrototypeReviewSummaries, withoutPrototypeReviews, prototypeReviewNotices, seatDecisionNotices } from "@/lib/prototypeReview/read";
@@ -925,6 +927,9 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      classifier recorded for each conversation. */
   overlayOperatorAsks(projected.files);
   markTiming("files-operator-asks");
+  const finished = finishedWorkIndex(boardTasks, pipelines, seatIdentityResolver(conversationLookup.canonicalConversationId));
+  projected.files = projected.files.map(file => withFinishedAttention(file, Date.now() / 1000, finished));
+  markTiming("files-finished-attention");
   /* Who answers each wait (docs/design/attention-auto-resolve.md): a worker's
      ask, a parked lane and a stopped merge go to the project's designated seat
      first, and the operator's list keeps what is theirs. Read after every
