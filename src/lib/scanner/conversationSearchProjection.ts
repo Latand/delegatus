@@ -17,6 +17,7 @@ const MAX_ENTRIES = 50_000;
 const MAX_BYTES = 512 * 1024 * 1024;
 const WAIT_MS = 4_000;
 const SEARCH_MS = 11_000;
+const PREPARE_MS = 120_000;
 type Entry = ConversationCatalogEntry;
 type Metadata = { path: string; size: number; mtime: number; engine: string; sourceTitle: string; kind: string; title: string; displayed: string; project: string };
 type Hydrated = { entry: Entry; text: ConversationSearchText };
@@ -50,22 +51,33 @@ export class ConversationSearchProjection {
   private tail: Promise<unknown> = Promise.resolve();
   private pending = 0;
   private retiring = false;
+  private preparation?: Promise<void>;
+  private preparationFailure?: unknown;
   constructor(private filename: string, private limits = { entries: MAX_ENTRIES, bytes: MAX_BYTES }) {}
 
   search(catalog: readonly Entry[], query: string, options: {
     signal?: AbortSignal;
     projectTitle?: (entry: FileEntry) => void;
     readText?: (entry: Entry) => Promise<ConversationSearchText>;
+    prepareOnly?: boolean;
   } = {}): Promise<Entry[]> {
     if (this.retiring) return Promise.reject(new Error("conversation search projection retired"));
     if (this.pending >= 64) return Promise.reject(new Error("conversation search queue is full"));
     this.pending++;
-    const signal = AbortSignal.any([AbortSignal.timeout(SEARCH_MS), ...(options.signal ? [options.signal] : [])]);
+    const signal = AbortSignal.any([AbortSignal.timeout(options.prepareOnly ? PREPARE_MS : SEARCH_MS), ...(options.signal ? [options.signal] : [])]);
     let started = false;
     const result = this.tail.then(() => withViewerOperation("catalog.search", async () => {
       started = true;
       signal.throwIfAborted();
+      if (!options.prepareOnly && this.preparation) await this.preparation;
+      if (!options.prepareOnly && this.preparationFailure) throw this.preparationFailure;
       await this.open(signal);
+      this.db!.exec("CREATE TEMP TABLE IF NOT EXISTS search_unvisited(path TEXT PRIMARY KEY)");
+      this.db!.exec("DELETE FROM search_unvisited");
+      for (let offset = 0; offset < catalog.length; offset += 500) {
+        const paths = catalog.slice(offset, offset + 500).map(entry => entry.path);
+        this.db!.query(`INSERT OR IGNORE INTO search_unvisited(path) VALUES ${paths.map(() => "(?)").join(",")}`).run(...paths);
+      }
       const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
       const matches: Entry[] = [];
       for (let start = 0; start < catalog.length; start += BATCH) {
@@ -116,7 +128,7 @@ export class ConversationSearchProjection {
             return batch.filter(entry => paths.has(entry.path)).map(entry => ({ ...entry, title: displayed.get(entry.path)!, firstPrompt: "" }));
           };
           if (changed.length || updated.length) {
-            matches.push(...await this.write(signal, () => {
+              const found = await this.write(signal, () => {
               for (const { entry, text } of changed) {
                 const title = baseTitles.get(entry.path)!;
                 const prompt = (text.firstPrompt ?? "").toLocaleLowerCase();
@@ -134,10 +146,15 @@ export class ConversationSearchProjection {
                   .run(display, entry.project, display, display.toLocaleLowerCase(), entry.project, entry.project.toLocaleLowerCase(), entry.path);
               }
               const found = select();
+              this.db!.query(`DELETE FROM search_unvisited WHERE path IN (${placeholders})`).run(...batch.map(entry => entry.path));
               this.trim();
               return found;
-            }));
-          } else matches.push(...withViewerOperation("catalog.search", select));
+            });
+            if (!options.prepareOnly) matches.push(...found);
+          } else {
+            this.db!.query(`DELETE FROM search_unvisited WHERE path IN (${placeholders})`).run(...batch.map(entry => entry.path));
+            if (!options.prepareOnly) matches.push(...withViewerOperation("catalog.search", select));
+          }
           // Hydration and SQLite both have bounded slices, even on a warm cache.
           await new Promise<void>(resolve => setImmediate(resolve));
         } catch (error) {
@@ -146,6 +163,7 @@ export class ConversationSearchProjection {
           await new Promise<void>(resolve => setImmediate(resolve));
         }
       }
+      this.db!.exec("DELETE FROM search_unvisited");
       signal.throwIfAborted();
       return matches;
     })).finally(() => { this.pending--; });
@@ -161,6 +179,28 @@ export class ConversationSearchProjection {
       void result.then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
       if (signal.aborted) aborted();
     });
+  }
+
+  /** Catalog publication owns cold hydration. Foreground searches wait for this
+   * bounded-batch worker, then query the persisted text without opening every
+   * transcript on the request path. */
+  prepare(catalog: readonly Entry[], options: {
+    projectTitle?: (entry: FileEntry) => void;
+    readText?: (entry: Entry) => Promise<ConversationSearchText>;
+  } = {}): Promise<void> {
+    if (this.retiring) return Promise.reject(new Error("conversation search projection retired"));
+    if (this.preparation) return this.preparation;
+    this.preparationFailure = undefined;
+    const job = this.search(catalog, "\u0000", { ...options, prepareOnly: true }).then(() => undefined, error => {
+      this.preparationFailure = error;
+      throw error;
+    });
+    this.preparation = job;
+    void job.then(
+      () => { if (this.preparation === job) this.preparation = undefined; },
+      () => { if (this.preparation === job) this.preparation = undefined; },
+    );
+    return job;
   }
 
   close(): void { this.db?.close(); this.db = undefined; }
@@ -238,13 +278,14 @@ export class ConversationSearchProjection {
     for (;;) {
       const totals = this.db!.query<{ rows: number; bytes: number }, []>("SELECT rows,bytes FROM meta").get()!;
       if (totals.rows <= this.limits.entries && totals.bytes <= this.limits.bytes) return;
-      const oldest = this.db!.query<{ bytes: number }, []>("SELECT bytes FROM texts ORDER BY seq,path LIMIT 24").all();
+      const oldest = this.db!.query<{ path: string; bytes: number }, []>("SELECT path,bytes FROM texts WHERE path NOT IN (SELECT path FROM search_unvisited) ORDER BY seq,path LIMIT 24").all();
       let count = 0;
       for (const row of oldest) {
         if (totals.rows <= this.limits.entries && totals.bytes <= this.limits.bytes) break;
         totals.rows--; totals.bytes -= row.bytes; count++;
       }
-      this.db!.query("DELETE FROM texts WHERE path IN (SELECT path FROM texts ORDER BY seq,path LIMIT ?)").run(count);
+      if (!count) return;
+      this.db!.query("DELETE FROM texts WHERE path IN (SELECT path FROM texts WHERE path NOT IN (SELECT path FROM search_unvisited) ORDER BY seq,path LIMIT ?)").run(count);
     }
   }
 }

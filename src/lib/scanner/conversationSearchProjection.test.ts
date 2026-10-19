@@ -79,6 +79,54 @@ test("byte and entry eviction preserve complete results above either ceiling", a
   }
 });
 
+test("repeated searches retain future cached rows while misses are hydrated", async () => {
+  for (const limits of [{ entries: 24, bytes: 1_000_000 }, { entries: 100, bytes: 10_000 }]) {
+    const { store, filename } = fixture(limits);
+    const catalog = Array.from({ length: 55 }, (_, n) => row(n));
+    let reads = 0;
+    const readText = async (entry: ConversationCatalogEntry) => { reads++; return text(entry); };
+    expect(await store.search(catalog, "orchard", { readText })).toHaveLength(55);
+    expect(reads).toBe(55);
+    const db = new Database(filename, { readonly: true });
+    let retained = 0;
+    try { retained = db.query<{ rows: number; bytes: number }, []>("SELECT rows,bytes FROM meta").get()!.rows; }
+    finally { db.close(); }
+    expect(retained).toBeGreaterThan(0);
+    expect(retained).toBeLessThanOrEqual(limits.entries);
+    reads = 0;
+    expect(await store.search(catalog, "orchard", { readText })).toHaveLength(55);
+    expect(reads).toBe(55 - retained);
+    const after = new Database(filename, { readonly: true });
+    try {
+      const totals = after.query<{ rows: number; bytes: number }, []>("SELECT rows,bytes FROM meta").get()!;
+      expect(totals.rows).toBeLessThanOrEqual(limits.entries);
+      expect(totals.bytes).toBeLessThanOrEqual(limits.bytes);
+    } finally { after.close(); }
+  }
+});
+
+test("catalog preparation hydrates before the foreground query and serves complete results", async () => {
+  const { store } = fixture();
+  const catalog = Array.from({ length: 60 }, (_, n) => row(n));
+  let reads = 0;
+  store.prepare(catalog, { readText: async entry => { reads++; return text(entry); } });
+  const results = await store.search(catalog, "orchard", { readText: async entry => { reads++; return text(entry); } });
+  expect(results).toHaveLength(60);
+  expect(reads).toBe(60);
+  reads = 0;
+  expect(await store.search(catalog, "orchard", { readText: async entry => { reads++; return text(entry); } })).toHaveLength(60);
+  expect(reads).toBe(0);
+});
+
+test("a failed catalog preparation refuses the foreground query without rehydrating the scope", async () => {
+  const { store } = fixture();
+  const catalog = Array.from({ length: 60 }, (_, n) => row(n));
+  await expect(store.prepare(catalog, { readText: async () => { throw new Error("bootstrap refused"); } })).rejects.toThrow("bootstrap refused");
+  let foregroundReads = 0;
+  await expect(store.search(catalog, "orchard", { readText: async entry => { foregroundReads++; return text(entry); } })).rejects.toThrow("bootstrap refused");
+  expect(foregroundReads).toBe(0);
+});
+
 test("failed hydration and cancellation never publish partial text; an identical retry recovers", async () => {
   const { store } = fixture();
   await expect(store.search([row(1)], "orchard", { readText: async () => { throw new Error("read refused"); } })).rejects.toThrow("read refused");

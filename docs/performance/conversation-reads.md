@@ -86,20 +86,25 @@ JavaScript on a warm query. Only matching entries reach cursor pagination and
 page-sized filesystem stats.
 
 The cache retains up to 50,000 entries and 512 MiB of accounted payload, evicting
-the oldest hydration records. The database file has a 262,144-page ceiling (1 GiB with 4 KiB pages);
+the oldest eligible hydration records. During a sweep, a temporary path table
+protects identities not yet visited, so inserting an early miss cannot evict a
+later hit. The database file has a 262,144-page ceiling (1 GiB with 4 KiB pages);
 SQLite also owns its WAL and shared-memory companions. A batch matches before
 eviction, so exceeding a cache limit keeps results complete. One global owner
 per state directory serializes up to 64 admitted searches. A queued request
 can cancel before dispatch; active cancellation closes its reads before
-returning. The complete search, including queue time, has an 11-second local
-deadline; writer admission has a four-second maximum within that deadline.
-SQLite's busy timeout is zero and admission uses `waitForStateLock`. Work is
-attributed as `catalog.search` in the loop monitor.
+returning. Foreground search, including queue time, has an 11-second deadline;
+catalog preparation runs in bounded batches with a two-minute worker deadline.
+Writer admission has a four-second maximum within the search deadline. SQLite's
+busy timeout is zero and admission uses `waitForStateLock`. Work is attributed
+as `catalog.search` in the loop monitor.
 
 The new schema has one producer, the search projection owned by the Viewer.
-Earlier releases never write it. Discovery and the file-scanner worker remain
-the producers of catalog membership; registry ownership scopes it before any
-text read, and deputy exclusions run before search and on returned pages.
+Catalog publication starts its bounded background preparation before a search
+reads text. The Viewer owns preparation both after in-process discovery and when
+the file-scanner worker publishes a completed catalog. Earlier releases never
+write the projection. Registry ownership scopes results before any text read,
+and deputy exclusions run before search and on returned pages.
 Registry launch titles and alias-aware title overrides feed one pinned title
 projector per request. Another Viewer generation can share the cache: the
 matching statement rechecks row identity after hydration/admission, retrying a
@@ -108,44 +113,48 @@ the rows. Startup validates the artifact's version, columns, counters and
 schema objects before reuse. Existing HTTP/MCP schemas, final title/identity
 and lineage overlays, and frozen cursor continuations are preserved.
 
-The same revised `scripts/profile-catalog-search.ts` ran against the base and
-candidate exports, one at a time through the gate. Both used the same 8,247
-files, 6,000 selected rows, 50,016-character prompts, fresh private state and
-the same 300% CPU quota. The listener bound port 0. MCP calls used
-`productionViewerControlDependencies(true)` with the real attempt/recovery
+The updated `scripts/profile-catalog-search.ts` ran against base `9e77bba6` and
+the candidate through the same independent parent MCP client and child HTTP
+server. Both used the same 8,247 files, 6,000 selected rows, 50,016-character
+prompts, private state and 300% CPU quota. The listener bound port 0. MCP calls
+used `productionViewerControlDependencies(true)` with the real attempt/recovery
 budgets and body parsing. All four variants succeeded 11/11 on both revisions.
-MCP's byte budget returned 35 default rows on both revisions; HTTP returned 50.
+MCP returned 34 default rows under its byte budget; HTTP returned 50.
 
-| Local variant | Base p50/p95/max, seconds | Candidate p50/p95/max, seconds | Bytes p50/p95/max, both |
+| Local variant | Base p50/p95/max, seconds | Candidate p50/p95/max, seconds | Base / candidate bytes p50/p95/max |
 | --- | --- | --- | --- |
-| MCP search, including cold creation | 3.081/3.406/3.406 | 0.153/4.377/4.377 | 2036/2036/2036 |
-| HTTP search, after the MCP query | 3.138/3.574/3.574 | 0.150/0.196/0.196 | 2675/2675/2675 |
-| MCP default | 0.031/0.040/0.040 | 0.034/0.049/0.049 | 11666/11666/11666 |
-| HTTP default | 0.026/0.031/0.031 | 0.031/0.045/0.045 | 25926/25926/25926 |
+| MCP search | 3.036/3.245/3.245 | 0.288/0.402/0.402 | 2027/2027/2027 / 2027/2027/2027 |
+| HTTP search | 3.076/3.969/3.969 | 0.306/0.375/0.375 | 2617/2617/2617 / 2617/2617/2617 |
+| MCP default | 0.030/0.051/0.051 | 0.048/0.060/0.060 | 11435/11435/11435 / 11435/11435/11435 |
+| HTTP default | 0.027/0.043/0.043 | 0.041/0.053/0.053 | 25650/25650/25650 / 25650/25650/25650 |
 
-The first MCP search took 3.218 seconds on the base and 4.377 seconds while
-creating the candidate's persistent cache. Candidate warm MCP searches
-(samples 2–11) had a 0.228-second maximum. Cold creation therefore increases
-the full-sample p95 in this local comparison; both candidate search p95 values
-remain below six seconds. Load1 ranged 9.74–11.03 on the base and 13.52–14.17
-on the candidate. Background activity was uncontrolled, so this comparison
-does not isolate a precise speedup ratio. Production after deployment still
-needs its own observation.
+The candidate prepared the projection before opening its listener in 7.65
+seconds; the first MCP page then took 0.402 seconds. Base and candidate MCP
+clients each failed at 11.75 seconds while their separate Viewer process was
+blocked synchronously for 15 seconds, confirming the 12-second caller deadline
+is measured independently. Load1 ranged 8.23–9.30 during the base samples and
+15.62–16.51 during candidate samples. Background activity was uncontrolled;
+the candidate MCP default p95 rose from 0.051 to 0.060 seconds under its higher
+load, while the search p95 remained 0.402 seconds.
+Production before this change had 11 observations over 15 minutes with an MCP
+search p95 of 12.433 seconds; after-deployment observation remains for the
+deployment stage.
 
 Reproduce with two source exports sharing the dependency lockfile and corpus.
-Use private HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR; keep the home and
-config below TMPDIR. Run the current driver against each export:
+Use private HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR under one temporary
+root. Run the same driver against each export; append `base` after the state
+argument for the unprepared base behavior:
 
 ```sh
-bash scripts/gate-slot.sh bun scripts/profile-catalog-search.ts <export> "$TMPDIR/catalog-corpus" 6000 11
+bash scripts/gate-slot.sh bun scripts/profile-catalog-search.ts <export> "$TMPDIR/catalog-corpus" 6000 11 "$TMPDIR/profile-state" [base]
 ```
 
-The driver writes its complete JSON record to stdout and per-call observations
-to stderr. It uses private state by default; an optional fifth argument reuses
-a private projection across process restarts. Percentiles use nearest rank
-and include cold calls and time-to-error; payload statistics use successful
-JSON only. The artifact records source digests for the candidate's measured
-code and driver.
+The driver writes its full JSON record to stdout and per-call observations to
+stderr. It records source digests, startup preparation time, per-call load, and
+the independent stalled-server control. Percentiles use nearest rank and
+include cold calls and time-to-error; payload statistics use successful JSON
+only. The artifact retains both complete revision records and the earlier
+read-only production observations.
 
 The route regression is red on the base and green on the candidate: after a
 2,051-row search, a retained transcript head is made unreadable while the

@@ -143,7 +143,7 @@
       ],
       [
         "19:00:33",
-        12.0,
+        12,
         12.433,
         35.25,
         35.49,
@@ -152,7 +152,7 @@
       ],
       [
         "19:02:03",
-        12.0,
+        12,
         12.193,
         25.29,
         26.49,
@@ -161,7 +161,7 @@
       ],
       [
         "19:03:33",
-        12.0,
+        12,
         12.057,
         21.99,
         21.3,
@@ -172,8 +172,8 @@
         "19:05:03",
         4.135,
         12.411,
-        18.0,
-        18.0,
+        18,
+        18,
         false,
         true
       ]
@@ -194,23 +194,23 @@
   "localComparison": {
     "baseRevision": "9e77bba618b8637e105c6c6d391b37f99de05587",
     "candidateSourceSha256": {
+      "src/lib/scanner/conversationSearchProjection.ts": "05869df0a742250f50c3d3821e15cd5f636d52ace5f9c39312c3e48f9ea8e0c4",
       "src/app/api/conversations/route.ts": "896596e0f2b5499b720adc454e1674ba8a14180f637292b9ac2de35854b83d87",
-      "src/lib/scanner/conversationSearchProjection.ts": "429352fc83a7e446d066284d514a66753378ecb83810101302958d92ce490a43",
-      "src/lib/scanner/describe.ts": "b7e0574324780e3d5cf746d5300ccb53c6a6c781445a91a793a88856ce4a7cc6",
-      "src/lib/session/titleProjection.ts": "86cc6ffbc0f9a39ead54f0fb299a948944b3fe37d7826ce465c4fb35b5f14e48",
-      "src/lib/viewerLoopMonitor.ts": "5b858e5e1a9ef23127d4c23aed2d25516a863e1f37a4e31e0b018f0456b5f46f",
-      "scripts/profile-catalog-search.ts": "22c79a5dbd55d78dc1bf721702e3b584fb4242c5ac4d6c40590c02eeca581c51"
+      "src/lib/mcp/bindings.ts": "480fd206e8508eb60ea711b63b9035d6eb80898ba8d64caba87f1025d7198988",
+      "scripts/profile-catalog-search.ts": "34d29b8541a88ce8f5a43c3534dbf8a6ee9a07b59d81162da42741bfd8bff462",
+      "scripts/profile-catalog-search-server.ts": "0ce4573c4dbd8bf1e585667a38f1f391b08ca61ae34c1f4fd7afe0aac747a3a0"
     },
     "interpreter": "Bun 1.4.0",
     "driver": "scripts/profile-catalog-search.ts",
     "arguments": [
-      "<export>",
+      "<base-or-candidate-export>",
       "<same-corpus>",
       "6000",
       "11",
-      "<private-state>"
+      "<private-state>",
+      "base mode for base export"
     ],
-    "execution": "committed gate-slot.sh; private HOME, XDG_CONFIG_HOME, LLV_STATE_DIR, TMPDIR; port-0 listener; productionViewerControlDependencies(true)",
+    "execution": "committed gate-slot.sh; independent MCP caller process; separately owned port-0 HTTP server; private HOME, XDG_CONFIG_HOME, LLV_STATE_DIR, TMPDIR; productionViewerControlDependencies(true)",
     "cpuQuotaPercent": 300,
     "onlineCpus": 24,
     "backgroundLoadControlled": false,
@@ -218,23 +218,46 @@
     "corpusRows": 8247,
     "selectedRows": 6000,
     "firstPromptCharacters": 50016,
-    "percentiles": "nearest rank, include cold and failed observations; successful JSON payload bytes",
+    "percentiles": "nearest rank; include cold calls and errors; successful JSON payload bytes",
     "before": {
+      "revision": "base",
+      "sourceDigests": {
+        "src/lib/scanner/conversationSearchProjection.ts": null,
+        "src/app/api/conversations/route.ts": "1d5fb5a6eeef9bd8da1733421e52f48df46d787fe072355f6922fd87fc7856b3",
+        "src/lib/mcp/bindings.ts": "480fd206e8508eb60ea711b63b9035d6eb80898ba8d64caba87f1025d7198988",
+        "scripts/profile-catalog-search.ts": "34d29b8541a88ce8f5a43c3534dbf8a6ee9a07b59d81162da42741bfd8bff462",
+        "scripts/profile-catalog-search-server.ts": "0ce4573c4dbd8bf1e585667a38f1f391b08ca61ae34c1f4fd7afe0aac747a3a0"
+      },
       "corpus": 8247,
       "selected": 6000,
       "samples": 11,
-      "startedAt": "2026-10-19T19:39:15.349Z",
-      "finishedAt": "2026-10-19T19:40:25.194Z",
+      "startedAt": "2026-10-19T20:26:12.373Z",
+      "finishedAt": "2026-10-19T20:28:07.139Z",
+      "server": {
+        "separateProcess": true,
+        "preparedBeforeListening": false,
+        "preparationMs": 0,
+        "loadBefore": "8.97",
+        "loadAfter": "8.97"
+      },
+      "stallControl": {
+        "serverStallMs": 15000,
+        "clientBudgetMs": 12000,
+        "failed": true,
+        "elapsedMs": 11753.521305999995,
+        "loadBefore": "8.93",
+        "loadAfter": "11.87"
+      },
       "cold": {
         "sample": 1,
         "variant": "MCP search",
-        "ms": 3217.712624,
-        "bytes": 2035,
+        "ms": 3199.113171,
+        "bytes": 2026,
         "returned": 5,
         "total": 6000,
         "ok": true,
-        "loadBefore": "11.03",
-        "loadAfter": "11.03"
+        "loadBefore": "8.97",
+        "loadAfter": "8.89"
       },
       "summary": [
         {
@@ -242,14 +265,14 @@
           "successes": 11,
           "count": 11,
           "ms": {
-            "p50": 3080.5158390000033,
-            "p95": 3405.8227000000043,
-            "max": 3405.8227000000043
+            "p50": 3036.2247730000017,
+            "p95": 3244.8400629999996,
+            "max": 3244.8400629999996
           },
           "bytes": {
-            "p50": 2036,
-            "p95": 2036,
-            "max": 2036
+            "p50": 2027,
+            "p95": 2027,
+            "max": 2027
           }
         },
         {
@@ -257,14 +280,14 @@
           "successes": 11,
           "count": 11,
           "ms": {
-            "p50": 3137.940358,
-            "p95": 3574.2744310000053,
-            "max": 3574.2744310000053
+            "p50": 3076.2882240000035,
+            "p95": 3969.3925639999943,
+            "max": 3969.3925639999943
           },
           "bytes": {
-            "p50": 2675,
-            "p95": 2675,
-            "max": 2675
+            "p50": 2617,
+            "p95": 2617,
+            "max": 2617
           }
         },
         {
@@ -272,14 +295,14 @@
           "successes": 11,
           "count": 11,
           "ms": {
-            "p50": 30.745674000005238,
-            "p95": 39.973745000000235,
-            "max": 39.973745000000235
+            "p50": 30.232011000000057,
+            "p95": 50.789340000002994,
+            "max": 50.789340000002994
           },
           "bytes": {
-            "p50": 11666,
-            "p95": 11666,
-            "max": 11666
+            "p50": 11435,
+            "p95": 11435,
+            "max": 11435
           }
         },
         {
@@ -287,14 +310,14 @@
           "successes": 11,
           "count": 11,
           "ms": {
-            "p50": 25.887644999999793,
-            "p95": 31.237840000001597,
-            "max": 31.237840000001597
+            "p50": 26.7598109999999,
+            "p95": 43.35893300001044,
+            "max": 43.35893300001044
           },
           "bytes": {
-            "p50": 25926,
-            "p95": 25926,
-            "max": 25926
+            "p50": 25650,
+            "p95": 25650,
+            "max": 25650
           }
         }
       ],
@@ -302,505 +325,528 @@
         {
           "sample": 1,
           "variant": "MCP search",
-          "ms": 3217.712624,
-          "bytes": 2035,
+          "ms": 3199.113171,
+          "bytes": 2026,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "11.03",
-          "loadAfter": "11.03"
+          "loadBefore": "8.97",
+          "loadAfter": "8.89"
         },
         {
           "sample": 1,
           "variant": "HTTP search",
-          "ms": 3067.3445959999995,
-          "bytes": 2674,
+          "ms": 3041.802479,
+          "bytes": 2616,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "11.03",
-          "loadAfter": "10.71"
+          "loadBefore": "8.89",
+          "loadAfter": "8.89"
         },
         {
           "sample": 1,
           "variant": "MCP default",
-          "ms": 39.973745000000235,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 27.827151999999842,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.71",
-          "loadAfter": "10.71"
+          "loadBefore": "8.89",
+          "loadAfter": "8.89"
         },
         {
           "sample": 1,
           "variant": "HTTP default",
-          "ms": 25.887644999999793,
-          "bytes": 25925,
+          "ms": 25.605847000000722,
+          "bytes": 25649,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.71",
-          "loadAfter": "10.71"
+          "loadBefore": "8.89",
+          "loadAfter": "8.89"
         },
         {
           "sample": 2,
           "variant": "MCP search",
-          "ms": 2901.8415429999995,
-          "bytes": 2035,
+          "ms": 3244.8400629999996,
+          "bytes": 2026,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.71",
-          "loadAfter": "10.33"
+          "loadBefore": "8.89",
+          "loadAfter": "8.82"
         },
         {
           "sample": 2,
           "variant": "HTTP search",
-          "ms": 2937.989523,
-          "bytes": 2674,
+          "ms": 3219.7431109999998,
+          "bytes": 2616,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.33",
-          "loadAfter": "10.33"
+          "loadBefore": "8.82",
+          "loadAfter": "9.23"
         },
         {
           "sample": 2,
           "variant": "MCP default",
-          "ms": 27.69532799999979,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 42.92621699999836,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.33",
-          "loadAfter": "10.33"
+          "loadBefore": "9.23",
+          "loadAfter": "9.23"
         },
         {
           "sample": 2,
           "variant": "HTTP default",
-          "ms": 24.25788999999895,
-          "bytes": 25925,
+          "ms": 36.53567699999985,
+          "bytes": 25649,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.33",
-          "loadAfter": "10.33"
+          "loadBefore": "9.23",
+          "loadAfter": "9.23"
         },
         {
           "sample": 3,
           "variant": "MCP search",
-          "ms": 2892.129116,
-          "bytes": 2035,
+          "ms": 3027.279868999998,
+          "bytes": 2026,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.33",
-          "loadAfter": "10.14"
+          "loadBefore": "9.23",
+          "loadAfter": "9.23"
         },
         {
           "sample": 3,
           "variant": "HTTP search",
-          "ms": 2888.0545299999994,
-          "bytes": 2675,
+          "ms": 3127.3784570000025,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.14",
-          "loadAfter": "10.14"
+          "loadBefore": "9.23",
+          "loadAfter": "9.30"
         },
         {
           "sample": 3,
           "variant": "MCP default",
-          "ms": 37.558382999999594,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 28.318241999997554,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.14",
-          "loadAfter": "10.14"
+          "loadBefore": "9.30",
+          "loadAfter": "9.30"
         },
         {
           "sample": 3,
           "variant": "HTTP default",
-          "ms": 23.789018999999826,
-          "bytes": 25926,
+          "ms": 31.686949999999342,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.14",
-          "loadAfter": "10.14"
+          "loadBefore": "9.30",
+          "loadAfter": "9.30"
         },
         {
           "sample": 4,
           "variant": "MCP search",
-          "ms": 2989.9347070000003,
-          "bytes": 2036,
+          "ms": 3017.484416000003,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.14",
-          "loadAfter": "9.89"
+          "loadBefore": "9.30",
+          "loadAfter": "9.27"
         },
         {
           "sample": 4,
           "variant": "HTTP search",
-          "ms": 3035.7250179999974,
-          "bytes": 2675,
+          "ms": 3096.6267289999996,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "9.89",
-          "loadAfter": "9.74"
+          "loadBefore": "9.27",
+          "loadAfter": "9.27"
         },
         {
           "sample": 4,
           "variant": "MCP default",
-          "ms": 36.469929999999295,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 29.815006999997422,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "9.74",
-          "loadAfter": "9.74"
+          "loadBefore": "9.27",
+          "loadAfter": "9.27"
         },
         {
           "sample": 4,
           "variant": "HTTP default",
-          "ms": 26.045642000000953,
-          "bytes": 25926,
+          "ms": 26.24576199999865,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "9.74",
-          "loadAfter": "9.74"
+          "loadBefore": "9.27",
+          "loadAfter": "9.27"
         },
         {
           "sample": 5,
           "variant": "MCP search",
-          "ms": 3078.6981110000015,
-          "bytes": 2036,
+          "ms": 2968.270595000002,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "9.74",
-          "loadAfter": "9.74"
+          "loadBefore": "9.27",
+          "loadAfter": "9.09"
         },
         {
           "sample": 5,
           "variant": "HTTP search",
-          "ms": 3137.940358,
-          "bytes": 2675,
+          "ms": 3058.7554340000024,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "9.74",
-          "loadAfter": "9.92"
+          "loadBefore": "9.09",
+          "loadAfter": "9.09"
         },
         {
           "sample": 5,
           "variant": "MCP default",
-          "ms": 27.083027000000584,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 28.81211699999767,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "9.92",
-          "loadAfter": "9.92"
+          "loadBefore": "9.09",
+          "loadAfter": "9.09"
         },
         {
           "sample": 5,
           "variant": "HTTP default",
-          "ms": 24.246001999999862,
-          "bytes": 25926,
+          "ms": 26.7598109999999,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "9.92",
-          "loadAfter": "9.92"
+          "loadBefore": "9.09",
+          "loadAfter": "9.09"
         },
         {
           "sample": 6,
           "variant": "MCP search",
-          "ms": 3080.5158390000033,
-          "bytes": 2036,
+          "ms": 2947.105886000005,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "9.92",
-          "loadAfter": "9.77"
+          "loadBefore": "9.09",
+          "loadAfter": "9.00"
         },
         {
           "sample": 6,
           "variant": "HTTP search",
-          "ms": 3156.9881959999984,
-          "bytes": 2675,
+          "ms": 3076.2882240000035,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "9.77",
-          "loadAfter": "9.77"
+          "loadBefore": "9.00",
+          "loadAfter": "8.76"
         },
         {
           "sample": 6,
           "variant": "MCP default",
-          "ms": 30.00635400000465,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 26.833741999995254,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "9.77",
-          "loadAfter": "9.77"
+          "loadBefore": "8.76",
+          "loadAfter": "8.76"
         },
         {
           "sample": 6,
           "variant": "HTTP default",
-          "ms": 26.773267999997188,
-          "bytes": 25926,
+          "ms": 25.45629999999801,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "9.77",
-          "loadAfter": "9.77"
+          "loadBefore": "8.76",
+          "loadAfter": "8.76"
         },
         {
           "sample": 7,
           "variant": "MCP search",
-          "ms": 3220.5009500000015,
-          "bytes": 2036,
+          "ms": 3036.2247730000017,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "9.77",
-          "loadAfter": "10.35"
+          "loadBefore": "8.76",
+          "loadAfter": "8.76"
         },
         {
           "sample": 7,
           "variant": "HTTP search",
-          "ms": 3226.4528619999983,
-          "bytes": 2675,
+          "ms": 3039.176062000006,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.35",
-          "loadAfter": "10.35"
+          "loadBefore": "8.76",
+          "loadAfter": "8.78"
         },
         {
           "sample": 7,
           "variant": "MCP default",
-          "ms": 28.289519999998447,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 31.914853999995103,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.35",
-          "loadAfter": "10.35"
+          "loadBefore": "8.78",
+          "loadAfter": "8.78"
         },
         {
           "sample": 7,
           "variant": "HTTP default",
-          "ms": 24.780836999998428,
-          "bytes": 25926,
+          "ms": 25.36541799999395,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.35",
-          "loadAfter": "10.35"
+          "loadBefore": "8.78",
+          "loadAfter": "8.78"
         },
         {
           "sample": 8,
           "variant": "MCP search",
-          "ms": 3405.8227000000043,
-          "bytes": 2036,
+          "ms": 2999.985695000003,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.35",
-          "loadAfter": "10.40"
+          "loadBefore": "8.78",
+          "loadAfter": "8.78"
         },
         {
           "sample": 8,
           "variant": "HTTP search",
-          "ms": 3574.2744310000053,
-          "bytes": 2675,
+          "ms": 2928.7832320000016,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.40",
-          "loadAfter": "10.37"
+          "loadBefore": "8.78",
+          "loadAfter": "8.56"
         },
         {
           "sample": 8,
           "variant": "MCP default",
-          "ms": 35.07503900000302,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 30.232011000000057,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.37",
-          "loadAfter": "10.37"
+          "loadBefore": "8.56",
+          "loadAfter": "8.56"
         },
         {
           "sample": 8,
           "variant": "HTTP default",
-          "ms": 23.51231099999859,
-          "bytes": 25926,
+          "ms": 32.13610999999946,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.37",
-          "loadAfter": "10.37"
+          "loadBefore": "8.56",
+          "loadAfter": "8.56"
         },
         {
           "sample": 9,
           "variant": "MCP search",
-          "ms": 3057.9819389999975,
-          "bytes": 2036,
+          "ms": 3085.8676609999966,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.37",
-          "loadAfter": "10.37"
+          "loadBefore": "8.56",
+          "loadAfter": "8.27"
         },
         {
           "sample": 9,
           "variant": "HTTP search",
-          "ms": 3113.380793999997,
-          "bytes": 2675,
+          "ms": 3026.532368,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.37",
-          "loadAfter": "10.18"
+          "loadBefore": "8.27",
+          "loadAfter": "8.27"
         },
         {
           "sample": 9,
           "variant": "MCP default",
-          "ms": 30.745674000005238,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 46.25357200000144,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.18",
-          "loadAfter": "10.18"
+          "loadBefore": "8.27",
+          "loadAfter": "8.27"
         },
         {
           "sample": 9,
           "variant": "HTTP default",
-          "ms": 25.940347000003385,
-          "bytes": 25926,
+          "ms": 26.031186999993224,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.18",
-          "loadAfter": "10.18"
+          "loadBefore": "8.27",
+          "loadAfter": "8.27"
         },
         {
           "sample": 10,
           "variant": "MCP search",
-          "ms": 3333.8530240000036,
-          "bytes": 2036,
+          "ms": 3075.542164000006,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.18",
-          "loadAfter": "10.16"
+          "loadBefore": "8.27",
+          "loadAfter": "8.25"
         },
         {
           "sample": 10,
           "variant": "HTTP search",
-          "ms": 3312.899311000001,
-          "bytes": 2675,
+          "ms": 3282.5630079999974,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.16",
-          "loadAfter": "10.16"
+          "loadBefore": "8.25",
+          "loadAfter": "8.23"
         },
         {
           "sample": 10,
           "variant": "MCP default",
-          "ms": 36.31345699999656,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 39.33181699999841,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.16",
-          "loadAfter": "10.16"
+          "loadBefore": "8.23",
+          "loadAfter": "8.23"
         },
         {
           "sample": 10,
           "variant": "HTTP default",
-          "ms": 31.237840000001597,
-          "bytes": 25926,
+          "ms": 37.93810200000007,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.16",
-          "loadAfter": "10.16"
+          "loadBefore": "8.23",
+          "loadAfter": "8.23"
         },
         {
           "sample": 11,
           "variant": "MCP search",
-          "ms": 3149.3575830000045,
-          "bytes": 2036,
+          "ms": 3128.262736000004,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.16",
-          "loadAfter": "10.15"
+          "loadBefore": "8.23",
+          "loadAfter": "8.23"
         },
         {
           "sample": 11,
           "variant": "HTTP search",
-          "ms": 3420.127960999991,
-          "bytes": 2675,
+          "ms": 3969.3925639999943,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "10.15",
-          "loadAfter": "10.38"
+          "loadBefore": "8.23",
+          "loadAfter": "8.93"
         },
         {
           "sample": 11,
           "variant": "MCP default",
-          "ms": 28.84005500000785,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 50.789340000002994,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.38",
-          "loadAfter": "10.38"
+          "loadBefore": "8.93",
+          "loadAfter": "8.93"
         },
         {
           "sample": 11,
           "variant": "HTTP default",
-          "ms": 27.29789100000926,
-          "bytes": 25926,
+          "ms": 43.35893300001044,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "10.38",
-          "loadAfter": "10.38"
+          "loadBefore": "8.93",
+          "loadAfter": "8.93"
         }
       ]
     },
     "after": {
+      "revision": "candidate",
+      "sourceDigests": {
+        "src/lib/scanner/conversationSearchProjection.ts": "05869df0a742250f50c3d3821e15cd5f636d52ace5f9c39312c3e48f9ea8e0c4",
+        "src/app/api/conversations/route.ts": "896596e0f2b5499b720adc454e1674ba8a14180f637292b9ac2de35854b83d87",
+        "src/lib/mcp/bindings.ts": "480fd206e8508eb60ea711b63b9035d6eb80898ba8d64caba87f1025d7198988",
+        "scripts/profile-catalog-search.ts": "34d29b8541a88ce8f5a43c3534dbf8a6ee9a07b59d81162da42741bfd8bff462",
+        "scripts/profile-catalog-search-server.ts": "0ce4573c4dbd8bf1e585667a38f1f391b08ca61ae34c1f4fd7afe0aac747a3a0"
+      },
       "corpus": 8247,
       "selected": 6000,
       "samples": 11,
-      "startedAt": "2026-10-19T19:38:25.675Z",
-      "finishedAt": "2026-10-19T19:38:34.172Z",
+      "startedAt": "2026-10-19T20:28:10.521Z",
+      "finishedAt": "2026-10-19T20:29:11.144Z",
+      "server": {
+        "separateProcess": true,
+        "preparedBeforeListening": true,
+        "preparationMs": 7650.726702999999,
+        "loadBefore": "15.24",
+        "loadAfter": "15.62"
+      },
+      "stallControl": {
+        "serverStallMs": 15000,
+        "clientBudgetMs": 12000,
+        "failed": true,
+        "elapsedMs": 11750.854889999999,
+        "loadBefore": "16.51",
+        "loadAfter": "16.56"
+      },
       "cold": {
         "sample": 1,
         "variant": "MCP search",
-        "ms": 4376.606446999999,
-        "bytes": 2035,
+        "ms": 402.0693030000002,
+        "bytes": 2026,
         "returned": 5,
         "total": 6000,
         "ok": true,
-        "loadBefore": "14.17",
-        "loadAfter": "13.91"
+        "loadBefore": "15.62",
+        "loadAfter": "15.62"
       },
       "summary": [
         {
@@ -808,14 +854,14 @@
           "successes": 11,
           "count": 11,
           "ms": {
-            "p50": 152.99969000000056,
-            "p95": 4376.606446999999,
-            "max": 4376.606446999999
+            "p50": 287.6074380000009,
+            "p95": 402.0693030000002,
+            "max": 402.0693030000002
           },
           "bytes": {
-            "p50": 2036,
-            "p95": 2036,
-            "max": 2036
+            "p50": 2027,
+            "p95": 2027,
+            "max": 2027
           }
         },
         {
@@ -823,14 +869,14 @@
           "successes": 11,
           "count": 11,
           "ms": {
-            "p50": 149.8468040000007,
-            "p95": 196.34585600000082,
-            "max": 196.34585600000082
+            "p50": 306.4959980000003,
+            "p95": 374.6457640000008,
+            "max": 374.6457640000008
           },
           "bytes": {
-            "p50": 2675,
-            "p95": 2675,
-            "max": 2675
+            "p50": 2617,
+            "p95": 2617,
+            "max": 2617
           }
         },
         {
@@ -838,14 +884,14 @@
           "successes": 11,
           "count": 11,
           "ms": {
-            "p50": 34.03811600000063,
-            "p95": 49.08684600000015,
-            "max": 49.08684600000015
+            "p50": 48.498859999999695,
+            "p95": 59.92483899999934,
+            "max": 59.92483899999934
           },
           "bytes": {
-            "p50": 11666,
-            "p95": 11666,
-            "max": 11666
+            "p50": 11435,
+            "p95": 11435,
+            "max": 11435
           }
         },
         {
@@ -853,14 +899,14 @@
           "successes": 11,
           "count": 11,
           "ms": {
-            "p50": 30.6244829999996,
-            "p95": 45.20005899999978,
-            "max": 45.20005899999978
+            "p50": 40.655816000000414,
+            "p95": 52.96573300000091,
+            "max": 52.96573300000091
           },
           "bytes": {
-            "p50": 25926,
-            "p95": 25926,
-            "max": 25926
+            "p50": 25650,
+            "p95": 25650,
+            "max": 25650
           }
         }
       ],
@@ -868,486 +914,486 @@
         {
           "sample": 1,
           "variant": "MCP search",
-          "ms": 4376.606446999999,
-          "bytes": 2035,
+          "ms": 402.0693030000002,
+          "bytes": 2026,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "14.17",
-          "loadAfter": "13.91"
+          "loadBefore": "15.62",
+          "loadAfter": "15.62"
         },
         {
           "sample": 1,
           "variant": "HTTP search",
-          "ms": 157.48059900000044,
-          "bytes": 2674,
+          "ms": 306.4959980000003,
+          "bytes": 2616,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "15.62",
+          "loadAfter": "15.62"
         },
         {
           "sample": 1,
           "variant": "MCP default",
-          "ms": 34.25211800000034,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 55.04504999999881,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "15.62",
+          "loadAfter": "15.62"
         },
         {
           "sample": 1,
           "variant": "HTTP default",
-          "ms": 28.602182999999968,
-          "bytes": 25925,
+          "ms": 40.48300600000039,
+          "bytes": 25649,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "15.62",
+          "loadAfter": "15.62"
         },
         {
           "sample": 2,
           "variant": "MCP search",
-          "ms": 108.80916399999933,
-          "bytes": 2035,
+          "ms": 281.55326199999945,
+          "bytes": 2026,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "15.62",
+          "loadAfter": "16.29"
         },
         {
           "sample": 2,
           "variant": "HTTP search",
-          "ms": 119.37187900000026,
-          "bytes": 2674,
+          "ms": 331.24620499999946,
+          "bytes": 2616,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 2,
           "variant": "MCP default",
-          "ms": 27.7451489999994,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 50.186164999999164,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 2,
           "variant": "HTTP default",
-          "ms": 34.89629299999979,
-          "bytes": 25925,
+          "ms": 41.789968000000954,
+          "bytes": 25649,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 3,
           "variant": "MCP search",
-          "ms": 199.93501399999968,
-          "bytes": 2035,
+          "ms": 224.79092599999967,
+          "bytes": 2026,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 3,
           "variant": "HTTP search",
-          "ms": 188.4568390000004,
-          "bytes": 2675,
+          "ms": 266.80935000000136,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 3,
           "variant": "MCP default",
-          "ms": 44.872566000000006,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 41.208990999999514,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 3,
           "variant": "HTTP default",
-          "ms": 36.43698899999981,
-          "bytes": 25926,
+          "ms": 36.875968000000285,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 4,
           "variant": "MCP search",
-          "ms": 200.50324100000034,
-          "bytes": 2036,
+          "ms": 261.95505500000036,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 4,
           "variant": "HTTP search",
-          "ms": 196.34585600000082,
-          "bytes": 2675,
+          "ms": 314.5097530000003,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 4,
           "variant": "MCP default",
-          "ms": 34.03811600000063,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 46.46100099999967,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 4,
           "variant": "HTTP default",
-          "ms": 45.20005899999978,
-          "bytes": 25926,
+          "ms": 40.655816000000414,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 5,
           "variant": "MCP search",
-          "ms": 126.80794400000013,
-          "bytes": 2036,
+          "ms": 283.0370040000016,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 5,
           "variant": "HTTP search",
-          "ms": 139.67642400000022,
-          "bytes": 2675,
+          "ms": 295.0814590000009,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 5,
           "variant": "MCP default",
-          "ms": 28.008708000000297,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 59.13012399999934,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 5,
           "variant": "HTTP default",
-          "ms": 29.048233000000437,
-          "bytes": 25926,
+          "ms": 42.47829300000012,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 6,
           "variant": "MCP search",
-          "ms": 152.99969000000056,
-          "bytes": 2036,
+          "ms": 287.6074380000009,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 6,
           "variant": "HTTP search",
-          "ms": 118.22972800000025,
-          "bytes": 2675,
+          "ms": 269.1010270000006,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 6,
           "variant": "MCP default",
-          "ms": 27.382996000000276,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 45.161346999999296,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 6,
           "variant": "HTTP default",
-          "ms": 28.827994000000217,
-          "bytes": 25926,
+          "ms": 46.48327099999915,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 7,
           "variant": "MCP search",
-          "ms": 131.85530899999958,
-          "bytes": 2036,
+          "ms": 259.63962999999967,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 7,
           "variant": "HTTP search",
-          "ms": 183.52231699999993,
-          "bytes": 2675,
+          "ms": 272.8604919999998,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 7,
           "variant": "MCP default",
-          "ms": 49.08684600000015,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 42.064933999999994,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 7,
           "variant": "HTTP default",
-          "ms": 40.850908000000345,
-          "bytes": 25926,
+          "ms": 38.6582269999999,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 8,
           "variant": "MCP search",
-          "ms": 228.17418199999975,
-          "bytes": 2036,
+          "ms": 318.20651200000066,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 8,
           "variant": "HTTP search",
-          "ms": 195.15035799999987,
-          "bytes": 2675,
+          "ms": 374.6457640000008,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 8,
           "variant": "MCP default",
-          "ms": 34.61544700000013,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 59.92483899999934,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 8,
           "variant": "HTTP default",
-          "ms": 32.32558000000063,
-          "bytes": 25926,
+          "ms": 52.96573300000091,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 9,
           "variant": "MCP search",
-          "ms": 131.61561999999958,
-          "bytes": 2036,
+          "ms": 329.678629,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.29"
         },
         {
           "sample": 9,
           "variant": "HTTP search",
-          "ms": 144.96597100000054,
-          "bytes": 2675,
+          "ms": 328.9118120000003,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.29",
+          "loadAfter": "16.51"
         },
         {
           "sample": 9,
           "variant": "MCP default",
-          "ms": 35.6022380000004,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 54.98512699999992,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.51",
+          "loadAfter": "16.51"
         },
         {
           "sample": 9,
           "variant": "HTTP default",
-          "ms": 26.796769000000495,
-          "bytes": 25926,
+          "ms": 47.41857700000037,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.51",
+          "loadAfter": "16.51"
         },
         {
           "sample": 10,
           "variant": "MCP search",
-          "ms": 218.64040599999953,
-          "bytes": 2036,
+          "ms": 341.7819950000012,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.91"
+          "loadBefore": "16.51",
+          "loadAfter": "16.51"
         },
         {
           "sample": 10,
           "variant": "HTTP search",
-          "ms": 141.36687299999903,
-          "bytes": 2675,
+          "ms": 325.70716600000014,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.91",
-          "loadAfter": "13.52"
+          "loadBefore": "16.51",
+          "loadAfter": "16.51"
         },
         {
           "sample": 10,
           "variant": "MCP default",
-          "ms": 28.80186599999979,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 40.910022999998546,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.52",
-          "loadAfter": "13.52"
+          "loadBefore": "16.51",
+          "loadAfter": "16.51"
         },
         {
           "sample": 10,
           "variant": "HTTP default",
-          "ms": 30.6244829999996,
-          "bytes": 25926,
+          "ms": 39.311117999999624,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.52",
-          "loadAfter": "13.52"
+          "loadBefore": "16.51",
+          "loadAfter": "16.51"
         },
         {
           "sample": 11,
           "variant": "MCP search",
-          "ms": 151.74410100000023,
-          "bytes": 2036,
+          "ms": 300.53903399999945,
+          "bytes": 2027,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.52",
-          "loadAfter": "13.52"
+          "loadBefore": "16.51",
+          "loadAfter": "16.51"
         },
         {
           "sample": 11,
           "variant": "HTTP search",
-          "ms": 149.8468040000007,
-          "bytes": 2675,
+          "ms": 300.6804860000011,
+          "bytes": 2617,
           "returned": 5,
           "total": 6000,
           "ok": true,
-          "loadBefore": "13.52",
-          "loadAfter": "13.52"
+          "loadBefore": "16.51",
+          "loadAfter": "16.51"
         },
         {
           "sample": 11,
           "variant": "MCP default",
-          "ms": 25.89218400000027,
-          "bytes": 11666,
-          "returned": 35,
+          "ms": 48.498859999999695,
+          "bytes": 11435,
+          "returned": 34,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.52",
-          "loadAfter": "13.52"
+          "loadBefore": "16.51",
+          "loadAfter": "16.51"
         },
         {
           "sample": 11,
           "variant": "HTTP default",
-          "ms": 28.460080000000744,
-          "bytes": 25926,
+          "ms": 39.51195000000007,
+          "bytes": 25650,
           "returned": 50,
           "total": 8247,
           "ok": true,
-          "loadBefore": "13.52",
-          "loadAfter": "13.52"
+          "loadBefore": "16.51",
+          "loadAfter": "16.51"
         }
       ]
     }
