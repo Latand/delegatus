@@ -3363,6 +3363,7 @@ export function adoptAttempt(
     error: null,
   };
   run.attempts.push(attempt);
+  if (pipeline.terminalReap?.settledAt) pipeline.terminalReap = { ...pipeline.terminalReap, rounds: 0, settledAt: null };
   retainCloseHosts(pipeline);
   return attempt;
 }

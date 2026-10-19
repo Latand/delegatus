@@ -355,10 +355,10 @@ test("indexed host and flow owners match custody predicates and follow old-write
       { state: "settled", result: { ok: false, error: "refused" } }, { state: "settled", result: { ok: true, sha: "head", remote: "unreachable" } },
       { state: "settled", result: { ok: true, sha: "head", remote: "published", uncertain: true } },
       { state: "settled", result: { ok: true, sha: "head", remote: "published" }, executor: { finished: false } }];
-    for (const state of ["passed","failed","running","pending","reviewing","committing","needs_decision"]) for (const operation of operations) {
+    for (const historical of [false, true]) for (const state of ["passed","failed","running","pending","reviewing","committing","needs_decision"]) for (const operation of operations) {
       const row: OwnerRow = { key: "owner", state: "completed", srcConversationId: "source", srcPath: "source-path",
         ...(operation ? { delivery: { operation } } : {}),
-        runs: [{ stageId: "build", attempts: [{ n: 1, ...target, state, verdict: { status: "pass" }, completedAt: "done", flowId: "flow" }] }] };
+        runs: [{ stageId: "build", attempts: [{ n: 1, ...target, state, historical, verdict: { status: "pass" }, completedAt: "done", flowId: "flow" }] }] };
       store.boundedPatch(1, tx => tx.put(row));
       expect(store.pipelineOwnerExists([["flow","flow"]],false)).toBe(true);
       for (const [kind,identity] of Object.entries(target)) {

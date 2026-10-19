@@ -23,8 +23,10 @@ receipt cannot hide the newly resident host from the controller window.
 
 Terminal lanes now consider every recorded host. Replaced operational attempts
 release their ownership, while adopted helpers retain their independent work
-evidence. Every automatic stop still requires the runtime's conditional idle
-protocol; an open turn, publication custody, a replacement writer, pending
+evidence. Late adoption reopens a settled reap so the controller can reconcile
+the helper's terminal turn and retire its host. Every automatic stop still
+requires the runtime's conditional idle protocol; an open turn, publication
+custody, a replacement writer, pending
 work or unreadable evidence keeps the host alive and cleanup pending. Explicit
 close obligations continue to drain their frozen targets. Closed lanes without
 an obligation use the automatic idle reap. Archiving waits for outstanding

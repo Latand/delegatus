@@ -229,6 +229,53 @@ test.each([false, true])("a later attempt reusing a previously reaped host retai
   expect(loadPipelines()[0]!.terminalReap?.settledAttempts).toEqual(["implement:1", "implement:2"]);
 });
 
+test.each(["completed", "closed"] as const)("late adoption reopens a settled %s lane and retires its host after the turn settles", async state => {
+  const h = harness();
+  const record = pipelineRecord({ id: `late-adoption-${state}`, state, attempts: [attempt(1, "conversation_source", true)] });
+  record.terminalReap = { rounds: 0, stopped: 1, lastAt: record.createdAt, settledAt: record.closedAt,
+    settledAttempts: ["implement:1"] };
+  const adopted = adoptAttempt(record, "implement", {
+    sourceConversationId: "conversation_source", conversationId: "conversation_late", launchId: "launch-late",
+    sessionId: "session-late", agentPath: "/codex/late.jsonl", paneId: null, startedAt: record.closedAt!,
+  });
+  expect(adopted?.n).toBe(2);
+  expect(record.terminalReap?.settledAt).toBeNull();
+  savePipelines([record]);
+  h.resident.set("conversation_late", true);
+  h.active.set("conversation_late", true);
+  await tickPipelinesController([], h.ports);
+  expect(h.stops).toEqual([]);
+  expect(loadPipelines()[0]!.terminalReap?.settledAt).toBeNull();
+  h.active.set("conversation_late", false);
+  h.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: {
+    text: '```json\n{"status":"pass"}\n```', ts: Date.parse(record.closedAt!) + 1_000,
+  } });
+  await tickPipelinesController([], h.ports);
+  await tickPipelinesController([], h.ports);
+  expect(h.stops).toEqual(["implement:2:conversation_late"]);
+  expect(h.idleEvidenceRequired).toEqual([false]);
+  expect(loadPipelines()[0]!.terminalReap?.settledAt).toBeTruthy();
+});
+
+test.each(["completed", "closed"] as const)("an unstamped adopted host in a %s lane retires only after its open turn settles", async state => {
+  const h = harness();
+  const helper = attempt(1, "conversation_helper", false);
+  helper.historical = true;
+  savePipelines([pipelineRecord({ id: `terminal-helper-${state}`, state, attempts: [helper] })]);
+  h.resident.set("conversation_helper", true);
+  h.active.set("conversation_helper", true);
+  await tickPipelinesController([], h.ports);
+  expect(h.stops).toEqual([]);
+  h.active.set("conversation_helper", false);
+  h.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: {
+    text: '```json\n{"status":"pass"}\n```', ts: Date.parse("2026-07-31T00:20:01.000Z"),
+  } });
+  await tickPipelinesController([], h.ports);
+  await tickPipelinesController([], h.ports);
+  expect(h.stops).toEqual(["implement:1:conversation_helper"]);
+  expect(h.idleEvidenceRequired).toEqual([false]);
+});
+
 test("an old terminal lane remains scheduled and unarchived until its open turn settles", async () => {
   const h = harness();
   savePipelines([pipelineRecord({ id: "retire-before-archive", state: "completed",

@@ -104,6 +104,22 @@ test.each(["completed", "closed", "superseded"] as const)("the production idle c
   expect(f.signals).toEqual([987001, 987002]);
 });
 
+test.each([false, true])("terminal adopted work requires an idle turn at production actuation: %s", async resumed => {
+  const f = fixture();
+  f.pipeline.state = "completed";
+  f.attempt.historical = true;
+  f.attempt.state = "passed";
+  f.attempt.verdict = { status: "pass" };
+  f.attempt.completedAt = "2026-10-13T00:00:01.000Z";
+  const status = f.deps.client.operationStatus;
+  f.deps.client.operationStatus = async () => {
+    if (resumed) f.entry.structuredHost.activeTurnRef = "new-turn" as never;
+    return status();
+  };
+  expect(await f.retire()).toBe(!resumed);
+  expect(f.signals).toEqual(resumed ? [] : [987001, 987002]);
+});
+
 test.each(["turn", "writer", "replacement", "publication"] as const)("released attempts still refuse a changed %s after awaited admission", async change => {
   const f = fixture();
   f.pipeline.state = "completed";
