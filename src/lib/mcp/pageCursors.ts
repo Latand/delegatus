@@ -118,7 +118,7 @@ function withoutCursor(args: McpToolArgs): McpToolArgs {
 
 async function restartPage(service: McpToolService, toolName: string, args: McpToolArgs, context?: Parameters<McpToolService["callTool"]>[2]): Promise<McpToolResult> {
   const fresh = await service.callTool(toolName, withoutCursor(args), context);
-  return { ...fresh, cursorReset: true };
+  return fresh.ok ? { ...fresh, cursorReset: true } : fresh;
 }
 
 function invalidInput(toolName: string, args: McpToolArgs): McpToolResult {
@@ -156,7 +156,7 @@ export function withMcpPageCursors(service: McpToolService, store = mcpPageCurso
                 return callWithoutCursor;
               });
               const fresh = await wrapped.callTool(toolName, { ...args, calls }, context);
-              return { ...fresh, cursorReset: true };
+              return fresh.ok ? { ...fresh, cursorReset: true } : fresh;
             }
             item = { ...item, arguments: held.filters.arguments, cursor: held.cursor };
           }
