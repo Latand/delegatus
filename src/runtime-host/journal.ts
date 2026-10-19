@@ -1,3 +1,5 @@
+import { dirname } from "node:path";
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
 import { parseSnapshotReadRequest, SNAPSHOT_ACTIVITY_FIELDS, SNAPSHOT_OWNER_FIELDS, type RuntimeSnapshotMetadata } from "@/lib/runtime/snapshotReads";
@@ -390,6 +392,22 @@ function runtimeJournalOpenRefusal(error: unknown): unknown {
   );
 }
 
+const journalDeploymentIndexes = declaredIndexes([
+  `CREATE UNIQUE INDEX IF NOT EXISTS viewer_deployments_one_active
+          ON viewer_deployments(active) WHERE active = 1`,
+]);
+
+const journalEventIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS deployment_list_recent ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS events_event_id ON events(event_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS events_scope_revision ON events(scope, revision)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS events_producer_key ON events(producer_kind, producer_key) WHERE producer_key IS NOT NULL`,
+]);
+
+const sessionArtifactIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS session_artifact_path ON entities(json_extract(state_json, '$.artifactPath'), id) WHERE kind = 'session'`,
+]);
+
 export class RuntimeJournal {
   private readonly db: Database;
   private readonly nativeQueue: NativeQueueJournal;
@@ -454,6 +472,8 @@ export class RuntimeJournal {
       }
       /* One statement per exec, as above: a table creation refused for a
          peer's lock must not be replaced by a later statement's outcome. */
+      journalDeploymentIndexes.assertRepairAuthority(this.db, dirname(filename));
+      journalEventIndexes.assertRepairAuthority(this.db, dirname(filename));
       for (const statement of [
         `CREATE TABLE IF NOT EXISTS journal_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
         `CREATE TABLE IF NOT EXISTS events (
@@ -496,19 +516,15 @@ export class RuntimeJournal {
           request_hash TEXT NOT NULL, status_json TEXT NOT NULL,
           active INTEGER NOT NULL, updated_at INTEGER NOT NULL
         )`,
-        `CREATE UNIQUE INDEX IF NOT EXISTS viewer_deployments_one_active
-          ON viewer_deployments(active) WHERE active = 1`,
       ]) this.db.exec(statement);
+      journalDeploymentIndexes.install(this.db, dirname(filename));
       this.migrateOperationIdempotencyScope();
       this.migrateOperationOrphanedSince();
       this.migrateOperationProjectionPending();
       this.migrateLegacyEvents();
       this.migrateEntityUpdatedAt();
       this.retainLegacyStopAdmissions();
-      this.db.exec(`CREATE INDEX IF NOT EXISTS deployment_list_recent ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`);
-      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS events_event_id ON events(event_id)");
-      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS events_scope_revision ON events(scope, revision)");
-      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS events_producer_key ON events(producer_kind, producer_key) WHERE producer_key IS NOT NULL");
+      journalEventIndexes.install(this.db, dirname(filename));
       this.metaSetDefault("schema_version", String(RUNTIME_SCHEMA_VERSION));
       this.metaSetDefault("seq", "0");
       this.metaSetDefault("published_seq", this.metaOr("seq", "0"));
@@ -537,7 +553,7 @@ export class RuntimeJournal {
     yield* this.backfillProducerReceipts();
     yield* this.verify();
     if (!this.fault) {
-      this.db.exec(`CREATE INDEX IF NOT EXISTS session_artifact_path ON entities(json_extract(state_json, '$.artifactPath'), id) WHERE kind = 'session'`);
+      sessionArtifactIndexes.install(this.db, dirname(this.db.filename));
       this.sessionHostMetadata.start();
     }
   }
