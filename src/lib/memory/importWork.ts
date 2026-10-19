@@ -317,6 +317,7 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       Object.assign(record, { state: "ready", curationDirty: true, files: manifest.files.length,
         candidates: (request.rescan ? record.candidates : 0) + new Set(candidates.map(row => row.group)).size,
         parts: (request.rescan ? record.parts : 0) + candidates.length });
+      delete record.reason;
       await writeImportRows([record], assertOwned);
       return record;
     } catch (error) {

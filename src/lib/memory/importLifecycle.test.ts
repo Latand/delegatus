@@ -112,8 +112,10 @@ test("a retirement during a scan owes another final scan; failed scans never sta
   expect(readMemorySourceFile()?.phase).toBe("draining"); expect(readMemorySourceFile()?.drainedAt).toBeUndefined();
   await expect(advanceMemoryImportWork(request(20), { ...ports(), legacy: async () => legacy, afterCopy: async copy => { await fs.writeFile(copy, "bad copy"); } })).rejects.toThrow(/integrity/);
   expect(readMemorySourceFile()?.drainedAt).toBeUndefined();
+  expect(readImportRecord(ID)?.reason).toBe("integrity");
   await advanceMemoryImportWork(request(30), { ...ports(), legacy: async () => [] });
   expect(readMemorySourceFile()?.phase).toBe("active");
+  expect(readImportRecord(ID)?.reason).toBeUndefined();
   expect(readImportCandidates(ID).candidates.some(c => c.body === "A write landed after the scan committed.\n")).toBe(true);
 });
 
