@@ -2705,7 +2705,7 @@ test("attempt Git custody settles the later candidate after a rejected push is r
 
 for (const stallMs of [0, 27_000]) test(`refresh completion advances its parent through the controller after a ${stallMs}ms stall`, async () => {
   let sequence = 0;
-  const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
+  const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `${stallMs === 0 ? "10000000" : "20000000"}-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
   const fixture = await realWorktreeLane("refresh-controller", [
     { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Refresh", next: "review" },
     { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review resolution", next: null, onFail: { to: "build", maxRounds: 1 } },
