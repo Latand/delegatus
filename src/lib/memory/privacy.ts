@@ -5,7 +5,7 @@ import type { PublicDenyList } from "@/lib/bridge/publicSafe";
 
 /** A revision conflict is safe to retry only before dispatch. Never carries text. */
 export class RoleMemoryChanged extends RoleMemoryRefusal {
-  constructor() { super("LESSON_PRIVACY_CHANGED", "Role-memory privacy changed; retrying before dispatch"); }
+  constructor() { super("LESSON_PRIVACY_UNAVAILABLE", "Role-memory privacy changed; retrying before dispatch"); }
 }
 
 /** Restart from original inputs. A failed read of an unchanged store remains
