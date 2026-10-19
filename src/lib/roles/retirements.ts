@@ -1,6 +1,7 @@
+import { stateLockDeferral } from "@/lib/state/lockWait";
 /**
  * Stale preset overrides (docs/design/model-sizing-tiers.md §5). One pass at
- * the serving release's boot, journaled in role-presets.json itself:
+ * the serving release's boot, journaled with the role presets in SQLite:
  *
  * 1. Normalize: a row equal to the value shipped now is dropped. Nothing
  *    changes at runtime; the row stops being pinned, so the next change to a
@@ -11,14 +12,13 @@
  *    else is the operator's choice and is left alone.
  */
 
-import fs from "node:fs";
 import path from "node:path";
 
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
 import { ROLE_DEFAULTS } from "./defaults";
 import { shippedVariantConfig } from "./paramConfig";
-import { loadRoleOverrides, roleOverridesFile, sameConfig, saveRoleOverrides, withRoleRegistryLock } from "./store";
+import { hasRoleOverrides, loadRoleOverrides, roleOverridesFile, sameConfig, saveRoleOverrides, withRoleRegistryLock } from "./store";
 import type { RoleConfig, RoleId, RoleMappingRetirementRecord, RoleOverride, RoleVariantId } from "./types";
 
 export type RoleMappingRetirement = {
@@ -76,7 +76,7 @@ function storedRows(overrides: Partial<Record<RoleId, RoleOverride>>): [string, 
 
 /**
  * The boot pass. Never creates the file when it is absent and never deletes
- * it (its existence is the onboarding marker); a file that fails validation is
+ * it (saved mappings identify an existing install); a file that fails validation is
  * left as it is. Only a process that owns the state directory's startup
  * mutations may run it against the operator's own directory.
  */
@@ -86,7 +86,10 @@ export function applyRoleMappingRetirements(
 ): RoleMappingRetirementOutcome {
   const file = roleOverridesFile();
   assertStateStartupMutation(path.dirname(file), "role mapping retirement");
-  if (!fs.existsSync(file)) return { state: "absent" };
+  if (!hasRoleOverrides()) return { state: "absent" };
+  // Validation can now refuse while opening the transaction, before the
+  // callback reads the draft. Retirements retain their advisory failure mode.
+  try { loadRoleOverrides(); } catch (error) { if (stateLockDeferral(error)) throw error; return { state: "unreadable" }; }
   return withRoleRegistryLock(() => applyRetirementsLocked(retirements, now));
 }
 

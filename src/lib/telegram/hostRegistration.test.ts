@@ -1,3 +1,4 @@
+import { setLegacyDocumentWriteHookForTests } from "@/lib/state/legacyDocumentStore";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -119,12 +120,14 @@ test("high-level registration aggregates every required host failure", () => {
 test("ownership persistence failure rolls back newly published Claude registrations", () => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   const telegramState = path.join(process.env.LLV_STATE_DIR!, "telegram");
-  fs.mkdirSync(path.join(telegramState, "registrations.json"), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(telegramState, { recursive: true, mode: 0o700 });
+  setLegacyDocumentWriteHookForTests(collection => { if (collection === "telegram_registrations") throw new Error("ownership persistence refused"); });
   const claudeFile = tempPath(".claude.json");
   const original = JSON.stringify({ theme: "dark", mcpServers: { viewer: { type: "stdio", command: "viewer-mcp" } } }, null, 2) + "\n";
   fs.writeFileSync(claudeFile, original, { mode: 0o600 });
 
-  expect(() => registerTelegramHosts({ claudeStatePaths: [claudeFile], codexConfigPaths: [] }, URL)).toThrow();
+  try { expect(() => registerTelegramHosts({ claudeStatePaths: [claudeFile], codexConfigPaths: [] }, URL)).toThrow("ownership persistence refused"); }
+  finally { setLegacyDocumentWriteHookForTests(null); }
 
   expect(fs.readFileSync(claudeFile, "utf8")).toBe(original);
   expect((JSON.parse(fs.readFileSync(claudeFile, "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers.telegram).toBeUndefined();
