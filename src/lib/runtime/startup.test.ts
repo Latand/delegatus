@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import net from "node:net";
-import { expect, spyOn, test } from "bun:test";
+import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
+
+// Durable startup fixtures yield between phases. Supervise their whole pass
+// without leaving a five-second caller running into the next test's controller.
+setDefaultTimeout(60_000);
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
@@ -44,6 +48,15 @@ import { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost } from "./codexAppServerHost";
 import { setTelegramLaunchRepairForTests } from "@/lib/telegram/launchReadiness";
 import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
+
+class ObservedDeliveryHost extends FakeEngineHost {
+  readonly sent = Promise.withResolvers<void>();
+  override async send(entry: Parameters<FakeEngineHost["send"]>[0]) {
+    const receipt = await super.send(entry);
+    this.sent.resolve();
+    return receipt;
+  }
+}
 
 function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
   return {
@@ -4004,14 +4017,13 @@ test("startup transcript refresh skips historical structured hosts", async () =>
     expect(registry.conversation(live.conversation.id)?.turn.state).toBe("terminal");
     expect(historical.every((conversation) => registry.conversation(conversation.id)?.turn.state === "busy")).toBeTrue();
   } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
     registry.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
-  // This 65-row integration fixture includes reconciliation and publication.
-  // Let its awaited startup and controller teardown finish before the next
-  // test replaces the process-wide publication. Bun's default five seconds
-  // expires while that work is still running under the gate's CPU quota.
-}, 30_000);
+  // Seeding and reconciling 65 durable rows takes over five seconds under the
+  // gate's CPU quota. This bounds the workload without ending its caller early.
+}, 60_000);
 
 test.each(["codex", "claude"] as const)(
   "startup adopts a persisted terminal %s conversation whose transcript starts a new turn before restart",
@@ -5618,39 +5630,51 @@ test("one host's unanswered continuation admission holds no other host's", async
     });
     projectHostedRestart(journal, "codex", conversation.id, sessionId, directory, artifactPath);
   }
-  let releaseFirst: (() => void) | null = null;
+  const firstEntered = Promise.withResolvers<void>();
+  const secondEntered = Promise.withResolvers<void>();
+  const firstRelease = Promise.withResolvers<void>();
+  let pass: ReturnType<typeof adoptStructuredHostsAtStartup> | undefined;
   const base = runtimeJournalClient(journal);
   const client = {
     ...base,
     command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => {
-      if (command.operationId?.includes(sessions[0]!)) await new Promise<void>((resolve) => { releaseFirst = resolve; });
-      return journal.executeOperation(command);
+      if (command.operationId?.includes(sessions[0]!)) {
+        firstEntered.resolve();
+        await firstRelease.promise;
+      }
+      const result = journal.executeOperation(command);
+      if (command.operationId?.includes(sessions[1]!)) secondEntered.resolve();
+      return result;
     },
   } as RuntimeHostClient;
   const ledgers = sessions.map(() => createFakeDeliveryLedger());
-  const hosts = ledgers.map((ledger) => Object.assign(new FakeEngineHost(ledger), { onStateChange: () => () => {} }));
+  const hosts = ledgers.map((ledger) => Object.assign(new ObservedDeliveryHost(ledger), { onStateChange: () => () => {} }));
   try {
-    const pass = adoptStructuredHostsAtStartup({
+    pass = adoptStructuredHostsAtStartup({
       registry, client,
       adopt: async () => sessions.map((sessionId, index) => ({ key: { engine: "codex" as const, sessionId }, host: hosts[index] as never })),
       adoptClaude: async () => [],
     });
-    const secondOperation = () => `recovery-continuation-${sessions[1]}-${registry.snapshot().entries[`codex:${sessions[1]}`]!.claimEpoch}`;
-    const admitted = await Promise.race([
-      (async () => { await waitFor(() => releaseFirst !== null && journal.operationResult(secondOperation()) !== null, 1_500); return "admitted"; })(),
-      Bun.sleep(2_000).then(() => "waiting"),
-    ]).catch(() => "waiting");
-    expect(admitted).toBe("admitted");
-    (releaseFirst as unknown as () => void)();
+    // Both admissions must be observed while the first answer is still held.
+    // A serialized implementation cannot reach the second handshake.
+    await Promise.race([
+      Promise.all([firstEntered.promise, secondEntered.promise]),
+      pass.then(() => { throw new Error("startup ended before both admissions"); }),
+    ]);
+    firstRelease.resolve();
     await pass;
-    await waitFor(() => ledgers.every((ledger) => ledger.writes.length === 1), 500);
+    await Promise.all(hosts.map(host => host.sent.promise));
+    expect(ledgers.map(ledger => ledger.writes.length)).toEqual([1, 1]);
   } finally {
-    (releaseFirst as (() => void) | null)?.();
+    firstRelease.resolve();
+    // Finish the caller before retiring the controller or closing its journal,
+    // including when an assertion failed while the first answer was held.
+    await pass?.catch(() => {});
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
-});
+}, 60_000);
 
 test("a continuation retry has its row and record before the retry command, even for a continuation older code left in the journal only, and a lost retry reply converges on the same leaf once", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-continuation-retry-row-"));
@@ -5726,6 +5750,7 @@ test("one seat's unanswered interruption continuation holds no other seat's", as
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   const ledgers = new Map<string, ReturnType<typeof createFakeDeliveryLedger>>();
+  const delivered: Promise<void>[] = [];
   const isolatedEnvironment = {
     HOME: path.join(directory, "home"),
     XDG_CONFIG_HOME: path.join(directory, "config"),
@@ -5747,7 +5772,10 @@ test("one seat's unanswered interruption continuation holds no other seat's", as
     completeOrchestratorSeatIntent({ project, clientRequestId: requestId, conversationId: conversation.id, path: artifactPath });
     return conversation;
   };
-  let releaseFirst: (() => void) | null = null;
+  const firstEntered = Promise.withResolvers<void>();
+  const secondEntered = Promise.withResolvers<void>();
+  const firstRelease = Promise.withResolvers<void>();
+  let pass: ReturnType<typeof adoptStructuredHostsAtStartup> | undefined;
   try {
     const first = addSeat("seat-hung", "25400000-0000-0000-0000-000000000001");
     const second = addSeat("seat-free", "25400000-0000-0000-0000-000000000002");
@@ -5757,9 +5785,12 @@ test("one seat's unanswered interruption continuation holds no other seat's", as
       ...base,
       command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => {
         if (command.conversationId === first.id && command.idempotencyKey.startsWith("interruption-continuation-")) {
-          await new Promise<void>((resolve) => { releaseFirst = resolve; });
+          firstEntered.resolve();
+          await firstRelease.promise;
         }
-        return journal.executeOperation(command);
+        const result = journal.executeOperation(command);
+        if (command.conversationId === second.id && command.idempotencyKey.startsWith("interruption-continuation-")) secondEntered.resolve();
+        return result;
       },
     } as RuntimeHostClient;
     const adopt = async (received: AgentRegistry, shouldAdopt: StructuredHostAdoptionFilter) =>
@@ -5773,27 +5804,32 @@ test("one seat's unanswered interruption continuation holds no other seat's", as
           "idle", claimed.claimOwner, claimed.claimEpoch);
         const ledger = createFakeDeliveryLedger();
         ledgers.set(keyId, ledger);
-        return [{ key: entry.key, host: Object.assign(new FakeEngineHost(ledger), { onStateChange: () => () => {} }) as never }];
+        const host = Object.assign(new ObservedDeliveryHost(ledger), { onStateChange: () => () => {} });
+        delivered.push(host.sent.promise);
+        return [{ key: entry.key, host: host as never }];
       });
-    const pass = adoptStructuredHostsAtStartup({
+    pass = adoptStructuredHostsAtStartup({
       registry, client,
       orchestratorSeats: () => durableSeats,
       adopt: async (received, _optionsFor, _env, shouldAdopt = () => true) => adopt(received, shouldAdopt) as never,
       adoptClaude: async () => [],
     });
-    const secondAdmitted = () => journal.snapshot().sessions.some((session) => session.conversationId === second.id
-      && session.recentReceipts.some((receipt) => receipt.idempotencyKey.startsWith("interruption-continuation-")));
-    const admitted = await Promise.race([
-      (async () => { await waitFor(() => releaseFirst !== null && secondAdmitted(), 1_500); return "admitted"; })(),
-      Bun.sleep(2_000).then(() => "waiting"),
-    ]).catch(() => "waiting");
-    expect(admitted).toBe("admitted");
-    (releaseFirst as unknown as () => void)();
+    // Both admissions must be observed while the first answer is still held.
+    // A serialized implementation cannot reach the second handshake.
+    await Promise.race([
+      Promise.all([firstEntered.promise, secondEntered.promise]),
+      pass.then(() => { throw new Error("startup ended before both admissions"); }),
+    ]);
+    firstRelease.resolve();
     await pass;
-    await waitFor(() => [...ledgers.values()].every((ledger) => ledger.writes.length === 1), 1_000);
+    expect(delivered).toHaveLength(2);
+    await Promise.all(delivered);
     expect([...ledgers.values()].flatMap((ledger) => ledger.writes)).toHaveLength(2);
   } finally {
-    (releaseFirst as (() => void) | null)?.();
+    firstRelease.resolve();
+    // Finish the caller before retiring the controller or closing its journal,
+    // including when an assertion failed while the first answer was held.
+    await pass?.catch(() => {});
     for (const [key, value] of Object.entries(previousEnvironment)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -5802,7 +5838,7 @@ test("one seat's unanswered interruption continuation holds no other seat's", as
     journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
-});
+}, 60_000);
 
 /* docs/design/delivery-progress-and-drain.md, P19b and A2, rule (a) step 4:
    a later startup pass that finds the retry's row already written carries on
