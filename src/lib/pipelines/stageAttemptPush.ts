@@ -39,7 +39,66 @@ async function publishedIntegrationGreen(pipeline: Pipeline, target: string, mai
   if (!view || view.state !== "OPEN" || view.isDraft !== false || view.headRefOid !== target || view.baseRefName !== pipeline.baseBranch) return false;
   if (!Array.isArray(view.statusCheckRollup) || view.statusCheckRollup.some(entry => !entry || typeof entry !== "object"
     || !(typeof entry.name === "string" || typeof entry.context === "string"))) return false;
-  const checks = rollupChecksWithIdentity(view.statusCheckRollup);
+  const [owner, name] = repository.split("/");
+  const query = `query($owner: String!, $name: String!, $oid: GitObjectID!, $endCursor: String) {
+    repository(owner: $owner, name: $name) {
+      object(oid: $oid) {
+        ... on Commit {
+          statusCheckRollup {
+            contexts(first: 100, after: $endCursor) {
+              nodes {
+                __typename
+                ... on CheckRun {
+                  name status conclusion startedAt
+                  checkSuite { app { databaseId } workflowRun { workflow { name } } }
+                }
+                ... on StatusContext { context state createdAt }
+              }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }
+    }
+  }`;
+  // gh pr view exports workflowName but omits the CheckRun app. Query the
+  // exact head with GraphQL for both app and workflow provenance instead.
+  const entries: Record<string, unknown>[] = [];
+  const pageInfoQuery = "{nodes: .data.repository.object.statusCheckRollup.contexts.nodes, pageInfo: .data.repository.object.statusCheckRollup.contexts.pageInfo}";
+  const seenCursors = new Set<string>();
+  let cursor: string | null = null;
+  for (let pageNumber = 0; pageNumber < 50; pageNumber++) {
+    const args = ["api", "graphql", "--jq", pageInfoQuery,
+      "-F", `owner=${owner}`, "-F", `name=${name}`, "-F", `oid=${target}`];
+    if (cursor !== null) args.push("-F", `endCursor=${cursor}`);
+    args.push("-f", `query=${query}`);
+    const page = await read(args);
+    if (!page || typeof page !== "object" || Array.isArray(page)) throw new StageIntegrationChecksPending("the published integration's checks are malformed");
+    const body = page as { nodes?: unknown; pageInfo?: { hasNextPage?: unknown; endCursor?: unknown } };
+    if (!Array.isArray(body.nodes) || body.nodes.some(node => !node || typeof node !== "object" || Array.isArray(node))
+      || !body.pageInfo || typeof body.pageInfo.hasNextPage !== "boolean"
+      || (body.pageInfo.hasNextPage && (typeof body.pageInfo.endCursor !== "string" || !body.pageInfo.endCursor
+        || seenCursors.has(body.pageInfo.endCursor)))) {
+      throw new StageIntegrationChecksPending("the published integration's checks are malformed");
+    }
+    entries.push(...body.nodes as Record<string, unknown>[]);
+    if (!body.pageInfo.hasNextPage) break;
+    cursor = body.pageInfo.endCursor as string;
+    seenCursors.add(cursor);
+    if (pageNumber === 49) throw new StageIntegrationChecksPending("the published integration has too many check pages");
+  }
+  if (entries.some(entry => entry.__typename === "CheckRun"
+    ? typeof entry.name !== "string" || !entry.name || typeof entry.status !== "string"
+      || (entry.conclusion !== null && typeof entry.conclusion !== "string")
+    : entry.__typename === "StatusContext"
+      ? typeof entry.context !== "string" || !entry.context || typeof entry.state !== "string"
+      : true)) throw new StageIntegrationChecksPending("the published integration's checks are malformed");
+  const checks = rollupChecksWithIdentity(entries.map(entry => {
+    if (entry.__typename === "StatusContext") return { ...entry, startedAt: entry.createdAt };
+    const suite = entry.checkSuite && typeof entry.checkSuite === "object" ? entry.checkSuite as Record<string, unknown> : {};
+    const app = suite.app && typeof suite.app === "object" ? suite.app as Record<string, unknown> : null;
+    return { ...entry, app: app ? { ...app, id: app.databaseId } : undefined };
+  }));
   if (!checks.length) throw new StageIntegrationChecksPending("the published integration is waiting for checks to register");
   if (checks.some(check => check.verdict === "red")) return false;
   const protection = await read(["api", `repos/${repository}/branches/${encodeURIComponent(pipeline.baseBranch)}`]) as {
@@ -58,7 +117,7 @@ async function publishedIntegrationGreen(pipeline: Pipeline, target: string, mai
     && (appId == null || (check.source === "check" && check.appId === appId)));
   if (checks.some(check => check.verdict !== "green")
     || contexts.some(name => !requiredSatisfied(name))
-    || configured.some(check => !requiredSatisfied(check.context, check.app_id as number | null))) {
+    || configured.some(check => !requiredSatisfied(check.context, check.app_id === -1 ? null : check.app_id as number | null))) {
     throw new StageIntegrationChecksPending("the published integration is waiting for green checks");
   }
   return true;

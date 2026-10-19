@@ -488,6 +488,10 @@ async function foreignIntegration(local: boolean) {
     statusCheckRollup: Array<Record<string, unknown>> } = { headRefOid: head, baseRefName: "main", state: "OPEN", isDraft: false,
     statusCheckRollup: [{ __typename: "StatusContext", context: "ci", state: "SUCCESS" }] };
   let required: unknown = { protected: true, protection: { required_status_checks: { contexts: ["ci"] } } };
+  let checkPages: { nodes: unknown[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } }[] = [
+    { nodes: [{ __typename: "StatusContext", context: "ci", state: "SUCCESS", createdAt: "2026-10-16T10:01:00Z" }],
+      pageInfo: { hasNextPage: false, endCursor: null } },
+  ];
   let checksCode = 0;
   const commands: string[][] = [];
   const exec: typeof realExec = async (command, args, cwd, env, options) => {
@@ -495,11 +499,21 @@ async function foreignIntegration(local: boolean) {
     if (command === "git" && args[0] === "remote" && args[1] === "get-url") {
       return { code: 0, stdout: "https://github.com/example/project.git\n", stderr: "" };
     }
-    if (command === "gh") return { code: checksCode, stdout: JSON.stringify(args[0] === "api" ? required : checks), stderr: "" };
+    if (command === "gh") {
+      if (args[0] === "api" && args.includes("graphql")) {
+        const after = args.find(part => part.startsWith("endCursor="))?.slice("endCursor=".length);
+        const index = after === undefined ? 0 : checkPages.findIndex(page => page.pageInfo.endCursor === after) + 1;
+        const page = checkPages[index];
+        return { code: checksCode, stdout: JSON.stringify(page ?? { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } }) + "\n", stderr: "" };
+      }
+      return { code: checksCode, stdout: JSON.stringify(args[0] === "api" ? required : checks), stderr: "" };
+    }
     return realExec(command, args, cwd, env, options);
   };
   return { ...f, head, reviewed, checks, exec, commands,
-    setRequired(value: unknown) { required = value; }, setChecksCode(code: number) { checksCode = code; } };
+    setRequired(value: unknown) { required = value; },
+    setCheckRuns(value: unknown[]) { checkPages = [{ nodes: value, pageInfo: { hasNextPage: false, endCursor: null } }]; },
+    setCheckPages(value: typeof checkPages) { checkPages = value; }, setChecksCode(code: number) { checksCode = code; } };
 }
 
 test.each([false, true])("published clean main integration is adopted without creation receipts (local=%s)", async local => {
@@ -526,7 +540,8 @@ test.each([false, true])("published clean main integration is adopted without cr
           if (command === "git" && args[0] === "remote" && args[1] === "get-url")
             return { code: 0, stdout: "https://github.com/example/project.git", stderr: "" };
           if (command === "gh") return { code: 0, stdout: JSON.stringify(args[0] === "api"
-            ? { protected: true, protection: { required_status_checks: { contexts: ["ci"] } } } : checks), stderr: "" };
+            ? args.includes("graphql") ? { nodes: [{ __typename: "StatusContext", context: "ci", state: "SUCCESS", createdAt: "2026-10-16T10:01:00Z" }], pageInfo: { hasNextPage: false, endCursor: null } }
+              : { protected: true, protection: { required_status_checks: { contexts: ["ci"] } } } : checks), stderr: "" };
           return realExec(command, args, cwd, env, options);
         };
         const result = await commitAndAdoptStageBranch(pipeline, "refresh", exec, () => [pipeline], undefined,
@@ -571,9 +586,9 @@ test.each(["extra commit", "amended merge", "non-main parent", "unpublished"])("
 test.each(["pending", "red", "empty", "malformed rollup", "stale head", "wrong base", "missing required", "malformed protection", "malformed protection body", "malformed contexts", "unavailable"])("published clean integration waits or refuses when checks are %s", async mode => {
   const f = await foreignIntegration(true);
   try {
-    if (mode === "pending") f.checks.statusCheckRollup[0]!.state = "PENDING";
-    if (mode === "red") f.checks.statusCheckRollup[0]!.state = "FAILURE";
-    if (mode === "empty") f.checks.statusCheckRollup = [];
+    if (mode === "pending") f.setCheckRuns([{ __typename: "StatusContext", context: "ci", state: "PENDING", createdAt: "2026-10-16T10:01:00Z" }]);
+    if (mode === "red") f.setCheckRuns([{ __typename: "StatusContext", context: "ci", state: "FAILURE", createdAt: "2026-10-16T10:01:00Z" }]);
+    if (mode === "empty") f.setCheckRuns([]);
     if (mode === "malformed rollup") f.checks.statusCheckRollup.push(null as never);
     if (mode === "stale head") f.checks.headRefOid = f.reviewed;
     if (mode === "wrong base") f.checks.baseRefName = "other";
@@ -587,7 +602,7 @@ test.each(["pending", "red", "empty", "malformed rollup", "stale head", "wrong b
     expect(await f.own("rev-parse", "HEAD")).toBe(f.head);
     if (["pending", "empty", "missing required", "unavailable"].includes(mode)) {
       expect(result).toMatchObject({ deferred: true });
-      f.checks.statusCheckRollup = [{ __typename: "StatusContext", context: "ci", state: "SUCCESS" }];
+      f.setCheckRuns([{ __typename: "StatusContext", context: "ci", state: "SUCCESS", createdAt: "2026-10-16T10:01:00Z" }]);
       f.setRequired({ protected: true, protection: { required_status_checks: { contexts: ["ci"] } } });
       f.setChecksCode(0);
       expect(await settleStageAttemptPush(f.pipeline, f.attempt, f.exec, NOW)).toEqual({ ok: true, sha: f.head });
@@ -598,10 +613,11 @@ test.each(["pending", "red", "empty", "malformed rollup", "stale head", "wrong b
 test.each(["FAILURE", "PENDING"] as const)("a green check run cannot hide an independent %s status context", async state => {
   const f = await foreignIntegration(true);
   try {
-    f.checks.statusCheckRollup = [
-      { __typename: "StatusContext", context: "ci", state, startedAt: "2026-10-16T10:00:00Z" },
-      { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-16T10:01:00Z" },
-    ];
+    f.setCheckRuns([
+      { __typename: "StatusContext", context: "ci", state, createdAt: "2026-10-16T10:00:00Z" },
+      { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-16T10:01:00Z",
+        checkSuite: { app: { databaseId: 123 }, workflowRun: { workflow: { name: "tests" } } } },
+    ]);
     const result = await settleStageAttemptPush(f.pipeline, f.attempt, f.exec, NOW);
     expect(result?.ok).toBe(false);
     if (state === "PENDING") expect(result).toMatchObject({ deferred: true });
@@ -612,13 +628,14 @@ test.each(["FAILURE", "PENDING"] as const)("a green check run cannot hide an ind
 test.each(["FAILURE", "IN_PROGRESS"] as const)("a namesake run in another workflow cannot hide required %s", async state => {
   const f = await foreignIntegration(true);
   try {
-    f.checks.statusCheckRollup = [
+    f.setRequired({ protected: true, protection: { required_status_checks: { contexts: [], checks: [{ context: "ci", app_id: 123 }] } } });
+    f.setCheckRuns([
       { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-16T10:01:00Z",
-        app: { id: 123 }, checkSuite: { workflowRun: { workflow: { name: "optional-format" } } } },
+        checkSuite: { app: { databaseId: 123 }, workflowRun: { workflow: { name: "optional-format" } } } },
       { __typename: "CheckRun", name: "ci", status: state === "FAILURE" ? "COMPLETED" : state,
-        conclusion: state === "FAILURE" ? "FAILURE" : "", startedAt: "2026-10-16T10:00:00Z",
-        app: { id: 123 }, checkSuite: { workflowRun: { workflow: { name: "required-tests" } } } },
-    ];
+        conclusion: state === "FAILURE" ? "FAILURE" : null, startedAt: "2026-10-16T10:00:00Z",
+        checkSuite: { app: { databaseId: 123 }, workflowRun: { workflow: { name: "required-tests" } } } },
+    ]);
     const result = await settleStageAttemptPush(f.pipeline, f.attempt, f.exec, NOW);
     expect(result?.ok).toBe(false);
     if (state === "IN_PROGRESS") expect(result).toMatchObject({ deferred: true });
@@ -626,24 +643,62 @@ test.each(["FAILURE", "IN_PROGRESS"] as const)("a namesake run in another workfl
   } finally { await f.close(); }
 });
 
-test.each(["status only", "wrong app", "missing app identity", "required app", "unrestricted source"] as const)("required check source app is enforced (%s)", async mode => {
+test.each(["status only", "wrong app", "missing app identity", "required app", "unrestricted source", "legacy unrestricted source"] as const)("required check source app is enforced (%s)", async mode => {
   const f = await foreignIntegration(true);
   try {
-    const appId = mode === "unrestricted source" ? null : 123;
+    const appId = mode === "unrestricted source" ? null : mode === "legacy unrestricted source" ? -1 : 123;
     f.setRequired({ protected: true, protection: { required_status_checks: { contexts: [], checks: [{ context: "ci", app_id: appId }] } } });
     if (mode === "status only") {
       f.checks.statusCheckRollup = [{ __typename: "StatusContext", context: "ci", state: "SUCCESS" }];
     } else {
-      f.checks.statusCheckRollup = [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS",
-        startedAt: "2026-10-16T10:01:00Z", ...(mode === "missing app identity" ? {} : { app: { id: mode === "wrong app" || mode === "unrestricted source" ? 456 : 123 } }),
-        checkSuite: { workflowRun: { workflow: { name: "required-tests" } } } }];
+      f.setCheckRuns([{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-16T10:01:00Z",
+        checkSuite: { ...(mode === "missing app identity" ? {} : { app: { databaseId: mode === "wrong app" || mode === "unrestricted source" ? 456 : 123 } }),
+          workflowRun: { workflow: { name: "tests" } } } }]);
     }
     const result = await settleStageAttemptPush(f.pipeline, f.attempt, f.exec, NOW);
-    if (mode === "required app" || mode === "unrestricted source") expect(result).toEqual({ ok: true, sha: f.head });
+    if (mode === "required app" || mode === "unrestricted source" || mode === "legacy unrestricted source") expect(result).toEqual({ ok: true, sha: f.head });
     else {
       expect(result?.ok).toBe(false);
       expect(result).toMatchObject({ deferred: true });
     }
+  } finally { await f.close(); }
+});
+
+test("the actual gh PR shape adopts an app-bound green check using exact-head GraphQL provenance", async () => {
+  const f = await foreignIntegration(true);
+  try {
+    f.setRequired({ protected: true, protection: { required_status_checks: { contexts: [], checks: [{ context: "ci", app_id: 123 }] } } });
+    // gh 2.45.0 statusCheckRollup exports workflowName but no app identity.
+    f.checks.statusCheckRollup = [{ __typename: "CheckRun", name: "ci", workflowName: "tests",
+      status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-16T10:01:00Z" }];
+    f.setCheckRuns([{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-16T10:01:00Z",
+      checkSuite: { app: { databaseId: 123 }, workflowRun: { workflow: { name: "tests" } } } }]);
+    expect(await settleStageAttemptPush(f.pipeline, f.attempt, f.exec, NOW)).toEqual({ ok: true, sha: f.head });
+    expect(f.commands.some(command => command[0] === "gh" && command.includes("graphql") && command.includes("--jq"))).toBe(true);
+  } finally { await f.close(); }
+});
+
+test("exact-head check pagination retains pending evidence from the next page", async () => {
+  const f = await foreignIntegration(true);
+  try {
+    f.setCheckPages([
+      { nodes: [{ __typename: "StatusContext", context: "ci", state: "SUCCESS", createdAt: "2026-10-16T10:01:00Z" }],
+        pageInfo: { hasNextPage: true, endCursor: "checks-page-one" } },
+      { nodes: [{ __typename: "CheckRun", name: "other", status: "IN_PROGRESS", conclusion: null, startedAt: null,
+        checkSuite: { app: { databaseId: 123 }, workflowRun: { workflow: { name: "tests" } } } }],
+        pageInfo: { hasNextPage: false, endCursor: null } },
+    ]);
+    expect(await settleStageAttemptPush(f.pipeline, f.attempt, f.exec, NOW)).toMatchObject({ ok: false, deferred: true });
+    expect(f.commands.some(command => command.includes("endCursor=checks-page-one"))).toBe(true);
+  } finally { await f.close(); }
+});
+
+test("an unknown exact-head check kind cannot authorize a published integration", async () => {
+  const f = await foreignIntegration(true);
+  try {
+    f.setCheckRuns([{ __typename: "FutureCheckContext" }]);
+    expect(await settleStageAttemptPush(f.pipeline, f.attempt, f.exec, NOW)).toMatchObject({ ok: false, deferred: true });
+    expect(await f.own("rev-parse", "HEAD")).toBe(f.head);
   } finally { await f.close(); }
 });
 

@@ -81,3 +81,19 @@ export function rollupChecksWithIdentity(rollup: unknown): ReadCheck[] {
 export function rollupChecks(rollup: unknown): ReadCheck[] {
   return rollupChecksWithIdentity(rollup).map(({ name, verdict }) => ({ name, verdict }));
 }
+
+/** Legacy REST readers receive check runs grouped by app but without workflow
+ * provenance. Preserve their same-name rerun ordering; identity-sensitive
+ * callers must use rollupChecksWithIdentity instead. */
+export function rollupLatestChecksByName(rollup: unknown): ReadCheck[] {
+  const byName = new Map<string, NonNullable<ReturnType<typeof checkOf>>>();
+  for (const entry of Array.isArray(rollup) ? rollup : []) {
+    if (!entry || typeof entry !== "object") continue;
+    const check = checkOf(entry as Record<string, unknown>);
+    if (!check) continue;
+    const previous = byName.get(check.name);
+    if (!previous || check.at >= previous.at) byName.set(check.name, check);
+  }
+  return [...byName.values()].map(({ name, verdict }) => ({ name, verdict }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
