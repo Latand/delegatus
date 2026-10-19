@@ -31,7 +31,21 @@ function hostState(overrides: Partial<HostState> = {}): HostState {
 }
 
 class RecordingRegistry {
-  async deliveryWriteOrBusy<T>(_correlation: unknown, write: () => T): Promise<T> { return write(); }
+  private nextWrite: { enter(): void; released: Promise<void> } | null = null;
+  pauseNextWrite() {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const released = new Promise<void>(resolve => { release = resolve; });
+    this.nextWrite = { enter, released };
+    return { entered, release };
+  }
+  async deliveryWriteOrBusy<T>(_correlation: unknown, write: () => T): Promise<T> {
+    const gate = this.nextWrite;
+    this.nextWrite = null;
+    if (gate) { gate.enter(); await gate.released; }
+    return write();
+  }
 
   readonly writes: Array<{ columns: StructuredHostColumns; status: string; releaseClaim: boolean }> = [];
   readonly releases: number[] = [];
@@ -105,6 +119,36 @@ const binders: Array<[string, Binder]> = [
     options,
   )],
 ];
+
+for (const [engine, bind] of binders) for (const older of ["material", "cursor"] as const) {
+  test(`${engine} a held ${older} checkpoint does not revive state superseded during admission`, async () => {
+    const registry = new RecordingRegistry();
+    const host = new RecordingHost();
+    const stop = await bind(registry as unknown as AgentRegistry, host, { cursorDebounceMs: older === "cursor" ? 1 : 10_000 });
+    const gate = registry.pauseNextWrite();
+    registry.acceptWrites = false;
+    registry.heldByTermination = true;
+    try {
+      host.emit(older === "cursor" ? { eventCursor: 1 } : { eventCursor: 1, status: "active", activeTurnRef: "turn-1" });
+      await gate.entered;
+      host.emit({ eventCursor: 2, status: "attention", pendingAttention: ["newest-approval"] });
+      gate.release();
+      // The admitted jobs have no I/O after this barrier is released. Drain
+      // their microtasks before allowing the retained checkpoint to commit.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      registry.acceptWrites = true;
+      registry.heldByTermination = false;
+      await stop.flush();
+      expect(registry.writes.at(-1)?.columns).toMatchObject({ eventCursor: 2, pendingAttention: ["newest-approval"] });
+      expect(host.releaseCalls).toBe(0);
+    } finally {
+      gate.release();
+      registry.acceptWrites = true;
+      registry.heldByTermination = false;
+      await stop();
+    }
+  });
+}
 
 test("production cursor checkpoints stay bounded to two writes per minute", () => {
   expect(DEFAULT_CURSOR_DEBOUNCE_MS).toBe(30_000);

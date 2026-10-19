@@ -228,6 +228,7 @@ async function bindStructuredHostPersistence(
   let stopped = false;
   let claimReleased = false;
   let pendingState: HostState | null = null;
+  let lastQueuedState = lastPersistedState;
   let cursorTimer: ReturnType<typeof setTimeout> | null = null;
   let unsubscribe = () => {};
   /* A host stop signals its child's process group, and a tool that left the
@@ -308,6 +309,7 @@ async function bindStructuredHostPersistence(
         cursorTimer = null;
         if (failed || stopped || pendingState === null) return;
         const state = pendingState;
+        const material = lastQueuedState;
         try {
           await persistPending();
         } catch (error) {
@@ -317,8 +319,10 @@ async function bindStructuredHostPersistence(
              proceeds ends the process itself. Only a lost claim means another
              writer owns the row, and only that ends this host. */
           if (error instanceof StructuredHostWriteHeld) {
-            pendingState ??= state;
-            schedulePending();
+            if (lastQueuedState === material) {
+              pendingState ??= state;
+              schedulePending();
+            }
             return;
           }
           await fail();
@@ -387,7 +391,6 @@ async function bindStructuredHostPersistence(
     stopped = true;
   });
 
-  let lastQueuedState = lastPersistedState;
   unsubscribe = host.onStateChange((observed) => {
     if (failed || stopped) return;
     const state = structuredClone(observed);
@@ -418,7 +421,7 @@ async function bindStructuredHostPersistence(
           if (terminal) {
             heldTerminal = state;
             settleHeldTerminal();
-          } else {
+          } else if (lastQueuedState === state) {
             pendingState ??= state;
             schedulePending();
           }
