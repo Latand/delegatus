@@ -8,1569 +8,1654 @@
   "readOnly": true,
   "procedure": "scripts/measure-release-retention.ts",
   "procCollector": "same legacy collector injected in both trees; production helper completeness tested separately",
+  "workloadSource": "agent_fleet project summary immediately before each sample",
   "scope": "all releases in flight; full keep passes; no removal performance claim",
   "before": [
     {
-      "at": "2026-10-18T23:58:21.330Z",
-      "wallMs": 11321.277328999999,
-      "maxGapMs": 11321.760709999999,
+      "at": "2026-10-19T00:38:03.525Z",
+      "wallMs": 11419.00084,
+      "maxGapMs": 11419.341497000001,
       "scans": 88,
       "timerSamplesDuringPass": 0,
+      "workload": {
+        "source": "agent_fleet",
+        "scope": "project",
+        "observedAt": "2026-10-19T00:37:29.121Z",
+        "liveAgents": 4,
+        "runningAgents": 2
+      },
       "loadBefore": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 11809927\nuser_usec 6945133\nsystem_usec 4864793\ncore_sched.force_idle_usec 0\nnr_periods 566\nnr_throttled 2\nthrottled_usec 30190\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 11693686\nuser_usec 6803744\nsystem_usec 4889941\ncore_sched.force_idle_usec 0\nnr_periods 562\nnr_throttled 2\nthrottled_usec 2236\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075225484961\nuser_usec 3032982809593\nsystem_usec 1042242675368\ncore_sched.force_idle_usec 0\nnr_periods 41091193\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4079845252215\nuser_usec 3036806527901\nsystem_usec 1043038724314\ncore_sched.force_idle_usec 0\nnr_periods 41187839\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8715644681429\nuser_usec 6361516695125\nsystem_usec 2354127986303\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721355706244\nuser_usec 6365929532162\nsystem_usec 2355426174082\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8715644744431\nuser_usec 6361516716034\nsystem_usec 2354128028396\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721355769246\nuser_usec 6365929553071\nsystem_usec 2355426216174\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14549691109690\nuser_usec 10546948226529\nsystem_usec 4002742883160\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14558700573476\nuser_usec 10554087288981\nsystem_usec 4004613284494\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14553732594370\nuser_usec 10549403884102\nsystem_usec 4004328710268\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14562743037864\nuser_usec 10556543661124\nsystem_usec 4006199376740\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14553975494563\nuser_usec 10549613355610\nsystem_usec 4004362138952\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14562985938057\nuser_usec 10556753131767\nsystem_usec 4006232806289\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399004813000\nuser_usec 10398954680000\nsystem_usec 4000050133000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14408150159000\nuser_usec 10406000248000\nsystem_usec 4002149911000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          3.08,
-          3.37,
-          3.47
+          6.56,
+          6.81,
+          5.26
         ],
         "cpus": 3,
-        "memoryFree": 114256748544,
-        "cpuPressure": "some avg10=0.00 avg60=0.22 avg300=0.49 total=121425915642\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 110807990272,
+        "cpuPressure": "some avg10=0.00 avg60=0.11 avg300=0.90 total=121465315194\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       },
       "loadAfter": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 23708048\nuser_usec 11844005\nsystem_usec 11864042\ncore_sched.force_idle_usec 0\nnr_periods 1133\nnr_throttled 2\nthrottled_usec 30190\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 23689740\nuser_usec 11741871\nsystem_usec 11947869\ncore_sched.force_idle_usec 0\nnr_periods 1133\nnr_throttled 2\nthrottled_usec 2236\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075237383736\nuser_usec 3032987595835\nsystem_usec 1042249787901\ncore_sched.force_idle_usec 0\nnr_periods 41091760\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4079857249023\nuser_usec 3036811343146\nsystem_usec 1043045905876\ncore_sched.force_idle_usec 0\nnr_periods 41188411\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8715672382010\nuser_usec 6361535040984\nsystem_usec 2354137341026\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721374298808\nuser_usec 6365938133337\nsystem_usec 2355436165471\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8715672445012\nuser_usec 6361535061893\nsystem_usec 2354137383119\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721374361811\nuser_usec 6365938154246\nsystem_usec 2355436207564\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14549724306969\nuser_usec 10546971046842\nsystem_usec 4002753260127\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14558733488089\nuser_usec 10554107187117\nsystem_usec 4004626300971\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14553765791945\nuser_usec 10549426704637\nsystem_usec 4004339087307\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14562775953128\nuser_usec 10556563559990\nsystem_usec 4006212393138\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554008692362\nuser_usec 10549636176307\nsystem_usec 4004372516054\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563018853321\nuser_usec 10556773030634\nsystem_usec 4006245822686\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399037908000\nuser_usec 10398977197000\nsystem_usec 4000060711000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14408183044000\nuser_usec 10406019876000\nsystem_usec 4002163168000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          3.32,
-          3.42,
-          3.49
+          6.03,
+          6.68,
+          5.24
         ],
         "cpus": 3,
-        "memoryFree": 113774985216,
-        "cpuPressure": "some avg10=0.00 avg60=0.18 avg300=0.47 total=121425938206\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 110438518784,
+        "cpuPressure": "some avg10=0.00 avg60=0.09 avg300=0.87 total=121465350397\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       }
     },
     {
-      "at": "2026-10-18T23:59:23.666Z",
-      "wallMs": 11040.161401,
-      "maxGapMs": 11040.483164,
+      "at": "2026-10-19T00:40:02.756Z",
+      "wallMs": 13076.617069,
+      "maxGapMs": 13079.952477,
       "scans": 88,
       "timerSamplesDuringPass": 0,
+      "workload": {
+        "source": "agent_fleet",
+        "scope": "project",
+        "observedAt": "2026-10-19T00:39:24.146Z",
+        "liveAgents": 5,
+        "runningAgents": 3
+      },
       "loadBefore": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 76753728\nuser_usec 41696821\nsystem_usec 35056907\ncore_sched.force_idle_usec 0\nnr_periods 3688\nnr_throttled 3\nthrottled_usec 35149\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 12986479\nuser_usec 7780291\nsystem_usec 5206187\ncore_sched.force_idle_usec 0\nnr_periods 623\nnr_throttled 1\nthrottled_usec 3935\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075292438712\nuser_usec 3033018664774\nsystem_usec 1042273773938\ncore_sched.force_idle_usec 0\nnr_periods 41094315\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080114905687\nuser_usec 3037033521850\nsystem_usec 1043081383836\ncore_sched.force_idle_usec 0\nnr_periods 41192575\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8715740229428\nuser_usec 6361572407997\nsystem_usec 2354167821430\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721687171681\nuser_usec 6366194182897\nsystem_usec 2355492988783\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8715740292430\nuser_usec 6361572428906\nsystem_usec 2354167863524\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721687234684\nuser_usec 6366194203807\nsystem_usec 2355493030876\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14549815730348\nuser_usec 10547026231384\nsystem_usec 4002789498964\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14559137053380\nuser_usec 10554434577454\nsystem_usec 4004702475925\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14553857217653\nuser_usec 10549481888812\nsystem_usec 4004375328840\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563179529384\nuser_usec 10556890959548\nsystem_usec 4006288569836\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554100119846\nuser_usec 10549691361305\nsystem_usec 4004408758540\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563422429584\nuser_usec 10557100430152\nsystem_usec 4006321999431\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399128500000\nuser_usec 10399031756000\nsystem_usec 4000096744000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14408587288000\nuser_usec 10406343292000\nsystem_usec 4002243996000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          2.54,
-          3.17,
-          3.4
+          4.7,
+          5.85,
+          5.08
         ],
         "cpus": 3,
-        "memoryFree": 114069520384,
-        "cpuPressure": "some avg10=0.00 avg60=0.07 avg300=0.39 total=121426029289\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 103517523968,
+        "cpuPressure": "some avg10=0.04 avg60=0.12 avg300=0.64 total=121466004777\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       },
       "loadAfter": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 88323111\nuser_usec 46496184\nsystem_usec 41826926\ncore_sched.force_idle_usec 0\nnr_periods 4240\nnr_throttled 3\nthrottled_usec 35149\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 26830525\nuser_usec 13410758\nsystem_usec 13419766\ncore_sched.force_idle_usec 0\nnr_periods 1278\nnr_throttled 1\nthrottled_usec 3935\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075304009260\nuser_usec 3033023356419\nsystem_usec 1042280652841\ncore_sched.force_idle_usec 0\nnr_periods 41094867\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080174286361\nuser_usec 3037080758390\nsystem_usec 1043093527970\ncore_sched.force_idle_usec 0\nnr_periods 41193230\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8715754756158\nuser_usec 6361578491698\nsystem_usec 2354176264460\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721751910473\nuser_usec 6366244349821\nsystem_usec 2355507560651\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8715754819161\nuser_usec 6361578512607\nsystem_usec 2354176306553\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721751973475\nuser_usec 6366244370731\nsystem_usec 2355507602744\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14549832985941\nuser_usec 10547034373939\nsystem_usec 4002798612002\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14559213137392\nuser_usec 10554493107848\nsystem_usec 4004720029544\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14553874473447\nuser_usec 10549490031468\nsystem_usec 4004384441979\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563255616250\nuser_usec 10556949491669\nsystem_usec 4006306124581\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554117373640\nuser_usec 10549699502980\nsystem_usec 4004417870660\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563498516443\nuser_usec 10557158962261\nsystem_usec 4006339554182\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399145593000\nuser_usec 10399039787000\nsystem_usec 4000105806000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14408663438000\nuser_usec 10406401513000\nsystem_usec 4002261925000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          2.38,
-          3.11,
-          3.37
+          5.97,
+          6.08,
+          5.17
         ],
         "cpus": 3,
-        "memoryFree": 114278965248,
-        "cpuPressure": "some avg10=0.00 avg60=0.06 avg300=0.37 total=121426045878\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 101698887680,
+        "cpuPressure": "some avg10=0.01 avg60=0.10 avg300=0.62 total=121466079902\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       }
     },
     {
-      "at": "2026-10-19T00:00:31.777Z",
-      "wallMs": 12135.050226999998,
-      "maxGapMs": 12135.390434,
+      "at": "2026-10-19T00:41:14.178Z",
+      "wallMs": 11175.777056999998,
+      "maxGapMs": 11176.725984000002,
       "scans": 88,
       "timerSamplesDuringPass": 0,
+      "workload": {
+        "source": "agent_fleet",
+        "scope": "project",
+        "observedAt": "2026-10-19T00:40:40.229Z",
+        "liveAgents": 5,
+        "runningAgents": 3
+      },
       "loadBefore": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 146288422\nuser_usec 79152748\nsystem_usec 67135673\ncore_sched.force_idle_usec 0\nnr_periods 7024\nnr_throttled 6\nthrottled_usec 48870\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 11348136\nuser_usec 6678788\nsystem_usec 4669347\ncore_sched.force_idle_usec 0\nnr_periods 546\nnr_throttled 2\nthrottled_usec 7928\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075496398810\nuser_usec 3033174124449\nsystem_usec 1042322274360\ncore_sched.force_idle_usec 0\nnr_periods 41097651\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080266431388\nuser_usec 3037146537056\nsystem_usec 1043119894332\ncore_sched.force_idle_usec 0\nnr_periods 41196080\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8715968371609\nuser_usec 6361741666942\nsystem_usec 2354226704667\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721867090695\nuser_usec 6366322295643\nsystem_usec 2355544795052\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8715968434612\nuser_usec 6361741687851\nsystem_usec 2354226746760\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721867153698\nuser_usec 6366322316553\nsystem_usec 2355544837144\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550088396847\nuser_usec 10547229285779\nsystem_usec 4002859111068\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14559359842247\nuser_usec 10554594962691\nsystem_usec 4004764879555\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554129900725\nuser_usec 10549684956697\nsystem_usec 4004444944028\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563402326301\nuser_usec 10557051351452\nsystem_usec 4006350974849\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554372800918\nuser_usec 10549894428187\nsystem_usec 4004478372730\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563645226494\nuser_usec 10557260822040\nsystem_usec 4006384404453\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399402633000\nuser_usec 10399232605000\nsystem_usec 4000170028000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14408809589000\nuser_usec 10406501688000\nsystem_usec 4002307901000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          4.24,
-          3.45,
-          3.47
+          3.96,
+          5.49,
+          5.02
         ],
         "cpus": 3,
-        "memoryFree": 113148116992,
-        "cpuPressure": "some avg10=0.17 avg60=0.16 avg300=0.34 total=121426360596\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 111311691776,
+        "cpuPressure": "some avg10=0.00 avg60=0.04 avg300=0.50 total=121466259837\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       },
       "loadAfter": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 159072858\nuser_usec 84417889\nsystem_usec 74654969\ncore_sched.force_idle_usec 0\nnr_periods 7631\nnr_throttled 6\nthrottled_usec 48870\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 23060790\nuser_usec 11510365\nsystem_usec 11550425\ncore_sched.force_idle_usec 0\nnr_periods 1105\nnr_throttled 2\nthrottled_usec 7928\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075548690679\nuser_usec 3033212277235\nsystem_usec 1042336413444\ncore_sched.force_idle_usec 0\nnr_periods 41098258\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080278144840\nuser_usec 3037151255129\nsystem_usec 1043126889710\ncore_sched.force_idle_usec 0\nnr_periods 41196639\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716023892784\nuser_usec 6361781487865\nsystem_usec 2354242404918\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721881536087\nuser_usec 6366328367121\nsystem_usec 2355553168966\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8716023955787\nuser_usec 6361781508774\nsystem_usec 2354242447012\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721881599090\nuser_usec 6366328388031\nsystem_usec 2355553211059\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550148976196\nuser_usec 10547273029478\nsystem_usec 4002875946718\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14559382313676\nuser_usec 10554606644426\nsystem_usec 4004775669250\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554190485885\nuser_usec 10549728705796\nsystem_usec 4004461780089\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563424797961\nuser_usec 10557063033310\nsystem_usec 4006361764650\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554433386324\nuser_usec 10549938177461\nsystem_usec 4004495208863\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563667698154\nuser_usec 10557272503900\nsystem_usec 4006395194253\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399464197000\nuser_usec 10399275770000\nsystem_usec 4000188427000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14408831822000\nuser_usec 10406513316000\nsystem_usec 4002318506000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          4.02,
-          3.44,
-          3.47
+          3.58,
+          5.36,
+          4.98
         ],
         "cpus": 3,
-        "memoryFree": 113451229184,
-        "cpuPressure": "some avg10=1.54 avg60=0.57 avg300=0.42 total=121426706638\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 110893903872,
+        "cpuPressure": "some avg10=0.00 avg60=0.03 avg300=0.47 total=121466280203\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       }
     },
     {
-      "at": "2026-10-19T00:01:36.690Z",
-      "wallMs": 11816.227539999998,
-      "maxGapMs": 11816.559291,
+      "at": "2026-10-19T00:42:36.031Z",
+      "wallMs": 11109.658031,
+      "maxGapMs": 11109.980891,
       "scans": 88,
       "timerSamplesDuringPass": 0,
+      "workload": {
+        "source": "agent_fleet",
+        "scope": "project",
+        "observedAt": "2026-10-19T00:42:02.293Z",
+        "liveAgents": 5,
+        "runningAgents": 3
+      },
       "loadBefore": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 214250295\nuser_usec 115595820\nsystem_usec 98654474\ncore_sched.force_idle_usec 0\nnr_periods 10286\nnr_throttled 8\nthrottled_usec 54747\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 11448861\nuser_usec 6772959\nsystem_usec 4675901\ncore_sched.force_idle_usec 0\nnr_periods 551\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075682092522\nuser_usec 3033307672084\nsystem_usec 1042374420437\ncore_sched.force_idle_usec 0\nnr_periods 41100914\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080334645750\nuser_usec 3037183681909\nsystem_usec 1043150963840\ncore_sched.force_idle_usec 0\nnr_periods 41199392\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716172883658\nuser_usec 6361884770201\nsystem_usec 2354288113457\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721964397117\nuser_usec 6366375368464\nsystem_usec 2355589028653\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8716172946706\nuser_usec 6361884791143\nsystem_usec 2354288155562\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721964460120\nuser_usec 6366375389374\nsystem_usec 2355589070745\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550323369589\nuser_usec 10547395680040\nsystem_usec 4002927689549\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14559543535333\nuser_usec 10554717364695\nsystem_usec 4004826170637\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554364891352\nuser_usec 10549851366256\nsystem_usec 4004513525095\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563586039505\nuser_usec 10557173768435\nsystem_usec 4006412271069\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554607791544\nuser_usec 10550060837736\nsystem_usec 4004546953808\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563828939697\nuser_usec 10557383239021\nsystem_usec 4006445700676\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399640634000\nuser_usec 10399396863000\nsystem_usec 4000243771000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14408991800000\nuser_usec 10406622256000\nsystem_usec 4002369544000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          3.77,
-          3.46,
-          3.47
+          2.59,
+          4.68,
+          4.77
         ],
         "cpus": 3,
-        "memoryFree": 113195520000,
-        "cpuPressure": "some avg10=0.15 avg60=0.29 avg300=0.36 total=121426944833\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 110590316544,
+        "cpuPressure": "some avg10=0.00 avg60=0.00 avg300=0.36 total=121466477223\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       },
       "loadAfter": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 226689341\nuser_usec 120813331\nsystem_usec 105876009\ncore_sched.force_idle_usec 0\nnr_periods 10878\nnr_throttled 8\nthrottled_usec 54747\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 23091665\nuser_usec 11557822\nsystem_usec 11533843\ncore_sched.force_idle_usec 0\nnr_periods 1107\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075713638345\nuser_usec 3033328033780\nsystem_usec 1042385604564\ncore_sched.force_idle_usec 0\nnr_periods 41101505\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080346289372\nuser_usec 3037188341657\nsystem_usec 1043157947714\ncore_sched.force_idle_usec 0\nnr_periods 41199948\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716208264866\nuser_usec 6361907119916\nsystem_usec 2354301144949\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721979504573\nuser_usec 6366381765062\nsystem_usec 2355597739510\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8716208327868\nuser_usec 6361907140825\nsystem_usec 2354301187042\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721979567629\nuser_usec 6366381786011\nsystem_usec 2355597781618\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550373840910\nuser_usec 10547431175482\nsystem_usec 4002942665428\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14559562480808\nuser_usec 10554726682305\nsystem_usec 4004835798502\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554415373424\nuser_usec 10549886872661\nsystem_usec 4004528500762\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563604985221\nuser_usec 10557183086176\nsystem_usec 4006421899045\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554658273677\nuser_usec 10550096344183\nsystem_usec 4004561929493\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563847885414\nuser_usec 10557392556765\nsystem_usec 4006455328649\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399691902000\nuser_usec 10399431906000\nsystem_usec 4000259996000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14409010448000\nuser_usec 10406631470000\nsystem_usec 4002378978000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          4.09,
-          3.53,
-          3.49
+          2.83,
+          4.66,
+          4.77
         ],
         "cpus": 3,
-        "memoryFree": 112745246720,
-        "cpuPressure": "some avg10=0.04 avg60=0.23 avg300=0.35 total=121427008058\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 111323447296,
+        "cpuPressure": "some avg10=0.00 avg60=0.00 avg300=0.35 total=121466501193\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       }
     },
     {
-      "at": "2026-10-19T00:02:39.080Z",
-      "wallMs": 11092.606475,
-      "maxGapMs": 11092.93152,
+      "at": "2026-10-19T00:43:55.505Z",
+      "wallMs": 12394.229998,
+      "maxGapMs": 12394.573910000001,
       "scans": 88,
       "timerSamplesDuringPass": 0,
+      "workload": {
+        "source": "agent_fleet",
+        "scope": "project",
+        "observedAt": "2026-10-19T00:43:17.553Z",
+        "liveAgents": 5,
+        "runningAgents": 3
+      },
       "loadBefore": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 280456136\nuser_usec 151053309\nsystem_usec 129402826\ncore_sched.force_idle_usec 0\nnr_periods 13466\nnr_throttled 10\nthrottled_usec 59890\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 13059024\nuser_usec 7868219\nsystem_usec 5190804\ncore_sched.force_idle_usec 0\nnr_periods 627\nnr_throttled 1\nthrottled_usec 3202\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075768496376\nuser_usec 3033358791682\nsystem_usec 1042409704694\ncore_sched.force_idle_usec 0\nnr_periods 41104093\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080675818958\nuser_usec 3037455581855\nsystem_usec 1043220237102\ncore_sched.force_idle_usec 0\nnr_periods 41203236\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716276566793\nuser_usec 6361944390958\nsystem_usec 2354332175835\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722336707108\nuser_usec 6366664103925\nsystem_usec 2355672603183\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8716276630797\nuser_usec 6361944411837\nsystem_usec 2354332218959\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722336770110\nuser_usec 6366664124834\nsystem_usec 2355672645276\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550487897142\nuser_usec 10547505257725\nsystem_usec 4002982639416\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14559977456948\nuser_usec 10555053898032\nsystem_usec 4004923558915\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554529444279\nuser_usec 10549960967109\nsystem_usec 4004568477169\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564020006517\nuser_usec 10557510339419\nsystem_usec 4006509667097\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554772344472\nuser_usec 10550170438587\nsystem_usec 4004601905884\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564262906886\nuser_usec 10557719810093\nsystem_usec 4006543096792\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399804783000\nuser_usec 10399504946000\nsystem_usec 4000299837000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14409429137000\nuser_usec 10406955078000\nsystem_usec 4002474059000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          3,
-          3.33,
-          3.42
+          5.52,
+          5.01,
+          4.87
         ],
         "cpus": 3,
-        "memoryFree": 114136559616,
-        "cpuPressure": "some avg10=0.00 avg60=0.09 avg300=0.28 total=121427114827\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 105646784512,
+        "cpuPressure": "some avg10=1.72 avg60=1.18 avg300=0.60 total=121467816774\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       },
       "loadAfter": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 292084694\nuser_usec 155886530\nsystem_usec 136198163\ncore_sched.force_idle_usec 0\nnr_periods 14021\nnr_throttled 10\nthrottled_usec 59890\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 26117669\nuser_usec 13224478\nsystem_usec 12893191\ncore_sched.force_idle_usec 0\nnr_periods 1247\nnr_throttled 1\nthrottled_usec 3202\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075780126096\nuser_usec 3033363511638\nsystem_usec 1042416614457\ncore_sched.force_idle_usec 0\nnr_periods 41104648\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080725093972\nuser_usec 3037493583463\nsystem_usec 1043231510509\ncore_sched.force_idle_usec 0\nnr_periods 41203856\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716291107865\nuser_usec 6361950455974\nsystem_usec 2354340651890\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722389830680\nuser_usec 6366704170630\nsystem_usec 2355685660049\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8716291170867\nuser_usec 6361950476883\nsystem_usec 2354340693983\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722389893682\nuser_usec 6366704191540\nsystem_usec 2355685702142\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550506617782\nuser_usec 10547514595125\nsystem_usec 4002992022656\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14560033898330\nuser_usec 10555096445249\nsystem_usec 4004937453080\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554548165178\nuser_usec 10549970304656\nsystem_usec 4004577860522\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564076451830\nuser_usec 10557552889835\nsystem_usec 4006523561994\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554791065371\nuser_usec 10550179776136\nsystem_usec 4004611289235\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564319352025\nuser_usec 10557762360380\nsystem_usec 4006556991645\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399823374000\nuser_usec 10399514183000\nsystem_usec 4000309191000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14409485818000\nuser_usec 10406997042000\nsystem_usec 4002488776000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          2.69,
-          3.25,
-          3.4
+          5.2,
+          4.96,
+          4.86
         ],
         "cpus": 3,
-        "memoryFree": 114237005824,
-        "cpuPressure": "some avg10=0.00 avg60=0.07 avg300=0.27 total=121427130294\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 105309831168,
+        "cpuPressure": "some avg10=0.42 avg60=0.93 avg300=0.56 total=121467859082\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       }
     },
     {
-      "at": "2026-10-19T00:03:41.838Z",
-      "wallMs": 11149.638685000002,
-      "maxGapMs": 11149.939248,
+      "at": "2026-10-19T00:45:12.329Z",
+      "wallMs": 12712.118629,
+      "maxGapMs": 12712.462579,
       "scans": 88,
       "timerSamplesDuringPass": 0,
+      "workload": {
+        "source": "agent_fleet",
+        "scope": "project",
+        "observedAt": "2026-10-19T00:44:35.268Z",
+        "liveAgents": 5,
+        "runningAgents": 3
+      },
       "loadBefore": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 345534617\nuser_usec 185709286\nsystem_usec 159825331\ncore_sched.force_idle_usec 0\nnr_periods 16596\nnr_throttled 12\nthrottled_usec 61735\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 12467062\nuser_usec 7435157\nsystem_usec 5031904\ncore_sched.force_idle_usec 0\nnr_periods 598\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075836756549\nuser_usec 3033395891527\nsystem_usec 1042440865021\ncore_sched.force_idle_usec 0\nnr_periods 41107223\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4081083377041\nuser_usec 3037806686405\nsystem_usec 1043276690636\ncore_sched.force_idle_usec 0\nnr_periods 41207091\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716360620185\nuser_usec 6361989206058\nsystem_usec 2354371414127\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722774985972\nuser_usec 6367031791872\nsystem_usec 2355743194100\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8716360683188\nuser_usec 6361989226967\nsystem_usec 2354371456220\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722775049065\nuser_usec 6367031812848\nsystem_usec 2355743236217\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550602021310\nuser_usec 10547573121165\nsystem_usec 4003028900145\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14560454905785\nuser_usec 10555451362734\nsystem_usec 4005003543050\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554643571856\nuser_usec 10550028832252\nsystem_usec 4004614739603\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564497472636\nuser_usec 10557907821425\nsystem_usec 4006589651211\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554886472048\nuser_usec 10550238303734\nsystem_usec 4004648168314\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564740372829\nuser_usec 10558117291911\nsystem_usec 4006623080917\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399917734000\nuser_usec 10399571961000\nsystem_usec 4000345773000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14409909721000\nuser_usec 10407347363000\nsystem_usec 4002562358000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          2.12,
-          3.01,
-          3.31
+          6.11,
+          5.3,
+          4.99
         ],
         "cpus": 3,
-        "memoryFree": 114218721280,
-        "cpuPressure": "some avg10=0.00 avg60=0.02 avg300=0.22 total=121427233191\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 105815064576,
+        "cpuPressure": "some avg10=0.37 avg60=0.78 avg300=0.62 total=121468659701\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       },
       "loadAfter": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 357205528\nuser_usec 190488436\nsystem_usec 166717091\ncore_sched.force_idle_usec 0\nnr_periods 17154\nnr_throttled 12\nthrottled_usec 61735\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 25849398\nuser_usec 12850053\nsystem_usec 12999344\ncore_sched.force_idle_usec 0\nnr_periods 1234\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075848428060\nuser_usec 3033400556917\nsystem_usec 1042447871143\ncore_sched.force_idle_usec 0\nnr_periods 41107781\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4081137541237\nuser_usec 3037847211902\nsystem_usec 1043290329334\ncore_sched.force_idle_usec 0\nnr_periods 41207727\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716375343792\nuser_usec 6361995304334\nsystem_usec 2354380039457\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722834199327\nuser_usec 6367075113599\nsystem_usec 2355759085728\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8716375406794\nuser_usec 6361995325243\nsystem_usec 2354380081551\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722834262330\nuser_usec 6367075134508\nsystem_usec 2355759127821\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550618444153\nuser_usec 10547580474583\nsystem_usec 4003037969570\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14560519054176\nuser_usec 10555498391131\nsystem_usec 4005020663044\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554659994938\nuser_usec 10550036185794\nsystem_usec 4004623809144\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564561624740\nuser_usec 10557954852868\nsystem_usec 4006606771872\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554902895131\nuser_usec 10550245657279\nsystem_usec 4004657237852\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564804524933\nuser_usec 10558164323350\nsystem_usec 4006640201582\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399933835000\nuser_usec 10399579202000\nsystem_usec 4000354633000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14409974163000\nuser_usec 10407394170000\nsystem_usec 4002579993000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          2.27,
-          2.99,
-          3.3
+          5.84,
+          5.28,
+          4.99
         ],
         "cpus": 3,
-        "memoryFree": 114343219200,
-        "cpuPressure": "some avg10=0.00 avg60=0.02 avg300=0.21 total=121427248829\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 105418698752,
+        "cpuPressure": "some avg10=1.56 avg60=1.03 avg300=0.68 total=121468944709\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       }
     }
   ],
   "after": [
     {
-      "at": "2026-10-18T23:58:50.144Z",
-      "wallMs": 6945.873484999998,
-      "maxGapMs": 63.69786400000157,
+      "at": "2026-10-19T00:39:13.991Z",
+      "wallMs": 7575.371445000001,
+      "maxGapMs": 80.87757499999861,
+      "scans": 1,
+      "timerSamplesDuringPass": 744,
+      "workload": {
+        "source": "agent_fleet",
+        "scope": "project",
+        "observedAt": "2026-10-19T00:38:40.723Z",
+        "liveAgents": 5,
+        "runningAgents": 3
+      },
+      "loadBefore": {
+        "cgroups": [
+          {
+            "cpuMax": "60000 20000",
+            "memoryMax": "8589934592",
+            "cpuStat": "usage_usec 12724298\nuser_usec 7489891\nsystem_usec 5234407\ncore_sched.force_idle_usec 0\nnr_periods 611\nnr_throttled 1\nthrottled_usec 2736\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
+          },
+          {
+            "cpuMax": "360000 20000",
+            "memoryMax": "max",
+            "cpuStat": "usage_usec 4079945671431\nuser_usec 3036886616285\nsystem_usec 1043059055145\ncore_sched.force_idle_usec 0\nnr_periods 41190408\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
+          },
+          {
+            "cpuMax": "max 100000",
+            "memoryMax": "114462744576",
+            "cpuStat": "usage_usec 8721499645888\nuser_usec 6366036771983\nsystem_usec 2355462873905\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
+          },
+          {
+            "cpuMax": "max 100000",
+            "memoryMax": "max",
+            "cpuStat": "usage_usec 8721499708891\nuser_usec 6366036792892\nsystem_usec 2355462915998\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
+          },
+          {
+            "cpuMax": "max 100000",
+            "memoryMax": "max",
+            "cpuStat": "usage_usec 14558926433787\nuser_usec 10554259509341\nsystem_usec 4004666924446\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
+          },
+          {
+            "cpuMax": "max 100000",
+            "memoryMax": "max",
+            "cpuStat": "usage_usec 14562968904789\nuser_usec 10556715886937\nsystem_usec 4006253017852\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
+          },
+          {
+            "cpuMax": "max 100000",
+            "memoryMax": "max",
+            "cpuStat": "usage_usec 14563211804982\nuser_usec 10556925357564\nsystem_usec 4006286447418\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
+          },
+          {
+            "cpuMax": null,
+            "memoryMax": null,
+            "cpuStat": "usage_usec 14408376127000\nuser_usec 10406170098000\nsystem_usec 4002206029000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": null
+          }
+        ],
+        "loadavg": [
+          4.31,
+          6,
+          5.09
+        ],
+        "cpus": 3,
+        "memoryFree": 103737622528,
+        "cpuPressure": "some avg10=0.14 avg60=0.17 avg300=0.74 total=121465723217\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+      },
+      "loadAfter": {
+        "cgroups": [
+          {
+            "cpuMax": "60000 20000",
+            "memoryMax": "8589934592",
+            "cpuStat": "usage_usec 20672601\nuser_usec 10576423\nsystem_usec 10096177\ncore_sched.force_idle_usec 0\nnr_periods 991\nnr_throttled 1\nthrottled_usec 2736\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
+          },
+          {
+            "cpuMax": "360000 20000",
+            "memoryMax": "max",
+            "cpuStat": "usage_usec 4079975439669\nuser_usec 3036909118061\nsystem_usec 1043066321607\ncore_sched.force_idle_usec 0\nnr_periods 41190788\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
+          },
+          {
+            "cpuMax": "max 100000",
+            "memoryMax": "114462744576",
+            "cpuStat": "usage_usec 8721532265449\nuser_usec 6366060807354\nsystem_usec 2355471458095\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
+          },
+          {
+            "cpuMax": "max 100000",
+            "memoryMax": "max",
+            "cpuStat": "usage_usec 8721532329830\nuser_usec 6366060829353\nsystem_usec 2355471500476\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
+          },
+          {
+            "cpuMax": "max 100000",
+            "memoryMax": "max",
+            "cpuStat": "usage_usec 14558961393345\nuser_usec 10554285378927\nsystem_usec 4004676014417\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
+          },
+          {
+            "cpuMax": "max 100000",
+            "memoryMax": "max",
+            "cpuStat": "usage_usec 14563003866021\nuser_usec 10556741757309\nsystem_usec 4006262108712\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
+          },
+          {
+            "cpuMax": "max 100000",
+            "memoryMax": "max",
+            "cpuStat": "usage_usec 14563246766214\nuser_usec 10556951227933\nsystem_usec 4006295538280\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
+          },
+          {
+            "cpuMax": null,
+            "memoryMax": null,
+            "cpuStat": "usage_usec 14408411060000\nuser_usec 10406195726000\nsystem_usec 4002215334000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": null
+          }
+        ],
+        "loadavg": [
+          4.26,
+          5.93,
+          5.07
+        ],
+        "cpus": 3,
+        "memoryFree": 103042633728,
+        "cpuPressure": "some avg10=0.06 avg60=0.14 avg300=0.72 total=121465761178\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+      }
+    },
+    {
+      "at": "2026-10-19T00:40:35.621Z",
+      "wallMs": 6937.961223,
+      "maxGapMs": 65.07448300000033,
       "scans": 1,
       "timerSamplesDuringPass": 682,
+      "workload": {
+        "source": "agent_fleet",
+        "scope": "project",
+        "observedAt": "2026-10-19T00:40:06.031Z",
+        "liveAgents": 5,
+        "runningAgents": 3
+      },
       "loadBefore": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 46805240\nuser_usec 25414256\nsystem_usec 21390983\ncore_sched.force_idle_usec 0\nnr_periods 2244\nnr_throttled 2\nthrottled_usec 30190\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 11502721\nuser_usec 6722850\nsystem_usec 4779870\ncore_sched.force_idle_usec 0\nnr_periods 552\nnr_throttled 1\nthrottled_usec 4818\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075262488366\nuser_usec 3033002559863\nsystem_usec 1042259928502\ncore_sched.force_idle_usec 0\nnr_periods 41092871\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080234309325\nuser_usec 3037128929865\nsystem_usec 1043105379460\ncore_sched.force_idle_usec 0\nnr_periods 41194439\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8715703648382\nuser_usec 6361553165278\nsystem_usec 2354150483103\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721822770390\nuser_usec 6366298316677\nsystem_usec 2355524453713\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8715703711385\nuser_usec 6361553186187\nsystem_usec 2354150525197\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721822833393\nuser_usec 6366298337587\nsystem_usec 2355524495806\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14549769157681\nuser_usec 10546998986767\nsystem_usec 4002770170914\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14559300788548\nuser_usec 10554559864764\nsystem_usec 4004740923783\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14553810644944\nuser_usec 10549454644219\nsystem_usec 4004356000725\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563343269660\nuser_usec 10557016250615\nsystem_usec 4006327019045\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554053545137\nuser_usec 10549664115727\nsystem_usec 4004389429409\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563586169957\nuser_usec 10557225721275\nsystem_usec 4006360448681\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399082275000\nuser_usec 10399004776000\nsystem_usec 4000077499000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14408751262000\nuser_usec 10406467408000\nsystem_usec 4002283854000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          2.78,
-          3.29,
-          3.44
+          4.91,
+          5.83,
+          5.11
         ],
         "cpus": 3,
-        "memoryFree": 114364731392,
-        "cpuPressure": "some avg10=0.00 avg60=0.12 avg300=0.43 total=121425984196\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 111004762112,
+        "cpuPressure": "some avg10=0.01 avg60=0.08 avg300=0.56 total=121466176744\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       },
       "loadAfter": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 54032651\nuser_usec 28203063\nsystem_usec 25829587\ncore_sched.force_idle_usec 0\nnr_periods 2592\nnr_throttled 2\nthrottled_usec 30190\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 18727982\nuser_usec 9560663\nsystem_usec 9167319\ncore_sched.force_idle_usec 0\nnr_periods 899\nnr_throttled 1\nthrottled_usec 4818\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075269716199\nuser_usec 3033005276453\nsystem_usec 1042264439746\ncore_sched.force_idle_usec 0\nnr_periods 41093219\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080241535061\nuser_usec 3037131702059\nsystem_usec 1043109833001\ncore_sched.force_idle_usec 0\nnr_periods 41194786\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8715712317258\nuser_usec 6361556575706\nsystem_usec 2354155741552\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721832571229\nuser_usec 6366302489971\nsystem_usec 2355530081258\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8715712380261\nuser_usec 6361556596615\nsystem_usec 2354155783645\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721832634284\nuser_usec 6366302510919\nsystem_usec 2355530123365\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14549779245442\nuser_usec 10547003468622\nsystem_usec 4002775776820\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14559313601707\nuser_usec 10554566289435\nsystem_usec 4004747312271\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14553820731966\nuser_usec 10549459126261\nsystem_usec 4004361605705\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563356082912\nuser_usec 10557022675323\nsystem_usec 4006333407588\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554063632159\nuser_usec 10549668597771\nsystem_usec 4004395034388\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563598983105\nuser_usec 10557232145909\nsystem_usec 4006366837195\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399092408000\nuser_usec 10399009185000\nsystem_usec 4000083223000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14408763839000\nuser_usec 10406473712000\nsystem_usec 4002290127000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          2.64,
-          3.25,
-          3.43
+          4.76,
+          5.79,
+          5.1
         ],
         "cpus": 3,
-        "memoryFree": 114623815680,
-        "cpuPressure": "some avg10=0.00 avg60=0.11 avg300=0.42 total=121425995787\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 110994120704,
+        "cpuPressure": "some avg10=0.00 avg60=0.07 avg300=0.55 total=121466188888\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       }
     },
     {
-      "at": "2026-10-18T23:59:55.763Z",
-      "wallMs": 7599.891331000001,
-      "maxGapMs": 66.2156900000009,
+      "at": "2026-10-19T00:41:57.731Z",
+      "wallMs": 7053.877422999998,
+      "maxGapMs": 65.27061700000013,
       "scans": 1,
-      "timerSamplesDuringPass": 748,
+      "timerSamplesDuringPass": 694,
+      "workload": {
+        "source": "agent_fleet",
+        "scope": "project",
+        "observedAt": "2026-10-19T00:41:26.873Z",
+        "liveAgents": 5,
+        "runningAgents": 3
+      },
       "loadBefore": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 111583728\nuser_usec 60050318\nsystem_usec 51533410\ncore_sched.force_idle_usec 0\nnr_periods 5360\nnr_throttled 5\nthrottled_usec 37978\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 12082979\nuser_usec 7232374\nsystem_usec 4850604\ncore_sched.force_idle_usec 0\nnr_periods 582\nnr_throttled 1\nthrottled_usec 2239\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075327271700\nuser_usec 3033036806766\nsystem_usec 1042290464934\ncore_sched.force_idle_usec 0\nnr_periods 41095987\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080303216757\nuser_usec 3037166484452\nsystem_usec 1043136732304\ncore_sched.force_idle_usec 0\nnr_periods 41197922\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8715787297828\nuser_usec 6361597845720\nsystem_usec 2354189452108\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721921053584\nuser_usec 6366351790081\nsystem_usec 2355569263502\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8715787360830\nuser_usec 6361597866629\nsystem_usec 2354189494201\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721921116586\nuser_usec 6366351810991\nsystem_usec 2355569305595\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14549882619113\nuser_usec 10547066168198\nsystem_usec 4002816450915\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14559469703839\nuser_usec 10554669749853\nsystem_usec 4004799953986\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14553924107142\nuser_usec 10549521826090\nsystem_usec 4004402281051\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563512191622\nuser_usec 10557126142186\nsystem_usec 4006386049436\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554167007335\nuser_usec 10549731297602\nsystem_usec 4004435709732\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563755091815\nuser_usec 10557335612772\nsystem_usec 4006419479043\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399194777000\nuser_usec 10399071233000\nsystem_usec 4000123544000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14408918789000\nuser_usec 10406575453000\nsystem_usec 4002343336000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          2.36,
-          3.06,
-          3.35
+          3.04,
+          5.02,
+          4.88
         ],
         "cpus": 3,
-        "memoryFree": 114000412672,
-        "cpuPressure": "some avg10=0.00 avg60=0.04 avg300=0.34 total=121426087051\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 109767266304,
+        "cpuPressure": "some avg10=0.00 avg60=0.01 avg300=0.41 total=121466385769\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       },
       "loadAfter": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 119499831\nuser_usec 63140817\nsystem_usec 56359014\ncore_sched.force_idle_usec 0\nnr_periods 5741\nnr_throttled 5\nthrottled_usec 37978\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 19433594\nuser_usec 10167423\nsystem_usec 9266170\ncore_sched.force_idle_usec 0\nnr_periods 936\nnr_throttled 1\nthrottled_usec 2239\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075354331332\nuser_usec 3033056709388\nsystem_usec 1042297621944\ncore_sched.force_idle_usec 0\nnr_periods 41096368\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080310567950\nuser_usec 3037169350321\nsystem_usec 1043141217628\ncore_sched.force_idle_usec 0\nnr_periods 41198275\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8715816380942\nuser_usec 6361618798486\nsystem_usec 2354197582455\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721930609790\nuser_usec 6366355920429\nsystem_usec 2355574689360\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8715816443944\nuser_usec 6361618819395\nsystem_usec 2354197624549\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8721930672792\nuser_usec 6366355941339\nsystem_usec 2355574731453\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14549913603431\nuser_usec 10547088464306\nsystem_usec 4002825139124\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14559486878750\nuser_usec 10554680483156\nsystem_usec 4004806395594\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14553955096140\nuser_usec 10549544125725\nsystem_usec 4004410970414\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563529366934\nuser_usec 10557136875767\nsystem_usec 4006392491166\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554197996535\nuser_usec 10549753597382\nsystem_usec 4004444399152\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563772267127\nuser_usec 10557346346354\nsystem_usec 4006425920772\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399225922000\nuser_usec 10399093409000\nsystem_usec 4000132513000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14408935689000\nuser_usec 10406586010000\nsystem_usec 4002349679000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          2.57,
-          3.09,
-          3.36
+          2.89,
+          4.92,
+          4.85
         ],
         "cpus": 3,
-        "memoryFree": 112485105664,
-        "cpuPressure": "some avg10=0.18 avg60=0.06 avg300=0.34 total=121426137033\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 109997346816,
+        "cpuPressure": "some avg10=0.00 avg60=0.01 avg300=0.41 total=121466403494\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       }
     },
     {
-      "at": "2026-10-19T00:01:01.566Z",
-      "wallMs": 7109.3955780000015,
-      "maxGapMs": 66.637745,
+      "at": "2026-10-19T00:43:14.221Z",
+      "wallMs": 7446.352897000001,
+      "maxGapMs": 79.17055599999912,
       "scans": 1,
-      "timerSamplesDuringPass": 699,
+      "timerSamplesDuringPass": 732,
+      "workload": {
+        "source": "agent_fleet",
+        "scope": "project",
+        "observedAt": "2026-10-19T00:42:39.603Z",
+        "liveAgents": 5,
+        "runningAgents": 3
+      },
       "loadBefore": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 182942185\nuser_usec 98533001\nsystem_usec 84409183\ncore_sched.force_idle_usec 0\nnr_periods 8778\nnr_throttled 7\nthrottled_usec 53191\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 12967890\nuser_usec 7629113\nsystem_usec 5338776\ncore_sched.force_idle_usec 0\nnr_periods 621\nnr_throttled 1\nthrottled_usec 10282\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075604688196\nuser_usec 3033253620612\nsystem_usec 1042351067584\ncore_sched.force_idle_usec 0\nnr_periods 41099406\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080449898752\nuser_usec 3037271630351\nsystem_usec 1043178268400\ncore_sched.force_idle_usec 0\nnr_periods 41201332\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716086452234\nuser_usec 6361826213819\nsystem_usec 2354260238414\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722093188986\nuser_usec 6366470640459\nsystem_usec 2355622548526\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8716086515236\nuser_usec 6361826234728\nsystem_usec 2354260280507\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722093251988\nuser_usec 6366470661369\nsystem_usec 2355622590619\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550223193022\nuser_usec 10547326162114\nsystem_usec 4002897030908\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14559685380029\nuser_usec 10554822535845\nsystem_usec 4004862844184\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554264708223\nuser_usec 10549781844763\nsystem_usec 4004482863460\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563727898867\nuser_usec 10557278951821\nsystem_usec 4006448947046\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554507608416\nuser_usec 10549991316246\nsystem_usec 4004516292169\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563970799123\nuser_usec 10557488422444\nsystem_usec 4006482376679\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399538992000\nuser_usec 10399328221000\nsystem_usec 4000210771000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14409135073000\nuser_usec 10406726397000\nsystem_usec 4002408676000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          3.49,
-          3.36,
-          3.44
+          3.46,
+          4.62,
+          4.75
         ],
         "cpus": 3,
-        "memoryFree": 114271453184,
-        "cpuPressure": "some avg10=0.16 avg60=0.39 avg300=0.39 total=121426789807\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 106459766784,
+        "cpuPressure": "some avg10=0.59 avg60=0.20 avg300=0.36 total=121466742163\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       },
       "loadAfter": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 190354667\nuser_usec 101422799\nsystem_usec 88931867\ncore_sched.force_idle_usec 0\nnr_periods 9135\nnr_throttled 7\nthrottled_usec 53191\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 20784238\nuser_usec 10752678\nsystem_usec 10031560\ncore_sched.force_idle_usec 0\nnr_periods 995\nnr_throttled 1\nthrottled_usec 10282\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075619248082\nuser_usec 3033262340879\nsystem_usec 1042356907203\ncore_sched.force_idle_usec 0\nnr_periods 41099762\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080487136092\nuser_usec 3037301143976\nsystem_usec 1043185992115\ncore_sched.force_idle_usec 0\nnr_periods 41201705\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716102560288\nuser_usec 6361835667290\nsystem_usec 2354266892998\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722132852166\nuser_usec 6366501515293\nsystem_usec 2355631336873\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8716102623290\nuser_usec 6361835688199\nsystem_usec 2354266935091\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722132915169\nuser_usec 6366501536202\nsystem_usec 2355631378966\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550242498974\nuser_usec 10547338132681\nsystem_usec 4002904366292\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14559726538366\nuser_usec 10554854467381\nsystem_usec 4004872070985\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554284015920\nuser_usec 10549793816588\nsystem_usec 4004490199331\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14563769058781\nuser_usec 10557310883807\nsystem_usec 4006458174974\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554526916113\nuser_usec 10550003288071\nsystem_usec 4004523628041\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564011958974\nuser_usec 10557520354380\nsystem_usec 4006491604593\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399558673000\nuser_usec 10399340145000\nsystem_usec 4000218528000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14409176274000\nuser_usec 10406757898000\nsystem_usec 4002418376000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          4.07,
-          3.49,
-          3.48
+          3.85,
+          4.67,
+          4.76
         ],
         "cpus": 3,
-        "memoryFree": 113937895424,
-        "cpuPressure": "some avg10=0.07 avg60=0.34 avg300=0.38 total=121426824512\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 105489584128,
+        "cpuPressure": "some avg10=0.26 avg60=0.17 avg300=0.35 total=121466773818\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       }
     },
     {
-      "at": "2026-10-19T00:02:05.829Z",
-      "wallMs": 7039.552825000001,
-      "maxGapMs": 68.50456399999894,
+      "at": "2026-10-19T00:44:31.994Z",
+      "wallMs": 7796.691959,
+      "maxGapMs": 90.97546599999987,
       "scans": 1,
-      "timerSamplesDuringPass": 692,
+      "timerSamplesDuringPass": 765,
+      "workload": {
+        "source": "agent_fleet",
+        "scope": "project",
+        "observedAt": "2026-10-19T00:43:58.470Z",
+        "liveAgents": 5,
+        "runningAgents": 3
+      },
       "loadBefore": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 250440669\nuser_usec 134937381\nsystem_usec 115503287\ncore_sched.force_idle_usec 0\nnr_periods 12020\nnr_throttled 9\nthrottled_usec 57341\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 13315873\nuser_usec 7989925\nsystem_usec 5325948\ncore_sched.force_idle_usec 0\nnr_periods 636\nnr_throttled 2\nthrottled_usec 294\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075738478710\nuser_usec 3033342850780\nsystem_usec 1042395627930\ncore_sched.force_idle_usec 0\nnr_periods 41102647\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080894436006\nuser_usec 3037643572564\nsystem_usec 1043250863441\ncore_sched.force_idle_usec 0\nnr_periods 41205292\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716238904508\nuser_usec 6361924757758\nsystem_usec 2354314146749\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722572442729\nuser_usec 6366861243998\nsystem_usec 2355711198731\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8716238967511\nuser_usec 6361924778668\nsystem_usec 2354314188843\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722572505967\nuser_usec 6366861265080\nsystem_usec 2355711240887\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550440013594\nuser_usec 10547477548750\nsystem_usec 4002962464843\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14560234413306\nuser_usec 10555267434576\nsystem_usec 4004966978729\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554481559890\nuser_usec 10549933258340\nsystem_usec 4004548301549\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564276973111\nuser_usec 10557723885660\nsystem_usec 4006553087450\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554724460083\nuser_usec 10550142729816\nsystem_usec 4004581730266\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564519873304\nuser_usec 10557933356175\nsystem_usec 4006586517128\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399757483000\nuser_usec 10399477692000\nsystem_usec 4000279791000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14409686966000\nuser_usec 10407165770000\nsystem_usec 4002521196000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          3.55,
-          3.45,
-          3.47
+          6.06,
+          5.18,
+          4.93
         ],
         "cpus": 3,
-        "memoryFree": 113438543872,
-        "cpuPressure": "some avg10=0.00 avg60=0.15 avg300=0.32 total=121427062717\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 104800280576,
+        "cpuPressure": "some avg10=0.57 avg60=1.09 avg300=0.65 total=121468357695\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       },
       "loadAfter": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 257783234\nuser_usec 137756780\nsystem_usec 120026453\ncore_sched.force_idle_usec 0\nnr_periods 12373\nnr_throttled 9\nthrottled_usec 57341\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 21521818\nuser_usec 11197676\nsystem_usec 10324141\ncore_sched.force_idle_usec 0\nnr_periods 1026\nnr_throttled 2\nthrottled_usec 294\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075745821786\nuser_usec 3033345598840\nsystem_usec 1042400222945\ncore_sched.force_idle_usec 0\nnr_periods 41103000\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4080935430182\nuser_usec 3037677781750\nsystem_usec 1043257648431\ncore_sched.force_idle_usec 0\nnr_periods 41205683\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716248410664\nuser_usec 6361928525159\nsystem_usec 2354319885505\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722616264432\nuser_usec 6366896954985\nsystem_usec 2355719309446\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8716248473674\nuser_usec 6361928546073\nsystem_usec 2354319927600\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8722616327434\nuser_usec 6366896975895\nsystem_usec 2355719351539\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550451946158\nuser_usec 10547483224573\nsystem_usec 4002968721584\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14560285559189\nuser_usec 10555308328684\nsystem_usec 4004977230505\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554493493273\nuser_usec 10549938934260\nsystem_usec 4004554559012\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564328119904\nuser_usec 10557764780517\nsystem_usec 4006563339386\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554736393475\nuser_usec 10550148405744\nsystem_usec 4004587987731\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564571020113\nuser_usec 10557974251039\nsystem_usec 4006596769074\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399769470000\nuser_usec 10399483314000\nsystem_usec 4000286156000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14409738191000\nuser_usec 10407206105000\nsystem_usec 4002532086000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          3.23,
-          3.38,
-          3.44
+          6.05,
+          5.19,
+          4.94
         ],
         "cpus": 3,
-        "memoryFree": 113962074112,
-        "cpuPressure": "some avg10=0.00 avg60=0.14 avg300=0.31 total=121427076774\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 105154699264,
+        "cpuPressure": "some avg10=0.25 avg60=0.95 avg300=0.63 total=121468396685\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       }
     },
     {
-      "at": "2026-10-19T00:03:08.209Z",
-      "wallMs": 7088.787867000001,
-      "maxGapMs": 68.52834900000016,
+      "at": "2026-10-19T00:45:52.921Z",
+      "wallMs": 7458.035691999998,
+      "maxGapMs": 81.9805150000011,
       "scans": 1,
-      "timerSamplesDuringPass": 696,
+      "timerSamplesDuringPass": 732,
+      "workload": {
+        "source": "agent_fleet",
+        "scope": "project",
+        "observedAt": "2026-10-19T00:45:15.363Z",
+        "liveAgents": 5,
+        "runningAgents": 3
+      },
       "loadBefore": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 315262897\nuser_usec 169557921\nsystem_usec 145704976\ncore_sched.force_idle_usec 0\nnr_periods 15137\nnr_throttled 11\nthrottled_usec 59890\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 13715153\nuser_usec 8164139\nsystem_usec 5551013\ncore_sched.force_idle_usec 0\nnr_periods 658\nnr_throttled 1\nthrottled_usec 2391\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075804404129\nuser_usec 3033377981540\nsystem_usec 1042426422588\ncore_sched.force_idle_usec 0\nnr_periods 41105764\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4081309127970\nuser_usec 3037991949086\nsystem_usec 1043317178883\ncore_sched.force_idle_usec 0\nnr_periods 41209356\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716320694349\nuser_usec 6361967613517\nsystem_usec 2354353080832\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8723019146699\nuser_usec 6367227252716\nsystem_usec 2355791893982\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8716320757351\nuser_usec 6361967634426\nsystem_usec 2354353122925\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8723019209701\nuser_usec 6367227273626\nsystem_usec 2355791936075\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550549408079\nuser_usec 10547541441618\nsystem_usec 4003007966460\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14560729653614\nuser_usec 10555670041489\nsystem_usec 4005059612124\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554590957834\nuser_usec 10549997152185\nsystem_usec 4004593805649\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564772245504\nuser_usec 10558126521726\nsystem_usec 4006645723777\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554833858037\nuser_usec 10550206623673\nsystem_usec 4004627234364\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14565015145697\nuser_usec 10558335992183\nsystem_usec 4006679153513\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399865635000\nuser_usec 10399540643000\nsystem_usec 4000324992000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14410187099000\nuser_usec 10407564130000\nsystem_usec 4002622969000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          2.42,
-          3.13,
-          3.36
+          6.69,
+          5.55,
+          5.08
         ],
         "cpus": 3,
-        "memoryFree": 113780752384,
-        "cpuPressure": "some avg10=0.00 avg60=0.05 avg300=0.25 total=121427174715\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 106545942528,
+        "cpuPressure": "some avg10=1.21 avg60=1.18 avg300=0.75 total=121469576228\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       },
       "loadAfter": {
         "cgroups": [
           {
             "cpuMax": "60000 20000",
             "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 322637360\nuser_usec 172410761\nsystem_usec 150226599\ncore_sched.force_idle_usec 0\nnr_periods 15492\nnr_throttled 11\nthrottled_usec 59890\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 21531817\nuser_usec 11255062\nsystem_usec 10276754\ncore_sched.force_idle_usec 0\nnr_periods 1032\nnr_throttled 1\nthrottled_usec 2391\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
           },
           {
             "cpuMax": "360000 20000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 4075813857832\nuser_usec 3033382697979\nsystem_usec 1042431159852\ncore_sched.force_idle_usec 0\nnr_periods 41106119\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
+            "cpuStat": "usage_usec 4081343731458\nuser_usec 3038019750537\nsystem_usec 1043323980921\ncore_sched.force_idle_usec 0\nnr_periods 41209729\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 1474247\noom 167\noom_kill 3\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716332412600\nuser_usec 6361973457002\nsystem_usec 2354358955597\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
+            "cpuStat": "usage_usec 8723056074632\nuser_usec 6367256271067\nsystem_usec 2355799803564\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200064\noom 4874\noom_kill 731\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 8716332475698\nuser_usec 6361973477221\nsystem_usec 2354358998477\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
+            "cpuStat": "usage_usec 8723056137696\nuser_usec 6367256292022\nsystem_usec 2355799845673\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6200097\noom 4875\noom_kill 732\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14550564409841\nuser_usec 10547549839895\nsystem_usec 4003014569946\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14560768253352\nuser_usec 10555700303156\nsystem_usec 4005067950195\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554605959984\nuser_usec 10550005550720\nsystem_usec 4004600409263\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14564810847083\nuser_usec 10558156785073\nsystem_usec 4006654062009\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": "max 100000",
             "memoryMax": "max",
-            "cpuStat": "usage_usec 14554848860446\nuser_usec 10550215022397\nsystem_usec 4004633838049\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
+            "cpuStat": "usage_usec 14565053747276\nuser_usec 10558366255526\nsystem_usec 4006687491749\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "memoryEvents": "low 0\nhigh 0\nmax 6669004\noom 4889\noom_kill 748\noom_group_kill 0"
           },
           {
             "cpuMax": null,
             "memoryMax": null,
-            "cpuStat": "usage_usec 14399880570000\nuser_usec 10399549083000\nsystem_usec 4000331487000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
+            "cpuStat": "usage_usec 14410225674000\nuser_usec 10407593963000\nsystem_usec 4002631711000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
             "memoryEvents": null
           }
         ],
         "loadavg": [
-          2.39,
-          3.11,
-          3.35
+          6.68,
+          5.58,
+          5.1
         ],
         "cpus": 3,
-        "memoryFree": 114161229824,
-        "cpuPressure": "some avg10=0.00 avg60=0.04 avg300=0.24 total=121427194686\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
-      }
-    },
-    {
-      "at": "2026-10-19T00:04:11.176Z",
-      "wallMs": 7106.662973000002,
-      "maxGapMs": 72.09649200000058,
-      "scans": 1,
-      "timerSamplesDuringPass": 699,
-      "loadBefore": {
-        "cgroups": [
-          {
-            "cpuMax": "60000 20000",
-            "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 380642488\nuser_usec 204128454\nsystem_usec 176514034\ncore_sched.force_idle_usec 0\nnr_periods 18281\nnr_throttled 14\nthrottled_usec 65023\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
-          },
-          {
-            "cpuMax": "360000 20000",
-            "memoryMax": "max",
-            "cpuStat": "usage_usec 4075875365197\nuser_usec 3033417004512\nsystem_usec 1042458360684\ncore_sched.force_idle_usec 0\nnr_periods 41108908\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
-          },
-          {
-            "cpuMax": "max 100000",
-            "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716408424000\nuser_usec 6362014839446\nsystem_usec 2354393584554\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
-          },
-          {
-            "cpuMax": "max 100000",
-            "memoryMax": "max",
-            "cpuStat": "usage_usec 8716408487003\nuser_usec 6362014860355\nsystem_usec 2354393626648\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
-          },
-          {
-            "cpuMax": "max 100000",
-            "memoryMax": "max",
-            "cpuStat": "usage_usec 14550664778595\nuser_usec 10547609817785\nsystem_usec 4003054960810\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
-          },
-          {
-            "cpuMax": "max 100000",
-            "memoryMax": "max",
-            "cpuStat": "usage_usec 14554706331024\nuser_usec 10550065530170\nsystem_usec 4004640800853\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
-          },
-          {
-            "cpuMax": "max 100000",
-            "memoryMax": "max",
-            "cpuStat": "usage_usec 14554949231217\nuser_usec 10550275001655\nsystem_usec 4004674229562\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
-          },
-          {
-            "cpuMax": null,
-            "memoryMax": null,
-            "cpuStat": "usage_usec 14399980025000\nuser_usec 10399608261000\nsystem_usec 4000371764000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": null
-          }
-        ],
-        "loadavg": [
-          2.18,
-          2.93,
-          3.27
-        ],
-        "cpus": 3,
-        "memoryFree": 114213924864,
-        "cpuPressure": "some avg10=0.00 avg60=0.01 avg300=0.19 total=121427300990\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
-      },
-      "loadAfter": {
-        "cgroups": [
-          {
-            "cpuMax": "60000 20000",
-            "memoryMax": "8589934592",
-            "cpuStat": "usage_usec 388049263\nuser_usec 206923798\nsystem_usec 181125464\ncore_sched.force_idle_usec 0\nnr_periods 18637\nnr_throttled 14\nthrottled_usec 65023\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0"
-          },
-          {
-            "cpuMax": "360000 20000",
-            "memoryMax": "max",
-            "cpuStat": "usage_usec 4075893416392\nuser_usec 3033428279129\nsystem_usec 1042465137263\ncore_sched.force_idle_usec 0\nnr_periods 41109265\nnr_throttled 2125\nthrottled_usec 13832282\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 1394423\noom 167\noom_kill 3\noom_group_kill 0"
-          },
-          {
-            "cpuMax": "max 100000",
-            "memoryMax": "114462744576",
-            "cpuStat": "usage_usec 8716427980739\nuser_usec 6362026807256\nsystem_usec 2354401173482\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120240\noom 4874\noom_kill 731\noom_group_kill 0"
-          },
-          {
-            "cpuMax": "max 100000",
-            "memoryMax": "max",
-            "cpuStat": "usage_usec 8716428043741\nuser_usec 6362026828165\nsystem_usec 2354401215576\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6120273\noom 4875\noom_kill 732\noom_group_kill 0"
-          },
-          {
-            "cpuMax": "max 100000",
-            "memoryMax": "max",
-            "cpuStat": "usage_usec 14550686068786\nuser_usec 10547623161717\nsystem_usec 4003062907068\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
-          },
-          {
-            "cpuMax": "max 100000",
-            "memoryMax": "max",
-            "cpuStat": "usage_usec 14554727621633\nuser_usec 10550078874393\nsystem_usec 4004648747240\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
-          },
-          {
-            "cpuMax": "max 100000",
-            "memoryMax": "max",
-            "cpuStat": "usage_usec 14554970521845\nuser_usec 10550288345891\nsystem_usec 4004682175953\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": "low 0\nhigh 0\nmax 6589180\noom 4889\noom_kill 748\noom_group_kill 0"
-          },
-          {
-            "cpuMax": null,
-            "memoryMax": null,
-            "cpuStat": "usage_usec 14400001664000\nuser_usec 10399621394000\nsystem_usec 4000380270000\ncore_sched.force_idle_usec 0\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0",
-            "memoryEvents": null
-          }
-        ],
-        "loadavg": [
-          2.3,
-          2.93,
-          3.27
-        ],
-        "cpus": 3,
-        "memoryFree": 114268000256,
-        "cpuPressure": "some avg10=0.00 avg60=0.01 avg300=0.19 total=121427333012\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
+        "memoryFree": 106215288832,
+        "cpuPressure": "some avg10=0.66 avg60=1.07 avg300=0.74 total=121469610733\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0"
       }
     }
   ],
   "beforeSourceDigest": "ff0018fcb4e78342c6c02a0a19514d4e468397e0a21a794f6ee7eb29802529f4",
-  "measurementSha256": "508191c759b25d648378ad8b0e752fbd53d0e4b4165abf9b0af8384b0fdb96b9",
-  "seedDigest": "9dad32cd64927d8125c78f5f2bcd4f7fc039702e69bebf61a58452981f436d13",
+  "measurementSha256": "893c6c75a14d054cc88812dd7adbc729a0b141cd884533049510bcce0b62365b",
+  "seedDigest": "8b6ad0398a66aec97fe522bedd2b23dc042113d80c4c4b534c865d3af53bbbce",
   "beforeRevision": "7ac695acc0ce727d40784fe3c7b6b9fdf63e4b7f",
   "afterSourceDigest": "585382a9c5aa9ef35e125c440ba1d674c68cb2d536c87417518f338189a8b0af",
-  "afterRevision": "a54c11c6b762f7c650e69e431c9d5f28f1318a46",
-  "keptBytes": 90565795840,
-  "decisionsDigest": "10eaf804d169df7508fcc8f5107b4b41283ea79106ef51e7b4e301b34a2e50c7",
+  "afterRevision": "319ef58bdab241e0533fb133076e3f76ca50b4f5",
+  "keptBytes": 91987001344,
+  "decisionsDigest": "9a76b95802fa5d953d463c54facf7f424dc038aa63bc5e3f398a198821726c4e",
   "beforeSummary": {
     "wallMs": {
-      "median": 11235.458007000001,
-      "min": 11040.161401,
-      "max": 12135.050226999998
+      "median": 11906.615419000002,
+      "min": 11109.658031,
+      "max": 13076.617069
     },
     "maxGapMs": {
-      "median": 11235.849978999999,
-      "min": 11040.483164,
-      "max": 12135.390434
+      "median": 11906.9577035,
+      "min": 11109.980891,
+      "max": 13079.952477
     }
   },
   "afterSummary": {
     "wallMs": {
-      "median": 7097.725420000002,
-      "min": 6945.873484999998,
-      "max": 7599.891331000001
+      "median": 7452.194294499999,
+      "min": 6937.961223,
+      "max": 7796.691959
     },
     "maxGapMs": {
-      "median": 67.57115449999947,
-      "min": 63.69786400000157,
-      "max": 72.09649200000058
+      "median": 80.02406549999887,
+      "min": 65.07448300000033,
+      "max": 90.97546599999987
     }
   },
   "sourceFingerprints": {
-    "scope": "all non-test, non-fixture TypeScript, MJS and JSON under src/lib; per-file full manifests are emitted by the replay driver",
+    "scope": "all non-test, non-fixture TypeScript, MJS and JSON under src/lib; per-file full manifests emitted by the replay driver",
     "unchangedCount": 1418,
     "unchangedManifestSha256": "e0fd81a37ae2af5c306daa1478d0a718632c7b74ec13b0a972fb3a8565fe022a",
     "unchangedDigestEncoding": "UTF-8 JSON, sorted keys, compact separators",
@@ -1676,5 +1761,5 @@
     "ef9e6b23b4f4"
   ],
   "seedSelection": "first 87 retained checkout releases sorted by revision",
-  "seedCopyCompletedAt": "2026-10-18T23:43:00.561499+00:00"
+  "seedReadOnlyAt": "2026-10-19T00:37:28.863Z"
 }
