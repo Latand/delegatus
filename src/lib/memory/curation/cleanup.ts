@@ -7,7 +7,7 @@ import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { withTaskCompletion } from "@/lib/tasks/completion";
 import { mutateTasksFile } from "@/lib/tasks/store";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { readPass } from "./store";
+import { readPassAuthority } from "./store";
 
 const MIGRATION = "curatorPlaceholderRetirement-v1";
 const JOURNALED = `${MIGRATION}:journaled`;
@@ -27,7 +27,7 @@ export async function retireCuratorPlaceholdersAtStartup(now = new Date().toISOS
         const retirement: Retirement = { at: now, projects: {} };
         const tasks = state.tasks.map(task => {
           if (task.origin?.kind !== "launch" || task.status === "done" && task.board === "hidden" && task.groupHidden) return task;
-          const pass = readPass(task.origin.key);
+          const pass = readPassAuthority(task.origin.key);
           if (!pass || pass.clientAttemptId !== task.origin.key || canonicalProject(pass.project) !== canonicalProject(task.project)) return task;
           retirement.projects[task.project] = (retirement.projects[task.project] ?? 0) + 1;
           return withTaskCompletion({ ...task, status: "done", board: "hidden", groupHidden: { at: now, by: "agent" }, updatedAt: now }, task);

@@ -34,6 +34,9 @@ if (mode === "import") {
     await mutateTasksAsync((tasks) => ({ tasks: [...tasks, task(`${process.pid}-${index}`)], result: undefined }), filePath);
   }
   console.log(JSON.stringify({ tasks: loadTasks(filePath).length }));
+} else if (mode === "reopen") {
+  await waitForStateLock("tasks.import", () => importLegacyTasks(filePath, { reconcile: true }));
+  console.log(JSON.stringify(loadTasks(filePath).map(task => task.id)));
 } else if (mode === "hold-mutate") {
   // Killed with SIGKILL while holding the collection lease mid-write.
   mutateTasks((tasks) => {

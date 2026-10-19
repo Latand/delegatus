@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, test, spyOn } from "bun:test";
+import { Database } from "bun:sqlite";
 
 import { HOT_STATE_RELEASE_REVISION_ENV, publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { stateImportIncidents } from "@/lib/state/legacyImport";
@@ -19,6 +20,7 @@ import {
   loadTasksFile,
   mutateTasks,
   mutateTasksFile,
+  saveTasks,
 } from "./store";
 import type { BoardTask } from "./types";
 import { taskRevision } from "./revision";
@@ -474,6 +476,42 @@ describe("cross-process durability", () => {
 });
 
 describe("(f) rollback mirror and roll-forward", () => {
+  test("a consumed rollback snapshot cannot restore a deleted task after restart, and a failed merge retries", async () => {
+    const { dir, file, db } = sandbox();
+    writeLegacy(file, { tasks: [task("a")] });
+    importLegacyTasks(file, { reconcile: true });
+    checkpointTaskRollbackMirrorForDemotion(file);
+    const mirror = JSON.parse(fs.readFileSync(file, "utf8")) as { tasks: BoardTask[] };
+    mirror.tasks.push(task("b"));
+    writeLegacy(file, mirror);
+
+    const connection = new Database(db);
+    connection.exec(`CREATE TRIGGER interrupt_task_reconcile BEFORE UPDATE OF reconciled_sha256 ON state_imports
+      WHEN NEW.collection = 'tasks' BEGIN SELECT RAISE(ABORT, 'fixture interruption'); END`);
+    try {
+      expect(() => importLegacyTasks(file, { reconcile: true })).toThrow("fixture interruption");
+    } finally {
+      connection.exec("DROP TRIGGER interrupt_task_reconcile");
+      connection.close();
+    }
+    expect(loadTasks(file).map(row => row.id)).toEqual(["a"]);
+
+    importLegacyTasks(file, { reconcile: true });
+    expect(loadTasks(file).map(row => row.id)).toEqual(["a", "b"]);
+    saveTasks([task("a")], file);
+
+    const child = Bun.spawn([process.execPath, CHILD, "reopen", file], {
+      env: { ...process.env, LLV_STATE_DIR: dir }, stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    expect(stderr).toBe("");
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual(["a"]);
+    expect(loadTasks(file).map(row => row.id)).toEqual(["a"]);
+  });
+
   test("an untouched mirror is dropped on roll-forward without a second kept copy", () => {
     const { dir, file, db } = sandbox();
     writeLegacy(file, { tasks: [task("a")], recentCreates: [{ clientRequestId: "req", taskId: "a" }] });

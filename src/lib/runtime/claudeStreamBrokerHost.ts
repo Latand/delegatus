@@ -315,7 +315,7 @@ const DEFAULT_SHUTDOWN_GRACE_MS = 1_000;
 const DEFAULT_TERMINATION_CAPTURE_RETRY_MS = 1_000;
 
 /** Records the tree a stop read, and true only once it is durable (#2790). */
-export type TerminationCaptureListener = (root: number, tree: readonly ProcessIdentity[]) => boolean;
+export type TerminationCaptureListener = (root: number, tree: readonly ProcessIdentity[]) => boolean | Promise<boolean>;
 
 export { claudeHostEndText };
 
@@ -1681,7 +1681,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     /* Pending work hears "released" only from `finishRelease`, once the child
        is reaped. A stop that cannot prove the child ended says so instead, so
        no receipt reads "released" beside a process still writing (#2790). */
-    if (!this.startTermination() && this.releaseFence) {
+    if (!await this.startTermination() && this.releaseFence) {
       this.releasing = false;
       throw new Error("Claude child identity changed before signalling");
     }
@@ -1762,7 +1762,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.rejectPending(error);
     this.emit({ kind: "session-status", status: "dead" });
     this.closeSubscribers();
-    this.startTermination();
+    void this.startTermination();
   }
 
   private failWithoutLedger(error: Error): void {
@@ -1783,7 +1783,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.rejectPending(error);
     this.notifyStateListeners();
     this.closeSubscribers();
-    this.startTermination();
+    void this.startTermination();
   }
 
   private releaseFenceHolds(): boolean {
@@ -1809,7 +1809,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       read that names a running pid without its identity, a read that threw,
       and a listener that refused or threw all answer false, and the stop
       sends nothing (#2790). */
-  private captureTerminationTree(): boolean {
+  private async captureTerminationTree(): Promise<boolean> {
     const listener = this.terminationCapture;
     const pid = this.child.pid;
     if (!listener || this.treeCaptured || !pid) return true;
@@ -1818,8 +1818,15 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (capture.unresolved.length > 0) return false;
     if (capture.identities.length > 0) {
       let recorded = false;
-      try { recorded = listener(pid, capture.identities) === true; } catch { recorded = false; }
-      if (!recorded) return false;
+      try { recorded = await listener(pid, capture.identities) === true; } catch { recorded = false; }
+      // Health names the engine PID even when its launcher is a sandbox wrapper.
+      if (!recorded || this.terminationCapture !== listener || this.currentState().pid !== pid || !this.releaseFenceHolds()) return false;
+      // Admission lets the child run. A new descendant must be captured on a
+      // later attempt before any signal can make its parent disappear.
+      let current: ProcessTreeCapture;
+      try { current = this.captureProcessTree(pid); } catch { return false; }
+      const captured = new Set(capture.identities.map(identity => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`));
+      if (current.unresolved.length > 0 || current.identities.some(identity => !captured.has(`${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`))) return false;
     }
     this.treeCaptured = true;
     return true;
@@ -1833,7 +1840,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.captureRetryTimer = setTimeout(() => {
       this.captureRetryTimer = null;
       if (this.reaped || this.terminationStarted) return;
-      this.startTermination();
+      void this.startTermination();
     }, this.terminationCaptureRetryMs);
     this.captureRetryTimer.unref?.();
   }
@@ -1844,7 +1851,18 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.captureRetryTimer = null;
   }
 
-  private startTermination(): boolean {
+  private terminationPending: Promise<boolean> | null = null;
+
+  private startTermination(): Promise<boolean> {
+    if (this.terminationPending) return this.terminationPending;
+    const pending = this.startTerminationAdmitted();
+    this.terminationPending = pending;
+    const clear = () => { if (this.terminationPending === pending) this.terminationPending = null; };
+    void pending.then(clear, clear);
+    return pending;
+  }
+
+  private async startTerminationAdmitted(): Promise<boolean> {
     if (this.memoryCell?.fatalMemoryExit) {
       if (this.terminationTimer) clearTimeout(this.terminationTimer);
       this.terminationTimer = null;
@@ -1856,10 +1874,12 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     if (this.terminationStarted || this.reaped) return true;
     /* Nothing is sent, stdin included, until the tree is on record. */
-    if (this.releaseFenceHolds() && !this.captureTerminationTree()) {
+    if (this.releaseFenceHolds() && !await this.captureTerminationTree()) {
       this.retryTerminationCapture();
       return true;
     }
+    if (this.terminationStarted || this.reaped) return true;
+    if (!this.releaseFenceHolds()) return false;
     this.clearCaptureRetry();
     try { this.child.stdin.end(); } catch { /* already closed */ }
     if (!this.signalReleaseGroup("SIGTERM")) return false;

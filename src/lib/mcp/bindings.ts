@@ -4949,7 +4949,7 @@ async function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainD
     });
   } catch (error) {
     if (error instanceof RoleStoreError || error instanceof FileTransactionBusyError) throw error;
-    /* The store put the file back when the record failed, so nothing changed. */
+    /* The store rolled the SQLite transaction back when the record failed. */
     throw new McpToolRefusal(
       `the role mapping was not changed: it could not be written together with its audit record (${error instanceof Error ? error.message : String(error)})`,
       { code: "role_presets_audit_unavailable" },
@@ -8078,7 +8078,7 @@ export function viewerMcpBindings(
     seat_tick_settings: orchestratorProjectBinding(domainDependencies, (args) => seatTickSettingsTool(args, domainDependencies), true),
     /* Async bindings expose synchronous refusals as rejected promises. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
-    role_presets: async (args) => rolePresetsTool(args, domainDependencies),
+    role_presets: async (args) => waitForStateLock("mcp.role-presets", () => rolePresetsTool(args, domainDependencies)),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)), false, false),

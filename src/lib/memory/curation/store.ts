@@ -50,9 +50,26 @@ export function passMetadata(id: string): CuratorPass | null {
   const row = curationCollection()?.get(`r:${id}`);
   return row?.kind === "pass" ? row : null;
 }
+/** Fresh authority only; display counts are reconstructed separately by readPass. */
+export function readPassAuthority(id: string): CuratorPass | null {
+  return withViewerOperation("memory.curation-authority", () => {
+    const row = curationCollection()?.get(`r:${id}`);
+    return row?.kind === "pass" ? row : null;
+  });
+}
+type CountMemo = { stamp: string; counts: CuratorPass["counts"]; bytes: number };
+const countOwner = process as typeof process & { __llvCurationCounts?: Map<string, CountMemo> };
+const countMemos = countOwner.__llvCurationCounts ??= new Map<string, CountMemo>();
 export function readPass(id: string): CuratorPass | null {
-  const row = passMetadata(id);
+  const row = readPassAuthority(id);
   if (!row) return null;
+  const memoKey = JSON.stringify([statePath("state.sqlite"), row.project, id]);
+  const stamp = () => `${databaseIdentity()}:${roleMemoryCollection()?.revision()}:${curationRevision()}:${JSON.stringify(projectAliasSnapshot().aliases)}`;
+  const version = stamp(), cached = countMemos.get(memoKey);
+  if (cached?.stamp === version) {
+    countMemos.delete(memoKey); countMemos.set(memoKey, cached);
+    return { ...row, counts: { ...cached.counts } };
+  }
   const calls = new Map<string, CuratorPass["counts"]>();
   const scopes = new Map(curationScopes(row.project).map(scope => [scope.scope, scope]));
   // Seatless folders join the installation host's pass, but their own scope
@@ -64,9 +81,19 @@ export function readPass(id: string): CuratorPass | null {
   for (const scope of scopes.values()) {
     for (const h of scope.history) if (h.pass === id && h.counts) calls.set(h.at, h.counts);
   }
-  if (!calls.size) return row;
   const counts = { ...row.counts };
-  for (const field of Object.keys(counts) as (keyof typeof counts)[]) counts[field] = [...calls.values()].reduce((n, call) => n + call[field], 0);
+  if (calls.size) for (const field of Object.keys(counts) as (keyof typeof counts)[]) counts[field] = [...calls.values()].reduce((n, call) => n + call[field], 0);
+  // Derived counts contain no histories. One owner, 32 entries / 512 KiB,
+  // invalidated by metadata, scope revisions, aliases or database replacement.
+  const bytes = Buffer.byteLength(memoKey + version + JSON.stringify(counts));
+  if (stamp() === version && bytes <= 16 * 1024) {
+    countMemos.delete(memoKey); countMemos.set(memoKey, { stamp: version, counts: { ...counts }, bytes });
+    let total = [...countMemos.values()].reduce((sum, value) => sum + value.bytes, 0);
+    while (countMemos.size > 32 || total > 512 * 1024) {
+      const oldest = countMemos.keys().next().value!;
+      total -= countMemos.get(oldest)!.bytes; countMemos.delete(oldest);
+    }
+  }
   return { ...row, counts };
 }
 function projectRows(project: string): ProjectRow[] {
@@ -75,7 +102,7 @@ function projectRows(project: string): ProjectRow[] {
 }
 function combineProjectRows(project: string, rows: readonly ProjectRow[]): ProjectRow | null {
   if (!rows.length) return null;
-  const metadata = new Map(rows.flatMap(row => row.passes).map(id => [id, passMetadata(id)]));
+  const metadata = new Map(rows.flatMap(row => row.passes).map(id => [id, readPassAuthority(id)]));
   const passes = [...new Set(rows.flatMap(row => row.passes))].sort((a, b) => {
     const left = metadata.get(a)?.claimedAt ?? "", right = metadata.get(b)?.claimedAt ?? "";
     return left.localeCompare(right) || a.localeCompare(b);
@@ -84,7 +111,7 @@ function combineProjectRows(project: string, rows: readonly ProjectRow[]): Proje
   for (const row of rows) for (const [scope, revision] of Object.entries(row.claimRevisions ?? {})) {
     claimRevisions[scope] = Math.max(claimRevisions[scope] ?? 0, revision);
   }
-  const current = rows.map(row => row.current).find(id => id && passIsLive(metadata.get(id) ?? passMetadata(id))) ?? null;
+  const current = rows.map(row => row.current).find(id => id && passIsLive(metadata.get(id) ?? readPassAuthority(id))) ?? null;
   return {
     kind: "project", project: canonicalProject(project), current,
     lastClaimAt: rows.map(row => row.lastClaimAt).sort().at(-1)!,
@@ -94,13 +121,16 @@ function combineProjectRows(project: string, rows: readonly ProjectRow[]): Proje
   };
 }
 function projectRow(project: string): ProjectRow | null { return combineProjectRows(project, projectRows(project)); }
-export function currentPass(project: string) {
+export function currentPassAuthority(project: string) {
   // Reconciliation needs only the live selection; retained passes need no sort.
-  const id = projectRows(project).map(row => row.current).find(id => id && passIsLive(passMetadata(id)));
-  return id ? readPass(id) : null;
+  const id = projectRows(project).map(row => row.current).find(id => id && passIsLive(readPassAuthority(id)));
+  return id ? readPassAuthority(id) : null;
 }
-export function machinePass() { const row = curationCollection()?.get("machine"); return row?.kind === "machine" && row.current ? readPass(row.current) : null; }
-export function passForConversation(id: string): CuratorPass | null { const row = curationCollection()?.get(`c:${id}`); return row?.kind === "conversation" ? readPass(row.pass) : null; }
+export function machinePassAuthority() { const row = curationCollection()?.get("machine"); return row?.kind === "machine" && row.current ? readPassAuthority(row.current) : null; }
+export function passForConversationAuthority(id: string): CuratorPass | null { const row = curationCollection()?.get(`c:${id}`); return row?.kind === "conversation" ? readPassAuthority(row.pass) : null; }
+export function currentPass(project: string) { const pass = currentPassAuthority(project); return pass ? readPass(pass.id) : null; }
+export function machinePass() { const pass = machinePassAuthority(); return pass ? readPass(pass.id) : null; }
+export function passForConversation(id: string) { const pass = passForConversationAuthority(id); return pass ? readPass(pass.id) : null; }
 /** Scope-key reads exclude requests, versions and the cold rule archive. */
 export function curationScopes(project: string): RoleMemoryScopeRow[] {
   const p = canonicalProject(project), held = roleMemoryCollection();
@@ -250,7 +280,7 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
   });
 }
 export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass | null {
-  const original = readPass(id);
+  const original = readPassAuthority(id);
   const projectRowsBefore = original ? projectRows(original.project) : [];
   return curationCollection(true)!.boundedPatch(12, tx => {
     const held = tx.get(`r:${id}`); if (held?.kind !== "pass") return null;
@@ -280,7 +310,7 @@ export function curationView(project: string, now = Date.now(), scopeRows = cura
     pass.set(h.at, h.counts);
   }
   const passes = (projectRow(project)?.passes ?? []).slice().reverse().flatMap(id => {
-    const pass = passMetadata(id); if (!pass) return [];
+    const pass = readPassAuthority(id); if (!pass) return [];
     const { state, claimedAt, endedAt, failure, counts, revertedAt, skipped } = pass;
     const receipts = calls.get(id);
     const summed = { ...counts };
@@ -301,13 +331,13 @@ export function curationPanelRuns(project: string) {
     // pass, so walk back only to this row's newest completed pass; never
     // materialize the retained history for a panel read.
     for (let index = row.passes.length - 1; index >= 0; index--) {
-      const pass = passMetadata(row.passes[index]!);
+      const pass = readPassAuthority(row.passes[index]!);
       if (!pass) continue;
       if (passIsLive(pass)) continue;
       if (!latestCompleted || pass.claimedAt > latestCompleted.claimedAt) latestCompleted = pass;
       break;
     }
   }
-  const current = rows.map(row => row.current ? passMetadata(row.current) : null).find(passIsLive) ?? null;
+  const current = rows.map(row => row.current ? readPassAuthority(row.current) : null).find(passIsLive) ?? null;
   return { live: current ? readPass(current.id) : null, last: latestCompleted ? readPass(latestCompleted.id) : null };
 }

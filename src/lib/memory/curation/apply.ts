@@ -12,7 +12,7 @@ import { assertGenericRule, problemInput } from "../roleProblems";
 import { canonicalScope, joinMovedScopes, newRuleId, refreshLessonKnownValues, roleMemoryCollection, RoleMemoryRefusal, versionedRule, rulePrivacyHints } from "../roleStore";
 import { scopeKind, scopeProject, scopeRole, isCrossProjectRoleScope } from "../roleScopes";
 import { lessonText, lessonTextLength, ROLE_MEMORY_BOUND, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type CuratorReason, type RoleMemoryRule, type RoleMemoryRow, type RoleMemoryScopeRow, type ProblemInput } from "../roleTypes";
-import { patchPass, readPass, passIsLive, curationCollection, type CuratorPass } from "./store";
+import { patchPass, readPass, readPassAuthority, passIsLive, curationCollection, type CuratorPass } from "./store";
 
 export interface CurationApply {
   scopes: { scope: string; revision: number; order: string[] }[];
@@ -56,7 +56,7 @@ function evidence(repo: string | null, where: string | undefined) {
 
 /** The partition, all text and every level boundary are checked before any row is committed. */
 export function applyCuration(pass: CuratorPass, input: CurationApply, now = new Date().toISOString(), options: { refreshKnownValues?: boolean } = {}) {
-  const fresh = readPass(pass.id);
+  const fresh = readPassAuthority(pass.id);
   if (!fresh || !passIsLive(fresh)) refuse("CURATE_ENDED", "this curator pass has ended");
   joinMovedScopes(now);
   const allowedScopes = new Set(fresh.scopes.map(canonicalScope));
@@ -73,7 +73,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       put: (row: RoleMemoryRow) => { consume(); records.set(row.kind === "rule" ? `r:${row.id}` : row.kind === "scope" ? `s:${row.scope}` : `q:${row.pipelineId}:${row.stageId}:${row.attempt}`, row); },
     };
 
-    if (!passIsLive(readPass(pass.id))) refuse("CURATE_ENDED", "this curator pass has ended");
+    if (!passIsLive(readPassAuthority(pass.id))) refuse("CURATE_ENDED", "this curator pass has ended");
     const previousAt = Math.max(0, ...[...allowedScopes].flatMap(scope => { const row = tx.get(`s:${scope}`); return row?.kind === "scope" ? row.history.filter(h => h.pass === pass.id).map(h => Date.parse(h.at)) : []; }));
     now = new Date(Math.max(Date.parse(now), previousAt + 1)).toISOString();
     const scopes = new Map<string, RoleMemoryScopeRow>();

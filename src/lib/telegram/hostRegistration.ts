@@ -1,3 +1,5 @@
+import { validateTelegramLegacyStore } from "./storeMigration";
+import { smallStore } from "@/lib/state/smallStore";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,7 +28,7 @@ import { ensureTelegramStateDir, TELEGRAM_CONNECTOR_TOKEN_ENV } from "./sessionS
  *
  * OWNERSHIP. The Codex block carries its own markers, so ownership is in the
  * file. Claude JSON has no such place, so the Viewer records what it wrote
- * (path → url) in `<state>/telegram/registrations.json` and refuses to touch
+ * (path → url) in SQLite (importing `telegram/registrations.json`) and refuses to touch
  * anything else: a pre-existing `telegram` entry the Viewer did not write —
  * whatever its shape — is the operator's, registration backs off from it, and
  * removal deletes only an entry that still matches the Viewer's own record.
@@ -169,20 +171,19 @@ function registrationRecordsPath(): string {
   return statePath("telegram", "registrations.json");
 }
 
-function readRegistrationRecords(): RegistrationRecords {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(registrationRecordsPath(), "utf8")) as Partial<RegistrationRecords>;
-    if (parsed.version === 1 && parsed.claude && typeof parsed.claude === "object") {
-      return { version: 1, claude: { ...parsed.claude as Record<string, string> } };
-    }
-  } catch { /* absent or corrupt records start empty */ }
-  return { version: 1, claude: {} };
-}
+export const telegramRegistrationStore = smallStore<RegistrationRecords>({
+  collection: "telegram_registrations", databasePath: file => path.join(path.dirname(path.dirname(file)), "state.sqlite"),
+  validateLegacyPath: validateTelegramLegacyStore,
+  empty: () => ({ version: 1, claude: {} }),
+  parse: raw => {
+    const parsed = raw as Partial<RegistrationRecords> | null;
+    return { version: 1, claude: parsed?.version === 1 && parsed.claude && typeof parsed.claude === "object" ? { ...parsed.claude } : {} };
+  },
+  toRows: records => Object.entries(records.claude).map(([key, value]) => ({ key, value })),
+  fromRows: rows => ({ version: 1, claude: Object.fromEntries(rows.map(row => [row.key, row.value as string])) }),
+  toFile: records => records,
+});
 
-function writeRegistrationRecords(records: RegistrationRecords): void {
-  ensureTelegramStateDir(true);
-  atomicWrite(registrationRecordsPath(), JSON.stringify(records) + "\n", 0o600);
-}
 
 function snapshotClaudeState(pathname: string): ClaudeStateSnapshot | null {
   try {
@@ -292,26 +293,27 @@ export function registerTelegramHosts(
   targets: TelegramRegistrationTargets = telegramRegistrationTargets(),
   url: string = telegramMcpUrl(),
 ): TelegramHostRegistrationResult {
-  const records = readRegistrationRecords();
   const result: TelegramHostRegistrationResult = {
     ok: false,
     claude: { registered: 0, conflict: 0, unwritable: 0 },
     codex: { registered: 0, failed: 0 },
   };
   const publishedClaude: ClaudeStateSnapshot[] = [];
-  for (const pathname of targets.claudeStatePaths) {
-    const snapshot = snapshotClaudeState(pathname);
-    const registration = registerTelegramInClaudeState(pathname, url, records.claude[pathname] ?? null);
-    result.claude[registration] += 1;
-    if (registration === "registered") {
-      records.claude[pathname] = url;
-      if (snapshot) publishedClaude.push(snapshot);
-    }
-    /* A conflict is the operator's entry — nothing of ours exists there. */
-    else if (registration === "conflict") delete records.claude[pathname];
-  }
   try {
-    writeRegistrationRecords(records);
+    telegramRegistrationStore.mutate(registrationRecordsPath(), records => {
+      for (const pathname of targets.claudeStatePaths) {
+        const snapshot = snapshotClaudeState(pathname);
+        const registration = registerTelegramInClaudeState(pathname, url, records.claude[pathname] ?? null);
+        result.claude[registration] += 1;
+        if (registration === "registered") {
+          records.claude[pathname] = url;
+          if (snapshot) publishedClaude.push(snapshot);
+        }
+        /* A conflict is the operator's entry — nothing of ours exists there. */
+        else if (registration === "conflict") delete records.claude[pathname];
+      }
+      return { next: records, result: undefined };
+    });
   } catch (error) {
     for (const snapshot of publishedClaude.reverse()) {
       try { restoreClaudeState(snapshot); } catch { /* keep rolling back other targets */ }
@@ -329,12 +331,13 @@ export function registerTelegramHosts(
 }
 
 export function unregisterTelegramHosts(targets: TelegramRegistrationTargets = telegramRegistrationTargets()): void {
-  const records = readRegistrationRecords();
-  /* Recorded paths outside the current target list (a managed home removed
-     since registration) still get their Viewer entry cleaned up. */
-  for (const pathname of new Set([...targets.claudeStatePaths, ...Object.keys(records.claude)])) {
-    if (removeTelegramFromClaudeState(pathname, records.claude[pathname] ?? null)) delete records.claude[pathname];
-  }
-  writeRegistrationRecords(records);
+  telegramRegistrationStore.mutate(registrationRecordsPath(), records => {
+    /* Recorded paths outside the current target list (a managed home removed
+       since registration) still get their Viewer entry cleaned up. */
+    for (const pathname of new Set([...targets.claudeStatePaths, ...Object.keys(records.claude)])) {
+      if (removeTelegramFromClaudeState(pathname, records.claude[pathname] ?? null)) delete records.claude[pathname];
+    }
+    return { next: records, result: undefined };
+  });
   for (const pathname of targets.codexConfigPaths) removeTelegramFromCodexConfig(pathname);
 }

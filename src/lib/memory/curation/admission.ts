@@ -9,7 +9,7 @@ import { activeDrain } from "@/lib/selfUpdate/drain";
 import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { roleMemoryEnabled } from "../settings";
-import { machinePass, patchPass, readPass, passIsLive, type CuratorPass } from "./store";
+import { machinePassAuthority, patchPass, readPass, readPassAuthority, passIsLive, type CuratorPass } from "./store";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { curatorCallerOf } from "./guard";
 import { importBatchAccountingGap } from "../importCuration";
@@ -78,8 +78,8 @@ export async function curatorRecoveryGuard(conversationId: string, sources = def
     throw new DeliveryAdmissionRefusedError(`curation pass abandoned: ${host.held}`);
   }
   const assert = () => {
-    const current = readPass(pass.id);
-    if (!current || !passIsLive(current) || machinePass()?.id !== pass.id || current.project !== pass.project) {
+    const current = readPassAuthority(pass.id);
+    if (!current || !passIsLive(current) || machinePassAuthority()?.id !== pass.id || current.project !== pass.project) {
       throw new DeliveryAdmissionRefusedError("curation pass is no longer live on its admitted host");
     }
     const currentHostFailure = host.guard();
@@ -103,13 +103,14 @@ function archive(pass: CuratorPass, sources: SeatTickAdmissionSources) {
   if (paths.length) archiveConversationPaths(pass.project, "archive", paths, snapshot, { boardFor, applyBoardCommand: (input, record) => applyBoardCommand(input, { registrySnapshot: () => record }) });
 }
 export function settle(pass: CuratorPass, ports: CurationAdmissionPorts, failure: string | null, finalText?: string | null) {
-  const current = readPass(pass.id);
+  const current = readPassAuthority(pass.id);
   if (!current || !passIsLive(current)) return current?.failure?.startsWith("abandoned:") ? `curation: failed, ${current.failure}` : null;
   const accountingGap = !failure ? importBatchAccountingGap(current) : null;
   const settledFailure = failure ?? (accountingGap ? `import-accounting: ${accountingGap}` : null);
   // Final state releases the machine claim even if archive placement is unavailable.
   const next = patchPass(pass.id, { state: settledFailure ? "failed" : "succeeded", failure: settledFailure, endedAt: new Date(ports.sources.now()).toISOString(), ...(finalText ? { finalText } : {}) })!;
-  const detail = `curation: ${settledFailure ? `failed, ${settledFailure}` : `settled ${pass.id}, ${next.counts.calls} calls, ${next.counts.changed} rules changed`}`;
+  const counts = readPass(next.id)?.counts ?? next.counts;
+  const detail = `curation: ${settledFailure ? `failed, ${settledFailure}` : `settled ${pass.id}, ${counts.calls} calls, ${counts.changed} rules changed`}`;
   try { (ports.archive ?? (p => archive(p, ports.sources)))(next); }
   catch { return `${detail}; archive placement pending`; }
   return detail;

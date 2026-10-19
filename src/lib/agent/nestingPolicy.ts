@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
+import { smallStore } from "@/lib/state/smallStore";
 
 import { statePath } from "@/lib/configDir";
 
@@ -27,35 +27,32 @@ export function validMaxAgentNestingDepth(value: unknown): value is number {
     && (value as number) <= MAX_AGENT_NESTING_DEPTH;
 }
 
-/** Durable nesting ceiling. An absent or corrupt file degrades to the
-    default so admission never fails open on depth or blocks on policy IO. */
+const defaultPolicy = (): SpawnNestingPolicy => ({ maxAgentNestingDepth: DEFAULT_MAX_AGENT_NESTING_DEPTH });
+
+function parsePolicy(value: unknown): SpawnNestingPolicy {
+  const raw = (value ?? {}) as Partial<SpawnNestingPolicyFile>;
+  return raw.schemaVersion === SPAWN_NESTING_SCHEMA_VERSION && validMaxAgentNestingDepth(raw.maxAgentNestingDepth)
+    ? { maxAgentNestingDepth: raw.maxAgentNestingDepth } : defaultPolicy();
+}
+
+export const nestingPolicyStore = smallStore<SpawnNestingPolicy>({
+  collection: "spawn_nesting", empty: defaultPolicy, parse: parsePolicy,
+  toRows: value => [{ key: "policy", value }],
+  fromRows: rows => rows[0] ? parsePolicy({ schemaVersion: SPAWN_NESTING_SCHEMA_VERSION, ...(rows[0].value as SpawnNestingPolicy) }) : defaultPolicy(),
+  toFile: policy => ({ schemaVersion: SPAWN_NESTING_SCHEMA_VERSION, ...policy }),
+  readLegacy: file => {
+    try { return parsePolicy(JSON.parse(fs.readFileSync(file, "utf8"))); }
+    catch { return defaultPolicy(); }
+  },
+});
+
 export function loadSpawnNestingPolicy(): SpawnNestingPolicy {
-  let text: string;
-  try {
-    text = fs.readFileSync(policyFile(), "utf8");
-  } catch {
-    return { maxAgentNestingDepth: DEFAULT_MAX_AGENT_NESTING_DEPTH };
-  }
-  try {
-    const raw = JSON.parse(text) as Partial<SpawnNestingPolicyFile>;
-    if (raw.schemaVersion === SPAWN_NESTING_SCHEMA_VERSION && validMaxAgentNestingDepth(raw.maxAgentNestingDepth)) {
-      return { maxAgentNestingDepth: raw.maxAgentNestingDepth };
-    }
-  } catch { /* corrupt policy degrades to the default below */ }
-  return { maxAgentNestingDepth: DEFAULT_MAX_AGENT_NESTING_DEPTH };
+  return nestingPolicyStore.read(policyFile());
 }
 
 export function saveSpawnNestingPolicy(policy: SpawnNestingPolicy): void {
   if (!validMaxAgentNestingDepth(policy.maxAgentNestingDepth)) {
     throw new Error(`maxAgentNestingDepth must be an integer between ${MIN_AGENT_NESTING_DEPTH} and ${MAX_AGENT_NESTING_DEPTH}`);
   }
-  const target = policyFile();
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  const temp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.tmp`);
-  const file: SpawnNestingPolicyFile = {
-    schemaVersion: SPAWN_NESTING_SCHEMA_VERSION,
-    maxAgentNestingDepth: policy.maxAgentNestingDepth,
-  };
-  fs.writeFileSync(temp, JSON.stringify(file, null, 2) + "\n", "utf8");
-  fs.renameSync(temp, target);
+  nestingPolicyStore.mutate(policyFile(), () => ({ next: policy, result: undefined }));
 }
