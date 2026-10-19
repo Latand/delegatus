@@ -1,3 +1,4 @@
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
 import fs from "node:fs";
@@ -29,6 +30,18 @@ const SNAPSHOT_SPAWN_ALIAS_LIMIT = 64;
 const SNAPSHOT_TITLE_CONVERSATION_LIMIT = 2_000;
 const SNAPSHOT_TITLE_OWNED_PATH_LIMIT = 128;
 const WRITER_SNAPSHOT_CACHE_ROW_LIMIT = 8_192;
+
+const registryGenerationIndexes = declaredIndexes([
+  "CREATE INDEX IF NOT EXISTS registry_generation_identities_entry ON registry_generation_identities(entry_key)",
+  "CREATE INDEX IF NOT EXISTS registry_generation_identities_path ON registry_generation_identities(path)",
+  "CREATE INDEX IF NOT EXISTS registry_generation_identities_owner ON registry_generation_identities(conversation_id)",
+]);
+
+const registryCallerIndexes = declaredIndexes([
+  "CREATE INDEX IF NOT EXISTS registry_caller_roots_latest ON registry_caller_roots(updated_at DESC,row_order DESC)",
+  "CREATE INDEX IF NOT EXISTS registry_caller_agent_pid ON registry_rows(collection,json_extract(value_json,'$.host.agent.pid'),row_order)",
+  "CREATE INDEX IF NOT EXISTS registry_caller_structured_pid ON registry_rows(collection,json_extract(value_json,'$.structuredHost.process.pid'),row_order)",
+]);
 
 /** Archive storage retains each current row in registry_rows for older
     readers. Selecting its keys here avoids sorting every candidate through
@@ -1169,9 +1182,7 @@ export class SqliteAgentRegistryStore {
         `CREATE TABLE IF NOT EXISTS registry_generation_identities (
           conversation_id TEXT NOT NULL, entry_key TEXT, path TEXT
         )`,
-        "CREATE INDEX IF NOT EXISTS registry_generation_identities_entry ON registry_generation_identities(entry_key)",
-        "CREATE INDEX IF NOT EXISTS registry_generation_identities_path ON registry_generation_identities(path)",
-        "CREATE INDEX IF NOT EXISTS registry_generation_identities_owner ON registry_generation_identities(conversation_id)",
+        ...registryGenerationIndexes.statements,
         "DROP TRIGGER IF EXISTS registry_generation_identities_insert",
         "DROP TRIGGER IF EXISTS registry_generation_identities_update",
         "DROP TRIGGER IF EXISTS registry_generation_identities_delete",
@@ -1195,6 +1206,9 @@ export class SqliteAgentRegistryStore {
         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       ]);
     }
+    if (options.allowArchiveMigration !== false) {
+      registryGenerationIndexes.install(this.db, path.dirname(filename));
+    }
     this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
     this.secureFiles();
     this.importFirstBoot(options.initialSnapshot, options.verifyImport);
@@ -1210,7 +1224,10 @@ export class SqliteAgentRegistryStore {
   /** Only the legacy root-role fallback needs a cross-conversation ordering.
       Store its scalar result on writes, including writes by older releases. */
   private prepareCallerIndexes(): void {
-    if (this.meta("caller_indexes_version") === "2") return;
+    if (this.meta("caller_indexes_version") === "2") {
+      registryCallerIndexes.install(this.db, path.dirname(this.filename));
+      return;
+    }
     assertStateStartupMutation(path.dirname(this.filename), "MCP caller indexes");
     const role = (value: string) => `(SELECT CASE WHEN json_type(g.value,'$.launchProfile.role') IS NULL THEN 'worker'
       ELSE json_extract(g.value,'$.launchProfile.role') END
@@ -1220,9 +1237,7 @@ export class SqliteAgentRegistryStore {
       ORDER BY CAST(g.key AS INTEGER) DESC LIMIT 1)`;
     this.runAtomically([
       `CREATE TABLE IF NOT EXISTS registry_caller_roots (conversation_id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, row_order INTEGER NOT NULL)`,
-      `CREATE INDEX IF NOT EXISTS registry_caller_roots_latest ON registry_caller_roots(updated_at DESC,row_order DESC)`,
-      `CREATE INDEX IF NOT EXISTS registry_caller_agent_pid ON registry_rows(collection,json_extract(value_json,'$.host.agent.pid'),row_order)`,
-      `CREATE INDEX IF NOT EXISTS registry_caller_structured_pid ON registry_rows(collection,json_extract(value_json,'$.structuredHost.process.pid'),row_order)`,
+      ...registryCallerIndexes.statements,
       "DROP TRIGGER IF EXISTS registry_caller_roots_insert",
       "DROP TRIGGER IF EXISTS registry_caller_roots_update",
       "DROP TRIGGER IF EXISTS registry_caller_roots_delete",
@@ -1237,6 +1252,7 @@ export class SqliteAgentRegistryStore {
       `INSERT INTO registry_caller_roots SELECT row_key,json_extract(value_json,'$.updatedAt'),row_order FROM registry_rows WHERE collection='conversations' AND ${role("value_json")}='root'`,
       `INSERT INTO registry_meta(key,value) VALUES ('caller_indexes_version','2') ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
     ]);
+    registryCallerIndexes.install(this.db, path.dirname(this.filename));
   }
 
   /** One capability's generations, plus any independent ancestry evidence.
