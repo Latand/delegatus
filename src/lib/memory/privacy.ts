@@ -14,3 +14,6 @@ export function renderReportAsync(input: RenderReportInput): Promise<RenderRepor
 export function scrubIssueReportAsync(report: { title: string; body: string }, deny: PublicDenyList): Promise<IssueReportFinding[]> {
   return run({ kind: "issue", report, deny });
 }
+
+/** Import curation publishes its known values before acknowledging the write. */
+export function refreshCurationKnownValuesAsync(): Promise<void> { return run<void>({ kind: "curation-known-values" }); }

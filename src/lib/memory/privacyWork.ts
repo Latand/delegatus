@@ -3,6 +3,8 @@ import type { PublicDenyList } from "@/lib/bridge/publicSafe";
 import type { IssueReportFinding } from "@/lib/issueReports/scrub";
 
 export type PrivacyRequest =
+  | { kind: "curation-known-values" }
+  | { kind: "curation-undo"; passId: string }
   | { kind: "filter"; value: unknown }
   | { kind: "report"; input: Omit<RenderReportInput, "at"> & { at: string } }
   | { kind: "issue"; report: { title: string; body: string }; deny: PublicDenyList };

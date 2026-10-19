@@ -7,6 +7,7 @@ import type { FileEntry, ProjectCatalogEntry, RootKey } from "../types";
 import { forEachCooperatively, mapCooperatively } from "../cooperative";
 import { sessionProjectProjection } from "../session/titleProjection";
 import { scheduleTranscriptIndex, type TranscriptIndexFeed } from "../search/transcriptFeed";
+import { conversationSearchProjection } from "./conversationSearchProjection";
 import { isClaudeWorkflowBookkeeping } from "./claudeNative";
 import { codexThreadIdFromPath, nativeCodexParentThreadId } from "./codexNative";
 import { isOpenclawTranscript } from "./openclawNative";
@@ -218,6 +219,13 @@ export function publishTranscriptIndexFeed(
   scheduler?: TranscriptIndexScheduler,
 ): void {
   if (!isProjectCatalogScanCurrent(scanToken)) return;
+  if (complete && process.env.LLV_FILE_SCANNER_WORKER !== "1") {
+    const projected = catalog.map(entry => {
+      const project = projectByPath?.get(entry.path) ?? entry.project;
+      return project === entry.project ? entry : { ...entry, project };
+    });
+    void conversationSearchProjection().prepare(projected).catch(() => undefined);
+  }
   const publish = scheduler
     ?? (process.env.LLV_FILE_SCANNER_WORKER === "1" ? undefined : scheduleTranscriptIndex);
   publish?.(transcriptIndexFeed(catalog, complete, projectByPath));

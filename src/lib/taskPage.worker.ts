@@ -1,7 +1,7 @@
 import readline from "node:readline";
 import { TaskPageBuilder, type PageBuildRequest } from "./links/taskPageBuild";
 
-import { observeLessonPrivacyPhase, storedLessonPatterns, storedLessonRevision, hasStoredLesson, withoutStoredLessonsIn } from "./memory/roleStore";
+import { RoleMemoryRefusal, refreshLessonKnownValues, observeLessonPrivacyPhase, storedLessonPatterns, storedLessonRevision, hasStoredLesson, withoutStoredLessonsIn } from "./memory/roleStore";
 import { renderReport } from "./bridge/reportRender";
 import { lessonPattern } from "./memory/roleConsolidate";
 import { EMPTY_DENY_LIST } from "./bridge/publicSafe";
@@ -22,8 +22,27 @@ for await (const line of lines) {
       if (phase !== previousPhase) process.stdout.write(`${JSON.stringify({ id, phase })}\n`);
       previousPhase = phase;
     });
+    if (frame.request.kind === "curation-known-values" || frame.request.kind === "curation-undo") {
+      let value: unknown = null;
+      if (frame.request.kind === "curation-undo") {
+        const { revertCuratorPass } = await import("./memory/curation/apply");
+        try { value = revertCuratorPass(frame.request.passId, undefined, { refreshKnownValues: false }); }
+        catch (error) {
+          if (error instanceof RoleMemoryRefusal && ["CURATE_LIVE", "CURATE_INVALID"].includes(error.code)) {
+            process.stdout.write(`${JSON.stringify({ id, curationRefusal: error.code })}\n`); continue;
+          }
+          throw error;
+        }
+      }
+      process.stdout.write(`${JSON.stringify({ id, phase: "compile" })}\n`);
+      // Also repairs the known-value file after a committed undo whose first
+      // acknowledgement was lost. All history work stays in this leased worker.
+      refreshLessonKnownValues();
+      process.stdout.write(`${JSON.stringify({ id, result: { privacyRevision: storedLessonRevision(), value } })}\n`);
+      continue;
+    }
     if (["filter", "report", "issue"].includes(frame.request.kind)) {
-      const request = frame.request as PrivacyRequest;
+      const request = frame.request as Exclude<PrivacyRequest, { kind: "curation-known-values" | "curation-undo" }>;
       const privacyRevision = storedLessonRevision();
       let value: unknown;
       if (request.kind === "filter") value = withoutStoredLessonsIn(request.value, { requireComplete: true });
