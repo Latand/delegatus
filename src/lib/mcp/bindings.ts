@@ -4635,7 +4635,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   let maintenanceNotes: string[] | undefined;
   if (Object.keys(change).length > 0) {
     const actor: SeatTickSettingsActor = {
-      kind: attribution.kind,
+      kind: attribution.kind === "gateway" && callerSeat ? "manager" : attribution.kind,
       conversationId: attribution.conversationId,
       project: own,
       seatEpoch: own === project ? orchestratorSeatFor(project).active?.seatEpoch ?? null : null,
@@ -4683,7 +4683,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const reportAsk = quieted && bridgeReportsEnabled(project) ? seatTickReportAsk(project, dependencies) : {};
 
   const verbose = args.verbose === true || args.full === true;
-  const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
+  const { monitorPrompt: storedPrompt, reason: storedReason, instructionLines: storedInstructions, ...settingsWithoutPrompt } = settings;
   delete settingsWithoutPrompt.maintenance;
   delete settingsWithoutPrompt.curation;
   delete settingsWithoutPrompt.autoRotate;
@@ -4727,7 +4727,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
        caller's own is allowed, and the answer says so out loud. */
     callerProject: own,
     scope: own === project ? "own-project" : "other-project",
-    settings: verbose ? { ...settingsWithoutPrompt, reason: storedReason } : compactSettings,
+    settings: verbose ? { ...settingsWithoutPrompt, reason: storedReason, instructionLines: storedInstructions } : compactSettings,
     /* The stored note is an explicit read; its length acknowledges a write. The wake shows
        only a marked preview of a long note; this is the whole of it. */
     ...(echoPrompt ? { monitorPrompt: storedPrompt } : {}),
@@ -4737,7 +4737,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     ...(maintenanceNotes ? { notes: maintenanceNotes } : {}),
     /* A full read names nothing it left out (#2030). */
     ...(echoPrompt ? {} : {
-      omittedFieldCount: 1,
+      omittedFieldCount: storedInstructions ? 2 : 1,
       readMore: "seat_tick_settings verbose:true reads the full record.",
     }),
     effective: {

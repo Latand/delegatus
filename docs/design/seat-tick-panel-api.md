@@ -141,3 +141,32 @@ Details.
 
 The phone's task screen has no button for the notice: on the phone the panel is
 reached from the seat sheet's tick row.
+
+
+## Instruction authorship
+
+The `reason` string remains the combined instruction text for cadence consumers.
+`settings.instructionLines` records each line as `{text, author, at}`. The server
+derives the author from the browser request or verified MCP caller. An active
+seat records its epoch even when its general MCP role is gateway. Request bodies
+cannot set line authors or dates.
+
+A `reason` write replaces that author's lines only. Clearing it removes only
+that author's lines. Unchanged lines retain their original date; every other
+author's text and dates survive, including earlier seat epochs. The 500-character
+limit applies to the combined text, and a refusal stores nothing. The panel edits
+the operator's lines and displays all stored lines with their authors and dates.
+
+Both normal wakes and proposal wakes separate operator instructions, seat notes,
+and instructions whose author is unknown. Legacy JSON and SQLite rows have
+unknown authors and dates regardless of the row's last editor. Attribution is
+preserved through schedule reset, expiry and rollback mirrors. An older writer
+that changes the combined text without matching metadata makes its authorship
+unknown, so it cannot accidentally reuse an operator stamp.
+
+Writers: the settings HTTP PUT and `seat_tick_settings` both reach the same
+locked mutation. Direct store writes, expiry, autonomy/report acknowledgements,
+and rollback mirrors preserve the line records. Readers: the panel, settings
+answers, wake formats and wake identity use the same record. No performance gain
+is claimed; attribution normalization reads only the selected project’s bounded
+instruction text. The existing instruction payload keeps its 500-character cap.

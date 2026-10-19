@@ -18470,7 +18470,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
 
   const tickAnswer = (reason = "a release afternoon") => ({
     project: "atlas", changed: false, at: new Date().toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
-    settings: { project: "atlas", enabled: true, wakeIntervalMinutes: 30, reason, monitorPrompt: null, until: stamp(-120), updatedAt: stamp(45), setBy: null },
+    settings: { project: "atlas", enabled: true, wakeIntervalMinutes: 30, reason, instructionLines: [{ text: reason, author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, at: "2026-10-01T12:00:00.000Z" }], monitorPrompt: null, until: stamp(-120), updatedAt: stamp(45), setBy: null },
     effective: { enabled: true, wakeIntervalMinutes: 30, reason, monitorPrompt: null, until: stamp(-120), isDefault: false, configured: true, lapsed: false, updatedAt: stamp(45) },
     defaults: {}, defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, cardText: null,
     policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
@@ -18492,6 +18492,76 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }],
   };
 
+  browserTest("instruction authors are readable on desktop and 390px in both locales and themes", async () => {
+    const out = path.resolve(".artifacts/seat-tick-authors");
+    fs.mkdirSync(out, { recursive: true });
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const at = "2026-10-01T12:00:00.000Z";
+    const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    const instructionLines = [
+      { text: "Keep  operator wording.", author: operator, at },
+      { text: "Check the release before resuming the paused lane.", author: { kind: "manager" as const, conversationId: "conversation_seat", project: "atlas", seatEpoch: 7 }, at },
+      { text: "A legacy note with no author recorded.", author: null, at: null },
+    ];
+    const initial = { ...defaultSeatTickSettings("atlas"), reason: instructionLines.map(line => line.text).join("\n"), instructionLines, updatedAt: at };
+    let stored = structuredClone(initial);
+    const response = () => ({ ...tickAnswer(stored.reason!), settings: stored });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT") {
+          const result = applySeatTickSettingsChange(stored, await request.json(), { at: "2026-10-02T12:00:00.000Z", actor: operator });
+          if (!result.ok) return Response.json({ error: result.error }, { status: 400 });
+          stored = result.settings as typeof stored;
+        }
+        return Response.json(response());
+      },
+      "/api/roles": rolesAnswer,
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
+        stored = structuredClone(initial);
+        const label = `${phone ? "phone-390" : "desktop"}-${lang}-${theme}`;
+        const texts = cardTexts(lang);
+        const url = `${server.base}?scenario=seat-tick-cards&texts=${encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(texts)))))}`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width: phone ? 390 : 1440, height: phone ? 844 : 1000 }, theme, lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-kanban-tab="inbox"]').click();
+            await page.locator('[data-phone-kanban-column="inbox"] button', { hasText: /Tick|Тікер/ }).first().click();
+            await page.locator("[data-phone-task-tick-open]").click();
+          } else {
+            const fold = page.locator("[data-seat-collapse]");
+            if (await fold.count()) await fold.first().click();
+            await page.locator("[data-open-seat-tick]").click();
+          }
+          const entries = page.locator("[data-seat-tick-instruction-line]");
+          await entries.first().waitFor();
+          expect(await entries.count()).toBe(3);
+          expect(await entries.nth(0).textContent()).toContain(lang === "en" ? "Operator" : "Оператор");
+          expect(await entries.nth(1).textContent()).toContain(lang === "en" ? "Seat epoch 7" : "Сидіння, епоха 7");
+          expect(await entries.nth(2).textContent()).toContain(lang === "en" ? "author unknown" : "автор невідомий");
+          expect(await entries.nth(0).locator("time").getAttribute("datetime")).toBe(at);
+          expect(await page.locator("[data-seat-tick-reason]").inputValue()).toBe(instructionLines[0]!.text);
+          await page.locator("[data-seat-tick-reason]").fill("Updated operator instruction.");
+          await page.locator("[data-seat-tick-save]").click();
+          await page.locator("[data-seat-tick-save]").waitFor({ state: "detached" });
+          expect(stored.instructionLines.slice(1)).toEqual(instructionLines.slice(1));
+          await page.locator("[data-seat-tick-instruction-lines]").scrollIntoViewIfNeeded();
+          const geometry = await entries.evaluateAll(nodes => nodes.map(node => ({ width: node.clientWidth, scrollWidth: node.scrollWidth, text: node.textContent })));
+          expect(geometry.every(row => row.scrollWidth <= row.width + 1)).toBe(true);
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await page.screenshot({ path: path.join(out, `${label}.png`) });
+          await page.locator("[data-seat-tick-instruction-lines]").screenshot({ path: path.join(out, `${label}-lines.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ label, geometry, operatorDate: stored.instructionLines[0]!.at, preservedSeatAndLegacy: true, pageErrors });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+  }, 180_000);
+
   browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
     fs.mkdirSync(SHOTS, { recursive: true });
     const out = path.resolve(".artifacts/seat-tick-instructions");
@@ -18502,7 +18572,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     let frozenAnswer = tickAnswer(storedReason);
     const answerWith = (reason: string) => ({
       ...frozenAnswer,
-      settings: { ...frozenAnswer.settings, reason },
+      settings: { ...frozenAnswer.settings, reason, instructionLines: [{ text: reason, author: frozenAnswer.actor, at: frozenAnswer.settings.instructionLines[0]!.at }] },
       effective: { ...frozenAnswer.effective, reason },
     });
     let putRequests = 0;
@@ -18661,8 +18731,8 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
     await field.scrollIntoViewIfNeeded();
     const label = lang === "en" ? "Instructions for every wake" : "Вказівки на кожне пробудження";
     const helper = lang === "en"
-      ? "The agent receives these instructions on every wake: what to do next and when to stop."
-      : "Агент отримує ці вказівки на кожне пробудження: що робити далі й коли зупинитися.";
+      ? "The agent receives these instructions on every wake."
+      : "Агент отримує ці вказівки на кожне пробудження.";
     expect(await field.getAttribute("aria-describedby")).toBeTruthy();
     expect(await field.locator("..").textContent()).toContain(label);
     const hint = page.locator("[data-seat-tick-instructions-hint]");

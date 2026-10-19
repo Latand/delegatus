@@ -1,3 +1,4 @@
+import { seatTickInstructionSections, type SeatTickInstructionLine } from "./seatTickInstructions";
 import { autonomyMandate, type AutonomySetting } from "./autonomy";
 import { createHash } from "node:crypto";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
@@ -261,6 +262,7 @@ export function seatTickWakeMessage(input: {
   gaps?: readonly SeatTickEvidenceGap[];
   /** Panel instructions, delivered in full on every scheduler wake. */
   operatorInstructions?: string | null;
+  instructionLines?: SeatTickInstructionLine[];
   /** The project's own monitor prompt (#1280), or nothing. */
   monitorPrompt?: string | null;
   /** The seat's last landed wake already showed this exact note (#2030). */
@@ -331,7 +333,7 @@ export function seatTickWakeMessage(input: {
     ...autonomy,
     ...snapshotSection(input.snapshotAt, !!input.workers),
     ...(input.reportLines && input.reportLines.length > 0 ? ["", compactLedger ? "Reports:" : "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
-    ...(input.operatorInstructions ? ["", compactLedger ? "Operator instructions:" : "Operator instructions for every wake:", input.operatorInstructions] : []),
+    ...seatTickInstructionSections({ reason: input.operatorInstructions ?? null, instructionLines: input.instructionLines }),
     ...(autonomyNote ?? seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, noteLimit, !!input.workers)),
     ...(autonomy.length && input.workers ? ["", `Worker limit ${input.workers.limit} (${input.workers.source}; machine ${input.workers.machine}); running ${input.workers.running}. Overrides mandate/launch limits.`] : workerSection(input.workers)),
     ...seatTickContractLines(input.mandateCarriesContract === true),
@@ -429,6 +431,7 @@ export function seatTickProposalMessage(input: {
   slot: string;
   /** Panel instructions, delivered in full on every scheduler wake. */
   operatorInstructions?: string | null;
+  instructionLines?: SeatTickInstructionLine[];
   /** The project's own monitor prompt (#1280), or nothing. The proposal slot is
       a scheduler-fired wake like any other, so a note about what this project's
       monitor should look at is owed here too — a prompt that silently went
@@ -463,7 +466,7 @@ export function seatTickProposalMessage(input: {
     "Rank by what actually matters now: what is blocking, what is cheap and finishes something, what has been waiting longest.",
     `Put this exact line at the foot of the card so the next tick recognizes it: ${MONITOR_REF_PREFIX} ${seatTickProposalRef(input.slot)}`,
     "Open no GitHub issue and start no pipeline from this — the operator moves a card to assigned when they want it, and the next tick starts it.",
-    ...(input.operatorInstructions ? ["", "Operator instructions for every wake:", input.operatorInstructions] : []),
+    ...seatTickInstructionSections({ reason: input.operatorInstructions ?? null, instructionLines: input.instructionLines }),
     ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, SEAT_TICK_PROMPT_PREVIEW_LIMIT, !!input.workers),
     ...workerSection(input.workers),
     ...seatTickContractLines(input.mandateCarriesContract === true),

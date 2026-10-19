@@ -84,7 +84,7 @@ function configured(overrides: Partial<SeatTickSettingsAnswer> = {}): SeatTickSe
   const base = record();
   return {
     ...base,
-    settings: { ...base.settings, wakeIntervalMinutes: 30, reason: "a release afternoon", updatedAt: ago(60), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } },
+    settings: { ...base.settings, wakeIntervalMinutes: 30, reason: "a release afternoon", instructionLines: [{ text: "a release afternoon", author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, at: ago(60) }], updatedAt: ago(60), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } },
     effective: { ...base.effective, wakeIntervalMinutes: 30, reason: "a release afternoon", isDefault: false, configured: true, updatedAt: ago(60) },
     ...overrides,
   };
@@ -335,7 +335,7 @@ test("a save displays what was sent and then adopts what the route read back", a
      redacts and stamps, and the display has to follow the record. */
   putAnswers = [{
     status: 200,
-    body: { ...configured({ changed: true }), settings: { ...configured().settings, reason: "a release afternoon (recorded)" } },
+    body: { ...configured({ changed: true }), settings: { ...configured().settings, reason: "a release afternoon (recorded)", instructionLines: [{ ...configured().settings.instructionLines![0]!, text: "a release afternoon (recorded)" }] } },
   }];
   press(save());
   await settle(root);
@@ -1213,4 +1213,26 @@ test("curation: a failed run with zero counts shows its result without a counts 
   expect(last.textContent).toContain("failed");
   expect(last.textContent).toContain("fixture failure");
   expect(last.querySelector("[data-seat-tick-curation-counts]")).toBeNull();
+});
+
+
+test("the editor contains operator lines and the panel attributes every stored line", async () => {
+  const at = "2026-10-01T12:00:00.000Z";
+  const instructionLines = [
+    { text: "Operator instruction.", author: { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null }, at },
+    { text: "Seat note.", author: { kind: "manager" as const, conversationId: "conversation_seat", project: PROJECT, seatEpoch: 7 }, at },
+    { text: "Legacy note.", author: null, at: null },
+  ];
+  const base = configured();
+  getAnswer = { ...base, settings: { ...base.settings, reason: instructionLines.map(line => line.text).join("\n"), instructionLines } };
+  const { root } = await mount();
+  await open(root);
+  expect((body().querySelector("[data-seat-tick-reason]") as HTMLTextAreaElement).value).toBe("Operator instruction.");
+  const entries = [...body().querySelectorAll("[data-seat-tick-instruction-line]")];
+  expect(entries).toHaveLength(3);
+  expect(entries[0]!.textContent).toContain("Operator");
+  expect(entries[1]!.textContent).toContain("Seat epoch 7");
+  expect(entries[2]!.textContent).toContain("author unknown");
+  expect(entries[0]!.querySelector("time")?.getAttribute("datetime")).toBe(at);
+  expect(entries[2]!.querySelector("time")).toBeNull();
 });

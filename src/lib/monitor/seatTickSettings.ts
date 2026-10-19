@@ -8,6 +8,8 @@ import { applyLineEdits, type LineEdits, type LineTarget } from "@/lib/lineEdits
 import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
 import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
 
+import { seatTickInstructionLines, replaceSeatTickInstructions, type SeatTickInstructionLine } from "./seatTickInstructions";
+
 import { redactMonitorText } from "./redact";
 
 /**
@@ -114,6 +116,7 @@ export interface SeatTickSettings {
   wakeIntervalMinutes: number | null;
   /** Panel instructions for every wake, also the board cadence explanation. */
   reason: string | null;
+  instructionLines?: SeatTickInstructionLine[];
   /**
    * The seat's own additional prompt for its monitor (#1280): what it wants
    * every later wake to look at, in its own words.
@@ -143,6 +146,7 @@ export interface EffectiveSeatTickSettings {
   enabled: boolean;
   wakeIntervalMs: number;
   reason: string | null;
+  instructionLines?: SeatTickInstructionLine[];
   /**
    * The agent-authored prompt this project's wakes carry, or null (#1280).
    *
@@ -246,7 +250,7 @@ function normalizeRow(project: string, value: unknown): SeatTickSettings {
   const empty = defaultSeatTickSettings(project);
   if (!value || typeof value !== "object" || Array.isArray(value)) return empty;
   const raw = value as Record<string, unknown>;
-  return {
+  return withInstructionLines({
     project,
     ...(normalizeAutonomy(raw.autonomy) ? { autonomy: normalizeAutonomy(raw.autonomy) } : {}),
     ...(Array.isArray(raw.autonomyHistory) ? { autonomyHistory: raw.autonomyHistory.map(normalizeAutonomy).filter((entry): entry is AutonomySetting => entry !== null) } : {}),
@@ -266,7 +270,13 @@ function normalizeRow(project: string, value: unknown): SeatTickSettings {
     until: isoOrNull(raw.until),
     updatedAt: isoOrNull(raw.updatedAt),
     setBy: normalizeActor(raw.setBy),
-  };
+    ...(Array.isArray(raw.instructionLines) ? { instructionLines: raw.instructionLines as SeatTickInstructionLine[] } : {}),
+  });
+}
+
+function withInstructionLines(settings: SeatTickSettings): SeatTickSettings {
+  const { instructionLines, ...rest } = settings;
+  return { ...rest, ...(settings.reason || instructionLines ? { instructionLines: seatTickInstructionLines(settings) } : {}) };
 }
 
 function normalizeAutonomy(value: unknown): AutonomySetting | null {
@@ -342,7 +352,7 @@ const settingsStore = new LegacyDocumentStore<SeatTickSettingsFile>({
       return [settings.project, settings] as const;
     })),
   }),
-  toFile: (file) => file,
+  toFile: (file) => ({ ...file, projects: Object.fromEntries(Object.entries(file.projects).map(([project, row]) => [project, withInstructionLines(row)])) }),
   readLegacy: readLegacySettingsFile,
   error: (message, cause) => new Error(message, { cause }),
 });
@@ -366,18 +376,18 @@ export function checkpointSeatTickSettingsRollbackMirrorForDemotion(filePath = s
 }
 
 export function readSeatTickSettings(project: string, filePath = seatTickSettingsPath()): SeatTickSettings {
-  return settingsStore.read(filePath).projects[project] ?? defaultSeatTickSettings(project);
+  return withInstructionLines(settingsStore.read(filePath).projects[project] ?? defaultSeatTickSettings(project));
 }
 
 export function readSeatTickSettingsFile(filePath = seatTickSettingsPath()): Record<string, SeatTickSettings> {
-  return settingsStore.read(filePath).projects;
+  return Object.fromEntries(Object.entries(settingsStore.read(filePath).projects).map(([project, row]) => [project, withInstructionLines(row)]));
 }
 
 /** Serialized read-modify-write of one project's row. Only that row is
     written, so two writers of different projects cannot clobber each other. */
 export function writeSeatTickSettings(project: string, settings: SeatTickSettings, filePath = seatTickSettingsPath()): void {
   settingsStore.mutate(filePath, (file) => ({
-    next: { ...file, projects: { ...file.projects, [project]: { ...settings, project } } },
+    next: { ...file, projects: { ...file.projects, [project]: withInstructionLines({ ...settings, project }) } },
     result: undefined,
   }));
 }
@@ -411,6 +421,7 @@ export function effectiveSeatTickSettings(
       enabled: true,
       wakeIntervalMs: defaultWakeIntervalMs,
       reason: settings.reason,
+      instructionLines: seatTickInstructionLines(settings),
       /* The prompt survives the branch that discards the schedule setting,
          because it was never part of it. */
       monitorPrompt: settings.monitorPrompt,
@@ -430,6 +441,7 @@ export function effectiveSeatTickSettings(
       ? defaultWakeIntervalMs
       : Math.round(settings.wakeIntervalMinutes * 60_000),
     reason: settings.reason,
+    instructionLines: seatTickInstructionLines(settings),
     monitorPrompt: settings.monitorPrompt,
     until: settings.until,
     updatedAt: settings.updatedAt,
@@ -454,11 +466,11 @@ export function effectiveSeatTickSettings(
  */
 export function seatTickSettingsAfterLapse(
   project: string,
-  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "maintenanceSetting" | "curationSetting" | "autoRotate" | "release" | "autonomy" | "autonomyHistory">>,
+  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "instructionLines" | "maintenanceSetting" | "curationSetting" | "autoRotate" | "release" | "autonomy" | "autonomyHistory">>,
 ): SeatTickSettings {
   const restored = defaultSeatTickSettings(project);
   if (!lapsed.reason && !lapsed.monitorPrompt && !lapsed.maintenanceSetting && !lapsed.curationSetting && !lapsed.autoRotate && !lapsed.release && !lapsed.autonomy && !lapsed.autonomyHistory?.length) return restored;
-  return { ...restored, ...(lapsed.curationSetting ? { curation: lapsed.curationSetting } : {}), ...(lapsed.autonomy ? { autonomy: lapsed.autonomy } : {}), ...(lapsed.autonomyHistory ? { autonomyHistory: lapsed.autonomyHistory } : {}), ...(lapsed.release ? { release: lapsed.release } : {}), ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), ...(lapsed.autoRotate ? { autoRotate: lapsed.autoRotate } : {}), reason: lapsed.reason, monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
+  return { ...restored, ...(lapsed.curationSetting ? { curation: lapsed.curationSetting } : {}), ...(lapsed.autonomy ? { autonomy: lapsed.autonomy } : {}), ...(lapsed.autonomyHistory ? { autonomyHistory: lapsed.autonomyHistory } : {}), ...(lapsed.release ? { release: lapsed.release } : {}), ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), ...(lapsed.autoRotate ? { autoRotate: lapsed.autoRotate } : {}), reason: lapsed.reason, ...(lapsed.instructionLines ? { instructionLines: lapsed.instructionLines } : {}), monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
 }
 
 export type SeatTickSettingsChangeResult =
@@ -515,7 +527,9 @@ export function applySeatTickSettingsChange(
   }
 
   let reason = current.reason;
+  let instructionLines = seatTickInstructionLines(current);
   if (Object.hasOwn(change, "reason")) {
+    if (context.actor.kind === "unidentified") return { ok: false, error: "instruction writes need an identified author" };
     const raw = change.reason;
     if (raw === null) reason = null;
     else if (typeof raw !== "string") return { ok: false, error: "reason must be a string" };
@@ -526,6 +540,9 @@ export function applySeatTickSettingsChange(
       }
       reason = redacted || null;
     }
+    instructionLines = replaceSeatTickInstructions(current, reason, context.actor, context.at);
+    reason = instructionLines.map(line => line.text).join("\n") || null;
+    if ((reason?.length ?? 0) > REASON_LIMIT) return { ok: false, error: `instructions (reason) are ${reason!.length} characters; the limit is ${REASON_LIMIT}. Nothing was stored — shorten the instructions and send them again` };
   }
 
   /* Set, replaced and cleared through this one surface. Like the panel
@@ -654,6 +671,7 @@ export function applySeatTickSettingsChange(
     until,
     updatedAt: decisionOnly ? current.updatedAt : context.at,
     setBy: decisionOnly ? current.setBy : context.actor,
+    ...(instructionLines.length || current.instructionLines ? { instructionLines } : {}),
   };
   if (!seatTickSettingsAreDefault(next) && !next.reason) {
     return { ok: false, error: "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one" };

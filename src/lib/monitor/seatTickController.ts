@@ -1,3 +1,4 @@
+import type { SeatTickInstructionLine } from "./seatTickInstructions";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { pendingAutonomyReports, autonomyActive } from "./autonomy";
@@ -527,7 +528,7 @@ function wakeClientMessageId(
   project: string,
   seatEpoch: number,
   verdict: SeatTickVerdict,
-  context: { fingerprint: string; lastWakeAt: string | null; monitorPrompt: string | null; operatorInstructions: string | null; releasedWake?: SeatTickProjectState["releasedWake"] },
+  context: { fingerprint: string; lastWakeAt: string | null; monitorPrompt: string | null; operatorInstructions: string | null; instructionLines?: SeatTickInstructionLine[]; releasedWake?: SeatTickProjectState["releasedWake"] },
 ): string {
   const shape = verdict.kind === "wake"
     ? verdict.reasons.map((reason) => reason.kind).sort().join(",")
@@ -535,7 +536,7 @@ function wakeClientMessageId(
   // Fold instructions into the fixed-size board digest so edits change the
   // payload identity without lengthening a key already near the runtime bound.
   const fingerprint = context.operatorInstructions
-    ? crypto.createHash("sha512").update(JSON.stringify([context.fingerprint, context.operatorInstructions])).digest("hex").slice(0, context.fingerprint.length)
+    ? crypto.createHash("sha512").update(JSON.stringify([context.fingerprint, context.operatorInstructions, context.instructionLines])).digest("hex").slice(0, context.fingerprint.length)
     : context.fingerprint;
   return boundedWakeIdentity(`${seatMessageKeys.tick}${project}:${seatEpoch}:${context.lastWakeAt ?? "first"}:${shape}:${fingerprint}`
     + wakePromptIdentity(context.monitorPrompt)
@@ -1413,6 +1414,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
          from it. */
       gaps: verdict.gaps,
       operatorInstructions: input.settings.reason,
+      instructionLines: input.settings.instructionLines,
       monitorPrompt: input.settings.monitorPrompt,
       monitorPromptUnchanged,
       mandateCarriesContract: input.seat?.mandateCarriesTickContract === true,
@@ -1427,6 +1429,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       items: input.policy.itemsPerWake,
       slot: String(Math.floor(input.now / input.policy.proposalIntervalMs)),
       operatorInstructions: input.settings.reason,
+      instructionLines: input.settings.instructionLines,
       monitorPrompt: input.settings.monitorPrompt,
       monitorPromptUnchanged,
       mandateCarriesContract: input.seat?.mandateCarriesTickContract === true,
@@ -1865,6 +1868,7 @@ async function check(
          identity and the text have to move together or they are exactly the
          disagreement this key exists to prevent. */
       operatorInstructions: input.settings.reason,
+      instructionLines: input.settings.instructionLines,
       monitorPrompt: input.settings.monitorPrompt,
     });
     const { text, commit } = withViewerOperation("seat-tick.payload", () => alarmPayload(input, verdict, proposalIssues, new Date(gathered.now).toISOString()));

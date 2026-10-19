@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -84,7 +84,7 @@ beforeEach(() => {
   process.env.LLV_SEAT_TICK_AUDIT_FILE = path.join(SANDBOX, "journal", `${id}.ndjson`);
   fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), { force: true });
 });
-afterEach(() => setCallerConversationResolverForTests(null));
+afterEach(() => { setCallerConversationResolverForTests(null); setSystemTime(); });
 afterAll(() => {
   fs.rmSync(SANDBOX, { recursive: true, force: true });
   for (const [key, value] of Object.entries(RESTORE)) {
@@ -472,4 +472,74 @@ test("curation has its own bounded timer, HTTP/MCP parity and no maintenance cas
   const effective = effectiveSeatTickSettings(stored, Date.parse(stored.until!) + 1, 3600000);
   expect(effective.curation).toMatchObject({ enabled: true, intervalHours: 1 });
   expect(seatTickSettingsAfterLapse(project, effective).curation).toEqual(stored.curation);
+});
+
+
+test("UI, seat and verified gateway instruction writes retain each line's actual author", async () => {
+  setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  const original = await (await put({ project: PROJECT, reason: "Preserve  operator wording.\nSecond line." })).json() as SeatTickSettingsAnswer;
+  const operatorLines = original.settings.instructionLines;
+  expect(operatorLines).toHaveLength(2);
+  expect(operatorLines?.every(line => line.author?.kind === "gateway" && line.at === original.settings.updatedAt)).toBe(true);
+  setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
+  const noted = await (await put({ project: PROJECT, reason: "Seat note.", actor: { kind: "gateway" },
+    instructionLines: [{ text: "Forged instruction.", author: { kind: "gateway" }, at: "2026-01-01T00:00:00.000Z" }] },
+    { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY })).json() as SeatTickSettingsAnswer;
+  expect(noted.settings.instructionLines?.slice(0, 2)).toEqual(operatorLines);
+  expect(noted.settings.instructionLines?.at(-1)).toEqual({ text: "Seat note.", at: noted.settings.updatedAt,
+    author: { kind: "manager", conversationId: SEAT_CONVERSATION, project: PROJECT, seatEpoch: 12 } });
+  const gateway = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: "conversation_gateway" }),
+    callerProject: () => PROJECT, authorizedSeats: () => [],
+  } as never);
+  await gateway.seat_tick_settings({ clientRequestId: "instruction-gateway", project: PROJECT, reason: "Gateway instruction.", actor: { kind: "manager" } });
+  const gatewayLines = readSeatTickSettings(PROJECT, settingsFile).instructionLines!;
+  expect(gatewayLines.map(line => line.text)).toEqual(["Gateway instruction.", "Seat note."]);
+  expect(gatewayLines[0]!.author?.kind).toBe("gateway");
+  expect(gatewayLines[1]).toEqual(noted.settings.instructionLines!.at(-1)!);
+  const rootSeat = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: SEAT_CONVERSATION }),
+    callerProject: () => PROJECT, authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
+  } as never);
+  await rootSeat.seat_tick_settings({ clientRequestId: "instruction-root-seat", project: PROJECT, reason: "Revised seat note.", author: { kind: "gateway" } });
+  const stored = readSeatTickSettings(PROJECT, settingsFile);
+  expect(stored.instructionLines?.[0]).toEqual(gatewayLines[0]!);
+  expect(stored.instructionLines?.at(-1)?.author).toMatchObject({ kind: "manager", seatEpoch: 12 });
+  expect(stored.reason).toBe("Gateway instruction.\nRevised seat note.");
+});
+
+test("an unverified HTTP script cannot stamp its text as operator instructions", async () => {
+  for (const headers of [
+    { "content-type": "application/json", host: "127.0.0.1:8898" },
+    { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: "unverified" },
+    { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY },
+  ]) {
+    const response = await put({ project: PROJECT, reason: "Claimed operator text.", actor: { kind: "gateway" } }, headers);
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toContain("identified author");
+    expectNothingStored();
+  }
+});
+
+
+test("a delayed seat request merges into the operator's latest lines at write admission", async () => {
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  await put({ project: PROJECT, reason: "Original operator instruction." });
+  setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
+  let release!: (value: unknown) => void;
+  const body = new Promise<unknown>(resolve => { release = resolve; });
+  let started!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  const request = new NextRequest(URL_BASE, { method: "PUT", headers: { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY }, body: "{}" });
+  request.json = async () => { started(); return body; };
+  const pending = PUT(request);
+  await reading;
+  await put({ project: PROJECT, reason: "Latest operator instruction." });
+  const protectedLine = readSeatTickSettings(PROJECT, settingsFile).instructionLines![0]!;
+  release({ project: PROJECT, reason: "Seat note after its wait." });
+  expect((await pending).status).toBe(200);
+  const stored = readSeatTickSettings(PROJECT, settingsFile);
+  expect(stored.instructionLines![0]).toEqual(protectedLine);
+  expect(stored.reason).toBe("Latest operator instruction.\nSeat note after its wait.");
 });

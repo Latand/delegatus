@@ -2,7 +2,8 @@ import { releaseControlChange } from "@/lib/release/store";
 import { NextRequest, NextResponse } from "next/server";
 
 import { agentRegistry } from "@/lib/agent/registry";
-import { callerConversationId } from "@/lib/agent/operatorAuthority";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { callerConversationId, operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
 import {
   changeSeatTickSettings,
   type SeatTickSettingsActor,
@@ -78,7 +79,7 @@ function callerOwnProject(conversationId: string): string | null {
  */
 function settingsActor(req: NextRequest, project: string): SeatTickSettingsActor {
   const conversationId = callerConversationId(req);
-  if (!conversationId) return { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
+  if (!conversationId) return { kind: !req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER) && operatorBrowserRequest(req) ? "gateway" : "unidentified", conversationId: null, project: null, seatEpoch: null };
   const active = orchestratorSeatFor(project).active ?? null;
   if (active && active.conversationId === conversationId) {
     return { kind: "manager", conversationId, project, seatEpoch: active.seatEpoch };
