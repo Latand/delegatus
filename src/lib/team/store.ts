@@ -1,3 +1,4 @@
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
@@ -223,6 +224,18 @@ export interface EventQuery {
   limit: number;
 }
 
+const teamIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS sessions_member ON sessions(member_id)`,
+  `CREATE INDEX IF NOT EXISTS passkeys_member ON passkeys(member_id)`,
+  `CREATE INDEX IF NOT EXISTS events_member ON events(actor_member_id, id)`,
+  `CREATE INDEX IF NOT EXISTS events_subject ON events(subject_id, id)`,
+  `CREATE INDEX IF NOT EXISTS events_project ON events(project, id)`,
+  `CREATE INDEX IF NOT EXISTS message_authors_conversation ON message_authors(conversation_id, at)`,
+  `CREATE INDEX IF NOT EXISTS challenges_user_code ON challenges(user_code)`,
+  `CREATE INDEX IF NOT EXISTS challenges_kind_expiry ON challenges(kind, expires_at)`,
+  `CREATE INDEX IF NOT EXISTS challenges_keyless_evictable ON challenges(kind, polled_at, created_at) WHERE ${KEYLESS_WAITING}`,
+]);
+
 export class TeamStore {
   private readonly db: Db;
 
@@ -237,6 +250,8 @@ export class TeamStore {
     this.db = openCurrentDatabase(filename, () => {
       const db = observeSqlite(new sqlite.Database(filename, { create: true, strict: true }), "team");
       db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+      try { teamIndexes.assertRepairAuthority(db, path.dirname(filename)); }
+      catch (error) { db.close(); throw error; }
       db.exec(`
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS members (
@@ -264,7 +279,6 @@ export class TeamStore {
           method TEXT NOT NULL,
           revoked_at TEXT
         );
-        CREATE INDEX IF NOT EXISTS sessions_member ON sessions(member_id);
         CREATE TABLE IF NOT EXISTS challenges (
           id TEXT PRIMARY KEY,
           kind TEXT NOT NULL,
@@ -296,7 +310,6 @@ export class TeamStore {
           created_at TEXT NOT NULL,
           last_used_at TEXT
         );
-        CREATE INDEX IF NOT EXISTS passkeys_member ON passkeys(member_id);
         CREATE TABLE IF NOT EXISTS events (
           id TEXT PRIMARY KEY,
           at TEXT NOT NULL,
@@ -309,9 +322,6 @@ export class TeamStore {
           subject_title TEXT,
           detail_json TEXT
         );
-        CREATE INDEX IF NOT EXISTS events_member ON events(actor_member_id, id);
-        CREATE INDEX IF NOT EXISTS events_subject ON events(subject_id, id);
-        CREATE INDEX IF NOT EXISTS events_project ON events(project, id);
         CREATE TABLE IF NOT EXISTS message_authors (
           client_message_id TEXT PRIMARY KEY,
           conversation_id TEXT,
@@ -319,7 +329,6 @@ export class TeamStore {
           at TEXT NOT NULL,
           text_digest TEXT
         );
-        CREATE INDEX IF NOT EXISTS message_authors_conversation ON message_authors(conversation_id, at);
       `);
       /* A store from before the eviction order knew polls and Start holders
          gains both columns; the index they order by replaces the old one. */
@@ -329,10 +338,8 @@ export class TeamStore {
       }
       db.exec(`
         DROP INDEX IF EXISTS challenges_keyless_waiting;
-        CREATE INDEX IF NOT EXISTS challenges_user_code ON challenges(user_code);
-        CREATE INDEX IF NOT EXISTS challenges_kind_expiry ON challenges(kind, expires_at);
-        CREATE INDEX IF NOT EXISTS challenges_keyless_evictable ON challenges(kind, polled_at, created_at) WHERE ${KEYLESS_WAITING};
       `);
+      teamIndexes.install(db, path.dirname(filename));
       const version = db.query<{ value: string }, []>("SELECT value FROM meta WHERE key = 'schema'").get();
       if (!version) db.query("INSERT INTO meta(key, value) VALUES ('schema', ?)").run(String(SCHEMA_VERSION));
       else if (Number(version.value) > SCHEMA_VERSION) {

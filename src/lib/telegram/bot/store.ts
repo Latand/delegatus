@@ -1,3 +1,4 @@
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
@@ -212,6 +213,12 @@ const CHAT_SELECT = `
   SELECT c.*, (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.chat_id) AS stored
   FROM chats c`;
 
+const telegramIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS messages_newest ON messages(chat_id, date DESC, message_id DESC)`,
+  `CREATE INDEX IF NOT EXISTS report_replies_pending ON report_replies(key)
+          WHERE json_extract(value_json, '$.state') = 'pending'`,
+]);
+
 export class TelegramBotStore {
   private readonly db: import("bun:sqlite").Database;
 
@@ -226,6 +233,8 @@ export class TelegramBotStore {
     this.db = openCurrentDatabase(filename, () => {
       const db = observeSqlite(new sqlite.Database(filename, { create: true, strict: true }), "telegram");
       db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+      try { telegramIndexes.assertRepairAuthority(db, path.dirname(filename)); }
+      catch (error) { db.close(); throw error; }
       db.exec(`
         CREATE TABLE IF NOT EXISTS bot (
           id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -270,7 +279,6 @@ export class TelegramBotStore {
           sent_by_unidentified INTEGER NOT NULL DEFAULT 0,
           PRIMARY KEY (chat_id, message_id)
         );
-        CREATE INDEX IF NOT EXISTS messages_newest ON messages(chat_id, date DESC, message_id DESC);
         CREATE TABLE IF NOT EXISTS sends (
           caller_key TEXT NOT NULL,
           client_request_id TEXT NOT NULL,
@@ -291,9 +299,8 @@ export class TelegramBotStore {
           key TEXT PRIMARY KEY,
           value_json TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS report_replies_pending ON report_replies(key)
-          WHERE json_extract(value_json, '$.state') = 'pending';
       `);
+      telegramIndexes.install(db, path.dirname(filename));
       /* The name a posted document was shown under; stores from before
          documents gain the column empty. */
       const messageColumns = new Set(db.query<{ name: string }, []>("PRAGMA table_info(messages)").all().map((column) => column.name));

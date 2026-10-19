@@ -1,3 +1,5 @@
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
+import path from "node:path";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import type { Database } from "bun:sqlite";
@@ -19,6 +21,20 @@ export const outboundKey = (m: TelegramPublishReceipt) => JSON.stringify([m.botI
 export const samePublicationTarget = (a: PublicationTarget | null, b: PublicationTarget | null) =>
   !!a && !!b && a.relayId === b.relayId && a.apiBase === b.apiBase && a.targetId === b.targetId && a.ownerId === b.ownerId;
 
+const outboundIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS relay_owner_contexts_retention ON relay_owner_contexts(at, key)`,
+  `CREATE INDEX IF NOT EXISTS relay_outbound_handoff_link_due ON relay_outbound_handoffs(link, due, key)`,
+  `CREATE INDEX IF NOT EXISTS relay_outbound_unrouted_due ON relay_outbound(due, key) WHERE state = 'unrouted'`,
+  `CREATE INDEX IF NOT EXISTS relay_outbound_expiry ON relay_outbound(date, key) WHERE state IN ('pending', 'unrouted', 'forwarding')`,
+  `CREATE INDEX IF NOT EXISTS relay_outbound_expiry_forwarding ON relay_outbound(date, key) WHERE state IN ('unrouted', 'forwarding')`,
+  `CREATE INDEX IF NOT EXISTS relay_outbound_retention ON relay_outbound(date, key) WHERE state <> 'pending'`,
+  `CREATE INDEX IF NOT EXISTS relay_outbound_retention_eligible ON relay_outbound(date, key) WHERE state NOT IN ('pending', 'forwarding')`,
+  `CREATE INDEX IF NOT EXISTS relay_outbound_due ON relay_outbound(due, key) WHERE state = 'pending'`,
+  `CREATE INDEX IF NOT EXISTS relay_outbound_questions ON relay_outbound(bot_id, chat_id, topic_id, date DESC, message_id DESC) WHERE is_question = 1`,
+  `CREATE INDEX IF NOT EXISTS relay_outbound_group ON relay_outbound(bot_id, chat_id, topic_id, send_key, date DESC, message_id DESC)`,
+  `CREATE INDEX IF NOT EXISTS relay_outbound_scope ON relay_outbound(bot_id, chat_id, topic_id, date DESC, message_id DESC)`,
+]);
+
 /** Short connections, zero SQLite waits, and one async admission deadline.
  * This journal shares the bot database, so the confirmed receipt and the
  * publication obligation commit together. It never calls Telegram. */
@@ -34,6 +50,7 @@ function outboundAttempt<T>(filename: string, write: boolean, work: (db: Databas
     try {
       db.exec("PRAGMA busy_timeout = 0");
       if (write) {
+        outboundIndexes.assertRepairAuthority(db, path.dirname(filename));
         db.exec("BEGIN IMMEDIATE");
         db.exec(`CREATE TABLE IF NOT EXISTS relay_outbound (
           key TEXT PRIMARY KEY, bot_id TEXT NOT NULL, chat_id TEXT NOT NULL, topic_id INTEGER,
@@ -42,7 +59,6 @@ function outboundAttempt<T>(filename: string, write: boolean, work: (db: Databas
           state TEXT NOT NULL, due INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0)`);
         db.exec("CREATE TABLE IF NOT EXISTS relay_owner_turns (scope TEXT PRIMARY KEY, request_id TEXT NOT NULL, at INTEGER NOT NULL, previous_at INTEGER NOT NULL)");
         db.exec("CREATE TABLE IF NOT EXISTS relay_owner_contexts (key TEXT PRIMARY KEY, at INTEGER NOT NULL, previous_at INTEGER NOT NULL)");
-        db.exec("CREATE INDEX IF NOT EXISTS relay_owner_contexts_retention ON relay_owner_contexts(at, key)");
         db.exec("CREATE TABLE IF NOT EXISTS relay_publication_results (key TEXT PRIMARY KEY, reason TEXT NOT NULL)");
         db.exec("CREATE TABLE IF NOT EXISTS relay_outbound_handoffs (key TEXT PRIMARY KEY, link TEXT NOT NULL, destination TEXT NOT NULL, due INTEGER NOT NULL DEFAULT 0)");
         const handoffColumns = db.query<{ name: string }, []>("PRAGMA table_info(relay_outbound_handoffs)").all();
@@ -51,19 +67,10 @@ function outboundAttempt<T>(filename: string, write: boolean, work: (db: Databas
           db.exec("UPDATE relay_outbound_handoffs SET due=COALESCE((SELECT due FROM relay_outbound WHERE relay_outbound.key=relay_outbound_handoffs.key), 0)");
           db.exec("DELETE FROM relay_outbound_handoffs WHERE key IN (SELECT key FROM relay_outbound WHERE state<>'forwarding')");
         }
-        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_handoff_link_due ON relay_outbound_handoffs(link, due, key)");
         db.exec("DROP INDEX IF EXISTS relay_outbound_handoff_due");
-        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_unrouted_due ON relay_outbound(due, key) WHERE state = 'unrouted'");
         db.exec("CREATE TABLE IF NOT EXISTS relay_publication_cooldowns (key TEXT PRIMARY KEY, until_ms INTEGER NOT NULL)");
-        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_expiry ON relay_outbound(date, key) WHERE state IN ('pending', 'unrouted', 'forwarding')");
-        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_expiry_forwarding ON relay_outbound(date, key) WHERE state IN ('unrouted', 'forwarding')");
-        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_retention ON relay_outbound(date, key) WHERE state <> 'pending'");
-        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_retention_eligible ON relay_outbound(date, key) WHERE state NOT IN ('pending', 'forwarding')");
-        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_due ON relay_outbound(due, key) WHERE state = 'pending'");
-        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_questions ON relay_outbound(bot_id, chat_id, topic_id, date DESC, message_id DESC) WHERE is_question = 1");
-        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_group ON relay_outbound(bot_id, chat_id, topic_id, send_key, date DESC, message_id DESC)");
-        db.exec("CREATE INDEX IF NOT EXISTS relay_outbound_scope ON relay_outbound(bot_id, chat_id, topic_id, date DESC, message_id DESC)");
       }
+      if (write) outboundIndexes.install(db, path.dirname(filename));
       const result = work(db);
       if (write) db.exec("COMMIT");
       return result;

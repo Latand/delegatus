@@ -970,9 +970,14 @@ export async function registerViewerRuntime(): Promise<void> {
     const { agentRegistry } = await import("@/lib/agent/registry");
     await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", () => agentRegistry().prepareReadOnlySnapshot(startupAbort.signal)));
     assertStartupActive();
+    const { cleanupFinishedWorkAtStartup } = await import("@/lib/attention/finishedWorkCleanup");
+    await startupBarrier.run(() => cleanupFinishedWorkAtStartup(undefined, assertStartupActive));
+    assertStartupActive();
     let activatedAuthority: HotStateAuthority | null = null;
     const { retireCuratorPlaceholdersAtStartup } = await import("@/lib/memory/curation/cleanup");
     await startupBarrier.run(() => retireCuratorPlaceholdersAtStartup(undefined, assertStartupActive));
+    const { retireSeatRecoveryPlaceholdersAtStartup } = await import("@/lib/tasks/seatRecoveryCleanup");
+    await startupBarrier.run(() => retireSeatRecoveryPlaceholdersAtStartup(undefined, assertStartupActive));
     assertStartupActive();
     await completeViewerRuntimeActivation({
       initializeOperatorCapability: initializeOperatorSpawnCapabilityAtStartup,
@@ -1003,6 +1008,9 @@ export async function registerViewerRuntime(): Promise<void> {
       prepareBoard: async () => {
         assertStartupActive();
         await startupBarrier.run(() => prepareBoardSummary(true));
+        const { reconcileAttentionOnce } = await import("@/lib/attention/reconcileController");
+        assertStartupActive();
+        await startupBarrier.run(() => reconcileAttentionOnce(undefined, assertStartupActive));
         assertStartupActive();
       },
       startControllers: startCurrentReleaseControllers,
