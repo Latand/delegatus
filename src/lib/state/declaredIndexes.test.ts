@@ -242,10 +242,10 @@ test("fresh processes repair indexes only with startup authority", () => {
     import { RuntimeJournal } from "./src/runtime-host/journal";
     import { SessionHostMetadata } from "./src/runtime-host/journalSessionMetadata";
     import { Database } from "bun:sqlite";
-    const [kind, filename] = process.argv.slice(1);
+    const [kind, filename, registryMode] = process.argv.slice(1);
     try {
       if (kind === "state") initializeStateCollections(filename, [{ collection:"fixture", schemaVersion:1, migrationId:"fixture", key:r=>r.id, loadRecords:()=>[{id:"fixture"}] }]);
-      if (kind === "registry") new SqliteAgentRegistryStore(filename, { initialSnapshot: normalizeRegistry({version:2,entries:{},receipts:{}}), normalize: normalizeRegistry }).close();
+      if (kind === "registry") new SqliteAgentRegistryStore(filename, { initialSnapshot: normalizeRegistry({version:2,entries:{},receipts:{}}), normalize: normalizeRegistry, ...(registryMode === "restricted" ? {allowArchiveMigration:false} : {}) }).close();
       if (kind === "journal") {
         const journal = new RuntimeJournal(filename, {now:()=>0});
         const db = new Database(filename);
@@ -303,6 +303,58 @@ test("fresh processes repair indexes only with startup authority", () => {
         expect(indexes(filename).find(row => row.name === missing)).toEqual(declared);
         expect(data(filename)).toBe(before);
       }
+    }
+  } finally { sandbox.release(); }
+}, 120_000);
+
+test("restricted registry opens refuse repair of every missing constructor index", () => {
+  const sandbox = ownershipSandbox();
+  const directory = path.join(sandbox.home, ".config", "delegatus", "state");
+  fs.mkdirSync(directory, { recursive: true });
+  const filename = path.join(directory, "registry.sqlite");
+  const source = `
+    import { SqliteAgentRegistryStore } from "./src/lib/agent/sqliteRegistryStore";
+    import { normalizeRegistry } from "./src/lib/agent/registry";
+    const [file, mode] = process.argv.slice(1);
+    try { new SqliteAgentRegistryStore(file, {initialSnapshot:normalizeRegistry({version:2,entries:{},receipts:{}}),normalize:normalizeRegistry,...(mode === "restricted" ? {allowArchiveMigration:false} : {})}).close(); }
+    catch (error) { console.error(error.name); process.exit(7); }
+  `;
+  const run = (owner: string, mode: "full" | "restricted") => Bun.spawnSync({
+    cmd: [process.execPath, "--preload", OWNERSHIP_PRELOAD, "-e", source, filename, mode],
+    cwd: path.resolve(import.meta.dir, "../../.."),
+    env: { ...sandbox.environment(), LLV_STATE_DIR: directory, LLV_STATE_OWNER: owner }, stdout: "pipe", stderr: "pipe",
+  });
+  try {
+    const seeded = run("viewer", "full");
+    expect(seeded.exitCode, seeded.stderr.toString()).toBe(0);
+    const deferredLookupIndexes = new Set([
+      "registry_lookup_launchId", "registry_lookup_requestDigest", "registry_lookup_supersedes_conversationId",
+      "registry_lookup_structuredHost_kind", "registry_lookup_parentConversationId",
+      "registry_lookup_launchProfile_parentConversationId", "registry_lookup_pendingSpawnCapability_operationId",
+      // These belong to the archive migration, which restricted opens skip.
+      "registry_changes_collection_seq", "registry_hot_operation",
+    ]);
+    const declared = indexes(filename).filter(({ name }) =>
+      !name.startsWith("registry_archive_") && !deferredLookupIndexes.has(name));
+    expect(declared.length).toBeGreaterThan(15);
+    const before = data(filename);
+    const complete = run("mcp", "restricted");
+    expect(complete.exitCode, complete.stderr.toString()).toBe(0);
+    expect(indexes(filename)).toEqual(expect.arrayContaining(declared));
+    expect(data(filename)).toBe(before);
+    for (const index of declared) {
+      const db = new Database(filename);
+      try { db.exec(`DROP INDEX "${index.name}"`); } finally { db.close(); }
+      const missing = data(filename);
+      const refused = run("mcp", "restricted");
+      expect(refused.exitCode, `${index.name}: ${refused.stderr.toString()}`).toBe(7);
+      expect(refused.stderr.toString()).toContain("StateStartupMutationRefused");
+      expect(indexes(filename).some(row => row.name === index.name), index.name).toBe(false);
+      expect(data(filename)).toBe(missing);
+      const repaired = run("viewer", "full");
+      expect(repaired.exitCode, repaired.stderr.toString()).toBe(0);
+      expect(indexes(filename).find(row => row.name === index.name)).toEqual(index);
+      expect(data(filename)).toBe(before);
     }
   } finally { sandbox.release(); }
 }, 120_000);

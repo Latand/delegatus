@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 
 import { expect, test } from "bun:test";
 
@@ -320,4 +321,62 @@ test("SQLite migration preserves duplicate legacy rows as one active lease plus 
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+function handoffTableContents(filename: string): string {
+  const db = new Database(filename);
+  try {
+    return JSON.stringify(["handoff_rows", "handoff_history", "handoff_draining_generations"].map(table => [
+      table,
+      db.query(`SELECT * FROM ${table} ORDER BY 1`).all(),
+    ]));
+  } finally { db.close(); }
+}
+
+function currentHandoffFixture(filename: string, rows: readonly HandoffRow[]): void {
+  new SqliteHandoffQueueStore(filename)["db"].close();
+  const db = new Database(filename);
+  try {
+    db.exec("DROP INDEX handoff_one_active_conversation");
+    const insert = db.query("INSERT INTO handoff_rows(operation_id,conversation_id,row_order,value_json) VALUES (?,?,?,?)");
+    rows.forEach((row, index) => insert.run(row.operationId, row.conversationId, index, JSON.stringify(row)));
+  } finally { db.close(); }
+}
+
+test("current-schema handoff index repair preserves populated tables", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-handoff-index-repair-"));
+  const filename = path.join(directory, "handoff-queue.sqlite");
+  try {
+    currentHandoffFixture(filename, [
+      storedRow(rowInput({ operationId: "handoff_a", conversationId: "conversation_a" })),
+      storedRow(rowInput({ operationId: "handoff_b", conversationId: "conversation_b" })),
+    ]);
+    const before = handoffTableContents(filename);
+    const repaired = new SqliteHandoffQueueStore(filename);
+    repaired["db"].close();
+    expect(handoffTableContents(filename)).toBe(before);
+    const db = new Database(filename);
+    try {
+      expect(db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type='index' AND name='handoff_one_active_conversation'").get()?.sql)
+        .toContain("WHERE conversation_id IS NOT NULL");
+    } finally { db.close(); }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("conflicting current-schema handoff rows refuse unique-index repair without rewriting data", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-handoff-index-conflict-"));
+  const filename = path.join(directory, "handoff-queue.sqlite");
+  try {
+    currentHandoffFixture(filename, [
+      storedRow(rowInput({ operationId: "handoff_a", conversationId: "conversation_same" })),
+      storedRow(rowInput({ operationId: "handoff_b", conversationId: "conversation_same" })),
+    ]);
+    const before = handoffTableContents(filename);
+    expect(() => new SqliteHandoffQueueStore(filename)).toThrow("UNIQUE constraint failed");
+    expect(handoffTableContents(filename)).toBe(before);
+    const db = new Database(filename);
+    try {
+      expect(db.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name='handoff_one_active_conversation'").get()).toBeNull();
+    } finally { db.close(); }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
