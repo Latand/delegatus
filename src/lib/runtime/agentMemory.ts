@@ -12,6 +12,7 @@ import { cpuScopeProperties, invalidateCpuContainmentProbe, type AgentCpuPlan } 
 export { GIB, normalizeHostMemory, memoryKillText, type AgentMemoryKill, type HostMemoryState } from "./agentMemoryState";
 export type MemoryMode = "auto" | "scope" | "watchdog" | "off";
 export type MemoryRunner = (command: string, args: string[]) => string;
+// eslint-disable-next-line no-restricted-syntax -- Legacy serving memory-scope commands and non-Linux watchdog ps sampling.
 const run: MemoryRunner = (command, args) => execFileSync(command, args, { encoding: "utf8", timeout: 2_000, stdio: ["ignore", "pipe", "pipe"] });
 function read(file: string): string { try { return fs.readFileSync(file, "utf8"); } catch { return ""; } }
 const diagnostics = new Set<string>();

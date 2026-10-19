@@ -176,6 +176,7 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
       const descriptor = tryAcquire(ticket);
       if (descriptor === null) {
         waited = true;
+        // eslint-disable-next-line no-restricted-syntax -- Legacy synchronous file-transaction API still reached while serving; async API is available.
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
         continue;
       }

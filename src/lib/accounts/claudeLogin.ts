@@ -169,6 +169,7 @@ const EXEC_POLL_MS = 2;
 const execWindowLatch = new Int32Array(new SharedArrayBuffer(4));
 
 function sleepThrough(ms: number): void {
+  // eslint-disable-next-line no-restricted-syntax -- Legacy login child exec-identity polling while serving; bounded by EXEC_WINDOW_MS.
   try { Atomics.wait(execWindowLatch, 0, 0, ms); }
   catch { const until = Date.now() + ms; while (Date.now() < until) { /* runtime forbids a blocking wait here */ } }
 }

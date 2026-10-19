@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 import { stateDir, statePath } from "@/lib/configDir";
+// eslint-disable-next-line no-restricted-imports -- The leased disk-pressure helper scans processes; injected ports keep direct test reads available.
 import { isOwnedTempConsumerName, ownTempRoots, scanProcesses, sweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";

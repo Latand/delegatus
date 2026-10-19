@@ -5162,6 +5162,7 @@ export class AgentRegistry {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === "ENOENT") return;
         if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+        // eslint-disable-next-line no-restricted-syntax -- Legacy recovery-lock restoration shared by serving synchronous and asynchronous writers.
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
       }
     }
@@ -5428,6 +5429,7 @@ export class AgentRegistry {
         if (recovered) return recovered;
         throw new RegistryWriterBusyError("account commit");
       }
+      // eslint-disable-next-line no-restricted-syntax -- Legacy synchronous registry writer admission; serving async writers use acquireLockAsync.
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, this.lockBackoff(attempt, REGISTRY_LOCK_BACKOFF_MAX_MS));
     }
   }

@@ -59,6 +59,7 @@ export function machineHome(): string {
   const env = { ...process.env };
   delete env.HOME; delete env.USERPROFILE;
   const script = 'process.stdout.write(require("node:os").userInfo().homedir)';
+  // eslint-disable-next-line no-restricted-syntax -- Legacy cached native-home probe on first CPU admission, including serving launch paths.
   const probe = (runtime: string, source: string, childEnv: NodeJS.ProcessEnv) => spawnSync(runtime, ["-e", source], {
     env: childEnv, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000,
   });

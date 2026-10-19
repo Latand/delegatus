@@ -35,6 +35,7 @@ export function hostCommandArgs(pid: number, command: string, args: string[]): s
 }
 
 export function enterStageHost(command: string, args: string[]): childProcess.SpawnSyncReturns<string> {
+  // eslint-disable-next-line no-restricted-syntax -- Legacy host-namespace probe shared by sweep helpers and serving disk-pressure reads.
   return childProcess.spawnSync("nsenter", hostCommandArgs(1, command, args), { encoding: "utf8", timeout: 2_000 });
 }
 

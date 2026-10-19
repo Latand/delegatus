@@ -20,6 +20,7 @@ export interface ClaudeCredentialPorts {
 const productionPorts: ClaudeCredentialPorts = {
   platform: process.platform,
   security: (args, input) => {
+    // eslint-disable-next-line no-restricted-syntax -- Legacy macOS Keychain credential access during serving account operations.
     const result = spawnSync("/usr/bin/security", args, {
       input, encoding: "utf8", timeout: 2_000, maxBuffer: 1024 * 1024,
       stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],

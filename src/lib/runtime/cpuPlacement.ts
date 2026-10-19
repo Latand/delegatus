@@ -74,6 +74,7 @@ export class CpuContainmentUnavailable extends Error {
 }
 
 export type CpuRunner = (command: string, args: string[]) => string;
+// eslint-disable-next-line no-restricted-syntax -- Legacy systemd containment probes and scope setup during serving agent launches.
 const run: CpuRunner = (command, args) => execFileSync(command, args, { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "pipe"] });
 const diagnostics = new Set<string>();
 function diagnostic(key: string, message: string) { if (!diagnostics.has(key)) { diagnostics.add(key); console.warn(`[delegatus] ${message}`); } }

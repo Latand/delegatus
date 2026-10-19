@@ -36,6 +36,7 @@ const pins = [
 const validators = new Map<string, ZodType>();
 
 export function installedCodexVersion(binary: string, env: NodeJS.ProcessEnv): string {
+  // eslint-disable-next-line no-restricted-syntax -- Legacy executable-version probe during Codex host initialization while serving.
   const result = spawnSync(binary, ["--version"], { env, encoding: "utf8", timeout: 5_000 });
   const version = result.status === 0 && /^codex-cli (\d+\.\d+\.\d+)\s*$/.exec(result.stdout)?.[1];
   if (!version) throw new CodexAppServerProtocolError("cannot identify executable version with --version");
