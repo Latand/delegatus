@@ -922,7 +922,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   projected.flows = projected.flows.map((flow) => ({ ...flow, project: remapProject(flow.project) }));
   pipelines = pipelines.map((pipeline) => ({ ...pipeline, project: remapProject(pipeline.project) }));
   workflows = workflows.map((workflow) => ({ ...workflow, project: remapProject(workflow.project) }));
-  const boardTasks = tasks.tasks.map((task) => ({ ...task, project: remapProject(task.project) }));
+  let boardTasks = tasks.tasks.map((task) => ({ ...task, project: remapProject(task.project) }));
   const projectNames = new Map(effectiveProjectCatalog.map((entry) => [entry.project, entry.displayName] as const));
   for (const file of projected.files) {
     file.projectName = projectNames.get(file.project) ?? file.projectName;
@@ -952,6 +952,10 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   overlayOperatorAsks(projected.files);
   markTiming("files-operator-asks");
   const finished = finishedWorkIndex(boardTasks, terminalPipelines, seatIdentityResolver(conversationLookup.canonicalConversationId), [], terminalOwnershipComplete);
+  /* The task column receives the same terminal ownership projection as the
+     conversation card. Visible pipelines may omit a closed or archived owner,
+     so leaving this derivation to the client would keep the task assigned. */
+  boardTasks = boardTasks.map(task => ({ ...task, status: finished.taskStatus(task) }));
   projected.files = projected.files.map(file => withFinishedAttention(file, Date.now() / 1000, finished));
   markTiming("files-finished-attention");
   /* Who answers each wait (docs/design/attention-auto-resolve.md): a worker's

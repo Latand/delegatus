@@ -30,6 +30,7 @@ import {
 import type { DismissedBy } from "./dismissalTypes";
 import { needsYouAnswer } from "./needsYouRead";
 import { attentionSystemClears } from "./reconcile";
+import { reconcileAttentionOnce, type AttentionReconcilePorts } from "./reconcileController";
 import { openBridgeAsks } from "@/lib/bridge/asks";
 import type { BridgeReportLogV1 } from "@/lib/bridge/types";
 
@@ -517,4 +518,40 @@ test("an escalation is stored by the wait it names, replays by operation, and un
   expect(files[0]!.attentionDismissal).toBeUndefined();
   expect(writeAttentionEscalation(escalation, by, { undo: true })).toEqual({ changed: true, escalation: null });
   expect(attentionEscalationIndex().size).toBe(0);
+});
+
+
+test("an archived finished ask is durably cleared and stays restored after Undo and reconciliation", async () => {
+  const now = new Date("2026-10-19T06:00:00.000Z");
+  const askedAt = "2026-10-12T06:00:00.000Z";
+  const membership = { kind: "pipeline" as const, containerId: "archived-lane", stageId: "build", stageOrder: 0, role: "builder", slot: "build", round: null, parentConversationId: null };
+  const stale = { path: "/t/archived-ask.jsonl", conversationId: "conversation_archived_ask", project: "repo-fixture", title: "Archived ask",
+    proc: "killed", activity: "recent", mtime: Date.parse(askedAt) / 1000, pendingPermission: { id: "permission-old", since: askedAt, tool: "Bash", command: "make" },
+    durableLineage: { kind: "spawn", role: "builder", depth: 0, parentConversationId: null, reviewsConversationId: null, memberships: [membership] } } as unknown as FileEntry;
+  const lane = { id: "archived-lane", state: "closed", closedAt: "2026-10-13T06:00:00.000Z", taskIds: ["task-archived"], runs: [], stages: [] } as unknown as Pipeline;
+  const task = { id: "task-archived", project: "repo-fixture", status: "assigned", assignments: [{ path: stale.path, conversationId: stale.conversationId, at: askedAt, state: "linked" }] } as unknown as BoardTask;
+  const reconcileFacts = { canonicalConversationId: (id: string) => id, retiredSeats: new Set<string>(), operatorWroteAt: new Map<string, number>(),
+    pipeline: (id: string) => id === lane.id ? lane : null, tasks: [task], pipelines: [lane] };
+  const dismissalHarness = harness();
+  dismissalHarness.clock.now = now;
+  const dismissalPorts = { ...dismissalHarness.ports, resolveConversation: () => ({ conversationId: stale.conversationId, path: stale.path }) };
+  const ports: AttentionReconcilePorts = {
+    now: () => now,
+    board: async () => { const files = [{ ...stale }]; overlayAttentionDismissals(files); return { files, pipelines: [], tasks: [task] }; },
+    facts: () => reconcileFacts, write: systemClearAttention, announce: async () => {},
+  };
+
+  const cleared = await reconcileAttentionOnce(ports);
+  expect(cleared.map(clear => clear.rule)).toEqual(["container-finished"]);
+  expect(readAttentionDismissals(undefined, now).records).toHaveLength(1);
+  await reconcileAttentionOnce(ports);
+  expect(readAttentionDismissals(undefined, now).records).toHaveLength(1);
+
+  const undone = await dismissAttention({ kind: "conversation", conversationId: stale.conversationId, path: stale.path }, OPERATOR, { undo: true, ports: dismissalPorts });
+  expect(undone.alreadyClear).toEqual([]);
+  expect(readAttentionDismissals(undefined, now).records[0]?.restoredAt).toEqual(now.toISOString());
+  expect(await reconcileAttentionOnce(ports)).toEqual([]);
+  const visible = [{ ...stale }]; overlayAttentionDismissals(visible);
+  const { attentionReason } = await import("@/components/attention");
+  expect(attentionReason(visible[0]!, now.getTime() / 1000)?.kind).toBe("permission");
 });

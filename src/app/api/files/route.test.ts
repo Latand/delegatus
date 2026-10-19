@@ -4206,7 +4206,7 @@ test("files attention projection retains closed and archived ownership across re
   const archivedQueries: string[][] = [];
   pipelinesStore = () => archivedForPass.length ? [] : [terminal("closed-lane")];
   pipelineVisibility = () => [];
-  boardTasksStore = () => [{ id: "task-finished", project: "repo", text: "Finished", status: "inbox", placement: "unplaced",
+  boardTasksStore = () => [{ id: "task-finished", project: "repo", text: "Finished", status: "assigned", placement: "unplaced",
     assignments: [{ path: asked.path, conversationId: asked.conversationId, at: "2026-10-12T06:00:00Z", state: "linked" }],
     createdAt: "2026-10-12T06:00:00Z", updatedAt: "2026-10-12T06:00:00Z" }];
   archivedOwnershipStore = ids => { archivedQueries.push([...ids]); return archivedForPass; };
@@ -4229,6 +4229,8 @@ test("files attention projection retains closed and archived ownership across re
       const { finishedWorkIndex } = await import("@/lib/attention/finishedWork");
       expect(projected.durableLineage?.memberships.map(member => member.containerId)).toEqual([pass === 0 ? "closed-lane" : "archived-lane"]);
       expect(body.tasks.map(task => [task.id, task.status])).toEqual([["task-finished", "inbox"]]);
+      const clientOwnership = finishedWorkIndex(body.tasks as never, body.pipelines);
+      expect(clientOwnership.taskStatus(body.tasks[0] as never)).toBe("inbox");
       const ownership = finishedWorkIndex(body.tasks as never, pass === 0 ? [terminal("closed-lane")] : [archived]);
       const { withFinishedAttention } = await import("@/lib/attention/finishedAttention");
       expect(withFinishedAttention(projected, Date.parse("2026-10-19T06:00:00Z") / 1000, ownership).attentionDismissal?.by)

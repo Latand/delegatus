@@ -7,7 +7,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { failUnstartedLaunchMembership } from "@/lib/tasks/membership";
 
 import { attentionSystemClears, retiredSeatConversations, type ReconcileFacts } from "./reconcile";
-import { reconcileAttentionOnce, type AttentionReconcilePorts } from "./reconcileController";
+import { pipelineOwnershipIds, reconcileAttentionOnce, type AttentionReconcilePorts } from "./reconcileController";
 
 /*
  * docs/design/attention-auto-resolve.md, acceptance 2: a wait clears itself
@@ -214,4 +214,14 @@ test("losing release authority during admission rejects without clearing", async
   });
   await entered; active = false; release();
   await expect(running).rejects.toThrow("release retired"); expect(writes).toBe(0);
+});
+
+
+test("reconciliation requests archived owners named by current file and registry memberships", () => {
+  const fileOwner = { kind: "pipeline" as const, containerId: "archived-file-owner", stageId: "build", stageOrder: 0, role: "builder", slot: "build", round: null, parentConversationId: null };
+  const registryOwner = { ...fileOwner, containerId: "archived-registry-owner" };
+  const fileWithLineage = file("archived", { durableLineage: { kind: "spawn", role: "builder", depth: 0, parentConversationId: null, reviewsConversationId: null, memberships: [fileOwner] } as FileEntry["durableLineage"] });
+  expect(pipelineOwnershipIds([fileWithLineage], { "conversation_archived": [registryOwner] }, new Set(["active-owner"]))).toEqual([
+    "archived-file-owner", "archived-registry-owner",
+  ]);
 });

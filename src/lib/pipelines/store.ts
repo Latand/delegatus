@@ -2007,6 +2007,11 @@ export function loadArchivedPipelinesForOwnership(ids: readonly string[]): Pipel
   });
 }
 
+/** Collection revision for rechecking a narrow archived-owner observation after admission. */
+export function archivedPipelinesRevision(): number {
+  return archiveStore().revision();
+}
+
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
   if (!pipelineActivitySettled(pipeline)) return false;
   /* Closed records archive on closedAt. A discarded draft now closes like

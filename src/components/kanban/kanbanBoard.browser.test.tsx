@@ -34446,6 +34446,15 @@ describe("finished work leaves In progress", () => {
     const pipelines = [{ id: "finished-lane", project: "atlas", repoDir: "/fixture", worktreeDir: "/fixture-lane", branch: "pipeline/finished", baseBranch: "main", baseRef: "", lastPassedCommit: "", pausedState: null, stateDetail: null, srcPath: null, srcConversationId: null, task: "Finished lane", taskIds: ["t-finished"], state: "completed", createdAt: at, closedAt: ended, stages: [],
       runs: [{ stageId: "review", attempts: [{ n: 1, state: "needs_decision", effectiveRole: { roleId: "reviewer", engine: "codex" }, conversationId: "conversation_finished", agentPath: files[0]!.path, startedAt: at, completedAt: ended }] }], cursor: null,
     }];
+    if (!before) {
+      /* Match the production response after its task projection settles the
+         assignment and omits the closed owner from visible pipelines. */
+      tasks[0]!.status = "inbox";
+      pipelines.length = 0;
+      for (const file of files.filter(entry => entry.name === "finished" || entry.name === "done")) {
+        file.attentionDismissal = { at: ended, by: { kind: "system", rule: "container-finished" } } as FileEntry["attentionDismissal"];
+      }
+    }
     const payload = { files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 3, smt: now / 1000 }], projectCwds: { atlas: "/fixture" }, systemHealth: { tmux: { status: "healthy" } } };
     const server = await serveEvidenceFixture(out, undefined, { "/api/files": payload, "/api/tasks": { tasks } });
     const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;

@@ -2,6 +2,7 @@ import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { NeedsYouBody } from "./needsYouRead";
+import type { FileEntry } from "@/lib/types";
 import type { SystemAttentionClear } from "./dismissals";
 import { attentionSystemClears, retiredSeatConversations, type ReconcileFacts } from "./reconcile";
 
@@ -17,6 +18,29 @@ import { attentionSystemClears, retiredSeatConversations, type ReconcileFacts } 
 
 export const ATTENTION_RECONCILE_INTERVAL_MS = 60_000;
 const FIRST_RECONCILE_DELAY_MS = 30_000;
+
+/** Archived ownership is fetched only for owners present in this current board
+ * observation; active owners stay on the paged list reader. */
+type PipelineMembership = NonNullable<FileEntry["durableLineage"]>["memberships"][number];
+
+export function pipelineOwnershipIds(
+  files: readonly FileEntry[],
+  registryMemberships: Readonly<Record<string, readonly PipelineMembership[]>>,
+  activeIds: ReadonlySet<string>,
+  canonical: (id: string) => string = id => id,
+): string[] {
+  const ids = new Set<string>();
+  const collect = (memberships: readonly PipelineMembership[] | undefined) => {
+    for (const membership of memberships ?? []) {
+      if (membership.kind === "pipeline" && !activeIds.has(membership.containerId)) ids.add(membership.containerId);
+    }
+  };
+  for (const file of files) {
+    collect(file.durableLineage?.memberships);
+    if (file.conversationId) collect(registryMemberships[canonical(file.conversationId)]);
+  }
+  return [...ids];
+}
 
 export interface AttentionReconcilePorts {
   now(): Date;
@@ -43,10 +67,13 @@ async function productionPorts(assertActive: () => void): Promise<AttentionRecon
   let observedRegistry: ReturnType<ReturnType<typeof registry.agentRegistry>["readOnlySnapshot"]> | undefined;
   let observedTasks: ReturnType<typeof tasks.loadTasksForList> | undefined;
   let observedLanes: ReturnType<typeof pipelines.loadPipelinesForList> = [];
+  let observedArchivedIds: string[] = [];
+  let observedArchivedRevision: number | null = null;
+  let observedArchivedLanes: ReturnType<typeof pipelines.loadArchivedPipelinesForOwnership> = [];
   return {
     now: () => new Date(),
     board: operatorBoardRepresentation,
-    facts: () => {
+    facts: body => {
       observedRegistry = registry.agentRegistry().readOnlySnapshot();
       const lookup = registry.readOnlyConversationLookupFromSnapshot(observedRegistry);
       const canonical = (id: string) => (id.startsWith("conversation_") ? lookup.canonicalConversationId(id as `conversation_${string}`) : id);
@@ -58,14 +85,18 @@ async function productionPorts(assertActive: () => void): Promise<AttentionRecon
       }
       observedTasks = tasks.loadTasksForList();
       observedLanes = pipelines.loadPipelinesForList();
-      const lanes = new Map(observedLanes.map(lane => [lane.id, lane]));
+      observedArchivedIds = pipelineOwnershipIds(body.files, observedRegistry.memberships, new Set(observedLanes.map(lane => lane.id)), canonical);
+      observedArchivedRevision = pipelines.archivedPipelinesRevision();
+      observedArchivedLanes = pipelines.loadArchivedPipelinesForOwnership(observedArchivedIds);
+      const authoritativeLanes = [...observedLanes, ...observedArchivedLanes];
+      const lanes = new Map(authoritativeLanes.map(lane => [lane.id, lane]));
       return {
         canonicalConversationId: canonical,
         retiredSeats: retiredSeatConversations(seats.readOrchestratorSeatFileOrNull(), canonical),
         operatorWroteAt,
         pipeline: (id) => lanes.get(id) ?? null,
         tasks: observedTasks,
-        pipelines: observedLanes,
+        pipelines: authoritativeLanes,
       };
     },
     admit: write => waitForStateLock("attention.reconcile.write", write, { subject: "attention" }),
@@ -73,6 +104,7 @@ async function productionPorts(assertActive: () => void): Promise<AttentionRecon
       assertActive();
       // Any source replacement while admission waited invalidates the observation.
       if (tasks.loadTasksForList() !== observedTasks || pipelines.loadPipelinesForList() !== observedLanes) return false;
+      if (observedArchivedRevision === null || pipelines.archivedPipelinesRevision() !== observedArchivedRevision) return false;
       if (!observedRegistry || registry.agentRegistry().readOnlySnapshot() !== observedRegistry) return false;
       return true;
     },
