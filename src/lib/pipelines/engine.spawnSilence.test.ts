@@ -205,7 +205,7 @@ test("a controller resumes the receipt-failure handoff before reserving its repl
 });
 
 
-test.each(["writer", "transcript", "pause"] as const)("a newer %s at receipt settlement retains the launch", async change => {
+test.each(["writer", "generation", "transcript", "pause"] as const)("a newer %s at receipt settlement retains the launch", async change => {
   const f = await silentLaunch();
   try {
     const fail = f.h.ports.failStoppedStageLaunch!;
@@ -213,7 +213,18 @@ test.each(["writer", "transcript", "pause"] as const)("a newer %s at receipt set
       const receipt = f.registry.spawnReceipt(args[0])!;
       if (change === "writer") {
         const { captureProcessIdentity } = await import("@/lib/processIdentity");
-        expect(f.registry.claimStructuredHost(receipt.key!, captureProcessIdentity(process.pid), { allowUnhosted: true })).not.toBeNull();
+        const entry = f.registry.readOnlySnapshot().entries[`codex:${receipt.key!.sessionId}`]!;
+        f.registry.upsert({ ...entry, claimOwner: `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`, claimEpoch: entry.claimEpoch + 1 });
+      } else if (change === "generation") {
+        const { captureProcessIdentity } = await import("@/lib/processIdentity");
+        const before = f.registry.readOnlySnapshot(); const next = structuredClone(before);
+        const conversation = next.conversations[receipt.conversationId]!;
+        const previous = conversation.generations.at(-1)!;
+        conversation.generations.push({ ...previous, id: "replacement-generation" });
+        const entry = next.entries[`codex:${receipt.key!.sessionId}`]!;
+        next.entries["codex:replacement-generation"] = { ...entry, key: { engine: "codex", sessionId: "replacement-generation" },
+          status: "live", structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } };
+        f.registry.restoreSnapshot(before, next);
       } else if (change === "transcript") {
         fs.writeFileSync(receipt.artifactPath!, JSON.stringify({ timestamp: f.h.ports.now(), type: "event_msg", payload: { type: "task_started" } }) + "\n");
       } else {
@@ -226,4 +237,41 @@ test.each(["writer", "transcript", "pause"] as const)("a newer %s at receipt set
     expect(f.registry.spawnReceipt(f.attempt().launchId!)?.state).toBe("path-pending");
     if (change === "pause") expect(loadPipelines()[0]!.state).toBe("paused");
   } finally { setAgentRegistryForTests(null); await f.host.end(); }
+});
+
+
+test.each(["generation", "writer"] as const)("a newer %s during host observation prevents signalling either host", async change => {
+  const f = await silentLaunch();
+  const peer = await stageHostChild();
+  try {
+    const readHost = f.h.ports.conversationHostProcess!;
+    let changed = false;
+    f.h.ports.conversationHostProcess = async id => {
+      const result = await readHost(id);
+      if (changed) return result;
+      changed = true;
+      const before = f.registry.readOnlySnapshot();
+      const next = structuredClone(before);
+      const receipt = next.receipts[f.attempt().launchId!]!;
+      const originalKey = `codex:${receipt.key!.sessionId}`;
+      const entry = next.entries[originalKey]!;
+      if (change === "writer") entry.claimEpoch++;
+      else {
+        const conversation = next.conversations[receipt.conversationId]!;
+        const previous = conversation.generations.at(-1)!;
+        const pathname = `${previous.path}.replacement`;
+        conversation.generations.push({ ...previous, id: "replacement-generation", path: pathname });
+        next.entries["codex:replacement-generation"] = { ...entry, key: { engine: "codex", sessionId: "replacement-generation" },
+          artifactPath: pathname, structuredHostOperationId: "launch-replacement",
+          structuredHost: { ...entry.structuredHost!, process: peer.process } };
+      }
+      f.registry.restoreSnapshot(before, next);
+      return result;
+    };
+    f.advance(BUDGET); await f.wake();
+    const { processIdentityStatus } = await import("@/lib/processIdentity");
+    expect(processIdentityStatus(f.host.process)).toBe("alive");
+    expect(processIdentityStatus(peer.process)).toBe("alive");
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  } finally { setAgentRegistryForTests(null); await f.host.end(); await peer.end(); }
 });

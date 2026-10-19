@@ -1716,7 +1716,7 @@ export function defaultPipelinePorts(
         const generation = conversation?.generations.at(-1);
         const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
         if (!receipt.key && conversation?.generations.length) return false;
-        if (receipt.key && (!entry || !stageLaunchGenerationMatches(receipt,
+        if (receipt.key && (!entry || generation?.id !== receipt.key.sessionId || !stageLaunchGenerationMatches(receipt,
           conversation && generation ? { engine: conversation.engine, path: generation.path } : null, entry))) return false;
         if (entry && (entry.claimOwner || capturedTreeMayRun(entry)
           || entry.structuredHost?.process && processIdentityStatus(entry.structuredHost.process) !== "dead")) return false;
@@ -1800,11 +1800,23 @@ export function defaultPipelinePorts(
           const evidence = await durableStageTurnEvidence(receipt.engine, receipt.artifactPath!);
           if (!evidence?.launchOnly) return { outcome: "failed", error: "stage launch already has native turn evidence" };
         }
+        const writer = receipt.key ? registry.readOnlySnapshot().entries[sessionKeyId(receipt.key)] : null;
+        if (writer?.claimOwner && writer.structuredHost?.writerClaimEpoch !== writer.claimEpoch) {
+          return { outcome: "failed", error: "a newer writer owns stage host setup" };
+        }
         const probe = await stageHostProbe(target);
-        if (!probe || !probe.resident()) return { outcome: "not-running" };
+        if (!probe || !probe.resident() && !writer?.structuredHost?.process) return { outcome: "not-running" };
+        if (!receipt.key || sessionKeyId(receipt.key) !== sessionKeyId(probe.key) || receipt.artifactPath !== probe.transcriptPath) {
+          return { outcome: "failed", error: "the recorded launch is no longer the current stage host generation" };
+        }
         return stopStageHostByRecordedIdentity(target, probe, dependencies.termination ?? {}, () => {
           const current = target.launchId ? registry.spawnReceipt(target.launchId) : null;
-          if (options.eligible?.() === false || !receipt || current?.conversationId !== target.conversationId || current.error !== receipt.error
+          const snapshot = registry.readOnlySnapshot();
+          const entry = receipt.key ? snapshot.entries[sessionKeyId(receipt.key)] : null;
+          const generation = snapshot.conversations[probe.conversationId]?.generations.at(-1);
+          if (!generation || generation.id !== probe.key.sessionId || generation.path !== probe.transcriptPath
+            || entry?.claimOwner !== writer?.claimOwner || entry?.claimEpoch !== writer?.claimEpoch
+            || options.eligible?.() === false || !receipt || current?.conversationId !== target.conversationId || current.error !== receipt.error
             || current.artifactPath !== receipt.artifactPath || current.state !== receipt.state
             || stageArtifactStamp(receipt.artifactPath) !== stamp) {
             return { status: 409, error: "stage launch changed or wrote its transcript before termination" };
@@ -8819,7 +8831,8 @@ function unansweredLaunchRecovery(attempt: PipelineStageAttempt, receipt: Pipeli
   const legacy = attempt.error?.startsWith(`${SPAWN_RECOVERY_PARK_PREFIX}${STAGED_RECOVERY_EXHAUSTED}`)
     && receipt && ["starting", "path-pending"].includes(receipt.state);
   const checks = legacy ? Number(attempt.error?.match(/after (\d+) checks/)?.[1] ?? 0) : settled ? 1 : 0;
-  return checks > 0 ? { phase: "uncertain", startedAt: unixMs(attempt.startedAt), checks, nextTryAt: 0, stopped: true,
+  return checks > 0 ? { phase: settled && !receipt?.staged ? "unpublished" : "uncertain",
+    startedAt: unixMs(attempt.startedAt), checks, nextTryAt: 0, stopped: true,
     reason: `${STAGED_RECOVERY_EXHAUSTED}; recorded silent launch settlement pending` } : null;
 }
 

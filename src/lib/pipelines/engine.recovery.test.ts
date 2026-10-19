@@ -1924,6 +1924,7 @@ test("a launch whose recorded host exited without a transcript is replaced after
   try {
     const f = await aliveStagedLaunch({ hostProcess: host.process, nativeTranscript: true });
     productionHostSeams(f);
+    f.h.ports.stopStageAgent = (target, options) => defaultPipelinePorts().stopStageAgent(target, options);
     f.advance(24 * 60 * 60_000);
     await f.wake();
     const pipeline = loadPipelines()[0]!;
