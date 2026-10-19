@@ -13,16 +13,8 @@ import type { PairedRelay } from "./store";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { recordPublishedRelayReference } from "./publishedReferences";
 
-export class ExternalRelayError extends Error {
-  constructor(
-    readonly code: string,
-    readonly status = 0,
-    readonly retryAfterSeconds: number | null = null,
-    readonly payload?: unknown,
-  ) {
-    super(code);
-  }
-}
+import { ExternalRelayError } from "./errors";
+export { ExternalRelayError } from "./errors";
 export function isUnknownFeatureRefusal(error: unknown): error is ExternalRelayError {
   return error instanceof ExternalRelayError && error.status >= 400 && error.status < 500 &&
     /^(?:(?:unknown|unsupported)(?:_[a-z]+)*_features?|features?_(?:unknown|unsupported))$/.test(error.code);
@@ -206,6 +198,53 @@ export async function relayCall<T = unknown>(
       source.on("error", error => request.destroy(error));
       source.pipe(request);
     } else request.end(encoded ?? undefined);
+  });
+}
+/** Originals have exactly one authenticated route. A caller consumes the body
+ * as a stream; redirects and arbitrary ref paths never reach a second host. */
+export async function relayDownloadMedia<T>(apiBase: string, requestId: string, leaseId: string, mediaRef: string,
+  credential: string, consume: (response: http.IncomingMessage) => Promise<T>,
+  options: { signal: AbortSignal; beforeSend: () => void }) {
+  if (![requestId, mediaRef].every(id => /^[A-Za-z0-9_-]{1,64}$/.test(id)) || !credential || !/^[A-Za-z0-9_-]{22,64}$/.test(leaseId))
+    throw new ExternalRelayError("malformed", 400);
+  const { url, address } = await targetWithSignal(apiBase, options.signal);
+  options.signal.throwIfAborted(); options.beforeSend();
+  if (!url.pathname.endsWith("/v1")) throw new ExternalRelayError("invalid_address");
+  return new Promise<T>((resolve, reject) => {
+    const request = (url.protocol === "https:" ? https : http).request({
+      hostname: address, port: url.port || (url.protocol === "https:" ? 443 : 80),
+      servername: net.isIP(bare(url.hostname)) ? undefined : bare(url.hostname),
+      path: `${url.pathname}/requests/${requestId}/media/${mediaRef}`, method: "GET", agent: false, signal: options.signal,
+      headers: { host: url.host, "Delegatus-Relay-Version": "1", "Delegatus-Relay-Lease": leaseId, Authorization: `Bearer ${credential}` },
+    }, response => {
+      response.on("error", () => { /* The consumer/pipeline observes the error. */ });
+      void (async () => {
+        const status = response.statusCode ?? 0;
+        if (status >= 300 && status < 400) throw new ExternalRelayError("malformed", status);
+        if (status !== 200) {
+          const chunks: Buffer[] = []; let size = 0;
+          for await (const chunk of response) {
+            size += chunk.length;
+            if (size > 65536) throw new ExternalRelayError("malformed", status);
+            chunks.push(Buffer.from(chunk));
+          }
+          let body: { error?: { code?: unknown; retry_after_s?: unknown } };
+          try { body = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new ExternalRelayError("malformed", status); }
+          const code = body.error?.code;
+          const retry = body.error?.retry_after_s;
+          throw new ExternalRelayError(typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? code : "malformed", status,
+            typeof retry === "number" && Number.isFinite(retry) ? retry : null);
+        }
+        options.signal.throwIfAborted(); options.beforeSend();
+        const result = await consume(response);
+        options.signal.throwIfAborted(); options.beforeSend();
+        if (!response.complete) throw new ExternalRelayError("malformed", 400);
+        return result;
+      })().then(resolve, error => { response.destroy(); reject(error instanceof ExternalRelayError || options.signal.aborted ? error : new ExternalRelayError("malformed", 400)); });
+    });
+    request.on("error", error => reject(options.signal.aborted ? error : new ExternalRelayError("malformed", 400)));
+    request.setTimeout(30000, () => request.destroy(new ExternalRelayError("malformed", 400)));
+    request.end();
   });
 }
 /**

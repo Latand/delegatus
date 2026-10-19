@@ -113,7 +113,7 @@ type CardInput = Pick<KanbanCard, "needsYou" | "reasons" | "pipelines" | "member
 export function cardState(card: CardInput, nowSeconds: number): CardState | null {
   const lanes = card.pipelines.map((summary) => laneState(summary.pipeline));
   const formLane = lanes.find((lane) => lane.route?.owner === "form" && lane.route.form);
-  const waitingRound = card.task && prototypeWaitsOnOperator(card.task.prototypeReview) ? card.task.prototypeReview! : null;
+  const waitingRound = card.task && prototypeWaitsOnOperator(card.task.prototypeReview, card.task) ? card.task.prototypeReview! : null;
   const motionSince = parseMs(card.motion.since);
   if (card.needsYou || formLane) {
     const first = card.reasons[0];

@@ -123,4 +123,9 @@ test("every library worker is bundled and traced into standalone output", async 
       `${workerFile} has no standalone tracing include`,
     ).toContain(`.next/server/${workerEntry[0]}.js`);
   }
+  const relayPdfWorker = "./src/lib/externalRelay/pdfValidation.worker.ts";
+  const relayPdfEntry = Object.entries(entries).find(([, entry]) => entry === relayPdfWorker
+    || (typeof entry === "object" && entry !== null && "import" in entry && entry.import === relayPdfWorker));
+  if (!relayPdfEntry) throw new Error("relay PDF validation worker has no webpack entry");
+  expect(tracingIncludes).toContain(`.next/server/${relayPdfEntry[0]}.js`);
 });

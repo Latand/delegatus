@@ -234,7 +234,7 @@ export interface ConversationReason {
  * parse covers nothing.
  */
 export function dismissalCovers(reason: Pick<ConversationReason, "id" | "raisedAt" | "clocked">, dismissal: AttentionDismissalMark | null | undefined): boolean {
-  if (!dismissal) return false;
+  if (!dismissal || dismissal.restoredAt) return false;
   const at = isoSeconds(dismissal.at);
   if (at === null) return false;
   if (dismissal.reasonId) return dismissal.reasonId === reason.id;

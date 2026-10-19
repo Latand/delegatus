@@ -1,6 +1,8 @@
+import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { blockingWaitRole } from "@/lib/blockingWaits";
 import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
 import { normalizeShortIdArgs } from "./shortIdArgs";
+import { withMcpPageCursors, bindMcpPageCursorResult, mcpPageCursorCaller, MCP_PAGE_CURSOR_TOOLS, MCP_PAGE_CURSOR_DESCRIPTION, MCP_PAGE_CURSOR_RAW_RELAY_RESULTS } from "./pageCursors";
 import { relayAnswerSchema } from "@/lib/externalRelay/protocol";
 import { relayServiceToolsSchema } from "@/lib/externalRelay/ownerServiceTools";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
@@ -549,6 +551,8 @@ export type McpToolFailure = {
   error: string;
   code: string;
   retryable: boolean;
+  /** The continuation was unavailable; restart the page query without cursor. */
+  cursorReset?: true;
   /** Structured evidence a binding attached to its refusal, so an agent gets the
       same payload an HTTP caller does instead of only the prose message. */
   details?: McpToolPayload;
@@ -1747,6 +1751,11 @@ export interface SqliteMcpReceiptStoreOptions {
   now?: () => number;
 }
 
+const receiptIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS mcp_receipts_retention_sequence
+        ON mcp_receipts(retention, sequence)`,
+]);
+
 /**
  * Keyed durable receipts for the production MCP server.
  *
@@ -2022,6 +2031,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
    * both ALTER, and the second would throw "duplicate column name".
    */
   private initializeSchema(): void {
+    receiptIndexes.assertRepairAuthority(this.db, path.dirname(this.filename));
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.exec(`
@@ -2038,9 +2048,8 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
           storage_bytes INTEGER NOT NULL,
           claimed_at INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS mcp_receipts_retention_sequence
-        ON mcp_receipts(retention, sequence);
       `);
+      receiptIndexes.install(this.db, path.dirname(this.filename));
       /* #1490: the bound identity and dispatch stage of a recoverable mutation.
          Added in place so an existing database keeps every row it holds; rows
          from before carry NULL in both and are read as legacy. */
@@ -2611,6 +2620,7 @@ export function createMcpToolService(
           () => callTool(toolName, logicalArgs, context));
       }
       const typedTool = toolName as McpToolName;
+      const pageCaller = mcpPageCursorCaller();
       const normalized = normalizeBoundedMcpNumerics(typedTool, args);
       let effectiveArgs = normalized.args;
       if (typedTool === "search_memory" && typeof effectiveArgs.clientRequestId === "string"
@@ -2637,8 +2647,13 @@ export function createMcpToolService(
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
+        if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
+        const rawRelayResults = result.ok && typedTool === "relay_service_tools" && Array.isArray(result.results) ? result.results : undefined;
         if (effectiveArgs.full !== true) result = shortIdsInAnswer(result);
+        if (rawRelayResults && result && typeof result === "object") {
+          Object.defineProperty(result, MCP_PAGE_CURSOR_RAW_RELAY_RESULTS, { value: rawRelayResults });
+        }
         const serializationStartedAt = performance.now();
         let resultSizeBytes: number | undefined;
         try {
@@ -3365,6 +3380,7 @@ export function createMcpToolService(
           phaseDurations.completion = performance.now() - releaseStartedAt;
           return settled;
         }
+        settled = bindMcpPageCursorResult(typedTool, settled, pageCaller);
         await measure("completion", () => receipts.complete(key, digest, settled, retention));
         return settled;
       })();
@@ -3388,7 +3404,7 @@ export function createMcpToolService(
       }
     },
   };
-  return { callTool: (tool, args, context) => runWithMcpCallerResolution(() => service.callTool(tool, args, context)) };
+  return withMcpPageCursors({ callTool: (tool, args, context) => runWithMcpCallerResolution(() => service.callTool(tool, args, context)) });
 }
 
 /**
@@ -3606,7 +3622,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Types: .md .markdown .txt .log .json .csv .pdf .png .jpg .jpeg .html, non-empty, at most 20 MB; text files are scanned, as UTF-8 and UTF-16, for private keys, tokens and credentials (including `password: word` assignments) and refused with document_secret naming the class (`details.secretClass`). Other refusals: document_invalid, document_outside_roots, document_forbidden_path, document_type, document_too_large.",
     "`document.filename` is the shown name (default the file's own name) and must keep the file's type class (text, PDF or image: a .md may be shown as .txt, never as .pdf); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. The post appears in telegram_bot_messages with kind document and its filename.",
   ].join(" "),
-  relay_answer: "Only while you answer a relay message as its owner: choose how your last message is delivered. format rich_markdown renders the Markdown subset and length in your prompt; buttons are https links; attachments are files under your document roots, sent after your message. Each call replaces the previous one. Refused in every other conversation and after the answer.",
+  relay_answer: "Only while you answer a relay message as its owner: choose how your last message is delivered. format rich_markdown renders the Markdown subset and length in your prompt; buttons are https links; mentions annotates person labels at original Unicode-scalar offsets; attachments are files under your document roots. Photo references use stable attachment_id values from the receipt; several photos form one carousel with your message. Each call replaces the previous one. Refused in every other conversation and after the answer.",
   relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Refused in any other conversation and once answered.",
   relay_owner_history: [
     "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. Received edits keep first text; Telegram-side deletions may remain stored. Author ids and file ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
@@ -4693,7 +4709,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
     const taskMutation = toolName === "create_task" || toolName === "update_task";
     const schema = TOOL_INPUT_SCHEMAS[toolName];
     server.registerTool(toolName, {
-      description: TOOL_DESCRIPTIONS[toolName],
+      description: TOOL_DESCRIPTIONS[toolName] + (MCP_PAGE_CURSOR_TOOLS.has(toolName) ? ` ${MCP_PAGE_CURSOR_DESCRIPTION}` : ""),
       inputSchema: shortenSchemaDescriptions(TOOL_TRANSPORT_SCHEMAS[toolName]),
     }, async (args, extra) => {
       if (taskMutation) {
@@ -4775,11 +4791,13 @@ export const MCP_HTTP_CLIENT_ID = "llv-spawn-capability";
     for a request that did not come through it (every stdio call). */
 function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancelSignal: (requestId: unknown) => AbortSignal | null }) | null {
   if (!authInfo || typeof authInfo !== "object") return null;
-  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown; nativePeer?: McpHttpCaller["nativePeer"]; unidentified?: boolean } };
+  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown; nativePeer?: McpHttpCaller["nativePeer"]; unidentified?: boolean; paginationIdentity?: unknown } };
   if (clientId !== MCP_HTTP_CLIENT_ID || typeof token !== "string" || !token) return null;
   const lookup = typeof extra?.cancelSignal === "function" ? extra.cancelSignal as (requestId: unknown) => unknown : null;
   return {
-    ...(extra?.nativePeer ? { nativePeer: extra.nativePeer } : extra?.unidentified ? {} : { capability: token }),
+    ...(extra?.nativePeer ? { nativePeer: extra.nativePeer } : extra?.unidentified ? {
+      ...(typeof extra.paginationIdentity === "string" && extra.paginationIdentity ? { paginationIdentity: extra.paginationIdentity } : {}),
+    } : { capability: token }),
     cancelSignal: (requestId) => {
       const signal = lookup?.(requestId);
       return signal instanceof AbortSignal ? signal : null;

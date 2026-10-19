@@ -91,7 +91,7 @@ export function prototypeReviewNotices(tasks: readonly BoardTask[], seatOrNow: r
     const failures: PrototypeReviewNotice[] = undelivered.map(round => ({ id: `prototype-delivery:${round.reviewId}`, project: task.project,
       taskId: task.id, reviewId: round.reviewId, title: firstLineTitle(task.text), roundTitle: round.title,
       undelivered: true, createdAt: round.at, target: { kind: "prototype-review", taskId: task.id, reviewId: round.reviewId } }));
-    if (!summary || !reviewId || !prototypeWaitsOnOperator(summary)) return failures;
+    if (!summary || !reviewId || !prototypeWaitsOnOperator(summary, task)) return failures;
     /* The notice names the task the jump lands on; the waiting round's own title, which may be older than the latest, rides second. */
     const waiting = (task.prototypeReviews ?? task.prototypeReviewReplica?.rounds ?? []).find(round => round.id === reviewId);
     const roundTitle = waiting?.title ?? (reviewId === summary.latestReviewId ? summary.title : undefined);
@@ -101,6 +101,12 @@ export function prototypeReviewNotices(tasks: readonly BoardTask[], seatOrNow: r
   }), ...seat];
 }
 
-export function prototypeWaitsOnOperator(summary: PrototypeReviewSummary | undefined): boolean {
-  return !!summary?.waitingReviewId && !summary.waitingDismissal;
+export function prototypeWaitsOnOperator(summary: PrototypeReviewSummary | undefined, task?: Pick<BoardTask, "status" | "doneAt" | "updatedAt"> | null): boolean {
+  if (!summary?.waitingReviewId || summary.waitingDismissal) return false;
+  if (task?.status === "done") {
+    const finished = Date.parse(task.doneAt ?? task.updatedAt);
+    const raised = Date.parse(summary.createdAt);
+    if (Number.isFinite(finished) && Number.isFinite(raised) && raised <= finished) return false;
+  }
+  return true;
 }
