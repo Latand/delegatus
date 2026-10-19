@@ -87,7 +87,7 @@ test("the common service shortens cursor state on fresh calls and receipt replay
   const { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES } = await import("./server");
   const upstream = Buffer.from(JSON.stringify({ scope: "quartz", offset: 12 })).toString("base64url");
   const binding = async () => ({ nextCursor: upstream, hasMore: true });
-  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, binding])) as Parameters<typeof createMcpToolService>[0];
+  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, binding])) as unknown as Parameters<typeof createMcpToolService>[0];
   const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
   const call = () => runAsMcpHttpCaller({ capability: "service-caller" }, () => service.callTool("search_transcripts", { query: "quartz", clientRequestId: "same-page" }).then(payload));
   const first = await call(), replay = await call();
@@ -100,7 +100,7 @@ test("another caller cannot mint a handle from a foreign receipt with the same r
   const { currentMcpHttpCaller } = await import("./callerContext");
   let calls = 0;
   const binding = async () => { calls++; return { nextCursor: `state-${currentMcpHttpCaller()?.capability}` }; };
-  const service = createMcpToolService(Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, binding])) as Parameters<typeof createMcpToolService>[0], new MemoryMcpReceiptStore());
+  const service = createMcpToolService(Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, binding])) as unknown as Parameters<typeof createMcpToolService>[0], new MemoryMcpReceiptStore());
   const call = (capability: string) => runAsMcpHttpCaller({ capability }, () => service.callTool("search_transcripts", { query: "quartz", clientRequestId: "shared-request" }).then(payload));
   const first = await call("one"), second = await call("two");
   expect(calls).toBe(1);
@@ -124,7 +124,7 @@ test("upstream cursor state that looks like a commit hash round-trips byte for b
     received = args.cursor;
     return { nextCursor: args.cursor ? null : upstream };
   };
-  const service = createMcpToolService(Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, binding])) as Parameters<typeof createMcpToolService>[0], new MemoryMcpReceiptStore());
+  const service = createMcpToolService(Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, binding])) as unknown as Parameters<typeof createMcpToolService>[0], new MemoryMcpReceiptStore());
   const call = (args: Record<string, unknown>) => runAsMcpHttpCaller({ capability: "hash-caller" }, () => service.callTool("search_transcripts", args).then(payload));
   const first = await call({ query: "quartz" });
   await call({ query: "quartz", cursor: first.nextCursor });
