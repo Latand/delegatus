@@ -4649,7 +4649,11 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
       if (!round || round.nativeAssociation || canonicalOrchestratorProject(round.project || project) !== project) throw new Error("autonomy cannot decide this form");
     }
     // Instruction authorship is separate from the existing control authority.
-    const instructionActor = attribution.kind === "gateway" && callerSeat ? { ...actor, kind: "manager" as const } : actor;
+    // A temporarily unavailable manager grant cannot make a recorded seat's
+    // words operator-authored. The designation still proves its authorship.
+    const instructionActor = attribution.kind === "gateway"
+      && (callerSeat || (activeSeat && activeSeat.conversationId === attribution.conversationId))
+      ? { ...actor, kind: "manager" as const } : actor;
     const context = { at: new Date().toISOString(), actor, instructionActor };
     const applied = dependencies.writeTickSettings || dependencies.readTickSettings
       ? applySeatTickSettingsChange(current, change, context)

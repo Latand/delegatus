@@ -578,3 +578,21 @@ test("instruction attribution keeps the existing authority of unrelated settings
   expect(readSeatTickSettings(PROJECT, settingsFile).autoRotate?.enabled).toBe(false);
   expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual(stored.instructionLines!);
 });
+
+
+test("an active root seat remains the instruction author when manager authority is unavailable", async () => {
+  setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  await put({ project: PROJECT, reason: "Preserve operator instruction." });
+  const operatorLine = readSeatTickSettings(PROJECT, settingsFile).instructionLines![0]!;
+  const rootSeat = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: SEAT_CONVERSATION }),
+    callerProject: () => PROJECT,
+    authorizedSeats: () => [],
+  } as never);
+  await rootSeat.seat_tick_settings({ clientRequestId: "instruction-seat-without-authority", reason: "Seat note." });
+  const stored = readSeatTickSettings(PROJECT, settingsFile);
+  expect(stored.instructionLines![0]).toEqual(operatorLine);
+  expect(stored.instructionLines![1]!.author).toMatchObject({ kind: "manager", conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  expect(stored.reason).toBe("Preserve operator instruction.\nSeat note.");
+});
