@@ -597,9 +597,9 @@ async function reconcileAuthorityProjections(
 ): Promise<OrchestratorSeat> {
   if (!seat.conversationId) throw new Error("active orchestrator seat is missing its conversation identity");
   const registry = agentRegistry();
-  // Completed replays own their identity admission even when request replay is
-  // disabled. New activations pass their configured store deadline explicitly.
-  const deadline = performance.now() + waitMs;
+  // Active seats own their identity admission even when request replay is
+  // disabled. New activations can supply a positive, shorter store deadline.
+  const deadline = performance.now() + (waitMs || SEAT_STORE_WAIT_MS);
   for (let attempt = 0; attempt < 3; attempt++) {
     const revision = registry.storageDiagnostics().revision;
     // Discovery can take another state lease. Prepare outside both writers,

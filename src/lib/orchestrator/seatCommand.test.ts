@@ -2513,6 +2513,13 @@ test("a spawn route that answers its own busy store is replayed under the same a
   expect(orchestratorSeatFor("proj-a").history).toEqual([]);
 });
 
+test("a newly activated seat publishes identity when request replay is disabled", async () => {
+  const { deps, recorded } = dependencies({ seatStoreWaitMs: 0 });
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_identity_no_replay"), deps);
+  expect(result.status).toBe(200);
+  expect(recorded.identityStamps).toHaveLength(1);
+});
+
 test("reconcileCompletedSeatReplay waits out a short foreign holder without needing a request replay", async () => {
   seedLegacyActiveSeat("req_completed_holder");
   const seatsFile = path.join(sandbox, "orchestrator-seats.json");
