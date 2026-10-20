@@ -11,7 +11,7 @@ import type { Pipeline, PipelineStageAttempt } from "./types";
 
 const START = "2026-10-16T08:00:00.000Z", NOW = "2026-10-16T12:00:00.000Z";
 let nextFixture = 0;
-async function fixture(legacy = false) {
+async function fixture(legacy = false, successor = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "stage-proof-"));
   const lane = path.join(root, "lane"), remote = path.join(root, "remote.git"), foreign = path.join(root, "foreign");
   const baseEnv = { ...process.env, ...Object.fromEntries(Object.keys(process.env).filter(key => key.startsWith("GIT_")).map(key => [key, undefined])),
@@ -29,9 +29,14 @@ async function fixture(legacy = false) {
   await git(lane, "config", "user.email", ["noreply", "example.invalid"].join("@"));
   await git(lane, "config", "commit.gpgSign", "false");
   await git(lane, "commit", "--allow-empty", "-m", "base");
-  const base = await git(lane, "rev-parse", "HEAD");
+  let base = await git(lane, "rev-parse", "HEAD");
   await git(lane, "remote", "add", "origin", remote);
   await git(lane, "push", "origin", "main");
+  if (successor) {
+    await git(lane, "push", "origin", "HEAD:refs/heads/pipeline/proof");
+    await git(lane, "commit", "--allow-empty", "-m", "reviewed successor base");
+    base = await git(lane, "rev-parse", "HEAD");
+  }
   await git(lane, "checkout", "-b", "pipeline/proof");
   await git(root, "clone", remote, foreign);
   await git(foreign, "config", "user.name", "Fixture");
@@ -53,6 +58,30 @@ async function fixture(legacy = false) {
   return { root, lane, remote, foreign, env, git, own, commit, push, settle, pipeline, attempt, receipt: stageGitReceiptDirectory(launchId),
     close: async () => { await fs.rm(root, { recursive: true, force: true }); await fs.rm(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); } };
 }
+
+for (const divergent of [false, true]) test(`successor settlement preserves an older delivery tip (divergent: ${divergent})`, async () => {
+  const f = await fixture(false, true);
+  try {
+    const head = await f.commit("passed successor output");
+    if (divergent) {
+      await f.git(f.foreign, "commit", "--allow-empty", "-m", "foreign delivery output");
+      await f.git(f.foreign, "push", "origin", "HEAD:refs/heads/pipeline/proof");
+    }
+    const tip = await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof");
+    f.pipeline.repoDir = f.lane;
+    const result = await commitAndAdoptStageBranch(f.pipeline, "build", realExec, () => [f.pipeline], undefined,
+      () => {}, null, undefined, undefined, f.attempt, NOW);
+    if (divergent) {
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain("settling the stage push:");
+    } else {
+      expect(await f.own("merge-base", "--is-ancestor", tip, f.pipeline.baseRef)).toBe("");
+      expect(result).toEqual({ ok: true, sha: head });
+    }
+    expect(await f.own("rev-parse", "HEAD")).toBe(head);
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(tip);
+  } finally { await f.close(); }
+});
 
 test("B: a controller-created replacement link proves a completed parent without restartRecovery", async () => {
   const f = await fixture();
