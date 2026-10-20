@@ -7,6 +7,11 @@ Earlier profiling and the existing registry keyed-write work showed that a
 small requested result can still materialize retained history before selecting it.
 This change selects sooner and yields between bounded batches.
 
+The first results table records the original comparison. Independent review
+then identified additional warm-registry, seat-projection, merge-sweep and cold
+session costs; the follow-up below records those fixes and supersedes the first
+table's cold-session conclusion.
+
 ## Reproduction and conditions
 
 `scripts/benchmark-viewer-loop-pair.py` compiles the same
@@ -18,11 +23,18 @@ reproduction. The separately built Next server also loaded all 32 compiled
 server runtimes and served GET `/` with HTTP 200. The synthetic benchmark does
 not reproduce the production journal window or its browser traffic.
 
-Use two exports under the stage-provided `$TMPDIR`, with frozen dependencies,
-and run the pair through the prescribed gate wrapper:
+Export the base and head under the stage-provided `$TMPDIR` with
+`scripts/review-export.ts`. It shares dependencies only when their manifests,
+lock and patch inputs match. Pass its returned checkout directories to the
+paired driver through the prescribed gate wrapper:
 
 ```sh
-bash "$GATE_SLOT" python3 scripts/benchmark-viewer-loop-pair.py   "$TMPDIR/before-export" "$TMPDIR/after-export" "$TMPDIR/paired.json"
+before_json=$(TMPDIR="$TMPDIR" bun scripts/review-export.ts "$BASE_REF")
+after_json=$(TMPDIR="$TMPDIR" bun scripts/review-export.ts "$HEAD_REF")
+before_export=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["directory"])' <<<"$before_json")
+after_export=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["directory"])' <<<"$after_json")
+rtk proxy bash "$GATE_SLOT" python3 scripts/benchmark-viewer-loop-pair.py \
+  "$before_export" "$after_export" "$TMPDIR/paired.json"
 ```
 
 The script refuses checkouts with `.git`, gives both servers private HOME,
@@ -73,6 +85,49 @@ These results support latency improvements for the measured slices only. The
 measured registry backend is authoritative SQLite. The compatibility JSON
 backend retains its existing whole-file materialization; its session privacy
 behavior is covered by the existing API tests, with no speed claim here.
+
+## Independent review follow-up
+
+The follow-up comparison is [the raw review record](../../evidence/perf/viewer-loop-slices-review.json),
+completed at 09:44:44Z on the same Bun 1.4.0, package lock, synthetic corpus,
+three alternating repeats, and one request at a time. Its `before` arm is the
+then-current branch; `after` contains the review fixes. Both arms used 804
+pipelines with 89,807,612 bytes in the supported `spec` field, 1,200 tasks,
+3,500 memory entries / 1,699,912 bytes, and 53,299 registry rows /
+218,442,053 bytes. The registry digest matches. There were no synthetic
+agents. The host load averages ranged from 15.73 to 20.67 while the Viewer
+cgroup was limited to 3 CPUs and 8 GiB. These wall timings include any
+scheduling delay and the raw record preserves each request's measured load.
+
+| Cause and final slice | Before: sampled / exclusive s; gap p95/max ms | After: sampled / exclusive s; gap p95/max ms | Loop work and scale |
+| --- | --- | --- | --- |
+| Memory refresh: `src/lib/memory/service.ts:39` | 0.032 / n/a; 0.09 / 10.48 | 0.023 / n/a; 0.12 / 8.41 | The parent hands refresh to the existing helper, so the request has no exclusive synchronous operation span to sum. The worker still scans changed sources and indexes entries; that cost scales with source bytes and entries. |
+| Seat projection and hashing: `src/lib/monitor/seatTickSources.ts:2475`, `:2563`; own lanes `:976` | 0.492 / 0.238; 16.26 / 42.16 | 0.498 / 0.245; 30.17 / 66.57 | The old evidence pass synchronously revisited populated specs and attempts. Current preparation refreshes immutable-row evidence in cooperative slices; lane selection keeps the newest 20 during traversal before projecting review details. The measured input has 804 lanes, populated `spec`, and 6,000 attempts on the selected lane. The largest named projection span after the fix was 42.40 ms. |
+| Auto-merge sweep: `src/lib/forge/autoMerge.ts:745` | 0.722 / 0.014; 32.00 / 281.72 | 0.699 / 0.013; 26.25 / 316.05 | The old prefix filter/map and admission scan ran before the first yield; each repository queue was sorted before selecting its head. Current prune, admission, and queue passes yield during traversal, keeping each repository's oldest eligible lane as they go. |
+| Registry cold and warm preparation: `src/lib/agent/sqliteRegistryStore.ts:1754`, `:1956`, `:2005`, `:2537` | Cold 4.144 / 5.056; 13.01 / 111.24; warm 4.663 / 4.763; 14.12 / 313.92 | Cold 4.692 / 5.773; 10.18 / 92.03; warm 5.439 / 5.700; 9.63 / 329.83 | Former synchronous journal/header/projection drains now iterate and yield through `registry.prepare.slice` and `registry.headers`, with an 8 ms target. The row fetch/decode batch is capped at 16. Three warm peer archives were applied to one prepared reader. Largest named `registry.prepare.slice` spans were 92.97 ms cold and 94.72 ms warm; these are measured wall spans under the host load above. |
+| Cold session target: `src/lib/agent/registry.ts:11493`, `src/app/api/session/route.ts:19` | 5.234 / 0.375; 16.41 / 241.98 | 0.063 / 0.039; 13.16 / 42.12 | The old facade constructor drained all cold keys synchronously and retained a 5 s busy timeout. The current request opens with async state-lock admission and zero-timeout SQLite access, then resolves the conversation through keyed rows without a full cold-key scan. |
+
+This follow-up measures the actual seat evidence projection and attempt history,
+three warm archive invalidations on one prepared reader, the auto-merge prefix
+and eligible queue, and the cold session facade through its first answer. Every
+request retained its operation attribution: 0 unresolved samples and 0 dropped
+spans across 36 requests. The record includes per-request load, source and
+bundle digests, sampled time, exclusive spans, timer gaps and longest named
+slices. The earlier comparison above remains the original before/after record;
+this table supplies the independent review cases it did not exercise.
+
+The paired `before` source identifies the handed synchronous slices: the warm
+registry called `preparedReader.readOnlySnapshot()` at
+`src/lib/agent/sqliteRegistryStore.ts:1575`, which drained journal, header and
+projection generators through `finishSteps`; cold session construction at
+`src/lib/agent/registry.ts:11477-11478` synchronously filled every cold key and
+kept SQLite's 5 s busy timeout; seat evidence scanned full pipeline specs and
+attempt histories at `src/lib/monitor/seatTickSources.ts:2415-2430` and
+`:2561-2584`, then materialized and sorted own-lane results before the limit at
+`:1007-1008`; and auto-merge filtered/mapped its full prefix at
+`src/lib/forge/autoMerge.ts:750` before admission, then sorted each eligible
+repository queue at `:871-872`. The record's source and bundle digests bind
+those reproductions to the reviewed `before` and `after` builds.
 
 The baseline profile names memory SQLite `run`, filesystem discovery,
 seat `update` / `stringify`, merge `structuredClone` / `stringify`, and registry

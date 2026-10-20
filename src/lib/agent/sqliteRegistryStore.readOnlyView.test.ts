@@ -8,6 +8,7 @@ import { Database } from "bun:sqlite";
 import { AgentRegistry, normalizeRegistry, type RegistryFile } from "./registry";
 import { registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
+import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
 
 /* The shared read-only registry view (viewer-hot-path-clones): every reader of
    `readOnlySnapshot` holds the same objects, so none may change them, and every
@@ -92,12 +93,22 @@ test("a prepared reader cooperatively rebuilds its view after a peer archives a 
   await expect(canceled).rejects.toThrow("retired warm refresh");
   for (let pass = 0; pass < 3; pass++) {
     expect(writer.archiveInactive(1)).toBe(1);
+    const syncSnapshot = spyOn(SqliteAgentRegistryStore.prototype, "readOnlySnapshot");
     let yielded = false;
     const turn = new Promise<boolean>(resolve => setImmediate(() => { yielded = true; resolve(true); }));
+    const started = performance.now();
     const refreshed = reader.prepareReadOnlySnapshot();
-    expect(await Promise.race([refreshed.then(() => false), turn])).toBe(true);
-    expect(yielded).toBe(true);
-    const snapshot = await refreshed;
+    let snapshot!: Awaited<typeof refreshed>;
+    try {
+      expect(await Promise.race([refreshed.then(() => false), turn])).toBe(true);
+      expect(yielded).toBe(true);
+      snapshot = await refreshed;
+      expect(syncSnapshot).not.toHaveBeenCalled();
+    } finally { syncSnapshot.mockRestore(); }
+    const preparationSlices = performanceSpans.snapshot(started).records.filter(record =>
+      record.kind === "sync" && ["registry.prepare.slice", "registry.headers"].includes(performanceSites[record.site]!));
+    expect(preparationSlices.length).toBeGreaterThan(0);
+    expect(Math.max(...preparationSlices.map(record => record.maxMs))).toBeLessThan(50);
     expect(Object.keys(snapshot.file.receipts).filter(id => id.startsWith("archived-receipt-"))).toHaveLength(4096);
     expect(Object.keys(snapshot.file.receipts).filter(id => id.startsWith("archived-receipt-")))
       .toEqual(Array.from({ length: 4096 }, (_, index) => `archived-receipt-${index}`));

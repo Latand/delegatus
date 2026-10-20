@@ -2469,6 +2469,19 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   };
 }
 
+/** Refresh after the immutable evidence rows have been prepared in bounded
+ * slices. A row may have arrived since the preceding await, so every refresh
+ * prepares the currently published source set before using its projection. */
+async function refreshSeatTickInputCooperatively(
+  input: SeatTickCheckInput,
+  sources: SeatTickSources,
+): Promise<SeatTickCheckInput> {
+  return withViewerOperation("seat-tick.check", async () => {
+    await performanceSpans.wait("seat-tick.project", () => prepareSeatTickProjection(sources, input.project));
+    return performanceSpans.sync("seat-tick.project", () => refreshSeatTickInput(input, sources));
+  });
+}
+
 /* Keep the byte-proportional evidence projection with its immutable source row.
    Warm refreshes then visit only row identities and small derived fields; a
    mutable adapter/test row always takes the uncached path. */
@@ -2644,10 +2657,9 @@ async function pullRequestEvidenceKey(input: Pick<SeatTickCheckInput, "project" 
  * second concurrent change leaves this check unsent for the next tick.
  */
 export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources: SeatTickSources): Promise<SeatTickCheckInput> {
-  await withViewerOperation("seat-tick.check", () => performanceSpans.wait("seat-tick.project", () => prepareSeatTickProjection(sources, input.project)));
-  let fresh = refreshSeatTickInput(input, sources);
+  let fresh = await refreshSeatTickInputCooperatively(input, sources);
   const key = await pullRequestEvidenceKey(fresh, sources);
-  fresh = refreshSeatTickInput(fresh, sources);
+  fresh = await refreshSeatTickInputCooperatively(fresh, sources);
   if (key === input.pullRequestEvidenceKey) return fresh;
   const evidence = await unmergedPullRequests({
     project: fresh.project, seat: fresh.seat,
@@ -2655,11 +2667,11 @@ export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources
     enabled: fresh.settings.enabled, now: fresh.now, wakeIntervalMs: fresh.settings.wakeIntervalMs,
     gap: fresh.state.pullRequestGap, sources,
   });
-  fresh = refreshSeatTickInput({ ...fresh, pullRequests: evidence.pullRequests,
+  fresh = await refreshSeatTickInputCooperatively({ ...fresh, pullRequests: evidence.pullRequests,
     pullRequestsUnavailable: evidence.unavailable, pullRequestEvidenceKey: key,
     state: { ...fresh.state, pullRequestGap: evidence.gap } }, sources);
   if (await pullRequestEvidenceKey(fresh, sources) !== key) throw new SeatTickEvidenceRefreshCanceledError(fresh.state.pullRequestGap);
-  return refreshSeatTickInput(fresh, sources);
+  return refreshSeatTickInputCooperatively(fresh, sources);
 }
 
 export async function gatherSeatTickInput(

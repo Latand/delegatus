@@ -1,0 +1,4382 @@
+{
+  "conditions": {
+    "before": {
+      "runtime": "1.4.0",
+      "utc": "2026-10-20T09:43:43.402Z",
+      "synthetic": {
+        "agents": 0,
+        "mutatingLanes": 6,
+        "mutationPosition": "tail",
+        "pipelines": 804,
+        "pipelinePayloadField": "spec",
+        "pipelineBytes": 89807612,
+        "mergeQueueRows": 804,
+        "tasks": 1200,
+        "memoryBytes": 1699912,
+        "memoryEntries": 3500,
+        "registryRows": 53299,
+        "registryBytes": 218442053,
+        "warmArchiveInvalidations": 3,
+        "registrySha256": "46b775706002a36f3dd566ab4c90b938e4383239d4ef7ec65b9d9f582050641a"
+      },
+      "sourceSha256": "540ad7c3539491a35176d131d349bb0fe74d13fc1421c46b1a18a9d90e963ea3",
+      "bundleSha256": "2d7efaa5830654c131cf73fbf6bf7e4b51ad9998f12cc176cc77c162265aaf14",
+      "packageSha256": "f11dc9b2140d62dd2ac3f22d856825eda65a1dfb1999dd6ef6b30a9e116be173",
+      "lockSha256": "3ae798ca5037e503d4f0937eb27e83a824191723c7ad1cd606d545a16774c6ea"
+    },
+    "after": {
+      "runtime": "1.4.0",
+      "utc": "2026-10-20T09:44:04.996Z",
+      "synthetic": {
+        "agents": 0,
+        "mutatingLanes": 6,
+        "mutationPosition": "tail",
+        "pipelines": 804,
+        "pipelinePayloadField": "spec",
+        "pipelineBytes": 89807612,
+        "mergeQueueRows": 804,
+        "tasks": 1200,
+        "memoryBytes": 1699912,
+        "memoryEntries": 3500,
+        "registryRows": 53299,
+        "registryBytes": 218442053,
+        "warmArchiveInvalidations": 3,
+        "registrySha256": "46b775706002a36f3dd566ab4c90b938e4383239d4ef7ec65b9d9f582050641a"
+      },
+      "sourceSha256": "d36a4c055f62686c359888c565a51e23affa7ab637bf8d09d046245fc35018e2",
+      "bundleSha256": "913ee35be4a12d4ef851175f29f821aed6d5658276551cd01fbe32878c3f34d3",
+      "packageSha256": "f11dc9b2140d62dd2ac3f22d856825eda65a1dfb1999dd6ef6b30a9e116be173",
+      "lockSha256": "3ae798ca5037e503d4f0937eb27e83a824191723c7ad1cd606d545a16774c6ea"
+    }
+  },
+  "runs": [
+    {
+      "arm": "before",
+      "repeat": 0,
+      "name": "memory",
+      "elapsed": 790.0497099999993,
+      "profiledSyncMs": 13,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 47705,
+        "system": 14973
+      },
+      "load": [
+        15.73,
+        16.65,
+        17.8
+      ],
+      "gapP95": 0.09354700000403682,
+      "gapMax": 5.98240000000078,
+      "exclusiveMs": {},
+      "spansDropped": 0,
+      "top": [
+        [
+          "anonymous",
+          2
+        ],
+        [
+          "profile",
+          1
+        ],
+        [
+          "writeFileSync",
+          1
+        ],
+        [
+          "wait",
+          1
+        ],
+        [
+          "flatMap",
+          1
+        ],
+        [
+          "getBunStdioFromOptions",
+          1
+        ],
+        [
+          "connect",
+          1
+        ],
+        [
+          "_final",
+          1
+        ],
+        [
+          "pull",
+          1
+        ],
+        [
+          "endReadableNT",
+          1
+        ],
+        [
+          "resolve",
+          1
+        ]
+      ],
+      "longestSlices": [],
+      "answer": {
+        "filesRead": 1,
+        "filesSkipped": 0,
+        "entriesIndexed": 3501,
+        "filesFailed": 0
+      }
+    },
+    {
+      "arm": "after",
+      "repeat": 0,
+      "name": "memory",
+      "elapsed": 579.7361490000003,
+      "profiledSyncMs": 12,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 35109,
+        "system": 11453
+      },
+      "load": [
+        15.73,
+        16.65,
+        17.8
+      ],
+      "gapP95": 0.07220900000174879,
+      "gapMax": 7.494857999998203,
+      "exclusiveMs": {},
+      "spansDropped": 0,
+      "top": [
+        [
+          "profile",
+          1
+        ],
+        [
+          "writeFileSync",
+          1
+        ],
+        [
+          "exists",
+          1
+        ],
+        [
+          "cloneObject",
+          1
+        ],
+        [
+          "nextTick",
+          1
+        ],
+        [
+          "defineProperty",
+          1
+        ],
+        [
+          "listenerCount",
+          1
+        ],
+        [
+          "Socket",
+          1
+        ],
+        [
+          "ref",
+          1
+        ],
+        [
+          "removeListener",
+          1
+        ]
+      ],
+      "longestSlices": [],
+      "answer": {
+        "filesRead": 1,
+        "filesSkipped": 0,
+        "entriesIndexed": 3501,
+        "filesFailed": 0
+      }
+    },
+    {
+      "arm": "before",
+      "repeat": 0,
+      "name": "seat",
+      "elapsed": 424.14651500000036,
+      "profiledSyncMs": 345,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 516635,
+        "system": 123115
+      },
+      "load": [
+        15.73,
+        16.65,
+        17.8
+      ],
+      "gapP95": 3.159505999996327,
+      "gapMax": 41.13495900000271,
+      "exclusiveMs": {
+        "seat-tick.project": 81.60375699999713,
+        "seat-tick.hash": 4.833480000146665
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          84
+        ],
+        [
+          "parse",
+          39
+        ],
+        [
+          "lstatSync",
+          22
+        ],
+        [
+          "readdirSync",
+          18
+        ],
+        [
+          "deeplyFrozen",
+          13
+        ],
+        [
+          "sync",
+          11
+        ],
+        [
+          "byteLength",
+          11
+        ],
+        [
+          "statSync",
+          11
+        ],
+        [
+          "getOwnPropertyDescriptor",
+          11
+        ],
+        [
+          "join",
+          8
+        ],
+        [
+          "values",
+          7
+        ],
+        [
+          "freeze",
+          6
+        ],
+        [
+          "isAttempt",
+          4
+        ],
+        [
+          "deepFreeze",
+          4
+        ],
+        [
+          "map",
+          4
+        ],
+        [
+          "preparePipelineMetadata",
+          4
+        ],
+        [
+          "isFrozen",
+          4
+        ],
+        [
+          "basename",
+          3
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "seat-tick.project",
+          "maxMs": 32.99126300000353
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 25.318793000005826
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 12.582098999999289
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 2.791578999997
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 2.129668000001402
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 1.9229169999962323
+        },
+        {
+          "site": "seat-tick.hash",
+          "maxMs": 1.4657880000013392
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 1.1474319999979343
+        }
+      ]
+    },
+    {
+      "arm": "after",
+      "repeat": 0,
+      "name": "seat",
+      "elapsed": 395.914423000002,
+      "profiledSyncMs": 320,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 411077,
+        "system": 127770
+      },
+      "load": [
+        15.73,
+        16.65,
+        17.8
+      ],
+      "gapP95": 4.183793000000151,
+      "gapMax": 24.30587800000285,
+      "exclusiveMs": {
+        "seat-tick.project": 48.831556000001,
+        "seat-tick.hash": 1.8664650001155678
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          92
+        ],
+        [
+          "parse",
+          54
+        ],
+        [
+          "byteLength",
+          16
+        ],
+        [
+          "readdirSync",
+          12
+        ],
+        [
+          "getOwnPropertyDescriptor",
+          11
+        ],
+        [
+          "values",
+          10
+        ],
+        [
+          "sync",
+          8
+        ],
+        [
+          "lstatSync",
+          7
+        ],
+        [
+          "isPipelineShape",
+          6
+        ],
+        [
+          "deeplyFrozen",
+          6
+        ],
+        [
+          "statSync",
+          5
+        ],
+        [
+          "join",
+          5
+        ],
+        [
+          "deepFreeze",
+          5
+        ],
+        [
+          "isFrozen",
+          5
+        ],
+        [
+          "isAttempt",
+          4
+        ],
+        [
+          "stateDatabaseSignature",
+          4
+        ],
+        [
+          "run",
+          3
+        ],
+        [
+          "map",
+          3
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "seat-tick.project",
+          "maxMs": 15.723896999999852
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 15.310311000001093
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 14.702863000002253
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 11.578703999999561
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 11.445120000000315
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 1.7188249999999243
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 1.3956429999998363
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 1.2455789999985427
+        }
+      ]
+    },
+    {
+      "arm": "before",
+      "repeat": 0,
+      "name": "merge",
+      "elapsed": 473.76305900000443,
+      "profiledSyncMs": 407,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 395294,
+        "system": 143122
+      },
+      "load": [
+        15.73,
+        16.65,
+        17.8
+      ],
+      "gapP95": 31.995294000000285,
+      "gapMax": 281.7166780000043,
+      "exclusiveMs": {
+        "state.write-wait": 42.95308599997952,
+        "state.lease-commit": 3.046522000004188,
+        "pipeline.copy": 44.49267400000099,
+        "forge.auto-merge.step": 0.3396070000017062,
+        "state.lease-release": 2.1923559999922873,
+        "forge.auto-merge.read": 0.6772789999959059,
+        "forge.auto-merge.prune": 1.8556599999428727,
+        "forge.auto-merge.admit": 2.417939000049955,
+        "forge.auto-merge.queue": 1.7657169998856261
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "run",
+          224
+        ],
+        [
+          "structuredClone",
+          38
+        ],
+        [
+          "prepare",
+          19
+        ],
+        [
+          "stringify",
+          12
+        ],
+        [
+          "parse",
+          11
+        ],
+        [
+          "getOwnPropertyDescriptor",
+          11
+        ],
+        [
+          "sync",
+          7
+        ],
+        [
+          "get",
+          7
+        ],
+        [
+          "close",
+          7
+        ],
+        [
+          "statSync",
+          5
+        ],
+        [
+          "cloneObject",
+          4
+        ],
+        [
+          "freeze",
+          4
+        ],
+        [
+          "value",
+          3
+        ],
+        [
+          "filter",
+          3
+        ],
+        [
+          "isAttempt",
+          3
+        ],
+        [
+          "all",
+          2
+        ],
+        [
+          "every",
+          2
+        ],
+        [
+          "waitForStateLock",
+          1
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "pipeline.copy",
+          "maxMs": 21.607899000002362
+        },
+        {
+          "site": "pipeline.copy",
+          "maxMs": 20.464059999998426
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 7.4446440000028815
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 3.9464739999966696
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 3.5373259999978472
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.64545999999973
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.6304589999999735
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.4919039999949746
+        }
+      ]
+    },
+    {
+      "arm": "after",
+      "repeat": 0,
+      "name": "merge",
+      "elapsed": 490.5315530000007,
+      "profiledSyncMs": 406,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 430820,
+        "system": 125499
+      },
+      "load": [
+        15.73,
+        16.65,
+        17.8
+      ],
+      "gapP95": 26.249281000000337,
+      "gapMax": 316.04734299999836,
+      "exclusiveMs": {
+        "state.write-wait": 35.896560999997746,
+        "state.lease-commit": 2.9251020000010612,
+        "pipeline.copy": 55.542434000006324,
+        "forge.auto-merge.step": 0.2543649999970512,
+        "state.lease-release": 1.9276460000000952,
+        "forge.auto-merge.read": 0.472395000000688,
+        "forge.auto-merge.prune": 1.1034709999876213,
+        "forge.auto-merge.admit": 1.056977999949595,
+        "forge.auto-merge.queue": 1.9591589999799908
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "run",
+          224
+        ],
+        [
+          "structuredClone",
+          48
+        ],
+        [
+          "prepare",
+          16
+        ],
+        [
+          "parse",
+          12
+        ],
+        [
+          "close",
+          10
+        ],
+        [
+          "get",
+          10
+        ],
+        [
+          "getOwnPropertyDescriptor",
+          10
+        ],
+        [
+          "stringify",
+          9
+        ],
+        [
+          "sync",
+          6
+        ],
+        [
+          "isAttempt",
+          6
+        ],
+        [
+          "cloneObject",
+          5
+        ],
+        [
+          "all",
+          4
+        ],
+        [
+          "filter",
+          3
+        ],
+        [
+          "copyDataProperties",
+          3
+        ],
+        [
+          "freeze",
+          3
+        ],
+        [
+          "reviveLoadedPipeline",
+          2
+        ],
+        [
+          "resolve",
+          2
+        ],
+        [
+          "statSync",
+          2
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "pipeline.copy",
+          "maxMs": 31.323575000002165
+        },
+        {
+          "site": "pipeline.copy",
+          "maxMs": 21.72517599999992
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 3.6161509999983537
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 3.1619840000021213
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.9426429999984975
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.4039149999989604
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.2377919999998994
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.1629549999997835
+        }
+      ]
+    },
+    {
+      "arm": "before",
+      "repeat": 0,
+      "name": "registry",
+      "elapsed": 1405.6012929999997,
+      "profiledSyncMs": 1120,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 1552005,
+        "system": 343678
+      },
+      "load": [
+        16.23,
+        16.74,
+        17.83
+      ],
+      "gapP95": 12.866470000000845,
+      "gapMax": 101.15057499999966,
+      "exclusiveMs": {
+        "state.write-wait": 2.7348189999975148,
+        "registry.prepare.slice": 1111.5499159986066,
+        "registry.headers": 170.96094800141873,
+        "registry.snapshot": 0.4979529999982333
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          335
+        ],
+        [
+          "iterate",
+          135
+        ],
+        [
+          "get",
+          89
+        ],
+        [
+          "sync",
+          88
+        ],
+        [
+          "structuredClone",
+          67
+        ],
+        [
+          "parse",
+          51
+        ],
+        [
+          "rememberReadOnlySteps",
+          46
+        ],
+        [
+          "refreshColdKeySteps",
+          21
+        ],
+        [
+          "now",
+          20
+        ],
+        [
+          "set",
+          12
+        ],
+        [
+          "read",
+          11
+        ],
+        [
+          "loadHotSteps",
+          9
+        ],
+        [
+          "generatorResume",
+          9
+        ],
+        [
+          "add",
+          9
+        ],
+        [
+          "parseSqliteJson",
+          8
+        ],
+        [
+          "normalizeDeliveryOperationOwners",
+          8
+        ],
+        [
+          "query",
+          8
+        ],
+        [
+          "rememberColdProjectionSteps",
+          8
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 79.93449299999338
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 73.86159599999519
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 64.87321599999996
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 26.862227000005078
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 13.924129999999423
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 13.807457000002614
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 13.698557000003348
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 13.531472999995458
+        }
+      ]
+    },
+    {
+      "arm": "after",
+      "repeat": 0,
+      "name": "registry",
+      "elapsed": 1474.4289239999998,
+      "profiledSyncMs": 1219,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 1802656,
+        "system": 386937
+      },
+      "load": [
+        16.23,
+        16.74,
+        17.83
+      ],
+      "gapP95": 10.175057000000379,
+      "gapMax": 61.74241599999732,
+      "exclusiveMs": {
+        "state.write-wait": 1.7452999999986787,
+        "registry.prepare.slice": 1058.1678389995795,
+        "registry.headers": 306.32255000037185
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          285
+        ],
+        [
+          "iterate",
+          208
+        ],
+        [
+          "sync",
+          168
+        ],
+        [
+          "get",
+          65
+        ],
+        [
+          "structuredClone",
+          60
+        ],
+        [
+          "parse",
+          49
+        ],
+        [
+          "rememberReadOnlySteps",
+          41
+        ],
+        [
+          "add",
+          32
+        ],
+        [
+          "set",
+          27
+        ],
+        [
+          "refreshColdKeySteps",
+          26
+        ],
+        [
+          "rememberColdProjectionSteps",
+          21
+        ],
+        [
+          "generatorResume",
+          19
+        ],
+        [
+          "now",
+          16
+        ],
+        [
+          "read",
+          11
+        ],
+        [
+          "orderedKeysSteps",
+          9
+        ],
+        [
+          "copyDataProperties",
+          8
+        ],
+        [
+          "loadHotSteps",
+          7
+        ],
+        [
+          "begin",
+          7
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 62.67372500000056
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 26.392626999997447
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 12.779241000000184
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 12.750241000001552
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 11.123601999999664
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 11.03768300000229
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 10.917658999998821
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 9.975579000001744
+        }
+      ]
+    },
+    {
+      "arm": "before",
+      "repeat": 0,
+      "name": "registry-warm",
+      "elapsed": 1419.295087999999,
+      "profiledSyncMs": 1228,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 1350974,
+        "system": 351573
+      },
+      "load": [
+        16.23,
+        16.74,
+        17.83
+      ],
+      "gapP95": 12.895973999999114,
+      "gapMax": 194.95049700000527,
+      "exclusiveMs": {
+        "state.write-wait": 0.9383510000043316,
+        "registry.prepare.slice": 986.0309870006386,
+        "registry.headers": 160.63078799931827,
+        "registry.snapshot": 0.14802400000189664
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          509
+        ],
+        [
+          "iterate",
+          105
+        ],
+        [
+          "rememberReadOnlySteps",
+          94
+        ],
+        [
+          "sync",
+          83
+        ],
+        [
+          "structuredClone",
+          63
+        ],
+        [
+          "get",
+          62
+        ],
+        [
+          "parse",
+          40
+        ],
+        [
+          "refreshColdKeySteps",
+          21
+        ],
+        [
+          "now",
+          18
+        ],
+        [
+          "generatorResume",
+          10
+        ],
+        [
+          "stringify",
+          9
+        ],
+        [
+          "loadHotSteps",
+          8
+        ],
+        [
+          "filter",
+          8
+        ],
+        [
+          "value",
+          7
+        ],
+        [
+          "orderedHeaderSteps",
+          7
+        ],
+        [
+          "query",
+          7
+        ],
+        [
+          "decideStoredRow",
+          7
+        ],
+        [
+          "byteLength",
+          6
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 81.44297799999913
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 65.45914600000106
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 26.348690000006172
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 15.817829999999958
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 13.856693000001542
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 9.081884999999602
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 9.069610999998986
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 8.762044999995851
+        }
+      ]
+    },
+    {
+      "arm": "after",
+      "repeat": 0,
+      "name": "registry-warm",
+      "elapsed": 2186.609848,
+      "profiledSyncMs": 1829,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 2486808,
+        "system": 497365
+      },
+      "load": [
+        16.29,
+        16.74,
+        17.82
+      ],
+      "gapP95": 9.31056499999977,
+      "gapMax": 278.9576909999996,
+      "exclusiveMs": {
+        "state.write-wait": 1.1360610000010638,
+        "registry.prepare.slice": 1300.8202190000738,
+        "registry.headers": 465.0602549999676
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          588
+        ],
+        [
+          "sync",
+          221
+        ],
+        [
+          "iterate",
+          218
+        ],
+        [
+          "rememberReadOnlySteps",
+          154
+        ],
+        [
+          "get",
+          79
+        ],
+        [
+          "structuredClone",
+          65
+        ],
+        [
+          "parse",
+          55
+        ],
+        [
+          "begin",
+          31
+        ],
+        [
+          "now",
+          29
+        ],
+        [
+          "rememberColdProjectionSteps",
+          27
+        ],
+        [
+          "refreshColdKeySteps",
+          25
+        ],
+        [
+          "orderedKeysSteps",
+          24
+        ],
+        [
+          "generatorResume",
+          18
+        ],
+        [
+          "stringify",
+          14
+        ],
+        [
+          "read",
+          12
+        ],
+        [
+          "includes",
+          10
+        ],
+        [
+          "orderedHeaderSteps",
+          8
+        ],
+        [
+          "entries",
+          7
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 63.82398900000044
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 24.38614400000006
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 14.976729999998497
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 11.456005000000005
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 11.090915999997378
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 10.237176999999065
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 10.23710900000151
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 10.18755500000043
+        }
+      ]
+    },
+    {
+      "arm": "before",
+      "repeat": 0,
+      "name": "session",
+      "elapsed": 2670.181883999998,
+      "profiledSyncMs": 2319,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 2079323,
+        "system": 860291
+      },
+      "load": [
+        16.29,
+        16.74,
+        17.82
+      ],
+      "gapP95": 85.89514300000155,
+      "gapMax": 209.98329999999987,
+      "exclusiveMs": {
+        "registry.prepare.open": 10.934064000000944,
+        "state.write-wait": 8.465261000012106,
+        "registry.prepare.index": 1082.8092350000006,
+        "registry.prepare.slice": 1142.2907750002996,
+        "registry.headers": 149.84105099966837,
+        "registry.snapshot": 0.2406150000024354,
+        "registry.keyed": 107.53840499999933
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "run",
+          1008
+        ],
+        [
+          "all",
+          323
+        ],
+        [
+          "sync",
+          140
+        ],
+        [
+          "iterate",
+          129
+        ],
+        [
+          "structuredClone",
+          88
+        ],
+        [
+          "rememberReadOnlySteps",
+          81
+        ],
+        [
+          "parse",
+          64
+        ],
+        [
+          "get",
+          62
+        ],
+        [
+          "refreshColdKeySteps",
+          57
+        ],
+        [
+          "add",
+          24
+        ],
+        [
+          "now",
+          19
+        ],
+        [
+          "generatorResume",
+          18
+        ],
+        [
+          "stringify",
+          18
+        ],
+        [
+          "value",
+          14
+        ],
+        [
+          "rememberColdProjectionSteps",
+          10
+        ],
+        [
+          "begin",
+          9
+        ],
+        [
+          "filter",
+          8
+        ],
+        [
+          "loadOwnerInTransaction",
+          8
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.prepare.index",
+          "maxMs": 120.17486500000086
+        },
+        {
+          "site": "registry.keyed",
+          "maxMs": 107.53840499999933
+        },
+        {
+          "site": "registry.prepare.index",
+          "maxMs": 99.40721499999927
+        },
+        {
+          "site": "registry.prepare.index",
+          "maxMs": 96.66811199999938
+        },
+        {
+          "site": "registry.prepare.index",
+          "maxMs": 95.76166799999919
+        },
+        {
+          "site": "registry.prepare.index",
+          "maxMs": 95.45311499999661
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 86.86005699999805
+        },
+        {
+          "site": "registry.prepare.index",
+          "maxMs": 86.79684300000372
+        }
+      ],
+      "answer": 200
+    },
+    {
+      "arm": "after",
+      "repeat": 0,
+      "name": "session",
+      "elapsed": 52.720844000003126,
+      "profiledSyncMs": 39,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 45649,
+        "system": 8026
+      },
+      "load": [
+        16.29,
+        16.74,
+        17.82
+      ],
+      "gapP95": 42.12283699999534,
+      "gapMax": 42.12283699999534,
+      "exclusiveMs": {
+        "registry.prepare.open": 5.980870999999752,
+        "state.write-wait": 9.411219000001438,
+        "registry.keyed": 4.2716419999997015
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "run",
+          5
+        ],
+        [
+          "prepare",
+          4
+        ],
+        [
+          "fsyncSync",
+          3
+        ],
+        [
+          "defineProperty",
+          2
+        ],
+        [
+          "test",
+          1
+        ],
+        [
+          "SqliteAgentRegistryStore",
+          1
+        ],
+        [
+          "map",
+          1
+        ],
+        [
+          "cleanupStaleTempFiles",
+          1
+        ],
+        [
+          "get",
+          1
+        ],
+        [
+          "matchingRowKeys",
+          1
+        ],
+        [
+          "record",
+          1
+        ],
+        [
+          "ownerIsStale",
+          1
+        ],
+        [
+          "mkdirSync",
+          1
+        ],
+        [
+          "sync",
+          1
+        ],
+        [
+          "close",
+          1
+        ],
+        [
+          "open",
+          1
+        ],
+        [
+          "observeStatement",
+          1
+        ],
+        [
+          "loadFull",
+          1
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "state.write-wait",
+          "maxMs": 6.144412000001466
+        },
+        {
+          "site": "registry.prepare.open",
+          "maxMs": 5.980870999999752
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 4.551721000003454
+        },
+        {
+          "site": "registry.keyed",
+          "maxMs": 4.2716419999997015
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.7048219999996945
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.6724839999951655
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 1.8664740000021993
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 1.0522510000009788
+        }
+      ],
+      "answer": 200
+    },
+    {
+      "arm": "after",
+      "repeat": 1,
+      "name": "memory",
+      "elapsed": 810.4130730000034,
+      "profiledSyncMs": 5,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 35477,
+        "system": 13624
+      },
+      "load": [
+        16.29,
+        16.74,
+        17.82
+      ],
+      "gapP95": 0.11686200000258395,
+      "gapMax": 5.051417000002402,
+      "exclusiveMs": {},
+      "spansDropped": 0,
+      "top": [
+        [
+          "writeFileSync",
+          1
+        ],
+        [
+          "refreshMemoryIndex",
+          1
+        ],
+        [
+          "spawn",
+          1
+        ],
+        [
+          "_destroy",
+          1
+        ]
+      ],
+      "longestSlices": [],
+      "answer": {
+        "filesRead": 1,
+        "filesSkipped": 0,
+        "entriesIndexed": 3501,
+        "filesFailed": 0
+      }
+    },
+    {
+      "arm": "before",
+      "repeat": 1,
+      "name": "memory",
+      "elapsed": 739.7647890000007,
+      "profiledSyncMs": 13,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 100419,
+        "system": 30463
+      },
+      "load": [
+        16.11,
+        16.7,
+        17.8
+      ],
+      "gapP95": 0.11709600000176579,
+      "gapMax": 10.482258999996702,
+      "exclusiveMs": {},
+      "spansDropped": 0,
+      "top": [
+        [
+          "Duplex",
+          6
+        ],
+        [
+          "writeFileSync",
+          2
+        ],
+        [
+          "spawn",
+          1
+        ],
+        [
+          "connect",
+          1
+        ],
+        [
+          "start",
+          1
+        ]
+      ],
+      "longestSlices": [],
+      "answer": {
+        "filesRead": 1,
+        "filesSkipped": 0,
+        "entriesIndexed": 3501,
+        "filesFailed": 0
+      }
+    },
+    {
+      "arm": "after",
+      "repeat": 1,
+      "name": "seat",
+      "elapsed": 116.51374299999588,
+      "profiledSyncMs": 81,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 153540,
+        "system": 20928
+      },
+      "load": [
+        16.11,
+        16.7,
+        17.8
+      ],
+      "gapP95": 30.169415000003937,
+      "gapMax": 30.169415000003937,
+      "exclusiveMs": {
+        "seat-tick.project": 65.24800000000687,
+        "seat-tick.hash": 1.8568430002851528
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "readdirSync",
+          9
+        ],
+        [
+          "lstatSync",
+          9
+        ],
+        [
+          "isFrozen",
+          5
+        ],
+        [
+          "deeplyFrozen",
+          5
+        ],
+        [
+          "values",
+          4
+        ],
+        [
+          "hardenedRedact",
+          4
+        ],
+        [
+          "join",
+          4
+        ],
+        [
+          "get",
+          3
+        ],
+        [
+          "preparePipelineMetadata",
+          3
+        ],
+        [
+          "stringify",
+          3
+        ],
+        [
+          "sort",
+          3
+        ],
+        [
+          "cloneObject",
+          3
+        ],
+        [
+          "arrayIteratorNextHelper",
+          2
+        ],
+        [
+          "statSync",
+          2
+        ],
+        [
+          "redactMonitorText",
+          2
+        ],
+        [
+          "Set",
+          2
+        ],
+        [
+          "privateRead",
+          1
+        ],
+        [
+          "filter",
+          1
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "seat-tick.project",
+          "maxMs": 30.294283000002906
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 23.398275999999896
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 21.15263699999923
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 14.003765000001295
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 11.626360000002023
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 2.925767000000633
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 2.002584999994724
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 1.593367000001308
+        }
+      ]
+    },
+    {
+      "arm": "before",
+      "repeat": 1,
+      "name": "seat",
+      "elapsed": 75.20652100000007,
+      "profiledSyncMs": 61,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 105015,
+        "system": 10703
+      },
+      "load": [
+        16.11,
+        16.7,
+        17.8
+      ],
+      "gapP95": 16.25577200000407,
+      "gapMax": 16.25577200000407,
+      "exclusiveMs": {
+        "seat-tick.project": 41.2264770000038,
+        "seat-tick.hash": 0.9898550002035336
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "readdirSync",
+          11
+        ],
+        [
+          "deeplyFrozen",
+          5
+        ],
+        [
+          "lstatSync",
+          5
+        ],
+        [
+          "find",
+          4
+        ],
+        [
+          "isFrozen",
+          3
+        ],
+        [
+          "values",
+          2
+        ],
+        [
+          "preparePipelineMetadata",
+          2
+        ],
+        [
+          "arrayIteratorNextHelper",
+          2
+        ],
+        [
+          "taskEvidenceFor",
+          2
+        ],
+        [
+          "join",
+          2
+        ],
+        [
+          "sort",
+          2
+        ],
+        [
+          "withViewerOperation",
+          1
+        ],
+        [
+          "get",
+          1
+        ],
+        [
+          "gatherSeatTickInputWork",
+          1
+        ],
+        [
+          "parse",
+          1
+        ],
+        [
+          "dirname",
+          1
+        ],
+        [
+          "reduce",
+          1
+        ],
+        [
+          "seatProjectResolver",
+          1
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "seat-tick.project",
+          "maxMs": 12.28517400000419
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 12.23145199999999
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 11.98301999999967
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 1.2585249999974621
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 1.1735699999990175
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 1.1142449999970268
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 0.16344799999933457
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 0.1522079999995185
+        }
+      ]
+    },
+    {
+      "arm": "after",
+      "repeat": 1,
+      "name": "merge",
+      "elapsed": 166.58064499999455,
+      "profiledSyncMs": 133,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 165900,
+        "system": 28022
+      },
+      "load": [
+        16.11,
+        16.7,
+        17.8
+      ],
+      "gapP95": 19.98422600000049,
+      "gapMax": 20.115209999996296,
+      "exclusiveMs": {
+        "state.write-wait": 44.88502100000915,
+        "state.lease-commit": 8.77988600001845,
+        "pipeline.copy": 3.2951110000140034,
+        "forge.auto-merge.step": 0.11985699999786448,
+        "state.lease-release": 3.169556000000739,
+        "forge.auto-merge.read": 0.5926160000017262,
+        "forge.auto-merge.prune": 0.6155930000022636,
+        "forge.auto-merge.admit": 0.7415129999935743,
+        "forge.auto-merge.queue": 1.397439000029408
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "run",
+          62
+        ],
+        [
+          "prepare",
+          21
+        ],
+        [
+          "structuredClone",
+          6
+        ],
+        [
+          "close",
+          6
+        ],
+        [
+          "statSync",
+          5
+        ],
+        [
+          "isAttempt",
+          2
+        ],
+        [
+          "value",
+          2
+        ],
+        [
+          "isPipeline",
+          1
+        ],
+        [
+          "join",
+          1
+        ],
+        [
+          "readFileSync",
+          1
+        ],
+        [
+          "isPipelineMerge",
+          1
+        ],
+        [
+          "isStage",
+          1
+        ],
+        [
+          "withImmediateTransaction",
+          1
+        ],
+        [
+          "statePath",
+          1
+        ],
+        [
+          "Database",
+          1
+        ],
+        [
+          "copyDataProperties",
+          1
+        ],
+        [
+          "mutate",
+          1
+        ],
+        [
+          "all",
+          1
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "state.write-wait",
+          "maxMs": 8.53926599999977
+        },
+        {
+          "site": "state.lease-commit",
+          "maxMs": 6.270103000002564
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 3.5667859999957727
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 3.4951209999999264
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 3.2227440000060597
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.5257689999998547
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.488699000001361
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.418878999997105
+        }
+      ]
+    },
+    {
+      "arm": "before",
+      "repeat": 1,
+      "name": "merge",
+      "elapsed": 155.57397499999934,
+      "profiledSyncMs": 126,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 156646,
+        "system": 17654
+      },
+      "load": [
+        16.11,
+        16.7,
+        17.8
+      ],
+      "gapP95": 19.022829000001366,
+      "gapMax": 29.12811900000088,
+      "exclusiveMs": {
+        "state.write-wait": 46.14957200000208,
+        "state.lease-commit": 8.769108000000415,
+        "pipeline.copy": 3.081233999997494,
+        "forge.auto-merge.step": 0.11926900000253227,
+        "state.lease-release": 2.5706889999928535,
+        "forge.auto-merge.read": 0.49661800001194933,
+        "forge.auto-merge.prune": 0.5245080000240705,
+        "forge.auto-merge.admit": 0.5525469999629422,
+        "forge.auto-merge.queue": 0.6994730000005802
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "run",
+          52
+        ],
+        [
+          "prepare",
+          18
+        ],
+        [
+          "close",
+          8
+        ],
+        [
+          "get",
+          4
+        ],
+        [
+          "statSync",
+          4
+        ],
+        [
+          "sync",
+          4
+        ],
+        [
+          "open",
+          3
+        ],
+        [
+          "now",
+          2
+        ],
+        [
+          "join",
+          2
+        ],
+        [
+          "filter",
+          2
+        ],
+        [
+          "Database",
+          1
+        ],
+        [
+          "isNullableString",
+          1
+        ],
+        [
+          "begin",
+          1
+        ],
+        [
+          "pipelineGraphError",
+          1
+        ],
+        [
+          "noteStateCommit",
+          1
+        ],
+        [
+          "stateLockAttempt",
+          1
+        ],
+        [
+          "structuredClone",
+          1
+        ],
+        [
+          "stringify",
+          1
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "state.write-wait",
+          "maxMs": 10.450110999998287
+        },
+        {
+          "site": "state.lease-commit",
+          "maxMs": 6.15576300000248
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 3.4823230000038166
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 3.474183999998786
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 3.0801960000026156
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.935356000001775
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.758713000002899
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.5129349999988335
+        }
+      ]
+    },
+    {
+      "arm": "after",
+      "repeat": 1,
+      "name": "registry",
+      "elapsed": 1657.9041079999952,
+      "profiledSyncMs": 1396,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 2158499,
+        "system": 356980
+      },
+      "load": [
+        16.11,
+        16.7,
+        17.8
+      ],
+      "gapP95": 9.769848000003549,
+      "gapMax": 58.95274000000063,
+      "exclusiveMs": {
+        "state.write-wait": 0.9489840000023833,
+        "registry.prepare.slice": 1203.1247820006975,
+        "registry.headers": 339.79123999924195
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          305
+        ],
+        [
+          "iterate",
+          176
+        ],
+        [
+          "sync",
+          170
+        ],
+        [
+          "get",
+          107
+        ],
+        [
+          "rememberReadOnlySteps",
+          65
+        ],
+        [
+          "parse",
+          64
+        ],
+        [
+          "structuredClone",
+          50
+        ],
+        [
+          "add",
+          44
+        ],
+        [
+          "rememberColdProjectionSteps",
+          29
+        ],
+        [
+          "set",
+          28
+        ],
+        [
+          "refreshColdKeySteps",
+          27
+        ],
+        [
+          "generatorResume",
+          21
+        ],
+        [
+          "now",
+          21
+        ],
+        [
+          "orderedKeysSteps",
+          21
+        ],
+        [
+          "orderedHeaderSteps",
+          12
+        ],
+        [
+          "grantDecisionKey",
+          11
+        ],
+        [
+          "stringify",
+          10
+        ],
+        [
+          "includes",
+          7
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 59.9176890000017
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 17.65987000000314
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 13.79527500000404
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 11.019298999999592
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 10.729726999998093
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 10.595998999997391
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 9.172949999992852
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 8.746144000004278
+        }
+      ]
+    },
+    {
+      "arm": "before",
+      "repeat": 1,
+      "name": "registry",
+      "elapsed": 1686.1305530000027,
+      "profiledSyncMs": 1431,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 1658724,
+        "system": 389210
+      },
+      "load": [
+        16.11,
+        16.7,
+        17.8
+      ],
+      "gapP95": 13.01484999999957,
+      "gapMax": 79.31239900000219,
+      "exclusiveMs": {
+        "state.write-wait": 1.4978360000022803,
+        "registry.prepare.slice": 1317.3114980009195,
+        "registry.headers": 257.07546799908596,
+        "registry.snapshot": 0.2998650000008638
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          388
+        ],
+        [
+          "iterate",
+          166
+        ],
+        [
+          "sync",
+          127
+        ],
+        [
+          "rememberReadOnlySteps",
+          110
+        ],
+        [
+          "get",
+          86
+        ],
+        [
+          "structuredClone",
+          86
+        ],
+        [
+          "parse",
+          74
+        ],
+        [
+          "refreshColdKeySteps",
+          28
+        ],
+        [
+          "add",
+          19
+        ],
+        [
+          "now",
+          16
+        ],
+        [
+          "generatorResume",
+          13
+        ],
+        [
+          "filter",
+          13
+        ],
+        [
+          "query",
+          12
+        ],
+        [
+          "stringify",
+          12
+        ],
+        [
+          "rememberColdProjectionSteps",
+          11
+        ],
+        [
+          "set",
+          11
+        ],
+        [
+          "decideStoredRow",
+          11
+        ],
+        [
+          "begin",
+          10
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 80.25950300000113
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 66.05731899999955
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 24.94772599999851
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 24.29166499999701
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 20.726198000003933
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 15.757507000002079
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 13.957934999998542
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 12.881086000001233
+        }
+      ]
+    },
+    {
+      "arm": "after",
+      "repeat": 1,
+      "name": "registry-warm",
+      "elapsed": 2066.184398999998,
+      "profiledSyncMs": 1667,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 1755203,
+        "system": 436352
+      },
+      "load": [
+        17.54,
+        16.99,
+        17.89
+      ],
+      "gapP95": 9.629942999999912,
+      "gapMax": 277.50634100000025,
+      "exclusiveMs": {
+        "state.write-wait": 1.3990449999982957,
+        "registry.prepare.slice": 1321.3475629987297,
+        "registry.headers": 378.01607400128705
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          551
+        ],
+        [
+          "iterate",
+          217
+        ],
+        [
+          "sync",
+          160
+        ],
+        [
+          "rememberReadOnlySteps",
+          121
+        ],
+        [
+          "get",
+          83
+        ],
+        [
+          "structuredClone",
+          80
+        ],
+        [
+          "parse",
+          62
+        ],
+        [
+          "now",
+          33
+        ],
+        [
+          "refreshColdKeySteps",
+          28
+        ],
+        [
+          "generatorResume",
+          27
+        ],
+        [
+          "rememberColdProjectionSteps",
+          27
+        ],
+        [
+          "includes",
+          16
+        ],
+        [
+          "orderedHeaderSteps",
+          14
+        ],
+        [
+          "begin",
+          12
+        ],
+        [
+          "normalizeRegistry2",
+          10
+        ],
+        [
+          "read",
+          10
+        ],
+        [
+          "stringify",
+          8
+        ],
+        [
+          "loadHotSteps",
+          7
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 94.72004700000252
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 23.723987999997917
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 14.595110000002023
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 12.58918999999878
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 12.15078600000561
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 10.582589999998163
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 9.560615000002144
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 9.515202000002319
+        }
+      ]
+    },
+    {
+      "arm": "before",
+      "repeat": 1,
+      "name": "registry-warm",
+      "elapsed": 1585.768842999998,
+      "profiledSyncMs": 1396,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 1421370,
+        "system": 409562
+      },
+      "load": [
+        17.54,
+        16.99,
+        17.89
+      ],
+      "gapP95": 14.116191000000981,
+      "gapMax": 267.40131100000144,
+      "exclusiveMs": {
+        "state.write-wait": 1.3722229999984847,
+        "registry.prepare.slice": 1055.8121550001015,
+        "registry.headers": 182.933439999877,
+        "registry.snapshot": 0.11166100000264123
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          586
+        ],
+        [
+          "iterate",
+          111
+        ],
+        [
+          "rememberReadOnlySteps",
+          110
+        ],
+        [
+          "sync",
+          104
+        ],
+        [
+          "structuredClone",
+          64
+        ],
+        [
+          "get",
+          59
+        ],
+        [
+          "parse",
+          51
+        ],
+        [
+          "refreshColdKeySteps",
+          25
+        ],
+        [
+          "rememberColdProjectionSteps",
+          20
+        ],
+        [
+          "now",
+          16
+        ],
+        [
+          "stringify",
+          14
+        ],
+        [
+          "generatorResume",
+          10
+        ],
+        [
+          "rowClaimsBeyondBaselineGrant",
+          10
+        ],
+        [
+          "byteLength",
+          9
+        ],
+        [
+          "filter",
+          8
+        ],
+        [
+          "Set",
+          8
+        ],
+        [
+          "decideStoredRow",
+          8
+        ],
+        [
+          "read",
+          8
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 52.33549399999902
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 49.894718000003195
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 24.46582099999796
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 19.9973519999985
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 14.977676000002248
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 11.964944999999716
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 11.563634999998612
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 10.503860000004352
+        }
+      ]
+    },
+    {
+      "arm": "after",
+      "repeat": 1,
+      "name": "session",
+      "elapsed": 79.0249479999984,
+      "profiledSyncMs": 13,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 78001,
+        "system": 9323
+      },
+      "load": [
+        17.54,
+        16.99,
+        17.89
+      ],
+      "gapP95": 13.15936099999817,
+      "gapMax": 13.15936099999817,
+      "exclusiveMs": {
+        "registry.prepare.open": 7.02057899999636,
+        "state.write-wait": 0.5348719999965397,
+        "registry.keyed": 2.1161879999999655
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "stateLockAttempt",
+          1
+        ],
+        [
+          "Map",
+          1
+        ],
+        [
+          "run",
+          1
+        ],
+        [
+          "operatorOwnedRoots",
+          1
+        ],
+        [
+          "observeStatement",
+          1
+        ],
+        [
+          "databaseSwapInProgress",
+          1
+        ],
+        [
+          "existsSync",
+          1
+        ],
+        [
+          "prepare",
+          1
+        ],
+        [
+          "matchingRowKeys",
+          1
+        ],
+        [
+          "stateLockProcessKind",
+          1
+        ],
+        [
+          "parse",
+          1
+        ],
+        [
+          "resolve",
+          1
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "state.write-wait",
+          "maxMs": 7.412294999994629
+        },
+        {
+          "site": "registry.prepare.open",
+          "maxMs": 7.02057899999636
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.2593439999982365
+        },
+        {
+          "site": "registry.keyed",
+          "maxMs": 2.1161879999999655
+        }
+      ],
+      "answer": 200
+    },
+    {
+      "arm": "before",
+      "repeat": 1,
+      "name": "session",
+      "elapsed": 1377.6835990000036,
+      "profiledSyncMs": 1135,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 1437862,
+        "system": 323651
+      },
+      "load": [
+        17.54,
+        16.99,
+        17.89
+      ],
+      "gapP95": 16.413009999996575,
+      "gapMax": 142.55906400000094,
+      "exclusiveMs": {
+        "registry.prepare.open": 2.532656000003044,
+        "state.write-wait": 0.8083299999925657,
+        "registry.prepare.slice": 983.5892070002155,
+        "registry.headers": 209.85450799976388,
+        "registry.snapshot": 0.13967000000411645,
+        "registry.keyed": 85.38739100000384
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          345
+        ],
+        [
+          "iterate",
+          134
+        ],
+        [
+          "sync",
+          134
+        ],
+        [
+          "rememberReadOnlySteps",
+          79
+        ],
+        [
+          "structuredClone",
+          61
+        ],
+        [
+          "parse",
+          56
+        ],
+        [
+          "refreshColdKeySteps",
+          45
+        ],
+        [
+          "get",
+          42
+        ],
+        [
+          "now",
+          20
+        ],
+        [
+          "generatorResume",
+          14
+        ],
+        [
+          "stringify",
+          12
+        ],
+        [
+          "read",
+          8
+        ],
+        [
+          "begin",
+          8
+        ],
+        [
+          "Set",
+          7
+        ],
+        [
+          "rememberColdProjectionSteps",
+          7
+        ],
+        [
+          "map",
+          6
+        ],
+        [
+          "query",
+          5
+        ],
+        [
+          "copyDataProperties",
+          5
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.keyed",
+          "maxMs": 85.38739100000384
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 56.74019799999951
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 56.67281300000468
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 21.87705399999686
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 20.02319699999498
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 14.05718500000512
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 13.765725999997812
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 12.662850000000617
+        }
+      ],
+      "answer": 200
+    },
+    {
+      "arm": "before",
+      "repeat": 2,
+      "name": "memory",
+      "elapsed": 600.9868100000022,
+      "profiledSyncMs": 6,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 55901,
+        "system": 12223
+      },
+      "load": [
+        18.46,
+        17.19,
+        17.95
+      ],
+      "gapP95": 0.07579399999667658,
+      "gapMax": 9.868016999993415,
+      "exclusiveMs": {},
+      "spansDropped": 0,
+      "top": [
+        [
+          "Date",
+          3
+        ],
+        [
+          "writeFileSync",
+          1
+        ],
+        [
+          "EventEmitter",
+          1
+        ],
+        [
+          "howMuchToRead",
+          1
+        ]
+      ],
+      "longestSlices": [],
+      "answer": {
+        "filesRead": 1,
+        "filesSkipped": 0,
+        "entriesIndexed": 3501,
+        "filesFailed": 0
+      }
+    },
+    {
+      "arm": "after",
+      "repeat": 2,
+      "name": "memory",
+      "elapsed": 941.9343039999949,
+      "profiledSyncMs": 6,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 47161,
+        "system": 16989
+      },
+      "load": [
+        18.46,
+        17.19,
+        17.95
+      ],
+      "gapP95": 0.4907680000032997,
+      "gapMax": 8.405971000000136,
+      "exclusiveMs": {},
+      "spansDropped": 0,
+      "top": [
+        [
+          "writeFileSync",
+          2
+        ],
+        [
+          "EventEmitter",
+          1
+        ],
+        [
+          "Socket",
+          1
+        ],
+        [
+          "resolve",
+          1
+        ]
+      ],
+      "longestSlices": [],
+      "answer": {
+        "filesRead": 1,
+        "filesSkipped": 0,
+        "entriesIndexed": 3501,
+        "filesFailed": 0
+      }
+    },
+    {
+      "arm": "before",
+      "repeat": 2,
+      "name": "seat",
+      "elapsed": 164.52655599999707,
+      "profiledSyncMs": 86,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 132487,
+        "system": 18056
+      },
+      "load": [
+        18.46,
+        17.19,
+        17.95
+      ],
+      "gapP95": 39.92547799999011,
+      "gapMax": 42.15572100000281,
+      "exclusiveMs": {
+        "seat-tick.project": 106.1498230000143,
+        "seat-tick.hash": 3.494482999885804
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "readdirSync",
+          17
+        ],
+        [
+          "lstatSync",
+          9
+        ],
+        [
+          "statSync",
+          4
+        ],
+        [
+          "taskEvidenceFor",
+          3
+        ],
+        [
+          "hardenedRedact",
+          3
+        ],
+        [
+          "join",
+          3
+        ],
+        [
+          "sort",
+          3
+        ],
+        [
+          "deeplyFrozen",
+          3
+        ],
+        [
+          "arrayIteratorNextHelper",
+          2
+        ],
+        [
+          "homedir",
+          2
+        ],
+        [
+          "redactMonitorText",
+          2
+        ],
+        [
+          "sync",
+          2
+        ],
+        [
+          "forEachCooperatively",
+          2
+        ],
+        [
+          "stringify",
+          2
+        ],
+        [
+          "loadPipelinesForListAsync",
+          1
+        ],
+        [
+          "wait",
+          1
+        ],
+        [
+          "projectTaskPipelineIds",
+          1
+        ],
+        [
+          "dirname",
+          1
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "seat-tick.project",
+          "maxMs": 31.627129000000423
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 31.21398300000874
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 31.06848600000376
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 4.784660000004806
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 3.123797000007471
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 2.0808189999952447
+        },
+        {
+          "site": "seat-tick.hash",
+          "maxMs": 0.7004820000001928
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 0.35228200000710785
+        }
+      ]
+    },
+    {
+      "arm": "after",
+      "repeat": 2,
+      "name": "seat",
+      "elapsed": 218.21373400000448,
+      "profiledSyncMs": 97,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 145515,
+        "system": 28945
+      },
+      "load": [
+        18.46,
+        17.19,
+        17.95
+      ],
+      "gapP95": 33.40296099999978,
+      "gapMax": 66.57369499999913,
+      "exclusiveMs": {
+        "seat-tick.project": 124.24618599999667,
+        "seat-tick.hash": 3.121609000110766
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "lstatSync",
+          14
+        ],
+        [
+          "readdirSync",
+          14
+        ],
+        [
+          "Set",
+          4
+        ],
+        [
+          "redactMonitorText",
+          4
+        ],
+        [
+          "sync",
+          3
+        ],
+        [
+          "deeplyFrozen",
+          2
+        ],
+        [
+          "find",
+          2
+        ],
+        [
+          "join",
+          2
+        ],
+        [
+          "setImmediate",
+          2
+        ],
+        [
+          "stringify",
+          2
+        ],
+        [
+          "map",
+          2
+        ],
+        [
+          "knownProviderSecrets",
+          2
+        ],
+        [
+          "statSync",
+          1
+        ],
+        [
+          "seatTickInstructionLines",
+          1
+        ],
+        [
+          "preparePipelineMetadata",
+          1
+        ],
+        [
+          "taskEvidenceFor",
+          1
+        ],
+        [
+          "homedir",
+          1
+        ],
+        [
+          "redactBounded",
+          1
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "seat-tick.project",
+          "maxMs": 42.40146100000129
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 41.36751699999877
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 33.578779999996186
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 25.2944789999965
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 25.148457000002963
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 8.66146199999639
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 5.911026000001584
+        },
+        {
+          "site": "seat-tick.project",
+          "maxMs": 4.513373000001593
+        }
+      ]
+    },
+    {
+      "arm": "before",
+      "repeat": 2,
+      "name": "merge",
+      "elapsed": 318.7906709999952,
+      "profiledSyncMs": 189,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 260775,
+        "system": 32898
+      },
+      "load": [
+        18.46,
+        17.19,
+        17.95
+      ],
+      "gapP95": 39.44870199999423,
+      "gapMax": 48.13132099999348,
+      "exclusiveMs": {
+        "state.write-wait": 87.76875399994606,
+        "state.lease-commit": 10.237802000003285,
+        "pipeline.copy": 7.187667999984114,
+        "forge.auto-merge.step": 0.1968510000006063,
+        "state.lease-release": 8.665924000015366,
+        "forge.auto-merge.read": 0.8261440000060247,
+        "forge.auto-merge.prune": 0.8557340002444107,
+        "forge.auto-merge.admit": 1.4831010000925744,
+        "forge.auto-merge.queue": 1.6260690000781324
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "run",
+          73
+        ],
+        [
+          "prepare",
+          27
+        ],
+        [
+          "close",
+          13
+        ],
+        [
+          "sync",
+          7
+        ],
+        [
+          "get",
+          7
+        ],
+        [
+          "readHotStateReleaseTarget",
+          5
+        ],
+        [
+          "structuredClone",
+          4
+        ],
+        [
+          "filter",
+          4
+        ],
+        [
+          "stateDatabaseSignature",
+          3
+        ],
+        [
+          "statSync",
+          2
+        ],
+        [
+          "open",
+          2
+        ],
+        [
+          "chmodSync",
+          2
+        ],
+        [
+          "existsSync",
+          2
+        ],
+        [
+          "mainThreadReadCounter",
+          2
+        ],
+        [
+          "now",
+          2
+        ],
+        [
+          "copyDataProperties",
+          1
+        ],
+        [
+          "value",
+          1
+        ],
+        [
+          "write",
+          1
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "state.write-wait",
+          "maxMs": 8.68024199998763
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 7.687021000005188
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 7.419976999997743
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 7.215228000000934
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 7.046908000003896
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 6.247557999988203
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 5.374037000001408
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 5.2836220000026515
+        }
+      ]
+    },
+    {
+      "arm": "after",
+      "repeat": 2,
+      "name": "merge",
+      "elapsed": 298.128134999999,
+      "profiledSyncMs": 160,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 256462,
+        "system": 27234
+      },
+      "load": [
+        18.46,
+        17.19,
+        17.95
+      ],
+      "gapP95": 34.407774999999674,
+      "gapMax": 43.10279199999786,
+      "exclusiveMs": {
+        "state.write-wait": 73.93675899998925,
+        "state.lease-commit": 11.619890999994823,
+        "pipeline.copy": 3.8357279999981984,
+        "forge.auto-merge.step": 0.2526690000013332,
+        "state.lease-release": 16.029751000009128,
+        "forge.auto-merge.read": 0.6296440000005532,
+        "forge.auto-merge.prune": 1.1398610000906046,
+        "forge.auto-merge.admit": 1.0451959999918472,
+        "forge.auto-merge.queue": 2.0938989998903708
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "run",
+          68
+        ],
+        [
+          "prepare",
+          22
+        ],
+        [
+          "close",
+          10
+        ],
+        [
+          "get",
+          5
+        ],
+        [
+          "getOwnPropertyDescriptor",
+          3
+        ],
+        [
+          "sync",
+          2
+        ],
+        [
+          "statSync",
+          2
+        ],
+        [
+          "structuredClone",
+          2
+        ],
+        [
+          "finish",
+          2
+        ],
+        [
+          "all",
+          2
+        ],
+        [
+          "some",
+          2
+        ],
+        [
+          "mergeRows2",
+          2
+        ],
+        [
+          "stringify",
+          2
+        ],
+        [
+          "merge",
+          1
+        ],
+        [
+          "mkdirSync",
+          1
+        ],
+        [
+          "reviveLoadedPipeline",
+          1
+        ],
+        [
+          "key",
+          1
+        ],
+        [
+          "stateLockAttempt",
+          1
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "state.write-wait",
+          "maxMs": 8.433414999999513
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 7.174688999999489
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 6.028742999995302
+        },
+        {
+          "site": "state.lease-release",
+          "maxMs": 5.959085000002233
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 5.904135999997379
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 5.534436999994796
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 4.70579199999338
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 4.519086000000243
+        }
+      ]
+    },
+    {
+      "arm": "before",
+      "repeat": 2,
+      "name": "registry",
+      "elapsed": 2473.1301210000092,
+      "profiledSyncMs": 1593,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 2291781,
+        "system": 452515
+      },
+      "load": [
+        18.46,
+        17.19,
+        17.95
+      ],
+      "gapP95": 17.101625999988755,
+      "gapMax": 111.23832999999286,
+      "exclusiveMs": {
+        "state.write-wait": 3.336003000003984,
+        "registry.prepare.slice": 1861.760991001167,
+        "registry.headers": 337.1909069987887,
+        "registry.snapshot": 0.3291599999938626
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          454
+        ],
+        [
+          "iterate",
+          183
+        ],
+        [
+          "rememberReadOnlySteps",
+          127
+        ],
+        [
+          "sync",
+          121
+        ],
+        [
+          "structuredClone",
+          92
+        ],
+        [
+          "get",
+          83
+        ],
+        [
+          "parse",
+          74
+        ],
+        [
+          "refreshColdKeySteps",
+          35
+        ],
+        [
+          "add",
+          24
+        ],
+        [
+          "now",
+          21
+        ],
+        [
+          "stringify",
+          19
+        ],
+        [
+          "includes",
+          15
+        ],
+        [
+          "Set",
+          14
+        ],
+        [
+          "generatorResume",
+          13
+        ],
+        [
+          "value",
+          12
+        ],
+        [
+          "clear",
+          11
+        ],
+        [
+          "query",
+          11
+        ],
+        [
+          "read",
+          11
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 102.4853199999925
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 97.38826900000277
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 34.5934500000003
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 29.00498099999095
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 23.059625000008964
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 18.747876000008546
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 18.21281500000623
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 16.024883999998565
+        }
+      ]
+    },
+    {
+      "arm": "after",
+      "repeat": 2,
+      "name": "registry",
+      "elapsed": 3224.638328000001,
+      "profiledSyncMs": 2077,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 3436102,
+        "system": 556564
+      },
+      "load": [
+        19.94,
+        17.51,
+        18.05
+      ],
+      "gapP95": 12.86122699999396,
+      "gapMax": 92.0295929999993,
+      "exclusiveMs": {
+        "state.write-wait": 6.618957999999111,
+        "registry.prepare.slice": 2208.786130999433,
+        "registry.headers": 656.8888490006284
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          413
+        ],
+        [
+          "sync",
+          273
+        ],
+        [
+          "iterate",
+          265
+        ],
+        [
+          "rememberReadOnlySteps",
+          142
+        ],
+        [
+          "get",
+          112
+        ],
+        [
+          "structuredClone",
+          105
+        ],
+        [
+          "parse",
+          79
+        ],
+        [
+          "generatorResume",
+          59
+        ],
+        [
+          "refreshColdKeySteps",
+          44
+        ],
+        [
+          "rememberColdProjectionSteps",
+          42
+        ],
+        [
+          "add",
+          35
+        ],
+        [
+          "grantDecisionKey",
+          21
+        ],
+        [
+          "stringify",
+          20
+        ],
+        [
+          "orderedKeysSteps",
+          20
+        ],
+        [
+          "begin",
+          19
+        ],
+        [
+          "now",
+          17
+        ],
+        [
+          "includes",
+          14
+        ],
+        [
+          "copyDataProperties",
+          14
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 92.96765099999902
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 28.29432700000325
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 23.277000000001863
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 14.825919999995676
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 13.821344000003592
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 13.435067999998864
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 13.214632000002894
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 13.059120999998413
+        }
+      ]
+    },
+    {
+      "arm": "before",
+      "repeat": 2,
+      "name": "registry-warm",
+      "elapsed": 2931.4659079999983,
+      "profiledSyncMs": 2039,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 2587999,
+        "system": 594527
+      },
+      "load": [
+        20.67,
+        17.71,
+        18.11
+      ],
+      "gapP95": 15.912559999997029,
+      "gapMax": 313.9243640000059,
+      "exclusiveMs": {
+        "state.write-wait": 1.7460829999909038,
+        "registry.prepare.slice": 2045.5200449985568,
+        "registry.headers": 332.3657940014382,
+        "registry.snapshot": 0.5341340000013588
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          704
+        ],
+        [
+          "rememberReadOnlySteps",
+          186
+        ],
+        [
+          "iterate",
+          185
+        ],
+        [
+          "sync",
+          166
+        ],
+        [
+          "structuredClone",
+          118
+        ],
+        [
+          "get",
+          100
+        ],
+        [
+          "parse",
+          85
+        ],
+        [
+          "refreshColdKeySteps",
+          35
+        ],
+        [
+          "now",
+          22
+        ],
+        [
+          "stringify",
+          20
+        ],
+        [
+          "Set",
+          18
+        ],
+        [
+          "generatorResume",
+          17
+        ],
+        [
+          "rememberColdProjectionSteps",
+          17
+        ],
+        [
+          "query",
+          16
+        ],
+        [
+          "map",
+          10
+        ],
+        [
+          "read",
+          10
+        ],
+        [
+          "includes",
+          9
+        ],
+        [
+          "parseSqliteJson",
+          9
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 142.560839999991
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 136.54524200000742
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 32.39883900000132
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 28.055033000011463
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 26.018045999997412
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 23.299098999996204
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 22.247643000009703
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 22.210292000003392
+        }
+      ]
+    },
+    {
+      "arm": "after",
+      "repeat": 2,
+      "name": "registry-warm",
+      "elapsed": 2785.311421999999,
+      "profiledSyncMs": 1943,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 2267190,
+        "system": 546279
+      },
+      "load": [
+        20.67,
+        17.71,
+        18.11
+      ],
+      "gapP95": 10.746992000000319,
+      "gapMax": 329.82639200000267,
+      "exclusiveMs": {
+        "state.write-wait": 1.714802000002237,
+        "registry.prepare.slice": 1651.1982130014148,
+        "registry.headers": 583.2885479985925
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          581
+        ],
+        [
+          "iterate",
+          249
+        ],
+        [
+          "sync",
+          207
+        ],
+        [
+          "rememberReadOnlySteps",
+          171
+        ],
+        [
+          "get",
+          79
+        ],
+        [
+          "structuredClone",
+          71
+        ],
+        [
+          "parse",
+          60
+        ],
+        [
+          "now",
+          43
+        ],
+        [
+          "rememberColdProjectionSteps",
+          37
+        ],
+        [
+          "generatorResume",
+          31
+        ],
+        [
+          "refreshColdKeySteps",
+          30
+        ],
+        [
+          "orderedKeysSteps",
+          26
+        ],
+        [
+          "includes",
+          20
+        ],
+        [
+          "stringify",
+          14
+        ],
+        [
+          "copyDataProperties",
+          13
+        ],
+        [
+          "decideStoredRow",
+          11
+        ],
+        [
+          "parseSqliteJson",
+          11
+        ],
+        [
+          "query",
+          10
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 89.48422299999947
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 24.030221000000893
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 16.197086000000127
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 15.832453999995778
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 13.536704000005557
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 11.226038000000699
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 11.169807999998739
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 10.48679500000435
+        }
+      ]
+    },
+    {
+      "arm": "before",
+      "repeat": 2,
+      "name": "session",
+      "elapsed": 2523.142949000001,
+      "profiledSyncMs": 1780,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 2253544,
+        "system": 496681
+      },
+      "load": [
+        20.3,
+        17.68,
+        18.1
+      ],
+      "gapP95": 12.36819999999716,
+      "gapMax": 241.98352499998873,
+      "exclusiveMs": {
+        "registry.prepare.open": 9.143427000002703,
+        "state.write-wait": 8.02676499998779,
+        "registry.prepare.slice": 1831.0947229992744,
+        "registry.headers": 351.89012300061586,
+        "registry.snapshot": 0.4110029999865219,
+        "registry.keyed": 142.10841100000835
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "all",
+          431
+        ],
+        [
+          "iterate",
+          227
+        ],
+        [
+          "sync",
+          218
+        ],
+        [
+          "rememberReadOnlySteps",
+          127
+        ],
+        [
+          "get",
+          99
+        ],
+        [
+          "parse",
+          91
+        ],
+        [
+          "structuredClone",
+          80
+        ],
+        [
+          "refreshColdKeySteps",
+          59
+        ],
+        [
+          "now",
+          21
+        ],
+        [
+          "query",
+          21
+        ],
+        [
+          "set",
+          20
+        ],
+        [
+          "generatorResume",
+          16
+        ],
+        [
+          "stringify",
+          16
+        ],
+        [
+          "parseSqliteJson",
+          14
+        ],
+        [
+          "includes",
+          13
+        ],
+        [
+          "add",
+          11
+        ],
+        [
+          "begin",
+          10
+        ],
+        [
+          "rememberColdProjectionSteps",
+          10
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "registry.keyed",
+          "maxMs": 142.10841100000835
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 120.41689300000144
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 97.75245200000063
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 39.6128549999994
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 37.44062500000291
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 20.597039000000223
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 19.496100000003935
+        },
+        {
+          "site": "registry.prepare.slice",
+          "maxMs": 16.441275999997742
+        }
+      ],
+      "answer": 200
+    },
+    {
+      "arm": "after",
+      "repeat": 2,
+      "name": "session",
+      "elapsed": 17.364612999997917,
+      "profiledSyncMs": 11,
+      "unresolvedSamples": 0,
+      "cpu": {
+        "user": 15498,
+        "system": 1825
+      },
+      "load": [
+        20.3,
+        17.68,
+        18.1
+      ],
+      "gapP95": 13.032976999995299,
+      "gapMax": 13.032976999995299,
+      "exclusiveMs": {
+        "registry.prepare.open": 6.5142590000032214,
+        "state.write-wait": 0.7252879999941797,
+        "registry.keyed": 2.5950340000053984
+      },
+      "spansDropped": 0,
+      "top": [
+        [
+          "close",
+          1
+        ],
+        [
+          "statSync",
+          1
+        ],
+        [
+          "run",
+          1
+        ],
+        [
+          "mainThreadReadCounter",
+          1
+        ],
+        [
+          "value",
+          1
+        ],
+        [
+          "finish",
+          1
+        ],
+        [
+          "get",
+          1
+        ],
+        [
+          "structuredClone",
+          1
+        ],
+        [
+          "refreshReadCache",
+          1
+        ],
+        [
+          "engineForPath",
+          1
+        ],
+        [
+          "resolve",
+          1
+        ]
+      ],
+      "longestSlices": [
+        {
+          "site": "state.write-wait",
+          "maxMs": 7.079624000005424
+        },
+        {
+          "site": "registry.prepare.open",
+          "maxMs": 6.5142590000032214
+        },
+        {
+          "site": "state.write-wait",
+          "maxMs": 2.7549569999973755
+        },
+        {
+          "site": "registry.keyed",
+          "maxMs": 2.5950340000053984
+        }
+      ],
+      "answer": 200
+    }
+  ],
+  "method": {
+    "sampleIntervalUs": 1000,
+    "repeats": 3,
+    "order": "alternating",
+    "concurrentRequests": 1
+  },
+  "resources": [
+    {
+      "cpuMax": "60000 20000",
+      "memoryMax": "8589934592"
+    },
+    {
+      "cpuMax": "360000 20000",
+      "memoryMax": "max"
+    },
+    {
+      "cpuMax": "max 100000",
+      "memoryMax": "114462744576"
+    },
+    {
+      "cpuMax": "max 100000",
+      "memoryMax": "max"
+    },
+    {
+      "cpuMax": "max 100000",
+      "memoryMax": "max"
+    },
+    {
+      "cpuMax": "max 100000",
+      "memoryMax": "max"
+    },
+    {
+      "cpuMax": "max 100000",
+      "memoryMax": "max"
+    },
+    {}
+  ],
+  "utc": "2026-10-20T09:44:44Z"
+}

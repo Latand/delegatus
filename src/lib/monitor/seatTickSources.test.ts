@@ -2286,6 +2286,28 @@ test("a lane the seat created reads as provisioned while its first stage is its 
   expect((await gather({ pipelines: [waiting] })).ownLanes).toEqual([]);
 });
 
+test("own settled lanes select the newest twenty before projecting review details", async () => {
+  let reviewReads = 0;
+  const rows = Array.from({ length: 804 }, (_, index) => {
+    const pipeline = lane({
+      id: `own-settled-${String(index).padStart(4, "0")}`,
+      srcConversationId: CONVERSATION,
+      state: "needs_review",
+      pausedState: "needs_review",
+      cursor: null,
+      runs: [{ stageId: "build", attempts: [] }],
+      createdAt: new Date(NOW - index * 1_000).toISOString(),
+    });
+    Object.defineProperty(pipeline, "reviewPending", { get: () => { reviewReads++; return NEEDS_REVIEW; } });
+    return pipeline;
+  });
+  const input = await gather({ pipelines: rows });
+  expect(input.ownLanes).toHaveLength(20);
+  expect(input.ownLanes.map(item => item.id)).toEqual(Array.from({ length: 20 }, (_, index) =>
+    `own-settled-${String(index).padStart(4, "0")}`));
+  expect(reviewReads).toBe(40);
+});
+
 test("an announced lane is not offered as provisioned a second time (#1799)", async () => {
   const provisioned = lane({ srcConversationId: CONVERSATION, state: "running" });
   /* The same lane, against a row that has announced nothing, is offered. */

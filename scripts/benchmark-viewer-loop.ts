@@ -10,7 +10,7 @@ import { GET as sessionGet } from "../src/app/api/session/route";
 import { refreshMemoryIndex } from "../src/lib/memory/service";
 import { performanceSpans, performanceSites } from "../src/lib/performanceSpans";
 import { withViewerOperation } from "../src/lib/viewerLoopMonitor";
-import { gatherSeatTickInput, type SeatTickSources } from "../src/lib/monitor/seatTickSources";
+import { gatherSeatTickInput, refreshSeatTickEvidence, type SeatTickSources } from "../src/lib/monitor/seatTickSources";
 import { emptySeatTickState } from "../src/lib/monitor/types";
 import { DEFAULT_SEAT_TICK_POLICY } from "../src/lib/monitor/seatTick";
 import { defaultSeatTickSettings } from "../src/lib/monitor/seatTickSettings";
@@ -35,11 +35,19 @@ const seed = buildPipeline({
   srcPath: null, srcConversationId: null, now: new Date(NOW).toISOString(), state: "draft",
 });
 const reviewedHead = "a".repeat(40);
+const attempts = Array.from({ length: 6000 }, (_, index) => ({
+  n: index + 1, state: "running" as const,
+  effectiveRole: { roleId: null, engine: "codex" as const, model: null, effort: null, access: "read-write" as const, promptScaffold: null },
+  launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+  startedAt: new Date(NOW - index * 1000).toISOString(), completedAt: null,
+  input: null, activatedBy: null, output: null, verdict: null, error: null,
+}));
 const pipelines: Pipeline[] = Array.from({ length: 804 }, (_, i) => {
   const id = `lane${String(i).padStart(4, "0")}`;
   return { ...seed, id, worktreeDir: `/repo-pipeline-${id}`, branch: `pipeline/synthetic-work-${id}`,
     taskIds: [`task-${i}`], spec: "Synthetic context. ".repeat(5500),
     state: "completed", lastPassedCommit: reviewedHead, cursor: null,
+    runs: [{ stageId: "build", attempts: i === 0 ? attempts : attempts.slice(0, 8) }],
     merge: { state: "queued", by: null, repository: "fixture/project", prNumber: null,
       policyChangedAt: new Date(NOW).toISOString(), reviewedHead, chain: [reviewedHead], updates: [], seenChecks: [],
       head: null, headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: new Date(NOW + 60_000).toISOString(),
@@ -111,7 +119,8 @@ const cases = {
     fs.utimesSync(memoryFile, new Date(NOW + iteration * 1000), new Date(NOW + iteration * 1000));
     return refreshMemoryIndex({ claudeHomes: [], codexHome: path.join(root, "codex"), skillRoots: [] });
   },
-  seat: () => gatherSeatTickInput("fixture", emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, sources),
+  seat: async () => refreshSeatTickEvidence(
+    await gatherSeatTickInput("fixture", emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, sources), sources),
   merge: async () => {
     for (let i = 0; i < 6; i++) await ports.mutate(pipelines[pipelines.length - 1 - i]!.id, row => { row.stateDetail = `sample-${++iteration}`; return true; });
     await sweepAutoMerge(ports);

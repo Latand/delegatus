@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { blockingWaitDiagnostics, resetBlockingWaitsForTests, withWaitCorrelation } from "@/lib/blockingWaits";
 
-import { AgentRegistry, closeAgentRegistryForTests, normalizeRegistry, prepareAgentRegistryForSession, setAgentRegistryForTests } from "./registry";
+import { AgentRegistry, closeAgentRegistryForTests, normalizeRegistry, readAgentSessionTarget, setAgentRegistryForTests } from "./registry";
 import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 
 /*
@@ -480,20 +480,38 @@ test("cold session facade opening yields while the SQLite writer is contended", 
   process.env.LLV_STATE_DIR = directory;
   process.env.LLV_STATE_OWNER = "viewer";
   const seed = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const conversation = seed.ensureConversation("codex", "/sessions/session-open.jsonl", null);
   seed.close();
+  const archive = new SqliteAgentRegistryStore(path.join(directory, "agent-registry.sqlite"), {
+    initialSnapshot: () => { throw new Error("fixture already initialized"); },
+    normalize: normalizeRegistry,
+  });
+  try { expect(archive.archiveInactive()).toBeGreaterThan(0); }
+  finally { archive.close(); }
+  const archivedDb = new Database(path.join(directory, "agent-registry.sqlite"), { readonly: true });
+  try {
+    expect(archivedDb.query("SELECT 1 FROM registry_cold WHERE collection='conversations' AND row_key=?").get(conversation.id)).toBeTruthy();
+  } finally { archivedDb.close(); }
   const holder = registryLockHolder(path.join(directory, "agent-registry.sqlite"));
   closeAgentRegistryForTests();
+  const query = Database.prototype.query;
+  let coldKeyScans = 0;
+  const queryProbe = spyOn(Database.prototype, "query").mockImplementation((function (this: Database, sql: string) {
+    if (/SELECT\s+collection\s*,\s*row_key\s+FROM\s+registry_cold/i.test(sql)) coldKeyScans++;
+    return query.call(this, sql);
+  }) as typeof Database.prototype.query);
   try {
     await holder.hold(120);
     let settled = false;
     const started = performance.now();
-    const opening = prepareAgentRegistryForSession().finally(() => { settled = true; });
+    const opening = readAgentSessionTarget(conversation.id, "", AbortSignal.timeout(10_000)).finally(() => { settled = true; });
     const progress = await new Promise<number>(resolve => setTimeout(() => resolve(performance.now() - started), 10));
     expect(progress).toBeLessThan(50);
     expect(settled).toBe(false);
-    const registry = await opening;
-    expect(registry.readOnlySnapshot().version).toBe(2);
+    expect(await opening).toEqual({ path: "/sessions/session-open.jsonl", unavailable: false });
+    expect(coldKeyScans).toBe(0);
   } finally {
+    queryProbe.mockRestore();
     await holder.close();
     closeAgentRegistryForTests();
     setAgentRegistryForTests(null);

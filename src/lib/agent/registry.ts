@@ -5732,9 +5732,9 @@ export class AgentRegistry {
     return this.readOnlySnapshot();
   }
 
-  private readKeyed<T>(reader: (file: RegistryFile) => T): T {
+  private readKeyed<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
     return withViewerOperation("registry.read", () => performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-      ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot())));
+      ? this.sqliteStore.read(reader, options) : reader(this.readOnlySnapshot())));
   }
 
   /** Retention evidence for one pending runtime effect. SQLite selectors run
@@ -8960,7 +8960,11 @@ export class AgentRegistry {
 
   /** One request's aliases, conversation and staged-path receipts, under the
       same keyed read transaction. No lookup or lazy registry row escapes it. */
-  sessionTarget(conversationId: string | null, fallbackPath: string): { path: string; unavailable: boolean } {
+  sessionTarget(
+    conversationId: string | null,
+    fallbackPath: string,
+    options: { skipColdKeyInitialization?: boolean } = {},
+  ): { path: string; unavailable: boolean } {
     return this.readKeyed(file => {
       const lookup = readOnlyConversationLookupFromSnapshot(file);
       const fence = identityMaterializationFence(file);
@@ -8968,7 +8972,7 @@ export class AgentRegistry {
       const materialized = conversation ? fence.pathForConversation(conversation.id) : null;
       const path = materialized ?? fallbackPath;
       return { path, unavailable: Boolean(conversation && !materialized || path && !fence.allowsPath(path)) };
-    });
+    }, options);
   }
 
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
@@ -11483,20 +11487,23 @@ export function agentRegistry(): AgentRegistry {
   return registryProcessState.__llvAgentRegistry;
 }
 
-/** The session endpoint is the first reader on a cold Viewer. Admit its
-    construction asynchronously, then prepare archived keys before selecting
-    a session so no full-history constructor drain or lock sleep precedes it. */
-export async function prepareAgentRegistryForSession(signal?: AbortSignal): Promise<AgentRegistry> {
-  let registry = registryProcessState.__llvAgentRegistry;
-  if (!registry) {
-    registry = await waitForStateLock("registry.session.open", () => stateLockAttempt("registry.session.open", () => {
+/** Open the cold session facade and answer from keyed rows. The one admitted
+    read bypasses the full cold-key index and snapshot preparation; uncached row
+    parsing keeps archived values out of the hot row cache. */
+export async function readAgentSessionTarget(
+  conversationId: string | null,
+  fallbackPath: string,
+  signal?: AbortSignal,
+): Promise<{ path: string; unavailable: boolean }> {
+  return waitForStateLock("registry.session.read", () => {
+    const registry = stateLockAttempt("registry.session.open", () => {
       registryProcessState.__llvAgentRegistry ??= withViewerOperation("registry.prepare", () => performanceSpans.sync("registry.prepare.open", () =>
         new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true, deferColdKeyInitialization: true })));
-      return registryProcessState.__llvAgentRegistry!;
-    }), { signal });
-  }
-  await registry.prepareReadOnlySnapshot(signal);
-  return registry;
+      return registryProcessState.__llvAgentRegistry;
+    });
+    return stateLockAttempt("registry.session.read", () => registry.sessionTarget(conversationId, fallbackPath,
+      { skipColdKeyInitialization: true }));
+  }, { signal });
 }
 
 export function setAgentRegistryForTests(value: AgentRegistry | null): void {
