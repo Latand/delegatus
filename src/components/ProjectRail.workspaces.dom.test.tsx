@@ -152,8 +152,9 @@ describe("a chosen workspace", () => {
     const host = await render(<Harness initial={CLIENT} selected="shop-app" crowned={["shop-app", "voice-lab"]} archived={["shop-backend"]} />);
     expect(host.querySelector("[data-workspace-chip-label]")?.textContent).toBe("Client work");
     expect(host.querySelector("[data-rail-brand]")).toBeNull();
-    /* The crowned project of another workspace leaves the Pinned section while filtered out. */
-    expect(sections(host)).toEqual([`${t("rail.pinned")}1`, `${t("rail.projects")}0`]);
+    /* The crowned project of another workspace leaves the Pinned section while filtered out, and a
+       Projects heading with nothing under it is not drawn. */
+    expect(sections(host)).toEqual([`${t("rail.pinned")}1`]);
     expect(rows(host)).toEqual(["shop-app"]);
     expect(host.querySelector("[data-rail-archive]")?.textContent).toBe(`${t("rail.archive")}1`);
     await click(host.querySelector("[data-rail-archive]")!);
@@ -199,6 +200,19 @@ describe("All", () => {
     expect(host.querySelector("[data-workspace-chip-label]")?.textContent).toBe(t("workspaces.all"));
     expect(sections(host)).toEqual(["Client work2", "Research1", `${t("workspaces.unassigned")}2`]);
     expect(rows(host)).toEqual(["shop-app", "shop-backend", "voice-lab", "bench-tmp", "scratch-notes"]);
+  });
+
+  test("a pinned project stands first under its own workspace, so each heading counts what the switcher counts", async () => {
+    setWorkspacesForTests(teamView(true));
+    const host = await render(<Harness initial="all" selected="voice-lab" crowned={["shop-backend", "bench-tmp"]} />);
+    expect(sections(host)).toEqual(["Client work2", "Research1", `${t("workspaces.unassigned")}2`]);
+    expect(rows(host)).toEqual(["shop-backend", "shop-app", "voice-lab", "bench-tmp", "scratch-notes"]);
+    /* The crown the Pinned heading carried stands on the row's name. */
+    expect([...host.querySelectorAll("[data-rail-pinned-mark]")].map((mark) => mark.closest("[data-rail-project]")?.getAttribute("data-rail-project"))).toEqual(["shop-backend", "bench-tmp"]);
+    await click(host.querySelector("[data-workspace-chip]")!);
+    expect([...host.querySelectorAll("[data-workspace-option]")].map((row) => row.textContent)).toEqual([
+      `${t("workspaces.all")}5 projects`, "Client work2 projects", "Research1 project",
+    ]);
   });
 
   test("Move shows on the selected Unassigned row for the owner, never for a member", async () => {

@@ -34882,6 +34882,15 @@ describe("team workspaces slice (a)", () => {
       return { box: [box.left, box.top, box.width, box.height].map(Math.round), inside: box.left >= -0.5 && box.top >= -0.5 && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5 };
     }, selector);
 
+    /* Every element `selector` matches whose text the box cuts (an ellipsis): a name must be whole. */
+    const cutNames = (page: Page, selector: string) => page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(selector)]
+      .filter((element) => element.getClientRects().length > 0 && element.scrollWidth > element.clientWidth + 0.5)
+      .map((element) => element.textContent ?? ""), selector);
+    /* A rail heading that counts nothing under it. */
+    const emptyHeadings = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rail-section]")]
+      .filter((label) => label.querySelector("[data-rail-count]")?.textContent?.trim() === "0")
+      .map((label) => label.textContent ?? ""));
+
     async function frame(page: Page, tag: string, state: string, defining: Array<[selector: string, text: string]>, popover?: string) {
       for (const [selector, text] of defining) {
         const reading = await measure(page, selector, text);
@@ -34904,6 +34913,7 @@ describe("team workspaces slice (a)", () => {
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 820, 390]) {
         const tag = `${lang}-${theme}-${width}`;
         const phone = width === 390;
+        let chipRight: number | null = null;
         const open = async (query: string) => {
           const opened = await openFixture(browser, `${server.base}?${query}`, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
           return opened;
@@ -34919,6 +34929,9 @@ describe("team workspaces slice (a)", () => {
               if (JSON.stringify([...listed].sort()) !== JSON.stringify(["acme-ledger", "harbor-docs"])) failures.push(`${tag} D1: the rail lists ${JSON.stringify(listed)}`);
               if (await page.locator("[data-rail-brand]").count()) failures.push(`${tag} D1: the product name is still in the header`);
               await frame(page, tag, "D1-client", [["[data-workspace-chip]", names[lang].client]]);
+              const empty = await emptyHeadings(page);
+              if (empty.length) failures.push(`${tag} D1: a heading counts nothing under it ${JSON.stringify(empty)}`);
+              chipRight = await page.locator("[data-workspace-chip]").evaluate((chip) => chip.getBoundingClientRect().right);
               /* D2 as the owner: the menu with the counts, the check, settings, New and Manage. */
               await page.locator("[data-workspace-chip]").click();
               await page.locator("[data-workspace-menu]").waitFor();
@@ -34957,7 +34970,9 @@ describe("team workspaces slice (a)", () => {
               });
               if (!chip.truncated) failures.push(`${tag} long name: the chip label is not truncated`);
               if (chip.labelRight > chip.chipRight + 0.5 || chip.chipRight > chip.hideLeft + 0.5) failures.push(`${tag} long name: the chip overruns ${JSON.stringify(chip)}`);
-              readings.push({ tag, state: "chip-long", ...chip });
+              readings.push({ tag, state: "chip-long", ...chip, clientChipRight: chipRight });
+              /* The chip fills the header: its edge stands where it stood for a short name. */
+              if (chipRight === null || Math.abs(chip.chipRight - chipRight) > 0.5) failures.push(`${tag} long name: the chip's right edge moved from ${chipRight} to ${chip.chipRight}`);
               await frame(page, tag, "D1-long", [["[data-workspace-chip]", names[lang].long.slice(0, 8)]]);
             } finally { await context.close(); }
           }
@@ -34966,8 +34981,27 @@ describe("team workspaces slice (a)", () => {
             const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all");
             try {
               await page.locator("[data-rail-workspace-section='unassigned']").waitFor();
+              /* The headings count once the catalog's rows have arrived, not while the sections stand empty. */
+              await page.locator("[data-rail-project='paper-kite']").waitFor();
+              await page.locator("[data-rail-project='acme-ledger']").waitFor();
               const order = await page.locator("[data-rail-workspace-section]").evaluateAll((items) => items.map((item) => item.getAttribute("data-rail-workspace-section")));
               if (order.at(-1) !== "unassigned" || order.length !== 4) failures.push(`${tag} D3: sections ${JSON.stringify(order)}`);
+              /* Each heading counts what the switcher counts for its workspace, pinned projects included. */
+              const headed = await page.locator("[data-rail-workspace-section]").evaluateAll((items) => Object.fromEntries(items
+                .filter((item) => item.getAttribute("data-rail-workspace-section") !== "unassigned")
+                .map((item) => [item.getAttribute("data-rail-workspace-section"), Number(item.querySelector("[data-rail-count]")?.textContent)])));
+              await page.locator("[data-workspace-chip]").click();
+              await page.locator("[data-workspace-menu]").waitFor();
+              const menuCounts = await page.locator("[data-workspace-option]").evaluateAll((items) => Object.fromEntries(items
+                .filter((item) => item.getAttribute("data-workspace-option") !== "all")
+                .map((item) => [item.getAttribute("data-workspace-option"), Number(/\d+/.exec(item.textContent ?? "")?.[0])])));
+              await page.keyboard.press("Escape");
+              await page.waitForFunction(() => !document.querySelector("[data-workspace-menu]"));
+              readings.push({ tag, state: "D3-counts", headed, menuCounts });
+              if (JSON.stringify(headed) !== JSON.stringify(menuCounts)) failures.push(`${tag} D3: headings count ${JSON.stringify(headed)}, the switcher ${JSON.stringify(menuCounts)}`);
+              if (await page.locator("[data-rail-section]").filter({ has: page.locator("[data-testid='crown-marker']") }).count()) failures.push(`${tag} D3: a Pinned section stands apart from the workspaces`);
+              const marked = await page.locator("[data-rail-pinned-mark]").evaluateAll((marks) => marks.map((mark) => mark.closest("[data-rail-project]")?.getAttribute("data-rail-project")).sort());
+              if (JSON.stringify(marked) !== JSON.stringify(["acme-ledger", "harbor-docs"])) failures.push(`${tag} D3: the pinned rows' crowns ${JSON.stringify(marked)}`);
               await page.locator("[data-rail-project='paper-kite']").click();
               const move = page.locator("[data-rail-project='paper-kite']").locator("xpath=..").locator("[data-rail-move]");
               await move.waitFor();
@@ -34988,6 +35022,8 @@ describe("team workspaces slice (a)", () => {
               });
               if (covers) failures.push(`${tag} D3: the Move to… menu covers its own row`);
               await frame(page, tag, "D3-move", [["[data-workspace-popover='move']", words(lang, "workspaces.moveTo")], ["[data-workspace-popover='move']", names[lang].client]], "[data-workspace-popover='move']");
+              const cutTargets = await cutNames(page, "[data-workspace-popover='move'] [data-workspace-move-to] span.truncate");
+              if (cutTargets.length) failures.push(`${tag} D3: Move to… cuts ${JSON.stringify(cutTargets)}`);
               /* The move lands: the row joins Client work and leaves Unassigned. */
               await page.locator(`[data-workspace-move-to='${FIXTURE_IDS.client}']`).click();
               await page.waitForFunction(() => !document.querySelector("[data-workspace-popover='move']"));
@@ -35024,6 +35060,15 @@ describe("team workspaces slice (a)", () => {
               await page.locator(`[data-workspace-row='${FIXTURE_IDS.client}'] [data-workspace-row-menu]`).click();
               await page.locator("[data-workspace-popover='row']").waitFor();
               await frame(page, tag, "D4-row-menu", [["[data-workspace-popover='row']", words(lang, "workspaces.deleteBlocked")]], "[data-workspace-popover='row']");
+              /* The menu hangs under ⋯, its right edge on the button's, inside the list. */
+              const hung = await page.evaluate((id) => {
+                const menu = document.querySelector("[data-workspace-popover='row']")!.getBoundingClientRect();
+                const trigger = document.querySelector(`[data-workspace-row='${id}'] [data-workspace-row-menu]`)!.getBoundingClientRect();
+                const list = document.querySelector(`[data-workspace-row='${id}']`)!.parentElement!.getBoundingClientRect();
+                return { menuLeft: menu.left, menuRight: menu.right, menuTop: menu.top, triggerRight: trigger.right, triggerBottom: trigger.bottom, listLeft: list.left, listRight: list.right };
+              }, FIXTURE_IDS.client);
+              readings.push({ tag, state: "D4-row-menu-place", ...hung });
+              if (hung.menuRight > hung.triggerRight + 0.5 || hung.menuRight > hung.listRight + 0.5 || hung.menuLeft < hung.listLeft - 0.5 || hung.menuTop < hung.triggerBottom - 0.5) failures.push(`${tag} D4: the row menu stands outside its list ${JSON.stringify(hung)}`);
             }
             if (pageErrors.length) failures.push(`${tag} D4: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
@@ -35039,6 +35084,16 @@ describe("team workspaces slice (a)", () => {
               ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.colour")],
               ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.projects")],
             ], "[data-team-dialog='workspace-create']");
+            /* The eight swatches share one row, or stand four to a row. */
+            const swatchRows = await page.locator("[data-workspace-color]").evaluateAll((items) => {
+              const rows = new Map<number, number>();
+              for (const item of items) { const top = Math.round(item.getBoundingClientRect().top); rows.set(top, (rows.get(top) ?? 0) + 1); }
+              return [...rows.values()];
+            });
+            readings.push({ tag, state: "D5-swatch-rows", swatchRows });
+            if (!(swatchRows.length === 1 && swatchRows[0] === 8) && !swatchRows.every((count) => count === 4)) failures.push(`${tag} D5: the swatches stand ${JSON.stringify(swatchRows)} to a row`);
+            const cutChecks = await cutNames(page, "[data-workspace-check-name]");
+            if (cutChecks.length) failures.push(`${tag} D5: the checklist cuts ${JSON.stringify(cutChecks)}`);
             await page.locator("[data-workspace-create-submit]").scrollIntoViewIfNeeded();
             await frame(page, tag, "D5-submit", [
               ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.projectsHint")],
@@ -35069,13 +35124,39 @@ describe("team workspaces slice (a)", () => {
               ["[data-workspace-delete-blocked]", words(lang, "workspaces.deleteBlocked")],
             ]);
             if (await page.locator("[data-workspace-delete]").isEnabled()) failures.push(`${tag} D7: Delete is enabled on a workspace with projects`);
+            /* Remove starts where the project's name starts, or is a bordered button. */
+            const remove = await page.evaluate(() => {
+              const row = document.querySelector("[data-workspace-project]")!;
+              const button = row.querySelector<HTMLElement>("[data-workspace-remove]")!;
+              const name = row.querySelector<HTMLElement>("span.truncate")!.getBoundingClientRect();
+              return { removeLeft: button.getBoundingClientRect().left, nameLeft: name.left, border: getComputedStyle(button).borderTopWidth };
+            });
+            readings.push({ tag, state: "D6-remove", ...remove });
+            if (remove.border === "0px" && Math.abs(remove.removeLeft - remove.nameLeft) > 1) failures.push(`${tag} D6: Remove is loose text off the name's edge ${JSON.stringify(remove)}`);
+            if (phone && Math.abs(remove.removeLeft - remove.nameLeft) > 1) failures.push(`${tag} P6: Remove does not start where the name starts ${JSON.stringify(remove)}`);
+            const headingTop = () => page.locator("#workspace-projects-title").evaluate((heading) => heading.getBoundingClientRect().top);
+            const before = await headingTop();
             await page.locator("[data-workspace-rename]").click();
             await page.locator("[data-workspace-rename-field]").waitFor();
             await frame(page, tag, "D6-rename", [["[data-workspace-page]", words(lang, "team.member.save")]]);
+            /* The inline field moves nothing: Save, Cancel and Delete share a centre, and Projects keeps its place. */
+            const renameLine = await page.evaluate(() => {
+              const form = document.querySelector("[data-workspace-rename-field]")!.closest("form")!;
+              const centre = (element: Element) => { const box = element.getBoundingClientRect(); return Math.round((box.top + box.bottom) / 2); };
+              const [save, cancel] = [...form.querySelectorAll("button")];
+              return { save: centre(save!), cancel: centre(cancel!), remove: centre(document.querySelector("[data-workspace-delete]")!), dot: Boolean(form.querySelector("[data-workspace-dot]")) };
+            });
+            const after = await headingTop();
+            readings.push({ tag, state: "D6-rename-line", ...renameLine, headingBefore: before, headingAfter: after });
+            if (Math.abs(after - before) > 0.5) failures.push(`${tag} D6: Rename moves the Projects heading from ${before} to ${after}`);
+            if (renameLine.save !== renameLine.cancel || (!phone && renameLine.save !== renameLine.remove)) failures.push(`${tag} D6: Save, Cancel and Delete stand on different lines ${JSON.stringify(renameLine)}`);
+            if (!renameLine.dot) failures.push(`${tag} D6: the title's colour dot leaves while renaming`);
             await page.keyboard.press("Escape");
             await page.locator("[data-workspace-add]").click();
             await page.locator("[data-workspace-popover='add']").waitFor();
             await frame(page, tag, "D6-add", [["[data-workspace-popover='add']", words(lang, "workspaces.page.add")], ["[data-workspace-popover='add']", "Paper Kite"]], "[data-workspace-popover='add']");
+            const cutAdd = await cutNames(page, "[data-workspace-popover='add'] [data-workspace-check-name]");
+            if (cutAdd.length) failures.push(`${tag} D6: Add project cuts ${JSON.stringify(cutAdd)}`);
             /* Remove every project: Delete is offered, and deleting goes back to the list. */
             await page.keyboard.press("Escape");
             for (let left = await page.locator("[data-workspace-remove]").count(); left > 0; left -= 1) await page.locator("[data-workspace-remove]").first().click();

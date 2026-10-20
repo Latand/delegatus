@@ -187,10 +187,12 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
   const totalLive = useMemo(() => overviewWorkingTotal(scoped, archivedProjects), [scoped, archivedProjects]);
   const totalAttention = useMemo(() => attentionTotal(scoped), [scoped]);
   /* The All view of a team with workspaces: one section per workspace, then
-     Unassigned, whose rows the owner can move (§13.5 D3). */
+     Unassigned, whose rows the owner can move (§13.5 D3). Every project stands
+     under its own workspace, as in the prototype, a crowned one first with its
+     crown, so a heading counts the rows under it and the switcher's number. */
   const sections = useMemo(
-    () => (workspace && !scope ? groupAll(regularRows, workspace.view).filter((section) => section.rows.length || !query.trim()) : null),
-    [workspace, scope, regularRows, query],
+    () => (workspace && !scope ? groupAll([...crownedRows, ...regularRows], workspace.view).filter((section) => section.rows.length || !query.trim()) : null),
+    [workspace, scope, crownedRows, regularRows, query],
   );
   const [moveError, setMoveError] = useState<{ project: string; text: string } | null>(null);
   const moveProject = (project: string, workspaceId: string) => {
@@ -227,10 +229,11 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
 
   const columns = { anyNeeds: totalAttention > 0, anyLive: totalLive > 0 };
   /* An archived row is drawn as the quiet rows above it, without the crown control. */
-  const railRow = (summary: ProjectSummary, archived = false, movable = false) => (
+  const railRow = (summary: ProjectSummary, archived = false, movable = false, pinnedMark = false) => (
     <RailRow
       key={summary.project}
       summary={summary}
+      pinnedMark={pinnedMark}
       active={selected === summary.project}
       now={now}
       columns={columns}
@@ -384,26 +387,27 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
           <MarkColumns needs={totalAttention} live={totalLive} {...columns} />
           <span className={SLOT_AGE} />
         </button>
-        {crownedRows.length ? (
+        {crownedRows.length && !sections ? (
           <SectionLabel count={crownedRows.length} icon={<Crown className="h-3 w-3 fill-crown text-crown" aria-hidden data-testid="crown-marker" />}>{t("rail.pinned")}</SectionLabel>
         ) : null}
         <FlipRow>
-          {crownedRows.map((summary) => railRow(summary))}
+          {sections ? null : crownedRows.map((summary) => railRow(summary))}
           {sections ? sections.flatMap((section, index) => [
             <div
               key={`__workspace-label-${section.workspace?.id ?? "unassigned"}__`}
               data-flip-key={`__workspace-label-${section.workspace?.id ?? "unassigned"}__`}
               data-rail-workspace-section={section.workspace?.id ?? "unassigned"}
-              className={crownedRows.length || index > 0 ? "mt-1.5" : ""}
+              className={index > 0 ? "mt-1.5" : ""}
             >
               <SectionLabel count={section.rows.length} lead={section.workspace ? <WorkspaceDot color={section.workspace.color} size={7} /> : undefined}>
                 {section.workspace ? section.workspace.name : t("workspaces.unassigned")}
               </SectionLabel>
             </div>,
-            ...section.rows.map((summary) => railRow(summary, false, !section.workspace)),
+            ...section.rows.map((summary) => railRow(summary, false, !section.workspace, crownedProjects.has(summary.project))),
           ]) : (
             <>
-              {crownedRows.length || regularRows.length ? (
+              {/* Inside a workspace whose every project is pinned, an empty «Projects 0» says nothing. */}
+              {regularRows.length || (crownedRows.length && !scope) ? (
                 <div data-flip-key="__projects-label__" className={crownedRows.length ? "mt-1.5" : ""}>
                   <SectionLabel count={regularRows.length}>{t("rail.projects")}</SectionLabel>
                 </div>
@@ -474,8 +478,10 @@ function focusVisible(element: Element): boolean {
 /* The Move control's face; its placeholder in the row's first line takes exactly its width. */
 const MOVE_FACE = "inline-flex h-[22px] items-center gap-1 rounded-[7px] border px-1.5 text-[11px] font-semibold";
 
-function RailRow({ summary, active, now, columns, crowned, onSelect, onToggleCrown, move }: {
+function RailRow({ summary, pinnedMark = false, active, now, columns, crowned, onSelect, onToggleCrown, move }: {
   summary: ProjectSummary;
+  /** In the All view a pinned row stands under its workspace, so its name carries the crown the Pinned heading carried. */
+  pinnedMark?: boolean;
   active: boolean;
   now: number;
   columns: { anyNeeds: boolean; anyLive: boolean };
@@ -498,6 +504,7 @@ function RailRow({ summary, active, now, columns, crowned, onSelect, onToggleCro
   const age = shortAge(summary.smt, now, t);
   const title = [
     summary.displayName,
+    pinnedMark ? t("rail.pinned") : null,
     summary.attentionCount ? t("rail.rowNeedsYou", { count: summary.attentionCount }) : null,
     summary.liveCount ? t("rail.rowWorking", { count: summary.liveCount }) : null,
     t("rail.rowConversations", { count: summary.conversations }),
@@ -533,6 +540,7 @@ function RailRow({ summary, active, now, columns, crowned, onSelect, onToggleCro
               )}
               <span data-rail-slot="age" className={`${SLOT_AGE} ${ageClass}`}>{age}</span>
             </span>
+            {pinnedMark ? <Crown data-rail-pinned-mark="" className="mr-1 inline h-3 w-3 -translate-y-px fill-crown text-crown" aria-hidden /> : null}
             {summary.displayName}
           </span>
         </span>

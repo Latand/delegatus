@@ -40,7 +40,7 @@ export const WORKSPACE_PATHS = {
 
 const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 /* The engine chip's trigger (`EngineAccountSwitch.tsx`), which fits the rail header's 40 px. */
-const CHIP = `flex h-8 min-w-0 max-w-full items-center gap-1 rounded-[7px] border border-border bg-canvas px-2 text-[11px] font-semibold hover:bg-sunken ${FOCUS}`;
+const CHIP = `flex h-8 w-full min-w-0 items-center gap-1 rounded-[7px] border border-border bg-canvas px-2 text-[11px] font-semibold hover:bg-sunken ${FOCUS}`;
 const MENU_LABEL = "px-2 pb-1 pt-1.5 text-[11px] font-bold text-muted";
 
 export function WorkspaceDot({ color, size = 8 }: { color: MemberColor; size?: number }) {
@@ -142,7 +142,8 @@ export function WorkspaceChip({ state, counts }: { state: WorkspaceRailState; co
     </a>
   );
   return (
-    <div ref={box} className="relative flex min-w-0">
+    /* The chip takes the header's whole width, so its edge stays put whatever the name (prototype `.wsw`). */
+    <div ref={box} className="relative flex min-w-0 flex-1">
       <button
         ref={trigger}
         type="button"
@@ -155,7 +156,7 @@ export function WorkspaceChip({ state, counts }: { state: WorkspaceRailState; co
         onClick={() => setOpen((value) => !value)}
       >
         {current ? <WorkspaceDot color={current.color} /> : <Folders className="h-3 w-3 shrink-0 text-muted" aria-hidden />}
-        <span data-workspace-chip-label="" className="min-w-0 truncate">{label}</span>
+        <span data-workspace-chip-label="" className="min-w-0 flex-1 truncate text-left">{label}</span>
         <ChevronDown className="h-3 w-3 shrink-0 text-muted" aria-hidden />
       </button>
       {open ? (
@@ -191,14 +192,17 @@ export function WorkspaceChip({ state, counts }: { state: WorkspaceRailState; co
  * drawn in a portal so a scrolling list or the rail's edge never cuts it. The
  * outside pointer and Escape close it; Escape gives focus back to the control.
  */
-export function WorkspacePopover({ anchor, beside, label, onClose, testId, width = 236, children }: {
+export function WorkspacePopover({ anchor, beside, below = false, label, onClose, testId, width = 236, children }: {
   anchor: RefObject<HTMLElement | null>;
+  /** Under the control, its right edge on the control's, at every width (a row's ⋯ menu stays inside its list). */
+  below?: boolean;
   /** The element whose right edge the menu stands beside (a whole row), so it covers none of the row; the control by default. */
   beside?: RefObject<HTMLElement | null>;
   label: string;
   onClose: () => void;
   testId: string;
-  width?: number;
+  /** A fixed width, or `"fit"`: as wide as its longest row, from 236 px up to 360 px. */
+  width?: number | "fit";
   children: ReactNode;
 }) {
   const menu = useRef<HTMLDivElement | null>(null);
@@ -215,14 +219,14 @@ export function WorkspacePopover({ anchor, beside, label, onClose, testId, width
     /* Beside the control (or its row) when the window has room; under it otherwise. */
     let left = edge + 4;
     let top = rect.top;
-    if (left + panel.offsetWidth > window.innerWidth - margin) {
+    if (below || left + panel.offsetWidth > window.innerWidth - margin) {
       left = Math.max(margin, Math.min(rect.right, window.innerWidth - margin) - panel.offsetWidth);
       top = rect.bottom + 4;
     }
     if (top + panel.offsetHeight > window.innerHeight - margin) top = Math.max(margin, rect.top - panel.offsetHeight - 4);
     setPlace({ left, top });
     panel.querySelector<HTMLElement>("button:not(:disabled), a[href]")?.focus();
-  }, [anchor, beside]);
+  }, [anchor, beside, below]);
   if (typeof document === "undefined") return null;
   return createPortal(
     <div
@@ -231,7 +235,7 @@ export function WorkspacePopover({ anchor, beside, label, onClose, testId, width
       aria-label={label}
       data-workspace-popover={testId}
       className={`fixed ${Z.popover} max-w-[calc(100vw-16px)] rounded-[10px] border border-border bg-card p-1 shadow-2`}
-      style={{ width, ...(place ? { left: place.left, top: place.top } : { left: 0, top: 0, visibility: "hidden" }) }}
+      style={{ ...(width === "fit" ? { width: "max-content", minWidth: 236, maxWidth: "min(360px, calc(100vw - 16px))" } : { width }), ...(place ? { left: place.left, top: place.top } : { left: 0, top: 0, visibility: "hidden" }) }}
     >
       {children}
     </div>,
@@ -250,7 +254,7 @@ export function MoveToMenu({ workspaces, exclude = null, anchor, beside, onPick,
 }) {
   const { t } = useLocale();
   return (
-    <WorkspacePopover anchor={anchor} beside={beside} label={t("workspaces.moveTo")} onClose={onClose} testId="move">
+    <WorkspacePopover anchor={anchor} beside={beside} label={t("workspaces.moveTo")} onClose={onClose} testId="move" width="fit">
       <div className={MENU_LABEL}>{t("workspaces.moveTo")}</div>
       {workspaces.filter((workspace) => workspace.id !== exclude).map((workspace) => (
         <button

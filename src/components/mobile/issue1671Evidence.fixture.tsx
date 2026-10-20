@@ -1180,6 +1180,11 @@ if (OVERVIEW_SCENE) {
     (entry as { project: string }).project = fileProject.get(entry.path) ?? (loose++ % 2 ? OVERVIEW_KEYS.forge : OVERVIEW_KEYS.delegatus);
   }
   kanbanFiles.push({ ...files[0]!, project: OVERVIEW_KEYS.forge } as FileEntry);
+  /* The workspace scenes show each project by the name a scanned file carries,
+     so the sheet's rows read forge-api, atlas-docs and delegatus as the bar does. */
+  if (new URLSearchParams(location.search).get("scenario")?.startsWith("workspaces")) {
+    for (const entry of kanbanFiles) (entry as { projectName?: string }).projectName = OVERVIEW_NAMES[entry.project];
+  }
   /* What ⋯ › Hidden tasks lists: a finished group hidden an hour ago, and an
      empty task taken off the board. */
   for (const row of kanbanTasks as Array<Record<string, unknown>>) {

@@ -20,6 +20,9 @@ import { deleteWorkspace, placeProject, updateWorkspace, useWorkspaces, workspac
  * prototype come with the later slices.
  */
 
+/* The form field at the height of the title line (32 px; 48 on the phone). */
+const RENAME_INPUT = INPUT.replace("h-10 ", "h-8 ");
+
 export function WorkspacePage({ id }: { id: string }) {
   const { t } = useLocale();
   const answer = useWorkspaces({ catalog: true });
@@ -115,13 +118,17 @@ function WorkspaceBody({ view, workspace }: { view: TeamWorkspaces; workspace: W
 
   return (
     <>
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-3">
+      {/* Every piece of the header's first line is 32 px tall and the line starts
+          at the top, so the inline rename field moves neither the actions nor the
+          sections below it. */}
+      <header className="flex flex-wrap items-start gap-x-4 gap-y-3">
         <BackLink />
         <div className="min-w-0 flex-1 basis-[240px]">
           {renaming !== null ? (
-            <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => { event.preventDefault(); rename(); }}>
+            <form className="flex min-h-8 flex-wrap items-center gap-2" onSubmit={(event) => { event.preventDefault(); rename(); }}>
+              <WorkspaceDot color={workspace.color} size={10} />
               <input
-                className={`${INPUT} min-w-0 max-w-[320px] flex-1`}
+                className={`${RENAME_INPUT} min-w-0 max-w-[320px] flex-1`}
                 value={renaming}
                 autoFocus
                 maxLength={80}
@@ -134,7 +141,7 @@ function WorkspaceBody({ view, workspace }: { view: TeamWorkspaces; workspace: W
               <button type="button" className={BUTTON.text} onClick={() => { setRenaming(null); setError(null); }}>{t("common.cancel")}</button>
             </form>
           ) : (
-            <h1 className="flex min-w-0 items-center gap-2 text-title font-bold text-primary" data-workspace-title="">
+            <h1 className="flex min-h-8 min-w-0 items-center gap-2 text-title font-bold text-primary max-sm:min-h-12" data-workspace-title="">
               <WorkspaceDot color={workspace.color} size={10} />
               <span className="min-w-0 truncate">{workspace.name}</span>
             </h1>
@@ -143,14 +150,18 @@ function WorkspaceBody({ view, workspace }: { view: TeamWorkspaces; workspace: W
           {alert("rename")}
         </div>
         {owner ? (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-start gap-2">
             {renaming === null ? (
               <button type="button" className={BUTTON.small} onClick={() => setRenaming(workspace.name)} data-workspace-rename="">{t("workspaces.rename")}</button>
             ) : null}
-            <button type="button" className={BUTTON.danger} disabled={!empty} aria-describedby={empty ? undefined : "workspace-delete-blocked"} onClick={remove} data-workspace-delete="">
-              {t("workspaces.delete")}
-            </button>
-            {empty ? null : <span id="workspace-delete-blocked" className="text-label text-muted" data-workspace-delete-blocked="">{t("workspaces.deleteBlocked")}</span>}
+            {/* The reason stands under Delete, as the sub line stands under the title, so the
+                group stays narrow enough to share the first line on the desktop. */}
+            <div className="flex flex-col items-start gap-1">
+              <button type="button" className={BUTTON.danger} disabled={!empty} aria-describedby={empty ? undefined : "workspace-delete-blocked"} onClick={remove} data-workspace-delete="">
+                {t("workspaces.delete")}
+              </button>
+              {empty ? null : <span id="workspace-delete-blocked" className="text-[11.5px] text-muted" data-workspace-delete-blocked="">{t("workspaces.deleteBlocked")}</span>}
+            </div>
           </div>
         ) : null}
       </header>
@@ -182,12 +193,15 @@ function WorkspaceBody({ view, workspace }: { view: TeamWorkspaces; workspace: W
               const age = row ? smtAge(row.smt, locale) : "";
               return (
                 <li key={project} data-workspace-project={project} className="border-b border-border last:border-b-0">
-                  <div className="flex min-h-11 items-center gap-3 px-4 py-2 max-sm:flex-wrap max-sm:px-3">
+                  <div className="flex min-h-11 items-center gap-3 px-4 py-2 max-sm:flex-wrap max-sm:gap-y-1 max-sm:px-3">
                     <Folder className="h-4 w-4 shrink-0 text-muted" aria-hidden />
                     <span className="min-w-0 flex-1 truncate text-ui font-semibold text-primary">{row?.displayName ?? project}</span>
                     {age ? <span className="shrink-0 text-label text-muted">{age}</span> : null}
+                    {/* A bordered button like the page's other actions; on the phone it takes
+                        its own line, starting where the name starts. */}
+                    {owner ? <span aria-hidden className="hidden max-sm:block max-sm:h-0 max-sm:basis-full" /> : null}
                     {owner ? (
-                      <button type="button" className={`${BUTTON.text} max-sm:w-full max-sm:justify-start`} onClick={() => place(project, null)} data-workspace-remove="">
+                      <button type="button" className={`${BUTTON.small} max-sm:ml-7`} onClick={() => place(project, null)} data-workspace-remove="">
                         {t("workspaces.page.remove")}
                       </button>
                     ) : null}

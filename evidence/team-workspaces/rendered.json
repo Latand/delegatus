@@ -1,7 +1,7 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "block": "team workspaces slice (a)",
-  "frames": 200,
+  "frames": 256,
   "failures": [],
   "readings": [
     {
@@ -54,7 +54,8 @@
       "truncated": true,
       "labelRight": 154,
       "chipRight": 179,
-      "hideLeft": 183
+      "hideLeft": 183,
+      "clientChipRight": 179
     },
     {
       "tag": "en-light-1440",
@@ -65,6 +66,20 @@
       "popover": null,
       "box": null,
       "file": "en-light-1440-D1-long.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D3-counts",
+      "headed": {
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2,
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1
+      },
+      "menuCounts": {
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2,
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1
+      }
     },
     {
       "tag": "en-light-1440",
@@ -89,8 +104,8 @@
       "popover": "[data-workspace-popover='move']",
       "box": [
         243,
-        453,
-        236,
+        423,
+        285,
         133
       ],
       "file": "en-light-1440-D3-move.png"
@@ -127,12 +142,23 @@
       ],
       "popover": "[data-workspace-popover='row']",
       "box": [
-        1163,
-        192,
+        911,
+        228,
         248,
         129
       ],
       "file": "en-light-1440-D4-row-menu.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D4-row-menu-place",
+      "menuLeft": 911,
+      "menuRight": 1159,
+      "menuTop": 227.75,
+      "triggerRight": 1159,
+      "triggerBottom": 223.75,
+      "listLeft": 264,
+      "listRight": 1176
     },
     {
       "tag": "en-light-1440",
@@ -168,11 +194,18 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "en-light-1440-D5.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        8
+      ]
     },
     {
       "tag": "en-light-1440",
@@ -184,9 +217,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "en-light-1440-D5-submit.png"
     },
@@ -199,9 +232,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        145,
+        125,
         480,
-        610
+        649
       ],
       "file": "en-light-1440-D5-refused.png"
     },
@@ -221,6 +254,13 @@
     },
     {
       "tag": "en-light-1440",
+      "state": "D6-remove",
+      "removeLeft": 990.9375,
+      "nameLeft": 309,
+      "border": "1px"
+    },
+    {
+      "tag": "en-light-1440",
       "state": "D6-rename",
       "defining": [
         "Save"
@@ -228,6 +268,16 @@
       "popover": null,
       "box": null,
       "file": "en-light-1440-D6-rename.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D6-rename-line",
+      "save": 36,
+      "cancel": 36,
+      "remove": 36,
+      "dot": true,
+      "headingBefore": 97,
+      "headingAfter": 97
     },
     {
       "tag": "en-light-1440",
@@ -239,9 +289,9 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         852,
-        112,
+        125,
         320,
-        191
+        217
       ],
       "file": "en-light-1440-D6-add.png"
     },
@@ -306,7 +356,8 @@
       "truncated": true,
       "labelRight": 154,
       "chipRight": 179,
-      "hideLeft": 183
+      "hideLeft": 183,
+      "clientChipRight": 179
     },
     {
       "tag": "en-light-820",
@@ -317,6 +368,20 @@
       "popover": null,
       "box": null,
       "file": "en-light-820-D1-long.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D3-counts",
+      "headed": {
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2,
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1
+      },
+      "menuCounts": {
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2,
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1
+      }
     },
     {
       "tag": "en-light-820",
@@ -341,8 +406,8 @@
       "popover": "[data-workspace-popover='move']",
       "box": [
         243,
-        453,
-        236,
+        423,
+        285,
         133
       ],
       "file": "en-light-820-D3-move.png"
@@ -388,6 +453,17 @@
     },
     {
       "tag": "en-light-820",
+      "state": "D4-row-menu-place",
+      "menuLeft": 531,
+      "menuRight": 779,
+      "menuTop": 227.75,
+      "triggerRight": 779,
+      "triggerBottom": 223.75,
+      "listLeft": 24,
+      "listRight": 796
+    },
+    {
+      "tag": "en-light-820",
       "state": "D4-member",
       "defining": [
         "Workspaces",
@@ -420,11 +496,18 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "en-light-820-D5.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        8
+      ]
     },
     {
       "tag": "en-light-820",
@@ -436,9 +519,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "en-light-820-D5-submit.png"
     },
@@ -451,9 +534,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        145,
+        125,
         480,
-        610
+        649
       ],
       "file": "en-light-820-D5-refused.png"
     },
@@ -473,6 +556,13 @@
     },
     {
       "tag": "en-light-820",
+      "state": "D6-remove",
+      "removeLeft": 610.9375,
+      "nameLeft": 69,
+      "border": "1px"
+    },
+    {
+      "tag": "en-light-820",
       "state": "D6-rename",
       "defining": [
         "Save"
@@ -480,6 +570,16 @@
       "popover": null,
       "box": null,
       "file": "en-light-820-D6-rename.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D6-rename-line",
+      "save": 36,
+      "cancel": 36,
+      "remove": 36,
+      "dot": true,
+      "headingBefore": 97,
+      "headingAfter": 97
     },
     {
       "tag": "en-light-820",
@@ -491,9 +591,9 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         472,
-        112,
+        125,
         320,
-        191
+        217
       ],
       "file": "en-light-820-D6-add.png"
     },
@@ -549,6 +649,17 @@
     },
     {
       "tag": "en-light-390",
+      "state": "D4-row-menu-place",
+      "menuLeft": 117,
+      "menuRight": 365,
+      "menuTop": 253,
+      "triggerRight": 365,
+      "triggerBottom": 249,
+      "listLeft": 12,
+      "listRight": 378
+    },
+    {
+      "tag": "en-light-390",
       "state": "D4-member",
       "defining": [
         "Workspaces",
@@ -586,6 +697,14 @@
         692
       ],
       "file": "en-light-390-D5.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        4,
+        4
+      ]
     },
     {
       "tag": "en-light-390",
@@ -634,6 +753,13 @@
     },
     {
       "tag": "en-light-390",
+      "state": "D6-remove",
+      "removeLeft": 53,
+      "nameLeft": 53,
+      "border": "1px"
+    },
+    {
+      "tag": "en-light-390",
       "state": "D6-rename",
       "defining": [
         "Save"
@@ -641,6 +767,16 @@
       "popover": null,
       "box": null,
       "file": "en-light-390-D6-rename.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D6-rename-line",
+      "save": 36,
+      "cancel": 36,
+      "remove": 111,
+      "dot": true,
+      "headingBefore": 184.25,
+      "headingAfter": 184.25
     },
     {
       "tag": "en-light-390",
@@ -652,7 +788,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         54,
-        176,
+        219,
         320,
         223
       ],
@@ -719,7 +855,8 @@
       "truncated": true,
       "labelRight": 154,
       "chipRight": 179,
-      "hideLeft": 183
+      "hideLeft": 183,
+      "clientChipRight": 179
     },
     {
       "tag": "en-dark-1440",
@@ -730,6 +867,20 @@
       "popover": null,
       "box": null,
       "file": "en-dark-1440-D1-long.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D3-counts",
+      "headed": {
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2,
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1
+      },
+      "menuCounts": {
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2,
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1
+      }
     },
     {
       "tag": "en-dark-1440",
@@ -754,8 +905,8 @@
       "popover": "[data-workspace-popover='move']",
       "box": [
         243,
-        453,
-        236,
+        423,
+        285,
         133
       ],
       "file": "en-dark-1440-D3-move.png"
@@ -792,12 +943,23 @@
       ],
       "popover": "[data-workspace-popover='row']",
       "box": [
-        1163,
-        192,
+        911,
+        228,
         248,
         129
       ],
       "file": "en-dark-1440-D4-row-menu.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D4-row-menu-place",
+      "menuLeft": 911,
+      "menuRight": 1159,
+      "menuTop": 227.75,
+      "triggerRight": 1159,
+      "triggerBottom": 223.75,
+      "listLeft": 264,
+      "listRight": 1176
     },
     {
       "tag": "en-dark-1440",
@@ -833,11 +995,18 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "en-dark-1440-D5.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        8
+      ]
     },
     {
       "tag": "en-dark-1440",
@@ -849,9 +1018,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "en-dark-1440-D5-submit.png"
     },
@@ -864,9 +1033,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        145,
+        125,
         480,
-        610
+        649
       ],
       "file": "en-dark-1440-D5-refused.png"
     },
@@ -886,6 +1055,13 @@
     },
     {
       "tag": "en-dark-1440",
+      "state": "D6-remove",
+      "removeLeft": 990.9375,
+      "nameLeft": 309,
+      "border": "1px"
+    },
+    {
+      "tag": "en-dark-1440",
       "state": "D6-rename",
       "defining": [
         "Save"
@@ -893,6 +1069,16 @@
       "popover": null,
       "box": null,
       "file": "en-dark-1440-D6-rename.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D6-rename-line",
+      "save": 36,
+      "cancel": 36,
+      "remove": 36,
+      "dot": true,
+      "headingBefore": 97,
+      "headingAfter": 97
     },
     {
       "tag": "en-dark-1440",
@@ -904,9 +1090,9 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         852,
-        112,
+        125,
         320,
-        191
+        217
       ],
       "file": "en-dark-1440-D6-add.png"
     },
@@ -971,7 +1157,8 @@
       "truncated": true,
       "labelRight": 154,
       "chipRight": 179,
-      "hideLeft": 183
+      "hideLeft": 183,
+      "clientChipRight": 179
     },
     {
       "tag": "en-dark-820",
@@ -982,6 +1169,20 @@
       "popover": null,
       "box": null,
       "file": "en-dark-820-D1-long.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D3-counts",
+      "headed": {
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2,
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1
+      },
+      "menuCounts": {
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2,
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1
+      }
     },
     {
       "tag": "en-dark-820",
@@ -1006,8 +1207,8 @@
       "popover": "[data-workspace-popover='move']",
       "box": [
         243,
-        453,
-        236,
+        423,
+        285,
         133
       ],
       "file": "en-dark-820-D3-move.png"
@@ -1053,6 +1254,17 @@
     },
     {
       "tag": "en-dark-820",
+      "state": "D4-row-menu-place",
+      "menuLeft": 531,
+      "menuRight": 779,
+      "menuTop": 227.75,
+      "triggerRight": 779,
+      "triggerBottom": 223.75,
+      "listLeft": 24,
+      "listRight": 796
+    },
+    {
+      "tag": "en-dark-820",
       "state": "D4-member",
       "defining": [
         "Workspaces",
@@ -1085,11 +1297,18 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "en-dark-820-D5.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        8
+      ]
     },
     {
       "tag": "en-dark-820",
@@ -1101,9 +1320,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "en-dark-820-D5-submit.png"
     },
@@ -1116,9 +1335,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        145,
+        125,
         480,
-        610
+        649
       ],
       "file": "en-dark-820-D5-refused.png"
     },
@@ -1138,6 +1357,13 @@
     },
     {
       "tag": "en-dark-820",
+      "state": "D6-remove",
+      "removeLeft": 610.9375,
+      "nameLeft": 69,
+      "border": "1px"
+    },
+    {
+      "tag": "en-dark-820",
       "state": "D6-rename",
       "defining": [
         "Save"
@@ -1145,6 +1371,16 @@
       "popover": null,
       "box": null,
       "file": "en-dark-820-D6-rename.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D6-rename-line",
+      "save": 36,
+      "cancel": 36,
+      "remove": 36,
+      "dot": true,
+      "headingBefore": 97,
+      "headingAfter": 97
     },
     {
       "tag": "en-dark-820",
@@ -1156,9 +1392,9 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         472,
-        112,
+        125,
         320,
-        191
+        217
       ],
       "file": "en-dark-820-D6-add.png"
     },
@@ -1214,6 +1450,17 @@
     },
     {
       "tag": "en-dark-390",
+      "state": "D4-row-menu-place",
+      "menuLeft": 117,
+      "menuRight": 365,
+      "menuTop": 253,
+      "triggerRight": 365,
+      "triggerBottom": 249,
+      "listLeft": 12,
+      "listRight": 378
+    },
+    {
+      "tag": "en-dark-390",
       "state": "D4-member",
       "defining": [
         "Workspaces",
@@ -1251,6 +1498,14 @@
         692
       ],
       "file": "en-dark-390-D5.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        4,
+        4
+      ]
     },
     {
       "tag": "en-dark-390",
@@ -1299,6 +1554,13 @@
     },
     {
       "tag": "en-dark-390",
+      "state": "D6-remove",
+      "removeLeft": 53,
+      "nameLeft": 53,
+      "border": "1px"
+    },
+    {
+      "tag": "en-dark-390",
       "state": "D6-rename",
       "defining": [
         "Save"
@@ -1306,6 +1568,16 @@
       "popover": null,
       "box": null,
       "file": "en-dark-390-D6-rename.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D6-rename-line",
+      "save": 36,
+      "cancel": 36,
+      "remove": 111,
+      "dot": true,
+      "headingBefore": 184.25,
+      "headingAfter": 184.25
     },
     {
       "tag": "en-dark-390",
@@ -1317,7 +1589,7 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         54,
-        176,
+        219,
         320,
         223
       ],
@@ -1384,7 +1656,8 @@
       "truncated": true,
       "labelRight": 154,
       "chipRight": 179,
-      "hideLeft": 183
+      "hideLeft": 183,
+      "clientChipRight": 179
     },
     {
       "tag": "uk-light-1440",
@@ -1395,6 +1668,20 @@
       "popover": null,
       "box": null,
       "file": "uk-light-1440-D1-long.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D3-counts",
+      "headed": {
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1,
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2
+      },
+      "menuCounts": {
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1,
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2
+      }
     },
     {
       "tag": "uk-light-1440",
@@ -1419,8 +1706,8 @@
       "popover": "[data-workspace-popover='move']",
       "box": [
         243,
-        453,
-        236,
+        423,
+        310,
         133
       ],
       "file": "uk-light-1440-D3-move.png"
@@ -1457,12 +1744,23 @@
       ],
       "popover": "[data-workspace-popover='row']",
       "box": [
-        1163,
-        318,
+        911,
+        354,
         248,
         129
       ],
       "file": "uk-light-1440-D4-row-menu.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D4-row-menu-place",
+      "menuLeft": 911,
+      "menuRight": 1159,
+      "menuTop": 353.75,
+      "triggerRight": 1159,
+      "triggerBottom": 349.75,
+      "listLeft": 264,
+      "listRight": 1176
     },
     {
       "tag": "uk-light-1440",
@@ -1498,11 +1796,18 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "uk-light-1440-D5.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        8
+      ]
     },
     {
       "tag": "uk-light-1440",
@@ -1514,9 +1819,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "uk-light-1440-D5-submit.png"
     },
@@ -1529,9 +1834,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        145,
+        125,
         480,
-        610
+        649
       ],
       "file": "uk-light-1440-D5-refused.png"
     },
@@ -1551,6 +1856,13 @@
     },
     {
       "tag": "uk-light-1440",
+      "state": "D6-remove",
+      "removeLeft": 1007.046875,
+      "nameLeft": 309,
+      "border": "1px"
+    },
+    {
+      "tag": "uk-light-1440",
       "state": "D6-rename",
       "defining": [
         "Зберегти"
@@ -1558,6 +1870,16 @@
       "popover": null,
       "box": null,
       "file": "uk-light-1440-D6-rename.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D6-rename-line",
+      "save": 36,
+      "cancel": 36,
+      "remove": 36,
+      "dot": true,
+      "headingBefore": 97,
+      "headingAfter": 97
     },
     {
       "tag": "uk-light-1440",
@@ -1569,9 +1891,9 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         852,
-        112,
+        125,
         320,
-        191
+        235
       ],
       "file": "uk-light-1440-D6-add.png"
     },
@@ -1636,7 +1958,8 @@
       "truncated": true,
       "labelRight": 154,
       "chipRight": 179,
-      "hideLeft": 183
+      "hideLeft": 183,
+      "clientChipRight": 179
     },
     {
       "tag": "uk-light-820",
@@ -1647,6 +1970,20 @@
       "popover": null,
       "box": null,
       "file": "uk-light-820-D1-long.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D3-counts",
+      "headed": {
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1,
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2
+      },
+      "menuCounts": {
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1,
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2
+      }
     },
     {
       "tag": "uk-light-820",
@@ -1671,8 +2008,8 @@
       "popover": "[data-workspace-popover='move']",
       "box": [
         243,
-        453,
-        236,
+        423,
+        310,
         133
       ],
       "file": "uk-light-820-D3-move.png"
@@ -1718,6 +2055,17 @@
     },
     {
       "tag": "uk-light-820",
+      "state": "D4-row-menu-place",
+      "menuLeft": 531,
+      "menuRight": 779,
+      "menuTop": 353.75,
+      "triggerRight": 779,
+      "triggerBottom": 349.75,
+      "listLeft": 24,
+      "listRight": 796
+    },
+    {
+      "tag": "uk-light-820",
       "state": "D4-member",
       "defining": [
         "Простори",
@@ -1750,11 +2098,18 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "uk-light-820-D5.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        8
+      ]
     },
     {
       "tag": "uk-light-820",
@@ -1766,9 +2121,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "uk-light-820-D5-submit.png"
     },
@@ -1781,9 +2136,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        145,
+        125,
         480,
-        610
+        649
       ],
       "file": "uk-light-820-D5-refused.png"
     },
@@ -1803,6 +2158,13 @@
     },
     {
       "tag": "uk-light-820",
+      "state": "D6-remove",
+      "removeLeft": 627.046875,
+      "nameLeft": 69,
+      "border": "1px"
+    },
+    {
+      "tag": "uk-light-820",
       "state": "D6-rename",
       "defining": [
         "Зберегти"
@@ -1810,6 +2172,16 @@
       "popover": null,
       "box": null,
       "file": "uk-light-820-D6-rename.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D6-rename-line",
+      "save": 36,
+      "cancel": 36,
+      "remove": 36,
+      "dot": true,
+      "headingBefore": 97,
+      "headingAfter": 97
     },
     {
       "tag": "uk-light-820",
@@ -1821,9 +2193,9 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         472,
-        156,
+        125,
         320,
-        191
+        235
       ],
       "file": "uk-light-820-D6-add.png"
     },
@@ -1879,6 +2251,17 @@
     },
     {
       "tag": "uk-light-390",
+      "state": "D4-row-menu-place",
+      "menuLeft": 117,
+      "menuRight": 365,
+      "menuTop": 391,
+      "triggerRight": 365,
+      "triggerBottom": 387,
+      "listLeft": 12,
+      "listRight": 378
+    },
+    {
+      "tag": "uk-light-390",
       "state": "D4-member",
       "defining": [
         "Простори",
@@ -1916,6 +2299,14 @@
         692
       ],
       "file": "uk-light-390-D5.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        4,
+        4
+      ]
     },
     {
       "tag": "uk-light-390",
@@ -1964,6 +2355,13 @@
     },
     {
       "tag": "uk-light-390",
+      "state": "D6-remove",
+      "removeLeft": 53,
+      "nameLeft": 53,
+      "border": "1px"
+    },
+    {
+      "tag": "uk-light-390",
       "state": "D6-rename",
       "defining": [
         "Зберегти"
@@ -1971,6 +2369,16 @@
       "popover": null,
       "box": null,
       "file": "uk-light-390-D6-rename.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D6-rename-line",
+      "save": 36,
+      "cancel": 36,
+      "remove": 111,
+      "dot": true,
+      "headingBefore": 184.25,
+      "headingAfter": 184.25
     },
     {
       "tag": "uk-light-390",
@@ -1982,9 +2390,9 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         54,
-        201,
+        219,
         320,
-        223
+        239
       ],
       "file": "uk-light-390-D6-add.png"
     },
@@ -2049,7 +2457,8 @@
       "truncated": true,
       "labelRight": 154,
       "chipRight": 179,
-      "hideLeft": 183
+      "hideLeft": 183,
+      "clientChipRight": 179
     },
     {
       "tag": "uk-dark-1440",
@@ -2060,6 +2469,20 @@
       "popover": null,
       "box": null,
       "file": "uk-dark-1440-D1-long.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D3-counts",
+      "headed": {
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1,
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2
+      },
+      "menuCounts": {
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1,
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2
+      }
     },
     {
       "tag": "uk-dark-1440",
@@ -2084,8 +2507,8 @@
       "popover": "[data-workspace-popover='move']",
       "box": [
         243,
-        453,
-        236,
+        423,
+        310,
         133
       ],
       "file": "uk-dark-1440-D3-move.png"
@@ -2122,12 +2545,23 @@
       ],
       "popover": "[data-workspace-popover='row']",
       "box": [
-        1163,
-        318,
+        911,
+        354,
         248,
         129
       ],
       "file": "uk-dark-1440-D4-row-menu.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D4-row-menu-place",
+      "menuLeft": 911,
+      "menuRight": 1159,
+      "menuTop": 353.75,
+      "triggerRight": 1159,
+      "triggerBottom": 349.75,
+      "listLeft": 264,
+      "listRight": 1176
     },
     {
       "tag": "uk-dark-1440",
@@ -2163,11 +2597,18 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "uk-dark-1440-D5.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        8
+      ]
     },
     {
       "tag": "uk-dark-1440",
@@ -2179,9 +2620,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "uk-dark-1440-D5-submit.png"
     },
@@ -2194,9 +2635,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        145,
+        125,
         480,
-        610
+        649
       ],
       "file": "uk-dark-1440-D5-refused.png"
     },
@@ -2216,6 +2657,13 @@
     },
     {
       "tag": "uk-dark-1440",
+      "state": "D6-remove",
+      "removeLeft": 1007.046875,
+      "nameLeft": 309,
+      "border": "1px"
+    },
+    {
+      "tag": "uk-dark-1440",
       "state": "D6-rename",
       "defining": [
         "Зберегти"
@@ -2223,6 +2671,16 @@
       "popover": null,
       "box": null,
       "file": "uk-dark-1440-D6-rename.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D6-rename-line",
+      "save": 36,
+      "cancel": 36,
+      "remove": 36,
+      "dot": true,
+      "headingBefore": 97,
+      "headingAfter": 97
     },
     {
       "tag": "uk-dark-1440",
@@ -2234,9 +2692,9 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         852,
-        112,
+        125,
         320,
-        191
+        235
       ],
       "file": "uk-dark-1440-D6-add.png"
     },
@@ -2301,7 +2759,8 @@
       "truncated": true,
       "labelRight": 154,
       "chipRight": 179,
-      "hideLeft": 183
+      "hideLeft": 183,
+      "clientChipRight": 179
     },
     {
       "tag": "uk-dark-820",
@@ -2312,6 +2771,20 @@
       "popover": null,
       "box": null,
       "file": "uk-dark-820-D1-long.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D3-counts",
+      "headed": {
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1,
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2
+      },
+      "menuCounts": {
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1,
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2
+      }
     },
     {
       "tag": "uk-dark-820",
@@ -2336,8 +2809,8 @@
       "popover": "[data-workspace-popover='move']",
       "box": [
         243,
-        453,
-        236,
+        423,
+        310,
         133
       ],
       "file": "uk-dark-820-D3-move.png"
@@ -2383,6 +2856,17 @@
     },
     {
       "tag": "uk-dark-820",
+      "state": "D4-row-menu-place",
+      "menuLeft": 531,
+      "menuRight": 779,
+      "menuTop": 353.75,
+      "triggerRight": 779,
+      "triggerBottom": 349.75,
+      "listLeft": 24,
+      "listRight": 796
+    },
+    {
+      "tag": "uk-dark-820",
       "state": "D4-member",
       "defining": [
         "Простори",
@@ -2415,11 +2899,18 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "uk-dark-820-D5.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        8
+      ]
     },
     {
       "tag": "uk-dark-820",
@@ -2431,9 +2922,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        170,
+        150,
         480,
-        560
+        599
       ],
       "file": "uk-dark-820-D5-submit.png"
     },
@@ -2446,9 +2937,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        145,
+        125,
         480,
-        610
+        649
       ],
       "file": "uk-dark-820-D5-refused.png"
     },
@@ -2468,6 +2959,13 @@
     },
     {
       "tag": "uk-dark-820",
+      "state": "D6-remove",
+      "removeLeft": 627.046875,
+      "nameLeft": 69,
+      "border": "1px"
+    },
+    {
+      "tag": "uk-dark-820",
       "state": "D6-rename",
       "defining": [
         "Зберегти"
@@ -2475,6 +2973,16 @@
       "popover": null,
       "box": null,
       "file": "uk-dark-820-D6-rename.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D6-rename-line",
+      "save": 36,
+      "cancel": 36,
+      "remove": 36,
+      "dot": true,
+      "headingBefore": 97,
+      "headingAfter": 97
     },
     {
       "tag": "uk-dark-820",
@@ -2486,9 +2994,9 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         472,
-        156,
+        125,
         320,
-        191
+        235
       ],
       "file": "uk-dark-820-D6-add.png"
     },
@@ -2544,6 +3052,17 @@
     },
     {
       "tag": "uk-dark-390",
+      "state": "D4-row-menu-place",
+      "menuLeft": 117,
+      "menuRight": 365,
+      "menuTop": 391,
+      "triggerRight": 365,
+      "triggerBottom": 387,
+      "listLeft": 12,
+      "listRight": 378
+    },
+    {
+      "tag": "uk-dark-390",
       "state": "D4-member",
       "defining": [
         "Простори",
@@ -2581,6 +3100,14 @@
         692
       ],
       "file": "uk-dark-390-D5.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        4,
+        4
+      ]
     },
     {
       "tag": "uk-dark-390",
@@ -2629,6 +3156,13 @@
     },
     {
       "tag": "uk-dark-390",
+      "state": "D6-remove",
+      "removeLeft": 53,
+      "nameLeft": 53,
+      "border": "1px"
+    },
+    {
+      "tag": "uk-dark-390",
       "state": "D6-rename",
       "defining": [
         "Зберегти"
@@ -2636,6 +3170,16 @@
       "popover": null,
       "box": null,
       "file": "uk-dark-390-D6-rename.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D6-rename-line",
+      "save": 36,
+      "cancel": 36,
+      "remove": 111,
+      "dot": true,
+      "headingBefore": 184.25,
+      "headingAfter": 184.25
     },
     {
       "tag": "uk-dark-390",
@@ -2647,9 +3191,9 @@
       "popover": "[data-workspace-popover='add']",
       "box": [
         54,
-        201,
+        219,
         320,
-        223
+        239
       ],
       "file": "uk-dark-390-D6-add.png"
     },

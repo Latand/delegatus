@@ -12211,7 +12211,7 @@ describe("team workspaces slice (a) on the phone", () => {
             await page.locator("[data-mobile2-sheet='projects'] [data-mobile2-workspace]").waitFor();
             const listed = await page.locator("[data-mobile2-sheet='projects'] [data-mobile2-project]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-mobile2-project")));
             if (JSON.stringify(listed) !== JSON.stringify(["__overview__", forge])) failures.push(`${tag} P2: the sheet lists ${JSON.stringify(listed)}`);
-            await frame(page, tag, "P2-sheet", [["[data-mobile2-workspace]", client[lang]], ["[data-mobile2-workspace]", words(lang, "workspaces.label")]]);
+            await frame(page, tag, "P2-sheet", [["[data-mobile2-workspace]", client[lang]], ["[data-mobile2-workspace]", words(lang, "workspaces.label")], [`[data-mobile2-project='${forge}']`, "forge-api"]]);
             await page.locator("[data-mobile2-workspace]").click();
             await page.locator("[data-mobile2-workspace-list]").waitFor();
             await frame(page, tag, "P2-expanded", [
@@ -12237,12 +12237,15 @@ describe("team workspaces slice (a) on the phone", () => {
             await page.locator('[data-mobile2-bar] [data-mobile2-open="projects"]').click();
             await page.locator("[data-mobile2-workspace-section='unassigned']").waitFor();
             await page.locator("[data-mobile2-workspace-section='unassigned']").scrollIntoViewIfNeeded();
-            /* The row's own label, as the sheet names the project (this scene's catalog carries no display name). */
-            const label = (await page.locator(`[data-mobile2-project='${delegatus}'] .truncate`).first().innerText()).trim();
+            /* The rows carry the projects' names, whole: Move takes the marks' place on the Unassigned row. */
+            const label = await page.locator(`[data-mobile2-project='${delegatus}'] .truncate`).first().evaluate((element) => ({ text: (element.textContent ?? "").trim(), cut: element.scrollWidth > element.clientWidth + 0.5 }));
+            readings.push({ tag, state: "P3-unassigned-label", ...label });
+            if (label.text !== "delegatus" || label.cut) failures.push(`${tag} P3: the Unassigned row reads ${JSON.stringify(label)}`);
             await frame(page, tag, "P3-all", [
               ["[data-mobile2-workspace-section='unassigned']", words(lang, "workspaces.unassigned")],
               ["[data-mobile2-workspace-section='unassigned']", words(lang, "workspaces.move")],
-              [`[data-mobile2-project='${delegatus}']`, label.replace(/…$/, "")],
+              [`[data-mobile2-project='${delegatus}']`, "delegatus"],
+              ["[data-mobile2-sheet='projects']", "atlas-docs"],
             ]);
             const move = page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move]`);
             const target = await move.boundingBox();
@@ -12272,6 +12275,12 @@ describe("team workspaces slice (a) on the phone", () => {
           try {
             await page.locator("[data-team-dialog='workspace-create']").waitFor({ timeout: 20_000 });
             await frame(page, tag, "P5", [["[data-team-dialog='workspace-create']", words(lang, "workspaces.new")], ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.name")]]);
+            /* The eight swatches stand four to a row, each a 44 px target. */
+            const swatches = await page.locator("[data-workspace-color]").evaluateAll((items) => items.map((item) => { const box = item.getBoundingClientRect(); return [Math.round(box.top), Math.round(box.width), Math.round(box.height)]; }));
+            const perRow = [...swatches.reduce((rows, [top]) => rows.set(top!, (rows.get(top!) ?? 0) + 1), new Map<number, number>()).values()];
+            readings.push({ tag, state: "P5-swatch-rows", perRow });
+            if (!(perRow.length === 1 && perRow[0] === 8) && !perRow.every((count) => count === 4)) failures.push(`${tag} P5: the swatches stand ${JSON.stringify(perRow)} to a row`);
+            if (swatches.some(([, width, height]) => width! < 44 || height! < 44)) failures.push(`${tag} P5: a swatch is under 44 px ${JSON.stringify(swatches)}`);
             await page.locator("[data-workspace-create-submit]").scrollIntoViewIfNeeded();
             await frame(page, tag, "P5-submit", [["[data-workspace-create-submit]", words(lang, "workspaces.create.submit")]]);
           } finally { await context.close(); }
@@ -12283,6 +12292,14 @@ describe("team workspaces slice (a) on the phone", () => {
             await page.locator("[data-workspace-title]").waitFor({ timeout: 20_000 });
             const remove = await page.locator("[data-workspace-remove]").first().boundingBox();
             if (!remove || remove.height < 44) failures.push(`${tag} P6: Remove is ${remove?.height ?? 0} px tall`);
+            /* Remove starts where the project's name starts, a bordered button on its own line. */
+            const edges = await page.evaluate(() => {
+              const row = document.querySelector("[data-workspace-project]")!;
+              const button = row.querySelector<HTMLElement>("[data-workspace-remove]")!;
+              return { removeLeft: button.getBoundingClientRect().left, nameLeft: row.querySelector("span.truncate")!.getBoundingClientRect().left, border: getComputedStyle(button).borderTopWidth };
+            });
+            readings.push({ tag, state: "P6-remove", ...edges });
+            if (Math.abs(edges.removeLeft - edges.nameLeft) > 1 || edges.border === "0px") failures.push(`${tag} P6: Remove ${JSON.stringify(edges)}`);
             await frame(page, tag, "P6", [["[data-workspace-title]", client[lang]], ["[data-workspace-remove]", words(lang, "workspaces.page.remove")], ["[data-workspace-delete-blocked]", words(lang, "workspaces.deleteBlocked")]]);
           } finally { await context.close(); }
         }

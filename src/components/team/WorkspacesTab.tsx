@@ -215,7 +215,7 @@ function WorkspaceRow({ workspace, names, owner, error, onRename, onDelete }: {
       </div>
       {error ? <p role="alert" className="px-4 pb-2 text-label font-semibold text-danger">{error}</p> : null}
       {menuOpen ? (
-        <WorkspacePopover anchor={trigger} label={t("workspaces.actions", { name: workspace.name })} onClose={() => setMenuOpen(false)} testId="row" width={248}>
+        <WorkspacePopover anchor={trigger} below label={t("workspaces.actions", { name: workspace.name })} onClose={() => setMenuOpen(false)} testId="row" width={248}>
           <a role="menuitem" href={WORKSPACE_PATHS.page(workspace.id)} className={BAR_MENU_ROW} data-workspace-action="open">{t("workspaces.open")}</a>
           <button type="button" role="menuitem" className={BAR_MENU_ROW} data-workspace-action="rename" onClick={() => { setMenuOpen(false); onRename(); }}>{t("workspaces.rename")}</button>
           <button type="button" role="menuitem" className={`${BAR_MENU_ROW} ${empty ? "text-danger" : ""}`} disabled={!empty} aria-describedby={empty ? undefined : `workspace-delete-blocked-${workspace.id}`} data-workspace-action="delete" onClick={() => { setMenuOpen(false); onDelete(); }}>
@@ -298,10 +298,14 @@ export function ProjectChecklist({ view, rows, checked, onToggle, exclude = null
       {list.map((row) => {
         const held = holder.get(row.project);
         return (
-          <label key={row.project} data-workspace-check={row.project} className="flex min-h-9 cursor-pointer items-center gap-2 rounded-[6px] px-2 hover:bg-sunken max-sm:min-h-11">
+          /* The name wraps whole and «in <workspace>» takes its own line, so a long
+             name and a long workspace never cut each other on one line. */
+          <label key={row.project} data-workspace-check={row.project} className="flex min-h-9 cursor-pointer items-center gap-2 rounded-[6px] px-2 py-1 hover:bg-sunken max-sm:min-h-11">
             <input type="checkbox" checked={checked.has(row.project)} onChange={() => onToggle(row.project)} className="h-4 w-4 shrink-0 accent-accent max-sm:h-5 max-sm:w-5" />
-            <span className="min-w-0 flex-1 truncate text-ui font-semibold text-primary">{row.displayName}</span>
-            <span className="max-w-[45%] shrink-0 truncate text-label text-muted">{held ? t("workspaces.inWs", { ws: held.name }) : t("workspaces.unassigned")}</span>
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="min-w-0 break-words text-ui font-semibold text-primary" data-workspace-check-name="">{row.displayName}</span>
+              <span className="min-w-0 truncate text-label text-muted" data-workspace-check-holder="">{held ? t("workspaces.inWs", { ws: held.name }) : t("workspaces.unassigned")}</span>
+            </span>
           </label>
         );
       })}
@@ -312,7 +316,8 @@ export function ProjectChecklist({ view, rows, checked, onToggle, exclude = null
 export function ColourSwatches({ value, onChange, label }: { value: MemberColor; onChange: (color: MemberColor) => void; label: string }) {
   const { t } = useLocale();
   return (
-    <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={label}>
+    /* Eight 44 px targets do not share a row on a phone sheet; two even rows of four do. */
+    <div className="flex flex-wrap gap-2 max-sm:grid max-sm:w-max max-sm:grid-cols-4" role="radiogroup" aria-label={label}>
       {MEMBER_COLORS.map((color) => (
         <button
           key={color}

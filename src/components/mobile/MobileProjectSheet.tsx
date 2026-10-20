@@ -89,7 +89,9 @@ export function MobileProjectSheet({
     all: summaries.length,
     byWorkspace: new Map(groupAll(summaries, workspace.view).flatMap((section) => (section.workspace ? [[section.workspace.id, section.rows.length] as const] : []))),
   } : null), [summaries, workspace]);
-  const sections = useMemo(() => (workspace && !scope ? groupAll(rest, workspace.view) : null), [workspace, scope, rest]);
+  /* In All every project stands under its own workspace, a crowned one first
+     with its crown, so each heading counts what the switcher counts (§13.5 P3). */
+  const sections = useMemo(() => (workspace && !scope ? groupAll([...crowned, ...rest], workspace.view) : null), [workspace, scope, crowned, rest]);
   const [switchOpen, setSwitchOpen] = useState(false);
   const [moving, setMoving] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<{ project: string; text: string } | null>(null);
@@ -111,7 +113,8 @@ export function MobileProjectSheet({
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(firstRun && Boolean(onCreateProject));
 
-  const row = (summary: ProjectSummary, quiet = false) => {
+  /* `marks` false: an Unassigned row whose Move control takes the marks' place, as the rail's row does (§13.5 D3). */
+  const row = (summary: ProjectSummary, quiet = false, marks = true) => {
     const current = summary.project === selected;
     const isCrowned = crownedProjects.has(summary.project);
     return (
@@ -126,7 +129,7 @@ export function MobileProjectSheet({
           <>
             {/* Working is the green ● count the rail row, the board header and
                 its columns draw, whichever row is selected. */}
-            {summary.liveCount ? (
+            {!marks ? null : summary.liveCount ? (
               <span data-mobile2-working="" className="inline-flex items-center gap-1 font-bold tabular-nums text-success">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success motion-reduce:animate-none" aria-hidden />
                 {t("mobile2.projects.live", { count: summary.liveCount })}
@@ -136,7 +139,7 @@ export function MobileProjectSheet({
                 {summary.smt ? t("mobile2.projects.quietSince", { age: fmtAge(summary.smt) }) : t("mobile2.projects.quiet")}
               </span>
             )}
-            {summary.attentionCount ? (
+            {marks && summary.attentionCount ? (
               <Badge tone="warning">
                 <TriangleAlert className="h-[11px] w-[11px]" aria-hidden /> {summary.attentionCount}
               </Badge>
@@ -154,7 +157,7 @@ export function MobileProjectSheet({
   const movableRow = (summary: ProjectSummary) => (
     <div key={summary.project} data-mobile2-movable={summary.project}>
       <div className="flex items-center">
-        <div className="min-w-0 flex-1">{row(summary)}</div>
+        <div className="min-w-0 flex-1">{row(summary, false, false)}</div>
         <button
           type="button"
           data-mobile2-move=""
@@ -220,7 +223,7 @@ export function MobileProjectSheet({
         onSelect={() => onSelect(OVERVIEW)}
       />
       <MobileSheetDivider />
-      {listHidden ? null : crowned.map((summary) => row(summary))}
+      {listHidden || sections ? null : crowned.map((summary) => row(summary))}
       {listHidden ? null : sections ? sections.map((section) => (
         <div key={section.workspace?.id ?? "unassigned"} data-mobile2-workspace-section={section.workspace?.id ?? "unassigned"}>
           <MobileSheetSection count={section.rows.length}>

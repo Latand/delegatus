@@ -103,11 +103,11 @@ const sheetProps = {
   onClose: () => {},
 };
 
-function Harness({ initial, selected = "voice-lab", leave = () => {} }: { initial: string; selected?: string; leave?: (path: string) => void }) {
+function Harness({ initial, selected = "voice-lab", leave = () => {}, crowned = [] }: { initial: string; selected?: string; leave?: (path: string) => void; crowned?: string[] }) {
   const view = useWorkspaces();
   const [current, setCurrent] = useState(initial);
   if (view?.mode !== "team") return null;
-  return <MobileProjectSheet {...sheetProps} selected={selected} workspace={{ view, chosen: current, choose: setCurrent, place: placeProject, leave }} />;
+  return <MobileProjectSheet {...sheetProps} crownedProjects={new Set(crowned)} selected={selected} workspace={{ view, chosen: current, choose: setCurrent, place: placeProject, leave }} />;
 }
 
 async function render(element: React.ReactElement): Promise<HTMLElement> {
@@ -185,6 +185,21 @@ describe("All", () => {
     setWorkspacesForTests(teamView(false));
     const member = await render(<Harness initial="all" />);
     expect(member.querySelector("[data-mobile2-move]")).toBeNull();
+  });
+
+  test("a crowned project stands first under its own workspace, and an Unassigned row's Move takes its marks' place", async () => {
+    setWorkspacesForTests(teamView(true));
+    const host = await render(<Harness initial="all" crowned={["shop-backend", "scratch-notes"]} />);
+    expect(projects(host)).toEqual(["__overview__", "shop-backend", "shop-app", "voice-lab", "scratch-notes", "bench-tmp"]);
+    const heading = (id: string) => host.querySelector(`[data-mobile2-workspace-section='${id}']`)!.firstElementChild!.textContent;
+    expect(heading(CLIENT)).toBe("Client work2");
+    expect(heading("unassigned")).toBe(`${t("workspaces.unassigned")}2`);
+    /* The Unassigned rows carry no working or quiet mark beside Move. */
+    for (const project of ["scratch-notes", "bench-tmp"]) {
+      const row = host.querySelector(`[data-mobile2-movable='${project}'] [data-mobile2-project]`)!;
+      expect(row.querySelector("[data-mobile2-working]")).toBeNull();
+      expect(row.textContent).toBe(project);
+    }
   });
 
   test("Move expands the workspaces under the row; a pick shows at once and a refusal comes back with its reason", async () => {
