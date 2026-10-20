@@ -1665,6 +1665,8 @@ test("lanes in linked checkouts serialize Git writes through their common direct
     (await git(publisher, "push", "origin", "main"));
     const expected = (await git(publisher, "rev-parse", "HEAD"));
     const hook = path.join(source, ".git", "hooks", "reference-transaction");
+    // The test preload uses an empty Git template, so fixtures own their hook directories.
+    fs.mkdirSync(path.dirname(hook), { recursive: true });
     fs.writeFileSync(hook, '#!/bin/sh\nif [ "$1" = prepared ]; then sleep 0.1; fi\n', { mode: 0o755 });
     for (const repoDir of [source, linked]) {
       expect((await createPipelineFromRequest({ task: "Shared repository", repoDir, stages: RUN_STAGES as never }, h.ports)).pipeline).toBeDefined();
