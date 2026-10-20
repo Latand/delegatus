@@ -23,6 +23,19 @@ const spawnIdentity = {
   conversationId: "conversation_task_binding",
 };
 
+test("task projection reads lane memberships once and preserves order, duplicates and caller isolation", () => {
+  let reads = 0;
+  const pipelines = ["first", "second"].map(id => ({ id, get taskIds() { reads++; return ["task-one", "task-one", "task-two"]; } }));
+  const tasks = [{ id: "task-two" }, { id: "missing" }, { id: "task-one" }, { id: "task-one" }];
+  const projected = projectTaskPipelineIds(tasks as never, pipelines as never);
+  expect(projected.map(task => task.pipelineIds)).toEqual([["first", "second"], [], ["first", "second"], ["first", "second"]]);
+  expect(reads).toBe(2);
+  projected[2]!.pipelineIds.push("local overlay");
+  expect(projected[3]!.pipelineIds).toEqual(["first", "second"]);
+  expect(projectTaskPipelineIds([], pipelines as never)).toEqual([]);
+  expect(reads).toBe(2);
+});
+
 test("a task-less pipeline keeps its first attempt's inherited task for later service stages", () => {
   const pipeline = buildPipeline({ id: "inherited01", task: "Review existing work", taskIds: [], project: "viewer", repoDir: "/repo",
     stages: [{ id: "run", kind: "run", prompt: "review", next: null, effectiveRole: role }], srcPath: null, srcConversationId: null, now: "now" });
