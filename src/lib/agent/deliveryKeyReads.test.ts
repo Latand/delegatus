@@ -107,11 +107,12 @@ test("recipient intersection and relay refusal stop at bounded indexed headers",
   const db = new Database(f.filename, { readonly: true });
   try {
     const plan = db.query<{ detail: string }, (string | number)[]>(`EXPLAIN QUERY PLAN
-      SELECT row_key FROM registry_rows
-      WHERE collection=? AND json_extract(value_json,'$.clientMessageId') IN (?)
-        AND json_extract(value_json,'$.conversationId') IN (?)
-      ORDER BY row_order LIMIT ?`).all("deliveryOperationOwners", "selected-key", "conversation_old", DELIVERY_KEY_ROW_LIMIT + 1);
-    expect(plan.some(row => row.detail.includes("registry_lookup_clientMessageId_deliveryOperationOwners"))).toBe(true);
+      SELECT row_key FROM registry_rows INDEXED BY registry_lookup_clientMessageId_conversationId_deliveryOperationOwners
+      WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.clientMessageId') IN (?)
+        AND json_extract(value_json,'$.conversationId') IN (?,?)
+      ORDER BY row_order LIMIT ?`).all("selected-key", "conversation_target", "conversation_old", DELIVERY_KEY_ROW_LIMIT + 1);
+    expect(plan.some(row => row.detail.includes("registry_lookup_clientMessageId_conversationId_deliveryOperationOwners")
+      && row.detail.includes("clientMessageId") && row.detail.includes("conversationId"))).toBe(true);
     expect(plan.some(row => row.detail.startsWith("SCAN"))).toBe(false);
   } finally { db.close(); }
 
@@ -126,6 +127,46 @@ test("recipient intersection and relay refusal stop at bounded indexed headers",
   expect(memoryDeliveryEvidence(view, "conversation_target", true)).toBeNull();
   expect(f.decoded()).toBe(0);
 });
+
+test("a heavily reused message key seeks the requested recipients in hot and archived rows", async () => {
+  const f = fixture(20_000); const store = f.open();
+  store.mutate(file => {
+    for (const [key, owner] of Object.entries(file.deliveryOperationOwners)) {
+      owner.clientMessageId = "shared-key";
+      owner.conversationId = `conversation_unrelated_${key}`;
+    }
+  }, false);
+  await store.prepareRecoveryIndexes();
+  const db = new Database(f.filename, { readonly: true });
+  try {
+    const plans = db.query<{ detail: string }, string[]>(`EXPLAIN QUERY PLAN
+      SELECT row_key FROM registry_rows INDEXED BY registry_lookup_clientMessageId_conversationId_deliveryOperationOwners
+      WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.clientMessageId') IN (?)
+        AND json_extract(value_json,'$.conversationId') IN (?,?) ORDER BY row_order LIMIT ?`)
+      .all("shared-key", "conversation_target", "conversation_old", String(DELIVERY_KEY_ROW_LIMIT + 1));
+    expect(plans.some(row => row.detail.includes("registry_lookup_clientMessageId_conversationId_deliveryOperationOwners")
+      && row.detail.includes("clientMessageId") && row.detail.includes("conversationId"))).toBe(true);
+    expect(plans.some(row => row.detail.startsWith("SEARCH"))).toBe(true);
+    expect(plans.some(row => row.detail.startsWith("SCAN"))).toBe(false);
+  } finally { db.close(); }
+
+  for (const archived of [false, true]) {
+    if (archived) {
+      let archivedRows = 0;
+      while (true) {
+        const count = store.archiveInactive(10_000);
+        archivedRows += count;
+        if (count === 0) break;
+      }
+      expect(archivedRows).toBeGreaterThan(20_000);
+    }
+    await store.prepareReadOnlySnapshot(); f.reset();
+    const view = store.readOnlySnapshot().file;
+    expect(deliveryRegistryEntriesForKey(view, "deliveryOperationOwners", "shared-key", ["conversation_target", "conversation_old"]))
+      .toEqual([]);
+    expect(f.decoded()).toBe(0);
+  }
+}, 30_000);
 
 test("message-key selectors seek scoped hot and archive indexes for duplicate and multiple bindings", async () => {
   const f = fixture(); const store = f.open(); await store.prepareRecoveryIndexes();

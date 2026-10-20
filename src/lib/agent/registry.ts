@@ -2602,8 +2602,6 @@ export function deliveryRegistryEntriesForKey<C extends "heldDeliveries" | "deli
       { field: "clientMessageId", value: clientMessageId },
     ];
     if (recipients) {
-      const matchingKeys = registryKeysMatchingBounded(file, collection, filters, DELIVERY_KEY_ROW_LIMIT + 1);
-      if (matchingKeys.length === 0) return [];
       const identities = [...new Set(recipients.flatMap(id => conversationIdentities(file, id as ViewerConversationId)))];
       if (identities.length === 0) return [];
       filters.push({ field: "conversationId", value: identities });

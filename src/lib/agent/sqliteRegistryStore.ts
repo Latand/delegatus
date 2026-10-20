@@ -1713,10 +1713,11 @@ export class SqliteAgentRegistryStore {
 
   async prepareRecoveryIndexes(signal?: AbortSignal): Promise<void> {
     if (this.options.readOnly || this.options.allowArchiveMigration === false) return;
-    for (const [name, table, field, collection] of [
+    for (const [name, table, field, collection, secondField] of [
       ...["heldDeliveries", "deliveryOperationOwners"].flatMap(collection => [
         [`registry_lookup_clientMessageId_${collection}`, "registry_rows", "clientMessageId", collection],
         [`registry_archive_clientMessageId_${collection}`, "registry_archive", "clientMessageId", collection],
+        [`registry_lookup_clientMessageId_conversationId_${collection}`, "registry_rows", "clientMessageId", collection, "conversationId"],
       ]),
       ["registry_lookup_launchId", "registry_rows", "launchId", "receipts"],
       ["registry_archive_launchId", "registry_archive", "launchId", "receipts"],
@@ -1732,7 +1733,7 @@ export class SqliteAgentRegistryStore {
       ["registry_archive_supersedes", "registry_archive", "supersedes.conversationId", "receipts"],
       ["registry_lookup_structuredHost_kind", "registry_rows", "structuredHost.kind", "entries"],
       ["registry_archive_structured_host_kind", "registry_archive", "structuredHost.kind", "entries"],
-    ]) {
+    ] as [string, string, string, string, string?][]) {
       signal?.throwIfAborted();
       if (this.db.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(name!)) continue;
       await yieldToRuntime();
@@ -1742,7 +1743,7 @@ export class SqliteAgentRegistryStore {
       const result = await this.withWriter(() => {
         signal?.throwIfAborted();
         performanceSpans.sync("registry.prepare.index", () => this.db.exec(`CREATE INDEX IF NOT EXISTS ${name}
-          ON ${table}(collection,json_extract(value_json,'$.${field}'),row_order) WHERE collection='${collection}'`));
+          ON ${table}(collection,json_extract(value_json,'$.${field}')${secondField ? `,json_extract(value_json,'$.${secondField}')` : ""},row_order) WHERE collection='${collection}'`));
         this.db.exec("COMMIT");
         this.writerHeld = false;
       });
@@ -3188,13 +3189,17 @@ export class SqliteAgentRegistryStore {
       return { field, values };
     }).filter(filter => filter.values.length);
     if (filters.length !== clauses.length) return [];
-    const indexedBy = clauses.length
+    const messageAndRecipient = clauses.some(filter => filter.field === "clientMessageId")
+      && clauses.some(filter => filter.field === "conversationId");
+    const indexedBy = messageAndRecipient
+      ? `registry_lookup_clientMessageId_conversationId_${collection}`
+      : clauses.length
       ? `registry_lookup_${clauses[0]!.field.replaceAll(".", "_")}` + (clauses[0]!.field === "clientMessageId" ? `_${collection}` : "")
       : "registry_rows_collection_order";
-    const where = ["collection=?", ...clauses.map(filter =>
+    const where = [messageAndRecipient ? `collection='${collection}'` : "collection=?", ...clauses.map(filter =>
       `json_extract(value_json,'${LOOKUP_PATHS[filter.field]}') IN (${filter.values.map(() => "?").join(",")})`)].join(" AND ");
-    const args: (string | number)[] = [collection, ...clauses.flatMap(filter => filter.values)];
-    const tableHint = clauses.length ? "" : ` INDEXED BY ${indexedBy}`;
+    const args: (string | number)[] = [...(messageAndRecipient ? [] : [collection]), ...clauses.flatMap(filter => filter.values)];
+    const tableHint = clauses.length ? (messageAndRecipient ? ` INDEXED BY ${indexedBy}` : "") : ` INDEXED BY ${indexedBy}`;
     return this.db.query<{ row_key: string }, (string | number)[]>(`SELECT row_key FROM registry_rows${tableHint}
       WHERE ${where} ORDER BY row_order LIMIT ?`).all(...args, limit).map(row => row.row_key);
   }

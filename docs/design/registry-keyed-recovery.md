@@ -22,13 +22,15 @@ and redirect chain. A former seat's recovery reuses the result already verified
 in the same synchronous decision. It does not repeat settlement selection.
 
 Four partial expression indexes cover `clientMessageId` on held deliveries and
-operation owners, in the current and archive tables. The existing cooperative
-preparation installs them through asynchronous writer admission. Each distinct
-lookup value gets a separate index seek, avoiding a multi-value ordering plan
-that scans retained history. No persisted row fields, defaults, serialization,
-retention rules or write contracts change. Existing reservation, direct-send,
-retry and compaction writers maintain the indexes through ordinary SQL writes;
-older readers keep their compatibility rows.
+operation owners, in the current and archive tables. Two additional partial
+indexes on current rows pair `clientMessageId` with `conversationId`. Recovery
+uses that compound index to seek each message key and the recipient or alias
+identities together, so unrelated owners sharing a popular key are not
+examined or JSON-extracted. The existing cooperative preparation installs the
+indexes through asynchronous writer admission. No persisted row fields,
+defaults, serialization, retention rules or write contracts change. Existing
+reservation, direct-send, retry and compaction writers maintain the indexes
+through ordinary SQL writes; older readers keep their compatibility rows.
 
 The next registry view observes peer key, recipient and disposition changes.
 Already-issued immutable views retain their cut through the existing change
@@ -89,40 +91,45 @@ of production request rates. Raw databases and request contents stay private.
 Sanitized paired results are recorded in
 `evidence/registry-keyed-recovery/readings.json`.
 
-The 2026-10-20 replay used 63,624 retained rows, including 14,147 operation
-owners. The comparison revision was `f335de650`; both arms used Bun 1.4.0
-and three available CPUs. Across two fresh processes per arm:
+The refreshed 2026-10-20 replay used 64,202 retained rows, including 14,272
+operation owners. It compared `8ff233dc` with the final candidate source
+digest recorded in `evidence/registry-keyed-recovery/readings.json`. Both arms
+used Bun 1.4.0 and three available CPUs. Each arm ran in two fresh processes
+from independent copies of the same captured databases and artifacts:
 
 | Unchanged operation | Base decodes / call | Base bytes / call | Candidate decodes / bytes |
 | --- | ---: | ---: | ---: |
-| Relay recovery, missing key | 14,137 | 134,666,033 | 0 / 0 |
-| Manager authorization | 728 | 1,193,942 | 0 / 0 |
+| Relay recovery, missing key | 14,264 | 136,187,714 | 0 / 0 |
+| Manager authorization | 724 | 1,187,314 | 0 / 0 |
 | Home HTML | 0 | 0 | 0 / 0 |
 | Saved summary | 0 | 0 | 0 / 0 |
 
-Six combined relay and authorization polls decoded 89,190 rows and
-815,159,850 bytes per minute on the base, and zero on the candidate. All
-polling samples had complete attribution. Home and saved-summary measurements
-cover three repetitions per route pass. They do not measure cold refinement
-or a complete browser navigation.
+Six relay and authorization polls decoded 89,928 rows and 824,250,168 bytes
+per minute on the base, and zero on the candidate. The warm per-poll totals
+were 14,988 rows and 137,375,028 bytes on the base. All polling samples had
+complete attribution. Home and saved-summary measurements cover three
+repetitions per route pass. Both remained at zero registry decodes on both
+arms. They do not measure cold refinement or a complete browser navigation.
 
-The two base polling windows spent 8.39% and 9.02% of their minute in gaps
+The two base polling windows spent 10.15% and 13.92% of their minute in gaps
 above 500 ms; both candidate windows recorded zero. Maximum measured timer
-gaps were 864 / 1,086 ms on the base and 110 / 115 ms on the candidate.
-One-minute host load ranged from 6.21–11.00 on the base and 7.48–12.40 on the
-candidate. These ranges describe the external load during the same polling
-workload; elapsed times also include scheduling noise and garbage collection.
+gaps were 1,266 / 1,870 ms on the base and 77 / 72 ms on the candidate. The
+recorded one-minute load averages ranged from 6.89–18.35 and 10.00–17.22 in
+the base arms, and 9.20–17.88 and 8.67–16.96 in the candidate arms. These
+ranges describe the external load during the same polling workload; elapsed
+times also include scheduling noise and garbage collection.
 
 ## Verification
 
-The isolated 29-file selection passed the hook's `local-gate-tests.ts` runner:
-zero new failures, six failures also present on the base, and one timing case
-that passed on rerun. The selection includes the new bound and invalidation
-tests, native memory controller, relay HTTP/MCP recovery, send settlement,
-archived reader consistency and both monitoring record formats. The readings
-artifact records the explicit test paths and comparison revision.
+The original task's isolated 29-file selection passed before this review fix.
+For this round, the hook comparator reported a green head for
+`deliveryKeyReads.test.ts` with no baseline checkout required; its focused run
+passed seven tests and 86 assertions. `viewerLoopMonitor.test.ts` also passed
+all ten tests and 52 assertions, preserving the loop-gap and performance
+summary records. Typecheck, changed-file lint and privacy passed on the review
+fix. The readings artifact records these commands and the earlier 29-file
+result separately.
 
-`bun node_modules/typescript/bin/tsc --noEmit`, changed-file
-`scripts/eslint-changes.ts`, and `bun run privacy:check` all passed through the
-gate-slot wrapper. Tests and checks used a scratch source export and isolated
-state. No live service mutation or deployment was part of verification.
+Tests and checks used isolated HOME, config, state and temp roots through
+`scripts/gate-slot.sh`. Measurement databases were read-only copies; no live
+service mutation or deployment was part of verification.
