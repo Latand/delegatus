@@ -603,6 +603,7 @@ class FakeAppServer extends EventEmitter {
 
   private accept(message: Record<string, unknown>): void {
     this.requests.push(message);
+    this.emit("client-request", message);
     if ((typeof message.id === "string" || typeof message.id === "number")
       && this.serverRequestIds.delete(message.id)) {
       if (this.autoResolveServerRequests) {
@@ -1296,7 +1297,7 @@ describe("CodexAppServerHost", () => {
     const firstUser = {
       type: "userMessage",
       id: "user-first",
-      content: [{ type: "text", text: encodeCodexStructuredUserText("Give the first status.") }],
+      content: [{ type: "text", text: await encodeCodexStructuredUserText("Give the first status.") }],
     };
     const followUpText = `<realtime_delegation>
   <input>Repeat the previous status.</input>
@@ -1305,7 +1306,7 @@ describe("CodexAppServerHost", () => {
     const followUp = {
       type: "userMessage",
       id: "user-follow-up",
-      content: [{ type: "text", text: encodeCodexStructuredUserText(followUpText) }],
+      content: [{ type: "text", text: await encodeCodexStructuredUserText(followUpText) }],
     };
     const eventStore = new MemoryEventStore();
     eventStore.append(threadId, { kind: "turn-started", turnId, seq: 1 });
@@ -1507,7 +1508,7 @@ describe("CodexAppServerHost", () => {
           id: `user-${index}`,
           content: [{
             type: "text",
-            text: encodeCodexStructuredUserText(`${"界".repeat(3_000)} follow-up-${index}`),
+            text: await encodeCodexStructuredUserText(`${"界".repeat(3_000)} follow-up-${index}`),
           }],
         },
       });
@@ -1834,7 +1835,7 @@ describe("CodexAppServerHost", () => {
     expect(server.requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
       input: [
         { type: "localImage", path: `/runtime-images/${first.sha256}` },
-        { type: "text", text: encodeCodexStructuredUserText("inspect", firstContent.contentDigest, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup("image-start")) },
+        { type: "text", text: await encodeCodexStructuredUserText("inspect", firstContent.contentDigest, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup("image-start")) },
       ],
       clientUserMessageId: "image-start",
     });
@@ -1848,7 +1849,7 @@ describe("CodexAppServerHost", () => {
       expectedTurnId: "turn-1",
       input: [
         { type: "localImage", path: `/runtime-images/${second.sha256}` },
-        { type: "text", text: encodeCodexStructuredUserText("", secondContent.contentDigest, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup("image-steer")) },
+        { type: "text", text: await encodeCodexStructuredUserText("", secondContent.contentDigest, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup("image-steer")) },
       ],
       clientUserMessageId: "image-steer",
     });
@@ -2042,7 +2043,7 @@ describe("CodexAppServerHost", () => {
     expect(steer.params).toMatchObject({
       expectedTurnId: "turn-1",
       clientUserMessageId: "delivery-two",
-      input: [{ type: "text", text: encodeCodexStructuredUserText("steer", undefined, null, null, deliveryDedup("delivery-two")) }],
+      input: [{ type: "text", text: await encodeCodexStructuredUserText("steer", undefined, null, null, deliveryDedup("delivery-two")) }],
     });
 
     server.request("approval-1", "item/commandExecution/requestApproval", { command: "touch allowed" });
@@ -2742,7 +2743,7 @@ describe("CodexAppServerHost", () => {
       type: "event_msg",
       payload: {
         type: "user_message",
-        message: encodeCodexStructuredUserText(text, undefined, null, null, deliveryDedup(operationId)),
+        message: await encodeCodexStructuredUserText(text, undefined, null, null, deliveryDedup(operationId)),
       },
     });
     const filler = JSON.stringify({
@@ -2779,9 +2780,9 @@ describe("CodexAppServerHost", () => {
     const userRecord = (message: string) => JSON.stringify({ timestamp: "t1", type: "event_msg", payload: { type: "user_message", message } });
     const lost = { id: "operation-lost-metadata", text: "delivered under another state directory" };
     const kept = { id: "operation-kept-metadata", text: "delivered under this state directory" };
-    const lostWire = encodeCodexStructuredUserText(lost.text, undefined, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup(lost.id));
+    const lostWire = await encodeCodexStructuredUserText(lost.text, undefined, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup(lost.id));
     for (const file of fs.readdirSync(metadataDirectory)) fs.unlinkSync(path.join(metadataDirectory, file));
-    const keptWire = encodeCodexStructuredUserText(kept.text, undefined, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup(kept.id));
+    const keptWire = await encodeCodexStructuredUserText(kept.text, undefined, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup(kept.id));
     fs.writeFileSync(transcriptPath, `${userRecord(lostWire)}\n${userRecord(keptWire)}\n`);
     const server = new FakeAppServer("delivery-thread", "delivery-thread");
     server.threadPath = transcriptPath;
@@ -2807,10 +2808,10 @@ describe("CodexAppServerHost", () => {
     }
   });
 
-  test("a rollout written under state directory A still reads from state directory B", () => {
+  test("a rollout written under state directory A still reads from state directory B", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rollout-state-ab-"));
     const transcriptPath = path.join(directory, "rollout.jsonl");
-    const wire = encodeCodexStructuredUserText("hello from A", undefined, COMPACT_SELECTED, { kind: "agent", role: "orchestrator" }, deliveryDedup("operation-state-a"));
+    const wire = await encodeCodexStructuredUserText("hello from A", undefined, COMPACT_SELECTED, { kind: "agent", role: "orchestrator" }, deliveryDedup("operation-state-a"));
     const item = { type: "userMessage", id: "user-a", content: [{ type: "text", text: wire }] };
     fs.writeFileSync(transcriptPath, [
       { payload: { type: "user_message", message: wire } },
@@ -2835,7 +2836,7 @@ describe("CodexAppServerHost", () => {
     const text = "retain exact recipient ownership";
     const delivered = JSON.stringify({ type: "event_msg", payload: {
       type: "user_message",
-      message: encodeCodexStructuredUserText(text, undefined, null, null, deliveryDedup(operationId)),
+      message: await encodeCodexStructuredUserText(text, undefined, null, null, deliveryDedup(operationId)),
     } });
     // The 16 MiB tail starts inside this complete, valid tool record. Its
     // quoted marker is ordinary tool output, not a corrupt recipient message.
@@ -2898,25 +2899,33 @@ describe("CodexAppServerHost", () => {
     });
 
     let settled = false;
+    let started!: () => void;
+    const requestStarted = new Promise<void>(resolve => { started = resolve; });
+    const onRequest = (message: Record<string, unknown>) => { if (message.method === "turn/start") started(); };
+    server.on("client-request", onRequest);
     const delivery = host.send({ id: "operation-confirmed", text: "hello" })
       .finally(() => { settled = true; });
-    await Bun.sleep(0);
+    try {
+      await Promise.race([requestStarted, delivery.then(() => { throw new Error("delivery settled before its native request"); })]);
+      expect(server.requests.some((request) => request.method === "turn/start")).toBeTrue();
+      expect(settled).toBeFalse();
 
-    expect(server.requests.some((request) => request.method === "turn/start")).toBeTrue();
-    expect(settled).toBeFalse();
+      server.notify("item/completed", {
+        threadId: "confirm-after-rpc",
+        turnId: "turn-1",
+        item: {
+          type: "userMessage",
+          clientId: "operation-confirmed",
+          content: [{ type: "text", text: "hello" }],
+        },
+      });
 
-    server.notify("item/completed", {
-      threadId: "confirm-after-rpc",
-      turnId: "turn-1",
-      item: {
-        type: "userMessage",
-        clientId: "operation-confirmed",
-        content: [{ type: "text", text: "hello" }],
-      },
-    });
-
-    expect(await delivery).toEqual({ outcome: "turn-started", turnId: "turn-1" });
-    await host.release();
+      expect(await delivery).toEqual({ outcome: "turn-started", turnId: "turn-1" });
+    } finally {
+      server.off("client-request", onRequest);
+      await host.release();
+      await delivery.catch(() => undefined);
+    }
   });
 
   test("rejects a persisted client id whose user-message text differs", async () => {
@@ -5973,7 +5982,7 @@ test("Codex stdout preserves Unicode split inside a completed user echo", async 
   const eventStore = new MemoryEventStore();
   const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
   await host.send({ id: "unicode-original", text: "Привіт 🌍" });
-  const encoded = encodeCodexStructuredUserText("Привіт 🌍", undefined, undefined, undefined, deliveryDedup("unicode-original"));
+  const encoded = await encodeCodexStructuredUserText("Привіт 🌍", undefined, undefined, undefined, deliveryDedup("unicode-original"));
   const bytes = Buffer.from(JSON.stringify({ method: "item/completed", params: { threadId: "unicode-wire", turnId: "turn-1", item: { type: "userMessage", id: "unicode-item", clientId: "unicode-original", content: [{ type: "text", text: encoded }] } } }) + "\n");
   const split = bytes.indexOf(Buffer.from("П")) + 1;
   const beforeEcho = Date.now();
