@@ -65,6 +65,32 @@ const productionPorts: VerifyPorts = {
     return await response.json() as Record<string, unknown>;
   }, provenance: () => readmeProvenance(process.cwd()), now: Date.now, wait: () => new Promise(resolve => setTimeout(resolve, 30_000)),
 };
+/** One inspector serves all three tags of a run, so their digests hash the same output format. */
+interface ImageInspector { fallback: boolean }
+const IMAGE_INSPECTORS = [
+  (image: string) => ["buildx", "imagetools", "inspect", image, "--raw"],
+  (image: string) => ["manifest", "inspect", image],
+];
+async function inspectImage(ports: VerifyPorts, image: string, inspector: ImageInspector): Promise<string> {
+  if (!inspector.fallback) {
+    try { return await ports.command("docker", IMAGE_INSPECTORS[0](image)); }
+    catch (buildxError) {
+      try {
+        const raw = await ports.command("docker", IMAGE_INSPECTORS[1](image));
+        inspector.fallback = true;
+        return raw;
+      } catch (manifestError) {
+        throw new Error(`docker image inspection failed for ${image}: buildx imagetools: ${errorText(buildxError)}; manifest inspect: ${errorText(manifestError)}`);
+      }
+    }
+  }
+  return await ports.command("docker", IMAGE_INSPECTORS[1](image));
+}
+function errorText(error: unknown): string { return (error instanceof Error ? error.message : String(error)).trim().split("\n")[0].slice(0, 300); }
+function imageResult(raw: string) {
+  const parsed = JSON.parse(raw);
+  return { digest: createHash("sha256").update(raw).digest("hex"), platforms: (parsed.manifests ?? []).map((m: { platform: { os: string; architecture: string } }) => `${m.platform.os}/${m.platform.architecture}`) };
+}
 interface WorkflowRun { databaseId: number; headSha: string; displayTitle: string; status: string; conclusion: string | null }
 export async function verifyRelease(tag: string, cut: string | null, ports: VerifyPorts = productionPorts): Promise<VerifyResult> {
   if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error("expected a v-prefixed release version");
@@ -134,11 +160,19 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
     const packument = await ports.registry(registryURL);
     const tags = packument?.["dist-tags"] as { latest?: string } | undefined;
     const images: PublishedRelease["images"] = [];
+    const imageInspector: ImageInspector = { fallback: false };
     if (selected.every(r => r?.conclusion === "success")) {
-      for (const imageTag of [version, version.split(".").slice(0, 2).join("."), "latest"]) {
-        const raw = await ports.command("docker", ["buildx", "imagetools", "inspect", `ghcr.io/${repo.toLowerCase()}:${imageTag}`, "--raw"]);
-        const parsed = JSON.parse(raw);
-        images.push({ digest: createHash("sha256").update(raw).digest("hex"), platforms: (parsed.manifests ?? []).map((m: { platform: { os: string; architecture: string } }) => `${m.platform.os}/${m.platform.architecture}`) });
+      const imageTags = [version, version.split(".").slice(0, 2).join("."), "latest"];
+      for (const [index, imageTag] of imageTags.entries()) {
+        const usingFallback = imageInspector.fallback;
+        const raw = await inspectImage(ports, `ghcr.io/${repo.toLowerCase()}:${imageTag}`, imageInspector);
+        if (index > 0 && !usingFallback && imageInspector.fallback) {
+          for (let previous = 0; previous < index; previous++) {
+            const previousRaw = await inspectImage(ports, `ghcr.io/${repo.toLowerCase()}:${imageTags[previous]}`, imageInspector);
+            images[previous] = imageResult(previousRaw);
+          }
+        }
+        images.push(imageResult(raw));
       }
     }
     errors = releasePublished({ version, npmVersion: String(manifest?.version ?? ""), latest: String(tags?.latest ?? ""), integrity: String((manifest?.dist as { integrity?: string })?.integrity ?? ""), runs: selected.map(r => r?.conclusion ?? null), images });

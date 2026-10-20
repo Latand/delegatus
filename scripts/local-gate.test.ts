@@ -564,6 +564,11 @@ test("scope uses executed import closure and the workflow test lists", () => {
   expect([doc.linux, doc.runtime, doc.native]).toEqual([false, false, false]);
   const host = discover(root, "HEAD", ["src/runtime-host/main.ts"]);
   expect(host.runtime).toBeTrue();
+  const workflow = Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/bun-runtime.yml"), "utf8")) as { jobs: Record<string, { strategy: { matrix: { codex: string[] } } }> };
+  expect(host.codexVersions).toEqual(workflow.jobs["native-queue-campaign"]!.strategy.matrix.codex);
+  expect(host.codexVersions).toContain("0.162.1");
+  expect(plan("pre-push", ["src/runtime-host/main.ts"], host).filter(step => step.codex).map(step => step.codex))
+    .toEqual([...host.codexVersions]);
   const native = discover(root, "HEAD", ["src/lib/runtime/nativeCodexQueue.ts"]);
   expect(native.native).toBeFalse();
   const linux = discover(root, "HEAD", ["src/lib/proc/index.ts"]);

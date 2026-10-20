@@ -3640,18 +3640,21 @@ async function deployExactSha(
       throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because its receipt store is unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  let receipt: Record<string, unknown>;
-  const priorAdmission = seatDeploymentForRequestKey(idempotencyKey);
-  if (priorAdmission) {
+  const admittedReceipt = (): Record<string, unknown> | null => {
+    const priorAdmission = seatDeploymentForRequestKey(idempotencyKey);
+    if (!priorAdmission) return null;
+    assertSeat();
     if (priorAdmission.conversationId !== seat.conversationId || priorAdmission.project !== seat.project
       || !priorAdmission.revision.toLowerCase().startsWith(revision.toLowerCase())) {
       throw new McpToolRefusal("the deployment request key is attributed to a different seat or revision", {
         code: "deploy_request_key_conflict", retryable: false,
       });
     }
-    receipt = { state: "accepted", deploymentId: priorAdmission.deploymentId,
+    return { state: "accepted", deploymentId: priorAdmission.deploymentId,
       revision: priorAdmission.revision, replayed: true };
-  } else try {
+  };
+  let receipt = admittedReceipt();
+  if (!receipt) try {
     receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
   } catch (error) {
     if (error instanceof McpToolRefusal) {
@@ -3664,7 +3667,8 @@ async function deployExactSha(
     } catch (recoveryError) {
       throw new McpDeploymentPendingError(`deployment admission may have completed, and its receipt could not be reconciled: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`);
     }
-    throw new McpDeploymentPendingError(error instanceof Error ? error.message : "Deployment control wait ended");
+    receipt = admittedReceipt();
+    if (!receipt) throw new McpDeploymentPendingError(error instanceof Error ? error.message : "Deployment control wait ended");
   }
   const matchingBusy = receipt.state === "busy" && typeof receipt.revision === "string"
     && /^[0-9a-f]{40}$/i.test(receipt.revision) && receipt.revision.toLowerCase().startsWith(revision.toLowerCase());
