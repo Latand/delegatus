@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { stateLockProcessKind } from "@/lib/state/lockWait";
 import { expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -1033,11 +1034,15 @@ test("startup admission warns with its phase when one hold exceeds 100 ms", asyn
       expect(available).toBe(true);
       await Bun.sleep(125);
     }, "fixture startup phase");
-    expect(warn).toHaveBeenCalledWith("[structured hosts] state lease exceeded budget", {
-      phase: "fixture startup phase", collection: "pipelines", budgetMs: 100, heldMs: expect.any(Number),
-    });
-    const fields = warn.mock.calls[0]![1] as { heldMs: number };
-    expect(fields.heldMs).toBeGreaterThanOrEqual(100);
+    const warning = warn.mock.calls.map(([message]) => String(message))
+      .find(message => message.startsWith("[structured hosts] state lease exceeded budget "))!;
+    expect(warning).toBeDefined();
+    expect(warning).not.toMatch(/[\r\n]/);
+    expect(JSON.parse(warning.slice("[structured hosts] state lease exceeded budget ".length))).toMatchObject({ pid: process.pid,
+      role: process.env.LLV_STATE_OWNER ?? stateLockProcessKind(),
+      phase: "fixture startup phase", collection: "pipelines", budgetMs: 100, heldMs: expect.any(Number) });
+    const freshFields = JSON.parse(warning.slice("[structured hosts] state lease exceeded budget ".length)) as { heldMs: number };
+    expect(freshFields.heldMs).toBeGreaterThanOrEqual(100);
   } finally { warn.mockRestore(); }
 }));
 
