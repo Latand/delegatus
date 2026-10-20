@@ -181,7 +181,7 @@ Pipeline stages cannot create another pipeline. Every stage's prompt forbids it,
 - `resume` — return to the saved pipeline phase and resume a legacy stage's embedded flow.
 - `override-stage` — change a stage definition from its next attempt. For a running structured run stage, `applyNow: true` moves its runtime immediately while preserving its current attempt, worktree, branch and receipts. Only engine, model, effort, service tier and account may change now. The operator, creator or authorized project seat can request it; a stale stage digest, an already reported stage, or a conflicting open switch is refused before cutting the turn. For a same-engine account change, target migration directories are checked before admission. An unsafe directory answers 409 `RUNTIME_SWITCH_UNAVAILABLE` with repair guidance and leaves the stage definition and running attempt unchanged. Repair the directory or choose another account, then repeat the request. The provider checks again before copying history; a later filesystem change can still require rollback. `expectedAttempt` and `expectedConversationId` name the attempt and conversation the choice was made on; when a retry has started another agent since, the request answers 409 `STAGE_CHANGED` and changes nothing.
 - `retry-stage` — retry the current stage. A passed stage waiting for publication retries verification and publication of its accepted work without launching another attempt.
-- `resolve-decision` — answer a settled stage question, or request a fresh run attempt after publication of a passed stage parks. Supply `answer`, `expectedStageId`, `expectedAttempt`, `expectedRevision` and a stable `clientRequestId`. A publication continuation keeps the current checkout and carries the refusal output into its prompt. Pending publication, queued repair delivery, a busy producer or unresolved survivors prevent the new attempt.
+- `resolve-decision` — answer a settled stage question, or request a fresh run attempt after custody verification or publication of a passed stage parks. Supply `answer`, `expectedStageId`, `expectedAttempt`, `expectedRevision` and a stable `clientRequestId`. A repair continuation keeps the current checkout and carries the refusal output into its prompt. Pending publication, queued repair delivery, a busy producer or unresolved survivors prevent the new attempt.
 - `skip-stage` — record an operator skip and follow `next`.
 - `close` — close the pipeline and any legacy embedded flow while retaining history, the worktree, and any live stage panes for inspection. A close first asks the runtime host to end each resident stage host; when the calling process has no structured control channel at all (an MCP host process), it ends the host by the identity the registry recorded (pid, start identity, boot epoch). That path acts only on an attempt affirmatively bound to the row: the attempt names the conversation the row is the current generation of, and its launch has a receipt naming that same conversation; no launch, no receipt, or a receipt naming another conversation is unresolved ownership and nothing is signalled. The same authority (the row still naming that exact process for that conversation, no orchestrator seat) is asked again after every await inside the termination and one step before each signal. The report says which Delegatus generation started the host and whether it still exists. A signal that was sent and did not end the whole authorized tree — a survivor, a refused signal — leaves the close refused with the pids named, and the survivors' identities are kept on the attempt: until each is proven gone, no later close may terminalize the attempt on registry or transcript evidence, however dead the row looks.
 
@@ -248,6 +248,22 @@ commit receipts from those launches, including output adopted from their scratch
 worktrees. A fresh publication decision can carry the accepted producer's proof
 the same way. Each launch's start must name this worktree; a new starting head,
 shared Git identity or caller-supplied reflog text grants no creation proof.
+
+The lane's accepted head (`lastPassedCommit` or durable `publishedCommit`) is a
+custody boundary across attempts: its ancestors need no new creation receipts
+when a later repair restores that history. A delivery tip that predates launch
+has no proof on its own; settlement checks it against that accepted boundary,
+predecessor attempt receipts or the verified base. New suffix commits still
+need creation proof, and a tracking ref alone cannot authorize them.
+The ordinary committer fences the head captured before custody verification,
+so a later foreign tip cannot enter through the handoff after proof checking.
+
+If custody refuses a passed stage, use `resolve-decision` with the stage,
+attempt and revision from `get_pipeline` to request a repair. The action retires
+the parked attempt after verifying that its producer is inactive, preserves its
+pass report and starts a fresh attempt in the current checkout. It does not
+authorize missing creation receipts or reset accepted history. The repair's
+settlement verifies the same custody chain again.
 
 The pipeline tick runs in the same durable scanner-controller pass as the flow tick. `GET /api/files` remains a pure read and includes the current pipeline records for the project UI. The pipeline store fails closed on malformed or future-schema state, and that failure is contained: the files payload carries `pipelinesError` and serves everything else, and the shared tick skips pipelines while flows, workflows, and tasks keep running.
 
