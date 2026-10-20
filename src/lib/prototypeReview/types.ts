@@ -1,4 +1,5 @@
 import type { PrototypeCriticPass } from "./criticGate";
+import type { OwnerDestinationDetail } from "@/lib/externalRelay/ownerDestination";
 
 /** Client-safe contract shared by the task card, review and orchestrator pane. */
 export interface PrototypeFrameInput {
@@ -140,6 +141,8 @@ export interface PrototypeTelegramPost {
   key: string;
   at: string;
   reason?: string;
+  /** The selection's privacy-safe subreason when reason is no_target. */
+  destinationDetail?: OwnerDestinationDetail;
 }
 export interface PrototypeMediaView extends PrototypeMedia { available: boolean; url: string | null }
 export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicationKey" | "inputDigest" | "critic" | "nativeAssociation" | "decision" | "variants"> {
