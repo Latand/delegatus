@@ -9,6 +9,7 @@ import { nativeBatches } from "./verify-native-codex-runtime";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
 import { changedSinceBase } from "./ci-platform-scope";
+import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
 const owned: ProcessIdentity[] = [];
@@ -97,6 +98,22 @@ test("push checks commits, types and all sibling test variants, excluding browse
   expect(tests.isolated).toBeTrue();
   for (const step of steps.filter(step => step.command[1] === "test")) for (const file of step.command.slice(2)) expect(file).toMatch(/\.test\.[jt]sx?$/);
 });
+test("the measured pipeline file families reserve comparison time without changing selection", () => {
+  const now = 1_000;
+  for (const file of ["src/lib/pipelines/engine.ts", "src/lib/pipelines/engine.fixture.ts", "src/lib/pipelines/engine.providerBudget.test.ts", "src/lib/pipelines/git.ts", "src/lib/pipelines/parkedPublication.test.ts"]) {
+    expect(publicationPushBudgetMs([file]), file).toBe(1_500_000);
+    expect(publicationHookDeadline(publicationPushBudgetMs([file]), now)).toBe(1_441_000);
+  }
+  for (const files of [[], ["docs/pipelines.md"], ["src/engine.ts"], ["prefix/src/lib/pipelines/engine.ts"], ["src/lib/pipelines/engine.ts/other.ts"]]) {
+    expect(publicationPushBudgetMs(files)).toBe(900_000);
+    expect(publicationHookDeadline(publicationPushBudgetMs(files), now)).toBe(841_000);
+  }
+  expect(publicationPushBudgetMs(null)).toBe(1_500_000);
+  const tests = Array.from({ length: 27 }, (_, index) => `src/lib/pipelines/engine.variant${index}.test.ts`);
+  const file = "src/lib/pipelines/engine.ts";
+  const step = plan("pre-push", [file], context({ existing: new Set([file]), tests })).find(step => step.name === "touched tests")!;
+  expect(step.command.slice(4)).toEqual(tests.map(file => `./${file}`));
+});
 test("scoped heavy steps retain pin, host interpreter and both native fixture versions", () => {
   const steps = plan("pre-push", ["package.json"], context({ linux: true, runtime: true, native: true }));
   expect(steps.some(step => step.name === "Linux backend")).toBeTrue();
@@ -169,7 +186,7 @@ test("native engine and hosted selections still require an executable fixture", 
   }
 });
 
-test("only a caller's deadline bounds the push, and it must be a Unix time in milliseconds", () => {
+test("a caller's deadline is authoritative and must be a Unix time in milliseconds", () => {
   expect(pushDeadline({}, 1_000)).toBeNull();
   expect(pushDeadline({ LLV_GATE_PUSH_DEADLINE: "" }, 1_000)).toBeNull();
   expect(pushDeadline({ LLV_GATE_PUSH_DEADLINE: "5000" }, 1_000)).toEqual({ at: 5_000, startedAt: 1_000 });
@@ -590,7 +607,7 @@ function hookFixture(realLint = false) {
   symlinkSync(path.join(root, "scripts/cpu-admission.ts"), path.join(dir, "scripts/cpu-admission.ts"));
   for (const file of ["platform-tests.yml", "bun-runtime.yml"]) copyFileSync(path.join(root, ".github/workflows", file), path.join(dir, ".github/workflows", file));
   const log = path.join(dir, "commands.jsonl");
-  writeFileSync(path.join(dir, "record.ts"), `import { appendFileSync, mkdtempSync, rmSync } from "node:fs"; import { execFileSync } from "node:child_process"; import { tmpdir } from "node:os"; import path from "node:path"; const fixture = mkdtempSync(path.join(tmpdir(), "hook-child-git-")); try { execFileSync("git", ["init", "--bare", fixture], { stdio: "pipe" }); } finally { rmSync(fixture, { recursive: true, force: true }); } appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(2), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, gitDir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE, workTree: process.env.GIT_WORK_TREE, commonDir: process.env.GIT_COMMON_DIR, configCount: process.env.GIT_CONFIG_COUNT, configKey: process.env.GIT_CONFIG_KEY_0 }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
+  writeFileSync(path.join(dir, "record.ts"), `import { appendFileSync, mkdtempSync, rmSync } from "node:fs"; import { execFileSync } from "node:child_process"; import { tmpdir } from "node:os"; import path from "node:path"; const fixture = mkdtempSync(path.join(tmpdir(), "hook-child-git-")); try { execFileSync("git", ["init", "--bare", fixture], { stdio: "pipe" }); } finally { rmSync(fixture, { recursive: true, force: true }); } appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(2), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, gitDir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE, workTree: process.env.GIT_WORK_TREE, commonDir: process.env.GIT_COMMON_DIR, configCount: process.env.GIT_CONFIG_COUNT, configKey: process.env.GIT_CONFIG_KEY_0, deadline: process.env.LLV_GATE_PUSH_DEADLINE, ownedBudget: process.env.LLV_OWNED_RUN_TIMEOUT_MS }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
   for (const name of ["bun", "bunx"]) {
     const shim = path.join(dir, "shims", name);
     writeFileSync(shim, '#!/bin/bash\nif [[ "$1" == scripts/local-gate.ts || ( "$1" == scripts/eslint-changes.ts && "$HOOK_REAL_LINT" == 1 ) ]]; then exec "$HOOK_BUN" "$@"; fi\nexec "$HOOK_BUN" "$HOOK_RECORD" "$@"\n'); chmodSync(shim, 0o755);
@@ -601,9 +618,37 @@ function hookFixture(realLint = false) {
   writeFileSync(path.join(dir, "package.json"), "{}"); writeFileSync(path.join(dir, "example.ts"), "export const value = 1;\n");
   writeFileSync(path.join(dir, "example.test.ts"), "// hook fixture\n"); git("add", "."); git("commit", "-m", "base");
   git("update-ref", "refs/remotes/origin/main", "HEAD"); git("config", "core.hooksPath", ".githooks");
-  const calls = () => readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; state?: string; home?: string; config?: string; tmp?: string; known?: string; gitDir?: string; index?: string; workTree?: string; commonDir?: string; configCount?: string; configKey?: string });
+  const calls = () => readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; state?: string; home?: string; config?: string; tmp?: string; known?: string; gitDir?: string; index?: string; workTree?: string; commonDir?: string; configCount?: string; configKey?: string; deadline?: string; ownedBudget?: string });
   return { dir, env: { ...env, HOOK_REAL_LINT: realLint ? "1" : "0" }, git, calls };
 }
+test("repository default budgets follow current changes across fresh hook processes and retain an explicit caller cap", () => {
+  const f = hookFixture();
+  const directory = path.join(f.dir, "src/lib/pipelines"); mkdirSync(directory, { recursive: true });
+  const modulePath = path.join(directory, "engine.ts");
+  writeFileSync(modulePath, "export const value = 1;\n");
+  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
+  f.git("add", "src/lib/pipelines/engine.ts", "example.ts"); f.git("commit", "-m", "engine change");
+  const run = (caller?: string) => {
+    const before = f.calls().length;
+    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir,
+      env: { ...f.env, LLV_GATE_PUSH_DEADLINE: caller }, encoding: "utf8" });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const calls = f.calls().slice(before);
+    const types = calls.find(call => call.args[0] === "tsc")!;
+    expect(types).toBeDefined();
+    expect(types.deadline).toMatch(/^\d+$/);
+    return Number(types.ownedBudget);
+  };
+  // Each call starts a new real hook and admitted process.
+  expect(run()).toBeGreaterThan(1_400_000);
+  f.git("rm", "src/lib/pipelines/engine.ts"); f.git("commit", "-m", "retain ordinary change");
+  const ordinary = run();
+  expect(ordinary).toBeGreaterThan(800_000); expect(ordinary).toBeLessThanOrEqual(840_000);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(modulePath, "export const value = 1;\n"); f.git("add", "src/lib/pipelines/engine.ts"); f.git("commit", "-m", "restore engine change");
+  expect(run(String(Date.now() + 30_000))).toBeLessThanOrEqual(30_000);
+}, 60_000);
+
 for (const mode of ["pre-commit", "pre-push"] as const) test(`${mode} allows KanbanBoard baseline errors and rejects one added error by file/line`, () => {
   const f = hookFixture(true);
   const file = "src/components/kanban/KanbanBoard.tsx";
