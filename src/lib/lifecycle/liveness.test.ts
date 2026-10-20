@@ -256,7 +256,7 @@ test.each(["none", "held"] as const)("issue 1999: exact transcript proof without
     : { lifecycle: "waiting", reason: "pipeline_stage_settled" });
 });
 
-test.each(["busy", "active-turn", "pending-action", "held-delivery", "held-alias", "permission", "tool", "background", "process", "wrong-conversation", "running-attempt", "historical", "unreadable"] as const)("issue 1999: settled reviewer proof preserves %s evidence", async control => {
+test.each(["busy", "active-turn", "pending-action", "held-delivery", "held-alias", "permission", "tool", "background", "process", "wrong-conversation", "running-attempt", "historical", "unreadable", "receipt", "receipt-alias", "receipt-with-host", "completed-receipt", "dead-receipt"] as const)("issue 1999: settled reviewer proof preserves %s evidence", async control => {
   const transcript = "/sessions/settled-reviewer-control.jsonl";
   const conversationId = "conversation_settled_control";
   const pipeline = zombiePipeline(control === "wrong-conversation" ? "conversation_other" : conversationId, transcript);
@@ -268,14 +268,24 @@ test.each(["busy", "active-turn", "pending-action", "held-delivery", "held-alias
   if (control === "active-turn") entry.structuredHost!.activeTurnRef = "active-review-turn";
   if (control === "pending-action") entry.pendingAction = "handoff";
   if (control === "permission") entry.structuredHost!.pendingPermissions = [{ requestId: "permission-one" }] as never;
+  const receiptConversationId = control === "receipt-alias" ? "conversation_old" : conversationId;
+  const receipt = { launchId: "launch_settled_review", state: control === "completed-receipt" ? "completed" : "starting",
+    transport: "structured", conversationId: receiptConversationId, artifactPath: transcript,
+    admissionOwner: { pid: 3333, startIdentity: "start-token-of-a-live-launch" },
+  } as unknown as RegistryFile["receipts"][string];
   const snapshot = await agentLivenessSnapshot({}, sources({
     listFiles: async () => [fileEntry({ path: transcript, conversationId })],
     registrySnapshot: () => ({ entries: { reviewer: entry }, conversations: {},
       conversationAliases: { conversation_old: conversationId },
+      receipts: ["receipt", "receipt-alias", "receipt-with-host", "completed-receipt", "dead-receipt"].includes(control)
+        ? { [receipt.launchId]: control === "dead-receipt" ? { ...receipt, admissionOwner: { pid: 3333, startIdentity: "different-identity" } } : receipt }
+        : {},
       heldDeliveries: ["held-delivery", "held-alias"].includes(control) ? { held: {
         conversationId: control === "held-alias" ? "conversation_old" : conversationId, state: "held" } } as never : {} }),
     pipelines: () => [pipeline],
-    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
+    probe: { now: () => NOW, pidAlive: () => true, processIdentity: pid => pid === 3333
+      ? control === "dead-receipt" ? "reused-pid-identity" : "start-token-of-a-live-launch"
+      : "start-token-of-a-dead-host" },
     workProcesses: () => control === "process" ? [{ startedAt: FROZEN_AT, command: "bun test fixture.test.ts" }] : [],
     transcriptEvidence: async () => control === "unreadable" ? null : ({ turn: control === "busy" ? "busy" : "unknown", lastRecordTs: FROZEN_AT,
       activityFacts: { lastRecordAt: FROZEN_AT,
@@ -284,6 +294,14 @@ test.each(["busy", "active-turn", "pending-action", "held-delivery", "held-alias
       } }),
   }));
   const record = snapshot.conversations[0]!;
+  if (["receipt", "receipt-alias", "receipt-with-host"].includes(control)) {
+    expect(record).toMatchObject({ lifecycle: "stalled", reason: "host_alive_transcript_silent" });
+    return;
+  }
+  if (["completed-receipt", "dead-receipt"].includes(control)) {
+    expect(record).toMatchObject({ lifecycle: "waiting", reason: "pipeline_stage_settled" });
+    return;
+  }
   expect(record.reason).not.toBe("pipeline_stage_settled");
   if (["busy", "wrong-conversation", "running-attempt", "historical"].includes(control)) expect(record.lifecycle).toBe("stalled");
   if (["tool", "background", "process"].includes(control)) expect(record.activity?.state).toBe("checking");

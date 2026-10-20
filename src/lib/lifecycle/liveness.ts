@@ -778,6 +778,21 @@ function receiptHostEvidence(registry: LivenessRegistrySnapshot, conversationId:
   return alive ?? (gone && !unresolved ? { state: "gone" as const, kind: "none" as const, pid: null } : null);
 }
 
+/** A live open receipt keeps launch setup in flight even when another host is
+    selected as the conversation's display host. */
+function hasLiveReceiptCustody(registry: LivenessRegistrySnapshot, conversationId: string | null | undefined,
+  artifactPath: string, probe: LivenessProbe): boolean {
+  if (!conversationId) return false;
+  const ownerId = canonicalConversationId(registry, conversationId);
+  const candidates = new Map<string, RegistryFile["receipts"][string]>();
+  for (const receipt of registryRowsMatching(registry as RegistryFile, "receipts", "conversationId",
+    conversationIdsResolvingTo(registry as RegistryFile, ownerId as `conversation_${string}`))) candidates.set(receipt.launchId, receipt);
+  for (const receipt of registryRowsMatching(registry as RegistryFile, "receipts", "artifactPath", artifactPath)) candidates.set(receipt.launchId, receipt);
+  return [...candidates.values()].some(receipt =>
+    (canonicalConversationId(registry, receipt.conversationId) === ownerId || receipt.artifactPath === artifactPath)
+      && receiptIsLive(registry as RegistryFile, receipt, probe));
+}
+
 /** Pipeline attempts indexed by the conversation and transcript they own, so a
     stalled agent can be named with its stage lineage. */
 function pipelineIndex(pipelines: Pipeline[]): {
@@ -1467,6 +1482,7 @@ async function livenessSnapshotWithin(
     const settledStage = turnState === "unknown" && host.state === "alive" && evidence !== null && lastRecordMs !== null
       && matchingStage && pipeline && ["passed", "failed", "needs_decision", "skipped"].includes(pipeline.reportedState)
       && !registryEntry?.pendingAction && !registryEntry?.structuredHost?.activeTurnRef
+      && !hasLiveReceiptCustody(registry, stageConversationId, entry.path, sources.probe)
       && (!stageConversationId || !registry.heldDeliveries || !registryRowsMatching(registry as RegistryFile,
         "heldDeliveries", "conversationId", conversationIdsResolvingTo(registry as RegistryFile,
           canonicalConversationId(registry, stageConversationId) as `conversation_${string}`)).some(delivery => delivery.state !== "delivered"));
