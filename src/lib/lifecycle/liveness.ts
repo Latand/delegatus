@@ -1460,15 +1460,16 @@ async function livenessSnapshotWithin(
       : null;
     const pipeline = narrowRefs ? narrowRefs[index] : (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
       ?? pipelines.byPath.get(entry.path) ?? null;
-    const matchingStage = pipeline?.conversationId
-      ? conversationId !== null && canonicalConversationId(registry, pipeline.conversationId) === canonicalConversationId(registry, conversationId)
+    const matchingStage = conversationId && pipeline?.conversationId
+      ? canonicalConversationId(registry, pipeline.conversationId) === canonicalConversationId(registry, conversationId)
       : pipeline?.agentPath === entry.path;
+    const stageConversationId = conversationId ?? pipeline?.conversationId;
     const settledStage = turnState === "unknown" && host.state === "alive" && evidence !== null && lastRecordMs !== null
       && matchingStage && pipeline && ["passed", "failed", "needs_decision", "skipped"].includes(pipeline.reportedState)
       && !registryEntry?.pendingAction && !registryEntry?.structuredHost?.activeTurnRef
-      && (!conversationId || !registry.heldDeliveries || !registryRowsMatching(registry as RegistryFile,
+      && (!stageConversationId || !registry.heldDeliveries || !registryRowsMatching(registry as RegistryFile,
         "heldDeliveries", "conversationId", conversationIdsResolvingTo(registry as RegistryFile,
-          canonicalConversationId(registry, conversationId) as `conversation_${string}`)).some(delivery => delivery.state !== "delivered"));
+          canonicalConversationId(registry, stageConversationId) as `conversation_${string}`)).some(delivery => delivery.state !== "delivered"));
     const verdict = evaluateActivityLiveness({
       host,
       turnState,

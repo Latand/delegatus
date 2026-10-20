@@ -237,6 +237,25 @@ test.each(["passed", "failed", "needs_decision", "skipped"] as const)("issue 199
   expect(snapshot.conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "pipeline_stage_settled" });
 });
 
+test.each(["none", "held"] as const)("issue 1999: exact transcript proof without a current id preserves pending work=%s", async work => {
+  const pending = work === "held";
+  const transcript = "/sessions/settled-reviewer-without-id.jsonl";
+  const conversationId = "conversation_settled_without_id";
+  const pipeline = zombiePipeline(conversationId, transcript);
+  pipeline.runs[0]!.attempts[0]!.state = "passed";
+  const snapshot = await agentLivenessSnapshot({}, sources({
+    listFiles: async () => [fileEntry({ path: transcript, conversationId: null })],
+    registrySnapshot: () => ({ entries: { reviewer: structuredEntry(transcript, 2222) }, conversations: {},
+      heldDeliveries: pending ? { held: { conversationId, state: "held" } } as never : {} }),
+    pipelines: () => [pipeline],
+    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
+    transcriptEvidence: async () => ({ turn: "unknown", lastRecordTs: FROZEN_AT }),
+  }));
+  expect(snapshot.conversations[0]).toMatchObject(pending
+    ? { lifecycle: "stalled", reason: "host_alive_transcript_silent" }
+    : { lifecycle: "waiting", reason: "pipeline_stage_settled" });
+});
+
 test.each(["busy", "active-turn", "pending-action", "held-delivery", "held-alias", "permission", "tool", "background", "process", "wrong-conversation", "running-attempt", "historical", "unreadable"] as const)("issue 1999: settled reviewer proof preserves %s evidence", async control => {
   const transcript = "/sessions/settled-reviewer-control.jsonl";
   const conversationId = "conversation_settled_control";
