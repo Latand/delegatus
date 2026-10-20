@@ -1370,6 +1370,9 @@ export interface SeatTickCheckInput {
    * a {@link SeatTickEvidenceGap} naming what was unreadable.
    */
   pullRequestsUnavailable: SeatTickPullRequestGap | null;
+  /** True only when this check actually verified the PR set. Gated reads keep
+      their prior digest evidence without claiming the set is empty. */
+  pullRequestsObserved?: boolean;
   /** Ephemeral provenance for the gates and lane associations of the PR read. */
   pullRequestEvidenceKey?: string;
   signals: readonly SeatTickSignalInput[];

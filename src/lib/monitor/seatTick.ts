@@ -1648,6 +1648,12 @@ function digestFingerprint(input: SeatTickCheckInput): string {
   return input.digestFingerprint ?? boardFingerprint(input.changeFingerprint);
 }
 
+function withPullRequestFingerprint(fingerprint: string, source: string): string {
+  const targetParts = splitFingerprint(fingerprint);
+  const sourceParts = splitFingerprint(source);
+  return targetParts && sourceParts ? `${targetParts.board}.${sourceParts.pullRequests}` : fingerprint;
+}
+
 export function seatTickCatchUp(input: Pick<SeatTickCheckInput, "state" | "now" | "settings" | "seat">) {
   const from = input.state.unreachableSince ? input.state.unreachableBacklogSince ?? input.state.unreachableSince : null;
   if (!from || input.now - Date.parse(from) <= input.settings.wakeIntervalMs) return null;
@@ -1684,15 +1690,32 @@ function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): S
   let reportSeenAt = state.reportSeenAt ?? null;
   // Without a prior board observation, establish a baseline. Signal-only
   // wakes cannot turn an unknown baseline into evidence of board movement.
-  const current = digestFingerprint(input);
+  const observed = digestFingerprint(input);
   // Old ledger rows compared timestamp-sensitive board hashes. Establish a
   // material baseline on upgrade without inventing an unreported change.
   const upgrading = !!input.digestFingerprint && !state.checkFingerprint?.startsWith("digest-v1:");
+  const priorParts = state.checkFingerprint ? splitFingerprint(state.checkFingerprint) : null;
+  const observedParts = splitFingerprint(observed);
+  // A gated or failed read is not an empty PR set. Carry forward the last
+  // verified PR portion while still advancing the board portion each check.
+  const current = observedParts?.pullRequests === FINGERPRINT_UNREAD && priorParts
+    && priorParts.pullRequests !== FINGERPRINT_UNREAD
+    ? withPullRequestFingerprint(observed, state.checkFingerprint!)
+    : observed;
   const previous = upgrading ? current : state.checkFingerprint;
   let reportFingerprint = upgrading ? current : state.reportFingerprint ?? previous ?? current;
   if (reports.lastReportAt && (!reportSeenAt || instant(reports.lastReportAt) > instant(reportSeenAt))) {
     reportSeenAt = reports.lastReportAt;
     reportFingerprint = previous ?? current;
+  }
+  // The first verified PR read after an unread baseline makes that one half
+  // comparable. Keep the report's board half so intervening task and lane
+  // changes remain owed.
+  const reportParts = splitFingerprint(reportFingerprint);
+  const currentParts = splitFingerprint(current);
+  if (reportParts?.pullRequests === FINGERPRINT_UNREAD && currentParts
+    && currentParts.pullRequests !== FINGERPRINT_UNREAD) {
+    reportFingerprint = withPullRequestFingerprint(reportFingerprint, current);
   }
   return {
     ...state,
