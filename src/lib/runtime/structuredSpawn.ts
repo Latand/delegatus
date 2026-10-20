@@ -620,6 +620,7 @@ async function settleTerminalStructuredSpawnOperation(
     || (matchingOwner !== null && matchingOwner.terminalDisposition !== "lost")
     || attemptedWithoutLossProof
     || Boolean(entry?.claimOwner || entry?.structuredHost?.process || entry?.status === "live")
+    || Boolean(entry?.structuredTerminationSurvivors?.some(identity => processIdentityStatus(identity) !== "dead"))
     || session?.host === "hosted" || session?.host === "recovering";
   const status = receipt.state === "completed" ? "delivered" : uncertain ? "uncertain" : "failed";
   try {

@@ -7,6 +7,7 @@ import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { reconcileStructuredSpawnReplay, recoverPendingStructuredSpawns, terminalizeStaleStructuredSpawns } from "./structuredSpawn";
@@ -18,12 +19,12 @@ afterEach(() => {
   setSystemTime();
 });
 
-function fixture(disposition: "lost" | "unverified", live = false) {
+function fixture(disposition: "lost" | "unverified", live = false, jsonRegistry = false) {
   setSystemTime(now);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "spawn-settlement-"));
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   const filename = path.join(root, "registry.json");
-  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: jsonRegistry ? "off" : "sqlite" });
   const runtimeFile = path.join(root, "runtime.sqlite");
   let journal = new RuntimeJournal(runtimeFile, { structuredHosts: true, now: () => now });
   cleanups.push(() => journal.close());
@@ -59,7 +60,7 @@ function fixture(disposition: "lost" | "unverified", live = false) {
   const delivery = registry.holdDelivery(receipt.conversationId, "initial prompt", `spawn_${receipt.launchId}`,
     "text", [], null, { operationId: `spawn_message_${receipt.launchId}` });
   ids.mockRestore();
-  return { registry, client, receipt, request, key, artifactPath, root, delivery,
+  return { registry, client, receipt, request, key, artifactPath, filename, root, delivery,
     commands: () => commands,
     journal: () => journal,
     async admitAndFail() {
@@ -134,6 +135,37 @@ test.each(["replay", "startup", "periodic"] as const)("uncertain settlement pres
   expect(f.journal().readSession({ conversationId: f.receipt.conversationId }))
     .toMatchObject({ host: "registering", turn: "unknown", sessionKey: before.sessionKey });
   expect(f.registry.spawnRecoverySnapshot([f.receipt.launchId]).entries[`codex:${f.key.sessionId}`]).toEqual(beforeEntry);
+  expect(f.commands()).toBe(1);
+});
+
+test.each(["replay", "startup", "periodic"] as const)("a retained live process keeps terminal launch settlement uncertain through %s reconciliation", async pass => {
+  const f = fixture("lost", false, true);
+  await f.admitAndFail();
+  const raw = JSON.parse(fs.readFileSync(f.filename, "utf8"));
+  const storedEntry = raw.entries[`codex:${f.key.sessionId}`];
+  storedEntry.status = "dead";
+  storedEntry.claimOwner = null;
+  storedEntry.structuredHost.process = null;
+  storedEntry.structuredTerminationSurvivors = [captureProcessIdentity(process.pid)];
+  fs.writeFileSync(f.filename, JSON.stringify(raw));
+  const registry = new AgentRegistry(f.filename, undefined, undefined, { sqliteMode: "off" });
+  const before = registry.spawnRecoverySnapshot([f.receipt.launchId]);
+  const entry = before.entries[`codex:${f.key.sessionId}`]!;
+  expect(entry).toMatchObject({ status: "dead", claimOwner: null, structuredHost: { process: null } });
+  expect(entry.structuredTerminationSurvivors).toEqual([captureProcessIdentity(process.pid)]);
+
+  const run = pass === "replay" ? () => reconcileStructuredSpawnReplay(f.receipt.launchId, registry, f.client)
+    : pass === "startup" ? () => recoverPendingStructuredSpawns(registry, f.client)
+      : () => terminalizeStaleStructuredSpawns(registry, f.client, { now: () => now });
+  await run();
+
+  expect(f.journal().operationResult(f.receipt.launchId)?.receipt).toMatchObject({
+    status: "uncertain", operationId: f.receipt.launchId, idempotencyKey: f.receipt.launchId,
+  });
+  expect(registry.spawnRecoverySnapshot([f.receipt.launchId]).entries[`codex:${f.key.sessionId}`]).toEqual(entry);
+  const replay = beginLegacySpawnFixture(registry, f.request);
+  expect(replay.kind).toBe("replay");
+  expect(replay.receipt).toMatchObject({ launchId: f.receipt.launchId, clientAttemptId: f.request.clientAttemptId });
   expect(f.commands()).toBe(1);
 });
 
