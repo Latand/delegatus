@@ -206,7 +206,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     let child = attempt;
     let acceptedProofBoundary: string | null = null;
     for (const prior of run?.attempts ?? []) {
-      if (prior.n >= attempt.n || prior.verdict?.status !== "pass" || !prior.launchId || !prior.startedAt) continue;
+      if (prior.n >= attempt.n || !prior.launchId || !prior.startedAt) continue;
       const priorDirectory = stageGitReceiptDirectory(prior.launchId);
       if (directories.includes(priorDirectory) || await stageAttemptPushRefusal(prior.launchId) !== null) continue;
       const priorRaw = await smallFile(path.join(priorDirectory, "start.json"));
@@ -407,9 +407,10 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       }
       return null;
     };
-    if (directories.length > 1) {
-      // Every replacement start is history the new attempt inherited. Prove
-      // its unaccepted prefix independently so a later merge cannot hide it.
+    if (attempt.n > 1 || directories.length > 1) {
+      // A retry can inherit history without a restartContext edge. Prove the
+      // current start and each replacement start independently so a later
+      // merge cannot hide an unaccepted prefix.
       for (const prefix of new Set([start.head, ...replacementStarts])) {
         const error = await verifiedSuffix(prefix, pipeline.baseRef);
         if (error) return refuse(error);

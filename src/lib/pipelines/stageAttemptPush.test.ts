@@ -255,6 +255,77 @@ test.each(["another worktree", "hooks off", "missing receipt"] as const)(
     }
   });
 
+test.each(["another worktree", "hooks off", "missing receipt"] as const)(
+  "an ordinary retry cannot publish an unproved starting prefix (%s)", async origin => {
+    const f = await fixture();
+    const childLaunch = `stage-proof-ordinary-retry-${nextFixture}`;
+    try {
+      const accepted = await f.commit("accepted output before retry");
+      f.pipeline.lastPassedCommit = accepted;
+      f.pipeline.publishedCommit = accepted;
+      await f.push();
+      await fs.rm(path.join(f.receipt, "commits", accepted));
+      await f.own("reset", "--hard", f.pipeline.baseRef);
+
+      let divergent: string;
+      if (origin === "another worktree") {
+        const foreign = path.join(f.root, "ordinary-retry-foreign");
+        await f.own("worktree", "add", "--detach", foreign, f.pipeline.baseRef);
+        await f.git(foreign, "commit", "--allow-empty", "-m", "ordinary retry foreign start");
+        divergent = await f.git(foreign, "rev-parse", "HEAD");
+        await f.own("fetch", foreign, divergent);
+        await f.own("reset", "--hard", divergent);
+      } else {
+        const args = ["commit", "--allow-empty", "-m", "ordinary retry divergent start"];
+        const made = await realExec("git", origin === "hooks off" ? ["-c", "core.hooksPath=", ...args] : args,
+          f.lane, f.env);
+        expect(made.code, made.stderr).toBe(0);
+        divergent = await f.own("rev-parse", "HEAD");
+        if (origin === "missing receipt") await fs.rm(path.join(f.receipt, "commits", divergent));
+      }
+
+      Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z"));
+      await f.own("merge", "--no-ff", "-m", "restore the accepted boundary", accepted);
+      const head = await f.commit("ordinary retry output");
+      const pushed = await realExec("git", ["push", "--no-verify", "origin", "HEAD:refs/heads/pipeline/proof"], f.lane, f.env);
+      expect(pushed.code, pushed.stderr).toBe(0);
+      const parent = { ...f.attempt, n: 1, state: "failed", completedAt: "2026-10-16T09:30:00.000Z",
+        agentPath: "/stage/ordinary-retry-parent.jsonl" } as PipelineStageAttempt;
+      const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: "2026-10-16T10:00:00.000Z",
+        completedAt: NOW, state: "passed", agentPath: "/stage/ordinary-retry-child.jsonl" } as PipelineStageAttempt;
+      f.pipeline.runs = [{ stageId: "build", attempts: [parent, child] }] as never;
+
+      expect(await settleStageAttemptPush(f.pipeline, child, realExec, NOW)).toMatchObject({ ok: false });
+      expect(await f.own("ls-remote", "--refs", "origin", "refs/heads/pipeline/proof"))
+        .toBe(`${head}\trefs/heads/pipeline/proof`);
+    } finally {
+      await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
+      await f.close();
+    }
+  });
+
+test("an ordinary retry settles a recorded prefix from its failed predecessor", async () => {
+  const f = await fixture();
+  const childLaunch = `stage-proof-ordinary-recorded-retry-${nextFixture}`;
+  try {
+    const inherited = await f.commit("recorded predecessor output");
+    const parent = { ...f.attempt, n: 1, state: "failed", completedAt: "2026-10-16T09:30:00.000Z",
+      agentPath: "/stage/recorded-retry-parent.jsonl" } as PipelineStageAttempt;
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z"));
+    const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: "2026-10-16T10:00:00.000Z",
+      completedAt: NOW, state: "passed", agentPath: "/stage/recorded-retry-child.jsonl" } as PipelineStageAttempt;
+    const head = await f.commit("ordinary retry continuation");
+    await f.push();
+    f.pipeline.runs = [{ stageId: "build", attempts: [parent, child] }] as never;
+
+    expect(await settleStageAttemptPush(f.pipeline, child, realExec, NOW)).toEqual({ ok: true, sha: head });
+    expect(await f.own("merge-base", "--is-ancestor", inherited, "HEAD")).toBe("");
+  } finally {
+    await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
 test("four host-loss attempts preserve their receipt ancestry", async () => {
   const f = await fixture();
   const attempts: PipelineStageAttempt[] = [];

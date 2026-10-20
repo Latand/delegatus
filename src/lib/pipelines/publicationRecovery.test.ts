@@ -24,7 +24,7 @@ const stages = [
 ];
 const current = () => loadPipelines()[0]!;
 
-async function fixture(prelaunchPrefix?: "unrecorded" | "hooks-off" | "foreign") {
+async function fixture(prelaunchPrefix?: "unrecorded" | "hooks-off" | "foreign", stageList = stages) {
   savePipelines([]);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "publication-recovery-"));
   const repo = path.join(root, "repo"), remote = path.join(root, "remote.git"), hooks = path.join(root, "hooks");
@@ -87,7 +87,7 @@ async function fixture(prelaunchPrefix?: "unrecorded" | "hooks-off" | "foreign")
     return { ...result, launchId, paneId: null };
   };
   const created = await createPipelineFromRequest({ task: "Recover stage publication", repoDir: repo, baseRef: await git(repo, "rev-parse", "HEAD"),
-    publication: "remote-branch", stages: stages as never }, h.ports);
+    publication: "remote-branch", stages: stageList as never }, h.ports);
   expect(created.error).toBeUndefined();
   await tickPipelines([], h.ports); await tickPipelines([], h.ports);
   expect(current().cursor, current().stateDetail ?? "").toMatchObject({ stageId: "build", state: "running" });
@@ -105,6 +105,61 @@ async function fixture(prelaunchPrefix?: "unrecorded" | "hooks-off" | "foreign")
     },
     close: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
+
+test.each(["unrecorded", "hooks-off", "foreign"] as const)(
+  "ordinary retry refuses a %s inherited head before publishing its receipted output", async origin => {
+    const twoWritableStages = [
+      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "retry" },
+      { id: "retry", kind: "run", role: { roleId: "builder" }, prompt: "Retry", next: "review" },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+    ];
+    const f = await fixture(undefined, twoWritableStages);
+    try {
+      const accepted = await f.commit("first stage accepted output");
+      await f.finish(1);
+      await tickPipelines([], f.h.ports);
+      expect(current()).toMatchObject({ lastPassedCommit: accepted, publishedCommit: accepted,
+        cursor: { stageId: "retry", state: "running" } });
+      const active = current();
+      active.runs!.find(run => run.stageId === "retry")!.attempts[0]!.paneId = "ordinary-retry-pane";
+      savePipelines([active]);
+      await f.git(f.lane(), "reset", "--hard", current().baseRef);
+
+      let divergent: string;
+      if (origin === "foreign") {
+        const foreign = path.join(f.root, "ordinary-retry-foreign");
+        await f.git(f.lane(), "worktree", "add", "--detach", foreign, current().baseRef);
+        await f.git(foreign, "commit", "--allow-empty", "-m", "foreign retry starting commit");
+        divergent = await f.git(foreign, "rev-parse", "HEAD");
+        await f.git(f.lane(), "fetch", foreign, divergent);
+        await f.git(f.lane(), "reset", "--hard", divergent);
+      } else {
+        const args = ["commit", "--allow-empty", "-m", `${origin} retry starting commit`];
+        const result = await f.execute("git", origin === "hooks-off" ? ["-c", "core.hooksPath=", ...args] : args,
+          f.lane(), undefined);
+        expect(result.code, result.stderr).toBe(0);
+        divergent = await f.git(f.lane(), "rev-parse", "HEAD");
+        if (origin === "unrecorded") {
+          const attempt = current().runs!.find(run => run.stageId === "retry")!.attempts[0]!;
+          fs.rmSync(path.join(stageGitReceiptDirectory(attempt.launchId!), "commits", divergent), { force: true });
+        }
+      }
+      expect(await f.git(f.remote, "rev-parse", current().delivery!.target.branch)).toBe(accepted);
+      await tickPipelines([f.h.finish("/codex/stage-2.jsonl", "fail", "retry this stage")], f.h.ports);
+      expect((await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+      await tickPipelines([], f.h.ports);
+      expect(current().runs!.find(run => run.stageId === "retry")!.attempts[1]!.restartContext).toBeUndefined();
+      await f.git(f.lane(), "merge", "--no-ff", "-m", "restore the accepted boundary", accepted);
+      const output = await f.commit("receipted retry output");
+      await tickPipelines([f.h.finish("/codex/stage-3.jsonl", "pass", "implemented")], f.h.ports);
+
+      expect(current().state).toBe("needs_decision");
+      expect(current().stateDetail).toContain(divergent);
+      expect(current().lastPassedCommit).toBe(accepted);
+      expect(await f.git(f.remote, "rev-parse", current().delivery!.target.branch)).toBe(accepted);
+      expect(await f.git(f.lane(), "merge-base", "--is-ancestor", output, "HEAD")).toBe("");
+    } finally { f.close(); }
+  });
 
 test.each([false, true])("a real refused pre-push admits one fresh decision attempt on the current head with refusal output (moved: %s)", async moved => {
   const f = await fixture();
