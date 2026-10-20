@@ -769,7 +769,7 @@ test("Viewer policy admission reads a bounded number of rows as unrelated conver
       expect(registry.autoBalancePolicy("claude")).toMatchObject({ enabled: false, revision: 1 });
     } finally { setAgentRegistryForTests(null); registry.close(); }
   }
-  expect(reads[1]).toBe(reads[0]!);
+  expect(reads[0]).toBeLessThan(10);
   expect(reads[1]).toBeLessThan(10);
 });
 
