@@ -260,9 +260,10 @@ function launcherFile(): string {
   return file;
 }
 
-/** An unavailable boundary leaves the pane command as it was. */
+/** An unavailable boundary leaves the pane command as it was. The pane runs
+ * in the tmux server's environment, so the launcher there judges a lease. */
 export function terminalSignalSandboxCommand(command: string, env: NodeJS.ProcessEnv = process.env): string {
-  const decision = signalLauncher(env, env.LLV_DOCKER_NSENTER_SHIMS === "1");
+  const decision = signalLauncher({ ...env, LLV_GATE_SLOT_LEASE: undefined }, env.LLV_DOCKER_NSENTER_SHIMS === "1");
   if ("off" in decision) {
     console.warn(`[signal-sandbox] terminal launch runs without the agent signal boundary: ${decision.off}`);
     return command;

@@ -135,8 +135,11 @@ test.each([
       // The engine itself is the launched process, exactly as on main.
       expect(child.spawnargs[0]).toBe("/bin/sh");
     }
-    expect(terminalSignalSandboxCommand("exec claude", fallbackEnv(root, extra))).toBe("exec claude");
-    expect(warn.mock.calls.filter(call => String(call[0]).includes("without the agent signal boundary"))).toHaveLength(4);
+    // A pane's lease belongs to the tmux server's environment; its launcher judges it.
+    const pane = terminalSignalSandboxCommand("exec claude", fallbackEnv(root, extra));
+    if ("LLV_GATE_SLOT_LEASE" in extra) expect(pane).toMatch(/^python3 '.+' --terminal -- \/bin\/sh -c 'exec claude'$/);
+    else expect(pane).toBe("exec claude");
+    expect(warn.mock.calls.filter(call => String(call[0]).includes("without the agent signal boundary"))).toHaveLength("LLV_GATE_SLOT_LEASE" in extra ? 3 : 4);
   } finally {
     Object.defineProperty(process, "platform", descriptor);
     getuid?.mockRestore(); warn.mockRestore();
