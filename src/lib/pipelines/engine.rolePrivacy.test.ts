@@ -150,11 +150,10 @@ test.each(["reclassify", "file-reclassify", "churn", "corrupt", "pause"] as cons
         await tickPipelines([], pending.ports);
         await tickPipelines([], pending.ports);
         const deferred = loadPipelines()[0]!;
-        expect(deferred.state).toBe("running");
-        expect(deferred.cursor?.state).toBe("pending");
-        expect(deferred.runs[0]!.attempts.at(-1)?.retiredLaunches).toHaveLength(1);
+        expect(deferred.state).toBe("needs_decision");
+        expect(deferred.stateDetail).toContain("original host termination is unconfirmed");
+        expect(deferred.runs[0]!.attempts.at(-1)?.retiredLaunches ?? []).toHaveLength(0);
         expect(sent).toHaveLength(0);
-        expect(deferred.runs[0]!.attempts.at(-1)?.roleMemoryWait?.observations).toBe(0);
         changing = false;
       }
     }

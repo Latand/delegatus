@@ -6684,12 +6684,21 @@ async function spawnRunStage(
       if (attempt.launchId) {
         const receipt = ports.spawnReceipt(attempt.launchId);
         if (!receipt || receipt.state !== "failed" || (!receipt.neverBegan && !receipt.roleMemoryRetrySafe) || receipt.transcript
-          || receipt.conversationId !== attempt.conversationId
-          || await ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`) !== "claimed") throw error;
+          || receipt.conversationId !== attempt.conversationId) {
+          await park(pipeline, "role-memory privacy changed before dispatch, but the original host termination is unconfirmed; original launch retained", attempt);
+          return;
+        }
+        if (await ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`) !== "claimed") {
+          await park(pipeline, "role-memory privacy changed before dispatch, but another recovery owns the original launch; original launch retained", attempt);
+          return;
+        }
         const current = ports.spawnReceipt(receipt.launchId);
         if (!current || current.state !== "failed" || (!current.neverBegan && !current.roleMemoryRetrySafe) || current.transcript
           || current.launchId !== receipt.launchId || current.error !== receipt.error
-          || current.conversationId !== attempt.conversationId) throw error;
+          || current.conversationId !== attempt.conversationId) {
+          await park(pipeline, "role-memory privacy changed before dispatch, but the original host termination could not be reverified; original launch retained", attempt);
+          return;
+        }
         attempt.retiredLaunches = [...attempt.retiredLaunches ?? [], {
           launchId: receipt.launchId, conversationId: receipt.conversationId, error: error.message, retiredAt: ports.now(),
         }].slice(-RETIRED_LAUNCH_LIMIT);
