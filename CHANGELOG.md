@@ -25,6 +25,16 @@ guarantees for the 1.x series.
   files, 40 MiB in total). The agent receives it under its original file
   name with its reported type and size. Without that offer the existing
   list of accepted types stays in force ([#3127]).
+- **Delegatus memory can replace the engines' own memory, through the API
+  for now.** `PUT /api/memory/source` with `delegatus` was refused until
+  now. It now imports the notes Claude and Codex kept: the curator adopts,
+  drops or defers them in batches of up to 40 parts. Once every note the
+  engines load at start has been handled, engine memory is off from each
+  conversation's next engine start, and the switch becomes final when the
+  Claude processes started earlier have retired and their last notes are
+  imported. Undoing an import pass reports it as undone, or as partly
+  undone with the number of rules kept because they were edited since. The
+  Settings row for this switch comes in a later release ([#3101]).
 
 ### Changed
 - **Searching conversations from an agent answers in time.**
@@ -62,13 +72,12 @@ guarantees for the 1.x series.
   you come back ([#3113]).
 - **Deploys report what happened.** `deploy_exact_sha` no longer answers
   an admitted deploy as failed when its reply was lost: it says the
-  outcome is unknown and points to `deployment_status`, and a repeated
-  request returns the reconciled deployment id in its first reply. A
-  request for the revision already deploying joins that deploy, and the
-  seat that asked is woken when it settles ([#3100], [#3111]). A release
-  hands over once even when its release records are missing or stale, and
-  a reviewer whose attempt already settled is no longer reported as
-  stalled ([#3111]).
+  outcome is unknown and points to `deployment_status`. A request for the
+  revision already deploying joins that deploy, and the seat that asked is
+  woken when it settles ([#3100]). A repeated request returns the
+  reconciled deployment id in its first reply, a release hands over once
+  even when its release records are missing or stale, and a reviewer whose
+  attempt already settled is no longer reported as stalled ([#3111]).
 - **Stages recover by themselves.** A stage whose agent never answers its
   first message is stopped after ten minutes and replaced once; if the
   replacement stays silent too, the lane parks naming `retry-stage`
@@ -84,6 +93,10 @@ guarantees for the 1.x series.
   acknowledgement can no longer both win, nothing is sent twice after a
   restart, and its attention item expires 24 hours after the message was
   admitted ([#3119]).
+- **A settled delivery is not retried later.** When a kill or another
+  event settles queued delivery work, its delayed automatic retry is
+  cancelled. While the queue is backing off after a failed read, such an
+  event keeps the retry time already set ([#3122]).
 - **The seat digest is due only after a real change.** Notes, details and
   report timestamps on tasks no longer make one due ([#3116]).
 - **The warning «pipeline registry unreadable: admission authority is
@@ -91,6 +104,27 @@ guarantees for the 1.x series.
   store is briefly busy; startup waits for the store and adopts those
   lanes later. In a reproduction it appeared 70 times on first start and 3
   times on restart before, and never after ([#3124]).
+
+### Maintainer notes
+- Pre-push touched-test comparison reaches a verdict within its deadline
+  at normal load, and a pipeline publication that changes the pipeline
+  engine, `git.ts` or `parkedPublication.test.ts` gets 25 minutes for its
+  push, other changes 15 ([#3106], [#3123]).
+- Every pull request runs the complete isolated README capture seed and
+  checks each picture's frame layout in the required runtime job
+  ([#3103]).
+- `scripts/release-verify.ts` reads Docker image manifests with
+  `docker manifest inspect` when `docker buildx imagetools` is missing
+  ([#3109]).
+- The served-payload secret check runs against the built production
+  server ([#3112]).
+- Native Codex CI covers the Codex CLI version installed on this machine
+  beside the pinned protocol versions ([#3115]).
+- Test repairs: the Claude protocol-failure reap test and the Codex
+  «dropped-after» steering test on 0.162.1 and 0.163.0 wait on lifecycle
+  events instead of timing ([#3117], [#3118]).
+- The 1.14.0 changelog, version and README pictures reached main after
+  that release was tagged ([#3102]).
 
 ## [1.14.0] — 2026-10-19
 
@@ -4728,16 +4762,27 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#3096]: https://github.com/Latand/delegatus/pull/3096
 [#3098]: https://github.com/Latand/delegatus/pull/3098
 [#3100]: https://github.com/Latand/delegatus/pull/3100
+[#3101]: https://github.com/Latand/delegatus/pull/3101
+[#3102]: https://github.com/Latand/delegatus/pull/3102
+[#3103]: https://github.com/Latand/delegatus/pull/3103
 [#3104]: https://github.com/Latand/delegatus/pull/3104
 [#3105]: https://github.com/Latand/delegatus/pull/3105
+[#3106]: https://github.com/Latand/delegatus/pull/3106
 [#3107]: https://github.com/Latand/delegatus/pull/3107
 [#3108]: https://github.com/Latand/delegatus/pull/3108
+[#3109]: https://github.com/Latand/delegatus/pull/3109
 [#3111]: https://github.com/Latand/delegatus/pull/3111
+[#3112]: https://github.com/Latand/delegatus/pull/3112
 [#3113]: https://github.com/Latand/delegatus/pull/3113
 [#3114]: https://github.com/Latand/delegatus/pull/3114
+[#3115]: https://github.com/Latand/delegatus/pull/3115
 [#3116]: https://github.com/Latand/delegatus/pull/3116
+[#3117]: https://github.com/Latand/delegatus/pull/3117
+[#3118]: https://github.com/Latand/delegatus/pull/3118
 [#3119]: https://github.com/Latand/delegatus/pull/3119
 [#3120]: https://github.com/Latand/delegatus/pull/3120
 [#3121]: https://github.com/Latand/delegatus/pull/3121
+[#3122]: https://github.com/Latand/delegatus/pull/3122
+[#3123]: https://github.com/Latand/delegatus/pull/3123
 [#3124]: https://github.com/Latand/delegatus/pull/3124
 [#3127]: https://github.com/Latand/delegatus/pull/3127
