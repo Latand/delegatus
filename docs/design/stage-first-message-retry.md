@@ -17,7 +17,7 @@ events show:
 
 | Stage | Attempt started (UTC) | Message admitted (UTC) | Journal fence (UTC) | Pre-dispatch privacy retries |
 | --- | --- | --- | --- | --- |
-| Review | 16:15:35.956 | 16:15:49.820 | 16:25:51.153 | 77 |
+| Review | 16:15:35.956 | 16:15:49.819 | 16:25:51.153 | 77 |
 | Fix | 16:17:03.144 | 16:17:31.695 | 16:27:38.223 | 76 |
 
 Both messages repeatedly returned from delivering to queued with the reason
